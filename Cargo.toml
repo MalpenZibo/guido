@@ -1,0 +1,37 @@
+[package]
+name = "guido"
+version = "0.1.0"
+edition = "2021"
+description = "A reactive Rust GUI library using wgpu for Wayland layer shell widgets"
+license = "MIT"
+
+[dependencies]
+wgpu = { version = "28.0", features = ["fragile-send-sync-non-atomic-wasm"] }
+bytemuck = { version = "1.24", features = ["derive"] }
+glyphon = "0.10"
+cosmic-text = "0.16"
+smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+raw-window-handle = "0.6"
+image = { version = "0.25", default-features = false, features = ["png"] }
+pollster = "0.4"
+calloop = "0.14"
+log = "0.4"
+env_logger = "0.11"
+
+[dev-dependencies]
+env_logger = "0.11"
+
+[[example]]
+name = "status_bar"
+path = "examples/status_bar.rs"
+
+[[example]]
+name = "reactive_example"
+path = "examples/reactive_example.rs"
+
+[[example]]
+name = "showcase"
+path = "examples/showcase.rs"
