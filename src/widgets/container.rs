@@ -97,6 +97,12 @@ pub struct Container {
     ripple_from_click: bool, // true = click (slower), false = hover (faster)
     ripple_is_exit: bool,    // true = exit ripple (fades out quickly)
     last_mouse_pos: Option<(f32, f32)>, // Track last mouse position for exit ripple
+
+    // Click ripple effect (separate from hover ripple)
+    click_ripple_center: Option<(f32, f32)>,
+    click_ripple_progress: f32,
+    click_ripple_reversing: bool, // true when animating backwards on release
+    click_ripple_release_pos: Option<(f32, f32)>, // position where mouse was released
 }
 
 impl Container {
@@ -124,6 +130,10 @@ impl Container {
             ripple_from_click: false,
             ripple_is_exit: false,
             last_mouse_pos: None,
+            click_ripple_center: None,
+            click_ripple_progress: 0.0,
+            click_ripple_reversing: false,
+            click_ripple_release_pos: None,
         }
     }
 
@@ -310,25 +320,46 @@ impl Widget for Container {
             child.set_origin(self.bounds.x + padding.left, self.bounds.y + padding.top);
         }
 
-        // Advance ripple animation each frame (layout is called every frame)
+        // Advance hover ripple animation each frame (layout is called every frame)
         if self.ripple_enabled && self.ripple_center.is_some() {
             if self.ripple_progress < 1.0 {
-                // Exit ripple: very fast (~0.2s), Click ripple: slower (~0.6s), Hover ripple: faster (~0.3s)
+                // Exit ripple: very fast (~0.2s), Hover ripple: faster (~0.3s)
                 let speed = if self.ripple_is_exit {
                     0.20
-                } else if self.ripple_from_click {
-                    0.08
                 } else {
                     0.12
                 };
                 self.ripple_progress = (self.ripple_progress + speed).min(1.0);
-            } else if self.ripple_from_click || self.ripple_is_exit {
-                // Auto-reset click ripples and exit ripples when complete
+            } else if self.ripple_is_exit {
+                // Auto-reset exit ripples when complete
                 self.ripple_center = None;
                 self.ripple_progress = 0.0;
-                self.ripple_from_click = false;
                 self.ripple_is_exit = false;
             }
+            // Hover ripples persist at 100% progress while hovering
+        }
+
+        // Advance click ripple animation each frame (separate from hover ripple)
+        if self.ripple_enabled && self.click_ripple_center.is_some() {
+            if self.click_ripple_reversing {
+                // Reverse animation: contract back to 0
+                if self.click_ripple_progress > 0.0 {
+                    // Reverse faster than expand for snappy feel (~0.3s)
+                    let speed = 0.15;
+                    self.click_ripple_progress = (self.click_ripple_progress - speed).max(0.0);
+                } else {
+                    // Animation complete, reset everything
+                    self.click_ripple_center = None;
+                    self.click_ripple_progress = 0.0;
+                    self.click_ripple_reversing = false;
+                    self.click_ripple_release_pos = None;
+                }
+            } else if self.click_ripple_progress < 1.0 {
+                // Forward animation: expand to 100%
+                let speed = 0.08;
+                self.click_ripple_progress = (self.click_ripple_progress + speed).min(1.0);
+            }
+            // Click ripple stays at 100% until MouseUp triggers reverse
         }
 
         size
@@ -380,8 +411,9 @@ impl Widget for Container {
             child.paint(ctx);
         }
 
-        // Draw ripple effect on top of everything (including text) using overlay
+        // Draw ripple effects on top of everything (including text) using overlay
         if self.ripple_enabled {
+            // First draw hover ripple (if active)
             if let Some((cx, cy)) = self.ripple_center {
                 // Calculate the maximum radius needed to cover the entire container from the entry point
                 let dx1 = cx - self.bounds.x;
@@ -398,7 +430,7 @@ impl Widget for Container {
                     // Exit ripple: aggressive fade out
                     self.ripple_color.a * (1.0 - self.ripple_progress).powi(2)
                 } else {
-                    // Normal ripple: gradual fade
+                    // Hover ripple: gradual fade
                     self.ripple_color.a * (1.0 - self.ripple_progress * 0.5)
                 };
 
@@ -413,6 +445,58 @@ impl Widget for Container {
                     ctx.draw_overlay_circle_clipped_with_curvature(
                         cx,
                         cy,
+                        current_radius,
+                        ripple_color,
+                        self.bounds,
+                        corner_radius,
+                        corner_curvature,
+                    );
+                }
+            }
+
+            // Then draw click ripple on top (if active)
+            if let Some((cx, cy)) = self.click_ripple_center {
+                // Interpolate center position during reverse animation
+                let (center_x, center_y) = if self.click_ripple_reversing {
+                    if let Some((rx, ry)) = self.click_ripple_release_pos {
+                        // As progress goes from 1.0 to 0.0, move from click position to release position
+                        // reverse_progress: 0.0 = at release point, 1.0 = at click point
+                        let t = self.click_ripple_progress; // progress as interpolation factor
+                        (
+                            cx + (rx - cx) * (1.0 - t),
+                            cy + (ry - cy) * (1.0 - t),
+                        )
+                    } else {
+                        (cx, cy)
+                    }
+                } else {
+                    (cx, cy)
+                };
+
+                // Calculate the maximum radius needed to cover the entire container from the current center
+                let dx1 = center_x - self.bounds.x;
+                let dx2 = (self.bounds.x + self.bounds.width) - center_x;
+                let dy1 = center_y - self.bounds.y;
+                let dy2 = (self.bounds.y + self.bounds.height) - center_y;
+                let max_radius = (dx1.max(dx2).powi(2) + dy1.max(dy2).powi(2)).sqrt();
+
+                // Animate radius from 0 to max_radius based on progress
+                let current_radius = max_radius * self.click_ripple_progress;
+
+                // Click ripple: gradual fade (similar to hover but slightly stronger)
+                let alpha = self.ripple_color.a * (1.0 - self.click_ripple_progress * 0.5);
+
+                if current_radius > 0.0 && alpha > 0.0 {
+                    let ripple_color = Color::rgba(
+                        self.ripple_color.r,
+                        self.ripple_color.g,
+                        self.ripple_color.b,
+                        alpha,
+                    );
+                    // Use overlay so ripple appears on top of text
+                    ctx.draw_overlay_circle_clipped_with_curvature(
+                        center_x,
+                        center_y,
                         current_radius,
                         ripple_color,
                         self.bounds,
@@ -487,11 +571,12 @@ impl Widget for Container {
             Event::MouseDown { x, y, button } => {
                 if self.bounds.contains(*x, *y) && *button == MouseButton::Left {
                     self.is_pressed = true;
-                    // Start click ripple (overrides hover ripple)
+                    // Start click ripple (separate from hover ripple)
                     if self.ripple_enabled {
-                        self.ripple_center = Some((*x, *y));
-                        self.ripple_progress = 0.0;
-                        self.ripple_from_click = true;
+                        self.click_ripple_center = Some((*x, *y));
+                        self.click_ripple_progress = 0.0;
+                        self.click_ripple_reversing = false;
+                        self.click_ripple_release_pos = None;
                     }
                     return EventResponse::Handled;
                 }
@@ -499,6 +584,11 @@ impl Widget for Container {
             Event::MouseUp { x, y, button } => {
                 if self.is_pressed && *button == MouseButton::Left {
                     self.is_pressed = false;
+                    // Start reverse animation for click ripple when mouse button is released
+                    if self.ripple_enabled && self.click_ripple_center.is_some() {
+                        self.click_ripple_reversing = true;
+                        self.click_ripple_release_pos = Some((*x, *y));
+                    }
                     if self.bounds.contains(*x, *y) {
                         if let Some(ref callback) = self.on_click {
                             callback();
