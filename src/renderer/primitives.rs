@@ -17,6 +17,14 @@ pub struct Vertex {
     pub border_width: [f32; 2],
     /// Border color RGBA
     pub border_color: [f32; 4],
+    /// Shadow offset in NDC (x, y)
+    pub shadow_offset: [f32; 2],
+    /// Shadow blur radius in NDC
+    pub shadow_blur: f32,
+    /// Shadow spread amount (expands shadow)
+    pub shadow_spread: f32,
+    /// Shadow color RGBA
+    pub shadow_color: [f32; 4],
 }
 
 impl Vertex {
@@ -67,6 +75,24 @@ impl Vertex {
                     shader_location: 6,
                     format: wgpu::VertexFormat::Float32x4,
                 },
+                // shadow_offset
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 20]>() as wgpu::BufferAddress,
+                    shader_location: 7,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                // shadow_blur + shadow_spread
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 22]>() as wgpu::BufferAddress,
+                    shader_location: 8,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                // shadow_color
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 24]>() as wgpu::BufferAddress,
+                    shader_location: 9,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
             ],
         }
     }
@@ -88,6 +114,10 @@ impl Vertex {
             _padding: 0.0,
             border_width: [0.0, 0.0],
             border_color: [0.0, 0.0, 0.0, 0.0],
+            shadow_offset: [0.0, 0.0],
+            shadow_blur: 0.0,
+            shadow_spread: 0.0,
+            shadow_color: [0.0, 0.0, 0.0, 0.0],
         }
     }
 
@@ -111,6 +141,40 @@ impl Vertex {
             _padding: 0.0,
             border_width,
             border_color,
+            shadow_offset: [0.0, 0.0],
+            shadow_blur: 0.0,
+            shadow_spread: 0.0,
+            shadow_color: [0.0, 0.0, 0.0, 0.0],
+        }
+    }
+
+    /// Create a vertex for a shape with SDF rendering, border, and shadow
+    pub fn with_shadow(
+        position: [f32; 2],
+        color: [f32; 4],
+        shape_rect: [f32; 4],
+        shape_radius: [f32; 2],
+        shape_curvature: f32,
+        border_width: [f32; 2],
+        border_color: [f32; 4],
+        shadow_offset: [f32; 2],
+        shadow_blur: f32,
+        shadow_spread: f32,
+        shadow_color: [f32; 4],
+    ) -> Self {
+        Self {
+            position,
+            color,
+            shape_rect,
+            shape_radius,
+            shape_curvature,
+            _padding: 0.0,
+            border_width,
+            border_color,
+            shadow_offset,
+            shadow_blur,
+            shadow_spread,
+            shadow_color,
         }
     }
 }
@@ -132,6 +196,51 @@ pub struct Gradient {
     pub direction: GradientDir,
 }
 
+/// Shadow configuration for shapes
+#[derive(Debug, Clone, Copy)]
+pub struct Shadow {
+    /// Shadow offset in logical pixels (x, y)
+    pub offset: (f32, f32),
+    /// Blur radius in logical pixels
+    pub blur: f32,
+    /// Spread amount in logical pixels (expands shadow)
+    pub spread: f32,
+    /// Shadow color
+    pub color: Color,
+}
+
+impl Shadow {
+    /// Create a shadow with the given parameters
+    pub fn new(offset: (f32, f32), blur: f32, spread: f32, color: Color) -> Self {
+        Self {
+            offset,
+            blur,
+            spread,
+            color,
+        }
+    }
+
+    /// Create a shadow with no spread
+    pub fn simple(offset: (f32, f32), blur: f32, color: Color) -> Self {
+        Self {
+            offset,
+            blur,
+            spread: 0.0,
+            color,
+        }
+    }
+
+    /// Create a default shadow (no shadow)
+    pub fn none() -> Self {
+        Self {
+            offset: (0.0, 0.0),
+            blur: 0.0,
+            spread: 0.0,
+            color: Color::TRANSPARENT,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RoundedRect {
     pub rect: Rect,
@@ -147,6 +256,8 @@ pub struct RoundedRect {
     pub border_width: f32,
     /// Border color
     pub border_color: Color,
+    /// Shadow configuration
+    pub shadow: Shadow,
 }
 
 #[derive(Debug, Clone)]
@@ -168,6 +279,7 @@ impl RoundedRect {
             curvature: 1.0, // Default K=1 (circular)
             border_width: 0.0,
             border_color: Color::TRANSPARENT,
+            shadow: Shadow::none(),
         }
     }
 
@@ -181,6 +293,7 @@ impl RoundedRect {
             curvature: 1.0, // Default K=1 (circular)
             border_width: 0.0,
             border_color: Color::TRANSPARENT,
+            shadow: Shadow::none(),
         }
     }
 
@@ -194,6 +307,7 @@ impl RoundedRect {
             curvature: 1.0, // Default K=1 (circular)
             border_width: 0.0,
             border_color: Color::TRANSPARENT,
+            shadow: Shadow::none(),
         }
     }
 
@@ -207,6 +321,7 @@ impl RoundedRect {
             curvature,
             border_width: 0.0,
             border_color: Color::TRANSPARENT,
+            shadow: Shadow::none(),
         }
     }
 
@@ -227,6 +342,7 @@ impl RoundedRect {
             curvature: 1.0,
             border_width,
             border_color,
+            shadow: Shadow::none(),
         }
     }
 
@@ -241,6 +357,7 @@ impl RoundedRect {
             curvature: 1.0,
             border_width,
             border_color,
+            shadow: Shadow::none(),
         }
     }
 
@@ -261,6 +378,7 @@ impl RoundedRect {
             curvature,
             border_width,
             border_color,
+            shadow: Shadow::none(),
         }
     }
 
@@ -359,43 +477,99 @@ impl RoundedRect {
             self.border_color.a,
         ];
 
+        // Convert shadow parameters to NDC
+        let shadow_offset_ndc = [
+            (self.shadow.offset.0 / screen_width) * 2.0,
+            -(self.shadow.offset.1 / screen_height) * 2.0,  // Negative because NDC y is flipped
+        ];
+        let shadow_blur_ndc = (self.shadow.blur / screen_height) * 2.0;  // Use height for uniform blur
+        let shadow_spread_ndc = (self.shadow.spread / screen_height) * 2.0;
+        let shadow_color = [
+            self.shadow.color.r,
+            self.shadow.color.g,
+            self.shadow.color.b,
+            self.shadow.color.a,
+        ];
+
+        // Expand quad bounds to include shadow if there is one
+        // The shadow needs extra space to fade smoothly to zero
+        // Blur defines the falloff distance, but we need ~3x blur for complete fadeout
+        let (quad_x1, quad_y1, quad_x2, quad_y2) = if self.shadow.color.a > 0.0 {
+            // Shadow fadeout multiplier: 3x ensures smooth gradient to transparent
+            let fadeout = 3.0;
+
+            // Calculate how far shadow extends beyond the shape in each direction
+            // Account for offset direction and full fadeout distance
+            let left_extend = (self.shadow.blur * fadeout - self.shadow.offset.0).max(0.0);
+            let right_extend = (self.shadow.blur * fadeout + self.shadow.offset.0).max(0.0);
+            let top_extend = (self.shadow.blur * fadeout - self.shadow.offset.1).max(0.0);
+            let bottom_extend = (self.shadow.blur * fadeout + self.shadow.offset.1).max(0.0);
+
+            (
+                to_ndc_x(self.rect.x - left_extend),
+                to_ndc_y(self.rect.y - top_extend),
+                to_ndc_x(self.rect.x + self.rect.width + right_extend),
+                to_ndc_y(self.rect.y + self.rect.height + bottom_extend),
+            )
+        } else {
+            // No shadow - use exact bounds
+            (x1, y1, x2, y2)
+        };
+
         // Simple quad - SDF rendering handles the shape in fragment shader
+        // Use expanded quad bounds for vertices, but keep original shape_rect for SDF
         let vertices = vec![
-            Vertex::with_border(
-                [x1, y1],
+            Vertex::with_shadow(
+                [quad_x1, quad_y1],
                 self.color_at(x1, y1, x1, y1, x2, y2),
                 shape_rect,
                 shape_radius,
                 shape_curvature,
                 border_width_ndc,
                 border_color,
+                shadow_offset_ndc,
+                shadow_blur_ndc,
+                shadow_spread_ndc,
+                shadow_color,
             ),
-            Vertex::with_border(
-                [x2, y1],
+            Vertex::with_shadow(
+                [quad_x2, quad_y1],
                 self.color_at(x2, y1, x1, y1, x2, y2),
                 shape_rect,
                 shape_radius,
                 shape_curvature,
                 border_width_ndc,
                 border_color,
+                shadow_offset_ndc,
+                shadow_blur_ndc,
+                shadow_spread_ndc,
+                shadow_color,
             ),
-            Vertex::with_border(
-                [x2, y2],
+            Vertex::with_shadow(
+                [quad_x2, quad_y2],
                 self.color_at(x2, y2, x1, y1, x2, y2),
                 shape_rect,
                 shape_radius,
                 shape_curvature,
                 border_width_ndc,
                 border_color,
+                shadow_offset_ndc,
+                shadow_blur_ndc,
+                shadow_spread_ndc,
+                shadow_color,
             ),
-            Vertex::with_border(
-                [x1, y2],
+            Vertex::with_shadow(
+                [quad_x1, quad_y2],
                 self.color_at(x1, y2, x1, y1, x2, y2),
                 shape_rect,
                 shape_radius,
                 shape_curvature,
                 border_width_ndc,
                 border_color,
+                shadow_offset_ndc,
+                shadow_blur_ndc,
+                shadow_spread_ndc,
+                shadow_color,
             ),
         ];
 
@@ -477,8 +651,14 @@ impl Circle {
             ([0.0, 0.0], [0.0, 0.0, 0.0, 0.0])
         };
 
+        // No shadow for circles (use default/zero values)
+        let shadow_offset = [0.0, 0.0];
+        let shadow_blur = 0.0;
+        let shadow_spread = 0.0;
+        let shadow_color = [0.0, 0.0, 0.0, 0.0];
+
         // Center vertex - pass clip region as shape params for clipping
-        vertices.push(Vertex::with_border(
+        vertices.push(Vertex::with_shadow(
             [cx, cy],
             color,
             clip_rect,
@@ -486,6 +666,10 @@ impl Circle {
             clip_curvature,
             border_width,
             border_color,
+            shadow_offset,
+            shadow_blur,
+            shadow_spread,
+            shadow_color,
         ));
 
         // Edge vertices
@@ -493,7 +677,7 @@ impl Circle {
             let angle = (i as f32 / segments as f32) * std::f32::consts::PI * 2.0;
             let vx = cx + angle.cos() * r_ndc_x;
             let vy = cy - angle.sin() * r_ndc_y;
-            vertices.push(Vertex::with_border(
+            vertices.push(Vertex::with_shadow(
                 [vx, vy],
                 color,
                 clip_rect,
@@ -501,6 +685,10 @@ impl Circle {
                 clip_curvature,
                 border_width,
                 border_color,
+                shadow_offset,
+                shadow_blur,
+                shadow_spread,
+                shadow_color,
             ));
         }
 

@@ -122,6 +122,16 @@ impl Renderer {
                     scaled_rect.curvature = rect.curvature; // Preserve curvature (doesn't scale)
                     scaled_rect.border_width = rect.border_width * self.scale_factor;
                     scaled_rect.border_color = rect.border_color;
+                    // Scale shadow parameters
+                    scaled_rect.shadow = primitives::Shadow {
+                        offset: (
+                            rect.shadow.offset.0 * self.scale_factor,
+                            rect.shadow.offset.1 * self.scale_factor,
+                        ),
+                        blur: rect.shadow.blur * self.scale_factor,
+                        spread: rect.shadow.spread * self.scale_factor,
+                        color: rect.shadow.color,
+                    };
                     scaled_rect.to_vertices(self.screen_width, self.screen_height)
                 }
                 Shape::Circle(circle) => {
@@ -181,6 +191,16 @@ impl Renderer {
                     scaled_rect.curvature = rect.curvature; // Preserve curvature (doesn't scale)
                     scaled_rect.border_width = rect.border_width * self.scale_factor;
                     scaled_rect.border_color = rect.border_color;
+                    // Scale shadow parameters
+                    scaled_rect.shadow = primitives::Shadow {
+                        offset: (
+                            rect.shadow.offset.0 * self.scale_factor,
+                            rect.shadow.offset.1 * self.scale_factor,
+                        ),
+                        blur: rect.shadow.blur * self.scale_factor,
+                        spread: rect.shadow.spread * self.scale_factor,
+                        color: rect.shadow.color,
+                    };
                     scaled_rect.to_vertices(self.screen_width, self.screen_height)
                 }
                 Shape::Circle(circle) => {
@@ -497,6 +517,33 @@ impl PaintContext {
         self.shapes.push(Shape::Circle(Circle::with_clip(
             center_x, center_y, radius, color, clip,
         )));
+    }
+
+    /// Draw a rounded rectangle with a shadow
+    pub fn draw_rounded_rect_with_shadow(
+        &mut self,
+        rect: Rect,
+        color: Color,
+        radius: f32,
+        shadow: primitives::Shadow,
+    ) {
+        let mut rounded_rect = RoundedRect::new(rect, color, radius);
+        rounded_rect.shadow = shadow;
+        self.shapes.push(Shape::RoundedRect(rounded_rect));
+    }
+
+    /// Draw a rounded rectangle with a shadow and custom curvature
+    pub fn draw_rounded_rect_with_shadow_and_curvature(
+        &mut self,
+        rect: Rect,
+        color: Color,
+        radius: f32,
+        curvature: f32,
+        shadow: primitives::Shadow,
+    ) {
+        let mut rounded_rect = RoundedRect::with_curvature(rect, color, radius, curvature);
+        rounded_rect.shadow = shadow;
+        self.shapes.push(Shape::RoundedRect(rounded_rect));
     }
 
     pub fn draw_text(&mut self, text: &str, rect: Rect, color: Color, font_size: f32) {

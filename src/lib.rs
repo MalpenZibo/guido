@@ -18,6 +18,7 @@ pub mod prelude {
         batch, create_computed, create_effect, create_signal, Computed, Effect, IntoMaybeDyn,
         MaybeDyn, ReadSignal, Signal, WriteSignal,
     };
+    pub use crate::renderer::primitives::Shadow;
     pub use crate::renderer::PaintContext;
     pub use crate::widgets::{
         column, container, row, text, Border, Color, Column, Container, CrossAxisAlignment, Event,
