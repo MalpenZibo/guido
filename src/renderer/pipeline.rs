@@ -11,6 +11,9 @@ struct VertexInput {
     @location(4) shape_curvature: vec2<f32>, // x = curvature, y = padding
     @location(5) border_width: vec2<f32>,  // border width in NDC (x, y)
     @location(6) border_color: vec4<f32>,
+    @location(7) shadow_offset: vec2<f32>,  // shadow offset in NDC (x, y)
+    @location(8) shadow_params: vec2<f32>,  // x = blur, y = spread
+    @location(9) shadow_color: vec4<f32>,
 }
 
 struct VertexOutput {
@@ -22,6 +25,9 @@ struct VertexOutput {
     @location(4) shape_curvature: f32,  // superellipse K-value
     @location(5) border_width: vec2<f32>,  // border width (x, y) in NDC
     @location(6) border_color: vec4<f32>,
+    @location(7) shadow_offset: vec2<f32>,
+    @location(8) shadow_params: vec2<f32>,  // x = blur, y = spread
+    @location(9) shadow_color: vec4<f32>,
 }
 
 @vertex
@@ -35,6 +41,9 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.shape_curvature = in.shape_curvature.x;
     out.border_width = in.border_width;
     out.border_color = in.border_color;
+    out.shadow_offset = in.shadow_offset;
+    out.shadow_params = in.shadow_params;
+    out.shadow_color = in.shadow_color;
     return out;
 }
 
@@ -170,44 +179,82 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(in.color.rgb, in.color.a * clip_alpha);
     }
 
+    // Compute shadow if enabled (shadow_color.a > 0)
+    var shadow_contribution = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    if (in.shadow_color.a > 0.0) {
+        let shadow_blur = in.shadow_params.x;
+        let shadow_spread = in.shadow_params.y;
+
+        // Scale shadow offset to match aspect ratio
+        let scaled_shadow_offset = vec2<f32>(in.shadow_offset.x * aspect, in.shadow_offset.y);
+
+        // Compute shadow position (offset from shape)
+        let shadow_pos = scaled_pos - scaled_shadow_offset;
+
+        // Scale shadow spread
+        let scaled_spread = shadow_spread * aspect;
+
+        // Compute shadow SDF (expanded by spread)
+        let shadow_dist = rounded_rect_sdf(shadow_pos, scaled_rect, scaled_radius, in.shape_curvature) - scaled_spread;
+
+        // Convert to alpha with blur falloff
+        // Use wider range for smoother fadeout: from -blur to 2*blur
+        // This creates a more gradual, CSS-like shadow that fades naturally
+        let shadow_alpha = in.shadow_color.a * (1.0 - smoothstep(-shadow_blur, shadow_blur * 2.0, shadow_dist));
+        shadow_contribution = vec4<f32>(in.shadow_color.rgb, shadow_alpha);
+    }
+
+    // Compute main shape color
+    var shape_result: vec4<f32>;
+
     // No border case - simple filled shape (SDF defines the shape)
     if (in.border_width.x <= 0.0 && in.border_width.y <= 0.0) {
         let alpha = 1.0 - smoothstep(-aa, aa, dist);
-        return vec4<f32>(in.color.rgb, in.color.a * alpha);
+        shape_result = vec4<f32>(in.color.rgb, in.color.a * alpha);
+    } else {
+        // Outer edge: shape boundary (dist = 0)
+        // Inner edge: dist = -border_w (inside by border width)
+        let outer_edge = dist;
+        let inner_edge = dist + border_w;
+
+        // Shape alpha (inside the outer boundary)
+        let shape_alpha = 1.0 - smoothstep(-aa, aa, outer_edge);
+
+        // Fill alpha (inside the inner boundary)
+        let fill_alpha = 1.0 - smoothstep(-aa, aa, inner_edge);
+
+        // Border alpha = shape minus fill
+        let border_alpha = max(shape_alpha - fill_alpha, 0.0);
+
+        // Handle border-only case (transparent fill)
+        if (in.color.a <= 0.0) {
+            shape_result = vec4<f32>(in.border_color.rgb, in.border_color.a * border_alpha);
+        } else {
+            // Composite fill and border
+            let fill_contribution = vec4<f32>(in.color.rgb, in.color.a * fill_alpha);
+            let border_contribution = vec4<f32>(in.border_color.rgb, in.border_color.a * border_alpha);
+
+            let result_rgb = border_contribution.rgb * border_contribution.a +
+                             fill_contribution.rgb * fill_contribution.a * (1.0 - border_contribution.a);
+            let result_a = border_contribution.a + fill_contribution.a * (1.0 - border_contribution.a);
+
+            if (result_a <= 0.0) {
+                shape_result = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+            } else {
+                shape_result = vec4<f32>(result_rgb / result_a, result_a);
+            }
+        }
     }
 
-    // Outer edge: shape boundary (dist = 0)
-    // Inner edge: dist = -border_w (inside by border width)
-    let outer_edge = dist;
-    let inner_edge = dist + border_w;
-
-    // Shape alpha (inside the outer boundary)
-    let shape_alpha = 1.0 - smoothstep(-aa, aa, outer_edge);
-
-    // Fill alpha (inside the inner boundary)
-    let fill_alpha = 1.0 - smoothstep(-aa, aa, inner_edge);
-
-    // Border alpha = shape minus fill
-    let border_alpha = max(shape_alpha - fill_alpha, 0.0);
-
-    // Handle border-only case (transparent fill)
-    if (in.color.a <= 0.0) {
-        return vec4<f32>(in.border_color.rgb, in.border_color.a * border_alpha);
+    // Composite shadow behind shape
+    if (shadow_contribution.a > 0.0) {
+        let final_rgb = shape_result.rgb * shape_result.a +
+                        shadow_contribution.rgb * shadow_contribution.a * (1.0 - shape_result.a);
+        let final_a = shape_result.a + shadow_contribution.a * (1.0 - shape_result.a);
+        return vec4<f32>(final_rgb, final_a);
     }
 
-    // Composite fill and border
-    let fill_contribution = vec4<f32>(in.color.rgb, in.color.a * fill_alpha);
-    let border_contribution = vec4<f32>(in.border_color.rgb, in.border_color.a * border_alpha);
-
-    let result_rgb = border_contribution.rgb * border_contribution.a +
-                     fill_contribution.rgb * fill_contribution.a * (1.0 - border_contribution.a);
-    let result_a = border_contribution.a + fill_contribution.a * (1.0 - border_contribution.a);
-
-    if (result_a <= 0.0) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
-
-    return vec4<f32>(result_rgb / result_a, result_a);
+    return shape_result;
 }
 "#;
 

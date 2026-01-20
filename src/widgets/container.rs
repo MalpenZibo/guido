@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::layout::{Constraints, Size};
 use crate::reactive::{IntoMaybeDyn, MaybeDyn};
-use crate::renderer::primitives::GradientDir;
+use crate::renderer::primitives::{GradientDir, Shadow};
 use crate::renderer::PaintContext;
 
 use super::widget::{
@@ -76,6 +76,7 @@ pub struct Container {
     corner_radius: MaybeDyn<f32>,
     corner_curvature: MaybeDyn<f32>,
     border: Option<Border>,
+    elevation: MaybeDyn<f32>,
     min_width: Option<MaybeDyn<f32>>,
     min_height: Option<MaybeDyn<f32>>,
     bounds: Rect,
@@ -109,6 +110,7 @@ impl Container {
             corner_radius: MaybeDyn::Static(0.0),
             corner_curvature: MaybeDyn::Static(1.0), // Default K=1 (circular/round)
             border: None,
+            elevation: MaybeDyn::Static(0.0),
             min_width: None,
             min_height: None,
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
@@ -261,6 +263,41 @@ impl Container {
         self.ripple_color = color;
         self
     }
+
+    /// Set the elevation level (0 = no shadow, higher = more elevated)
+    /// Automatically computes shadow offset, blur, and color based on the level
+    pub fn elevation(mut self, level: impl IntoMaybeDyn<f32>) -> Self {
+        self.elevation = level.into_maybe_dyn();
+        self
+    }
+}
+
+/// Convert elevation level to shadow parameters
+/// Returns: Shadow struct with offset, blur, spread, and color
+/// Based on Material Design elevation specifications
+fn elevation_to_shadow(level: f32) -> Shadow {
+    if level <= 0.0 {
+        return Shadow::none();
+    }
+
+    // Material Design elevation mapping (CSS-like values)
+    // Offset and blur scale with elevation, but stay reasonable
+    let (offset_y, blur, alpha) = match level as i32 {
+        1 => (1.0, 3.0, 0.12),
+        2 => (2.0, 4.0, 0.16),
+        3 => (3.0, 6.0, 0.19),
+        4 => (4.0, 8.0, 0.20),
+        5 => (6.0, 10.0, 0.22),
+        _ => {
+            // For levels > 5, scale gradually
+            let offset = (level * 1.2).min(12.0);
+            let blur = (level * 2.0).min(24.0);
+            let alpha = (0.12 + level * 0.02).min(0.25);
+            (offset, blur, alpha)
+        }
+    };
+
+    Shadow::new((0.0, offset_y), blur, 0.0, Color::rgba(0.0, 0.0, 0.0, alpha))
 }
 
 impl Default for Container {
@@ -338,6 +375,8 @@ impl Widget for Container {
         let background = self.background.get();
         let corner_radius = self.corner_radius.get();
         let corner_curvature = self.corner_curvature.get();
+        let elevation_level = self.elevation.get();
+        let shadow = elevation_to_shadow(elevation_level);
 
         // Draw background first (gradient or solid color)
         if let Some(ref gradient) = self.gradient {
@@ -347,6 +386,7 @@ impl Widget for Container {
                 GradientDirection::Diagonal => GradientDir::Diagonal,
                 GradientDirection::DiagonalReverse => GradientDir::DiagonalReverse,
             };
+            // Note: Gradients don't currently support shadows, draw without shadow
             ctx.draw_gradient_rect_with_curvature(
                 self.bounds,
                 gradient.start_color,
@@ -356,12 +396,23 @@ impl Widget for Container {
                 corner_curvature,
             );
         } else if background.a > 0.0 {
-            ctx.draw_rounded_rect_with_curvature(
-                self.bounds,
-                background,
-                corner_radius,
-                corner_curvature,
-            );
+            // Draw with or without shadow based on elevation
+            if elevation_level > 0.0 {
+                ctx.draw_rounded_rect_with_shadow_and_curvature(
+                    self.bounds,
+                    background,
+                    corner_radius,
+                    corner_curvature,
+                    shadow,
+                );
+            } else {
+                ctx.draw_rounded_rect_with_curvature(
+                    self.bounds,
+                    background,
+                    corner_radius,
+                    corner_curvature,
+                );
+            }
         }
 
         // Draw border frame on top (just the outline, not a filled rect)
