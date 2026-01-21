@@ -670,6 +670,8 @@ impl Widget for Container {
                         self.ripple_center = Some((*x, *y));
                         self.ripple_progress = 0.0;
                         self.ripple_from_click = false;
+                        // Request animation frame to start rendering the hover ripple
+                        request_animation_frame();
                     }
                     return EventResponse::Handled;
                 }
@@ -694,6 +696,8 @@ impl Widget for Container {
                             self.ripple_center = Some((*x, *y));
                             self.ripple_progress = 0.0;
                             self.ripple_from_click = false;
+                            // Request animation frame to start rendering the hover ripple
+                            request_animation_frame();
                         }
                     } else {
                         // Start exit ripple when leaving (moving to another container)
@@ -702,6 +706,8 @@ impl Widget for Container {
                                 self.ripple_center = Some((lx, ly));
                                 self.ripple_progress = 0.0;
                                 self.ripple_is_exit = true;
+                                // Request animation frame to start rendering the exit ripple
+                                request_animation_frame();
                             }
                         }
                     }
@@ -717,6 +723,8 @@ impl Widget for Container {
                         self.click_ripple_progress = 0.0;
                         self.click_ripple_reversing = false;
                         self.click_ripple_release_pos = None;
+                        // Request animation frame to start rendering the ripple
+                        request_animation_frame();
                     }
                     return EventResponse::Handled;
                 }
@@ -728,6 +736,8 @@ impl Widget for Container {
                     if self.ripple_enabled && self.click_ripple_center.is_some() {
                         self.click_ripple_reversing = true;
                         self.click_ripple_release_pos = Some((*x, *y));
+                        // Request animation frame to start the reverse animation
+                        request_animation_frame();
                     }
                     if self.bounds.contains(*x, *y) {
                         if let Some(ref callback) = self.on_click {
@@ -752,6 +762,8 @@ impl Widget for Container {
                         self.ripple_center = Some((x, y));
                         self.ripple_progress = 0.0;
                         self.ripple_is_exit = true;
+                        // Request animation frame to start rendering the exit ripple
+                        request_animation_frame();
                     }
                 }
             }

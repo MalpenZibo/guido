@@ -635,6 +635,7 @@ dependencies = [
  "bitflags",
  "bytemuck",
  "calloop",
+ "calloop-wayland-source",
  "cosmic-text 0.16.0",
  "env_logger",
  "glyphon",

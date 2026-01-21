@@ -44,6 +44,10 @@ pub struct WaylandState {
     pub scale_factor: f32,
     pub exit: bool,
 
+    // Initialization tracking for event-driven startup
+    pub scale_factor_received: bool,
+    pub first_frame_presented: bool,
+
     // Pointer state
     pointer: Option<wl_pointer::WlPointer>,
     pointer_x: f32,
@@ -84,6 +88,8 @@ pub fn create_wayland_app() -> (
         height: 0,
         scale_factor: 1.0,
         exit: false,
+        scale_factor_received: false,
+        first_frame_presented: false,
         pointer: None,
         pointer_x: 0.0,
         pointer_y: 0.0,
@@ -204,6 +210,7 @@ impl CompositorHandler for WaylandState {
     ) {
         log::info!("Scale factor changed to: {}", new_factor);
         self.scale_factor = new_factor as f32;
+        self.scale_factor_received = true;
         // Set the buffer scale on the surface for proper HiDPI rendering
         surface.set_buffer_scale(new_factor);
     }
@@ -242,6 +249,10 @@ impl CompositorHandler for WaylandState {
         _surface: &wl_surface::WlSurface,
         _time: u32,
     ) {
+        if !self.first_frame_presented {
+            log::info!("First frame presented by compositor - initialization complete, switching to on-demand rendering");
+            self.first_frame_presented = true;
+        }
     }
 }
 

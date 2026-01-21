@@ -8,12 +8,16 @@ pub mod renderer;
 
 use layout::Constraints;
 use platform::{create_wayland_app, Anchor, Layer, WaylandWindowWrapper};
-use reactive::{take_frame_request, with_app_state, with_app_state_mut};
+use reactive::{
+    clear_animation_flag, init_wakeup, take_frame_request, with_app_state, with_app_state_mut,
+};
 use renderer::{GpuContext, Renderer};
 use widgets::{Color, Widget};
 
-// Import clear_animation_flag to reset animation state each frame
-use reactive::invalidation::clear_animation_flag;
+// Calloop imports for event-driven main loop
+use calloop::ping::make_ping;
+use calloop::EventLoop;
+use calloop_wayland_source::WaylandSource;
 
 pub mod prelude {
     pub use crate::layout::{Constraints, Size};
@@ -209,23 +213,61 @@ impl App {
         // Track previous scale factor to detect changes
         let mut previous_scale_factor = wayland_state.scale_factor;
 
-        // Force render first N frames for initialization
-        let mut startup_frames = 60; // Force render first 60 frames (~1 second)
+        // Create calloop event loop for event-driven execution
+        let mut event_loop: EventLoop<platform::WaylandState> =
+            EventLoop::try_new().expect("Failed to create event loop");
+        let loop_handle = event_loop.handle();
 
-        // Main loop
+        // Create ping mechanism for wakeup on signal changes
+        let (ping, ping_source) = make_ping().expect("Failed to create ping");
+        init_wakeup(ping);
+
+        // Insert ping source - this wakes the loop when signals change
+        loop_handle
+            .insert_source(ping_source, |_, _, _| {
+                // Ping received - a signal was updated, frame will be rendered
+            })
+            .expect("Failed to insert ping source");
+
+        // Insert Wayland source - this handles all Wayland protocol events
+        WaylandSource::new(connection.clone(), event_queue)
+            .insert(loop_handle.clone())
+            .expect("Failed to insert Wayland source");
+
+        // Main loop - event-driven, blocks until Wayland event or signal update
         loop {
-            // Call the update callback to process external events
-            if let Some(ref mut callback) = self.on_update {
-                callback();
-            }
+            // Event-driven initialization detection
+            let fully_initialized = wayland_state.first_frame_presented
+                && (wayland_state.scale_factor_received || wayland_state.first_frame_presented);
+            let force_render = !fully_initialized;
 
-            // Non-blocking dispatch of Wayland events
-            event_queue
-                .dispatch_pending(&mut wayland_state)
-                .expect("Failed to dispatch events");
+            // Check if we need to actively poll (from previous frame's animations)
+            let has_animations = with_app_state(|state| state.has_animations);
+            let needs_polling = has_animations || self.on_update.is_some() || force_render;
+
+            // Clear animation flag - widgets will set it during layout if they need another frame
+            clear_animation_flag();
+
+            // Dispatch events from calloop:
+            // - If polling needed (animations/callbacks/init), use timeout
+            // - Otherwise block until event (Wayland or ping wakeup)
+            let timeout = if needs_polling {
+                Some(std::time::Duration::from_millis(16)) // ~60fps for animations
+            } else {
+                None // Block indefinitely until event
+            };
+
+            event_loop
+                .dispatch(timeout, &mut wayland_state)
+                .expect("Failed to dispatch event loop");
 
             if wayland_state.exit {
                 break;
+            }
+
+            // Call the update callback to process external events
+            if let Some(ref mut callback) = self.on_update {
+                callback();
             }
 
             // Dispatch input events to widgets
@@ -278,21 +320,16 @@ impl App {
             // Update scale factor
             renderer.set_scale_factor(wayland_state.scale_factor);
 
-            // Check if we need to render a frame
+            // Re-check render conditions after event dispatch (events may have triggered changes)
             let frame_requested = take_frame_request();
             let needs_layout = with_app_state(|state| state.needs_layout());
             let needs_paint = with_app_state(|state| state.needs_paint());
-            let has_animations = with_app_state(|state| state.has_animations);
+            // Re-check animations after event dispatch (events may have started new animations)
+            let has_animations_now = with_app_state(|state| state.has_animations);
 
-            // Force render during startup, then switch to on-demand
-            let force_render = startup_frames > 0;
-            if force_render {
-                startup_frames -= 1;
-            }
-
-            // Only render if something changed (or during startup)
-            if force_render || frame_requested || needs_layout || needs_paint || needs_resize || scale_changed || has_animations {
-                // Re-layout (for reactive updates) - EXACT same as crisp version
+            // Only render if something changed (or during initialization)
+            if force_render || frame_requested || needs_layout || needs_paint || needs_resize || scale_changed || has_animations_now {
+                // Re-layout (for reactive updates)
                 let constraints = Constraints::new(
                     0.0,
                     0.0,
@@ -316,16 +353,16 @@ impl App {
                 // Commit surface
                 if let Some(ref surface) = wayland_state.surface {
                     surface.commit();
+
+                    // Request frame callback if not yet initialized
+                    // This allows us to know when the compositor has presented our first frame
+                    if !wayland_state.first_frame_presented {
+                        surface.frame(&qh, surface.clone());
+                    }
                 }
 
                 // Flush the connection
                 connection.flush().expect("Failed to flush connection");
-
-                // Small delay to not busy-loop
-                std::thread::sleep(std::time::Duration::from_millis(16));
-            } else {
-                // Nothing to do, sleep longer to save CPU
-                std::thread::sleep(std::time::Duration::from_millis(16));
             }
         }
     }

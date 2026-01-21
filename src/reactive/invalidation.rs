@@ -1,8 +1,10 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 use bitflags::bitflags;
+use calloop::ping::Ping;
 
 bitflags! {
     /// Flags indicating what aspects of rendering need to be updated
@@ -95,9 +97,21 @@ thread_local! {
 /// Global flag to indicate a frame is requested
 static FRAME_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+/// Global wakeup handle for signaling the event loop
+static WAKEUP_PING: OnceLock<Ping> = OnceLock::new();
+
+/// Initialize the wakeup mechanism (called from App::run())
+pub fn init_wakeup(ping: Ping) {
+    let _ = WAKEUP_PING.set(ping);
+}
+
 /// Request that the main event loop process a frame
 pub fn request_frame() {
     FRAME_REQUESTED.store(true, Ordering::Relaxed);
+    // Wake up the event loop immediately
+    if let Some(ping) = WAKEUP_PING.get() {
+        ping.ping();
+    }
 }
 
 /// Check if a frame has been requested and clear the flag
