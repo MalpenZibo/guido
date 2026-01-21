@@ -806,11 +806,10 @@ impl Widget for Container {
             }
         }
 
-        // During size animations, use the LARGER of (current, target, size_hint) for child constraints.
-        // This prevents children (like text) from re-wrapping during collapse animations.
-        // Children maintain their layout at the larger size and get clipped instead.
-        // Also consider "about to animate" case: when size_hint differs from current target.
-        // size_hint = exact width/height if set, otherwise min_width/min_height
+        // Calculate child constraints based on container sizing mode:
+        // 1. If animation is running: use larger of (current, target, size_hint) to prevent re-wrapping
+        // 2. If exact width/height is set: use that value so text wraps correctly
+        // 3. Otherwise: use parent constraints minus padding
         let child_max_width = if let Some(ref anim) = self.width_anim {
             let size_hint = self
                 .width
@@ -828,8 +827,16 @@ impl Widget for Container {
                 let base = constraints.max_width.max(anim_max);
                 (base - padding.horizontal()).max(0.0)
             } else {
-                (constraints.max_width - padding.horizontal()).max(0.0)
+                // Animation done - use exact width if set, otherwise constraints
+                if let Some(ref exact_w) = self.width {
+                    (exact_w.get() - padding.horizontal()).max(0.0)
+                } else {
+                    (constraints.max_width - padding.horizontal()).max(0.0)
+                }
             }
+        } else if let Some(ref exact_w) = self.width {
+            // No animation but exact width set - use it for text wrapping
+            (exact_w.get() - padding.horizontal()).max(0.0)
         } else {
             (constraints.max_width - padding.horizontal()).max(0.0)
         };
@@ -851,8 +858,16 @@ impl Widget for Container {
                 let base = constraints.max_height.max(anim_max);
                 (base - padding.vertical()).max(0.0)
             } else {
-                (constraints.max_height - padding.vertical()).max(0.0)
+                // Animation done - use exact height if set, otherwise constraints
+                if let Some(ref exact_h) = self.height {
+                    (exact_h.get() - padding.vertical()).max(0.0)
+                } else {
+                    (constraints.max_height - padding.vertical()).max(0.0)
+                }
             }
+        } else if let Some(ref exact_h) = self.height {
+            // No animation but exact height set - use it
+            (exact_h.get() - padding.vertical()).max(0.0)
         } else {
             (constraints.max_height - padding.vertical()).max(0.0)
         };
