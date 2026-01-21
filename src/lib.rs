@@ -209,6 +209,9 @@ impl App {
         // Track previous scale factor to detect changes
         let mut previous_scale_factor = wayland_state.scale_factor;
 
+        // Force render first N frames for initialization
+        let mut startup_frames = 60; // Force render first 60 frames (~1 second)
+
         // Main loop
         loop {
             // Call the update callback to process external events
@@ -281,12 +284,15 @@ impl App {
             let needs_paint = with_app_state(|state| state.needs_paint());
             let has_animations = with_app_state(|state| state.has_animations);
 
-            // Only render if something changed
-            if frame_requested || needs_layout || needs_paint || needs_resize || scale_changed || has_animations {
-                // Clear animation flag - widgets will set it again if needed
-                clear_animation_flag();
+            // Force render during startup, then switch to on-demand
+            let force_render = startup_frames > 0;
+            if force_render {
+                startup_frames -= 1;
+            }
 
-                // Full layout
+            // Only render if something changed (or during startup)
+            if force_render || frame_requested || needs_layout || needs_paint || needs_resize || scale_changed || has_animations {
+                // Re-layout (for reactive updates) - EXACT same as crisp version
                 let constraints = Constraints::new(
                     0.0,
                     0.0,
@@ -294,15 +300,14 @@ impl App {
                     wayland_state.height as f32,
                 );
                 root.layout(constraints);
-                root.set_origin(0.0, 0.0);
 
-                // Full paint
+                // Paint
                 let mut paint_ctx = renderer.create_paint_context();
                 root.paint(&mut paint_ctx);
 
                 renderer.render(&mut surface, &paint_ctx, self.config.background_color);
 
-                // Clear flags
+                // Clear flags after rendering
                 with_app_state_mut(|state| {
                     state.clear_layout_flag();
                     state.clear_paint_flag();
@@ -316,10 +321,10 @@ impl App {
                 // Flush the connection
                 connection.flush().expect("Failed to flush connection");
 
-                // Short sleep when active
-                std::thread::sleep(std::time::Duration::from_millis(if has_animations { 16 } else { 1 }));
+                // Small delay to not busy-loop
+                std::thread::sleep(std::time::Duration::from_millis(16));
             } else {
-                // Nothing to do, sleep longer
+                // Nothing to do, sleep longer to save CPU
                 std::thread::sleep(std::time::Duration::from_millis(16));
             }
         }
