@@ -55,7 +55,10 @@ impl ChildrenSource {
     /// Get mutable access to the children vec, reconciling if needed
     pub fn reconcile_and_get_mut(&mut self) -> &mut Vec<Box<dyn Widget>> {
         // Always reconcile if we have dynamic slots (they need to be re-evaluated each frame)
-        let has_dynamic = self.slots.iter().any(|slot| matches!(slot, ChildSlot::Dynamic { .. }));
+        let has_dynamic = self
+            .slots
+            .iter()
+            .any(|slot| matches!(slot, ChildSlot::Dynamic { .. }));
 
         if self.needs_reconcile || has_dynamic {
             self.reconcile();
@@ -100,7 +103,11 @@ impl ChildrenSource {
                         self.merged.push(widget);
                     }
                 }
-                ChildSlot::Dynamic { items_fn, cached, order } => {
+                ChildSlot::Dynamic {
+                    items_fn,
+                    cached,
+                    order,
+                } => {
                     // Get new items from the function
                     let new_items = items_fn();
                     let new_keys: Vec<u64> = new_items.iter().map(|item| item.key).collect();
@@ -180,7 +187,6 @@ impl super::Widget for DummyWidget {
 
     fn clear_dirty(&mut self) {}
 }
-
 
 /// Wrapper for dynamic items with key + widget
 pub struct DynItem {

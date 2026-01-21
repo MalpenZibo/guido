@@ -133,3 +133,104 @@ impl<T: Clone + 'static> IntoMaybeDyn<T> for MaybeDyn<T> {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reactive::signal::create_signal;
+
+    #[test]
+    fn test_fixed_returns_static_value() {
+        let value = MaybeDyn::fixed(42);
+        assert_eq!(value.get(), 42);
+        assert_eq!(value.get(), 42); // Multiple gets return same value
+    }
+
+    #[test]
+    fn test_dynamic_calls_closure() {
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let counter_clone = counter.clone();
+        let value = MaybeDyn::dynamic(move || {
+            counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+        });
+        // Each get() calls the closure
+        assert_eq!(value.get(), 1);
+        assert_eq!(value.get(), 2);
+        assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn test_into_maybe_dyn_for_string() {
+        let value: MaybeDyn<String> = "hello".into_maybe_dyn();
+        assert_eq!(value.get(), "hello");
+
+        let value: MaybeDyn<String> = String::from("world").into_maybe_dyn();
+        assert_eq!(value.get(), "world");
+    }
+
+    #[test]
+    fn test_into_maybe_dyn_for_f32() {
+        let value: MaybeDyn<f32> = 2.5f32.into_maybe_dyn();
+        assert_eq!(value.get(), 2.5);
+    }
+
+    #[test]
+    fn test_into_maybe_dyn_for_bool() {
+        let value: MaybeDyn<bool> = true.into_maybe_dyn();
+        assert!(value.get());
+
+        let value: MaybeDyn<bool> = false.into_maybe_dyn();
+        assert!(!value.get());
+    }
+
+    #[test]
+    fn test_into_maybe_dyn_for_closures() {
+        let signal = create_signal(10);
+        let signal_clone = signal.clone();
+        let value: MaybeDyn<i32> = (move || signal_clone.get()).into_maybe_dyn();
+        assert_eq!(value.get(), 10);
+
+        signal.set(20);
+        assert_eq!(value.get(), 20);
+    }
+
+    #[test]
+    fn test_clone_static() {
+        let value1 = MaybeDyn::fixed(100);
+        let value2 = value1.clone();
+        assert_eq!(value1.get(), 100);
+        assert_eq!(value2.get(), 100);
+    }
+
+    #[test]
+    fn test_clone_dynamic() {
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+        let counter_clone = counter.clone();
+        let value1 = MaybeDyn::dynamic(move || {
+            counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        });
+        let value2 = value1.clone();
+
+        // Both share the same closure (Arc)
+        value1.get();
+        value2.get();
+        assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn test_signal_into_maybe_dyn() {
+        let signal = create_signal(42);
+        let value: MaybeDyn<i32> = signal.clone().into_maybe_dyn();
+
+        assert_eq!(value.get(), 42);
+        signal.set(100);
+        assert_eq!(value.get(), 100);
+    }
+
+    #[test]
+    fn test_maybe_dyn_into_maybe_dyn() {
+        let value1 = MaybeDyn::fixed(7);
+        let value2: MaybeDyn<i32> = value1.into_maybe_dyn();
+        assert_eq!(value2.get(), 7);
+    }
+}

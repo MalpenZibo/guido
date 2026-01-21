@@ -387,7 +387,12 @@ fn elevation_to_shadow(level: f32) -> Shadow {
         }
     };
 
-    Shadow::new((0.0, offset_y), blur, 0.0, Color::rgba(0.0, 0.0, 0.0, alpha))
+    Shadow::new(
+        (0.0, offset_y),
+        blur,
+        0.0,
+        Color::rgba(0.0, 0.0, 0.0, alpha),
+    )
 }
 
 impl Default for Container {
@@ -429,7 +434,8 @@ impl Widget for Container {
         }
 
         // Check if we need layout
-        let needs_layout = self.needs_layout() || padding_changed || child_needs_layout || has_animations;
+        let needs_layout =
+            self.needs_layout() || padding_changed || child_needs_layout || has_animations;
 
         if !needs_layout {
             if visual_changed {

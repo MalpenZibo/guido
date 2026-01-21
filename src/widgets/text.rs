@@ -59,8 +59,14 @@ impl Widget for Text {
         );
 
         let size = Size::new(
-            measured.width.max(constraints.min_width).min(constraints.max_width),
-            measured.height.max(constraints.min_height).min(constraints.max_height),
+            measured
+                .width
+                .max(constraints.min_width)
+                .min(constraints.max_width),
+            measured
+                .height
+                .max(constraints.min_height)
+                .min(constraints.max_height),
         );
 
         self.bounds.width = size.width;
