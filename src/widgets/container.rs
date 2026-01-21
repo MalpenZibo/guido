@@ -6,6 +6,7 @@ use crate::renderer::primitives::{GradientDir, Shadow};
 use crate::renderer::PaintContext;
 
 use super::children::{ChildrenSource, DynItem, DynamicChildren};
+use super::into_child::IntoChild;
 use super::widget::{
     Color, Event, EventResponse, MouseButton, Padding, Rect, ScrollSource, Widget,
 };
@@ -168,16 +169,13 @@ impl Container {
         self
     }
 
-    /// Add a single child (static mode)
-    pub fn child(mut self, widget: impl Widget + 'static) -> Self {
-        match &mut self.children_source {
-            ChildrenSource::Static(children) => {
-                children.push(Box::new(widget));
-            }
-            ChildrenSource::Dynamic(_) => {
-                panic!("Cannot add static child to container with dynamic children");
-            }
-        }
+    /// Add a single child (static or dynamic)
+    ///
+    /// Accepts both:
+    /// - Static widgets: `container().child(text("Hello"))`
+    /// - Dynamic closures: `container().child(dyn_child(move || Some(text("Hello"))))`
+    pub fn child(mut self, child: impl IntoChild) -> Self {
+        child.add_to_container(&mut self.children_source);
         self
     }
 

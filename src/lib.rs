@@ -31,8 +31,8 @@ pub mod prelude {
     pub use crate::renderer::primitives::Shadow;
     pub use crate::renderer::PaintContext;
     pub use crate::widgets::{
-        container, text, Border, Color, Container, Event, EventResponse, GradientDirection,
-        LinearGradient, MouseButton, Padding, Rect, ScrollSource, Text, Widget,
+        container, dyn_child, text, Border, Color, Container, Event, EventResponse,
+        GradientDirection, LinearGradient, MouseButton, Padding, Rect, ScrollSource, Text, Widget,
     };
     pub use crate::{App, AppConfig};
 }

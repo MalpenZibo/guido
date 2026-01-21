@@ -1,10 +1,12 @@
 //! Example demonstrating static and dynamic children.
 //!
 //! This example shows:
-//! - Static children with .child() (not reactive)
-//! - Conditional static children with .maybe_child() (NOT reactive - evaluated once)
-//! - Dynamic children with .children_dyn() (fully reactive with state preservation)
-//! - How to make truly reactive conditional children using .children_dyn()
+//! 1. Static children with .child() - Fixed at creation
+//! 2. Conditional static with .maybe_child() - NOT reactive (evaluated once)
+//! 3. Dynamic list with .children_dyn() - Fully reactive with keyed reconciliation
+//! 4. Unified .child() API - Accepts both static widgets and dyn_child() wrappers
+//! 5. Alternative: .child_dyn() - Convenience method for single optional child
+//! 6. Alternative: .children_dyn() - Verbose but powerful for complex cases
 
 use guido::prelude::*;
 use std::collections::hash_map::DefaultHasher;
@@ -30,10 +32,14 @@ fn main() {
     // Clone signals for closures
     let show_for_toggle = show_optional.clone();
     let show_for_toggle2 = show_optional2.clone();
+    let show_for_toggle3 = show_optional.clone();
     let show_for_maybe = show_optional.clone();
     let show_for_text = show_optional.clone();
+    let show_for_unified = show_optional.clone();
+    let show_for_unified_text = show_optional.clone();
     let show_for_child_dyn = show_optional.clone();
     let show_for_child_dyn_text = show_optional.clone();
+    let show_for_child_dyn_text2 = show_optional.clone();
     let show_for_children_dyn = show_optional2.clone();
     let show_for_children_dyn_text = show_optional2.clone();
     let items_for_add = items.clone();
@@ -219,20 +225,20 @@ fn main() {
                 )
         )
         .child(
-            // === SECTION 4: Reactive single child with .child_dyn() ===
+            // === SECTION 4: Unified .child() API (static + dynamic) ===
             container()
                 .padding(12.0)
-                .background(Color::rgb(0.2, 0.15, 0.2))
+                .background(Color::rgb(0.18, 0.18, 0.22))
                 .corner_radius(8.0)
                 .child(
                     container()
                         .layout(Flex::column().spacing(8.0))
                         .child(
-                            text("4. Reactive Single Child (.child_dyn) - EASY!")
-                                .color(Color::rgb(1.0, 0.9, 1.0))
+                            text("4. Unified .child() API - BOTH static and dynamic!")
+                                .color(Color::rgb(0.95, 0.95, 1.0))
                         )
                         .child(
-                            text("Convenience method for single optional child:")
+                            text("The .child() method now accepts both types:")
                                 .color(Color::WHITE)
                         )
                         .child(
@@ -246,7 +252,84 @@ fn main() {
                                 })
                                 .child(
                                     text(move || {
-                                        if show_for_child_dyn_text.get() {
+                                        if show_for_unified_text.get() {
+                                            "Click to Hide".to_string()
+                                        } else {
+                                            "Click to Show".to_string()
+                                        }
+                                    })
+                                    .color(Color::WHITE)
+                                )
+                        )
+                        .child(
+                            // Mixing static and dynamic children using unified .child()!
+                            container()
+                                .layout(Flex::row().spacing(4.0))
+                                .child(
+                                    // Static child
+                                    container()
+                                        .padding(6.0)
+                                        .background(Color::rgb(0.25, 0.2, 0.25))
+                                        .corner_radius(4.0)
+                                        .child(text("Static").color(Color::WHITE))
+                                )
+                                .child(
+                                    // Dynamic child using dyn_child()!
+                                    dyn_child(move || {
+                                        if show_for_unified.get() {
+                                            Some(
+                                                container()
+                                                    .padding(8.0)
+                                                    .background(Color::rgb(0.5, 0.3, 0.5))
+                                                    .corner_radius(4.0)
+                                                    .ripple()
+                                                    .child(text("Dynamic via .child()!").color(Color::WHITE))
+                                            )
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                )
+                                .child(
+                                    // Another static child
+                                    container()
+                                        .padding(6.0)
+                                        .background(Color::rgb(0.25, 0.2, 0.25))
+                                        .corner_radius(4.0)
+                                        .child(text("Static").color(Color::WHITE))
+                                )
+                        )
+                )
+        )
+        .child(
+            // === SECTION 5: Reactive single child with .child_dyn() ===
+            container()
+                .padding(12.0)
+                .background(Color::rgb(0.2, 0.15, 0.2))
+                .corner_radius(8.0)
+                .child(
+                    container()
+                        .layout(Flex::column().spacing(8.0))
+                        .child(
+                            text("5. Alternative: .child_dyn() method")
+                                .color(Color::rgb(1.0, 0.9, 1.0))
+                        )
+                        .child(
+                            text("Convenience method for single optional child:")
+                                .color(Color::WHITE)
+                        )
+                        .child(
+                            container()
+                                .padding(6.0)
+                                .background(Color::rgb(0.3, 0.2, 0.4))
+                                .corner_radius(4.0)
+                                .ripple()
+                                .on_click(move || {
+                                    show_for_toggle3.update(|v| *v = !*v);
+                                })
+                                .child(
+                                    text(move || {
+                                        if show_for_child_dyn_text2.get() {
                                             "Click to Hide".to_string()
                                         } else {
                                             "Click to Show".to_string()
@@ -292,7 +375,7 @@ fn main() {
                 )
         )
         .child(
-            // === SECTION 5: Truly reactive conditional children (verbose way) ===
+            // === SECTION 6: Truly reactive conditional children (verbose way) ===
             container()
                 .padding(12.0)
                 .background(Color::rgb(0.18, 0.15, 0.2))
@@ -301,7 +384,7 @@ fn main() {
                     container()
                         .layout(Flex::column().spacing(8.0))
                         .child(
-                            text("5. Reactive Conditional (using .children_dyn) - Verbose")
+                            text("6. Alternative: .children_dyn() - Verbose but powerful")
                                 .color(Color::rgb(0.9, 0.9, 1.0))
                         )
                         .child(
