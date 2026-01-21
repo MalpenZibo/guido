@@ -197,6 +197,12 @@ impl Container {
         self
     }
 
+    /// Transfer children from another ChildrenSource (useful for components)
+    pub fn children_source(mut self, source: ChildrenSource) -> Self {
+        self.children_source = source;
+        self
+    }
+
     pub fn padding(mut self, value: impl IntoMaybeDyn<f32>) -> Self {
         let value = value.into_maybe_dyn();
         self.padding = MaybeDyn::Dynamic(std::sync::Arc::new(move || Padding::all(value.get())));
@@ -289,6 +295,12 @@ impl Container {
 
     pub fn on_click<F: Fn() + Send + Sync + 'static>(mut self, callback: F) -> Self {
         self.on_click = Some(Arc::new(callback));
+        self
+    }
+
+    /// Accept an optional click callback (useful for components)
+    pub fn on_click_option(mut self, callback: Option<ClickCallback>) -> Self {
+        self.on_click = callback;
         self
     }
 
