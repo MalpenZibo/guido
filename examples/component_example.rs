@@ -43,11 +43,7 @@ impl Card {
             .background(self.background.get())
             .corner_radius(8.0)
             .layout(Flex::column().spacing(8.0))
-            .child(
-                text(self.title.clone())
-                    .font_size(18.0)
-                    .color(Color::WHITE),
-            )
+            .child(text(self.title.clone()).font_size(18.0).color(Color::WHITE))
             .children_source(self.take_children())
     }
 }
@@ -114,33 +110,31 @@ fn main() {
                 .child(text("Cards can have multiple children.").color(Color::rgb(0.8, 0.8, 0.8))),
         )
         .child(
-            card()
-                .title("Styled Buttons")
-                .child(
-                    container()
-                        .layout(Flex::row().spacing(8.0))
-                        .child(
-                            button()
-                                .label("Primary")
-                                .background(Color::rgb(0.2, 0.4, 0.8))
-                                .padding(12.0)
-                                .on_click(|| println!("Primary clicked")),
-                        )
-                        .child(
-                            button()
-                                .label("Secondary")
-                                .background(Color::rgb(0.5, 0.5, 0.6))
-                                .padding(12.0)
-                                .on_click(|| println!("Secondary clicked")),
-                        )
-                        .child(
-                            button()
-                                .label("Danger")
-                                .background(Color::rgb(0.8, 0.2, 0.2))
-                                .padding(12.0)
-                                .on_click(|| println!("Danger clicked")),
-                        ),
-                ),
+            card().title("Styled Buttons").child(
+                container()
+                    .layout(Flex::row().spacing(8.0))
+                    .child(
+                        button()
+                            .label("Primary")
+                            .background(Color::rgb(0.2, 0.4, 0.8))
+                            .padding(12.0)
+                            .on_click(|| println!("Primary clicked")),
+                    )
+                    .child(
+                        button()
+                            .label("Secondary")
+                            .background(Color::rgb(0.5, 0.5, 0.6))
+                            .padding(12.0)
+                            .on_click(|| println!("Secondary clicked")),
+                    )
+                    .child(
+                        button()
+                            .label("Danger")
+                            .background(Color::rgb(0.8, 0.2, 0.2))
+                            .padding(12.0)
+                            .on_click(|| println!("Danger clicked")),
+                    ),
+            ),
         )
         .child(
             card()
@@ -160,22 +154,20 @@ fn main() {
                         .color(Color::rgb(0.8, 0.8, 0.8)),
                 )
                 .child(
-                    container()
-                        .layout(Flex::row().spacing(8.0))
-                        .child(
-                            button()
-                                .label(move || format!("Count is {}", count5.get()))
-                                .background(move || {
-                                    // Button color changes based on count
-                                    let c = count6.get();
-                                    if c % 2 == 0 {
-                                        Color::rgb(0.3, 0.5, 0.7)
-                                    } else {
-                                        Color::rgb(0.7, 0.5, 0.3)
-                                    }
-                                })
-                                .on_click(move || count7.update(|c| *c += 1)),
-                        ),
+                    container().layout(Flex::row().spacing(8.0)).child(
+                        button()
+                            .label(move || format!("Count is {}", count5.get()))
+                            .background(move || {
+                                // Button color changes based on count
+                                let c = count6.get();
+                                if c % 2 == 0 {
+                                    Color::rgb(0.3, 0.5, 0.7)
+                                } else {
+                                    Color::rgb(0.7, 0.5, 0.3)
+                                }
+                            })
+                            .on_click(move || count7.update(|c| *c += 1)),
+                    ),
                 ),
         );
 

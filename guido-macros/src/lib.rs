@@ -48,9 +48,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         let field_type = &field.ty;
 
         // Skip if no #[prop] attribute
-        let prop_attr = field.attrs.iter().find(|attr| {
-            attr.path().is_ident("prop")
-        });
+        let prop_attr = field.attrs.iter().find(|attr| attr.path().is_ident("prop"));
 
         if prop_attr.is_none() {
             continue;
@@ -189,10 +187,8 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     // Create snake_case constructor name
-    let constructor_name = syn::Ident::new(
-        &to_snake_case(&struct_name.to_string()),
-        struct_name.span(),
-    );
+    let constructor_name =
+        syn::Ident::new(&to_snake_case(&struct_name.to_string()), struct_name.span());
 
     let expanded = quote! {
         #vis struct #struct_name {
