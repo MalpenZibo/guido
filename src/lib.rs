@@ -206,6 +206,9 @@ impl App {
         root.layout(constraints);
         root.set_origin(0.0, 0.0);
 
+        // Track previous scale factor to detect changes
+        let mut previous_scale_factor = wayland_state.scale_factor;
+
         // Main loop
         loop {
             // Call the update callback to process external events
@@ -235,6 +238,7 @@ impl App {
             // Check for resize or scale change
             let needs_resize =
                 surface.width() != physical_width || surface.height() != physical_height;
+            let scale_changed = wayland_state.scale_factor != previous_scale_factor;
 
             if needs_resize {
                 log::info!(
@@ -253,7 +257,22 @@ impl App {
                 });
             }
 
-            // Update scale factor
+            // Update scale factor and mark for re-render if changed
+            if scale_changed {
+                log::info!(
+                    "Scale factor changed: {} -> {}",
+                    previous_scale_factor,
+                    wayland_state.scale_factor
+                );
+                previous_scale_factor = wayland_state.scale_factor;
+
+                // Mark that we need to re-render with new scale factor
+                with_app_state_mut(|state| {
+                    state.change_flags |= reactive::ChangeFlags::NEEDS_PAINT;
+                });
+            }
+
+            // Always update renderer scale factor (cheap operation)
             renderer.set_scale_factor(wayland_state.scale_factor);
 
             // Check if we need to render a frame
@@ -263,13 +282,14 @@ impl App {
             let has_animations = with_app_state(|state| state.has_animations);
 
             // Only layout/paint/render if something changed or animations are active
-            if frame_requested || needs_layout || needs_paint || needs_resize || has_animations {
+            if frame_requested || needs_layout || needs_paint || needs_resize || scale_changed || has_animations {
                 log::trace!(
-                    "Rendering frame: requested={}, layout={}, paint={}, resize={}, animations={}",
+                    "Rendering frame: requested={}, layout={}, paint={}, resize={}, scale={}, animations={}",
                     frame_requested,
                     needs_layout,
                     needs_paint,
                     needs_resize,
+                    scale_changed,
                     has_animations
                 );
 
