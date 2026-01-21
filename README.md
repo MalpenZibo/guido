@@ -8,7 +8,7 @@ A reactive Rust GUI library for Wayland layer shell widgets.
 
 Guido is a GPU-accelerated GUI library for building Wayland layer shell applications like status bars, panels, and overlays. It features a fine-grained reactive programming model inspired by [Floem](https://github.com/lapce/floem), with automatic dependency tracking and efficient re-rendering.
 
-**Note:** This project is developed collaboratively using AI agents (Claude Code and Claude).
+**Note:** This project is developed collaboratively using AI agents.
 
 ## Features
 
