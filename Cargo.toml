@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "guido-macros"]
+
 [package]
 name = "guido"
 version = "0.1.0"
@@ -6,6 +9,7 @@ description = "A reactive Rust GUI library using wgpu for Wayland layer shell wi
 license = "MIT"
 
 [dependencies]
+guido-macros = { path = "guido-macros" }
 wgpu = { version = "28.0", features = ["fragile-send-sync-non-atomic-wasm"] }
 bytemuck = { version = "1.24", features = ["derive"] }
 glyphon = "0.10"

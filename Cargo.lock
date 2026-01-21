@@ -639,6 +639,7 @@ dependencies = [
  "cosmic-text 0.16.0",
  "env_logger",
  "glyphon",
+ "guido-macros",
  "image",
  "log",
  "pollster",
@@ -648,6 +649,15 @@ dependencies = [
  "wayland-client",
  "wayland-protocols-wlr",
  "wgpu",
+]
+
+[[package]]
+name = "guido-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

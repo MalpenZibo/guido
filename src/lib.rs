@@ -6,6 +6,9 @@ pub mod widgets;
 pub mod platform;
 pub mod renderer;
 
+// Re-export macros
+pub use guido_macros::component;
+
 use layout::Constraints;
 use platform::{create_wayland_app, Anchor, Layer, WaylandWindowWrapper};
 use reactive::{
@@ -32,7 +35,7 @@ pub mod prelude {
         container, text, Border, Color, Container, Event, EventResponse, GradientDirection,
         IntoChildren, LinearGradient, MouseButton, Padding, Rect, ScrollSource, Text, Widget,
     };
-    pub use crate::{App, AppConfig};
+    pub use crate::{component, App, AppConfig};
 }
 
 pub struct AppConfig {
@@ -143,7 +146,7 @@ impl App {
     }
 
     pub fn run<W: Widget + 'static>(mut self, mut root: W) {
-        env_logger::init();
+        let _ = env_logger::try_init();
 
         let (connection, mut event_queue, mut wayland_state, qh) = create_wayland_app();
 
