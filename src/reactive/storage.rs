@@ -50,43 +50,29 @@ pub fn create_signal_value<T: Send + Sync + 'static>(value: T) -> SignalId {
 
 /// Get a signal's value (clones it)
 pub fn get_signal_value<T: Clone + Send + Sync + 'static>(id: SignalId) -> T {
-    let arc = with_storage_read(|storage| {
-        storage.values[id].clone().expect("Signal disposed")
-    });
+    let arc = with_storage_read(|storage| storage.values[id].clone().expect("Signal disposed"));
     let guard = arc.read().unwrap();
     guard.downcast_ref::<T>().expect("Type mismatch").clone()
 }
 
 /// Set a signal's value
 pub fn set_signal_value<T: Send + Sync + 'static>(id: SignalId, value: T) {
-    let arc = with_storage_read(|storage| {
-        storage.values[id].clone().expect("Signal disposed")
-    });
+    let arc = with_storage_read(|storage| storage.values[id].clone().expect("Signal disposed"));
     let mut guard = arc.write().unwrap();
     *guard = Box::new(value);
 }
 
 /// Update a signal's value with a closure
-pub fn update_signal_value<T: Clone + Send + Sync + 'static>(
-    id: SignalId,
-    f: impl FnOnce(&mut T),
-) {
-    let arc = with_storage_read(|storage| {
-        storage.values[id].clone().expect("Signal disposed")
-    });
+pub fn update_signal_value<T: Clone + Send + Sync + 'static>(id: SignalId, f: impl FnOnce(&mut T)) {
+    let arc = with_storage_read(|storage| storage.values[id].clone().expect("Signal disposed"));
     let mut guard = arc.write().unwrap();
     let value = guard.downcast_mut::<T>().expect("Type mismatch");
     f(value);
 }
 
 /// Borrow a signal's value for reading
-pub fn with_signal_value<T: Send + Sync + 'static, R>(
-    id: SignalId,
-    f: impl FnOnce(&T) -> R,
-) -> R {
-    let arc = with_storage_read(|storage| {
-        storage.values[id].clone().expect("Signal disposed")
-    });
+pub fn with_signal_value<T: Send + Sync + 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -> R {
+    let arc = with_storage_read(|storage| storage.values[id].clone().expect("Signal disposed"));
     let guard = arc.read().unwrap();
     f(guard.downcast_ref::<T>().expect("Type mismatch"))
 }

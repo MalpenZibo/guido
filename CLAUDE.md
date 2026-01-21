@@ -184,19 +184,22 @@ Border radius curvature can be customized (default is 2.0 for circular arcs):
 
 - Always create a feature branch for any changes
 - Open a Pull Request (PR) for review
-- Merge to main only through PRs
+- **CRITICAL: Check that all CI checks pass before merging the PR**
+- Merge to main only through PRs after CI is green
 
-**CRITICAL: Always run `cargo clippy` before committing code changes.**
+**CRITICAL: Always run `cargo clippy` and `cargo fmt` before committing code changes.**
 - Fix all clippy errors (compilation will fail)
 - Address clippy warnings when reasonable
 - Use `cargo clippy --fix --allow-dirty` to auto-fix simple warnings
+- Run `cargo fmt --all` to ensure proper formatting
 
 ```bash
 # Create a feature branch
 git checkout -b feature/my-feature
 
-# Make changes, then run clippy BEFORE committing
-cargo clippy
+# Make changes, then run formatting and clippy BEFORE committing
+cargo fmt --all
+cargo clippy --all-targets --all-features -- -D warnings
 cargo clippy --fix --allow-dirty  # Auto-fix warnings if needed
 
 # Then commit
@@ -206,6 +209,12 @@ git commit -m "Add my feature"
 # Push and create PR
 git push -u origin feature/my-feature
 gh pr create --title "Add my feature" --body "Description of changes"
+
+# IMPORTANT: Check CI status before merging
+gh pr view --web  # Check that all CI checks pass (Format, Clippy, Test, Build)
+
+# Only merge after all CI checks are green
+gh pr merge <pr-number> --squash --delete-branch
 ```
 
 ### Visual Changes

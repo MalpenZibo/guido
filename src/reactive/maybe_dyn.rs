@@ -186,8 +186,7 @@ mod tests {
     #[test]
     fn test_into_maybe_dyn_for_closures() {
         let signal = create_signal(10);
-        let signal_clone = signal.clone();
-        let value: MaybeDyn<i32> = (move || signal_clone.get()).into_maybe_dyn();
+        let value: MaybeDyn<i32> = (move || signal.get()).into_maybe_dyn();
         assert_eq!(value.get(), 10);
 
         signal.set(20);
@@ -220,7 +219,7 @@ mod tests {
     #[test]
     fn test_signal_into_maybe_dyn() {
         let signal = create_signal(42);
-        let value: MaybeDyn<i32> = signal.clone().into_maybe_dyn();
+        let value: MaybeDyn<i32> = signal.into_maybe_dyn();
 
         assert_eq!(value.get(), 42);
         signal.set(100);

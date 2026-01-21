@@ -50,8 +50,7 @@ fn main() {
                     }
                 })
                 .child(
-                    text(move || format!("Count: {} (click me!)", count.get()))
-                        .color(Color::WHITE),
+                    text(move || format!("Count: {} (click me!)", count.get())).color(Color::WHITE),
                 ),
         )
         .child(
