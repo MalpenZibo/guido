@@ -1,6 +1,6 @@
 use crate::layout::{Constraints, Size};
 use crate::reactive::{ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId};
-use crate::renderer::PaintContext;
+use crate::renderer::{measure_text, PaintContext};
 
 use super::widget::{Color, EventResponse, Rect, Widget};
 
@@ -51,16 +51,16 @@ impl Widget for Text {
     fn layout(&mut self, constraints: Constraints) -> Size {
         self.refresh();
 
-        // Approximate text size (will be refined by renderer)
-        let char_width = self.cached_font_size * 0.6;
-        let width = (self.cached_text.len() as f32 * char_width).min(constraints.max_width);
-        let height = self.cached_font_size * 1.2;
+        // Use actual font metrics for accurate measurement
+        let measured = measure_text(
+            &self.cached_text,
+            self.cached_font_size,
+            Some(constraints.max_width),
+        );
 
         let size = Size::new(
-            width.max(constraints.min_width).min(constraints.max_width),
-            height
-                .max(constraints.min_height)
-                .min(constraints.max_height),
+            measured.width.max(constraints.min_width).min(constraints.max_width),
+            measured.height.max(constraints.min_height).min(constraints.max_height),
         );
 
         self.bounds.width = size.width;

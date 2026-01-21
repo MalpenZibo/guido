@@ -29,7 +29,7 @@ pub mod prelude {
         MaybeDyn, ReadSignal, Signal, WriteSignal,
     };
     pub use crate::renderer::primitives::Shadow;
-    pub use crate::renderer::PaintContext;
+    pub use crate::renderer::{measure_text, PaintContext};
     pub use crate::widgets::{
         container, text, Border, Color, Container, Event, EventResponse,
         GradientDirection, IntoChildren, LinearGradient, MouseButton, Padding, Rect, ScrollSource, Text, Widget,
