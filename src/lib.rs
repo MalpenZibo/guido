@@ -275,80 +275,32 @@ impl App {
             // Always update renderer scale factor (cheap operation)
             renderer.set_scale_factor(wayland_state.scale_factor);
 
-            // Check if we need to render a frame
-            let frame_requested = take_frame_request();
-            let needs_layout = with_app_state(|state| state.needs_layout());
-            let needs_paint = with_app_state(|state| state.needs_paint());
-            let has_animations = with_app_state(|state| state.has_animations);
+            // Re-layout (for reactive updates)
+            let constraints = Constraints::new(
+                0.0,
+                0.0,
+                wayland_state.width as f32,
+                wayland_state.height as f32,
+            );
+            root.layout(constraints);
+            root.set_origin(0.0, 0.0);
 
-            // Only layout/paint/render if something changed or animations are active
-            if frame_requested || needs_layout || needs_paint || needs_resize || scale_changed || has_animations {
-                log::trace!(
-                    "Rendering frame: requested={}, layout={}, paint={}, resize={}, scale={}, animations={}",
-                    frame_requested,
-                    needs_layout,
-                    needs_paint,
-                    needs_resize,
-                    scale_changed,
-                    has_animations
-                );
+            // Paint
+            let mut paint_ctx = renderer.create_paint_context();
+            root.paint(&mut paint_ctx);
 
-                // Clear animation flag before layout - widgets will set it again if they need to continue
-                clear_animation_flag();
+            renderer.render(&mut surface, &paint_ctx, self.config.background_color);
 
-                // Re-layout if needed (or if animations are active, since animations advance in layout)
-                if needs_layout || needs_resize || has_animations {
-                    let constraints = Constraints::new(
-                        0.0,
-                        0.0,
-                        wayland_state.width as f32,
-                        wayland_state.height as f32,
-                    );
-                    root.layout(constraints);
-                    root.set_origin(0.0, 0.0);
-
-                    // Clear layout flag
-                    with_app_state_mut(|state| {
-                        state.clear_layout_flag();
-                    });
-                }
-
-                // Paint if needed (always paint when layout happens or animations are active)
-                if needs_paint || needs_layout || needs_resize || has_animations {
-                    let mut paint_ctx = renderer.create_paint_context();
-                    root.paint(&mut paint_ctx);
-
-                    renderer.render(&mut surface, &paint_ctx, self.config.background_color);
-
-                    // Clear dirty flags on all widgets
-                    root.clear_dirty();
-
-                    // Clear global paint flag
-                    with_app_state_mut(|state| {
-                        state.clear_paint_flag();
-                        state.clear_dirty_widgets();
-                    });
-                }
-
-                // Commit surface
-                if let Some(ref surface) = wayland_state.surface {
-                    surface.commit();
-                }
-
-                // Flush the connection
-                connection.flush().expect("Failed to flush connection");
-
-                // If animations are active, sleep for frame time (16ms ~= 60fps)
-                if has_animations {
-                    std::thread::sleep(std::time::Duration::from_millis(16));
-                } else {
-                    // Short sleep to avoid busy-looping
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                }
-            } else {
-                // Nothing to do, sleep longer to save CPU
-                std::thread::sleep(std::time::Duration::from_millis(16));
+            // Commit surface
+            if let Some(ref surface) = wayland_state.surface {
+                surface.commit();
             }
+
+            // Flush the connection
+            connection.flush().expect("Failed to flush connection");
+
+            // Short sleep to avoid busy-looping
+            std::thread::sleep(std::time::Duration::from_millis(16));
         }
     }
 }
