@@ -23,9 +23,21 @@ fn main() {
     let show_optional = create_signal(true);
     let show_optional2 = create_signal(true);
     let items = create_signal(vec![
-        Item { id: 1, name: "Item 1".to_string(), color: Color::rgb(0.8, 0.3, 0.3) },
-        Item { id: 2, name: "Item 2".to_string(), color: Color::rgb(0.3, 0.8, 0.3) },
-        Item { id: 3, name: "Item 3".to_string(), color: Color::rgb(0.3, 0.3, 0.8) },
+        Item {
+            id: 1,
+            name: "Item 1".to_string(),
+            color: Color::rgb(0.8, 0.3, 0.3),
+        },
+        Item {
+            id: 2,
+            name: "Item 2".to_string(),
+            color: Color::rgb(0.3, 0.8, 0.3),
+        },
+        Item {
+            id: 3,
+            name: "Item 3".to_string(),
+            color: Color::rgb(0.3, 0.3, 0.8),
+        },
     ]);
 
     // Clone signals for closures
@@ -43,11 +55,15 @@ fn main() {
     let items_for_reverse = items.clone();
 
     let view = container()
-        .layout(Flex::column().spacing(12.0))
+        .layout(Flex::row().spacing(12.0))
         .padding(12.0)
         .child(
-            // === SECTION 1: Static children example ===
+            // First column - sections 1-2
             container()
+                .layout(Flex::column().spacing(12.0))
+                .child(
+                    // === SECTION 1: Static children example ===
+                    container()
                 .padding(12.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
                 .corner_radius(8.0)
@@ -82,10 +98,10 @@ fn main() {
                                 )
                         )
                 )
-        )
-        .child(
-            // === SECTION 2: Conditional static children (NOT REACTIVE) ===
-            container()
+                )
+                .child(
+                    // === SECTION 2: Conditional static children (NOT REACTIVE) ===
+                    container()
                 .padding(12.0)
                 .background(Color::rgb(0.2, 0.15, 0.15))
                 .corner_radius(8.0)
@@ -124,10 +140,15 @@ fn main() {
                                 )
                         )
                 )
+                )
         )
         .child(
-            // === SECTION 3: Dynamic children (FULLY REACTIVE) ===
+            // Second column - sections 3-4
             container()
+                .layout(Flex::column().spacing(12.0))
+                .child(
+                    // === SECTION 3: Dynamic children (FULLY REACTIVE) ===
+                    container()
                 .padding(12.0)
                 .background(Color::rgb(0.15, 0.2, 0.15))
                 .corner_radius(8.0)
@@ -218,10 +239,10 @@ fn main() {
                                 })
                         )
                 )
-        )
-        .child(
-            // === SECTION 4: NEW! Mixing static and dynamic children ===
-            container()
+                )
+                .child(
+                    // === SECTION 4: NEW! Mixing static and dynamic children ===
+                    container()
                 .padding(12.0)
                 .background(Color::rgb(0.15, 0.25, 0.15))
                 .corner_radius(8.0)
@@ -297,10 +318,15 @@ fn main() {
                                 .color(Color::rgb(0.8, 1.0, 0.8))
                         )
                 )
+                )
         )
         .child(
-            // === SECTION 5: Complex mixing example ===
+            // Third column - sections 5-6
             container()
+                .layout(Flex::column().spacing(12.0))
+                .child(
+                    // === SECTION 5: Complex mixing example ===
+                    container()
                 .padding(12.0)
                 .background(Color::rgb(0.18, 0.15, 0.25))
                 .corner_radius(8.0)
@@ -370,10 +396,10 @@ fn main() {
                                 .child(text("Static 3").color(Color::WHITE))
                         )
                 )
-        )
-        .child(
-            // === SECTION 6: .children() for keyed lists ===
-            container()
+                )
+                .child(
+                    // === SECTION 6: .children() for keyed lists ===
+                    container()
                 .padding(12.0)
                 .background(Color::rgb(0.18, 0.15, 0.2))
                 .corner_radius(8.0)
@@ -409,11 +435,12 @@ fn main() {
                                 .child(text("Static footer after list").color(Color::rgb(0.8, 0.8, 0.8)))
                         )
                 )
+        )
         );
 
     App::new()
-        .width(900)
-        .height(700)
+        .width(1800)
+        .height(450)
         .background_color(Color::rgb(0.1, 0.1, 0.15))
         .run(view);
 }
