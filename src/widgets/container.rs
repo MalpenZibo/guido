@@ -806,19 +806,25 @@ impl Widget for Container {
             }
         }
 
-        // During size animations, use the LARGER of (current, target, min_size) for child constraints.
+        // During size animations, use the LARGER of (current, target, size_hint) for child constraints.
         // This prevents children (like text) from re-wrapping during collapse animations.
         // Children maintain their layout at the larger size and get clipped instead.
-        // Also consider "about to animate" case: when min_size differs from current target.
+        // Also consider "about to animate" case: when size_hint differs from current target.
+        // size_hint = exact width/height if set, otherwise min_width/min_height
         let child_max_width = if let Some(ref anim) = self.width_anim {
-            let min_w = self.min_width.as_ref().map(|w| w.get()).unwrap_or(0.0);
+            let size_hint = self
+                .width
+                .as_ref()
+                .map(|w| w.get())
+                .or_else(|| self.min_width.as_ref().map(|w| w.get()))
+                .unwrap_or(0.0);
             let current = *anim.current();
             let target = *anim.target();
-            // If min_width differs from target, we're about to start a new animation
-            let will_animate = (min_w - target).abs() > 0.001;
+            // If size_hint differs from target, we're about to start a new animation
+            let will_animate = (size_hint - target).abs() > 0.001;
             if anim.is_animating() || will_animate {
-                // Use the larger of current/target/min_width so children don't re-wrap
-                let anim_max = current.max(target).max(min_w);
+                // Use the larger of current/target/size_hint so children don't re-wrap
+                let anim_max = current.max(target).max(size_hint);
                 let base = constraints.max_width.max(anim_max);
                 (base - padding.horizontal()).max(0.0)
             } else {
@@ -829,14 +835,19 @@ impl Widget for Container {
         };
 
         let child_max_height = if let Some(ref anim) = self.height_anim {
-            let min_h = self.min_height.as_ref().map(|h| h.get()).unwrap_or(0.0);
+            let size_hint = self
+                .height
+                .as_ref()
+                .map(|h| h.get())
+                .or_else(|| self.min_height.as_ref().map(|h| h.get()))
+                .unwrap_or(0.0);
             let current = *anim.current();
             let target = *anim.target();
-            // If min_height differs from target, we're about to start a new animation
-            let will_animate = (min_h - target).abs() > 0.001;
+            // If size_hint differs from target, we're about to start a new animation
+            let will_animate = (size_hint - target).abs() > 0.001;
             if anim.is_animating() || will_animate {
-                // Use the larger of current/target/min_height so children don't re-wrap
-                let anim_max = current.max(target).max(min_h);
+                // Use the larger of current/target/size_hint so children don't re-wrap
+                let anim_max = current.max(target).max(size_hint);
                 let base = constraints.max_height.max(anim_max);
                 (base - padding.vertical()).max(0.0)
             } else {
@@ -869,12 +880,15 @@ impl Widget for Container {
         let content_width = content_size.width + padding.horizontal();
         let content_height = content_size.height + padding.vertical();
 
-        // Update animation targets based on actual final size (max of min_size and content_size).
-        // This prevents the animation from targeting min_width when content is larger,
-        // which would cause the container to spring to min_width then snap back to content_width.
+        // Update animation targets based on the effective target size.
+        // Priority: exact width/height > max(content_size, min_size)
         if let Some(ref mut anim) = self.width_anim {
-            let min_w = self.min_width.as_ref().map(|w| w.get()).unwrap_or(0.0);
-            let effective_target = content_width.max(min_w);
+            let effective_target = if let Some(ref exact_w) = self.width {
+                exact_w.get() // Exact width takes precedence
+            } else {
+                let min_w = self.min_width.as_ref().map(|w| w.get()).unwrap_or(0.0);
+                content_width.max(min_w)
+            };
             if (effective_target - *anim.target()).abs() > 0.001 {
                 anim.animate_to(effective_target);
                 // Request frame since we just started/changed animation
@@ -883,8 +897,12 @@ impl Widget for Container {
         }
 
         if let Some(ref mut anim) = self.height_anim {
-            let min_h = self.min_height.as_ref().map(|h| h.get()).unwrap_or(0.0);
-            let effective_target = content_height.max(min_h);
+            let effective_target = if let Some(ref exact_h) = self.height {
+                exact_h.get() // Exact height takes precedence
+            } else {
+                let min_h = self.min_height.as_ref().map(|h| h.get()).unwrap_or(0.0);
+                content_height.max(min_h)
+            };
             if (effective_target - *anim.target()).abs() > 0.001 {
                 anim.animate_to(effective_target);
                 // Request frame since we just started/changed animation
@@ -1272,15 +1290,20 @@ impl Widget for Container {
         // Re-layout children with their current constraints
         let children = self.children_source.reconcile_and_get_mut();
         if !children.is_empty() {
-            // During size animations, use the LARGER of (current, target, min_size) for child constraints.
+            // During size animations, use the LARGER of (current, target, size_hint) for child constraints.
             // This prevents children (like text) from re-wrapping during collapse animations.
             let child_max_width = if let Some(ref anim) = self.width_anim {
-                let min_w = self.min_width.as_ref().map(|w| w.get()).unwrap_or(0.0);
+                let size_hint = self
+                    .width
+                    .as_ref()
+                    .map(|w| w.get())
+                    .or_else(|| self.min_width.as_ref().map(|w| w.get()))
+                    .unwrap_or(0.0);
                 let current = *anim.current();
                 let target = *anim.target();
-                let will_animate = (min_w - target).abs() > 0.001;
+                let will_animate = (size_hint - target).abs() > 0.001;
                 if anim.is_animating() || will_animate {
-                    let anim_max = current.max(target).max(min_w);
+                    let anim_max = current.max(target).max(size_hint);
                     (anim_max - padding.horizontal()).max(0.0)
                 } else {
                     (self.bounds.width - padding.horizontal()).max(0.0)
@@ -1290,12 +1313,17 @@ impl Widget for Container {
             };
 
             let child_max_height = if let Some(ref anim) = self.height_anim {
-                let min_h = self.min_height.as_ref().map(|h| h.get()).unwrap_or(0.0);
+                let size_hint = self
+                    .height
+                    .as_ref()
+                    .map(|h| h.get())
+                    .or_else(|| self.min_height.as_ref().map(|h| h.get()))
+                    .unwrap_or(0.0);
                 let current = *anim.current();
                 let target = *anim.target();
-                let will_animate = (min_h - target).abs() > 0.001;
+                let will_animate = (size_hint - target).abs() > 0.001;
                 if anim.is_animating() || will_animate {
-                    let anim_max = current.max(target).max(min_h);
+                    let anim_max = current.max(target).max(size_hint);
                     (anim_max - padding.vertical()).max(0.0)
                 } else {
                     (self.bounds.height - padding.vertical()).max(0.0)
