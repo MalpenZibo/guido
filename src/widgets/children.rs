@@ -86,6 +86,11 @@ impl ChildrenSource {
         self.merged.len()
     }
 
+    /// Check if reconciliation is needed (children were added but not yet merged)
+    pub fn needs_reconcile(&self) -> bool {
+        self.needs_reconcile
+    }
+
     /// Reconcile all slots and rebuild the merged children list
     fn reconcile(&mut self) {
         // Take the current merged list and convert to iterator
