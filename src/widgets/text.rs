@@ -1,10 +1,12 @@
 use crate::layout::{Constraints, Size};
-use crate::reactive::{IntoMaybeDyn, MaybeDyn};
+use crate::reactive::{ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId};
 use crate::renderer::PaintContext;
 
 use super::widget::{Color, EventResponse, Rect, Widget};
 
 pub struct Text {
+    widget_id: WidgetId,
+    dirty_flags: ChangeFlags,
     content: MaybeDyn<String>,
     color: MaybeDyn<Color>,
     font_size: MaybeDyn<f32>,
@@ -18,6 +20,8 @@ impl Text {
         let content = content.into_maybe_dyn();
         let cached_text = content.get();
         Self {
+            widget_id: WidgetId::next(),
+            dirty_flags: ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT,
             content,
             color: MaybeDyn::Static(Color::WHITE),
             font_size: MaybeDyn::Static(14.0),
@@ -81,6 +85,26 @@ impl Widget for Text {
 
     fn bounds(&self) -> Rect {
         self.bounds
+    }
+
+    fn id(&self) -> WidgetId {
+        self.widget_id
+    }
+
+    fn mark_dirty(&mut self, flags: ChangeFlags) {
+        self.dirty_flags |= flags;
+    }
+
+    fn needs_layout(&self) -> bool {
+        self.dirty_flags.contains(ChangeFlags::NEEDS_LAYOUT)
+    }
+
+    fn needs_paint(&self) -> bool {
+        self.dirty_flags.contains(ChangeFlags::NEEDS_PAINT)
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty_flags = ChangeFlags::empty();
     }
 }
 

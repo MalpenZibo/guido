@@ -186,11 +186,20 @@ Border radius curvature can be customized (default is 2.0 for circular arcs):
 - Open a Pull Request (PR) for review
 - Merge to main only through PRs
 
+**CRITICAL: Always run `cargo clippy` before committing code changes.**
+- Fix all clippy errors (compilation will fail)
+- Address clippy warnings when reasonable
+- Use `cargo clippy --fix --allow-dirty` to auto-fix simple warnings
+
 ```bash
 # Create a feature branch
 git checkout -b feature/my-feature
 
-# Make changes, then commit
+# Make changes, then run clippy BEFORE committing
+cargo clippy
+cargo clippy --fix --allow-dirty  # Auto-fix warnings if needed
+
+# Then commit
 git add .
 git commit -m "Add my feature"
 

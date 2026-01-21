@@ -578,6 +578,7 @@ impl PaintContext {
     }
 
     /// Draw a circle as an overlay, clipped to a bounding rectangle with custom curvature
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_overlay_circle_clipped_with_curvature(
         &mut self,
         center_x: f32,

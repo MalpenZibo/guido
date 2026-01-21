@@ -9,6 +9,12 @@ pub struct GpuContext {
     pub queue: Arc<Queue>,
 }
 
+impl Default for GpuContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GpuContext {
     pub fn new() -> Self {
         let instance = Instance::new(&wgpu::InstanceDescriptor {

@@ -21,7 +21,7 @@ pub struct Computed<T> {
 // Note: Effect is not Send, so Computed itself cannot be sent across threads
 // but the underlying signal value can still be read from any thread
 
-impl<T: Clone + 'static> Computed<T> {
+impl<T: Clone + PartialEq + 'static> Computed<T> {
     pub fn new<F>(f: F) -> Self
     where
         F: Fn() -> T + 'static,
@@ -32,7 +32,7 @@ impl<T: Clone + 'static> Computed<T> {
 
         let effect = Effect::new(move || {
             let value = f();
-            signal_clone.set(value);
+            signal_clone.set(value); // Now checks equality automatically!
         });
 
         Self {
@@ -61,7 +61,7 @@ impl<T: Clone + 'static> Computed<T> {
 
 pub fn create_computed<T, F>(f: F) -> Computed<T>
 where
-    T: Clone + 'static,
+    T: Clone + PartialEq + 'static,
     F: Fn() -> T + 'static,
 {
     Computed::new(f)
