@@ -6,11 +6,13 @@ A reactive Rust GUI library for Wayland layer shell widgets.
 
 ## Overview
 
-Guido is a GPU-accelerated GUI library for building Wayland layer shell applications like status bars, panels, and overlays. It features a reactive programming model inspired by SolidJS, with automatic dependency tracking and efficient re-rendering.
+Guido is a GPU-accelerated GUI library for building Wayland layer shell applications like status bars, panels, and overlays. It features a fine-grained reactive programming model inspired by [Floem](https://github.com/lapce/floem), with automatic dependency tracking and efficient re-rendering.
+
+**Note:** This project is developed collaboratively using AI agents (Claude Code and Claude).
 
 ## Features
 
-- **Reactive Signals** - Thread-safe reactive values with automatic dependency tracking
+- **Fine-Grained Reactivity** - Thread-safe reactive signals with automatic dependency tracking and efficient updates
 - **Reusable Components** - Define custom components with the `#[component]` macro and fluent builder API
 - **GPU Rendering** - Hardware-accelerated rendering via wgpu
 - **Superellipse Corners** - Smooth iOS-style "squircle" corners with configurable curvature
