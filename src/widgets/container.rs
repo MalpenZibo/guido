@@ -228,6 +228,8 @@ pub struct Container {
     corner_curvature: MaybeDyn<f32>,
     border: Option<Border>,
     elevation: MaybeDyn<f32>,
+    width: Option<MaybeDyn<f32>>,
+    height: Option<MaybeDyn<f32>>,
     min_width: Option<MaybeDyn<f32>>,
     min_height: Option<MaybeDyn<f32>>,
     overflow: Overflow,
@@ -290,6 +292,8 @@ impl Container {
             corner_curvature: MaybeDyn::Static(1.0),
             border: None,
             elevation: MaybeDyn::Static(0.0),
+            width: None,
+            height: None,
             min_width: None,
             min_height: None,
             overflow: Overflow::Visible,
@@ -442,6 +446,18 @@ impl Container {
     /// Convenience: vertical gradient
     pub fn gradient_vertical(mut self, start: Color, end: Color) -> Self {
         self.gradient = Some(LinearGradient::vertical(start, end));
+        self
+    }
+
+    /// Set the exact width of the container (overrides content-based sizing)
+    pub fn width(mut self, width: impl IntoMaybeDyn<f32>) -> Self {
+        self.width = Some(width.into_maybe_dyn());
+        self
+    }
+
+    /// Set the exact height of the container (overrides content-based sizing)
+    pub fn height(mut self, height: impl IntoMaybeDyn<f32>) -> Self {
+        self.height = Some(height.into_maybe_dyn());
         self
     }
 
@@ -886,12 +902,15 @@ impl Widget for Container {
         let allow_shrink_height = self.overflow == Overflow::Hidden || height_animating;
 
         // Calculate final width
+        // Priority: animation > exact width > min_width > content_width
         let mut width = if let Some(ref anim) = self.width_anim {
             if allow_shrink_width {
                 *anim.current() // Use animated value directly, can shrink below content
             } else {
                 content_width.max(*anim.current())
             }
+        } else if let Some(ref exact_w) = self.width {
+            exact_w.get() // Exact width takes precedence over content
         } else if let Some(ref min_w) = self.min_width {
             content_width.max(min_w.get())
         } else {
@@ -899,23 +918,26 @@ impl Widget for Container {
         };
 
         // Calculate final height
+        // Priority: animation > exact height > min_height > content_height
         let mut height = if let Some(ref anim) = self.height_anim {
             if allow_shrink_height {
                 *anim.current() // Use animated value directly, can shrink below content
             } else {
                 content_height.max(*anim.current())
             }
+        } else if let Some(ref exact_h) = self.height {
+            exact_h.get() // Exact height takes precedence over content
         } else if let Some(ref min_h) = self.min_height {
             content_height.max(min_h.get())
         } else {
             content_height
         };
 
-        // Ensure minimum content size when not allowing shrink
-        if !allow_shrink_width && self.width_anim.is_none() {
+        // Ensure minimum content size when not allowing shrink (but only if not using exact dimensions)
+        if !allow_shrink_width && self.width_anim.is_none() && self.width.is_none() {
             width = width.max(content_width);
         }
-        if !allow_shrink_height && self.height_anim.is_none() {
+        if !allow_shrink_height && self.height_anim.is_none() && self.height.is_none() {
             height = height.max(content_height);
         }
 
