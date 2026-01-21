@@ -1,54 +1,38 @@
-use super::children::{ChildrenSource, DynamicChildren, DynItem};
+use super::children::{ChildrenSource, DynItem};
 use super::Widget;
+
+/// Marker type for static child (widget value)
+pub struct StaticChild;
+
+/// Marker type for dynamic child (closure)
+pub struct DynamicChild;
 
 /// Trait for types that can be added as a child to a container
 ///
-/// This trait allows `.child()` to accept both:
-/// - Static widgets (evaluated once at creation)
-/// - Dynamic closures returning Option<Widget> (reactive)
-pub trait IntoChild {
+/// This trait uses a marker type parameter to disambiguate between:
+/// - Static widgets (evaluated once at creation) - uses `StaticChild` marker
+/// - Dynamic closures returning Option<Widget> (reactive) - uses `DynamicChild` marker
+///
+/// The marker parameter defaults to `StaticChild` for backwards compatibility.
+pub trait IntoChild<Marker = StaticChild> {
     fn add_to_container(self, children_source: &mut ChildrenSource);
 }
 
 // Implementation for static widgets
-impl<W: Widget + 'static> IntoChild for W {
+impl<W: Widget + 'static> IntoChild<StaticChild> for W {
     fn add_to_container(self, children_source: &mut ChildrenSource) {
-        match children_source {
-            ChildrenSource::Static(children) => {
-                children.push(Box::new(self));
-            }
-            ChildrenSource::Dynamic(_) => {
-                panic!("Cannot add static child to container that already has dynamic children");
-            }
-        }
+        children_source.add_static(Box::new(self));
     }
 }
 
-/// Wrapper for dynamic child closures
-///
-/// Use this to make `.child()` accept a reactive closure:
-/// ```ignore
-/// container()
-///     .child(text("Static"))
-///     .child(dyn_child(move || {
-///         if show.get() {
-///             Some(text("Dynamic!"))
-///         } else {
-///             None
-///         }
-///     }))
-/// ```
-pub struct DynChild<F> {
-    child_fn: F,
-}
-
-impl<F, W> IntoChild for DynChild<F>
+// Implementation for dynamic closures
+impl<F, W> IntoChild<DynamicChild> for F
 where
     F: Fn() -> Option<W> + Send + Sync + 'static,
     W: Widget + 'static,
 {
     fn add_to_container(self, children_source: &mut ChildrenSource) {
-        let child_fn = self.child_fn;
+        let child_fn = self;
 
         // Build a dynamic children source with this single optional child
         let items_fn = move || {
@@ -59,46 +43,6 @@ where
             }
         };
 
-        match children_source {
-            ChildrenSource::Static(existing) => {
-                if !existing.is_empty() {
-                    panic!(
-                        "Cannot mix static and dynamic children. \
-                        Add dynamic children before static children, \
-                        or use .child_dyn() / .children_dyn() directly."
-                    );
-                }
-                // Convert to dynamic mode
-                *children_source = ChildrenSource::Dynamic(DynamicChildren::new(items_fn));
-            }
-            ChildrenSource::Dynamic(_) => {
-                panic!(
-                    "Cannot add multiple dynamic child sources. \
-                    Use .children_dyn() for multiple dynamic children."
-                );
-            }
-        }
+        children_source.add_dynamic(items_fn);
     }
-}
-
-/// Create a dynamic child from a closure
-///
-/// # Example
-/// ```ignore
-/// let show = create_signal(true);
-/// container()
-///     .child(dyn_child(move || {
-///         if show.get() {
-///             Some(text("I'm reactive!"))
-///         } else {
-///             None
-///         }
-///     }))
-/// ```
-pub fn dyn_child<F, W>(child_fn: F) -> DynChild<F>
-where
-    F: Fn() -> Option<W> + Send + Sync + 'static,
-    W: Widget + 'static,
-{
-    DynChild { child_fn }
 }

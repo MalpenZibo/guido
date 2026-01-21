@@ -5,7 +5,7 @@ use crate::reactive::{request_animation_frame, ChangeFlags, IntoMaybeDyn, MaybeD
 use crate::renderer::primitives::{GradientDir, Shadow};
 use crate::renderer::PaintContext;
 
-use super::children::{ChildrenSource, DynItem, DynamicChildren};
+use super::children::{ChildrenSource, DynItem};
 use super::into_child::IntoChild;
 use super::widget::{
     Color, Event, EventResponse, MouseButton, Padding, Rect, ScrollSource, Widget,
@@ -173,8 +173,8 @@ impl Container {
     ///
     /// Accepts both:
     /// - Static widgets: `container().child(text("Hello"))`
-    /// - Dynamic closures: `container().child(dyn_child(move || Some(text("Hello"))))`
-    pub fn child(mut self, child: impl IntoChild) -> Self {
+    /// - Dynamic closures: `container().child(move || Some(text("Hello")))`
+    pub fn child<M>(mut self, child: impl IntoChild<M>) -> Self {
         child.add_to_container(&mut self.children_source);
         self
     }
@@ -205,7 +205,7 @@ impl Container {
         let key_fn = Arc::new(key_fn);
         let view_fn = Arc::new(view_fn);
 
-        let items_fn_wrapped = Arc::new(move || {
+        let items_fn_wrapped = move || {
             let items = items_fn();
             items
                 .into_iter()
@@ -215,49 +215,12 @@ impl Container {
                     DynItem::new(key, widget)
                 })
                 .collect()
-        });
+        };
 
-        self.children_source = ChildrenSource::Dynamic(DynamicChildren::new(move || {
-            items_fn_wrapped()
-        }));
+        self.children_source.add_dynamic(items_fn_wrapped);
         self
     }
 
-    /// Reactive single optional child (convenience wrapper around .children_dyn)
-    ///
-    /// Use this when you want a single child that appears/disappears based on a signal.
-    ///
-    /// # Example
-    /// ```ignore
-    /// let show = create_signal(true);
-    /// container()
-    ///     .child_dyn(move || {
-    ///         if show.get() {
-    ///             Some(text("I'm reactive!"))
-    ///         } else {
-    ///             None
-    ///         }
-    ///     })
-    /// ```
-    pub fn child_dyn<V>(
-        self,
-        child_fn: impl Fn() -> Option<V> + Send + Sync + 'static,
-    ) -> Self
-    where
-        V: Widget + 'static,
-    {
-        self.children_dyn::<V, Vec<V>, (), _>(
-            move || {
-                if let Some(widget) = child_fn() {
-                    vec![widget]
-                } else {
-                    vec![]
-                }
-            },
-            |_: &V| 0u64, // Single child always uses key 0
-            |widget: V| widget,
-        )
-    }
 
     pub fn padding(mut self, value: impl IntoMaybeDyn<f32>) -> Self {
         let value = value.into_maybe_dyn();

@@ -4,9 +4,8 @@
 //! 1. Static children with .child() - Fixed at creation
 //! 2. Conditional static with .maybe_child() - NOT reactive (evaluated once)
 //! 3. Dynamic list with .children_dyn() - Fully reactive with keyed reconciliation
-//! 4. Unified .child() API - Accepts both static widgets and dyn_child() wrappers
-//! 5. Alternative: .child_dyn() - Convenience method for single optional child
-//! 6. Alternative: .children_dyn() - Verbose but powerful for complex cases
+//! 4. NEW: Mixing static and dynamic children - Now works in any order!
+//! 5. Unified .child() API - Accepts both static widgets and closures
 
 use guido::prelude::*;
 use std::collections::hash_map::DefaultHasher;
@@ -32,14 +31,11 @@ fn main() {
     // Clone signals for closures
     let show_for_toggle = show_optional.clone();
     let show_for_toggle2 = show_optional2.clone();
-    let show_for_toggle3 = show_optional.clone();
     let show_for_maybe = show_optional.clone();
     let show_for_text = show_optional.clone();
     let show_for_unified = show_optional.clone();
     let show_for_unified_text = show_optional.clone();
     let show_for_child_dyn = show_optional.clone();
-    let show_for_child_dyn_text = show_optional.clone();
-    let show_for_child_dyn_text2 = show_optional.clone();
     let show_for_children_dyn = show_optional2.clone();
     let show_for_children_dyn_text = show_optional2.clone();
     let items_for_add = items.clone();
@@ -225,20 +221,20 @@ fn main() {
                 )
         )
         .child(
-            // === SECTION 4: Unified .child() API (static + dynamic) ===
+            // === SECTION 4: NEW! Mixing static and dynamic children ===
             container()
                 .padding(12.0)
-                .background(Color::rgb(0.18, 0.18, 0.22))
+                .background(Color::rgb(0.15, 0.25, 0.15))
                 .corner_radius(8.0)
                 .child(
                     container()
                         .layout(Flex::column().spacing(8.0))
                         .child(
-                            text("4. Unified .child() API - BOTH static and dynamic!")
-                                .color(Color::rgb(0.95, 0.95, 1.0))
+                            text("4. NEW! Mixing Static and Dynamic - ANY ORDER!")
+                                .color(Color::rgb(0.9, 1.0, 0.9))
                         )
                         .child(
-                            text("The .child() method now accepts both types:")
+                            text("You can now freely mix static and dynamic children!")
                                 .color(Color::WHITE)
                         )
                         .child(
@@ -253,29 +249,28 @@ fn main() {
                                 .child(
                                     text(move || {
                                         if show_for_unified_text.get() {
-                                            "Click to Hide".to_string()
+                                            "Click to Hide Middle".to_string()
                                         } else {
-                                            "Click to Show".to_string()
+                                            "Click to Show Middle".to_string()
                                         }
                                     })
                                     .color(Color::WHITE)
                                 )
                         )
                         .child(
-                            // Mixing static and dynamic children using unified .child()!
+                            // Demonstrate mixing: static -> dynamic -> static
                             container()
-                                .layout(Flex::row().spacing(4.0))
+                                .layout(Flex::column().spacing(4.0))
                                 .child(
-                                    // Static child
                                     container()
-                                        .padding(6.0)
-                                        .background(Color::rgb(0.25, 0.2, 0.25))
+                                        .padding(8.0)
+                                        .background(Color::rgb(0.3, 0.4, 0.3))
                                         .corner_radius(4.0)
-                                        .child(text("Static").color(Color::WHITE))
+                                        .child(text("Static Header").color(Color::WHITE))
                                 )
                                 .child(
-                                    // Dynamic child using dyn_child()!
-                                    dyn_child(move || {
+                                    // Dynamic child in the middle!
+                                    move || {
                                         if show_for_unified.get() {
                                             Some(
                                                 container()
@@ -283,112 +278,42 @@ fn main() {
                                                     .background(Color::rgb(0.5, 0.3, 0.5))
                                                     .corner_radius(4.0)
                                                     .ripple()
-                                                    .child(text("Dynamic via .child()!").color(Color::WHITE))
+                                                    .child(text("Dynamic Middle!").color(Color::WHITE))
                                             )
                                         } else {
                                             None
                                         }
-                                    })
+                                    }
                                 )
                                 .child(
-                                    // Another static child
                                     container()
-                                        .padding(6.0)
-                                        .background(Color::rgb(0.25, 0.2, 0.25))
+                                        .padding(8.0)
+                                        .background(Color::rgb(0.3, 0.4, 0.3))
                                         .corner_radius(4.0)
-                                        .child(text("Static").color(Color::WHITE))
+                                        .child(text("Static Footer").color(Color::WHITE))
                                 )
+                        )
+                        .child(
+                            text("This was IMPOSSIBLE before - would panic!")
+                                .color(Color::rgb(0.8, 1.0, 0.8))
                         )
                 )
         )
         .child(
-            // === SECTION 5: Reactive single child with .child_dyn() ===
+            // === SECTION 5: Complex mixing example ===
             container()
                 .padding(12.0)
-                .background(Color::rgb(0.2, 0.15, 0.2))
+                .background(Color::rgb(0.18, 0.15, 0.25))
                 .corner_radius(8.0)
                 .child(
                     container()
                         .layout(Flex::column().spacing(8.0))
                         .child(
-                            text("5. Alternative: .child_dyn() method")
+                            text("5. Complex Mixing Example")
                                 .color(Color::rgb(1.0, 0.9, 1.0))
                         )
                         .child(
-                            text("Convenience method for single optional child:")
-                                .color(Color::WHITE)
-                        )
-                        .child(
-                            container()
-                                .padding(6.0)
-                                .background(Color::rgb(0.3, 0.2, 0.4))
-                                .corner_radius(4.0)
-                                .ripple()
-                                .on_click(move || {
-                                    show_for_toggle3.update(|v| *v = !*v);
-                                })
-                                .child(
-                                    text(move || {
-                                        if show_for_child_dyn_text2.get() {
-                                            "Click to Hide".to_string()
-                                        } else {
-                                            "Click to Show".to_string()
-                                        }
-                                    })
-                                    .color(Color::WHITE)
-                                )
-                        )
-                        .child(
-                            // Use child_dyn for clean reactive optional child
-                            container()
-                                .layout(Flex::row().spacing(4.0))
-                                .child(
-                                    container()
-                                        .padding(6.0)
-                                        .background(Color::rgb(0.25, 0.2, 0.25))
-                                        .corner_radius(4.0)
-                                        .child(text("Before").color(Color::WHITE))
-                                )
-                                .child_dyn(move || {
-                                    // Simply return Some(widget) or None!
-                                    if show_for_child_dyn.get() {
-                                        Some(
-                                            container()
-                                                .padding(8.0)
-                                                .background(Color::rgb(0.5, 0.3, 0.5))
-                                                .corner_radius(4.0)
-                                                .ripple()
-                                                .child(text("I'm reactive with .child_dyn()!").color(Color::WHITE))
-                                        )
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .child(
-                                    container()
-                                        .padding(6.0)
-                                        .background(Color::rgb(0.25, 0.2, 0.25))
-                                        .corner_radius(4.0)
-                                        .child(text("After").color(Color::WHITE))
-                                )
-                        )
-                )
-        )
-        .child(
-            // === SECTION 6: Truly reactive conditional children (verbose way) ===
-            container()
-                .padding(12.0)
-                .background(Color::rgb(0.18, 0.15, 0.2))
-                .corner_radius(8.0)
-                .child(
-                    container()
-                        .layout(Flex::column().spacing(8.0))
-                        .child(
-                            text("6. Alternative: .children_dyn() - Verbose but powerful")
-                                .color(Color::rgb(0.9, 0.9, 1.0))
-                        )
-                        .child(
-                            text("This is how to make conditional children REACTIVE (verbose):")
+                            text("Multiple static and dynamic children in any order:")
                                 .color(Color::WHITE)
                         )
                         .child(
@@ -403,37 +328,75 @@ fn main() {
                                 .child(
                                     text(move || {
                                         if show_for_children_dyn_text.get() {
-                                            "Click to Hide".to_string()
+                                            "Click to Hide Dynamics".to_string()
                                         } else {
-                                            "Click to Show".to_string()
+                                            "Click to Show Dynamics".to_string()
                                         }
                                     })
                                     .color(Color::WHITE)
                                 )
                         )
                         .child(
-                            // Use children_dyn with a list that's empty or has one item
+                            // Complex pattern: S D S D S
                             container()
-                                .layout(Flex::row().spacing(4.0))
-                                .child(
-                                    container()
-                                        .padding(6.0)
-                                        .background(Color::rgb(0.25, 0.2, 0.25))
-                                        .corner_radius(4.0)
-                                        .child(text("Before").color(Color::WHITE))
-                                )
+                                .layout(Flex::column().spacing(4.0))
+                                .child(text("Static 1").color(Color::WHITE))
+                                .child(move || {
+                                    if show_for_children_dyn.get() {
+                                        Some(
+                                            container()
+                                                .padding(6.0)
+                                                .background(Color::rgb(0.5, 0.2, 0.3))
+                                                .corner_radius(4.0)
+                                                .child(text("Dynamic 1").color(Color::WHITE))
+                                        )
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .child(text("Static 2").color(Color::WHITE))
+                                .child(move || {
+                                    if show_for_child_dyn.get() {
+                                        Some(
+                                            container()
+                                                .padding(6.0)
+                                                .background(Color::rgb(0.3, 0.2, 0.5))
+                                                .corner_radius(4.0)
+                                                .child(text("Dynamic 2").color(Color::WHITE))
+                                        )
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .child(text("Static 3").color(Color::WHITE))
+                        )
+                )
+        )
+        .child(
+            // === SECTION 6: .children_dyn() still works for keyed lists ===
+            container()
+                .padding(12.0)
+                .background(Color::rgb(0.18, 0.15, 0.2))
+                .corner_radius(8.0)
+                .child(
+                    container()
+                        .layout(Flex::column().spacing(8.0))
+                        .child(
+                            text("6. .children_dyn() - For keyed lists")
+                                .color(Color::rgb(0.9, 0.9, 1.0))
+                        )
+                        .child(
+                            text("Use this for lists that need state preservation:")
+                                .color(Color::WHITE)
+                        )
+                        .child(
+                            // Can even mix static before keyed list!
+                            container()
+                                .layout(Flex::column().spacing(4.0))
+                                .child(text("Static header before list").color(Color::rgb(0.8, 0.8, 0.8)))
                                 .children_dyn::<&str, Vec<&str>, (), _>(
-                                    move || {
-                                        if show_for_children_dyn.get() {
-                                            // Return a vec with one item
-                                            vec!["Reactive! I appear/disappear based on signal!"]
-                                        } else {
-                                            // Return empty vec
-                                            vec![]
-                                        }
-                                    },
+                                    move || vec!["Keyed Item 1", "Keyed Item 2"],
                                     |content| {
-                                        // Hash the string for a stable key
                                         let mut hasher = DefaultHasher::new();
                                         content.hash(&mut hasher);
                                         hasher.finish()
@@ -447,13 +410,7 @@ fn main() {
                                             .child(text(content).color(Color::WHITE))
                                     },
                                 )
-                                .child(
-                                    container()
-                                        .padding(6.0)
-                                        .background(Color::rgb(0.25, 0.2, 0.25))
-                                        .corner_radius(4.0)
-                                        .child(text("After").color(Color::WHITE))
-                                )
+                                .child(text("Static footer after list").color(Color::rgb(0.8, 0.8, 0.8)))
                         )
                 )
         );
