@@ -491,12 +491,7 @@ impl Widget for Container {
     }
 
     fn paint(&self, ctx: &mut PaintContext) {
-        // Check if we need to paint
-        let child_needs_paint = self.child.as_ref().map_or(false, |c| c.needs_paint());
-        if !self.needs_paint() && !child_needs_paint {
-            return;
-        }
-
+        // Paint is always called - selective rendering is handled at main loop level
         let background = self.background.get();
         let corner_radius = self.corner_radius.get();
         let corner_curvature = self.corner_curvature.get();
@@ -551,11 +546,9 @@ impl Widget for Container {
             );
         }
 
-        // Draw child (only if it needs paint)
+        // Draw child
         if let Some(ref child) = self.child {
-            if child.needs_paint() {
-                child.paint(ctx);
-            }
+            child.paint(ctx);
         }
 
         // Draw ripple effects on top of everything (including text) using overlay

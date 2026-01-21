@@ -210,16 +210,9 @@ impl Widget for Row {
     }
 
     fn paint(&self, ctx: &mut PaintContext) {
-        // Only paint if this widget or any child needs it
-        if !self.needs_paint() && !self.any_child_needs_paint() {
-            return;
-        }
-
+        // Paint all children - selective rendering is handled at main loop level
         for child in &self.children {
-            // Only paint children that need it
-            if child.needs_paint() {
-                child.paint(ctx);
-            }
+            child.paint(ctx);
         }
     }
 
