@@ -1,5 +1,7 @@
 use std::sync::Arc;
+use std::time::Instant;
 
+use crate::animation::{Animatable, SpringState, Transform, Transition};
 use crate::layout::{Constraints, Flex, Layout, Size};
 use crate::reactive::{request_animation_frame, ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId};
 use crate::renderer::primitives::{GradientDir, Shadow};
@@ -70,6 +72,151 @@ impl Border {
     }
 }
 
+/// Overflow behavior for container content
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Overflow {
+    /// Content is not clipped and may overflow the container bounds
+    #[default]
+    Visible,
+    /// Content is clipped to the container bounds
+    Hidden,
+}
+
+/// Animation state for animatable properties
+struct AnimationState<T: Animatable> {
+    /// Current interpolated value
+    current: T,
+    /// Target value from MaybeDyn
+    target: T,
+    /// Value when animation started
+    start: T,
+    /// Progress from 0.0 to 1.0 (or beyond for overshoot)
+    progress: f32,
+    /// Time when animation started
+    start_time: Instant,
+    /// Transition configuration
+    transition: Transition,
+    /// Spring state (for spring timing functions)
+    spring_state: Option<SpringState>,
+}
+
+impl<T: Animatable> AnimationState<T> {
+    fn new(initial_value: T, transition: Transition) -> Self {
+        let spring_state = if matches!(
+            transition.timing,
+            crate::animation::TimingFunction::Spring(_)
+        ) {
+            Some(SpringState::new())
+        } else {
+            None
+        };
+        Self {
+            current: initial_value.clone(),
+            target: initial_value.clone(),
+            start: initial_value,
+            progress: 1.0, // Start completed
+            start_time: Instant::now(),
+            transition,
+            spring_state,
+        }
+    }
+
+    /// Start animating to a new target value
+    fn animate_to(&mut self, new_target: T) {
+        // Don't restart if we're already animating to this target
+        // Use custom comparison to avoid floating point precision issues
+        if self.targets_equal(&new_target, &self.target) {
+            return;
+        }
+
+        self.start = self.current.clone();
+        self.target = new_target.clone();
+        self.progress = 0.0;
+        self.start_time = Instant::now();
+        // Reset spring state for new animation
+        if self.spring_state.is_some() {
+            self.spring_state = Some(SpringState::new());
+        }
+    }
+
+    /// Compare targets with appropriate precision for the type
+    fn targets_equal(&self, a: &T, b: &T) -> bool {
+        a == b
+    }
+
+    /// Advance the animation and return the current value
+    fn advance(&mut self) -> T {
+        if self.progress >= 1.0 && self.spring_state.is_none() {
+            return self.current.clone();
+        }
+
+        let elapsed = self.start_time.elapsed().as_secs_f32() * 1000.0; // Convert to ms
+        let adjusted_elapsed = (elapsed - self.transition.delay_ms).max(0.0);
+
+        if adjusted_elapsed <= 0.0 {
+            // Still in delay period
+            return self.current.clone();
+        }
+
+        // Calculate eased value based on timing function type
+        let eased_t = if let Some(ref mut spring_state) = self.spring_state {
+            // For spring animations: use real elapsed time in seconds (not normalized)
+            // This allows the spring to continue oscillating until it naturally settles
+            let elapsed_secs = adjusted_elapsed / 1000.0;
+            if let crate::animation::TimingFunction::Spring(ref config) = self.transition.timing {
+                spring_state.step(elapsed_secs, config)
+            } else {
+                // Fallback: shouldn't happen, but use normalized time
+                adjusted_elapsed / self.transition.duration_ms
+            }
+        } else {
+            // For non-spring animations: use normalized time 0..1
+            let t = (adjusted_elapsed / self.transition.duration_ms).min(1.0);
+            self.transition.timing.evaluate(t, None)
+        };
+
+        // Interpolate
+        self.current = T::lerp(&self.start, &self.target, eased_t);
+
+        // Update progress
+        if let Some(ref state) = self.spring_state {
+            // For spring animations, only mark complete when spring has settled
+            if state.is_settled(0.01) {
+                self.progress = 1.0;
+            } else {
+                // Keep progress < 1.0 to continue animating
+                self.progress = 0.5;
+            }
+        } else {
+            // For non-spring animations, use time-based progress
+            let t = (adjusted_elapsed / self.transition.duration_ms).min(1.0);
+            self.progress = t;
+        }
+
+        self.current.clone()
+    }
+
+    /// Check if animation is still running
+    fn is_animating(&self) -> bool {
+        self.progress < 1.0 || (self.spring_state.is_some() && self.progress < 0.99)
+    }
+
+    /// Get current value
+    fn current(&self) -> &T {
+        &self.current
+    }
+
+    /// Get target value
+    fn target(&self) -> &T {
+        &self.target
+    }
+
+    /// Get start value (value when animation began)
+    fn start(&self) -> &T {
+        &self.start
+    }
+}
+
 pub struct Container {
     widget_id: WidgetId,
     dirty_flags: ChangeFlags,
@@ -88,6 +235,7 @@ pub struct Container {
     elevation: MaybeDyn<f32>,
     min_width: Option<MaybeDyn<f32>>,
     min_height: Option<MaybeDyn<f32>>,
+    overflow: Overflow,
     bounds: Rect,
 
     // Cached values for change detection
@@ -120,6 +268,17 @@ pub struct Container {
     click_ripple_progress: f32,
     click_ripple_reversing: bool,
     click_ripple_release_pos: Option<(f32, f32)>,
+
+    // Animation state
+    width_anim: Option<AnimationState<f32>>,
+    height_anim: Option<AnimationState<f32>>,
+    background_anim: Option<AnimationState<Color>>,
+    corner_radius_anim: Option<AnimationState<f32>>,
+    padding_anim: Option<AnimationState<Padding>>,
+    transform_anim: Option<AnimationState<Transform>>,
+
+    // Transform property
+    transform: MaybeDyn<Transform>,
 }
 
 impl Container {
@@ -138,6 +297,7 @@ impl Container {
             elevation: MaybeDyn::Static(0.0),
             min_width: None,
             min_height: None,
+            overflow: Overflow::Visible,
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
             on_click: None,
             on_hover: None,
@@ -160,6 +320,13 @@ impl Container {
             cached_corner_radius: 0.0,
             cached_corner_curvature: 1.0,
             cached_elevation: 0.0,
+            width_anim: None,
+            height_anim: None,
+            background_anim: None,
+            corner_radius_anim: None,
+            padding_anim: None,
+            transform_anim: None,
+            transform: MaybeDyn::Static(Transform::default()),
         }
     }
 
@@ -293,6 +460,12 @@ impl Container {
         self
     }
 
+    /// Set the overflow behavior for content that exceeds container bounds
+    pub fn overflow(mut self, overflow: Overflow) -> Self {
+        self.overflow = overflow;
+        self
+    }
+
     pub fn on_click<F: Fn() + Send + Sync + 'static>(mut self, callback: F) -> Self {
         self.on_click = Some(Arc::new(callback));
         self
@@ -333,6 +506,56 @@ impl Container {
         self
     }
 
+    /// Set the transform (translate, scale, rotate) - does not trigger layout
+    pub fn transform(mut self, transform: impl IntoMaybeDyn<Transform>) -> Self {
+        self.transform = transform.into_maybe_dyn();
+        self
+    }
+
+    /// Enable animation for width changes
+    pub fn animate_width(mut self, transition: Transition) -> Self {
+        // Initialize with current min_width or 0
+        let initial = self.min_width.as_ref().map(|w| w.get()).unwrap_or(0.0);
+        self.width_anim = Some(AnimationState::new(initial, transition));
+        self
+    }
+
+    /// Enable animation for height changes
+    pub fn animate_height(mut self, transition: Transition) -> Self {
+        // Initialize with current min_height or 0
+        let initial = self.min_height.as_ref().map(|h| h.get()).unwrap_or(0.0);
+        self.height_anim = Some(AnimationState::new(initial, transition));
+        self
+    }
+
+    /// Enable animation for background color changes
+    pub fn animate_background(mut self, transition: Transition) -> Self {
+        let initial = self.background.get();
+        self.background_anim = Some(AnimationState::new(initial, transition));
+        self
+    }
+
+    /// Enable animation for corner radius changes
+    pub fn animate_corner_radius(mut self, transition: Transition) -> Self {
+        let initial = self.corner_radius.get();
+        self.corner_radius_anim = Some(AnimationState::new(initial, transition));
+        self
+    }
+
+    /// Enable animation for padding changes
+    pub fn animate_padding(mut self, transition: Transition) -> Self {
+        let initial = self.padding.get();
+        self.padding_anim = Some(AnimationState::new(initial, transition));
+        self
+    }
+
+    /// Enable animation for transform changes
+    pub fn animate_transform(mut self, transition: Transition) -> Self {
+        let initial = self.transform.get();
+        self.transform_anim = Some(AnimationState::new(initial, transition));
+        self
+    }
+
     /// Check if any child widget needs layout
     fn any_child_needs_layout(&self) -> bool {
         self.children_source
@@ -341,8 +564,89 @@ impl Container {
             .any(|child| child.needs_layout())
     }
 
-    /// Advance animation state (ripple effects)
+    /// Advance animation state (ripple effects and property animations)
     fn advance_animations(&mut self) {
+        let mut any_animating = false;
+
+        // Advance property animations
+        if let Some(ref mut anim) = self.width_anim {
+            if let Some(ref min_w) = self.min_width {
+                let target = min_w.get();
+                // Use epsilon comparison for f32 to avoid floating point precision issues
+                if (target - *anim.target()).abs() > 0.001 {
+                    anim.animate_to(target);
+                }
+            }
+            if anim.is_animating() {
+                anim.advance();
+                any_animating = true;
+            }
+        }
+
+        if let Some(ref mut anim) = self.height_anim {
+            if let Some(ref min_h) = self.min_height {
+                let target = min_h.get();
+                // Use epsilon comparison for f32 to avoid floating point precision issues
+                if (target - *anim.target()).abs() > 0.001 {
+                    anim.animate_to(target);
+                }
+            }
+            if anim.is_animating() {
+                anim.advance();
+                any_animating = true;
+            }
+        }
+
+        if let Some(ref mut anim) = self.background_anim {
+            let target = self.background.get();
+            if target != *anim.target() {
+                anim.animate_to(target);
+            }
+            if anim.is_animating() {
+                anim.advance();
+                any_animating = true;
+            }
+        }
+
+        if let Some(ref mut anim) = self.corner_radius_anim {
+            let target = self.corner_radius.get();
+            // Use epsilon comparison for f32 to avoid floating point precision issues
+            if (target - *anim.target()).abs() > 0.001 {
+                anim.animate_to(target);
+            }
+            if anim.is_animating() {
+                anim.advance();
+                any_animating = true;
+            }
+        }
+
+        if let Some(ref mut anim) = self.padding_anim {
+            let target = self.padding.get();
+            if target != *anim.target() {
+                anim.animate_to(target);
+            }
+            if anim.is_animating() {
+                anim.advance();
+                any_animating = true;
+            }
+        }
+
+        if let Some(ref mut anim) = self.transform_anim {
+            let target = self.transform.get();
+            if target != *anim.target() {
+                anim.animate_to(target);
+            }
+            if anim.is_animating() {
+                anim.advance();
+                any_animating = true;
+            }
+        }
+
+        // Request next frame if any property animations are running
+        if any_animating {
+            request_animation_frame();
+        }
+
         // Advance hover ripple animation
         if self.ripple_enabled && self.ripple_center.is_some() {
             if self.ripple_progress < 1.0 {
@@ -418,10 +722,22 @@ impl Widget for Container {
         // Always advance animations first
         self.advance_animations();
 
-        // Get current property values
-        let padding = self.padding.get();
-        let background = self.background.get();
-        let corner_radius = self.corner_radius.get();
+        // Get current property values (use animated values if available)
+        let padding = if let Some(ref anim) = self.padding_anim {
+            *anim.current()
+        } else {
+            self.padding.get()
+        };
+        let background = if let Some(ref anim) = self.background_anim {
+            *anim.current()
+        } else {
+            self.background.get()
+        };
+        let corner_radius = if let Some(ref anim) = self.corner_radius_anim {
+            *anim.current()
+        } else {
+            self.corner_radius.get()
+        };
         let corner_curvature = self.corner_curvature.get();
         let elevation = self.elevation.get();
 
@@ -438,10 +754,20 @@ impl Widget for Container {
             || elevation != self.cached_elevation;
 
         let child_needs_layout = self.any_child_needs_layout();
-        let has_animations = self.ripple_center.is_some() || self.click_ripple_center.is_some();
+        let has_ripple_animations =
+            self.ripple_center.is_some() || self.click_ripple_center.is_some();
+        // Size animations require full layout recalculation (for child constraints)
+        let has_size_animations = self.width_anim.as_ref().is_some_and(|a| a.is_animating())
+            || self.height_anim.as_ref().is_some_and(|a| a.is_animating());
+        let has_animations = has_ripple_animations || has_size_animations;
 
-        // Downgrade to paint-only if only visuals changed
-        if self.needs_layout() && !padding_changed && !child_needs_layout && visual_changed {
+        // Downgrade to paint-only if only visuals changed (but not during size animations)
+        if self.needs_layout()
+            && !padding_changed
+            && !child_needs_layout
+            && !has_size_animations
+            && visual_changed
+        {
             self.dirty_flags = ChangeFlags::NEEDS_PAINT;
         }
 
@@ -469,12 +795,56 @@ impl Widget for Container {
         // Reconcile dynamic children if needed
         let children = self.children_source.reconcile_and_get_mut();
 
+        // During size animations, force ALL descendants to re-layout with new constraints.
+        // This ensures nested children (like text inside inner containers) don't use
+        // stale cached layouts from before animation.
+        if has_size_animations {
+            for child in children.iter_mut() {
+                child.mark_dirty_recursive(ChangeFlags::NEEDS_LAYOUT);
+            }
+        }
+
+        // During size animations, use the LARGER of (start, target) for child constraints.
+        // This prevents children (like text) from re-wrapping during collapse animations.
+        // Children maintain their layout at the larger size and get clipped instead.
+        let child_max_width = if let Some(ref anim) = self.width_anim {
+            if anim.is_animating() {
+                // Use the larger of start/target so children don't re-wrap during collapse
+                let start = *anim.start();
+                let target = *anim.target();
+                let anim_max = start.max(target);
+                // Use the larger of animation bounds and parent constraints
+                let base = constraints.max_width.max(anim_max);
+                (base - padding.horizontal()).max(0.0)
+            } else {
+                (constraints.max_width - padding.horizontal()).max(0.0)
+            }
+        } else {
+            (constraints.max_width - padding.horizontal()).max(0.0)
+        };
+
+        let child_max_height = if let Some(ref anim) = self.height_anim {
+            if anim.is_animating() {
+                // Use the larger of start/target so children don't re-wrap during collapse
+                let start = *anim.start();
+                let target = *anim.target();
+                let anim_max = start.max(target);
+                // Use the larger of animation bounds and parent constraints
+                let base = constraints.max_height.max(anim_max);
+                (base - padding.vertical()).max(0.0)
+            } else {
+                (constraints.max_height - padding.vertical()).max(0.0)
+            }
+        } else {
+            (constraints.max_height - padding.vertical()).max(0.0)
+        };
+
         // Calculate constraints for children (accounting for padding)
         let child_constraints = Constraints {
             min_width: 0.0,
             min_height: 0.0,
-            max_width: (constraints.max_width - padding.horizontal()).max(0.0),
-            max_height: (constraints.max_height - padding.vertical()).max(0.0),
+            max_width: child_max_width,
+            max_height: child_max_height,
         };
 
         // Use the layout strategy to position children
@@ -489,14 +859,50 @@ impl Widget for Container {
         };
 
         // Calculate container size including padding
-        let mut width = content_size.width + padding.horizontal();
-        let mut height = content_size.height + padding.vertical();
+        let content_width = content_size.width + padding.horizontal();
+        let content_height = content_size.height + padding.vertical();
 
-        if let Some(ref min_w) = self.min_width {
-            width = width.max(min_w.get());
+        // Determine if we should allow shrinking below content size.
+        // This happens when:
+        // 1. overflow is Hidden (always clip content), OR
+        // 2. A size animation is currently running (temporary clip during animation)
+        let width_animating = self.width_anim.as_ref().is_some_and(|a| a.is_animating());
+        let height_animating = self.height_anim.as_ref().is_some_and(|a| a.is_animating());
+        let allow_shrink_width = self.overflow == Overflow::Hidden || width_animating;
+        let allow_shrink_height = self.overflow == Overflow::Hidden || height_animating;
+
+        // Calculate final width
+        let mut width = if let Some(ref anim) = self.width_anim {
+            if allow_shrink_width {
+                *anim.current() // Use animated value directly, can shrink below content
+            } else {
+                content_width.max(*anim.current())
+            }
+        } else if let Some(ref min_w) = self.min_width {
+            content_width.max(min_w.get())
+        } else {
+            content_width
+        };
+
+        // Calculate final height
+        let mut height = if let Some(ref anim) = self.height_anim {
+            if allow_shrink_height {
+                *anim.current() // Use animated value directly, can shrink below content
+            } else {
+                content_height.max(*anim.current())
+            }
+        } else if let Some(ref min_h) = self.min_height {
+            content_height.max(min_h.get())
+        } else {
+            content_height
+        };
+
+        // Ensure minimum content size when not allowing shrink
+        if !allow_shrink_width && self.width_anim.is_none() {
+            width = width.max(content_width);
         }
-        if let Some(ref min_h) = self.min_height {
-            height = height.max(min_h.get());
+        if !allow_shrink_height && self.height_anim.is_none() {
+            height = height.max(content_height);
         }
 
         let size = Size::new(
@@ -513,11 +919,32 @@ impl Widget for Container {
     }
 
     fn paint(&self, ctx: &mut PaintContext) {
-        let background = self.background.get();
-        let corner_radius = self.corner_radius.get();
+        // Use animated values if available
+        let background = if let Some(ref anim) = self.background_anim {
+            *anim.current()
+        } else {
+            self.background.get()
+        };
+        let corner_radius = if let Some(ref anim) = self.corner_radius_anim {
+            *anim.current()
+        } else {
+            self.corner_radius.get()
+        };
         let corner_curvature = self.corner_curvature.get();
         let elevation_level = self.elevation.get();
         let shadow = elevation_to_shadow(elevation_level);
+
+        // Apply transform if available
+        let transform = if let Some(ref anim) = self.transform_anim {
+            *anim.current()
+        } else {
+            self.transform.get()
+        };
+        let has_transform = transform != Transform::default();
+
+        if has_transform {
+            ctx.push_transform(transform, self.bounds);
+        }
 
         // Draw background
         if let Some(ref gradient) = self.gradient {
@@ -565,9 +992,25 @@ impl Widget for Container {
             );
         }
 
+        // Determine if we need to clip children
+        // Clip when: overflow is Hidden OR a size animation is running
+        let width_animating = self.width_anim.as_ref().is_some_and(|a| a.is_animating());
+        let height_animating = self.height_anim.as_ref().is_some_and(|a| a.is_animating());
+        let should_clip = self.overflow == Overflow::Hidden || width_animating || height_animating;
+
+        // Push clip if needed
+        if should_clip {
+            ctx.push_clip(self.bounds, corner_radius, corner_curvature);
+        }
+
         // Draw children
         for child in self.children_source.get() {
             child.paint(ctx);
+        }
+
+        // Pop clip if we pushed one
+        if should_clip {
+            ctx.pop_clip();
         }
 
         // Draw ripple effects
@@ -647,6 +1090,11 @@ impl Widget for Container {
                 }
             }
         }
+
+        // Pop transform if applied
+        if has_transform {
+            ctx.pop_transform();
+        }
     }
 
     fn event(&mut self, event: &Event) -> EventResponse {
@@ -716,7 +1164,10 @@ impl Widget for Container {
                         self.click_ripple_release_pos = None;
                         request_animation_frame();
                     }
-                    return EventResponse::Handled;
+                    // Only consume the event if we have a click handler
+                    if self.on_click.is_some() || self.ripple_enabled {
+                        return EventResponse::Handled;
+                    }
                 }
             }
             Event::MouseUp { x, y, button } => {
@@ -730,8 +1181,12 @@ impl Widget for Container {
                     if self.bounds.contains(*x, *y) {
                         if let Some(ref callback) = self.on_click {
                             callback();
+                            return EventResponse::Handled;
                         }
-                        return EventResponse::Handled;
+                        // If we have ripple but no click handler, still mark as handled
+                        if self.ripple_enabled {
+                            return EventResponse::Handled;
+                        }
                     }
                 }
             }
@@ -781,11 +1236,39 @@ impl Widget for Container {
         // Re-layout children with their current constraints
         let children = self.children_source.reconcile_and_get_mut();
         if !children.is_empty() {
+            // During size animations, use the LARGER of (start, target) for child constraints.
+            // This prevents children (like text) from re-wrapping during collapse animations.
+            let child_max_width = if let Some(ref anim) = self.width_anim {
+                if anim.is_animating() {
+                    let start = *anim.start();
+                    let target = *anim.target();
+                    let anim_max = start.max(target);
+                    (anim_max - padding.horizontal()).max(0.0)
+                } else {
+                    (self.bounds.width - padding.horizontal()).max(0.0)
+                }
+            } else {
+                (self.bounds.width - padding.horizontal()).max(0.0)
+            };
+
+            let child_max_height = if let Some(ref anim) = self.height_anim {
+                if anim.is_animating() {
+                    let start = *anim.start();
+                    let target = *anim.target();
+                    let anim_max = start.max(target);
+                    (anim_max - padding.vertical()).max(0.0)
+                } else {
+                    (self.bounds.height - padding.vertical()).max(0.0)
+                }
+            } else {
+                (self.bounds.height - padding.vertical()).max(0.0)
+            };
+
             let child_constraints = Constraints {
                 min_width: 0.0,
                 min_height: 0.0,
-                max_width: self.bounds.width - padding.horizontal(),
-                max_height: self.bounds.height - padding.vertical(),
+                max_width: child_max_width,
+                max_height: child_max_height,
             };
 
             self.layout.layout(
@@ -806,6 +1289,14 @@ impl Widget for Container {
 
     fn mark_dirty(&mut self, flags: ChangeFlags) {
         self.dirty_flags |= flags;
+    }
+
+    fn mark_dirty_recursive(&mut self, flags: ChangeFlags) {
+        self.dirty_flags |= flags;
+        // Use reconcile_and_get_mut to ensure children are available
+        for child in self.children_source.reconcile_and_get_mut() {
+            child.mark_dirty_recursive(flags);
+        }
     }
 
     fn needs_layout(&self) -> bool {

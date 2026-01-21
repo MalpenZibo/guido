@@ -42,14 +42,14 @@ impl TextRenderState {
         &mut self,
         device: &Device,
         queue: &Queue,
-        texts: &[(String, Rect, Color, f32)],
+        texts: &[(String, Rect, Color, f32, Option<Rect>)],
         screen_width: u32,
         screen_height: u32,
         scale_factor: f32,
     ) {
         self.buffers.clear();
 
-        for (text, rect, _color, font_size) in texts {
+        for (text, rect, _color, font_size, _clip) in texts {
             // Scale the font size for HiDPI rendering
             let scaled_font_size = *font_size * scale_factor;
 
@@ -77,21 +77,34 @@ impl TextRenderState {
         let text_areas: Vec<TextArea> = texts
             .iter()
             .zip(self.buffers.iter())
-            .map(|((_text, rect, color, _), buffer)| {
+            .map(|((_text, rect, color, _, clip), buffer)| {
                 // Scale positions for HiDPI rendering
                 let scaled_left = rect.x * scale_factor;
                 let scaled_top = rect.y * scale_factor;
+
+                // Use clip rect if provided, otherwise use full screen
+                let bounds = if let Some(clip_rect) = clip {
+                    TextBounds {
+                        left: (clip_rect.x * scale_factor) as i32,
+                        top: (clip_rect.y * scale_factor) as i32,
+                        right: ((clip_rect.x + clip_rect.width) * scale_factor) as i32,
+                        bottom: ((clip_rect.y + clip_rect.height) * scale_factor) as i32,
+                    }
+                } else {
+                    TextBounds {
+                        left: 0,
+                        top: 0,
+                        right: screen_width as i32,
+                        bottom: screen_height as i32,
+                    }
+                };
+
                 TextArea {
                     buffer,
                     left: scaled_left,
                     top: scaled_top,
                     scale: 1.0, // Buffer is already scaled, no additional scaling needed
-                    bounds: TextBounds {
-                        left: 0,
-                        top: 0,
-                        right: screen_width as i32,
-                        bottom: screen_height as i32,
-                    },
+                    bounds,
                     default_color: GlyphonColor::rgba(
                         (color.r * 255.0) as u8,
                         (color.g * 255.0) as u8,
