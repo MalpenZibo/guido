@@ -79,9 +79,7 @@ impl TextRenderState {
             .zip(self.buffers.iter())
             .map(|((_text, rect, color, _), buffer)| {
                 // Scale positions for HiDPI rendering
-                // Add a small offset to compensate for font metrics (left-side bearing)
-                let left_offset = 2.0 * scale_factor;
-                let scaled_left = rect.x * scale_factor + left_offset;
+                let scaled_left = rect.x * scale_factor;
                 let scaled_top = rect.y * scale_factor;
                 TextArea {
                     buffer,

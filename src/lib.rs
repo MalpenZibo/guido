@@ -20,20 +20,21 @@ use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
 
 pub mod prelude {
-    pub use crate::layout::{Constraints, Size};
+    pub use crate::layout::{
+        Axis, Constraints, CrossAxisAlignment, Flex, MainAxisAlignment, Size,
+    };
     pub use crate::platform::{Anchor, Layer};
     pub use crate::reactive::{
         batch, create_computed, create_effect, create_signal, Computed, Effect, IntoMaybeDyn,
         MaybeDyn, ReadSignal, Signal, WriteSignal,
     };
     pub use crate::renderer::primitives::Shadow;
-    pub use crate::renderer::PaintContext;
+    pub use crate::renderer::{measure_text, PaintContext};
     pub use crate::widgets::{
-        column, container, row, text, Border, Color, Column, Container, CrossAxisAlignment, Event,
-        EventResponse, GradientDirection, LinearGradient, MainAxisAlignment, MouseButton, Padding,
-        Rect, Row, ScrollSource, Text, Widget,
+        container, text, Border, Color, Container, Event, EventResponse,
+        GradientDirection, IntoChildren, LinearGradient, MouseButton, Padding, Rect, ScrollSource, Text, Widget,
     };
-    pub use crate::{column, row, App, AppConfig};
+    pub use crate::{App, AppConfig};
 }
 
 pub struct AppConfig {

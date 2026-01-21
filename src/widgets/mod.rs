@@ -1,12 +1,11 @@
-pub mod column;
+pub mod children;
 pub mod container;
-pub mod row;
+pub mod into_child;
 pub mod text;
 pub mod widget;
 
-pub use column::{column, Column};
 pub use container::{container, Border, Container, GradientDirection, LinearGradient};
-pub use row::{row, CrossAxisAlignment, MainAxisAlignment, Row};
+pub use into_child::{DynamicChildren, IntoChildren, StaticChildren};
 pub use text::{text, Text};
 pub use widget::{Color, Event, EventResponse, MouseButton, Padding, Rect, ScrollSource, Widget};
 

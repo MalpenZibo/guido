@@ -2,6 +2,7 @@ pub mod context;
 pub mod pipeline;
 pub mod primitives;
 pub mod text;
+mod text_measurer;
 
 use std::sync::Arc;
 
@@ -13,6 +14,7 @@ use self::text::TextRenderState;
 use crate::widgets::{Color, Rect};
 
 pub use context::{GpuContext, SurfaceState};
+pub use text_measurer::measure_text;
 
 /// Enum to hold different shape types for rendering
 #[derive(Debug, Clone)]
