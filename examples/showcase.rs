@@ -9,9 +9,8 @@
 use guido::prelude::*;
 
 fn main() {
+    // No need to clone signals anymore - they implement Copy!
     let hover_color = create_signal(Color::rgb(0.2, 0.2, 0.3));
-    let hover_for_callback2 = hover_color.clone();
-    let hover_for_callback = hover_color.clone();
 
     let view = container()
         .layout(Flex::column().spacing(12.0))
@@ -52,9 +51,9 @@ fn main() {
                         .ripple()
                         .on_hover(move |hovered| {
                             if hovered {
-                                hover_for_callback2.set(Color::rgb(0.3, 0.3, 0.4));
+                                hover_color.set(Color::rgb(0.3, 0.3, 0.4));
                             } else {
-                                hover_for_callback2.set(Color::rgb(0.2, 0.2, 0.3));
+                                hover_color.set(Color::rgb(0.2, 0.2, 0.3));
                             }
                         })
                         .child(text("Scoop\n(K=-1)").color(Color::WHITE)),
@@ -100,9 +99,9 @@ fn main() {
                         .ripple()
                         .on_hover(move |hovered| {
                             if hovered {
-                                hover_for_callback.set(Color::rgb(0.3, 0.3, 0.4));
+                                hover_color.set(Color::rgb(0.3, 0.3, 0.4));
                             } else {
-                                hover_for_callback.set(Color::rgb(0.2, 0.2, 0.3));
+                                hover_color.set(Color::rgb(0.2, 0.2, 0.3));
                             }
                         })
                         .child(text("Scoop\nBorder").color(Color::WHITE)),

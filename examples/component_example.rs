@@ -52,14 +52,8 @@ fn main() {
     let _ = env_logger::try_init();
 
     // Create some reactive state
+    // No need to clone signals anymore - they implement Copy!
     let count = create_signal(0);
-    let count1 = count.clone();
-    let count2 = count.clone();
-    let count3 = count.clone();
-    let count4 = count.clone();
-    let count5 = count.clone();
-    let count6 = count.clone();
-    let count7 = count.clone();
 
     // Build UI using our custom components
     let view = container()
@@ -87,19 +81,19 @@ fn main() {
                             button()
                                 .label("Increment")
                                 .background(Color::rgb(0.2, 0.6, 0.3))
-                                .on_click(move || count1.update(|c| *c += 1)),
+                                .on_click(move || count.update(|c| *c += 1)),
                         )
                         .child(
                             button()
                                 .label("Decrement")
                                 .background(Color::rgb(0.6, 0.2, 0.2))
-                                .on_click(move || count2.update(|c| *c -= 1)),
+                                .on_click(move || count.update(|c| *c -= 1)),
                         )
                         .child(
                             button()
                                 .label("Reset")
                                 .background(Color::rgb(0.4, 0.4, 0.5))
-                                .on_click(move || count3.set(0)),
+                                .on_click(move || count.set(0)),
                         ),
                 ),
         )
@@ -141,9 +135,9 @@ fn main() {
                 .title("Reactive Props Example")
                 .background(move || {
                     // Card background changes based on count
-                    if count4.get() > 5 {
+                    if count.get() > 5 {
                         Color::rgb(0.2, 0.3, 0.2)
-                    } else if count4.get() < -5 {
+                    } else if count.get() < -5 {
                         Color::rgb(0.3, 0.2, 0.2)
                     } else {
                         Color::rgb(0.18, 0.18, 0.22)
@@ -156,17 +150,17 @@ fn main() {
                 .child(
                     container().layout(Flex::row().spacing(8.0)).child(
                         button()
-                            .label(move || format!("Count is {}", count5.get()))
+                            .label(move || format!("Count is {}", count.get()))
                             .background(move || {
                                 // Button color changes based on count
-                                let c = count6.get();
+                                let c = count.get();
                                 if c % 2 == 0 {
                                     Color::rgb(0.3, 0.5, 0.7)
                                 } else {
                                     Color::rgb(0.7, 0.5, 0.3)
                                 }
                             })
-                            .on_click(move || count7.update(|c| *c += 1)),
+                            .on_click(move || count.update(|c| *c += 1)),
                     ),
                 ),
         );

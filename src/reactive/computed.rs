@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::effect::Effect;
-use super::signal::Signal;
+use super::signal::{create_signal, Signal};
 
 struct ComputedInner<T> {
     signal: Signal<T>,
@@ -21,23 +21,23 @@ pub struct Computed<T> {
 // Note: Effect is not Send, so Computed itself cannot be sent across threads
 // but the underlying signal value can still be read from any thread
 
-impl<T: Clone + PartialEq + 'static> Computed<T> {
+impl<T: Clone + PartialEq + Send + Sync + 'static> Computed<T> {
     pub fn new<F>(f: F) -> Self
     where
         F: Fn() -> T + 'static,
     {
         let initial = f();
-        let signal = Signal::new(initial);
-        let signal_clone = signal.clone();
+        let signal = create_signal(initial);
+        // Signal is Copy, so we can use it in both the closure and the struct!
 
         let effect = Effect::new(move || {
             let value = f();
-            signal_clone.set(value); // Now checks equality automatically!
+            signal.set(value); // Signal is Copy, so this works!
         });
 
         Self {
             inner: Arc::new(ComputedInner {
-                signal,
+                signal, // Signal is Copy, so this also works!
                 _effect: effect,
             }),
         }
@@ -61,7 +61,7 @@ impl<T: Clone + PartialEq + 'static> Computed<T> {
 
 pub fn create_computed<T, F>(f: F) -> Computed<T>
 where
-    T: Clone + PartialEq + 'static,
+    T: Clone + PartialEq + Send + Sync + 'static,
     F: Fn() -> T + 'static,
 {
     Computed::new(f)

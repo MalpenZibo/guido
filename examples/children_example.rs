@@ -20,6 +20,7 @@ struct Item {
 
 fn main() {
     // === Signals for reactive state ===
+    // No need to clone signals anymore - they implement Copy!
     let show_optional = create_signal(true);
     let show_optional2 = create_signal(true);
     let items = create_signal(vec![
@@ -39,20 +40,6 @@ fn main() {
             color: Color::rgb(0.3, 0.3, 0.8),
         },
     ]);
-
-    // Clone signals for closures
-    let show_for_toggle = show_optional.clone();
-    let show_for_toggle2 = show_optional2.clone();
-    let show_for_maybe = show_optional.clone();
-    let show_for_text = show_optional.clone();
-    let show_for_unified = show_optional.clone();
-    let show_for_unified_text = show_optional.clone();
-    let show_for_child_dyn = show_optional.clone();
-    let show_for_children_dyn = show_optional2.clone();
-    let show_for_children_dyn_text = show_optional2.clone();
-    let items_for_add = items.clone();
-    let items_for_remove = items.clone();
-    let items_for_reverse = items.clone();
 
     let view = container()
         .layout(Flex::row().spacing(12.0))
@@ -117,7 +104,7 @@ fn main() {
                                 .color(Color::rgb(1.0, 0.7, 0.7))
                         )
                         .child(
-                            text(move || format!("Signal: {} (but .maybe_child won't react!)", show_for_text.get()))
+                            text(move || format!("Signal: {} (but .maybe_child won't react!)", show_optional.get()))
                                 .color(Color::WHITE)
                         )
                         .child(
@@ -126,7 +113,7 @@ fn main() {
                                 .child(text("Fixed").color(Color::WHITE))
                                 // This is evaluated ONCE at creation - won't update!
                                 .maybe_child(
-                                    if show_for_maybe.get() {
+                                    if show_optional.get() {
                                         Some(
                                             container()
                                                 .padding(6.0)
@@ -174,7 +161,7 @@ fn main() {
                                         .corner_radius(4.0)
                                         .ripple()
                                         .on_click(move || {
-                                            items_for_add.update(|list: &mut Vec<Item>| {
+                                            items.update(|list: &mut Vec<Item>| {
                                                 let id = list.len() as u64 + 1;
                                                 list.push(Item {
                                                     id,
@@ -196,7 +183,7 @@ fn main() {
                                         .corner_radius(4.0)
                                         .ripple()
                                         .on_click(move || {
-                                            items_for_remove.update(|list: &mut Vec<Item>| {
+                                            items.update(|list: &mut Vec<Item>| {
                                                 if !list.is_empty() {
                                                     list.pop();
                                                 }
@@ -211,7 +198,7 @@ fn main() {
                                         .corner_radius(4.0)
                                         .ripple()
                                         .on_click(move || {
-                                            items_for_reverse.update(|list: &mut Vec<Item>| {
+                                            items.update(|list: &mut Vec<Item>| {
                                                 list.reverse();
                                             });
                                         })
@@ -264,11 +251,11 @@ fn main() {
                                 .corner_radius(4.0)
                                 .ripple()
                                 .on_click(move || {
-                                    show_for_toggle.update(|v| *v = !*v);
+                                    show_optional.update(|v| *v = !*v);
                                 })
                                 .child(
                                     text(move || {
-                                        if show_for_unified_text.get() {
+                                        if show_optional.get() {
                                             "Click to Hide Middle".to_string()
                                         } else {
                                             "Click to Show Middle".to_string()
@@ -291,7 +278,7 @@ fn main() {
                                 .child(
                                     // Dynamic child in the middle!
                                     move || {
-                                        if show_for_unified.get() {
+                                        if show_optional.get() {
                                             Some(
                                                 container()
                                                     .padding(8.0)
@@ -348,11 +335,11 @@ fn main() {
                                 .corner_radius(4.0)
                                 .ripple()
                                 .on_click(move || {
-                                    show_for_toggle2.update(|v| *v = !*v);
+                                    show_optional2.update(|v| *v = !*v);
                                 })
                                 .child(
                                     text(move || {
-                                        if show_for_children_dyn_text.get() {
+                                        if show_optional2.get() {
                                             "Click to Hide Dynamics".to_string()
                                         } else {
                                             "Click to Show Dynamics".to_string()
@@ -367,7 +354,7 @@ fn main() {
                                 .layout(Flex::column().spacing(4.0))
                                 .child(text("Static 1").color(Color::WHITE))
                                 .child(move || {
-                                    if show_for_children_dyn.get() {
+                                    if show_optional2.get() {
                                         Some(
                                             container()
                                                 .padding(6.0)
@@ -381,7 +368,7 @@ fn main() {
                                 })
                                 .child(text("Static 2").color(Color::WHITE))
                                 .child(move || {
-                                    if show_for_child_dyn.get() {
+                                    if show_optional.get() {
                                         Some(
                                             container()
                                                 .padding(6.0)
