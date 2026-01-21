@@ -272,7 +272,7 @@ impl App {
                 });
             }
 
-            // Always update renderer scale factor (cheap operation)
+            // Update scale factor
             renderer.set_scale_factor(wayland_state.scale_factor);
 
             // Check if we need to render a frame
@@ -281,22 +281,12 @@ impl App {
             let needs_paint = with_app_state(|state| state.needs_paint());
             let has_animations = with_app_state(|state| state.has_animations);
 
-            // Only layout/paint/render if something changed or animations are active
+            // Only render if something changed
             if frame_requested || needs_layout || needs_paint || needs_resize || scale_changed || has_animations {
-                log::trace!(
-                    "Rendering frame: requested={}, layout={}, paint={}, resize={}, scale={}, animations={}",
-                    frame_requested,
-                    needs_layout,
-                    needs_paint,
-                    needs_resize,
-                    scale_changed,
-                    has_animations
-                );
-
-                // Clear animation flag before layout - widgets will set it again if they need to continue
+                // Clear animation flag - widgets will set it again if needed
                 clear_animation_flag();
 
-                // Always do full layout when we render a frame
+                // Full layout
                 let constraints = Constraints::new(
                     0.0,
                     0.0,
@@ -306,24 +296,16 @@ impl App {
                 root.layout(constraints);
                 root.set_origin(0.0, 0.0);
 
-                // Clear layout flag
-                with_app_state_mut(|state| {
-                    state.clear_layout_flag();
-                });
-
-                // Always do full paint when we render a frame
+                // Full paint
                 let mut paint_ctx = renderer.create_paint_context();
                 root.paint(&mut paint_ctx);
 
                 renderer.render(&mut surface, &paint_ctx, self.config.background_color);
 
-                // Clear dirty flags on all widgets
-                root.clear_dirty();
-
-                // Clear global paint flag
+                // Clear flags
                 with_app_state_mut(|state| {
+                    state.clear_layout_flag();
                     state.clear_paint_flag();
-                    state.clear_dirty_widgets();
                 });
 
                 // Commit surface
@@ -334,15 +316,10 @@ impl App {
                 // Flush the connection
                 connection.flush().expect("Failed to flush connection");
 
-                // If animations are active, sleep for frame time (16ms ~= 60fps)
-                if has_animations {
-                    std::thread::sleep(std::time::Duration::from_millis(16));
-                } else {
-                    // Short sleep to avoid busy-looping
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                }
+                // Short sleep when active
+                std::thread::sleep(std::time::Duration::from_millis(if has_animations { 16 } else { 1 }));
             } else {
-                // Nothing to do, sleep longer to save CPU
+                // Nothing to do, sleep longer
                 std::thread::sleep(std::time::Duration::from_millis(16));
             }
         }
