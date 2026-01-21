@@ -11,6 +11,7 @@ Guido is a GPU-accelerated GUI library for building Wayland layer shell applicat
 ## Features
 
 - **Reactive Signals** - Thread-safe reactive values with automatic dependency tracking
+- **Reusable Components** - Define custom components with the `#[component]` macro and fluent builder API
 - **GPU Rendering** - Hardware-accelerated rendering via wgpu
 - **Superellipse Corners** - Smooth iOS-style "squircle" corners with configurable curvature
 - **SDF Borders** - Crisp anti-aliased borders using signed distance field rendering
@@ -25,17 +26,20 @@ use guido::prelude::*;
 
 fn main() {
     let count = create_signal(0);
+    let count_for_click = count.clone();
 
-    let view = row![
-        text(move || format!("Count: {}", count.get())),
-        container()
-            .background(Color::rgb(0.3, 0.3, 0.4))
-            .corner_radius(8.0)
-            .padding(8.0)
-            .on_click(move || count.update(|c| *c += 1))
-            .child(text("Click me"))
-    ]
-    .spacing(16.0);
+    let view = container()
+        .layout(Flex::row().spacing(16.0))
+        .child(text(move || format!("Count: {}", count.get())).color(Color::WHITE))
+        .child(
+            container()
+                .background(Color::rgb(0.3, 0.3, 0.4))
+                .corner_radius(8.0)
+                .padding(8.0)
+                .ripple()
+                .on_click(move || count_for_click.update(|c| *c += 1))
+                .child(text("Click me").color(Color::WHITE))
+        );
 
     App::new()
         .width(400)
@@ -60,6 +64,9 @@ cargo run --example reactive_example
 
 # Run the showcase (demonstrates various curvature options)
 cargo run --example showcase
+
+# Run the component example (demonstrates reusable components)
+cargo run --example component_example
 ```
 
 ## Examples
@@ -67,6 +74,7 @@ cargo run --example showcase
 - **status_bar** - Basic status bar layout demonstration
 - **reactive_example** - Interactive features with signals, click handlers, and ripple effects
 - **showcase** - Comprehensive feature demo showing different corner curvatures
+- **component_example** - Reusable components (Button, Card) with reactive props
 
 ## Requirements
 
