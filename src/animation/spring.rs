@@ -10,31 +10,31 @@ pub struct SpringConfig {
 }
 
 impl SpringConfig {
-    /// Default spring with pleasant overshoot
+    /// Default spring - fluid motion with moderate overshoot
     pub const DEFAULT: Self = Self {
         mass: 1.0,
-        stiffness: 180.0,
-        damping: 11.0,
+        stiffness: 150.0,
+        damping: 16.0,
     };
 
-    /// Bouncy spring with more overshoot
+    /// Bouncy spring with noticeable overshoot
     pub const BOUNCY: Self = Self {
         mass: 1.0,
-        stiffness: 200.0,
-        damping: 10.0,
+        stiffness: 150.0,
+        damping: 12.0,
     };
 
-    /// Snappy spring with quick response
+    /// Snappy spring - quicker response, subtle overshoot
     pub const SNAPPY: Self = Self {
         mass: 1.0,
         stiffness: 250.0,
-        damping: 14.0,
+        damping: 20.0,
     };
 
-    /// Gentle spring with subtle motion
+    /// Gentle spring - slow and smooth, minimal overshoot
     pub const GENTLE: Self = Self {
         mass: 1.0,
-        stiffness: 120.0,
+        stiffness: 100.0,
         damping: 15.0,
     };
 }

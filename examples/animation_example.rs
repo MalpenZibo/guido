@@ -74,7 +74,7 @@ fn create_color_animation_card(hovered: Signal<bool>) -> Container {
                 Color::rgb(0.25, 0.2, 0.3)
             }
         })
-        .animate_background(Transition::new(300.0, TimingFunction::EaseInOut))
+        .animate_background(Transition::spring(SpringConfig::DEFAULT))
         .corner_radius(12.0)
         .padding(20.0)
         .on_hover(move |h| hovered.set(h))
