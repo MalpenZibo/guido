@@ -52,46 +52,73 @@ impl<T: Clone> Signal<T> {
     pub fn get(&self) -> T {
         // Only track reads if we're on the main thread (runtime available)
         try_with_runtime(|rt| rt.track_read(self.inner.id));
-        self.inner.value.read().unwrap().clone()
+        self.inner
+            .value
+            .read()
+            .expect("signal lock poisoned")
+            .clone()
     }
 
     pub fn get_untracked(&self) -> T {
-        self.inner.value.read().unwrap().clone()
+        self.inner
+            .value
+            .read()
+            .expect("signal lock poisoned")
+            .clone()
     }
 }
 
-impl<T> Signal<T> {
+impl<T: PartialEq> Signal<T> {
+    /// Sets the signal's value, only triggering updates if the value actually changed.
     pub fn set(&self, value: T) {
-        *self.inner.value.write().unwrap() = value;
-        // Only notify if we're on the main thread (runtime available)
-        try_with_runtime(|rt| rt.notify_write(self.inner.id));
-        // Request a frame to be rendered
-        request_frame();
+        let Ok(mut guard) = self.inner.value.write() else {
+            return; // Lock poisoned, skip update silently
+        };
+        if *guard != value {
+            *guard = value;
+            drop(guard);
+            // Only notify if we're on the main thread (runtime available)
+            try_with_runtime(|rt| rt.notify_write(self.inner.id));
+            // Request a frame to be rendered
+            request_frame();
+        }
     }
+}
 
+impl<T: PartialEq + Clone> Signal<T> {
+    /// Updates the signal's value using a closure, only triggering updates if the value changed.
     pub fn update<F>(&self, f: F)
     where
         F: FnOnce(&mut T),
     {
-        f(&mut self.inner.value.write().unwrap());
-        try_with_runtime(|rt| rt.notify_write(self.inner.id));
-        // Request a frame to be rendered
-        request_frame();
+        let Ok(mut guard) = self.inner.value.write() else {
+            return; // Lock poisoned, skip update silently
+        };
+        let old_value = guard.clone();
+        f(&mut *guard);
+        if *guard != old_value {
+            drop(guard);
+            try_with_runtime(|rt| rt.notify_write(self.inner.id));
+            // Request a frame to be rendered
+            request_frame();
+        }
     }
+}
 
+impl<T> Signal<T> {
     pub fn with<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&T) -> R,
     {
         try_with_runtime(|rt| rt.track_read(self.inner.id));
-        f(&self.inner.value.read().unwrap())
+        f(&self.inner.value.read().expect("signal lock poisoned"))
     }
 
     pub fn with_untracked<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&T) -> R,
     {
-        f(&self.inner.value.read().unwrap())
+        f(&self.inner.value.read().expect("signal lock poisoned"))
     }
 }
 
@@ -107,11 +134,19 @@ unsafe impl<T: Send + Sync> Sync for ReadSignal<T> {}
 impl<T: Clone> ReadSignal<T> {
     pub fn get(&self) -> T {
         try_with_runtime(|rt| rt.track_read(self.inner.id));
-        self.inner.value.read().unwrap().clone()
+        self.inner
+            .value
+            .read()
+            .expect("signal lock poisoned")
+            .clone()
     }
 
     pub fn get_untracked(&self) -> T {
-        self.inner.value.read().unwrap().clone()
+        self.inner
+            .value
+            .read()
+            .expect("signal lock poisoned")
+            .clone()
     }
 }
 
@@ -121,14 +156,14 @@ impl<T> ReadSignal<T> {
         F: FnOnce(&T) -> R,
     {
         try_with_runtime(|rt| rt.track_read(self.inner.id));
-        f(&self.inner.value.read().unwrap())
+        f(&self.inner.value.read().expect("signal lock poisoned"))
     }
 
     pub fn with_untracked<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&T) -> R,
     {
-        f(&self.inner.value.read().unwrap())
+        f(&self.inner.value.read().expect("signal lock poisoned"))
     }
 }
 
@@ -141,29 +176,50 @@ pub struct WriteSignal<T> {
 unsafe impl<T: Send + Sync> Send for WriteSignal<T> {}
 unsafe impl<T: Send + Sync> Sync for WriteSignal<T> {}
 
-impl<T> WriteSignal<T> {
+impl<T: PartialEq> WriteSignal<T> {
+    /// Sets the signal's value, only triggering updates if the value actually changed.
     pub fn set(&self, value: T) {
-        *self.inner.value.write().unwrap() = value;
-        try_with_runtime(|rt| rt.notify_write(self.inner.id));
-        // Request a frame to be rendered
-        request_frame();
+        let Ok(mut guard) = self.inner.value.write() else {
+            return; // Lock poisoned, skip update silently
+        };
+        if *guard != value {
+            *guard = value;
+            drop(guard);
+            try_with_runtime(|rt| rt.notify_write(self.inner.id));
+            // Request a frame to be rendered
+            request_frame();
+        }
     }
+}
 
+impl<T: PartialEq + Clone> WriteSignal<T> {
+    /// Updates the signal's value using a closure, only triggering updates if the value changed.
     pub fn update<F>(&self, f: F)
     where
         F: FnOnce(&mut T),
     {
-        f(&mut self.inner.value.write().unwrap());
-        try_with_runtime(|rt| rt.notify_write(self.inner.id));
-        // Request a frame to be rendered
-        request_frame();
+        let Ok(mut guard) = self.inner.value.write() else {
+            return; // Lock poisoned, skip update silently
+        };
+        let old_value = guard.clone();
+        f(&mut *guard);
+        if *guard != old_value {
+            drop(guard);
+            try_with_runtime(|rt| rt.notify_write(self.inner.id));
+            // Request a frame to be rendered
+            request_frame();
+        }
     }
 }
 
 impl<T: Clone> WriteSignal<T> {
     /// Get the current value (useful for read-modify-write patterns)
     pub fn get(&self) -> T {
-        self.inner.value.read().unwrap().clone()
+        self.inner
+            .value
+            .read()
+            .expect("signal lock poisoned")
+            .clone()
     }
 }
 
