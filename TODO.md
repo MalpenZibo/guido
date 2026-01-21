@@ -1,15 +1,39 @@
 I want create a rust gui library using wgpu and the wulkan renderer.
 The primary scope is to create wayland widget using the layer shell protocol.
 
-The library should have just a few component:
+## Core Components
 
-- text to display text
-- row to show element in a row using a flexbox
-- column as the row but for the column
-- a box to UI related stuff border, padding, backgroud color, corner radius, shadow
-- show images
-- a toggle could be created using a box but maybe a checkbox need to be created
-- an input text
+### Completed
+- **Text**: Display text with reactive content and styling ✓
+- **Container**: Unified widget with pluggable layout system ✓
+  - Supports padding, background, gradients, borders, corner radius, shadows ✓
+  - Reactive properties via MaybeDyn ✓
+  - Event handlers (click, hover, scroll) ✓
+  - Ripple effects ✓
+  - **Layout Trait**: Pluggable layout system with Flex (row/column) ✓
+  - **Static Children**: `.child()` and `.maybe_child()` methods ✓
+  - **Dynamic Children**: `.children_dyn()` with keyed reconciliation (Floem-style) ✓
+
+### Planned
+- **Image**: Display images
+- **Toggle/Checkbox**: Interactive toggle component
+- **Input Text**: Text input field
+
+## Architecture Improvements (Completed)
+
+### Unified Container with Layout Trait (Jan 2026)
+Replaced separate Row/Column widgets with a unified Container that accepts pluggable layouts:
+
+- **Layout Trait**: Abstract interface for positioning children
+- **Flex Layout**: Row and column layouts with reactive spacing and alignment
+- **Children API**:
+  - Static: `.child()`, `.maybe_child()` for simple cases
+  - Dynamic: `.children_dyn()` with keyed reconciliation for preserving widget state
+- **Benefits**:
+  - Reduced code duplication
+  - Single Container type with flexible layouts
+  - State preservation during list reordering (via keyed reconciliation)
+  - Easier to extend with custom layouts
 
 The idea is that everything should be composed from these few component.
 

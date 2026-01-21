@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use crate::layout::{Constraints, Size};
+use crate::layout::{Constraints, Flex, Layout, Size};
 use crate::reactive::{request_animation_frame, ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId};
 use crate::renderer::primitives::{GradientDir, Shadow};
 use crate::renderer::PaintContext;
 
+use super::children::{ChildrenSource, DynItem, DynamicChildren};
 use super::widget::{
     Color, Event, EventResponse, MouseButton, Padding, Rect, ScrollSource, Widget,
 };
@@ -71,7 +72,12 @@ impl Border {
 pub struct Container {
     widget_id: WidgetId,
     dirty_flags: ChangeFlags,
-    child: Option<Box<dyn Widget>>,
+
+    // Layout and children
+    layout: Box<dyn Layout>,
+    children_source: ChildrenSource,
+
+    // Styling properties
     padding: MaybeDyn<Padding>,
     background: MaybeDyn<Color>,
     gradient: Option<LinearGradient>,
@@ -83,7 +89,7 @@ pub struct Container {
     min_height: Option<MaybeDyn<f32>>,
     bounds: Rect,
 
-    // Cached values for change detection (Phase 3)
+    // Cached values for change detection
     cached_padding: Padding,
     cached_background: Color,
     cached_corner_radius: f32,
@@ -104,15 +110,15 @@ pub struct Container {
     ripple_center: Option<(f32, f32)>,
     ripple_progress: f32,
     ripple_color: Color,
-    ripple_from_click: bool, // true = click (slower), false = hover (faster)
-    ripple_is_exit: bool,    // true = exit ripple (fades out quickly)
-    last_mouse_pos: Option<(f32, f32)>, // Track last mouse position for exit ripple
+    ripple_from_click: bool,
+    ripple_is_exit: bool,
+    last_mouse_pos: Option<(f32, f32)>,
 
-    // Click ripple effect (separate from hover ripple)
+    // Click ripple effect
     click_ripple_center: Option<(f32, f32)>,
     click_ripple_progress: f32,
-    click_ripple_reversing: bool, // true when animating backwards on release
-    click_ripple_release_pos: Option<(f32, f32)>, // position where mouse was released
+    click_ripple_reversing: bool,
+    click_ripple_release_pos: Option<(f32, f32)>,
 }
 
 impl Container {
@@ -120,12 +126,13 @@ impl Container {
         Self {
             widget_id: WidgetId::next(),
             dirty_flags: ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT,
-            child: None,
+            layout: Box::new(Flex::column()),
+            children_source: ChildrenSource::default(),
             padding: MaybeDyn::Static(Padding::default()),
             background: MaybeDyn::Static(Color::TRANSPARENT),
             gradient: None,
             corner_radius: MaybeDyn::Static(0.0),
-            corner_curvature: MaybeDyn::Static(1.0), // Default K=1 (circular/round)
+            corner_curvature: MaybeDyn::Static(1.0),
             border: None,
             elevation: MaybeDyn::Static(0.0),
             min_width: None,
@@ -147,7 +154,6 @@ impl Container {
             click_ripple_progress: 0.0,
             click_ripple_reversing: false,
             click_ripple_release_pos: None,
-            // Initialize cached values
             cached_padding: Padding::default(),
             cached_background: Color::TRANSPARENT,
             cached_corner_radius: 0.0,
@@ -156,9 +162,103 @@ impl Container {
         }
     }
 
-    pub fn child(mut self, widget: impl Widget + 'static) -> Self {
-        self.child = Some(Box::new(widget));
+    /// Set the layout strategy for this container
+    pub fn layout(mut self, layout: impl Layout + 'static) -> Self {
+        self.layout = Box::new(layout);
         self
+    }
+
+    /// Add a single child (static mode)
+    pub fn child(mut self, widget: impl Widget + 'static) -> Self {
+        match &mut self.children_source {
+            ChildrenSource::Static(children) => {
+                children.push(Box::new(widget));
+            }
+            ChildrenSource::Dynamic(_) => {
+                panic!("Cannot add static child to container with dynamic children");
+            }
+        }
+        self
+    }
+
+    /// Add a child if Some (static mode)
+    pub fn maybe_child(mut self, widget: Option<impl Widget + 'static>) -> Self {
+        if let Some(w) = widget {
+            self = self.child(w);
+        }
+        self
+    }
+
+    /// Dynamic children with keyed reconciliation (Floem-style)
+    /// - items_fn: Returns iterator of data items
+    /// - key_fn: Extracts unique key from each item
+    /// - view_fn: Creates widget for each item
+    pub fn children_dyn<T, I, K, V>(
+        mut self,
+        items_fn: impl Fn() -> I + Send + Sync + 'static,
+        key_fn: impl Fn(&T) -> u64 + Send + Sync + 'static,
+        view_fn: impl Fn(T) -> V + Send + Sync + 'static,
+    ) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        V: Widget + 'static,
+        T: 'static,
+    {
+        let key_fn = Arc::new(key_fn);
+        let view_fn = Arc::new(view_fn);
+
+        let items_fn_wrapped = Arc::new(move || {
+            let items = items_fn();
+            items
+                .into_iter()
+                .map(|item| {
+                    let key = key_fn(&item);
+                    let widget = view_fn(item);
+                    DynItem::new(key, widget)
+                })
+                .collect()
+        });
+
+        self.children_source = ChildrenSource::Dynamic(DynamicChildren::new(move || {
+            items_fn_wrapped()
+        }));
+        self
+    }
+
+    /// Reactive single optional child (convenience wrapper around .children_dyn)
+    ///
+    /// Use this when you want a single child that appears/disappears based on a signal.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let show = create_signal(true);
+    /// container()
+    ///     .child_dyn(move || {
+    ///         if show.get() {
+    ///             Some(text("I'm reactive!"))
+    ///         } else {
+    ///             None
+    ///         }
+    ///     })
+    /// ```
+    pub fn child_dyn<V>(
+        self,
+        child_fn: impl Fn() -> Option<V> + Send + Sync + 'static,
+    ) -> Self
+    where
+        V: Widget + 'static,
+    {
+        self.children_dyn::<V, Vec<V>, (), _>(
+            move || {
+                if let Some(widget) = child_fn() {
+                    vec![widget]
+                } else {
+                    vec![]
+                }
+            },
+            |_: &V| 0u64, // Single child always uses key 0
+            |widget: V| widget,
+        )
     }
 
     pub fn padding(mut self, value: impl IntoMaybeDyn<f32>) -> Self {
@@ -194,30 +294,24 @@ impl Container {
     }
 
     /// Set the corner curvature using CSS K-value system
-    /// - K = -1.0: scoop (concave inward curves)
-    /// - K = 0.0: bevel (straight diagonal cuts)
-    /// - K = 1.0: round/circular (default)
-    /// - K = 2.0: squircle (iOS-style smooth squares)
-    ///
-    /// Internally converted to n = 2^K for rendering
     pub fn corner_curvature(mut self, curvature: impl IntoMaybeDyn<f32>) -> Self {
         self.corner_curvature = curvature.into_maybe_dyn();
         self
     }
 
-    /// Convenience: Set squircle/iOS-style corners (K = 2.0 → n = 4.0)
+    /// Convenience: Set squircle/iOS-style corners
     pub fn squircle(mut self) -> Self {
         self.corner_curvature = MaybeDyn::Static(2.0);
         self
     }
 
-    /// Convenience: Set concave/scooped corners (K = -1.0 → n = 0.5)
+    /// Convenience: Set concave/scooped corners
     pub fn scoop(mut self) -> Self {
         self.corner_curvature = MaybeDyn::Static(-1.0);
         self
     }
 
-    /// Convenience: Set beveled corners (K = 0.0 → n = 1.0)
+    /// Convenience: Set beveled corners
     pub fn bevel(mut self) -> Self {
         self.corner_curvature = MaybeDyn::Static(0.0);
         self
@@ -229,19 +323,19 @@ impl Container {
         self
     }
 
-    /// Set a linear gradient background (overrides solid background)
+    /// Set a linear gradient background
     pub fn gradient(mut self, gradient: LinearGradient) -> Self {
         self.gradient = Some(gradient);
         self
     }
 
-    /// Convenience: horizontal gradient from start to end color
+    /// Convenience: horizontal gradient
     pub fn gradient_horizontal(mut self, start: Color, end: Color) -> Self {
         self.gradient = Some(LinearGradient::horizontal(start, end));
         self
     }
 
-    /// Convenience: vertical gradient from start to end color
+    /// Convenience: vertical gradient
     pub fn gradient_vertical(mut self, start: Color, end: Color) -> Self {
         self.gradient = Some(LinearGradient::vertical(start, end));
         self
@@ -257,19 +351,16 @@ impl Container {
         self
     }
 
-    /// Set a callback for click events (mouse button released inside bounds)
     pub fn on_click<F: Fn() + Send + Sync + 'static>(mut self, callback: F) -> Self {
         self.on_click = Some(Arc::new(callback));
         self
     }
 
-    /// Set a callback for hover events (mouse enter/leave)
     pub fn on_hover<F: Fn(bool) + Send + Sync + 'static>(mut self, callback: F) -> Self {
         self.on_hover = Some(Arc::new(callback));
         self
     }
 
-    /// Set a callback for scroll events
     pub fn on_scroll<F: Fn(f32, f32, ScrollSource) + Send + Sync + 'static>(
         mut self,
         callback: F,
@@ -278,24 +369,28 @@ impl Container {
         self
     }
 
-    /// Enable ripple effect on hover
     pub fn ripple(mut self) -> Self {
         self.ripple_enabled = true;
         self
     }
 
-    /// Enable ripple effect with a custom color
     pub fn ripple_with_color(mut self, color: Color) -> Self {
         self.ripple_enabled = true;
         self.ripple_color = color;
         self
     }
 
-    /// Set the elevation level (0 = no shadow, higher = more elevated)
-    /// Automatically computes shadow offset, blur, and color based on the level
     pub fn elevation(mut self, level: impl IntoMaybeDyn<f32>) -> Self {
         self.elevation = level.into_maybe_dyn();
         self
+    }
+
+    /// Check if any child widget needs layout
+    fn any_child_needs_layout(&self) -> bool {
+        self.children_source
+            .get()
+            .iter()
+            .any(|child| child.needs_layout())
     }
 
     /// Advance animation state (ripple effects)
@@ -303,69 +398,45 @@ impl Container {
         // Advance hover ripple animation
         if self.ripple_enabled && self.ripple_center.is_some() {
             if self.ripple_progress < 1.0 {
-                // Animation in progress, request next frame
                 request_animation_frame();
-
-                // Exit ripple: very fast (~0.2s), Hover ripple: faster (~0.3s)
-                let speed = if self.ripple_is_exit {
-                    0.20
-                } else {
-                    0.12
-                };
+                let speed = if self.ripple_is_exit { 0.20 } else { 0.12 };
                 self.ripple_progress = (self.ripple_progress + speed).min(1.0);
             } else if self.ripple_is_exit {
-                // Exit ripple complete, still need one more frame to fade out
                 request_animation_frame();
-
-                // Auto-reset exit ripples when complete
                 self.ripple_center = None;
                 self.ripple_progress = 0.0;
                 self.ripple_is_exit = false;
             }
-            // Hover ripples persist at 100% progress while hovering (no animation needed)
         }
 
         // Advance click ripple animation
         if self.ripple_enabled && self.click_ripple_center.is_some() {
             if self.click_ripple_reversing {
-                // Animation in progress (reversing), request next frame
                 request_animation_frame();
-
-                // Reverse animation: contract back to 0
                 if self.click_ripple_progress > 0.0 {
-                    // Reverse faster than expand for snappy feel (~0.3s)
                     let speed = 0.15;
                     self.click_ripple_progress = (self.click_ripple_progress - speed).max(0.0);
                 } else {
-                    // Animation complete, reset everything
                     self.click_ripple_center = None;
                     self.click_ripple_progress = 0.0;
                     self.click_ripple_reversing = false;
                     self.click_ripple_release_pos = None;
                 }
             } else if self.click_ripple_progress < 1.0 {
-                // Animation in progress (expanding), request next frame
                 request_animation_frame();
-
-                // Forward animation: expand to 100%
                 let speed = 0.08;
                 self.click_ripple_progress = (self.click_ripple_progress + speed).min(1.0);
             }
-            // Click ripple stays at 100% until MouseUp triggers reverse (no animation needed)
         }
     }
 }
 
 /// Convert elevation level to shadow parameters
-/// Returns: Shadow struct with offset, blur, spread, and color
-/// Based on Material Design elevation specifications
 fn elevation_to_shadow(level: f32) -> Shadow {
     if level <= 0.0 {
         return Shadow::none();
     }
 
-    // Material Design elevation mapping (CSS-like values)
-    // Offset and blur scale with elevation, but stay reasonable
     let (offset_y, blur, alpha) = match level as i32 {
         1 => (1.0, 3.0, 0.12),
         2 => (2.0, 4.0, 0.16),
@@ -373,7 +444,6 @@ fn elevation_to_shadow(level: f32) -> Shadow {
         4 => (4.0, 8.0, 0.20),
         5 => (6.0, 10.0, 0.22),
         _ => {
-            // For levels > 5, scale gradually
             let offset = (level * 1.2).min(12.0);
             let blur = (level * 2.0).min(24.0);
             let alpha = (0.12 + level * 0.02).min(0.25);
@@ -392,10 +462,10 @@ impl Default for Container {
 
 impl Widget for Container {
     fn layout(&mut self, constraints: Constraints) -> Size {
-        // Always advance animations first (before early return)
+        // Always advance animations first
         self.advance_animations();
 
-        // Phase 3: Check which properties actually changed
+        // Get current property values
         let padding = self.padding.get();
         let background = self.background.get();
         let corner_radius = self.corner_radius.get();
@@ -414,26 +484,24 @@ impl Widget for Container {
             || corner_curvature != self.cached_corner_curvature
             || elevation != self.cached_elevation;
 
-        let child_needs_layout = self.child.as_ref().is_some_and(|c| c.needs_layout());
+        let child_needs_layout = self.any_child_needs_layout();
         let has_animations = self.ripple_center.is_some() || self.click_ripple_center.is_some();
 
-        // If only visual properties changed (no layout changes), downgrade to paint-only
+        // Downgrade to paint-only if only visuals changed
         if self.needs_layout() && !padding_changed && !child_needs_layout && visual_changed {
             self.dirty_flags = ChangeFlags::NEEDS_PAINT;
         }
 
-        // Only do layout if: layout properties changed, child needs it, or animating
+        // Check if we need layout
         let needs_layout = self.needs_layout() || padding_changed || child_needs_layout || has_animations;
 
         if !needs_layout {
-            // No layout needed, but update cached values if visual properties changed
             if visual_changed {
                 self.cached_background = background;
                 self.cached_corner_radius = corner_radius;
                 self.cached_corner_curvature = corner_curvature;
                 self.cached_elevation = elevation;
             }
-            // Return cached size
             return Size::new(self.bounds.width, self.bounds.height);
         }
 
@@ -444,6 +512,10 @@ impl Widget for Container {
         self.cached_corner_curvature = corner_curvature;
         self.cached_elevation = elevation;
 
+        // Reconcile dynamic children if needed
+        let children = self.children_source.reconcile_and_get_mut();
+
+        // Calculate constraints for children (accounting for padding)
         let child_constraints = Constraints {
             min_width: 0.0,
             min_height: 0.0,
@@ -451,20 +523,20 @@ impl Widget for Container {
             max_height: (constraints.max_height - padding.vertical()).max(0.0),
         };
 
-        let child_size = if let Some(ref mut child) = self.child {
-            // Only layout child if it needs it
-            if child.needs_layout() {
-                child.layout(child_constraints)
-            } else {
-                let bounds = child.bounds();
-                Size::new(bounds.width, bounds.height)
-            }
+        // Use the layout strategy to position children
+        let content_size = if !children.is_empty() {
+            self.layout.layout(
+                children,
+                child_constraints,
+                (self.bounds.x + padding.left, self.bounds.y + padding.top),
+            )
         } else {
             Size::zero()
         };
 
-        let mut width = child_size.width + padding.horizontal();
-        let mut height = child_size.height + padding.vertical();
+        // Calculate container size including padding
+        let mut width = content_size.width + padding.horizontal();
+        let mut height = content_size.height + padding.vertical();
 
         if let Some(ref min_w) = self.min_width {
             width = width.max(min_w.get());
@@ -483,22 +555,17 @@ impl Widget for Container {
         self.bounds.width = size.width;
         self.bounds.height = size.height;
 
-        if let Some(ref mut child) = self.child {
-            child.set_origin(self.bounds.x + padding.left, self.bounds.y + padding.top);
-        }
-
         size
     }
 
     fn paint(&self, ctx: &mut PaintContext) {
-        // Paint is always called - selective rendering is handled at main loop level
         let background = self.background.get();
         let corner_radius = self.corner_radius.get();
         let corner_curvature = self.corner_curvature.get();
         let elevation_level = self.elevation.get();
         let shadow = elevation_to_shadow(elevation_level);
 
-        // Draw background first (gradient or solid color)
+        // Draw background
         if let Some(ref gradient) = self.gradient {
             let direction = match gradient.direction {
                 GradientDirection::Horizontal => GradientDir::Horizontal,
@@ -506,7 +573,6 @@ impl Widget for Container {
                 GradientDirection::Diagonal => GradientDir::Diagonal,
                 GradientDirection::DiagonalReverse => GradientDir::DiagonalReverse,
             };
-            // Note: Gradients don't currently support shadows, draw without shadow
             ctx.draw_gradient_rect_with_curvature(
                 self.bounds,
                 gradient.start_color,
@@ -516,7 +582,6 @@ impl Widget for Container {
                 corner_curvature,
             );
         } else if background.a > 0.0 {
-            // Draw with or without shadow based on elevation
             if elevation_level > 0.0 {
                 ctx.draw_rounded_rect_with_shadow_and_curvature(
                     self.bounds,
@@ -535,7 +600,7 @@ impl Widget for Container {
             }
         }
 
-        // Draw border frame on top (just the outline, not a filled rect)
+        // Draw border
         if let Some(ref border) = self.border {
             ctx.draw_border_frame_with_curvature(
                 self.bounds,
@@ -546,31 +611,25 @@ impl Widget for Container {
             );
         }
 
-        // Draw child
-        if let Some(ref child) = self.child {
+        // Draw children
+        for child in self.children_source.get() {
             child.paint(ctx);
         }
 
-        // Draw ripple effects on top of everything (including text) using overlay
+        // Draw ripple effects
         if self.ripple_enabled {
-            // First draw hover ripple (if active)
+            // Hover ripple
             if let Some((cx, cy)) = self.ripple_center {
-                // Calculate the maximum radius needed to cover the entire container from the entry point
                 let dx1 = cx - self.bounds.x;
                 let dx2 = (self.bounds.x + self.bounds.width) - cx;
                 let dy1 = cy - self.bounds.y;
                 let dy2 = (self.bounds.y + self.bounds.height) - cy;
                 let max_radius = (dx1.max(dx2).powi(2) + dy1.max(dy2).powi(2)).sqrt();
-
-                // Animate radius from 0 to max_radius based on progress
                 let current_radius = max_radius * self.ripple_progress;
 
-                // Fade out as the ripple expands (exit ripples fade faster)
                 let alpha = if self.ripple_is_exit {
-                    // Exit ripple: aggressive fade out
                     self.ripple_color.a * (1.0 - self.ripple_progress).powi(2)
                 } else {
-                    // Hover ripple: gradual fade
                     self.ripple_color.a * (1.0 - self.ripple_progress * 0.5)
                 };
 
@@ -581,7 +640,6 @@ impl Widget for Container {
                         self.ripple_color.b,
                         alpha,
                     );
-                    // Use overlay so ripple appears on top of text
                     ctx.draw_overlay_circle_clipped_with_curvature(
                         cx,
                         cy,
@@ -594,18 +652,12 @@ impl Widget for Container {
                 }
             }
 
-            // Then draw click ripple on top (if active)
+            // Click ripple
             if let Some((cx, cy)) = self.click_ripple_center {
-                // Interpolate center position during reverse animation
                 let (center_x, center_y) = if self.click_ripple_reversing {
                     if let Some((rx, ry)) = self.click_ripple_release_pos {
-                        // As progress goes from 1.0 to 0.0, move from click position to release position
-                        // reverse_progress: 0.0 = at release point, 1.0 = at click point
-                        let t = self.click_ripple_progress; // progress as interpolation factor
-                        (
-                            cx + (rx - cx) * (1.0 - t),
-                            cy + (ry - cy) * (1.0 - t),
-                        )
+                        let t = self.click_ripple_progress;
+                        (cx + (rx - cx) * (1.0 - t), cy + (ry - cy) * (1.0 - t))
                     } else {
                         (cx, cy)
                     }
@@ -613,17 +665,13 @@ impl Widget for Container {
                     (cx, cy)
                 };
 
-                // Calculate the maximum radius needed to cover the entire container from the current center
                 let dx1 = center_x - self.bounds.x;
                 let dx2 = (self.bounds.x + self.bounds.width) - center_x;
                 let dy1 = center_y - self.bounds.y;
                 let dy2 = (self.bounds.y + self.bounds.height) - center_y;
                 let max_radius = (dx1.max(dx2).powi(2) + dy1.max(dy2).powi(2)).sqrt();
-
-                // Animate radius from 0 to max_radius based on progress
                 let current_radius = max_radius * self.click_ripple_progress;
 
-                // Click ripple: gradual fade (similar to hover but slightly stronger)
                 let alpha = self.ripple_color.a * (1.0 - self.click_ripple_progress * 0.5);
 
                 if current_radius > 0.0 && alpha > 0.0 {
@@ -633,7 +681,6 @@ impl Widget for Container {
                         self.ripple_color.b,
                         alpha,
                     );
-                    // Use overlay so ripple appears on top of text
                     ctx.draw_overlay_circle_clipped_with_curvature(
                         center_x,
                         center_y,
@@ -649,14 +696,14 @@ impl Widget for Container {
     }
 
     fn event(&mut self, event: &Event) -> EventResponse {
-        // First, let children handle the event
-        if let Some(ref mut child) = self.child {
+        // Let children handle first
+        for child in self.children_source.reconcile_and_get_mut() {
             if child.event(event) == EventResponse::Handled {
                 return EventResponse::Handled;
             }
         }
 
-        // Then handle our own event callbacks
+        // Handle our own events (same as before)
         match event {
             Event::MouseEnter { x, y } => {
                 if self.bounds.contains(*x, *y) {
@@ -665,12 +712,10 @@ impl Widget for Container {
                     if let Some(ref callback) = self.on_hover {
                         callback(true);
                     }
-                    // Start hover ripple
                     if self.ripple_enabled && self.ripple_center.is_none() {
                         self.ripple_center = Some((*x, *y));
                         self.ripple_progress = 0.0;
                         self.ripple_from_click = false;
-                        // Request animation frame to start rendering the hover ripple
                         request_animation_frame();
                     }
                     return EventResponse::Handled;
@@ -680,7 +725,6 @@ impl Widget for Container {
                 let was_hovered = self.is_hovered;
                 self.is_hovered = self.bounds.contains(*x, *y);
 
-                // Track mouse position for exit ripple
                 if self.is_hovered {
                     self.last_mouse_pos = Some((*x, *y));
                 }
@@ -691,24 +735,18 @@ impl Widget for Container {
                     }
 
                     if self.is_hovered {
-                        // Start hover ripple when entering
                         if self.ripple_enabled && self.ripple_center.is_none() {
                             self.ripple_center = Some((*x, *y));
                             self.ripple_progress = 0.0;
                             self.ripple_from_click = false;
-                            // Request animation frame to start rendering the hover ripple
                             request_animation_frame();
                         }
-                    } else {
-                        // Start exit ripple when leaving (moving to another container)
-                        if self.ripple_enabled && !self.ripple_from_click {
-                            if let Some((lx, ly)) = self.last_mouse_pos {
-                                self.ripple_center = Some((lx, ly));
-                                self.ripple_progress = 0.0;
-                                self.ripple_is_exit = true;
-                                // Request animation frame to start rendering the exit ripple
-                                request_animation_frame();
-                            }
+                    } else if self.ripple_enabled && !self.ripple_from_click {
+                        if let Some((lx, ly)) = self.last_mouse_pos {
+                            self.ripple_center = Some((lx, ly));
+                            self.ripple_progress = 0.0;
+                            self.ripple_is_exit = true;
+                            request_animation_frame();
                         }
                     }
                     return EventResponse::Handled;
@@ -717,13 +755,11 @@ impl Widget for Container {
             Event::MouseDown { x, y, button } => {
                 if self.bounds.contains(*x, *y) && *button == MouseButton::Left {
                     self.is_pressed = true;
-                    // Start click ripple (separate from hover ripple)
                     if self.ripple_enabled {
                         self.click_ripple_center = Some((*x, *y));
                         self.click_ripple_progress = 0.0;
                         self.click_ripple_reversing = false;
                         self.click_ripple_release_pos = None;
-                        // Request animation frame to start rendering the ripple
                         request_animation_frame();
                     }
                     return EventResponse::Handled;
@@ -732,11 +768,9 @@ impl Widget for Container {
             Event::MouseUp { x, y, button } => {
                 if self.is_pressed && *button == MouseButton::Left {
                     self.is_pressed = false;
-                    // Start reverse animation for click ripple when mouse button is released
                     if self.ripple_enabled && self.click_ripple_center.is_some() {
                         self.click_ripple_reversing = true;
                         self.click_ripple_release_pos = Some((*x, *y));
-                        // Request animation frame to start the reverse animation
                         request_animation_frame();
                     }
                     if self.bounds.contains(*x, *y) {
@@ -756,13 +790,11 @@ impl Widget for Container {
                     }
                 }
                 self.is_pressed = false;
-                // Start exit ripple only if we were actually hovered
                 if was_hovered && self.ripple_enabled && !self.ripple_from_click {
                     if let Some((x, y)) = self.last_mouse_pos {
                         self.ripple_center = Some((x, y));
                         self.ripple_progress = 0.0;
                         self.ripple_is_exit = true;
-                        // Request animation frame to start rendering the exit ripple
                         request_animation_frame();
                     }
                 }
@@ -791,8 +823,22 @@ impl Widget for Container {
         self.bounds.y = y;
 
         let padding = self.padding.get();
-        if let Some(ref mut child) = self.child {
-            child.set_origin(x + padding.left, y + padding.top);
+
+        // Re-layout children with their current constraints
+        let children = self.children_source.reconcile_and_get_mut();
+        if !children.is_empty() {
+            let child_constraints = Constraints {
+                min_width: 0.0,
+                min_height: 0.0,
+                max_width: self.bounds.width - padding.horizontal(),
+                max_height: self.bounds.height - padding.vertical(),
+            };
+
+            self.layout.layout(
+                children,
+                child_constraints,
+                (x + padding.left, y + padding.top),
+            );
         }
     }
 
@@ -818,8 +864,7 @@ impl Widget for Container {
 
     fn clear_dirty(&mut self) {
         self.dirty_flags = ChangeFlags::empty();
-        // Also clear child dirty flags
-        if let Some(ref mut child) = self.child {
+        for child in self.children_source.reconcile_and_get_mut() {
             child.clear_dirty();
         }
     }
