@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::layout::{Constraints, Size};
-use crate::reactive::{request_animation_frame, IntoMaybeDyn, MaybeDyn, WidgetId};
+use crate::reactive::{request_animation_frame, ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId};
 use crate::renderer::primitives::{GradientDir, Shadow};
 use crate::renderer::PaintContext;
 
@@ -70,6 +70,7 @@ impl Border {
 
 pub struct Container {
     widget_id: WidgetId,
+    dirty_flags: ChangeFlags,
     child: Option<Box<dyn Widget>>,
     padding: MaybeDyn<Padding>,
     background: MaybeDyn<Color>,
@@ -111,6 +112,7 @@ impl Container {
     pub fn new() -> Self {
         Self {
             widget_id: WidgetId::next(),
+            dirty_flags: ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT,
             child: None,
             padding: MaybeDyn::Static(Padding::default()),
             background: MaybeDyn::Static(Color::TRANSPARENT),
@@ -282,6 +284,63 @@ impl Container {
         self.elevation = level.into_maybe_dyn();
         self
     }
+
+    /// Advance animation state (ripple effects)
+    fn advance_animations(&mut self) {
+        // Advance hover ripple animation
+        if self.ripple_enabled && self.ripple_center.is_some() {
+            if self.ripple_progress < 1.0 {
+                // Animation in progress, request next frame
+                request_animation_frame();
+
+                // Exit ripple: very fast (~0.2s), Hover ripple: faster (~0.3s)
+                let speed = if self.ripple_is_exit {
+                    0.20
+                } else {
+                    0.12
+                };
+                self.ripple_progress = (self.ripple_progress + speed).min(1.0);
+            } else if self.ripple_is_exit {
+                // Exit ripple complete, still need one more frame to fade out
+                request_animation_frame();
+
+                // Auto-reset exit ripples when complete
+                self.ripple_center = None;
+                self.ripple_progress = 0.0;
+                self.ripple_is_exit = false;
+            }
+            // Hover ripples persist at 100% progress while hovering (no animation needed)
+        }
+
+        // Advance click ripple animation
+        if self.ripple_enabled && self.click_ripple_center.is_some() {
+            if self.click_ripple_reversing {
+                // Animation in progress (reversing), request next frame
+                request_animation_frame();
+
+                // Reverse animation: contract back to 0
+                if self.click_ripple_progress > 0.0 {
+                    // Reverse faster than expand for snappy feel (~0.3s)
+                    let speed = 0.15;
+                    self.click_ripple_progress = (self.click_ripple_progress - speed).max(0.0);
+                } else {
+                    // Animation complete, reset everything
+                    self.click_ripple_center = None;
+                    self.click_ripple_progress = 0.0;
+                    self.click_ripple_reversing = false;
+                    self.click_ripple_release_pos = None;
+                }
+            } else if self.click_ripple_progress < 1.0 {
+                // Animation in progress (expanding), request next frame
+                request_animation_frame();
+
+                // Forward animation: expand to 100%
+                let speed = 0.08;
+                self.click_ripple_progress = (self.click_ripple_progress + speed).min(1.0);
+            }
+            // Click ripple stays at 100% until MouseUp triggers reverse (no animation needed)
+        }
+    }
 }
 
 /// Convert elevation level to shadow parameters
@@ -320,6 +379,20 @@ impl Default for Container {
 
 impl Widget for Container {
     fn layout(&mut self, constraints: Constraints) -> Size {
+        // Always advance animations first (before early return)
+        self.advance_animations();
+
+        // Check if we need to do layout
+        let has_animations = self.ripple_center.is_some() || self.click_ripple_center.is_some();
+        let child_needs_layout = self.child.as_ref().map_or(false, |c| c.needs_layout());
+        let needs_layout = self.needs_layout() || child_needs_layout || has_animations;
+
+        if !needs_layout {
+            // No layout needed, animations already advanced
+            // Return cached size
+            return Size::new(self.bounds.width, self.bounds.height);
+        }
+
         let padding = self.padding.get();
 
         let child_constraints = Constraints {
@@ -330,7 +403,13 @@ impl Widget for Container {
         };
 
         let child_size = if let Some(ref mut child) = self.child {
-            child.layout(child_constraints)
+            // Only layout child if it needs it
+            if child.needs_layout() {
+                child.layout(child_constraints)
+            } else {
+                let bounds = child.bounds();
+                Size::new(bounds.width, bounds.height)
+            }
         } else {
             Size::zero()
         };
@@ -359,64 +438,16 @@ impl Widget for Container {
             child.set_origin(self.bounds.x + padding.left, self.bounds.y + padding.top);
         }
 
-        // Advance hover ripple animation each frame (layout is called every frame)
-        if self.ripple_enabled && self.ripple_center.is_some() {
-            if self.ripple_progress < 1.0 {
-                // Animation in progress, request next frame
-                request_animation_frame();
-
-                // Exit ripple: very fast (~0.2s), Hover ripple: faster (~0.3s)
-                let speed = if self.ripple_is_exit {
-                    0.20
-                } else {
-                    0.12
-                };
-                self.ripple_progress = (self.ripple_progress + speed).min(1.0);
-            } else if self.ripple_is_exit {
-                // Exit ripple complete, still need one more frame to fade out
-                request_animation_frame();
-
-                // Auto-reset exit ripples when complete
-                self.ripple_center = None;
-                self.ripple_progress = 0.0;
-                self.ripple_is_exit = false;
-            }
-            // Hover ripples persist at 100% progress while hovering (no animation needed)
-        }
-
-        // Advance click ripple animation each frame (separate from hover ripple)
-        if self.ripple_enabled && self.click_ripple_center.is_some() {
-            if self.click_ripple_reversing {
-                // Animation in progress (reversing), request next frame
-                request_animation_frame();
-
-                // Reverse animation: contract back to 0
-                if self.click_ripple_progress > 0.0 {
-                    // Reverse faster than expand for snappy feel (~0.3s)
-                    let speed = 0.15;
-                    self.click_ripple_progress = (self.click_ripple_progress - speed).max(0.0);
-                } else {
-                    // Animation complete, reset everything
-                    self.click_ripple_center = None;
-                    self.click_ripple_progress = 0.0;
-                    self.click_ripple_reversing = false;
-                    self.click_ripple_release_pos = None;
-                }
-            } else if self.click_ripple_progress < 1.0 {
-                // Animation in progress (expanding), request next frame
-                request_animation_frame();
-
-                // Forward animation: expand to 100%
-                let speed = 0.08;
-                self.click_ripple_progress = (self.click_ripple_progress + speed).min(1.0);
-            }
-            // Click ripple stays at 100% until MouseUp triggers reverse (no animation needed)
-        }
-
         size
     }
 
     fn paint(&self, ctx: &mut PaintContext) {
+        // Check if we need to paint
+        let child_needs_paint = self.child.as_ref().map_or(false, |c| c.needs_paint());
+        if !self.needs_paint() && !child_needs_paint {
+            return;
+        }
+
         let background = self.background.get();
         let corner_radius = self.corner_radius.get();
         let corner_curvature = self.corner_curvature.get();
@@ -471,9 +502,11 @@ impl Widget for Container {
             );
         }
 
-        // Draw child
+        // Draw child (only if it needs paint)
         if let Some(ref child) = self.child {
-            child.paint(ctx);
+            if child.needs_paint() {
+                child.paint(ctx);
+            }
         }
 
         // Draw ripple effects on top of everything (including text) using overlay
@@ -715,6 +748,26 @@ impl Widget for Container {
 
     fn id(&self) -> WidgetId {
         self.widget_id
+    }
+
+    fn mark_dirty(&mut self, flags: ChangeFlags) {
+        self.dirty_flags |= flags;
+    }
+
+    fn needs_layout(&self) -> bool {
+        self.dirty_flags.contains(ChangeFlags::NEEDS_LAYOUT)
+    }
+
+    fn needs_paint(&self) -> bool {
+        self.dirty_flags.contains(ChangeFlags::NEEDS_PAINT)
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty_flags = ChangeFlags::empty();
+        // Also clear child dirty flags
+        if let Some(ref mut child) = self.child {
+            child.clear_dirty();
+        }
     }
 }
 

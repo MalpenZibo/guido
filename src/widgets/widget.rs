@@ -1,5 +1,5 @@
 use crate::layout::{Constraints, Size};
-use crate::reactive::WidgetId;
+use crate::reactive::{ChangeFlags, WidgetId};
 use crate::renderer::PaintContext;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -200,4 +200,16 @@ pub trait Widget {
 
     /// Get the widget's unique identifier
     fn id(&self) -> WidgetId;
+
+    /// Mark this widget as needing layout and/or paint
+    fn mark_dirty(&mut self, flags: ChangeFlags);
+
+    /// Check if this widget needs layout
+    fn needs_layout(&self) -> bool;
+
+    /// Check if this widget needs paint
+    fn needs_paint(&self) -> bool;
+
+    /// Clear dirty flags after processing
+    fn clear_dirty(&mut self);
 }

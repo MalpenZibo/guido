@@ -300,7 +300,10 @@ impl App {
 
                     renderer.render(&mut surface, &paint_ctx, self.config.background_color);
 
-                    // Clear paint flag
+                    // Clear dirty flags on all widgets
+                    root.clear_dirty();
+
+                    // Clear global paint flag
                     with_app_state_mut(|state| {
                         state.clear_paint_flag();
                         state.clear_dirty_widgets();

@@ -1,5 +1,5 @@
 use crate::layout::{Constraints, Size};
-use crate::reactive::WidgetId;
+use crate::reactive::{ChangeFlags, WidgetId};
 use crate::renderer::PaintContext;
 
 use super::widget::{Event, EventResponse, Rect, Widget};
@@ -24,6 +24,7 @@ pub enum CrossAxisAlignment {
 
 pub struct Row {
     widget_id: WidgetId,
+    dirty_flags: ChangeFlags,
     children: Vec<Box<dyn Widget>>,
     spacing: f32,
     main_axis_alignment: MainAxisAlignment,
@@ -33,9 +34,20 @@ pub struct Row {
 }
 
 impl Row {
+    /// Check if any child widget needs layout
+    fn any_child_needs_layout(&self) -> bool {
+        self.children.iter().any(|child| child.needs_layout())
+    }
+
+    /// Check if any child widget needs paint
+    fn any_child_needs_paint(&self) -> bool {
+        self.children.iter().any(|child| child.needs_paint())
+    }
+
     pub fn new() -> Self {
         Self {
             widget_id: WidgetId::next(),
+            dirty_flags: ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT,
             children: Vec::new(),
             spacing: 0.0,
             main_axis_alignment: MainAxisAlignment::Start,
@@ -48,6 +60,7 @@ impl Row {
     pub fn with_children(children: Vec<Box<dyn Widget>>) -> Self {
         Self {
             widget_id: WidgetId::next(),
+            dirty_flags: ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT,
             children,
             spacing: 0.0,
             main_axis_alignment: MainAxisAlignment::Start,
@@ -86,6 +99,13 @@ impl Default for Row {
 
 impl Widget for Row {
     fn layout(&mut self, constraints: Constraints) -> Size {
+        // Only do layout if this widget or any child needs it
+        let needs_layout = self.needs_layout() || self.any_child_needs_layout();
+        if !needs_layout {
+            // Return cached size
+            return Size::new(self.bounds.width, self.bounds.height);
+        }
+
         self.child_sizes.clear();
 
         let child_constraints = Constraints {
@@ -95,12 +115,18 @@ impl Widget for Row {
             max_height: constraints.max_height,
         };
 
-        // First pass: measure all children
+        // First pass: measure all children (only layout dirty children)
         let mut total_width = 0.0f32;
         let mut max_height = 0.0f32;
 
         for child in &mut self.children {
-            let size = child.layout(child_constraints);
+            let size = if child.needs_layout() {
+                child.layout(child_constraints)
+            } else {
+                // Use cached bounds
+                let bounds = child.bounds();
+                Size::new(bounds.width, bounds.height)
+            };
             total_width += size.width;
             max_height = max_height.max(size.height);
             self.child_sizes.push(size);
@@ -184,8 +210,16 @@ impl Widget for Row {
     }
 
     fn paint(&self, ctx: &mut PaintContext) {
+        // Only paint if this widget or any child needs it
+        if !self.needs_paint() && !self.any_child_needs_paint() {
+            return;
+        }
+
         for child in &self.children {
-            child.paint(ctx);
+            // Only paint children that need it
+            if child.needs_paint() {
+                child.paint(ctx);
+            }
         }
     }
 
@@ -269,6 +303,26 @@ impl Widget for Row {
 
     fn id(&self) -> WidgetId {
         self.widget_id
+    }
+
+    fn mark_dirty(&mut self, flags: ChangeFlags) {
+        self.dirty_flags |= flags;
+    }
+
+    fn needs_layout(&self) -> bool {
+        self.dirty_flags.contains(ChangeFlags::NEEDS_LAYOUT)
+    }
+
+    fn needs_paint(&self) -> bool {
+        self.dirty_flags.contains(ChangeFlags::NEEDS_PAINT)
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty_flags = ChangeFlags::empty();
+        // Also clear child dirty flags
+        for child in &mut self.children {
+            child.clear_dirty();
+        }
     }
 }
 
