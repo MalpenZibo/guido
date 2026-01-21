@@ -49,25 +49,19 @@ impl TextRenderState {
     ) {
         self.buffers.clear();
 
-        log::trace!(
-            "prepare_text: screen={}x{}, scale={}, texts={}",
-            screen_width,
-            screen_height,
-            scale_factor,
-            texts.len()
-        );
-
         for (text, rect, _color, font_size) in texts {
-            // Use logical font size - glyphon will scale via TextArea.scale parameter
+            // Scale the font size for HiDPI rendering
+            let scaled_font_size = *font_size * scale_factor;
+
             let mut buffer = Buffer::new(
                 &mut self.font_system,
-                Metrics::new(*font_size, *font_size * 1.2),
+                Metrics::new(scaled_font_size, scaled_font_size * 1.2),
             );
-            // Use logical dimensions - glyphon will scale
+            // Give more space for the text buffer, scaled
             buffer.set_size(
                 &mut self.font_system,
-                Some(rect.width.max(200.0)),
-                Some(rect.height.max(50.0)),
+                Some((rect.width.max(200.0)) * scale_factor),
+                Some((rect.height.max(50.0)) * scale_factor),
             );
             buffer.set_text(
                 &mut self.font_system,
@@ -84,15 +78,16 @@ impl TextRenderState {
             .iter()
             .zip(self.buffers.iter())
             .map(|((_text, rect, color, _), buffer)| {
-                // Use logical positions with small offset for font metrics
-                let left_offset = 2.0;
-                let left = rect.x + left_offset;
-                let top = rect.y;
+                // Scale positions for HiDPI rendering
+                // Add a small offset to compensate for font metrics (left-side bearing)
+                let left_offset = 2.0 * scale_factor;
+                let scaled_left = rect.x * scale_factor + left_offset;
+                let scaled_top = rect.y * scale_factor;
                 TextArea {
                     buffer,
-                    left,
-                    top,
-                    scale: scale_factor, // Let glyphon handle the HiDPI scaling
+                    left: scaled_left,
+                    top: scaled_top,
+                    scale: 1.0, // Buffer is already scaled, no additional scaling needed
                     bounds: TextBounds {
                         left: 0,
                         top: 0,
