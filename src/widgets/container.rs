@@ -525,16 +525,26 @@ impl Container {
 
     /// Enable animation for width changes
     pub fn animate_width(mut self, transition: Transition) -> Self {
-        // Initialize with current min_width or 0
-        let initial = self.min_width.as_ref().map(|w| w.get()).unwrap_or(0.0);
+        // Initialize with current width or min_width or 0
+        let initial = self
+            .width
+            .as_ref()
+            .map(|w| w.get())
+            .or_else(|| self.min_width.as_ref().map(|w| w.get()))
+            .unwrap_or(0.0);
         self.width_anim = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for height changes
     pub fn animate_height(mut self, transition: Transition) -> Self {
-        // Initialize with current min_height or 0
-        let initial = self.min_height.as_ref().map(|h| h.get()).unwrap_or(0.0);
+        // Initialize with current height or min_height or 0
+        let initial = self
+            .height
+            .as_ref()
+            .map(|h| h.get())
+            .or_else(|| self.min_height.as_ref().map(|h| h.get()))
+            .unwrap_or(0.0);
         self.height_anim = Some(AnimationState::new(initial, transition));
         self
     }
