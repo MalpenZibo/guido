@@ -481,9 +481,9 @@ impl RoundedRect {
         // Convert shadow parameters to NDC
         let shadow_offset_ndc = [
             (self.shadow.offset.0 / screen_width) * 2.0,
-            -(self.shadow.offset.1 / screen_height) * 2.0,  // Negative because NDC y is flipped
+            -(self.shadow.offset.1 / screen_height) * 2.0, // Negative because NDC y is flipped
         ];
-        let shadow_blur_ndc = (self.shadow.blur / screen_height) * 2.0;  // Use height for uniform blur
+        let shadow_blur_ndc = (self.shadow.blur / screen_height) * 2.0; // Use height for uniform blur
         let shadow_spread_ndc = (self.shadow.spread / screen_height) * 2.0;
         let shadow_color = [
             self.shadow.color.r,

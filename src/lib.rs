@@ -20,9 +20,7 @@ use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
 
 pub mod prelude {
-    pub use crate::layout::{
-        Axis, Constraints, CrossAxisAlignment, Flex, MainAxisAlignment, Size,
-    };
+    pub use crate::layout::{Axis, Constraints, CrossAxisAlignment, Flex, MainAxisAlignment, Size};
     pub use crate::platform::{Anchor, Layer};
     pub use crate::reactive::{
         batch, create_computed, create_effect, create_signal, Computed, Effect, IntoMaybeDyn,
@@ -31,8 +29,8 @@ pub mod prelude {
     pub use crate::renderer::primitives::Shadow;
     pub use crate::renderer::{measure_text, PaintContext};
     pub use crate::widgets::{
-        container, text, Border, Color, Container, Event, EventResponse,
-        GradientDirection, IntoChildren, LinearGradient, MouseButton, Padding, Rect, ScrollSource, Text, Widget,
+        container, text, Border, Color, Container, Event, EventResponse, GradientDirection,
+        IntoChildren, LinearGradient, MouseButton, Padding, Rect, ScrollSource, Text, Widget,
     };
     pub use crate::{App, AppConfig};
 }
@@ -238,8 +236,8 @@ impl App {
         // Main loop - event-driven, blocks until Wayland event or signal update
         loop {
             // Event-driven initialization detection
-            let fully_initialized = wayland_state.first_frame_presented
-                && wayland_state.scale_factor_received;
+            let fully_initialized =
+                wayland_state.first_frame_presented && wayland_state.scale_factor_received;
             let force_render = !fully_initialized;
 
             // Check if we need to actively poll (from previous frame's animations)
@@ -329,7 +327,14 @@ impl App {
             let has_animations_now = with_app_state(|state| state.has_animations);
 
             // Only render if something changed (or during initialization)
-            if force_render || frame_requested || needs_layout || needs_paint || needs_resize || scale_changed || has_animations_now {
+            if force_render
+                || frame_requested
+                || needs_layout
+                || needs_paint
+                || needs_resize
+                || scale_changed
+                || has_animations_now
+            {
                 // Re-layout (for reactive updates)
                 let constraints = Constraints::new(
                     0.0,

@@ -1,6 +1,6 @@
+use crate::layout::Size;
 use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping};
 use std::cell::RefCell;
-use crate::layout::Size;
 
 pub struct TextMeasurer {
     font_system: FontSystem,

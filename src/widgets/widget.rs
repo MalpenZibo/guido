@@ -213,3 +213,160 @@ pub trait Widget {
     /// Clear dirty flags after processing
     fn clear_dirty(&mut self);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_color_rgb() {
+        let color = Color::rgb(0.5, 0.6, 0.7);
+        assert_eq!(color.r, 0.5);
+        assert_eq!(color.g, 0.6);
+        assert_eq!(color.b, 0.7);
+        assert_eq!(color.a, 1.0);
+    }
+
+    #[test]
+    fn test_color_rgba() {
+        let color = Color::rgba(0.1, 0.2, 0.3, 0.5);
+        assert_eq!(color.r, 0.1);
+        assert_eq!(color.g, 0.2);
+        assert_eq!(color.b, 0.3);
+        assert_eq!(color.a, 0.5);
+    }
+
+    #[test]
+    fn test_color_from_hex() {
+        let color = Color::from_hex(0xFF0000);
+        assert_eq!(color.r, 1.0);
+        assert_eq!(color.g, 0.0);
+        assert_eq!(color.b, 0.0);
+        assert_eq!(color.a, 1.0);
+
+        let color = Color::from_hex(0x00FF00);
+        assert_eq!(color.r, 0.0);
+        assert_eq!(color.g, 1.0);
+        assert_eq!(color.b, 0.0);
+
+        let color = Color::from_hex(0x0000FF);
+        assert_eq!(color.r, 0.0);
+        assert_eq!(color.g, 0.0);
+        assert_eq!(color.b, 1.0);
+    }
+
+    #[test]
+    fn test_color_constants() {
+        assert_eq!(Color::WHITE, Color::rgb(1.0, 1.0, 1.0));
+        assert_eq!(Color::BLACK, Color::rgb(0.0, 0.0, 0.0));
+        assert_eq!(Color::TRANSPARENT, Color::rgba(0.0, 0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn test_color_default() {
+        let color = Color::default();
+        assert_eq!(color, Color::TRANSPARENT);
+    }
+
+    #[test]
+    fn test_rect_new() {
+        let rect = Rect::new(10.0, 20.0, 100.0, 200.0);
+        assert_eq!(rect.x, 10.0);
+        assert_eq!(rect.y, 20.0);
+        assert_eq!(rect.width, 100.0);
+        assert_eq!(rect.height, 200.0);
+    }
+
+    #[test]
+    fn test_rect_from_size() {
+        let size = Size::new(50.0, 75.0);
+        let rect = Rect::from_size(size);
+        assert_eq!(rect.x, 0.0);
+        assert_eq!(rect.y, 0.0);
+        assert_eq!(rect.width, 50.0);
+        assert_eq!(rect.height, 75.0);
+    }
+
+    #[test]
+    fn test_rect_offset() {
+        let rect = Rect::new(10.0, 20.0, 100.0, 200.0);
+        let offset_rect = rect.offset(5.0, 10.0);
+        assert_eq!(offset_rect.x, 15.0);
+        assert_eq!(offset_rect.y, 30.0);
+        assert_eq!(offset_rect.width, 100.0);
+        assert_eq!(offset_rect.height, 200.0);
+    }
+
+    #[test]
+    fn test_rect_inset() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let inset_rect = rect.inset(10.0);
+        assert_eq!(inset_rect.x, 10.0);
+        assert_eq!(inset_rect.y, 10.0);
+        assert_eq!(inset_rect.width, 80.0);
+        assert_eq!(inset_rect.height, 80.0);
+
+        // Test that inset doesn't go negative
+        let small_rect = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let over_inset = small_rect.inset(20.0);
+        assert_eq!(over_inset.width, 0.0);
+        assert_eq!(over_inset.height, 0.0);
+    }
+
+    #[test]
+    fn test_rect_contains() {
+        let rect = Rect::new(10.0, 20.0, 100.0, 50.0);
+
+        // Inside
+        assert!(rect.contains(50.0, 40.0));
+
+        // Edges
+        assert!(rect.contains(10.0, 20.0)); // Top-left corner (inclusive)
+        assert!(!rect.contains(110.0, 70.0)); // Bottom-right corner (exclusive)
+
+        // Outside
+        assert!(!rect.contains(5.0, 40.0));
+        assert!(!rect.contains(150.0, 40.0));
+        assert!(!rect.contains(50.0, 10.0));
+        assert!(!rect.contains(50.0, 100.0));
+    }
+
+    #[test]
+    fn test_padding_all() {
+        let padding = Padding::all(10.0);
+        assert_eq!(padding.top, 10.0);
+        assert_eq!(padding.right, 10.0);
+        assert_eq!(padding.bottom, 10.0);
+        assert_eq!(padding.left, 10.0);
+    }
+
+    #[test]
+    fn test_padding_symmetric() {
+        let padding = Padding::symmetric(20.0, 30.0);
+        assert_eq!(padding.top, 30.0);
+        assert_eq!(padding.right, 20.0);
+        assert_eq!(padding.bottom, 30.0);
+        assert_eq!(padding.left, 20.0);
+    }
+
+    #[test]
+    fn test_padding_horizontal() {
+        let padding = Padding::symmetric(15.0, 10.0);
+        assert_eq!(padding.horizontal(), 30.0); // left + right = 15 + 15
+    }
+
+    #[test]
+    fn test_padding_vertical() {
+        let padding = Padding::symmetric(15.0, 10.0);
+        assert_eq!(padding.vertical(), 20.0); // top + bottom = 10 + 10
+    }
+
+    #[test]
+    fn test_padding_default() {
+        let padding = Padding::default();
+        assert_eq!(padding.top, 0.0);
+        assert_eq!(padding.right, 0.0);
+        assert_eq!(padding.bottom, 0.0);
+        assert_eq!(padding.left, 0.0);
+    }
+}

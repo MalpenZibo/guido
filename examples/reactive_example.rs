@@ -37,7 +37,11 @@ fn main() {
 
     // Build the reactive UI with event handlers
     let view = container()
-        .layout(Flex::row().spacing(8.0).main_axis_alignment(MainAxisAlignment::SpaceBetween))
+        .layout(
+            Flex::row()
+                .spacing(8.0)
+                .main_axis_alignment(MainAxisAlignment::SpaceBetween),
+        )
         .child(
             // Clickable container with ripple effect - click to increment count
             container()
@@ -58,7 +62,7 @@ fn main() {
                 .child(
                     text(move || format!("Count: {} (click me!)", count_for_text.get()))
                         .color(Color::WHITE),
-                )
+                ),
         )
         .child(
             // Scrollable container
@@ -72,8 +76,9 @@ fn main() {
                     });
                 })
                 .child(
-                    text(move || format!("Scroll: {:.0}px", scroll_for_text.get())).color(Color::WHITE),
-                )
+                    text(move || format!("Scroll: {:.0}px", scroll_for_text.get()))
+                        .color(Color::WHITE),
+                ),
         )
         .child(
             // Container with border
@@ -81,15 +86,15 @@ fn main() {
                 .padding(8.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
                 .border(2.0, Color::rgb(0.4, 0.6, 0.8))
-                .child(text("With border").color(Color::WHITE))
+                .child(text("With border").color(Color::WHITE)),
         )
         .child(
             // Container with gradient
             container()
                 .padding(8.0)
-                .gradient_horizontal(Color::rgb(0.3, 0.1, 0.4), Color::rgb(0.1, 0.3, 0.5),)
+                .gradient_horizontal(Color::rgb(0.3, 0.1, 0.4), Color::rgb(0.1, 0.3, 0.5))
                 .corner_radius(4.0)
-                .child(text("Gradient!").color(Color::WHITE))
+                .child(text("Gradient!").color(Color::WHITE)),
         );
 
     // Run the app

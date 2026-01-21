@@ -226,3 +226,87 @@ impl<T: Clone> WriteSignal<T> {
 pub fn create_signal<T>(value: T) -> Signal<T> {
     Signal::new(value)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_signal_and_get() {
+        let signal = create_signal(42);
+        assert_eq!(signal.get(), 42);
+    }
+
+    #[test]
+    fn test_set_updates_value() {
+        let signal = create_signal(10);
+        signal.set(20);
+        assert_eq!(signal.get(), 20);
+    }
+
+    #[test]
+    fn test_update_with_closure() {
+        let signal = create_signal(5);
+        signal.update(|v| *v += 10);
+        assert_eq!(signal.get(), 15);
+    }
+
+    #[test]
+    fn test_with_for_borrowing() {
+        let signal = create_signal(String::from("hello"));
+        let length = signal.with(|s| s.len());
+        assert_eq!(length, 5);
+    }
+
+    #[test]
+    fn test_get_untracked() {
+        let signal = create_signal(100);
+        let value = signal.get_untracked();
+        assert_eq!(value, 100);
+    }
+
+    #[test]
+    fn test_split_into_read_write_handles() {
+        let signal = create_signal(7);
+        let (read, write) = signal.split();
+
+        assert_eq!(read.get(), 7);
+        write.set(14);
+        assert_eq!(read.get(), 14);
+    }
+
+    #[test]
+    fn test_clone_shares_underlying_value() {
+        let signal1 = create_signal(50);
+        let signal2 = signal1.clone();
+
+        signal1.set(75);
+        assert_eq!(signal2.get(), 75);
+
+        signal2.set(100);
+        assert_eq!(signal1.get(), 100);
+    }
+
+    #[test]
+    fn test_with_untracked() {
+        let signal = create_signal(String::from("test"));
+        let result = signal.with_untracked(|s| format!("{}ing", s));
+        assert_eq!(result, "testing");
+    }
+
+    #[test]
+    fn test_update_only_triggers_on_change() {
+        let signal = create_signal(10);
+        signal.update(|v| *v = 10); // No actual change
+        assert_eq!(signal.get(), 10);
+    }
+
+    #[test]
+    fn test_set_only_triggers_on_change() {
+        let signal = create_signal(5);
+        signal.set(5); // No actual change
+        assert_eq!(signal.get(), 5);
+        signal.set(10); // Actual change
+        assert_eq!(signal.get(), 10);
+    }
+}
