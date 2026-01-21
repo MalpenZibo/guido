@@ -414,7 +414,7 @@ impl Widget for Container {
             || corner_curvature != self.cached_corner_curvature
             || elevation != self.cached_elevation;
 
-        let child_needs_layout = self.child.as_ref().map_or(false, |c| c.needs_layout());
+        let child_needs_layout = self.child.as_ref().is_some_and(|c| c.needs_layout());
         let has_animations = self.ripple_center.is_some() || self.click_ripple_center.is_some();
 
         // If only visual properties changed (no layout changes), downgrade to paint-only

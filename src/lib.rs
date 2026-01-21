@@ -238,7 +238,7 @@ impl App {
         loop {
             // Event-driven initialization detection
             let fully_initialized = wayland_state.first_frame_presented
-                && (wayland_state.scale_factor_received || wayland_state.first_frame_presented);
+                && wayland_state.scale_factor_received;
             let force_render = !fully_initialized;
 
             // Check if we need to actively poll (from previous frame's animations)
