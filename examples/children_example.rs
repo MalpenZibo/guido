@@ -3,9 +3,9 @@
 //! This example shows:
 //! 1. Static children with .child() - Fixed at creation
 //! 2. Conditional static with .maybe_child() - NOT reactive (evaluated once)
-//! 3. Dynamic list with .children_dyn() - Fully reactive with keyed reconciliation
+//! 3. Dynamic list with .children() - Fully reactive with keyed reconciliation
 //! 4. NEW: Mixing static and dynamic children - Now works in any order!
-//! 5. Unified .child() API - Accepts both static widgets and closures
+//! 5. Unified .child() and .children() APIs - Accept both static and dynamic
 
 use guido::prelude::*;
 use std::collections::hash_map::DefaultHasher;
@@ -135,7 +135,7 @@ fn main() {
                     container()
                         .layout(Flex::column().spacing(8.0))
                         .child(
-                            text("3. Dynamic Children (.children_dyn) - REACTIVE!")
+                            text("3. Dynamic Children (.children) - REACTIVE!")
                                 .color(Color::rgb(0.9, 1.0, 0.9))
                         )
                         .child(
@@ -205,18 +205,17 @@ fn main() {
                             // Dynamic list with keyed reconciliation
                             container()
                                 .layout(Flex::row().spacing(4.0))
-                                .children_dyn::<Item, Vec<Item>, (), _>(
-                                    move || items.get(),
-                                    |item| item.id,  // Key by ID - preserves widget state on reorder!
-                                    |item| {
-                                        container()
+                                .children(move || {
+                                    items.get().into_iter().map(|item| {
+                                        // Key by ID - preserves widget state on reorder!
+                                        (item.id, container()
                                             .padding(8.0)
                                             .background(item.color)
                                             .corner_radius(4.0)
                                             .ripple()
-                                            .child(text(item.name).color(Color::WHITE))
-                                    },
-                                )
+                                            .child(text(item.name).color(Color::WHITE)))
+                                    })
+                                })
                         )
                 )
         )
@@ -373,7 +372,7 @@ fn main() {
                 )
         )
         .child(
-            // === SECTION 6: .children_dyn() still works for keyed lists ===
+            // === SECTION 6: .children() for keyed lists ===
             container()
                 .padding(12.0)
                 .background(Color::rgb(0.18, 0.15, 0.2))
@@ -382,7 +381,7 @@ fn main() {
                     container()
                         .layout(Flex::column().spacing(8.0))
                         .child(
-                            text("6. .children_dyn() - For keyed lists")
+                            text("6. .children() - For keyed lists")
                                 .color(Color::rgb(0.9, 0.9, 1.0))
                         )
                         .child(
@@ -394,22 +393,19 @@ fn main() {
                             container()
                                 .layout(Flex::column().spacing(4.0))
                                 .child(text("Static header before list").color(Color::rgb(0.8, 0.8, 0.8)))
-                                .children_dyn::<&str, Vec<&str>, (), _>(
-                                    move || vec!["Keyed Item 1", "Keyed Item 2"],
-                                    |content| {
+                                .children(move || {
+                                    vec!["Keyed Item 1", "Keyed Item 2"].into_iter().map(|content| {
                                         let mut hasher = DefaultHasher::new();
                                         content.hash(&mut hasher);
-                                        hasher.finish()
-                                    },
-                                    |content| {
-                                        container()
+                                        let key = hasher.finish();
+                                        (key, container()
                                             .padding(8.0)
                                             .background(Color::rgb(0.5, 0.3, 0.5))
                                             .corner_radius(4.0)
                                             .ripple()
-                                            .child(text(content).color(Color::WHITE))
-                                    },
-                                )
+                                            .child(text(content).color(Color::WHITE)))
+                                    })
+                                })
                                 .child(text("Static footer after list").color(Color::rgb(0.8, 0.8, 0.8)))
                         )
                 )

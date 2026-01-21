@@ -46,3 +46,53 @@ where
         children_source.add_dynamic(items_fn);
     }
 }
+
+/// Marker type for static children (iterator of widgets)
+pub struct StaticChildren;
+
+/// Marker type for dynamic children (closure returning keyed items)
+pub struct DynamicChildren;
+
+/// Trait for types that can be added as children to a container
+///
+/// This trait uses a marker type parameter to disambiguate between:
+/// - Static children (iterator of widgets) - uses `StaticChildren` marker
+/// - Dynamic children (closure returning keyed items) - uses `DynamicChildren` marker
+///
+/// The marker parameter defaults to `StaticChildren` for backwards compatibility.
+pub trait IntoChildren<Marker = StaticChildren> {
+    fn add_to_container(self, children_source: &mut ChildrenSource);
+}
+
+// Implementation for static children - IntoIterator<Item = W> where W: Widget
+// Each widget in the iterator becomes a separate static slot
+impl<I, W> IntoChildren<StaticChildren> for I
+where
+    I: IntoIterator<Item = W>,
+    W: Widget + 'static,
+{
+    fn add_to_container(self, children_source: &mut ChildrenSource) {
+        for widget in self {
+            children_source.add_static(Box::new(widget));
+        }
+    }
+}
+
+// Implementation for dynamic children - Fn() -> I where I: IntoIterator<Item = (u64, W)>
+// Adds a single dynamic slot with keyed reconciliation
+impl<F, I, W> IntoChildren<DynamicChildren> for F
+where
+    F: Fn() -> I + Send + Sync + 'static,
+    I: IntoIterator<Item = (u64, W)>,
+    W: Widget + 'static,
+{
+    fn add_to_container(self, children_source: &mut ChildrenSource) {
+        let items_fn = move || {
+            self()
+                .into_iter()
+                .map(|(key, widget)| DynItem::new(key, widget))
+                .collect()
+        };
+        children_source.add_dynamic(items_fn);
+    }
+}

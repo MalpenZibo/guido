@@ -5,8 +5,8 @@ use crate::reactive::{request_animation_frame, ChangeFlags, IntoMaybeDyn, MaybeD
 use crate::renderer::primitives::{GradientDir, Shadow};
 use crate::renderer::PaintContext;
 
-use super::children::{ChildrenSource, DynItem};
-use super::into_child::IntoChild;
+use super::children::ChildrenSource;
+use super::into_child::{IntoChild, IntoChildren};
 use super::widget::{
     Color, Event, EventResponse, MouseButton, Padding, Rect, ScrollSource, Widget,
 };
@@ -187,40 +187,15 @@ impl Container {
         self
     }
 
-    /// Dynamic children with keyed reconciliation (Floem-style)
-    /// - items_fn: Returns iterator of data items
-    /// - key_fn: Extracts unique key from each item
-    /// - view_fn: Creates widget for each item
-    pub fn children_dyn<T, I, K, V>(
-        mut self,
-        items_fn: impl Fn() -> I + Send + Sync + 'static,
-        key_fn: impl Fn(&T) -> u64 + Send + Sync + 'static,
-        view_fn: impl Fn(T) -> V + Send + Sync + 'static,
-    ) -> Self
-    where
-        I: IntoIterator<Item = T>,
-        V: Widget + 'static,
-        T: 'static,
-    {
-        let key_fn = Arc::new(key_fn);
-        let view_fn = Arc::new(view_fn);
-
-        let items_fn_wrapped = move || {
-            let items = items_fn();
-            items
-                .into_iter()
-                .map(|item| {
-                    let key = key_fn(&item);
-                    let widget = view_fn(item);
-                    DynItem::new(key, widget)
-                })
-                .collect()
-        };
-
-        self.children_source.add_dynamic(items_fn_wrapped);
+    /// Add multiple children (static or dynamic)
+    ///
+    /// Accepts both:
+    /// - Static: `container().children([widget1, widget2])`
+    /// - Dynamic: `container().children(move || items.iter().map(|i| (key, widget)))`
+    pub fn children<M>(mut self, children: impl IntoChildren<M>) -> Self {
+        children.add_to_container(&mut self.children_source);
         self
     }
-
 
     pub fn padding(mut self, value: impl IntoMaybeDyn<f32>) -> Self {
         let value = value.into_maybe_dyn();

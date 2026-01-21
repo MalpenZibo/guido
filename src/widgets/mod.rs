@@ -5,6 +5,7 @@ pub mod text;
 pub mod widget;
 
 pub use container::{container, Border, Container, GradientDirection, LinearGradient};
+pub use into_child::{DynamicChildren, IntoChildren, StaticChildren};
 pub use text::{text, Text};
 pub use widget::{Color, Event, EventResponse, MouseButton, Padding, Rect, ScrollSource, Widget};
 
