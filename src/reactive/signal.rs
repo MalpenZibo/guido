@@ -1,5 +1,6 @@
 use std::sync::{Arc, RwLock};
 
+use super::invalidation::request_frame;
 use super::runtime::{try_with_runtime, with_runtime, SignalId};
 
 struct SignalInner<T> {
@@ -64,6 +65,8 @@ impl<T> Signal<T> {
         *self.inner.value.write().unwrap() = value;
         // Only notify if we're on the main thread (runtime available)
         try_with_runtime(|rt| rt.notify_write(self.inner.id));
+        // Request a frame to be rendered
+        request_frame();
     }
 
     pub fn update<F>(&self, f: F)
@@ -72,6 +75,8 @@ impl<T> Signal<T> {
     {
         f(&mut self.inner.value.write().unwrap());
         try_with_runtime(|rt| rt.notify_write(self.inner.id));
+        // Request a frame to be rendered
+        request_frame();
     }
 
     pub fn with<F, R>(&self, f: F) -> R
@@ -140,6 +145,8 @@ impl<T> WriteSignal<T> {
     pub fn set(&self, value: T) {
         *self.inner.value.write().unwrap() = value;
         try_with_runtime(|rt| rt.notify_write(self.inner.id));
+        // Request a frame to be rendered
+        request_frame();
     }
 
     pub fn update<F>(&self, f: F)
@@ -148,6 +155,8 @@ impl<T> WriteSignal<T> {
     {
         f(&mut self.inner.value.write().unwrap());
         try_with_runtime(|rt| rt.notify_write(self.inner.id));
+        // Request a frame to be rendered
+        request_frame();
     }
 }
 

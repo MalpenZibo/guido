@@ -8,8 +8,12 @@ pub mod renderer;
 
 use layout::Constraints;
 use platform::{create_wayland_app, Anchor, Layer, WaylandWindowWrapper};
+use reactive::{take_frame_request, with_app_state, with_app_state_mut};
 use renderer::{GpuContext, Renderer};
 use widgets::{Color, Widget};
+
+// Import clear_animation_flag to reset animation state each frame
+use reactive::invalidation::clear_animation_flag;
 
 pub mod prelude {
     pub use crate::layout::{Constraints, Size};
@@ -209,7 +213,7 @@ impl App {
                 callback();
             }
 
-            // Non-blocking dispatch
+            // Non-blocking dispatch of Wayland events
             event_queue
                 .dispatch_pending(&mut wayland_state)
                 .expect("Failed to dispatch events");
@@ -229,7 +233,10 @@ impl App {
             let physical_height = wayland_state.height * scale;
 
             // Check for resize or scale change
-            if surface.width() != physical_width || surface.height() != physical_height {
+            let needs_resize =
+                surface.width() != physical_width || surface.height() != physical_height;
+
+            if needs_resize {
                 log::info!(
                     "Resizing surface to {}x{} (physical), scale {}",
                     physical_width,
@@ -239,44 +246,86 @@ impl App {
                 surface.resize(physical_width, physical_height);
                 renderer.set_screen_size(physical_width as f32, physical_height as f32);
 
-                let constraints = Constraints::new(
-                    0.0,
-                    0.0,
-                    wayland_state.width as f32,
-                    wayland_state.height as f32,
-                );
-                root.layout(constraints);
-                root.set_origin(0.0, 0.0);
+                // Mark that we need layout and paint due to resize
+                with_app_state_mut(|state| {
+                    state.change_flags |=
+                        reactive::ChangeFlags::NEEDS_LAYOUT | reactive::ChangeFlags::NEEDS_PAINT;
+                });
             }
 
             // Update scale factor
             renderer.set_scale_factor(wayland_state.scale_factor);
 
-            // Re-layout (for reactive updates)
-            let constraints = Constraints::new(
-                0.0,
-                0.0,
-                wayland_state.width as f32,
-                wayland_state.height as f32,
-            );
-            root.layout(constraints);
+            // Check if we need to render a frame
+            let frame_requested = take_frame_request();
+            let needs_layout = with_app_state(|state| state.needs_layout());
+            let needs_paint = with_app_state(|state| state.needs_paint());
+            let has_animations = with_app_state(|state| state.has_animations);
 
-            // Paint
-            let mut paint_ctx = renderer.create_paint_context();
-            root.paint(&mut paint_ctx);
+            // Only layout/paint/render if something changed or animations are active
+            if frame_requested || needs_layout || needs_paint || needs_resize || has_animations {
+                log::trace!(
+                    "Rendering frame: requested={}, layout={}, paint={}, resize={}, animations={}",
+                    frame_requested,
+                    needs_layout,
+                    needs_paint,
+                    needs_resize,
+                    has_animations
+                );
 
-            renderer.render(&mut surface, &paint_ctx, self.config.background_color);
+                // Clear animation flag before layout - widgets will set it again if they need to continue
+                clear_animation_flag();
 
-            // Commit surface
-            if let Some(ref surface) = wayland_state.surface {
-                surface.commit();
+                // Re-layout if needed (or if animations are active, since animations advance in layout)
+                if needs_layout || needs_resize || has_animations {
+                    let constraints = Constraints::new(
+                        0.0,
+                        0.0,
+                        wayland_state.width as f32,
+                        wayland_state.height as f32,
+                    );
+                    root.layout(constraints);
+                    root.set_origin(0.0, 0.0);
+
+                    // Clear layout flag
+                    with_app_state_mut(|state| {
+                        state.clear_layout_flag();
+                    });
+                }
+
+                // Paint if needed (always paint when layout happens or animations are active)
+                if needs_paint || needs_layout || needs_resize || has_animations {
+                    let mut paint_ctx = renderer.create_paint_context();
+                    root.paint(&mut paint_ctx);
+
+                    renderer.render(&mut surface, &paint_ctx, self.config.background_color);
+
+                    // Clear paint flag
+                    with_app_state_mut(|state| {
+                        state.clear_paint_flag();
+                        state.clear_dirty_widgets();
+                    });
+                }
+
+                // Commit surface
+                if let Some(ref surface) = wayland_state.surface {
+                    surface.commit();
+                }
+
+                // Flush the connection
+                connection.flush().expect("Failed to flush connection");
+
+                // If animations are active, sleep for frame time (16ms ~= 60fps)
+                if has_animations {
+                    std::thread::sleep(std::time::Duration::from_millis(16));
+                } else {
+                    // Short sleep to avoid busy-looping
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            } else {
+                // Nothing to do, sleep longer to save CPU
+                std::thread::sleep(std::time::Duration::from_millis(16));
             }
-
-            // Flush the connection
-            connection.flush().expect("Failed to flush connection");
-
-            // Small delay to not busy-loop
-            std::thread::sleep(std::time::Duration::from_millis(16));
         }
     }
 }

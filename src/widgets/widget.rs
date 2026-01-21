@@ -1,4 +1,5 @@
 use crate::layout::{Constraints, Size};
+use crate::reactive::WidgetId;
 use crate::renderer::PaintContext;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -196,4 +197,7 @@ pub trait Widget {
 
     /// Get the widget's bounding rectangle (for hit testing)
     fn bounds(&self) -> Rect;
+
+    /// Get the widget's unique identifier
+    fn id(&self) -> WidgetId;
 }

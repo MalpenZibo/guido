@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::layout::{Constraints, Size};
-use crate::reactive::{IntoMaybeDyn, MaybeDyn};
+use crate::reactive::{request_animation_frame, IntoMaybeDyn, MaybeDyn, WidgetId};
 use crate::renderer::primitives::{GradientDir, Shadow};
 use crate::renderer::PaintContext;
 
@@ -69,6 +69,7 @@ impl Border {
 }
 
 pub struct Container {
+    widget_id: WidgetId,
     child: Option<Box<dyn Widget>>,
     padding: MaybeDyn<Padding>,
     background: MaybeDyn<Color>,
@@ -109,6 +110,7 @@ pub struct Container {
 impl Container {
     pub fn new() -> Self {
         Self {
+            widget_id: WidgetId::next(),
             child: None,
             padding: MaybeDyn::Static(Padding::default()),
             background: MaybeDyn::Static(Color::TRANSPARENT),
@@ -360,6 +362,9 @@ impl Widget for Container {
         // Advance hover ripple animation each frame (layout is called every frame)
         if self.ripple_enabled && self.ripple_center.is_some() {
             if self.ripple_progress < 1.0 {
+                // Animation in progress, request next frame
+                request_animation_frame();
+
                 // Exit ripple: very fast (~0.2s), Hover ripple: faster (~0.3s)
                 let speed = if self.ripple_is_exit {
                     0.20
@@ -368,17 +373,23 @@ impl Widget for Container {
                 };
                 self.ripple_progress = (self.ripple_progress + speed).min(1.0);
             } else if self.ripple_is_exit {
+                // Exit ripple complete, still need one more frame to fade out
+                request_animation_frame();
+
                 // Auto-reset exit ripples when complete
                 self.ripple_center = None;
                 self.ripple_progress = 0.0;
                 self.ripple_is_exit = false;
             }
-            // Hover ripples persist at 100% progress while hovering
+            // Hover ripples persist at 100% progress while hovering (no animation needed)
         }
 
         // Advance click ripple animation each frame (separate from hover ripple)
         if self.ripple_enabled && self.click_ripple_center.is_some() {
             if self.click_ripple_reversing {
+                // Animation in progress (reversing), request next frame
+                request_animation_frame();
+
                 // Reverse animation: contract back to 0
                 if self.click_ripple_progress > 0.0 {
                     // Reverse faster than expand for snappy feel (~0.3s)
@@ -392,11 +403,14 @@ impl Widget for Container {
                     self.click_ripple_release_pos = None;
                 }
             } else if self.click_ripple_progress < 1.0 {
+                // Animation in progress (expanding), request next frame
+                request_animation_frame();
+
                 // Forward animation: expand to 100%
                 let speed = 0.08;
                 self.click_ripple_progress = (self.click_ripple_progress + speed).min(1.0);
             }
-            // Click ripple stays at 100% until MouseUp triggers reverse
+            // Click ripple stays at 100% until MouseUp triggers reverse (no animation needed)
         }
 
         size
@@ -697,6 +711,10 @@ impl Widget for Container {
 
     fn bounds(&self) -> Rect {
         self.bounds
+    }
+
+    fn id(&self) -> WidgetId {
+        self.widget_id
     }
 }
 

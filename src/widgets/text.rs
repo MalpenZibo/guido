@@ -1,10 +1,11 @@
 use crate::layout::{Constraints, Size};
-use crate::reactive::{IntoMaybeDyn, MaybeDyn};
+use crate::reactive::{IntoMaybeDyn, MaybeDyn, WidgetId};
 use crate::renderer::PaintContext;
 
 use super::widget::{Color, EventResponse, Rect, Widget};
 
 pub struct Text {
+    widget_id: WidgetId,
     content: MaybeDyn<String>,
     color: MaybeDyn<Color>,
     font_size: MaybeDyn<f32>,
@@ -18,6 +19,7 @@ impl Text {
         let content = content.into_maybe_dyn();
         let cached_text = content.get();
         Self {
+            widget_id: WidgetId::next(),
             content,
             color: MaybeDyn::Static(Color::WHITE),
             font_size: MaybeDyn::Static(14.0),
@@ -81,6 +83,10 @@ impl Widget for Text {
 
     fn bounds(&self) -> Rect {
         self.bounds
+    }
+
+    fn id(&self) -> WidgetId {
+        self.widget_id
     }
 }
 

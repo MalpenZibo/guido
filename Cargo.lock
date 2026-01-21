@@ -632,6 +632,7 @@ dependencies = [
 name = "guido"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "bytemuck",
  "calloop",
  "cosmic-text 0.16.0",

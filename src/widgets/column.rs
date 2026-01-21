@@ -1,10 +1,12 @@
 use crate::layout::{Constraints, Size};
+use crate::reactive::WidgetId;
 use crate::renderer::PaintContext;
 
 use super::row::{CrossAxisAlignment, MainAxisAlignment};
 use super::widget::{Event, EventResponse, Rect, Widget};
 
 pub struct Column {
+    widget_id: WidgetId,
     children: Vec<Box<dyn Widget>>,
     spacing: f32,
     main_axis_alignment: MainAxisAlignment,
@@ -16,6 +18,7 @@ pub struct Column {
 impl Column {
     pub fn new() -> Self {
         Self {
+            widget_id: WidgetId::next(),
             children: Vec::new(),
             spacing: 0.0,
             main_axis_alignment: MainAxisAlignment::Start,
@@ -27,6 +30,7 @@ impl Column {
 
     pub fn with_children(children: Vec<Box<dyn Widget>>) -> Self {
         Self {
+            widget_id: WidgetId::next(),
             children,
             spacing: 0.0,
             main_axis_alignment: MainAxisAlignment::Start,
@@ -223,6 +227,10 @@ impl Widget for Column {
 
     fn bounds(&self) -> Rect {
         self.bounds
+    }
+
+    fn id(&self) -> WidgetId {
+        self.widget_id
     }
 }
 
