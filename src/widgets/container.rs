@@ -913,11 +913,16 @@ impl Widget for Container {
         // Determine if we should allow shrinking below content size.
         // This happens when:
         // 1. overflow is Hidden (always clip content), OR
-        // 2. A size animation is currently running (temporary clip during animation)
+        // 2. A size animation is currently running (temporary clip during animation), OR
+        // 3. Exact width/height is set (user wants that exact size, content clips)
         let width_animating = self.width_anim.as_ref().is_some_and(|a| a.is_animating());
         let height_animating = self.height_anim.as_ref().is_some_and(|a| a.is_animating());
-        let allow_shrink_width = self.overflow == Overflow::Hidden || width_animating;
-        let allow_shrink_height = self.overflow == Overflow::Hidden || height_animating;
+        let has_exact_width = self.width.is_some();
+        let has_exact_height = self.height.is_some();
+        let allow_shrink_width =
+            self.overflow == Overflow::Hidden || width_animating || has_exact_width;
+        let allow_shrink_height =
+            self.overflow == Overflow::Hidden || height_animating || has_exact_height;
 
         // Calculate final width
         // Priority: animation > exact width > min_width > content_width
@@ -1047,10 +1052,14 @@ impl Widget for Container {
         }
 
         // Determine if we need to clip children
-        // Clip when: overflow is Hidden OR a size animation is running
+        // Clip when: overflow is Hidden OR a size animation is running OR exact size is set
         let width_animating = self.width_anim.as_ref().is_some_and(|a| a.is_animating());
         let height_animating = self.height_anim.as_ref().is_some_and(|a| a.is_animating());
-        let should_clip = self.overflow == Overflow::Hidden || width_animating || height_animating;
+        let has_exact_size = self.width.is_some() || self.height.is_some();
+        let should_clip = self.overflow == Overflow::Hidden
+            || width_animating
+            || height_animating
+            || has_exact_size;
 
         // Push clip if needed
         if should_clip {
