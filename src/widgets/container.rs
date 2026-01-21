@@ -83,6 +83,13 @@ pub struct Container {
     min_height: Option<MaybeDyn<f32>>,
     bounds: Rect,
 
+    // Cached values for change detection (Phase 3)
+    cached_padding: Padding,
+    cached_background: Color,
+    cached_corner_radius: f32,
+    cached_corner_curvature: f32,
+    cached_elevation: f32,
+
     // Event callbacks
     on_click: Option<ClickCallback>,
     on_hover: Option<HoverCallback>,
@@ -140,6 +147,12 @@ impl Container {
             click_ripple_progress: 0.0,
             click_ripple_reversing: false,
             click_ripple_release_pos: None,
+            // Initialize cached values
+            cached_padding: Padding::default(),
+            cached_background: Color::TRANSPARENT,
+            cached_corner_radius: 0.0,
+            cached_corner_curvature: 1.0,
+            cached_elevation: 0.0,
         }
     }
 
@@ -382,18 +395,54 @@ impl Widget for Container {
         // Always advance animations first (before early return)
         self.advance_animations();
 
-        // Check if we need to do layout
-        let has_animations = self.ripple_center.is_some() || self.click_ripple_center.is_some();
+        // Phase 3: Check which properties actually changed
+        let padding = self.padding.get();
+        let background = self.background.get();
+        let corner_radius = self.corner_radius.get();
+        let corner_curvature = self.corner_curvature.get();
+        let elevation = self.elevation.get();
+
+        // Detect layout-affecting changes
+        let padding_changed = padding.top != self.cached_padding.top
+            || padding.right != self.cached_padding.right
+            || padding.bottom != self.cached_padding.bottom
+            || padding.left != self.cached_padding.left;
+
+        // Detect paint-only changes
+        let visual_changed = background != self.cached_background
+            || corner_radius != self.cached_corner_radius
+            || corner_curvature != self.cached_corner_curvature
+            || elevation != self.cached_elevation;
+
         let child_needs_layout = self.child.as_ref().map_or(false, |c| c.needs_layout());
-        let needs_layout = self.needs_layout() || child_needs_layout || has_animations;
+        let has_animations = self.ripple_center.is_some() || self.click_ripple_center.is_some();
+
+        // If only visual properties changed (no layout changes), downgrade to paint-only
+        if self.needs_layout() && !padding_changed && !child_needs_layout && visual_changed {
+            self.dirty_flags = ChangeFlags::NEEDS_PAINT;
+        }
+
+        // Only do layout if: layout properties changed, child needs it, or animating
+        let needs_layout = self.needs_layout() || padding_changed || child_needs_layout || has_animations;
 
         if !needs_layout {
-            // No layout needed, animations already advanced
+            // No layout needed, but update cached values if visual properties changed
+            if visual_changed {
+                self.cached_background = background;
+                self.cached_corner_radius = corner_radius;
+                self.cached_corner_curvature = corner_curvature;
+                self.cached_elevation = elevation;
+            }
             // Return cached size
             return Size::new(self.bounds.width, self.bounds.height);
         }
 
-        let padding = self.padding.get();
+        // Update all cached values
+        self.cached_padding = padding;
+        self.cached_background = background;
+        self.cached_corner_radius = corner_radius;
+        self.cached_corner_curvature = corner_curvature;
+        self.cached_elevation = elevation;
 
         let child_constraints = Constraints {
             min_width: 0.0,
