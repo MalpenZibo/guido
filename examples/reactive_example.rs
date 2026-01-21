@@ -18,21 +18,11 @@ fn main() {
     let scroll_offset = create_signal(0.0f32);
     let hover_color = create_signal(Color::rgb(0.2, 0.2, 0.3));
 
-    // Clone signals for the background thread
-    let count_for_thread = count.clone();
-
-    // Clone signals for the UI closures
-    let count_for_text = count.clone();
-    let count_for_click = count.clone();
-    let scroll_for_text = scroll_offset.clone();
-    let scroll_for_callback = scroll_offset.clone();
-    let hover_for_bg = hover_color.clone();
-    let hover_for_callback = hover_color.clone();
-
     // Spawn a background thread that increments count every 2 seconds
+    // No need to clone signals anymore - they implement Copy!
     thread::spawn(move || loop {
         thread::sleep(Duration::from_secs(2));
-        count_for_thread.update(|c| *c += 1);
+        count.update(|c| *c += 1);
     });
 
     // Build the reactive UI with event handlers
@@ -46,21 +36,21 @@ fn main() {
             // Clickable container with ripple effect - click to increment count
             container()
                 .padding(8.0)
-                .background(hover_for_bg)
+                .background(hover_color)
                 .corner_radius(4.0)
                 .ripple() // Enable ripple effect on hover
                 .on_click(move || {
-                    count_for_click.update(|c| *c += 10);
+                    count.update(|c| *c += 10);
                 })
                 .on_hover(move |hovered| {
                     if hovered {
-                        hover_for_callback.set(Color::rgb(0.3, 0.3, 0.4));
+                        hover_color.set(Color::rgb(0.3, 0.3, 0.4));
                     } else {
-                        hover_for_callback.set(Color::rgb(0.2, 0.2, 0.3));
+                        hover_color.set(Color::rgb(0.2, 0.2, 0.3));
                     }
                 })
                 .child(
-                    text(move || format!("Count: {} (click me!)", count_for_text.get()))
+                    text(move || format!("Count: {} (click me!)", count.get()))
                         .color(Color::WHITE),
                 ),
         )
@@ -71,12 +61,12 @@ fn main() {
                 .background(Color::rgb(0.2, 0.3, 0.2))
                 .corner_radius(4.0)
                 .on_scroll(move |_dx, dy, _source| {
-                    scroll_for_callback.update(|offset| {
+                    scroll_offset.update(|offset| {
                         *offset += dy;
                     });
                 })
                 .child(
-                    text(move || format!("Scroll: {:.0}px", scroll_for_text.get()))
+                    text(move || format!("Scroll: {:.0}px", scroll_offset.get()))
                         .color(Color::WHITE),
                 ),
         )

@@ -1,230 +1,199 @@
-use std::sync::{Arc, RwLock};
+use std::marker::PhantomData;
 
 use super::invalidation::request_frame;
-use super::runtime::{try_with_runtime, with_runtime, SignalId};
-
-struct SignalInner<T> {
-    id: SignalId,
-    value: RwLock<T>,
-}
+use super::runtime::{try_with_runtime, SignalId};
+use super::storage::{
+    create_signal_value, get_signal_value, set_signal_value, update_signal_value,
+    with_signal_value,
+};
 
 /// A reactive signal that can be read and written from any thread.
 ///
 /// Signals are the core primitive of the reactive system. When a signal's
 /// value changes, any effects that depend on it will be re-run (on the main thread).
 ///
+/// Signals are Copy - they can be freely passed into closures without cloning.
+///
 /// # Thread Safety
 /// Signal values can be read and written from any thread. However, effects
 /// only run on the main thread. When you call `set()` from a background thread,
 /// the value is updated immediately, but effect notification is skipped.
 /// The UI will still update because the render loop reads signal values each frame.
-#[derive(Clone)]
 pub struct Signal<T> {
-    inner: Arc<SignalInner<T>>,
+    id: SignalId,
+    _marker: PhantomData<T>,
 }
 
-// Signal is Send + Sync when T is Send + Sync
-unsafe impl<T: Send + Sync> Send for Signal<T> {}
-unsafe impl<T: Send + Sync> Sync for Signal<T> {}
+// Manually implement Clone and Copy to avoid unnecessary bounds on T
+impl<T> Clone for Signal<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
 
-impl<T> Signal<T> {
-    pub fn new(value: T) -> Self {
-        let id = with_runtime(|rt| rt.allocate_signal());
-        Self {
-            inner: Arc::new(SignalInner {
-                id,
-                value: RwLock::new(value),
-            }),
+impl<T> Copy for Signal<T> {}
+
+impl<T: Clone + Send + Sync + 'static> Signal<T> {
+    /// Get the current value (tracks as dependency on main thread)
+    pub fn get(&self) -> T {
+        // Track reads only on main thread
+        try_with_runtime(|rt| rt.track_read(self.id));
+        // Get value from global storage (works from any thread)
+        get_signal_value(self.id)
+    }
+
+    /// Get the current value without tracking
+    pub fn get_untracked(&self) -> T {
+        get_signal_value(self.id)
+    }
+
+    /// Borrow the value for reading
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        try_with_runtime(|rt| rt.track_read(self.id));
+        with_signal_value(self.id, f)
+    }
+
+    /// Borrow the value without tracking
+    pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        with_signal_value(self.id, f)
+    }
+}
+
+impl<T: Clone + PartialEq + Send + Sync + 'static> Signal<T> {
+    /// Set a new value (notifies subscribers if changed)
+    pub fn set(&self, value: T) {
+        // Check if value changed
+        let changed = with_signal_value(self.id, |old: &T| *old != value);
+        if changed {
+            set_signal_value(self.id, value);
+            // Notify runtime (only on main thread)
+            try_with_runtime(|rt| rt.notify_write(self.id));
+            request_frame();
         }
     }
 
+    /// Update the value using a closure
+    pub fn update<F: FnOnce(&mut T)>(&self, f: F) {
+        let changed = {
+            let old = get_signal_value::<T>(self.id);
+            update_signal_value(self.id, f);
+            let new = get_signal_value::<T>(self.id);
+            old != new
+        };
+        if changed {
+            try_with_runtime(|rt| rt.notify_write(self.id));
+            request_frame();
+        }
+    }
+
+    /// Split into read and write handles
     pub fn split(self) -> (ReadSignal<T>, WriteSignal<T>) {
         (
             ReadSignal {
-                inner: self.inner.clone(),
+                id: self.id,
+                _marker: PhantomData,
             },
-            WriteSignal { inner: self.inner },
+            WriteSignal {
+                id: self.id,
+                _marker: PhantomData,
+            },
         )
     }
 }
 
-impl<T: Clone> Signal<T> {
-    pub fn get(&self) -> T {
-        // Only track reads if we're on the main thread (runtime available)
-        try_with_runtime(|rt| rt.track_read(self.inner.id));
-        self.inner
-            .value
-            .read()
-            .expect("signal lock poisoned")
-            .clone()
-    }
-
-    pub fn get_untracked(&self) -> T {
-        self.inner
-            .value
-            .read()
-            .expect("signal lock poisoned")
-            .clone()
-    }
-}
-
-impl<T: PartialEq> Signal<T> {
-    /// Sets the signal's value, only triggering updates if the value actually changed.
-    pub fn set(&self, value: T) {
-        let Ok(mut guard) = self.inner.value.write() else {
-            return; // Lock poisoned, skip update silently
-        };
-        if *guard != value {
-            *guard = value;
-            drop(guard);
-            // Only notify if we're on the main thread (runtime available)
-            try_with_runtime(|rt| rt.notify_write(self.inner.id));
-            // Request a frame to be rendered
-            request_frame();
-        }
-    }
-}
-
-impl<T: PartialEq + Clone> Signal<T> {
-    /// Updates the signal's value using a closure, only triggering updates if the value changed.
-    pub fn update<F>(&self, f: F)
-    where
-        F: FnOnce(&mut T),
-    {
-        let Ok(mut guard) = self.inner.value.write() else {
-            return; // Lock poisoned, skip update silently
-        };
-        let old_value = guard.clone();
-        f(&mut *guard);
-        if *guard != old_value {
-            drop(guard);
-            try_with_runtime(|rt| rt.notify_write(self.inner.id));
-            // Request a frame to be rendered
-            request_frame();
-        }
-    }
-}
-
-impl<T> Signal<T> {
-    pub fn with<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&T) -> R,
-    {
-        try_with_runtime(|rt| rt.track_read(self.inner.id));
-        f(&self.inner.value.read().expect("signal lock poisoned"))
-    }
-
-    pub fn with_untracked<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&T) -> R,
-    {
-        f(&self.inner.value.read().expect("signal lock poisoned"))
-    }
-}
-
 /// Read-only handle to a signal.
-#[derive(Clone)]
 pub struct ReadSignal<T> {
-    inner: Arc<SignalInner<T>>,
+    id: SignalId,
+    _marker: PhantomData<T>,
 }
 
-unsafe impl<T: Send + Sync> Send for ReadSignal<T> {}
-unsafe impl<T: Send + Sync> Sync for ReadSignal<T> {}
+// Manually implement Clone and Copy to avoid unnecessary bounds on T
+impl<T> Clone for ReadSignal<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
 
-impl<T: Clone> ReadSignal<T> {
+impl<T> Copy for ReadSignal<T> {}
+
+impl<T: Clone + Send + Sync + 'static> ReadSignal<T> {
     pub fn get(&self) -> T {
-        try_with_runtime(|rt| rt.track_read(self.inner.id));
-        self.inner
-            .value
-            .read()
-            .expect("signal lock poisoned")
-            .clone()
+        try_with_runtime(|rt| rt.track_read(self.id));
+        get_signal_value(self.id)
     }
 
     pub fn get_untracked(&self) -> T {
-        self.inner
-            .value
-            .read()
-            .expect("signal lock poisoned")
-            .clone()
-    }
-}
-
-impl<T> ReadSignal<T> {
-    pub fn with<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&T) -> R,
-    {
-        try_with_runtime(|rt| rt.track_read(self.inner.id));
-        f(&self.inner.value.read().expect("signal lock poisoned"))
+        get_signal_value(self.id)
     }
 
-    pub fn with_untracked<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&T) -> R,
-    {
-        f(&self.inner.value.read().expect("signal lock poisoned"))
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        try_with_runtime(|rt| rt.track_read(self.id));
+        with_signal_value(self.id, f)
+    }
+
+    pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        with_signal_value(self.id, f)
     }
 }
 
 /// Write-only handle to a signal.
-#[derive(Clone)]
 pub struct WriteSignal<T> {
-    inner: Arc<SignalInner<T>>,
+    id: SignalId,
+    _marker: PhantomData<T>,
 }
 
-unsafe impl<T: Send + Sync> Send for WriteSignal<T> {}
-unsafe impl<T: Send + Sync> Sync for WriteSignal<T> {}
-
-impl<T: PartialEq> WriteSignal<T> {
-    /// Sets the signal's value, only triggering updates if the value actually changed.
-    pub fn set(&self, value: T) {
-        let Ok(mut guard) = self.inner.value.write() else {
-            return; // Lock poisoned, skip update silently
-        };
-        if *guard != value {
-            *guard = value;
-            drop(guard);
-            try_with_runtime(|rt| rt.notify_write(self.inner.id));
-            // Request a frame to be rendered
-            request_frame();
-        }
+// Manually implement Clone and Copy to avoid unnecessary bounds on T
+impl<T> Clone for WriteSignal<T> {
+    fn clone(&self) -> Self {
+        *self
     }
 }
 
-impl<T: PartialEq + Clone> WriteSignal<T> {
+impl<T> Copy for WriteSignal<T> {}
+
+impl<T: Clone + PartialEq + Send + Sync + 'static> WriteSignal<T> {
+    /// Sets the signal's value, only triggering updates if the value actually changed.
+    pub fn set(&self, value: T) {
+        let changed = with_signal_value(self.id, |old: &T| *old != value);
+        if changed {
+            set_signal_value(self.id, value);
+            try_with_runtime(|rt| rt.notify_write(self.id));
+            request_frame();
+        }
+    }
+
     /// Updates the signal's value using a closure, only triggering updates if the value changed.
     pub fn update<F>(&self, f: F)
     where
         F: FnOnce(&mut T),
     {
-        let Ok(mut guard) = self.inner.value.write() else {
-            return; // Lock poisoned, skip update silently
+        let changed = {
+            let old = get_signal_value::<T>(self.id);
+            update_signal_value(self.id, f);
+            let new = get_signal_value::<T>(self.id);
+            old != new
         };
-        let old_value = guard.clone();
-        f(&mut *guard);
-        if *guard != old_value {
-            drop(guard);
-            try_with_runtime(|rt| rt.notify_write(self.inner.id));
-            // Request a frame to be rendered
+        if changed {
+            try_with_runtime(|rt| rt.notify_write(self.id));
             request_frame();
         }
     }
-}
 
-impl<T: Clone> WriteSignal<T> {
     /// Get the current value (useful for read-modify-write patterns)
     pub fn get(&self) -> T {
-        self.inner
-            .value
-            .read()
-            .expect("signal lock poisoned")
-            .clone()
+        get_signal_value(self.id)
     }
 }
 
-pub fn create_signal<T>(value: T) -> Signal<T> {
-    Signal::new(value)
+pub fn create_signal<T: Clone + PartialEq + Send + Sync + 'static>(value: T) -> Signal<T> {
+    // Create value in global storage
+    let id = create_signal_value(value);
+    // Register with thread-local runtime for subscriber tracking
+    try_with_runtime(|rt| rt.register_signal(id));
+    Signal {
+        id,
+        _marker: PhantomData,
+    }
 }
 
 #[cfg(test)]
@@ -278,7 +247,7 @@ mod tests {
     #[test]
     fn test_clone_shares_underlying_value() {
         let signal1 = create_signal(50);
-        let signal2 = signal1.clone();
+        let signal2 = signal1; // Copy, not clone!
 
         signal1.set(75);
         assert_eq!(signal2.get(), 75);
@@ -308,5 +277,14 @@ mod tests {
         assert_eq!(signal.get(), 5);
         signal.set(10); // Actual change
         assert_eq!(signal.get(), 10);
+    }
+
+    #[test]
+    fn test_signal_is_copy() {
+        let signal = create_signal(42);
+        let _copy1 = signal;
+        let _copy2 = signal;
+        // If Signal wasn't Copy, this wouldn't compile
+        assert_eq!(signal.get(), 42);
     }
 }

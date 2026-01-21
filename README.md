@@ -12,7 +12,7 @@ Guido is a GPU-accelerated GUI library for building Wayland layer shell applicat
 
 ## Features
 
-- **Fine-Grained Reactivity** - Thread-safe reactive signals with automatic dependency tracking and efficient updates
+- **Fine-Grained Reactivity** - Thread-safe reactive signals with automatic dependency tracking and efficient updates. Signals are `Copy`, eliminating the need for manual cloning
 - **Reusable Components** - Define custom components with the `#[component]` macro and fluent builder API
 - **GPU Rendering** - Hardware-accelerated rendering via wgpu
 - **Superellipse Corners** - Smooth iOS-style "squircle" corners with configurable curvature
@@ -28,7 +28,6 @@ use guido::prelude::*;
 
 fn main() {
     let count = create_signal(0);
-    let count_for_click = count.clone();
 
     let view = container()
         .layout(Flex::row().spacing(16.0))
@@ -39,7 +38,7 @@ fn main() {
                 .corner_radius(8.0)
                 .padding(8.0)
                 .ripple()
-                .on_click(move || count_for_click.update(|c| *c += 1))
+                .on_click(move || count.update(|c| *c += 1))
                 .child(text("Click me").color(Color::WHITE))
         );
 

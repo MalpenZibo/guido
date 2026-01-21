@@ -15,7 +15,6 @@ pub struct Runtime {
     effect_callbacks: Vec<Option<Box<dyn FnMut()>>>,
     effect_dependencies: Vec<HashSet<SignalId>>,
     signal_subscribers: Vec<HashSet<EffectId>>,
-    next_signal_id: SignalId,
     next_effect_id: EffectId,
     batch_depth: usize,
 }
@@ -25,11 +24,12 @@ impl Runtime {
         Self::default()
     }
 
-    pub fn allocate_signal(&mut self) -> SignalId {
-        let id = self.next_signal_id;
-        self.next_signal_id += 1;
-        self.signal_subscribers.push(HashSet::new());
-        id
+    /// Register a signal for subscriber tracking (called when signal is created)
+    pub fn register_signal(&mut self, id: SignalId) {
+        // Ensure we have space for subscribers
+        while self.signal_subscribers.len() <= id {
+            self.signal_subscribers.push(HashSet::new());
+        }
     }
 
     pub fn allocate_effect(&mut self, callback: Box<dyn FnMut()>) -> EffectId {

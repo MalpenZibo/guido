@@ -4,6 +4,7 @@ pub mod invalidation;
 pub mod maybe_dyn;
 pub mod runtime;
 pub mod signal;
+pub mod storage;
 
 pub use computed::{create_computed, Computed};
 pub use effect::{create_effect, Effect};
