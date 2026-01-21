@@ -149,6 +149,7 @@ impl Vertex {
     }
 
     /// Create a vertex for a shape with SDF rendering, border, and shadow
+    #[allow(clippy::too_many_arguments)]
     pub fn with_shadow(
         position: [f32; 2],
         color: [f32; 4],

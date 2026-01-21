@@ -22,11 +22,6 @@ impl Column {
         self.children.iter().any(|child| child.needs_layout())
     }
 
-    /// Check if any child widget needs paint
-    fn any_child_needs_paint(&self) -> bool {
-        self.children.iter().any(|child| child.needs_paint())
-    }
-
     pub fn new() -> Self {
         Self {
             widget_id: WidgetId::next(),
