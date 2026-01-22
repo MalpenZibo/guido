@@ -25,7 +25,10 @@ use calloop_wayland_source::WaylandSource;
 
 pub mod prelude {
     pub use crate::animation::{SpringConfig, TimingFunction, Transform, Transition};
-    pub use crate::layout::{Axis, Constraints, CrossAxisAlignment, Flex, MainAxisAlignment, Size};
+    pub use crate::layout::{
+        at_least, at_most, Axis, Constraints, CrossAxisAlignment, Flex, Length, MainAxisAlignment,
+        Size,
+    };
     pub use crate::platform::{Anchor, Layer};
     pub use crate::reactive::{
         batch, create_computed, create_effect, create_signal, Computed, Effect, IntoMaybeDyn,

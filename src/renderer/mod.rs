@@ -640,42 +640,4 @@ impl PaintContext {
                 curvature: *curvature,
             })
     }
-
-    /// Apply the current transform to a point
-    #[allow(dead_code)]
-    fn apply_transform(&self, x: f32, y: f32) -> (f32, f32) {
-        if let Some((transform, bounds)) = self.transform_stack.last() {
-            transform.apply_to_point(x, y, bounds.width, bounds.height)
-        } else {
-            (x, y)
-        }
-    }
-
-    /// Apply the current transform to a rect
-    #[allow(dead_code)]
-    fn apply_transform_to_rect(&self, rect: Rect) -> Rect {
-        if let Some((transform, bounds)) = self.transform_stack.last() {
-            // Transform all four corners and compute the bounding box
-            let (x1, y1) = transform.apply_to_point(rect.x, rect.y, bounds.width, bounds.height);
-            let (x2, y2) =
-                transform.apply_to_point(rect.x + rect.width, rect.y, bounds.width, bounds.height);
-            let (x3, y3) =
-                transform.apply_to_point(rect.x, rect.y + rect.height, bounds.width, bounds.height);
-            let (x4, y4) = transform.apply_to_point(
-                rect.x + rect.width,
-                rect.y + rect.height,
-                bounds.width,
-                bounds.height,
-            );
-
-            let min_x = x1.min(x2).min(x3).min(x4);
-            let max_x = x1.max(x2).max(x3).max(x4);
-            let min_y = y1.min(y2).min(y3).min(y4);
-            let max_y = y1.max(y2).max(y3).max(y4);
-
-            Rect::new(min_x, min_y, max_x - min_x, max_y - min_y)
-        } else {
-            rect
-        }
-    }
 }

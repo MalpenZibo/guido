@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::animation::{Animatable, SpringState, Transform, Transition};
-use crate::layout::{Constraints, Flex, Layout, Size};
+use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{request_animation_frame, ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId};
 use crate::renderer::primitives::{GradientDir, Shadow};
 use crate::renderer::PaintContext;
@@ -245,10 +245,8 @@ pub struct Container {
     corner_curvature: MaybeDyn<f32>,
     border: Option<Border>,
     elevation: MaybeDyn<f32>,
-    width: Option<MaybeDyn<f32>>,
-    height: Option<MaybeDyn<f32>>,
-    min_width: Option<MaybeDyn<f32>>,
-    min_height: Option<MaybeDyn<f32>>,
+    width: Option<MaybeDyn<Length>>,
+    height: Option<MaybeDyn<Length>>,
     overflow: Overflow,
     bounds: Rect,
 
@@ -311,8 +309,6 @@ impl Container {
             elevation: MaybeDyn::Static(0.0),
             width: None,
             height: None,
-            min_width: None,
-            min_height: None,
             overflow: Overflow::Visible,
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
             on_click: None,
@@ -466,25 +462,29 @@ impl Container {
         self
     }
 
-    /// Set the exact width of the container (overrides content-based sizing)
-    pub fn width(mut self, width: impl IntoMaybeDyn<f32>) -> Self {
+    /// Set the width of the container.
+    ///
+    /// Accepts:
+    /// - Exact size: `width(200.0)`
+    /// - Minimum: `width(at_least(100.0))`
+    /// - Maximum: `width(at_most(400.0))`
+    /// - Range: `width(at_least(50.0).at_most(400.0))`
+    /// - Reactive: `width(move || if expanded.get() { 600.0 } else { 50.0 })`
+    pub fn width(mut self, width: impl IntoMaybeDyn<Length>) -> Self {
         self.width = Some(width.into_maybe_dyn());
         self
     }
 
-    /// Set the exact height of the container (overrides content-based sizing)
-    pub fn height(mut self, height: impl IntoMaybeDyn<f32>) -> Self {
+    /// Set the height of the container.
+    ///
+    /// Accepts:
+    /// - Exact size: `height(100.0)`
+    /// - Minimum: `height(at_least(50.0))`
+    /// - Maximum: `height(at_most(200.0))`
+    /// - Range: `height(at_least(25.0).at_most(200.0))`
+    /// - Reactive: `height(move || if expanded.get() { 300.0 } else { 50.0 })`
+    pub fn height(mut self, height: impl IntoMaybeDyn<Length>) -> Self {
         self.height = Some(height.into_maybe_dyn());
-        self
-    }
-
-    pub fn min_width(mut self, width: impl IntoMaybeDyn<f32>) -> Self {
-        self.min_width = Some(width.into_maybe_dyn());
-        self
-    }
-
-    pub fn min_height(mut self, height: impl IntoMaybeDyn<f32>) -> Self {
-        self.min_height = Some(height.into_maybe_dyn());
         self
     }
 
@@ -542,12 +542,14 @@ impl Container {
 
     /// Enable animation for width changes
     pub fn animate_width(mut self, transition: Transition) -> Self {
-        // Initialize with current width or min_width or 0
+        // Initialize with current width (exact or min) or 0
         let initial = self
             .width
             .as_ref()
-            .map(|w| w.get())
-            .or_else(|| self.min_width.as_ref().map(|w| w.get()))
+            .map(|w| {
+                let len = w.get();
+                len.exact.or(len.min).unwrap_or(0.0)
+            })
             .unwrap_or(0.0);
         self.width_anim = Some(AnimationState::new(initial, transition));
         self
@@ -555,12 +557,14 @@ impl Container {
 
     /// Enable animation for height changes
     pub fn animate_height(mut self, transition: Transition) -> Self {
-        // Initialize with current height or min_height or 0
+        // Initialize with current height (exact or min) or 0
         let initial = self
             .height
             .as_ref()
-            .map(|h| h.get())
-            .or_else(|| self.min_height.as_ref().map(|h| h.get()))
+            .map(|h| {
+                let len = h.get();
+                len.exact.or(len.min).unwrap_or(0.0)
+            })
             .unwrap_or(0.0);
         self.height_anim = Some(AnimationState::new(initial, transition));
         self
@@ -833,6 +837,10 @@ impl Widget for Container {
             }
         }
 
+        // Get width/height Length values
+        let width_length = self.width.as_ref().map(|w| w.get()).unwrap_or_default();
+        let height_length = self.height.as_ref().map(|h| h.get()).unwrap_or_default();
+
         // Calculate current container dimensions (use animated value if animating)
         // For width: use animation current value, but on initial state use constraints
         // so children can determine their natural size before animation target is set
@@ -843,8 +851,8 @@ impl Widget for Container {
             } else {
                 *anim.current()
             }
-        } else if let Some(ref exact_w) = self.width {
-            exact_w.get()
+        } else if let Some(exact) = width_length.exact {
+            exact
         } else {
             constraints.max_width
         };
@@ -856,8 +864,8 @@ impl Widget for Container {
             } else {
                 *anim.current()
             }
-        } else if let Some(ref exact_h) = self.height {
-            exact_h.get()
+        } else if let Some(exact) = height_length.exact {
+            exact
         } else {
             constraints.max_height
         };
@@ -913,12 +921,12 @@ impl Widget for Container {
         let content_height = content_size.height + padding.vertical();
 
         // Update animation targets based on the effective target size.
-        // Priority: exact width/height > max(content_size, min_size)
+        // Priority: exact > max(content_size, min_size)
         if let Some(ref mut anim) = self.width_anim {
-            let effective_target = if let Some(ref exact_w) = self.width {
-                exact_w.get() // Exact width takes precedence
+            let effective_target = if let Some(exact) = width_length.exact {
+                exact // Exact width takes precedence
             } else {
-                let min_w = self.min_width.as_ref().map(|w| w.get()).unwrap_or(0.0);
+                let min_w = width_length.min.unwrap_or(0.0);
                 content_width.max(min_w)
             };
             if (effective_target - *anim.target()).abs() > 0.001 {
@@ -934,10 +942,10 @@ impl Widget for Container {
         }
 
         if let Some(ref mut anim) = self.height_anim {
-            let effective_target = if let Some(ref exact_h) = self.height {
-                exact_h.get() // Exact height takes precedence
+            let effective_target = if let Some(exact) = height_length.exact {
+                exact // Exact height takes precedence
             } else {
-                let min_h = self.min_height.as_ref().map(|h| h.get()).unwrap_or(0.0);
+                let min_h = height_length.min.unwrap_or(0.0);
                 content_height.max(min_h)
             };
             if (effective_target - *anim.target()).abs() > 0.001 {
@@ -959,50 +967,60 @@ impl Widget for Container {
         // 3. Exact width/height is set (user wants that exact size, content clips)
         let width_animating = self.width_anim.as_ref().is_some_and(|a| a.is_animating());
         let height_animating = self.height_anim.as_ref().is_some_and(|a| a.is_animating());
-        let has_exact_width = self.width.is_some();
-        let has_exact_height = self.height.is_some();
+        let has_exact_width = width_length.exact.is_some();
+        let has_exact_height = height_length.exact.is_some();
         let allow_shrink_width =
             self.overflow == Overflow::Hidden || width_animating || has_exact_width;
         let allow_shrink_height =
             self.overflow == Overflow::Hidden || height_animating || has_exact_height;
 
         // Calculate final width
-        // Priority: animation > exact width > min_width > content_width
+        // Priority: animation > exact > min constraint > content_width
         let mut width = if let Some(ref anim) = self.width_anim {
             if allow_shrink_width {
                 *anim.current() // Use animated value directly, can shrink below content
             } else {
                 content_width.max(*anim.current())
             }
-        } else if let Some(ref exact_w) = self.width {
-            exact_w.get() // Exact width takes precedence over content
-        } else if let Some(ref min_w) = self.min_width {
-            content_width.max(min_w.get())
+        } else if let Some(exact) = width_length.exact {
+            exact // Exact width takes precedence over content
+        } else if let Some(min) = width_length.min {
+            content_width.max(min)
         } else {
             content_width
         };
 
+        // Apply max constraint from Length
+        if let Some(max) = width_length.max {
+            width = width.min(max);
+        }
+
         // Calculate final height
-        // Priority: animation > exact height > min_height > content_height
+        // Priority: animation > exact > min constraint > content_height
         let mut height = if let Some(ref anim) = self.height_anim {
             if allow_shrink_height {
                 *anim.current() // Use animated value directly, can shrink below content
             } else {
                 content_height.max(*anim.current())
             }
-        } else if let Some(ref exact_h) = self.height {
-            exact_h.get() // Exact height takes precedence over content
-        } else if let Some(ref min_h) = self.min_height {
-            content_height.max(min_h.get())
+        } else if let Some(exact) = height_length.exact {
+            exact // Exact height takes precedence over content
+        } else if let Some(min) = height_length.min {
+            content_height.max(min)
         } else {
             content_height
         };
 
+        // Apply max constraint from Length
+        if let Some(max) = height_length.max {
+            height = height.min(max);
+        }
+
         // Ensure minimum content size when not allowing shrink (but only if not using exact dimensions)
-        if !allow_shrink_width && self.width_anim.is_none() && self.width.is_none() {
+        if !allow_shrink_width && self.width_anim.is_none() && !has_exact_width {
             width = width.max(content_width);
         }
-        if !allow_shrink_height && self.height_anim.is_none() && self.height.is_none() {
+        if !allow_shrink_height && self.height_anim.is_none() && !has_exact_height {
             height = height.max(content_height);
         }
 
@@ -1097,7 +1115,11 @@ impl Widget for Container {
         // Clip when: overflow is Hidden OR a size animation is running OR exact size is set
         let width_animating = self.width_anim.as_ref().is_some_and(|a| a.is_animating());
         let height_animating = self.height_anim.as_ref().is_some_and(|a| a.is_animating());
-        let has_exact_size = self.width.is_some() || self.height.is_some();
+        let has_exact_size = self.width.as_ref().is_some_and(|w| w.get().exact.is_some())
+            || self
+                .height
+                .as_ref()
+                .is_some_and(|h| h.get().exact.is_some());
         let should_clip = self.overflow == Overflow::Hidden
             || width_animating
             || height_animating

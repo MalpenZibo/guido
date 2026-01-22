@@ -30,9 +30,9 @@ fn main() {
 /// Card demonstrating width animation with spring physics
 fn create_width_animation_card(expanded: Signal<bool>, hovered: Signal<bool>) -> Container {
     container()
-        .min_width(move || if expanded.get() { 600.0 } else { 50.0 })
+        .width(move || at_least(if expanded.get() { 600.0 } else { 50.0 }))
         .animate_width(Transition::spring(SpringConfig::DEFAULT))
-        .min_height(80.0)
+        .height(at_least(80.0))
         .background(move || {
             if hovered.get() {
                 Color::rgb(0.25, 0.3, 0.4)
@@ -65,8 +65,8 @@ fn create_width_animation_card(expanded: Signal<bool>, hovered: Signal<bool>) ->
 /// Card demonstrating background color animation
 fn create_color_animation_card(hovered: Signal<bool>) -> Container {
     container()
-        .min_width(400.0)
-        .min_height(80.0)
+        .width(at_least(400.0))
+        .height(at_least(80.0))
         .background(move || {
             if hovered.get() {
                 Color::rgb(0.4, 0.25, 0.35)
@@ -96,9 +96,9 @@ fn create_combined_animation_card() -> Container {
     let local_hovered = create_signal(false);
 
     container()
-        .min_width(move || if clicked.get() { 500.0 } else { 350.0 })
+        .width(move || at_least(if clicked.get() { 500.0 } else { 350.0 }))
         .animate_width(Transition::spring(SpringConfig::SNAPPY))
-        .min_height(100.0)
+        .height(at_least(100.0))
         .background(move || {
             if local_hovered.get() {
                 Color::rgb(0.3, 0.35, 0.25)
