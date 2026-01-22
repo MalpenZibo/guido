@@ -554,28 +554,55 @@ impl RoundedRect {
         let x2 = to_ndc_x(self.rect.x + self.rect.width);
         let y2 = to_ndc_y(self.rect.y + self.rect.height);
 
-        // Convert transform's translation from pixels to NDC
-        // The transform stores translation in pixel units, but we apply in NDC space
-        let ndc_transform = if !self.transform.is_identity() {
-            let mut data = self.transform.data;
-            // data[3] is tx (x translation in pixels), data[7] is ty (y translation in pixels)
-            // Convert to NDC: pixel * 2 / screen_dimension
-            // For y, also flip the sign because NDC y is inverted
-            data[3] = data[3] * 2.0 / screen_width;
-            data[7] = -data[7] * 2.0 / screen_height;
-            Transform { data }
-        } else {
-            Transform::IDENTITY
-        };
+        // Convert transform to work correctly in NDC space
+        // NDC is non-isotropic: x and y have different pixel scales due to aspect ratio
+        // For rotation θ in pixel space, the equivalent NDC rotation matrix is:
+        //   [[cos θ, -sin θ / aspect], [aspect * sin θ, cos θ]]
+        // This preserves visual angles when the shape is displayed on screen
+        let aspect = screen_width / screen_height;
 
-        // Compute centered transform in NDC space
-        // Transform is applied around the shape's center, not the origin
-        let centered_transform = if !ndc_transform.is_identity() {
+        let centered_transform = if !self.transform.is_identity() {
+            // Extract rotation and scale from the transform matrix
+            // The transform is in row-major: [a, b, 0, tx; c, d, 0, ty; ...]
+            // For a rotation: a = cos θ, b = -sin θ, c = sin θ, d = cos θ
+            let a = self.transform.data[0]; // cos θ or scale_x * cos θ
+            let b = self.transform.data[1]; // -sin θ or scale_x * (-sin θ)
+            let c = self.transform.data[4]; // sin θ or scale_y * sin θ
+            let d = self.transform.data[5]; // cos θ or scale_y * cos θ
+            let tx = self.transform.data[3];
+            let ty = self.transform.data[7];
+
+            // Build aspect-corrected transform matrix for NDC
+            // For pure rotation: new_a = a, new_b = b/aspect, new_c = c*aspect, new_d = d
+            let ndc_transform = Transform {
+                data: [
+                    a,
+                    b / aspect,
+                    0.0,
+                    tx * 2.0 / screen_width,
+                    c * aspect,
+                    d,
+                    0.0,
+                    -ty * 2.0 / screen_height,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                ],
+            };
+
+            // Center point in NDC
             let center_x = (x1 + x2) / 2.0;
             let center_y = (y1 + y2) / 2.0;
+
+            // Build centered transform: T(center) * ndc_transform * T(-center)
             let to_origin = Transform::translate(-center_x, -center_y);
             let from_origin = Transform::translate(center_x, center_y);
-            // Composition: from_origin * transform * to_origin
+
             from_origin.then(&ndc_transform).then(&to_origin)
         } else {
             Transform::IDENTITY

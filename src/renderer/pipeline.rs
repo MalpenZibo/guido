@@ -166,16 +166,31 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // No inverse transform needed - this is the browser-standard approach
     let local_pos = in.frag_pos;
 
-    // Compute aspect ratio to make coordinate space isotropic
-    // Use screen-space derivatives to get aspect ratio even when border_width is 0
+    // Compute aspect ratio from shape_rect to make coordinate space isotropic
+    // This is independent of rotation - uses the shape's own proportions
+    // shape_rect: [min_x, min_y, max_x, max_y] in NDC
+    let rect_width_ndc = in.shape_rect.z - in.shape_rect.x;
+    let rect_height_ndc = in.shape_rect.w - in.shape_rect.y;
+
+    // The aspect ratio is derived from how the shape was converted to NDC
+    // In NDC: width_ndc = (pixel_width / screen_width) * 2
+    //         height_ndc = (pixel_height / screen_height) * 2
+    // So: aspect = height_ndc/width_ndc * (pixel_width/pixel_height) for a square shape
+    // But we can use radius ratio which directly encodes the screen aspect ratio
     var aspect: f32;
-    if (in.border_width.x > 0.0001) {
-        // Use border_width ratio when available
+    if (in.shape_radius.x > 0.0001) {
+        // Use radius ratio - this directly encodes screen aspect ratio
+        // radius_x = (r / screen_width) * 2, radius_y = (r / screen_height) * 2
+        // So radius_y / radius_x = screen_width / screen_height = aspect
+        aspect = in.shape_radius.y / in.shape_radius.x;
+    } else if (in.border_width.x > 0.0001) {
+        // Use border_width ratio as fallback
         aspect = in.border_width.y / in.border_width.x;
     } else {
-        // Compute from screen-space derivatives
-        let dx = abs(dpdx(local_pos.x));  // NDC change per screen pixel in x
-        let dy = abs(dpdy(local_pos.y));  // NDC change per screen pixel in y
+        // Last resort: compute from screen-space derivatives
+        // NOTE: This breaks under rotation, but we rarely hit this case
+        let dx = abs(dpdx(local_pos.x));
+        let dy = abs(dpdy(local_pos.y));
         aspect = dy / max(dx, 0.0001);
     }
 
@@ -192,8 +207,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Compute signed distance in scaled (isotropic) space
     let dist = rounded_rect_sdf(scaled_pos, scaled_rect, scaled_radius, in.shape_curvature);
 
-    // Anti-aliasing factor based on screen-space derivatives (in scaled space)
-    let aa = length(fwidth(scaled_pos)) * 0.5;
+    // Anti-aliasing: use fwidth on the DISTANCE value (browser-standard approach)
+    // This measures how fast the distance changes per screen pixel
+    // and automatically handles rotation and aspect ratio
+    let aa = fwidth(dist);
 
     // Use border_width.y since we scaled to match y's pixel density
     let border_w = in.border_width.y;
