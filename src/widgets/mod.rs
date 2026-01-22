@@ -12,6 +12,7 @@ pub use widget::{Color, Event, EventResponse, MouseButton, Padding, Rect, Scroll
 
 // IntoMaybeDyn implementations for widget types
 use crate::reactive::{IntoMaybeDyn, MaybeDyn};
+use crate::transform::Transform;
 
 impl IntoMaybeDyn<Color> for Color {
     fn into_maybe_dyn(self) -> MaybeDyn<Color> {
@@ -21,6 +22,12 @@ impl IntoMaybeDyn<Color> for Color {
 
 impl IntoMaybeDyn<Padding> for Padding {
     fn into_maybe_dyn(self) -> MaybeDyn<Padding> {
+        MaybeDyn::Static(self)
+    }
+}
+
+impl IntoMaybeDyn<Transform> for Transform {
+    fn into_maybe_dyn(self) -> MaybeDyn<Transform> {
         MaybeDyn::Static(self)
     }
 }

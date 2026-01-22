@@ -1,6 +1,7 @@
 pub mod animation;
 pub mod layout;
 pub mod reactive;
+pub mod transform;
 pub mod widgets;
 
 // These modules are public for advanced use cases
@@ -36,6 +37,7 @@ pub mod prelude {
     };
     pub use crate::renderer::primitives::Shadow;
     pub use crate::renderer::{measure_text, PaintContext};
+    pub use crate::transform::Transform;
     pub use crate::widgets::{
         container, text, Border, Color, Container, Event, EventResponse, GradientDirection,
         IntoChildren, LinearGradient, MouseButton, Overflow, Padding, Rect, ScrollSource, Text,

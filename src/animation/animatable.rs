@@ -1,3 +1,4 @@
+use crate::transform::Transform;
 use crate::widgets::{Color, Padding};
 
 /// Trait for types that can be animated by interpolating between values
@@ -33,6 +34,16 @@ impl Animatable for Padding {
             top: from.top + (to.top - from.top) * t,
             bottom: from.bottom + (to.bottom - from.bottom) * t,
         }
+    }
+}
+
+impl Animatable for Transform {
+    fn lerp(from: &Self, to: &Self, t: f32) -> Self {
+        let mut data = [0.0f32; 16];
+        for (i, val) in data.iter_mut().enumerate() {
+            *val = from.data[i] + (to.data[i] - from.data[i]) * t;
+        }
+        Transform { data }
     }
 }
 

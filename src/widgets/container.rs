@@ -6,6 +6,7 @@ use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{request_animation_frame, ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId};
 use crate::renderer::primitives::{GradientDir, Shadow};
 use crate::renderer::PaintContext;
+use crate::transform::Transform;
 
 use super::children::ChildrenSource;
 use super::into_child::{IntoChild, IntoChildren};
@@ -273,6 +274,7 @@ pub struct Container {
     height: Option<MaybeDyn<Length>>,
     overflow: Overflow,
     bounds: Rect,
+    transform: MaybeDyn<Transform>,
 
     // Cached values for change detection
     cached_padding: Padding,
@@ -313,6 +315,7 @@ pub struct Container {
     padding_anim: Option<AnimationState<Padding>>,
     border_width_anim: Option<AnimationState<f32>>,
     border_color_anim: Option<AnimationState<Color>>,
+    transform_anim: Option<AnimationState<Transform>>,
 }
 
 impl Container {
@@ -334,6 +337,7 @@ impl Container {
             height: None,
             overflow: Overflow::Visible,
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
+            transform: MaybeDyn::Static(Transform::IDENTITY),
             on_click: None,
             on_hover: None,
             on_scroll: None,
@@ -362,6 +366,7 @@ impl Container {
             padding_anim: None,
             border_width_anim: None,
             border_color_anim: None,
+            transform_anim: None,
         }
     }
 
@@ -562,6 +567,51 @@ impl Container {
         self
     }
 
+    /// Set the transform for this container
+    /// Transforms are applied around the center of the widget bounds
+    pub fn transform(mut self, t: impl IntoMaybeDyn<Transform>) -> Self {
+        self.transform = t.into_maybe_dyn();
+        self
+    }
+
+    /// Rotate this container by the given angle in degrees
+    /// Rotation is applied around the center of the widget bounds
+    pub fn rotate(mut self, degrees: impl IntoMaybeDyn<f32>) -> Self {
+        let degrees = degrees.into_maybe_dyn();
+        self.transform = MaybeDyn::Dynamic(std::sync::Arc::new(move || {
+            Transform::rotate_degrees(degrees.get())
+        }));
+        self
+    }
+
+    /// Scale this container uniformly
+    /// Scaling is applied around the center of the widget bounds
+    pub fn scale(mut self, s: impl IntoMaybeDyn<f32>) -> Self {
+        let s = s.into_maybe_dyn();
+        self.transform = MaybeDyn::Dynamic(std::sync::Arc::new(move || Transform::scale(s.get())));
+        self
+    }
+
+    /// Scale this container non-uniformly
+    pub fn scale_xy(mut self, sx: impl IntoMaybeDyn<f32>, sy: impl IntoMaybeDyn<f32>) -> Self {
+        let sx = sx.into_maybe_dyn();
+        let sy = sy.into_maybe_dyn();
+        self.transform = MaybeDyn::Dynamic(std::sync::Arc::new(move || {
+            Transform::scale_xy(sx.get(), sy.get())
+        }));
+        self
+    }
+
+    /// Translate (move) this container by the given offset
+    pub fn translate(mut self, x: impl IntoMaybeDyn<f32>, y: impl IntoMaybeDyn<f32>) -> Self {
+        let x = x.into_maybe_dyn();
+        let y = y.into_maybe_dyn();
+        self.transform = MaybeDyn::Dynamic(std::sync::Arc::new(move || {
+            Transform::translate(x.get(), y.get())
+        }));
+        self
+    }
+
     /// Enable animation for width changes
     pub fn animate_width(mut self, transition: Transition) -> Self {
         // Initialize with current width (exact or min) or 0
@@ -627,6 +677,13 @@ impl Container {
         self
     }
 
+    /// Enable animation for transform changes
+    pub fn animate_transform(mut self, transition: Transition) -> Self {
+        let initial = self.transform.get();
+        self.transform_anim = Some(AnimationState::new(initial, transition));
+        self
+    }
+
     /// Check if any child widget needs layout
     fn any_child_needs_layout(&self) -> bool {
         // If children haven't been reconciled yet, we need layout
@@ -679,6 +736,14 @@ impl Container {
             .unwrap_or_else(|| self.border_color.get())
     }
 
+    /// Get current transform (animated or static)
+    fn animated_transform(&self) -> Transform {
+        self.transform_anim
+            .as_ref()
+            .map(|a| *a.current())
+            .unwrap_or_else(|| self.transform.get())
+    }
+
     /// Advance animation state (ripple effects and property animations)
     fn advance_animations(&mut self) {
         let mut any_animating = false;
@@ -707,6 +772,7 @@ impl Container {
             self.border_color.get(),
             any_animating
         );
+        advance_anim!(self, transform_anim, self.transform.get(), any_animating);
 
         // Request next frame if any property animations are running
         if any_animating {
@@ -1100,6 +1166,22 @@ impl Widget for Container {
         let corner_curvature = self.corner_curvature.get();
         let elevation_level = self.elevation.get();
         let shadow = elevation_to_shadow(elevation_level);
+        let transform = self.animated_transform();
+
+        // Compute transform around the center of the widget bounds
+        // This creates: translate_to_origin -> apply_transform -> translate_back
+        let has_transform = !transform.is_identity();
+        if has_transform {
+            let center_x = self.bounds.x + self.bounds.width / 2.0;
+            let center_y = self.bounds.y + self.bounds.height / 2.0;
+            // Compose: translate(-center) * transform * translate(center)
+            // In our row-major system: we apply translate(center) first (rightmost),
+            // then transform, then translate(-center)
+            let to_origin = Transform::translate(-center_x, -center_y);
+            let from_origin = Transform::translate(center_x, center_y);
+            let composed = from_origin.then(&transform).then(&to_origin);
+            ctx.push_transform(composed);
+        }
 
         // Draw background
         if let Some(ref gradient) = self.gradient {
@@ -1255,6 +1337,11 @@ impl Widget for Container {
                     );
                 }
             }
+        }
+
+        // Pop transform if we pushed one
+        if has_transform {
+            ctx.pop_transform();
         }
     }
 
