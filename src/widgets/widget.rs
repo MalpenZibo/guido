@@ -88,7 +88,7 @@ impl Rect {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Padding {
     pub top: f32,
     pub right: f32,
@@ -203,6 +203,13 @@ pub trait Widget {
 
     /// Mark this widget as needing layout and/or paint
     fn mark_dirty(&mut self, flags: ChangeFlags);
+
+    /// Mark this widget and all descendants as needing layout and/or paint.
+    /// Default implementation just calls mark_dirty. Containers override this
+    /// to recursively mark children.
+    fn mark_dirty_recursive(&mut self, flags: ChangeFlags) {
+        self.mark_dirty(flags);
+    }
 
     /// Check if this widget needs layout
     fn needs_layout(&self) -> bool;

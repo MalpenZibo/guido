@@ -71,6 +71,11 @@ impl ChildrenSource {
         &self.merged
     }
 
+    /// Get mutable access to the children vec without reconciliation
+    pub fn get_mut(&mut self) -> &mut Vec<Box<dyn Widget>> {
+        &mut self.merged
+    }
+
     /// Check if empty
     pub fn is_empty(&self) -> bool {
         self.merged.is_empty()
@@ -79,6 +84,11 @@ impl ChildrenSource {
     /// Get the number of children
     pub fn len(&self) -> usize {
         self.merged.len()
+    }
+
+    /// Check if reconciliation is needed (children were added but not yet merged)
+    pub fn needs_reconcile(&self) -> bool {
+        self.needs_reconcile
     }
 
     /// Reconcile all slots and rebuild the merged children list

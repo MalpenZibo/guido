@@ -10,6 +10,8 @@ pub struct Text {
     content: MaybeDyn<String>,
     color: MaybeDyn<Color>,
     font_size: MaybeDyn<f32>,
+    /// If true, text won't wrap and will be clipped by parent container
+    nowrap: bool,
     cached_text: String,
     cached_font_size: f32,
     bounds: Rect,
@@ -25,6 +27,7 @@ impl Text {
             content,
             color: MaybeDyn::Static(Color::WHITE),
             font_size: MaybeDyn::Static(14.0),
+            nowrap: false,
             cached_text,
             cached_font_size: 14.0,
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
@@ -41,6 +44,13 @@ impl Text {
         self
     }
 
+    /// Prevent text from wrapping. Text will be clipped by parent container.
+    /// Use this for text inside animated containers to prevent re-wrapping during animation.
+    pub fn nowrap(mut self) -> Self {
+        self.nowrap = true;
+        self
+    }
+
     fn refresh(&mut self) {
         self.cached_text = self.content.get();
         self.cached_font_size = self.font_size.get();
@@ -52,11 +62,13 @@ impl Widget for Text {
         self.refresh();
 
         // Use actual font metrics for accurate measurement
-        let measured = measure_text(
-            &self.cached_text,
-            self.cached_font_size,
-            Some(constraints.max_width),
-        );
+        // If nowrap is true, don't pass max_width so text won't wrap
+        let max_width = if self.nowrap {
+            None
+        } else {
+            Some(constraints.max_width)
+        };
+        let measured = measure_text(&self.cached_text, self.cached_font_size, max_width);
 
         let size = Size::new(
             measured

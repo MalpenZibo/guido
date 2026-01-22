@@ -1,3 +1,4 @@
+pub mod animation;
 pub mod layout;
 pub mod reactive;
 pub mod widgets;
@@ -23,7 +24,11 @@ use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
 
 pub mod prelude {
-    pub use crate::layout::{Axis, Constraints, CrossAxisAlignment, Flex, MainAxisAlignment, Size};
+    pub use crate::animation::{SpringConfig, TimingFunction, Transition};
+    pub use crate::layout::{
+        at_least, at_most, Axis, Constraints, CrossAxisAlignment, Flex, Length, MainAxisAlignment,
+        Size,
+    };
     pub use crate::platform::{Anchor, Layer};
     pub use crate::reactive::{
         batch, create_computed, create_effect, create_signal, Computed, Effect, IntoMaybeDyn,
@@ -33,7 +38,8 @@ pub mod prelude {
     pub use crate::renderer::{measure_text, PaintContext};
     pub use crate::widgets::{
         container, text, Border, Color, Container, Event, EventResponse, GradientDirection,
-        IntoChildren, LinearGradient, MouseButton, Padding, Rect, ScrollSource, Text, Widget,
+        IntoChildren, LinearGradient, MouseButton, Overflow, Padding, Rect, ScrollSource, Text,
+        Widget,
     };
     pub use crate::{component, App, AppConfig};
 }
