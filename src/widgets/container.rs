@@ -98,6 +98,8 @@ struct AnimationState<T: Animatable> {
     transition: Transition,
     /// Spring state (for spring timing functions)
     spring_state: Option<SpringState>,
+    /// Whether the animation has been initialized with its first real value
+    initialized: bool,
 }
 
 impl<T: Animatable> AnimationState<T> {
@@ -118,6 +120,7 @@ impl<T: Animatable> AnimationState<T> {
             start_time: Instant::now(),
             transition,
             spring_state,
+            initialized: false, // Not yet initialized with real content-based value
         }
     }
 
@@ -209,6 +212,20 @@ impl<T: Animatable> AnimationState<T> {
     /// Get target value
     fn target(&self) -> &T {
         &self.target
+    }
+
+    /// Set value immediately without animation (for initialization)
+    fn set_immediate(&mut self, value: T) {
+        self.current = value.clone();
+        self.target = value.clone();
+        self.start = value;
+        self.progress = 1.0;
+        self.initialized = true;
+    }
+
+    /// Check if animation has never been initialized (first layout)
+    fn is_initial(&self) -> bool {
+        !self.initialized
     }
 }
 
@@ -817,26 +834,60 @@ impl Widget for Container {
         }
 
         // Calculate current container dimensions (use animated value if animating)
+        // For width: use animation current value, but on initial state use constraints
+        // so children can determine their natural size before animation target is set
         let current_width = if let Some(ref anim) = self.width_anim {
-            *anim.current()
+            if anim.is_initial() {
+                // On initial layout, use constraint max so content can size naturally
+                constraints.max_width
+            } else {
+                *anim.current()
+            }
         } else if let Some(ref exact_w) = self.width {
             exact_w.get()
         } else {
             constraints.max_width
         };
 
+        // Same for height
         let current_height = if let Some(ref anim) = self.height_anim {
-            *anim.current()
+            if anim.is_initial() {
+                constraints.max_height
+            } else {
+                *anim.current()
+            }
         } else if let Some(ref exact_h) = self.height {
             exact_h.get()
         } else {
             constraints.max_height
         };
 
-        // Child constraints: current container size minus padding
-        // Text will naturally wrap/unwrap as container animates
-        let child_max_width = (current_width - padding.horizontal()).max(0.0);
-        let child_max_height = (current_height - padding.vertical()).max(0.0);
+        // Calculate undershoot (how much smaller than target we are during bounce-back)
+        // This allows us to "eat" padding during undershoot to give children more space,
+        // preventing unnecessary text re-wrapping during the bounce-back phase of spring animation
+        let width_undershoot = if let Some(ref anim) = self.width_anim {
+            let target = *anim.target();
+            let current = *anim.current();
+            // Undershoot = target - current, but only when current < target
+            (target - current).max(0.0)
+        } else {
+            0.0
+        };
+
+        let height_undershoot = if let Some(ref anim) = self.height_anim {
+            let target = *anim.target();
+            let current = *anim.current();
+            (target - current).max(0.0)
+        } else {
+            0.0
+        };
+
+        // Child constraints: current container size minus effective padding
+        // During undershoot, we reduce padding to give children more space
+        let effective_h_padding = (padding.horizontal() - width_undershoot).max(0.0);
+        let effective_v_padding = (padding.vertical() - height_undershoot).max(0.0);
+        let child_max_width = (current_width - effective_h_padding).max(0.0);
+        let child_max_height = (current_height - effective_v_padding).max(0.0);
 
         // Calculate constraints for children (accounting for padding)
         let child_constraints = Constraints {
@@ -871,9 +922,14 @@ impl Widget for Container {
                 content_width.max(min_w)
             };
             if (effective_target - *anim.target()).abs() > 0.001 {
-                anim.animate_to(effective_target);
-                // Request frame since we just started/changed animation
-                request_animation_frame();
+                // On first layout, snap immediately to avoid startup animation
+                if anim.is_initial() {
+                    anim.set_immediate(effective_target);
+                } else {
+                    anim.animate_to(effective_target);
+                    // Request frame since we just started/changed animation
+                    request_animation_frame();
+                }
             }
         }
 
@@ -885,9 +941,14 @@ impl Widget for Container {
                 content_height.max(min_h)
             };
             if (effective_target - *anim.target()).abs() > 0.001 {
-                anim.animate_to(effective_target);
-                // Request frame since we just started/changed animation
-                request_animation_frame();
+                // On first layout, snap immediately to avoid startup animation
+                if anim.is_initial() {
+                    anim.set_immediate(effective_target);
+                } else {
+                    anim.animate_to(effective_target);
+                    // Request frame since we just started/changed animation
+                    request_animation_frame();
+                }
             }
         }
 

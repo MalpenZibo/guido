@@ -30,7 +30,7 @@ fn main() {
 /// Card demonstrating width animation with spring physics
 fn create_width_animation_card(expanded: Signal<bool>, hovered: Signal<bool>) -> Container {
     container()
-        .min_width(move || if expanded.get() { 600.0 } else { 300.0 })
+        .min_width(move || if expanded.get() { 600.0 } else { 50.0 })
         .animate_width(Transition::spring(SpringConfig::DEFAULT))
         .min_height(80.0)
         .background(move || {
