@@ -816,71 +816,27 @@ impl Widget for Container {
             }
         }
 
-        // Calculate child constraints based on container sizing mode:
-        // 1. If animation is running: use larger of (current, target, size_hint) to prevent re-wrapping
-        // 2. If exact width/height is set: use that value so text wraps correctly
-        // 3. Otherwise: use parent constraints minus padding
-        let child_max_width = if let Some(ref anim) = self.width_anim {
-            let size_hint = self
-                .width
-                .as_ref()
-                .map(|w| w.get())
-                .or_else(|| self.min_width.as_ref().map(|w| w.get()))
-                .unwrap_or(0.0);
-            let current = *anim.current();
-            let target = *anim.target();
-            // If size_hint differs from target, we're about to start a new animation
-            let will_animate = (size_hint - target).abs() > 0.001;
-            if anim.is_animating() || will_animate {
-                // Use the larger of current/target/size_hint so children don't re-wrap
-                let anim_max = current.max(target).max(size_hint);
-                let base = constraints.max_width.max(anim_max);
-                (base - padding.horizontal()).max(0.0)
-            } else {
-                // Animation done - use exact width if set, otherwise constraints
-                if let Some(ref exact_w) = self.width {
-                    (exact_w.get() - padding.horizontal()).max(0.0)
-                } else {
-                    (constraints.max_width - padding.horizontal()).max(0.0)
-                }
-            }
+        // Calculate current container dimensions (use animated value if animating)
+        let current_width = if let Some(ref anim) = self.width_anim {
+            *anim.current()
         } else if let Some(ref exact_w) = self.width {
-            // No animation but exact width set - use it for text wrapping
-            (exact_w.get() - padding.horizontal()).max(0.0)
+            exact_w.get()
         } else {
-            (constraints.max_width - padding.horizontal()).max(0.0)
+            constraints.max_width
         };
 
-        let child_max_height = if let Some(ref anim) = self.height_anim {
-            let size_hint = self
-                .height
-                .as_ref()
-                .map(|h| h.get())
-                .or_else(|| self.min_height.as_ref().map(|h| h.get()))
-                .unwrap_or(0.0);
-            let current = *anim.current();
-            let target = *anim.target();
-            // If size_hint differs from target, we're about to start a new animation
-            let will_animate = (size_hint - target).abs() > 0.001;
-            if anim.is_animating() || will_animate {
-                // Use the larger of current/target/size_hint so children don't re-wrap
-                let anim_max = current.max(target).max(size_hint);
-                let base = constraints.max_height.max(anim_max);
-                (base - padding.vertical()).max(0.0)
-            } else {
-                // Animation done - use exact height if set, otherwise constraints
-                if let Some(ref exact_h) = self.height {
-                    (exact_h.get() - padding.vertical()).max(0.0)
-                } else {
-                    (constraints.max_height - padding.vertical()).max(0.0)
-                }
-            }
+        let current_height = if let Some(ref anim) = self.height_anim {
+            *anim.current()
         } else if let Some(ref exact_h) = self.height {
-            // No animation but exact height set - use it
-            (exact_h.get() - padding.vertical()).max(0.0)
+            exact_h.get()
         } else {
-            (constraints.max_height - padding.vertical()).max(0.0)
+            constraints.max_height
         };
+
+        // Child constraints: current container size minus padding
+        // Text will naturally wrap/unwrap as container animates
+        let child_max_width = (current_width - padding.horizontal()).max(0.0);
+        let child_max_height = (current_height - padding.vertical()).max(0.0);
 
         // Calculate constraints for children (accounting for padding)
         let child_constraints = Constraints {
@@ -1321,50 +1277,11 @@ impl Widget for Container {
 
         let padding = self.padding.get();
 
-        // Re-layout children with their current constraints
+        // Re-layout children with current bounds minus padding
         let children = self.children_source.reconcile_and_get_mut();
         if !children.is_empty() {
-            // During size animations, use the LARGER of (current, target, size_hint) for child constraints.
-            // This prevents children (like text) from re-wrapping during collapse animations.
-            let child_max_width = if let Some(ref anim) = self.width_anim {
-                let size_hint = self
-                    .width
-                    .as_ref()
-                    .map(|w| w.get())
-                    .or_else(|| self.min_width.as_ref().map(|w| w.get()))
-                    .unwrap_or(0.0);
-                let current = *anim.current();
-                let target = *anim.target();
-                let will_animate = (size_hint - target).abs() > 0.001;
-                if anim.is_animating() || will_animate {
-                    let anim_max = current.max(target).max(size_hint);
-                    (anim_max - padding.horizontal()).max(0.0)
-                } else {
-                    (self.bounds.width - padding.horizontal()).max(0.0)
-                }
-            } else {
-                (self.bounds.width - padding.horizontal()).max(0.0)
-            };
-
-            let child_max_height = if let Some(ref anim) = self.height_anim {
-                let size_hint = self
-                    .height
-                    .as_ref()
-                    .map(|h| h.get())
-                    .or_else(|| self.min_height.as_ref().map(|h| h.get()))
-                    .unwrap_or(0.0);
-                let current = *anim.current();
-                let target = *anim.target();
-                let will_animate = (size_hint - target).abs() > 0.001;
-                if anim.is_animating() || will_animate {
-                    let anim_max = current.max(target).max(size_hint);
-                    (anim_max - padding.vertical()).max(0.0)
-                } else {
-                    (self.bounds.height - padding.vertical()).max(0.0)
-                }
-            } else {
-                (self.bounds.height - padding.vertical()).max(0.0)
-            };
+            let child_max_width = (self.bounds.width - padding.horizontal()).max(0.0);
+            let child_max_height = (self.bounds.height - padding.vertical()).max(0.0);
 
             let child_constraints = Constraints {
                 min_width: 0.0,
