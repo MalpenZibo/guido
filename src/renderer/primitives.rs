@@ -595,15 +595,10 @@ impl RoundedRect {
                 ],
             };
 
-            // Center point in NDC
+            // Center the transform around the shape's center in NDC
             let center_x = (x1 + x2) / 2.0;
             let center_y = (y1 + y2) / 2.0;
-
-            // Build centered transform: T(center) * ndc_transform * T(-center)
-            let to_origin = Transform::translate(-center_x, -center_y);
-            let from_origin = Transform::translate(center_x, center_y);
-
-            from_origin.then(&ndc_transform).then(&to_origin)
+            ndc_transform.center_at(center_x, center_y)
         } else {
             Transform::IDENTITY
         };
@@ -798,9 +793,7 @@ impl Circle {
 
         // Compute centered transform in NDC space (circle is already centered at cx, cy)
         let centered_transform = if !self.transform.is_identity() {
-            let to_origin = Transform::translate(-cx, -cy);
-            let from_origin = Transform::translate(cx, cy);
-            from_origin.then(&self.transform).then(&to_origin)
+            self.transform.center_at(cx, cy)
         } else {
             Transform::IDENTITY
         };
