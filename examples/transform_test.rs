@@ -1,9 +1,9 @@
-//! Simple test for transform rotation
+//! Simple test for transform rotation with shadow
 
 use guido::prelude::*;
 
 fn main() {
-    // A single large box with obvious rotation
+    // A single large box with obvious rotation and shadow
     let view = container()
         .layout(
             Flex::column()
@@ -18,6 +18,7 @@ fn main() {
                 .padding(10.0)
                 .background(Color::rgb(0.8, 0.3, 0.3))
                 .corner_radius(8.0)
+                .elevation(4.0) // Add shadow to test shadow rendering with rotation
                 .rotate(45.0), // Should be clearly rotated
         );
 
