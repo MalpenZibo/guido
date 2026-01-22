@@ -49,6 +49,69 @@ impl Renderer {
         }
     }
 
+    /// Scale a shape for HiDPI rendering and convert to vertices
+    fn scale_shape(&self, shape: &Shape) -> (Vec<Vertex>, Vec<u16>) {
+        match shape {
+            Shape::RoundedRect(rect) => {
+                let scaled_clip = rect.clip.as_ref().map(|c| ClipRegion {
+                    rect: Rect::new(
+                        c.rect.x * self.scale_factor,
+                        c.rect.y * self.scale_factor,
+                        c.rect.width * self.scale_factor,
+                        c.rect.height * self.scale_factor,
+                    ),
+                    radius: c.radius * self.scale_factor,
+                    curvature: c.curvature,
+                });
+                let mut scaled_rect = RoundedRect::new(
+                    Rect::new(
+                        rect.rect.x * self.scale_factor,
+                        rect.rect.y * self.scale_factor,
+                        rect.rect.width * self.scale_factor,
+                        rect.rect.height * self.scale_factor,
+                    ),
+                    rect.color,
+                    rect.radius * self.scale_factor,
+                );
+                scaled_rect.clip = scaled_clip;
+                scaled_rect.gradient = rect.gradient.clone();
+                scaled_rect.curvature = rect.curvature;
+                scaled_rect.border_width = rect.border_width * self.scale_factor;
+                scaled_rect.border_color = rect.border_color;
+                scaled_rect.shadow = primitives::Shadow {
+                    offset: (
+                        rect.shadow.offset.0 * self.scale_factor,
+                        rect.shadow.offset.1 * self.scale_factor,
+                    ),
+                    blur: rect.shadow.blur * self.scale_factor,
+                    spread: rect.shadow.spread * self.scale_factor,
+                    color: rect.shadow.color,
+                };
+                scaled_rect.to_vertices(self.screen_width, self.screen_height)
+            }
+            Shape::Circle(circle) => {
+                let scaled_clip = circle.clip.as_ref().map(|c| ClipRegion {
+                    rect: Rect::new(
+                        c.rect.x * self.scale_factor,
+                        c.rect.y * self.scale_factor,
+                        c.rect.width * self.scale_factor,
+                        c.rect.height * self.scale_factor,
+                    ),
+                    radius: c.radius * self.scale_factor,
+                    curvature: c.curvature,
+                });
+                let mut scaled_circle = Circle::new(
+                    circle.center_x * self.scale_factor,
+                    circle.center_y * self.scale_factor,
+                    circle.radius * self.scale_factor,
+                    circle.color,
+                );
+                scaled_circle.clip = scaled_clip;
+                scaled_circle.to_vertices(self.screen_width, self.screen_height)
+            }
+        }
+    }
+
     pub fn set_screen_size(&mut self, width: f32, height: f32) {
         self.screen_width = width;
         self.screen_height = height;
@@ -63,7 +126,6 @@ impl Renderer {
             shapes: Vec::new(),
             texts: Vec::new(),
             overlay_shapes: Vec::new(),
-            transform_stack: Vec::new(),
             clip_stack: Vec::new(),
         }
     }
@@ -98,69 +160,7 @@ impl Renderer {
         let mut shape_buffers: Vec<(Vec<Vertex>, Vec<u16>)> = Vec::new();
 
         for shape in &paint_ctx.shapes {
-            let (vertices, indices) = match shape {
-                Shape::RoundedRect(rect) => {
-                    // Scale rect coordinates for HiDPI rendering
-                    let scaled_clip = rect.clip.as_ref().map(|c| ClipRegion {
-                        rect: Rect::new(
-                            c.rect.x * self.scale_factor,
-                            c.rect.y * self.scale_factor,
-                            c.rect.width * self.scale_factor,
-                            c.rect.height * self.scale_factor,
-                        ),
-                        radius: c.radius * self.scale_factor,
-                        curvature: c.curvature, // Preserve curvature (doesn't scale)
-                    });
-                    let mut scaled_rect = RoundedRect::new(
-                        Rect::new(
-                            rect.rect.x * self.scale_factor,
-                            rect.rect.y * self.scale_factor,
-                            rect.rect.width * self.scale_factor,
-                            rect.rect.height * self.scale_factor,
-                        ),
-                        rect.color,
-                        rect.radius * self.scale_factor,
-                    );
-                    scaled_rect.clip = scaled_clip;
-                    scaled_rect.gradient = rect.gradient.clone(); // Preserve gradient
-                    scaled_rect.curvature = rect.curvature; // Preserve curvature (doesn't scale)
-                    scaled_rect.border_width = rect.border_width * self.scale_factor;
-                    scaled_rect.border_color = rect.border_color;
-                    // Scale shadow parameters
-                    scaled_rect.shadow = primitives::Shadow {
-                        offset: (
-                            rect.shadow.offset.0 * self.scale_factor,
-                            rect.shadow.offset.1 * self.scale_factor,
-                        ),
-                        blur: rect.shadow.blur * self.scale_factor,
-                        spread: rect.shadow.spread * self.scale_factor,
-                        color: rect.shadow.color,
-                    };
-                    scaled_rect.to_vertices(self.screen_width, self.screen_height)
-                }
-                Shape::Circle(circle) => {
-                    // Scale circle coordinates for HiDPI rendering
-                    let scaled_clip = circle.clip.as_ref().map(|c| ClipRegion {
-                        rect: Rect::new(
-                            c.rect.x * self.scale_factor,
-                            c.rect.y * self.scale_factor,
-                            c.rect.width * self.scale_factor,
-                            c.rect.height * self.scale_factor,
-                        ),
-                        radius: c.radius * self.scale_factor,
-                        curvature: c.curvature, // Preserve curvature (doesn't scale)
-                    });
-                    let mut scaled_circle = Circle::new(
-                        circle.center_x * self.scale_factor,
-                        circle.center_y * self.scale_factor,
-                        circle.radius * self.scale_factor,
-                        circle.color,
-                    );
-                    scaled_circle.clip = scaled_clip;
-                    scaled_circle.to_vertices(self.screen_width, self.screen_height)
-                }
-            };
-            shape_buffers.push((vertices, indices));
+            shape_buffers.push(self.scale_shape(shape));
         }
 
         // Collect overlay vertices and indices (rendered after text)
@@ -168,66 +168,7 @@ impl Renderer {
         let mut overlay_indices: Vec<u16> = Vec::new();
 
         for shape in &paint_ctx.overlay_shapes {
-            let (vertices, indices) = match shape {
-                Shape::RoundedRect(rect) => {
-                    let scaled_clip = rect.clip.as_ref().map(|c| ClipRegion {
-                        rect: Rect::new(
-                            c.rect.x * self.scale_factor,
-                            c.rect.y * self.scale_factor,
-                            c.rect.width * self.scale_factor,
-                            c.rect.height * self.scale_factor,
-                        ),
-                        radius: c.radius * self.scale_factor,
-                        curvature: c.curvature, // Preserve curvature (doesn't scale)
-                    });
-                    let mut scaled_rect = RoundedRect::new(
-                        Rect::new(
-                            rect.rect.x * self.scale_factor,
-                            rect.rect.y * self.scale_factor,
-                            rect.rect.width * self.scale_factor,
-                            rect.rect.height * self.scale_factor,
-                        ),
-                        rect.color,
-                        rect.radius * self.scale_factor,
-                    );
-                    scaled_rect.clip = scaled_clip;
-                    scaled_rect.gradient = rect.gradient.clone(); // Preserve gradient
-                    scaled_rect.curvature = rect.curvature; // Preserve curvature (doesn't scale)
-                    scaled_rect.border_width = rect.border_width * self.scale_factor;
-                    scaled_rect.border_color = rect.border_color;
-                    // Scale shadow parameters
-                    scaled_rect.shadow = primitives::Shadow {
-                        offset: (
-                            rect.shadow.offset.0 * self.scale_factor,
-                            rect.shadow.offset.1 * self.scale_factor,
-                        ),
-                        blur: rect.shadow.blur * self.scale_factor,
-                        spread: rect.shadow.spread * self.scale_factor,
-                        color: rect.shadow.color,
-                    };
-                    scaled_rect.to_vertices(self.screen_width, self.screen_height)
-                }
-                Shape::Circle(circle) => {
-                    let scaled_clip = circle.clip.as_ref().map(|c| ClipRegion {
-                        rect: Rect::new(
-                            c.rect.x * self.scale_factor,
-                            c.rect.y * self.scale_factor,
-                            c.rect.width * self.scale_factor,
-                            c.rect.height * self.scale_factor,
-                        ),
-                        radius: c.radius * self.scale_factor,
-                        curvature: c.curvature, // Preserve curvature (doesn't scale)
-                    });
-                    let mut scaled_circle = Circle::new(
-                        circle.center_x * self.scale_factor,
-                        circle.center_y * self.scale_factor,
-                        circle.radius * self.scale_factor,
-                        circle.color,
-                    );
-                    scaled_circle.clip = scaled_clip;
-                    scaled_circle.to_vertices(self.screen_width, self.screen_height)
-                }
-            };
+            let (vertices, indices) = self.scale_shape(shape);
             let base_index = overlay_vertices.len() as u16;
             overlay_vertices.extend(vertices);
             overlay_indices.extend(indices.iter().map(|i| i + base_index));
@@ -357,8 +298,6 @@ pub struct PaintContext {
     texts: Vec<(String, Rect, Color, f32, Option<Rect>)>,
     /// Shapes to render after text (for effects like ripples over text)
     overlay_shapes: Vec<Shape>,
-    /// Transform stack for applying transformations
-    transform_stack: Vec<(crate::animation::Transform, Rect)>,
     /// Clip stack for clipping children to container bounds
     /// Each entry is (clip_rect, corner_radius, curvature)
     clip_stack: Vec<(Rect, f32, f32)>,
@@ -606,17 +545,6 @@ impl PaintContext {
         self.overlay_shapes.push(Shape::Circle(Circle::with_clip(
             center_x, center_y, radius, color, clip,
         )));
-    }
-
-    /// Push a transform onto the stack
-    /// All drawing operations after this will be transformed
-    pub fn push_transform(&mut self, transform: crate::animation::Transform, bounds: Rect) {
-        self.transform_stack.push((transform, bounds));
-    }
-
-    /// Pop a transform from the stack
-    pub fn pop_transform(&mut self) {
-        self.transform_stack.pop();
     }
 
     /// Push a clip region onto the stack

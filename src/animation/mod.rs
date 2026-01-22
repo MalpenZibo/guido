@@ -1,12 +1,10 @@
 mod animatable;
 mod spring;
 mod timing;
-mod transform;
 
 pub use animatable::Animatable;
 pub use spring::{SpringConfig, SpringState};
 pub use timing::TimingFunction;
-pub use transform::Transform;
 
 /// Configuration for how a property should animate when it changes
 #[derive(Clone, Debug)]

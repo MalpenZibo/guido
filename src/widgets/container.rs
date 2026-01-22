@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::animation::{Animatable, SpringState, Transform, Transition};
+use crate::animation::{Animatable, SpringState, Transition};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{request_animation_frame, ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId};
 use crate::renderer::primitives::{GradientDir, Shadow};
@@ -127,8 +127,7 @@ impl<T: Animatable> AnimationState<T> {
     /// Start animating to a new target value
     fn animate_to(&mut self, new_target: T) {
         // Don't restart if we're already animating to this target
-        // Use custom comparison to avoid floating point precision issues
-        if self.targets_equal(&new_target, &self.target) {
+        if new_target == self.target {
             return;
         }
 
@@ -140,11 +139,6 @@ impl<T: Animatable> AnimationState<T> {
         if self.spring_state.is_some() {
             self.spring_state = Some(SpringState::new());
         }
-    }
-
-    /// Compare targets with appropriate precision for the type
-    fn targets_equal(&self, a: &T, b: &T) -> bool {
-        a == b
     }
 
     /// Advance the animation and return the current value
@@ -175,7 +169,7 @@ impl<T: Animatable> AnimationState<T> {
         } else {
             // For non-spring animations: use normalized time 0..1
             let t = (adjusted_elapsed / self.transition.duration_ms).min(1.0);
-            self.transition.timing.evaluate(t, None)
+            self.transition.timing.evaluate(t)
         };
 
         // Interpolate
@@ -229,6 +223,35 @@ impl<T: Animatable> AnimationState<T> {
     }
 }
 
+// Ripple animation speeds
+const RIPPLE_ENTER_SPEED: f32 = 0.12;
+const RIPPLE_EXIT_SPEED: f32 = 0.20;
+const CLICK_RIPPLE_EXPAND_SPEED: f32 = 0.08;
+const CLICK_RIPPLE_REVERSE_SPEED: f32 = 0.15;
+
+/// Macro to advance an animation field, optionally updating its target first
+macro_rules! advance_anim {
+    // Simple advance (no target update)
+    ($self:expr, $anim:ident, $any_animating:expr) => {
+        if let Some(ref mut anim) = $self.$anim {
+            if anim.is_animating() {
+                anim.advance();
+                $any_animating = true;
+            }
+        }
+    };
+    // With target update
+    ($self:expr, $anim:ident, $target_expr:expr, $any_animating:expr) => {
+        if let Some(ref mut anim) = $self.$anim {
+            anim.animate_to($target_expr);
+            if anim.is_animating() {
+                anim.advance();
+                $any_animating = true;
+            }
+        }
+    };
+}
+
 pub struct Container {
     widget_id: WidgetId,
     dirty_flags: ChangeFlags,
@@ -243,7 +266,8 @@ pub struct Container {
     gradient: Option<LinearGradient>,
     corner_radius: MaybeDyn<f32>,
     corner_curvature: MaybeDyn<f32>,
-    border: Option<Border>,
+    border_width: MaybeDyn<f32>,
+    border_color: MaybeDyn<Color>,
     elevation: MaybeDyn<f32>,
     width: Option<MaybeDyn<Length>>,
     height: Option<MaybeDyn<Length>>,
@@ -287,10 +311,8 @@ pub struct Container {
     background_anim: Option<AnimationState<Color>>,
     corner_radius_anim: Option<AnimationState<f32>>,
     padding_anim: Option<AnimationState<Padding>>,
-    transform_anim: Option<AnimationState<Transform>>,
-
-    // Transform property
-    transform: MaybeDyn<Transform>,
+    border_width_anim: Option<AnimationState<f32>>,
+    border_color_anim: Option<AnimationState<Color>>,
 }
 
 impl Container {
@@ -305,7 +327,8 @@ impl Container {
             gradient: None,
             corner_radius: MaybeDyn::Static(0.0),
             corner_curvature: MaybeDyn::Static(1.0),
-            border: None,
+            border_width: MaybeDyn::Static(0.0),
+            border_color: MaybeDyn::Static(Color::TRANSPARENT),
             elevation: MaybeDyn::Static(0.0),
             width: None,
             height: None,
@@ -337,8 +360,8 @@ impl Container {
             background_anim: None,
             corner_radius_anim: None,
             padding_anim: None,
-            transform_anim: None,
-            transform: MaybeDyn::Static(Transform::default()),
+            border_width_anim: None,
+            border_color_anim: None,
         }
     }
 
@@ -439,8 +462,13 @@ impl Container {
     }
 
     /// Set a border with the given width and color
-    pub fn border(mut self, width: f32, color: Color) -> Self {
-        self.border = Some(Border::new(width, color));
+    pub fn border(
+        mut self,
+        width: impl IntoMaybeDyn<f32>,
+        color: impl IntoMaybeDyn<Color>,
+    ) -> Self {
+        self.border_width = width.into_maybe_dyn();
+        self.border_color = color.into_maybe_dyn();
         self
     }
 
@@ -534,12 +562,6 @@ impl Container {
         self
     }
 
-    /// Set the transform (translate, scale, rotate) - does not trigger layout
-    pub fn transform(mut self, transform: impl IntoMaybeDyn<Transform>) -> Self {
-        self.transform = transform.into_maybe_dyn();
-        self
-    }
-
     /// Enable animation for width changes
     pub fn animate_width(mut self, transition: Transition) -> Self {
         // Initialize with current width (exact or min) or 0
@@ -591,10 +613,17 @@ impl Container {
         self
     }
 
-    /// Enable animation for transform changes
-    pub fn animate_transform(mut self, transition: Transition) -> Self {
-        let initial = self.transform.get();
-        self.transform_anim = Some(AnimationState::new(initial, transition));
+    /// Enable animation for border width changes
+    pub fn animate_border_width(mut self, transition: Transition) -> Self {
+        let initial = self.border_width.get();
+        self.border_width_anim = Some(AnimationState::new(initial, transition));
+        self
+    }
+
+    /// Enable animation for border color changes
+    pub fn animate_border_color(mut self, transition: Transition) -> Self {
+        let initial = self.border_color.get();
+        self.border_color_anim = Some(AnimationState::new(initial, transition));
         self
     }
 
@@ -610,70 +639,74 @@ impl Container {
             .any(|child| child.needs_layout())
     }
 
+    /// Get current padding (animated or static)
+    fn animated_padding(&self) -> Padding {
+        self.padding_anim
+            .as_ref()
+            .map(|a| *a.current())
+            .unwrap_or_else(|| self.padding.get())
+    }
+
+    /// Get current background color (animated or static)
+    fn animated_background(&self) -> Color {
+        self.background_anim
+            .as_ref()
+            .map(|a| *a.current())
+            .unwrap_or_else(|| self.background.get())
+    }
+
+    /// Get current corner radius (animated or static)
+    fn animated_corner_radius(&self) -> f32 {
+        self.corner_radius_anim
+            .as_ref()
+            .map(|a| *a.current())
+            .unwrap_or_else(|| self.corner_radius.get())
+    }
+
+    /// Get current border width (animated or static)
+    fn animated_border_width(&self) -> f32 {
+        self.border_width_anim
+            .as_ref()
+            .map(|a| *a.current())
+            .unwrap_or_else(|| self.border_width.get())
+    }
+
+    /// Get current border color (animated or static)
+    fn animated_border_color(&self) -> Color {
+        self.border_color_anim
+            .as_ref()
+            .map(|a| *a.current())
+            .unwrap_or_else(|| self.border_color.get())
+    }
+
     /// Advance animation state (ripple effects and property animations)
     fn advance_animations(&mut self) {
         let mut any_animating = false;
 
         // Advance property animations
         // Note: width/height animation targets are set in layout() after we know content size
-        if let Some(ref mut anim) = self.width_anim {
-            if anim.is_animating() {
-                anim.advance();
-                any_animating = true;
-            }
-        }
-
-        if let Some(ref mut anim) = self.height_anim {
-            if anim.is_animating() {
-                anim.advance();
-                any_animating = true;
-            }
-        }
-
-        if let Some(ref mut anim) = self.background_anim {
-            let target = self.background.get();
-            if target != *anim.target() {
-                anim.animate_to(target);
-            }
-            if anim.is_animating() {
-                anim.advance();
-                any_animating = true;
-            }
-        }
-
-        if let Some(ref mut anim) = self.corner_radius_anim {
-            let target = self.corner_radius.get();
-            // Use epsilon comparison for f32 to avoid floating point precision issues
-            if (target - *anim.target()).abs() > 0.001 {
-                anim.animate_to(target);
-            }
-            if anim.is_animating() {
-                anim.advance();
-                any_animating = true;
-            }
-        }
-
-        if let Some(ref mut anim) = self.padding_anim {
-            let target = self.padding.get();
-            if target != *anim.target() {
-                anim.animate_to(target);
-            }
-            if anim.is_animating() {
-                anim.advance();
-                any_animating = true;
-            }
-        }
-
-        if let Some(ref mut anim) = self.transform_anim {
-            let target = self.transform.get();
-            if target != *anim.target() {
-                anim.animate_to(target);
-            }
-            if anim.is_animating() {
-                anim.advance();
-                any_animating = true;
-            }
-        }
+        advance_anim!(self, width_anim, any_animating);
+        advance_anim!(self, height_anim, any_animating);
+        advance_anim!(self, background_anim, self.background.get(), any_animating);
+        advance_anim!(
+            self,
+            corner_radius_anim,
+            self.corner_radius.get(),
+            any_animating
+        );
+        advance_anim!(self, padding_anim, self.padding.get(), any_animating);
+        advance_anim!(
+            self,
+            border_width_anim,
+            self.border_width.get(),
+            any_animating
+        );
+        advance_anim!(
+            self,
+            border_color_anim,
+            self.border_color.get(),
+            any_animating
+        );
 
         // Request next frame if any property animations are running
         if any_animating {
@@ -684,7 +717,11 @@ impl Container {
         if self.ripple_enabled && self.ripple_center.is_some() {
             if self.ripple_progress < 1.0 {
                 request_animation_frame();
-                let speed = if self.ripple_is_exit { 0.20 } else { 0.12 };
+                let speed = if self.ripple_is_exit {
+                    RIPPLE_EXIT_SPEED
+                } else {
+                    RIPPLE_ENTER_SPEED
+                };
                 self.ripple_progress = (self.ripple_progress + speed).min(1.0);
             } else if self.ripple_is_exit {
                 request_animation_frame();
@@ -699,8 +736,8 @@ impl Container {
             if self.click_ripple_reversing {
                 request_animation_frame();
                 if self.click_ripple_progress > 0.0 {
-                    let speed = 0.15;
-                    self.click_ripple_progress = (self.click_ripple_progress - speed).max(0.0);
+                    self.click_ripple_progress =
+                        (self.click_ripple_progress - CLICK_RIPPLE_REVERSE_SPEED).max(0.0);
                 } else {
                     self.click_ripple_center = None;
                     self.click_ripple_progress = 0.0;
@@ -709,8 +746,8 @@ impl Container {
                 }
             } else if self.click_ripple_progress < 1.0 {
                 request_animation_frame();
-                let speed = 0.08;
-                self.click_ripple_progress = (self.click_ripple_progress + speed).min(1.0);
+                self.click_ripple_progress =
+                    (self.click_ripple_progress + CLICK_RIPPLE_EXPAND_SPEED).min(1.0);
             }
         }
     }
@@ -756,21 +793,9 @@ impl Widget for Container {
         self.advance_animations();
 
         // Get current property values (use animated values if available)
-        let padding = if let Some(ref anim) = self.padding_anim {
-            *anim.current()
-        } else {
-            self.padding.get()
-        };
-        let background = if let Some(ref anim) = self.background_anim {
-            *anim.current()
-        } else {
-            self.background.get()
-        };
-        let corner_radius = if let Some(ref anim) = self.corner_radius_anim {
-            *anim.current()
-        } else {
-            self.corner_radius.get()
-        };
+        let padding = self.animated_padding();
+        let background = self.animated_background();
+        let corner_radius = self.animated_corner_radius();
         let corner_curvature = self.corner_curvature.get();
         let elevation = self.elevation.get();
 
@@ -789,24 +814,55 @@ impl Widget for Container {
         let child_needs_layout = self.any_child_needs_layout();
         let has_ripple_animations =
             self.ripple_center.is_some() || self.click_ripple_center.is_some();
+
         // Size animations require full layout recalculation (for child constraints)
         let has_size_animations = self.width_anim.as_ref().is_some_and(|a| a.is_animating())
             || self.height_anim.as_ref().is_some_and(|a| a.is_animating());
-        let has_animations = has_ripple_animations || has_size_animations;
 
-        // Downgrade to paint-only if only visuals changed (but not during size animations)
+        // Layout-affecting animations (affect child positioning or bounds)
+        let has_layout_animations = self.padding_anim.as_ref().is_some_and(|a| a.is_animating())
+            || self
+                .border_width_anim
+                .as_ref()
+                .is_some_and(|a| a.is_animating());
+
+        // Paint-only animations (visual only, no layout impact)
+        let has_paint_animations = self
+            .background_anim
+            .as_ref()
+            .is_some_and(|a| a.is_animating())
+            || self
+                .corner_radius_anim
+                .as_ref()
+                .is_some_and(|a| a.is_animating())
+            || self
+                .border_color_anim
+                .as_ref()
+                .is_some_and(|a| a.is_animating());
+
+        // Downgrade to paint-only if only visuals changed (but not during layout-affecting animations)
         if self.needs_layout()
             && !padding_changed
             && !child_needs_layout
             && !has_size_animations
+            && !has_layout_animations
             && visual_changed
         {
             self.dirty_flags = ChangeFlags::NEEDS_PAINT;
         }
 
-        // Check if we need layout
-        let needs_layout =
-            self.needs_layout() || padding_changed || child_needs_layout || has_animations;
+        // Check if we need layout - paint-only animations don't require layout
+        let needs_layout = self.needs_layout()
+            || padding_changed
+            || child_needs_layout
+            || has_ripple_animations // Ripples need layout for animation frame requests
+            || has_size_animations
+            || has_layout_animations;
+
+        // Request animation frame for paint-only animations without triggering layout
+        if has_paint_animations && !needs_layout {
+            request_animation_frame();
+        }
 
         if !needs_layout {
             if visual_changed {
@@ -1039,31 +1095,11 @@ impl Widget for Container {
 
     fn paint(&self, ctx: &mut PaintContext) {
         // Use animated values if available
-        let background = if let Some(ref anim) = self.background_anim {
-            *anim.current()
-        } else {
-            self.background.get()
-        };
-        let corner_radius = if let Some(ref anim) = self.corner_radius_anim {
-            *anim.current()
-        } else {
-            self.corner_radius.get()
-        };
+        let background = self.animated_background();
+        let corner_radius = self.animated_corner_radius();
         let corner_curvature = self.corner_curvature.get();
         let elevation_level = self.elevation.get();
         let shadow = elevation_to_shadow(elevation_level);
-
-        // Apply transform if available
-        let transform = if let Some(ref anim) = self.transform_anim {
-            *anim.current()
-        } else {
-            self.transform.get()
-        };
-        let has_transform = transform != Transform::default();
-
-        if has_transform {
-            ctx.push_transform(transform, self.bounds);
-        }
 
         // Draw background
         if let Some(ref gradient) = self.gradient {
@@ -1101,12 +1137,15 @@ impl Widget for Container {
         }
 
         // Draw border
-        if let Some(ref border) = self.border {
+        let border_width = self.animated_border_width();
+        let border_color = self.animated_border_color();
+
+        if border_width > 0.0 {
             ctx.draw_border_frame_with_curvature(
                 self.bounds,
-                border.color,
+                border_color,
                 corner_radius,
-                border.width,
+                border_width,
                 corner_curvature,
             );
         }
@@ -1216,11 +1255,6 @@ impl Widget for Container {
                     );
                 }
             }
-        }
-
-        // Pop transform if applied
-        if has_transform {
-            ctx.pop_transform();
         }
     }
 

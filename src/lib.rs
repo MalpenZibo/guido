@@ -24,7 +24,7 @@ use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
 
 pub mod prelude {
-    pub use crate::animation::{SpringConfig, TimingFunction, Transform, Transition};
+    pub use crate::animation::{SpringConfig, TimingFunction, Transition};
     pub use crate::layout::{
         at_least, at_most, Axis, Constraints, CrossAxisAlignment, Flex, Length, MainAxisAlignment,
         Size,

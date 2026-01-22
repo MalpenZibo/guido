@@ -26,7 +26,7 @@ impl TimingFunction {
     ///
     /// Note: Spring animations are handled separately in AnimationState::advance()
     /// using real elapsed time. This method returns t as fallback for springs.
-    pub fn evaluate(&self, t: f32, _spring_state: Option<&mut super::spring::SpringState>) -> f32 {
+    pub fn evaluate(&self, t: f32) -> f32 {
         match self {
             TimingFunction::Linear => t,
             TimingFunction::EaseIn => ease_in(t),
@@ -124,20 +124,20 @@ mod tests {
 
     #[test]
     fn test_linear() {
-        assert_eq!(TimingFunction::Linear.evaluate(0.0, None), 0.0);
-        assert_eq!(TimingFunction::Linear.evaluate(0.5, None), 0.5);
-        assert_eq!(TimingFunction::Linear.evaluate(1.0, None), 1.0);
+        assert_eq!(TimingFunction::Linear.evaluate(0.0), 0.0);
+        assert_eq!(TimingFunction::Linear.evaluate(0.5), 0.5);
+        assert_eq!(TimingFunction::Linear.evaluate(1.0), 1.0);
     }
 
     #[test]
     fn test_ease_in() {
-        let result = TimingFunction::EaseIn.evaluate(0.5, None);
+        let result = TimingFunction::EaseIn.evaluate(0.5);
         assert!(result < 0.5); // Should be slower at start
     }
 
     #[test]
     fn test_ease_out() {
-        let result = TimingFunction::EaseOut.evaluate(0.5, None);
+        let result = TimingFunction::EaseOut.evaluate(0.5);
         assert!(result > 0.5); // Should be faster at start
     }
 }

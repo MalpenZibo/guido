@@ -6,23 +6,27 @@ fn main() {
     let hovered = create_signal(false);
     let bg_hovered = create_signal(false);
 
-    // Main view with animated cards
+    // Main view with animated cards in a 2-column grid
     let view = container()
         .background(Color::rgb(0.08, 0.08, 0.12))
         .padding(20.0)
         .layout(Flex::column().spacing(20.0))
         .children([
-            // Card 1: Width animation with spring
-            create_width_animation_card(expanded, hovered),
-            // Card 2: Background color animation
-            create_color_animation_card(bg_hovered),
-            // Card 3: Combined animations
-            create_combined_animation_card(),
+            // Row 1
+            container().layout(Flex::row().spacing(20.0)).children([
+                create_width_animation_card(expanded, hovered),
+                create_color_animation_card(bg_hovered),
+            ]),
+            // Row 2
+            container().layout(Flex::row().spacing(20.0)).children([
+                create_combined_animation_card(),
+                create_border_animation_card(),
+            ]),
         ]);
 
     App::new()
         .width(800)
-        .height(600)
+        .height(400)
         .background_color(Color::rgb(0.08, 0.08, 0.12))
         .run(view);
 }
@@ -122,6 +126,52 @@ fn create_combined_animation_card() -> Container {
                         "Width, color, and corner radius all animating!".to_string()
                     } else {
                         "Click to see multiple properties animate together".to_string()
+                    }
+                })
+                .font_size(14.0)
+                .color(Color::rgb(0.6, 0.6, 0.7)),
+            ]),
+        )
+}
+
+/// Card demonstrating border animations
+fn create_border_animation_card() -> Container {
+    let clicked = create_signal(false);
+    let local_hovered = create_signal(false);
+
+    container()
+        .width(at_least(400.0))
+        .height(at_least(100.0))
+        .background(Color::rgb(0.15, 0.15, 0.2))
+        // Reactive border width: 2px normally, 6px when clicked
+        .border(
+            move || if clicked.get() { 6.0 } else { 2.0 },
+            move || {
+                if local_hovered.get() {
+                    Color::rgb(0.4, 0.8, 0.6) // Green when hovered
+                } else if clicked.get() {
+                    Color::rgb(0.8, 0.4, 0.4) // Red when clicked
+                } else {
+                    Color::rgb(0.4, 0.5, 0.7) // Blue-ish default
+                }
+            },
+        )
+        .animate_border_width(Transition::spring(SpringConfig::BOUNCY))
+        .animate_border_color(Transition::new(300.0, TimingFunction::EaseOut))
+        .corner_radius(12.0)
+        .padding(20.0)
+        .on_click(move || clicked.update(|c| *c = !*c))
+        .on_hover(move |h| local_hovered.set(h))
+        .child(
+            container().layout(Flex::column().spacing(8.0)).children([
+                text("Border Animation")
+                    .font_size(18.0)
+                    .color(Color::rgb(0.9, 0.9, 0.95)),
+                text(move || {
+                    if clicked.get() {
+                        "Border width and color animating! Click to reset.".to_string()
+                    } else {
+                        "Hover for color change, click for width + color".to_string()
                     }
                 })
                 .font_size(14.0)
