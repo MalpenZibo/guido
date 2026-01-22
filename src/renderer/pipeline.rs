@@ -18,6 +18,7 @@ struct VertexInput {
     @location(11) transform_row1: vec4<f32>,
     @location(12) transform_row2: vec4<f32>,
     @location(13) transform_row3: vec4<f32>,
+    @location(14) local_pos: vec2<f32>,  // untransformed position for SDF
 }
 
 struct VertexOutput {
@@ -25,52 +26,13 @@ struct VertexOutput {
     @location(0) color: vec4<f32>,
     @location(1) shape_rect: vec4<f32>,
     @location(2) shape_radius: vec2<f32>,
-    @location(3) frag_pos: vec2<f32>,  // position in NDC (transformed)
+    @location(3) frag_pos: vec2<f32>,  // local position (untransformed) for SDF
     @location(4) shape_curvature: f32,  // superellipse K-value
     @location(5) border_width: vec2<f32>,  // border width (x, y) in NDC
     @location(6) border_color: vec4<f32>,
     @location(7) shadow_offset: vec2<f32>,
     @location(8) shadow_params: vec2<f32>,  // x = blur, y = spread
     @location(9) shadow_color: vec4<f32>,
-    @location(10) transform_row0: vec4<f32>,
-    @location(11) transform_row1: vec4<f32>,
-    @location(12) transform_row2: vec4<f32>,
-    @location(13) transform_row3: vec4<f32>,
-}
-
-// Compute 2D affine inverse for a row-major 4x4 matrix
-// Used in fragment shader to transform screen coordinates back to local space
-fn inverse_2d_affine(r0: vec4<f32>, r1: vec4<f32>) -> mat3x2<f32> {
-    // Extract 2D affine components:
-    // | a  b  tx |   from   | r0.x r0.y r0.z r0.w |
-    // | c  d  ty |          | r1.x r1.y r1.z r1.w |
-    let a = r0.x;
-    let b = r0.y;
-    let tx = r0.w;
-    let c = r1.x;
-    let d = r1.y;
-    let ty = r1.w;
-
-    let det = a * d - b * c;
-    let inv_det = select(1.0 / det, 0.0, abs(det) < 1e-10);
-
-    // Return as mat3x2 where:
-    // column 0 = (d*inv, -c*inv)
-    // column 1 = (-b*inv, a*inv)
-    // column 2 = ((-d*tx + b*ty)*inv, (c*tx - a*ty)*inv)
-    return mat3x2<f32>(
-        vec2<f32>(d * inv_det, -c * inv_det),
-        vec2<f32>(-b * inv_det, a * inv_det),
-        vec2<f32>((-d * tx + b * ty) * inv_det, (c * tx - a * ty) * inv_det)
-    );
-}
-
-// Apply inverse transform to a 2D point
-fn apply_inverse_transform(p: vec2<f32>, inv: mat3x2<f32>) -> vec2<f32> {
-    return vec2<f32>(
-        inv[0].x * p.x + inv[1].x * p.y + inv[2].x,
-        inv[0].y * p.x + inv[1].y * p.y + inv[2].y
-    );
 }
 
 @vertex
@@ -86,10 +48,13 @@ fn vs_main(in: VertexInput) -> VertexOutput {
         vec4<f32>(in.transform_row0.w, in.transform_row1.w, in.transform_row2.w, in.transform_row3.w)
     );
 
-    // Transform position
+    // Transform position for screen placement
     let transformed = transform * vec4<f32>(in.position, 0.0, 1.0);
     out.clip_position = vec4<f32>(transformed.xy, 0.0, 1.0);
-    out.frag_pos = transformed.xy;
+
+    // Pass LOCAL position directly (untransformed) for SDF evaluation
+    // Hardware interpolation gives us the correct local coordinate per-pixel
+    out.frag_pos = in.local_pos;
 
     out.color = in.color;
     out.shape_rect = in.shape_rect;
@@ -100,12 +65,6 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.shadow_offset = in.shadow_offset;
     out.shadow_params = in.shadow_params;
     out.shadow_color = in.shadow_color;
-
-    // Pass transform rows to fragment shader for inverse calculation
-    out.transform_row0 = in.transform_row0;
-    out.transform_row1 = in.transform_row1;
-    out.transform_row2 = in.transform_row2;
-    out.transform_row3 = in.transform_row3;
 
     return out;
 }
@@ -203,11 +162,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Marker: border_color.r == -1.0 indicates clip-only mode
     let is_clip_only = in.border_color.r < 0.0;
 
-    // Compute inverse transform to map fragment position back to local space
-    let inv_transform = inverse_2d_affine(in.transform_row0, in.transform_row1);
-
-    // Transform fragment position back to local (untransformed) space for SDF evaluation
-    let local_pos = apply_inverse_transform(in.frag_pos, inv_transform);
+    // Use local position directly (passed from vertex shader via hardware interpolation)
+    // No inverse transform needed - this is the browser-standard approach
+    let local_pos = in.frag_pos;
 
     // Compute aspect ratio to make coordinate space isotropic
     // Use screen-space derivatives to get aspect ratio even when border_width is 0
@@ -217,13 +174,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         aspect = in.border_width.y / in.border_width.x;
     } else {
         // Compute from screen-space derivatives
-        let dx = abs(dpdx(in.frag_pos.x));  // NDC change per screen pixel in x
-        let dy = abs(dpdy(in.frag_pos.y));  // NDC change per screen pixel in y
+        let dx = abs(dpdx(local_pos.x));  // NDC change per screen pixel in x
+        let dy = abs(dpdy(local_pos.y));  // NDC change per screen pixel in y
         aspect = dy / max(dx, 0.0001);
     }
 
     // Scale x coordinates to create uniform pixel density space
-    // Use local_pos for SDF evaluation (untransformed space)
     let scaled_pos = vec2<f32>(local_pos.x * aspect, local_pos.y);
     let scaled_rect = vec4<f32>(
         in.shape_rect.x * aspect,

@@ -34,6 +34,8 @@ pub struct Vertex {
     pub transform_row2: [f32; 4],
     /// Transform matrix row 3
     pub transform_row3: [f32; 4],
+    /// Local position (untransformed) for SDF evaluation in fragment shader
+    pub local_pos: [f32; 2],
 }
 
 impl Vertex {
@@ -126,6 +128,12 @@ impl Vertex {
                     shader_location: 13,
                     format: wgpu::VertexFormat::Float32x4,
                 },
+                // local_pos (untransformed position for SDF)
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 44]>() as wgpu::BufferAddress,
+                    shader_location: 14,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
             ],
         }
     }
@@ -140,6 +148,7 @@ impl Vertex {
     ) -> Self {
         Self::with_transform(
             position,
+            position, // local_pos = position (no transform)
             color,
             shape_rect,
             shape_radius,
@@ -167,6 +176,7 @@ impl Vertex {
     ) -> Self {
         Self::with_transform(
             position,
+            position, // local_pos = position (no transform)
             color,
             shape_rect,
             shape_radius,
@@ -198,6 +208,7 @@ impl Vertex {
     ) -> Self {
         Self::with_transform(
             position,
+            position, // local_pos = position (no transform)
             color,
             shape_rect,
             shape_radius,
@@ -216,6 +227,7 @@ impl Vertex {
     #[allow(clippy::too_many_arguments)]
     pub fn with_transform(
         position: [f32; 2],
+        local_pos: [f32; 2],
         color: [f32; 4],
         shape_rect: [f32; 4],
         shape_radius: [f32; 2],
@@ -246,6 +258,7 @@ impl Vertex {
             transform_row1: rows[1],
             transform_row2: rows[2],
             transform_row3: rows[3],
+            local_pos,
         }
     }
 
@@ -634,9 +647,11 @@ impl RoundedRect {
 
         // Simple quad - SDF rendering handles the shape in fragment shader
         // Use expanded quad bounds for vertices, but keep original shape_rect for SDF
+        // local_pos = untransformed position for SDF evaluation (same as position)
         let vertices = vec![
             Vertex::with_transform(
                 [quad_x1, quad_y1],
+                [quad_x1, quad_y1], // local_pos
                 self.color_at(x1, y1, x1, y1, x2, y2),
                 shape_rect,
                 shape_radius,
@@ -651,6 +666,7 @@ impl RoundedRect {
             ),
             Vertex::with_transform(
                 [quad_x2, quad_y1],
+                [quad_x2, quad_y1], // local_pos
                 self.color_at(x2, y1, x1, y1, x2, y2),
                 shape_rect,
                 shape_radius,
@@ -665,6 +681,7 @@ impl RoundedRect {
             ),
             Vertex::with_transform(
                 [quad_x2, quad_y2],
+                [quad_x2, quad_y2], // local_pos
                 self.color_at(x2, y2, x1, y1, x2, y2),
                 shape_rect,
                 shape_radius,
@@ -679,6 +696,7 @@ impl RoundedRect {
             ),
             Vertex::with_transform(
                 [quad_x1, quad_y2],
+                [quad_x1, quad_y2], // local_pos
                 self.color_at(x1, y2, x1, y1, x2, y2),
                 shape_rect,
                 shape_radius,
@@ -791,8 +809,10 @@ impl Circle {
         let shadow_color = [0.0, 0.0, 0.0, 0.0];
 
         // Center vertex - pass clip region as shape params for clipping
+        // local_pos = untransformed position for SDF evaluation
         vertices.push(Vertex::with_transform(
             [cx, cy],
+            [cx, cy], // local_pos
             color,
             clip_rect,
             clip_radius,
@@ -813,6 +833,7 @@ impl Circle {
             let vy = cy - angle.sin() * r_ndc_y;
             vertices.push(Vertex::with_transform(
                 [vx, vy],
+                [vx, vy], // local_pos
                 color,
                 clip_rect,
                 clip_radius,
