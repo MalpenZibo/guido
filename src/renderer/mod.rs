@@ -88,6 +88,7 @@ impl Renderer {
                     spread: rect.shadow.spread * self.scale_factor,
                     color: rect.shadow.color,
                 };
+                scaled_rect.transform = rect.transform;
                 scaled_rect.to_vertices(self.screen_width, self.screen_height)
             }
             Shape::Circle(circle) => {
@@ -108,6 +109,7 @@ impl Renderer {
                     circle.color,
                 );
                 scaled_circle.clip = scaled_clip;
+                scaled_circle.transform = circle.transform;
                 scaled_circle.to_vertices(self.screen_width, self.screen_height)
             }
         }

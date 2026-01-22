@@ -541,6 +541,33 @@ impl RoundedRect {
         let x2 = to_ndc_x(self.rect.x + self.rect.width);
         let y2 = to_ndc_y(self.rect.y + self.rect.height);
 
+        // Convert transform's translation from pixels to NDC
+        // The transform stores translation in pixel units, but we apply in NDC space
+        let ndc_transform = if !self.transform.is_identity() {
+            let mut data = self.transform.data;
+            // data[3] is tx (x translation in pixels), data[7] is ty (y translation in pixels)
+            // Convert to NDC: pixel * 2 / screen_dimension
+            // For y, also flip the sign because NDC y is inverted
+            data[3] = data[3] * 2.0 / screen_width;
+            data[7] = -data[7] * 2.0 / screen_height;
+            Transform { data }
+        } else {
+            Transform::IDENTITY
+        };
+
+        // Compute centered transform in NDC space
+        // Transform is applied around the shape's center, not the origin
+        let centered_transform = if !ndc_transform.is_identity() {
+            let center_x = (x1 + x2) / 2.0;
+            let center_y = (y1 + y2) / 2.0;
+            let to_origin = Transform::translate(-center_x, -center_y);
+            let from_origin = Transform::translate(center_x, center_y);
+            // Composition: from_origin * transform * to_origin
+            from_origin.then(&ndc_transform).then(&to_origin)
+        } else {
+            Transform::IDENTITY
+        };
+
         // Compute radius in NDC
         let radius = self
             .radius
@@ -620,7 +647,7 @@ impl RoundedRect {
                 shadow_blur_ndc,
                 shadow_spread_ndc,
                 shadow_color,
-                self.transform,
+                centered_transform,
             ),
             Vertex::with_transform(
                 [quad_x2, quad_y1],
@@ -634,7 +661,7 @@ impl RoundedRect {
                 shadow_blur_ndc,
                 shadow_spread_ndc,
                 shadow_color,
-                self.transform,
+                centered_transform,
             ),
             Vertex::with_transform(
                 [quad_x2, quad_y2],
@@ -648,7 +675,7 @@ impl RoundedRect {
                 shadow_blur_ndc,
                 shadow_spread_ndc,
                 shadow_color,
-                self.transform,
+                centered_transform,
             ),
             Vertex::with_transform(
                 [quad_x1, quad_y2],
@@ -662,7 +689,7 @@ impl RoundedRect {
                 shadow_blur_ndc,
                 shadow_spread_ndc,
                 shadow_color,
-                self.transform,
+                centered_transform,
             ),
         ];
 
@@ -724,6 +751,15 @@ impl Circle {
         let r_ndc_x = (self.radius / screen_width) * 2.0;
         let r_ndc_y = (self.radius / screen_height) * 2.0;
 
+        // Compute centered transform in NDC space (circle is already centered at cx, cy)
+        let centered_transform = if !self.transform.is_identity() {
+            let to_origin = Transform::translate(-cx, -cy);
+            let from_origin = Transform::translate(cx, cy);
+            from_origin.then(&self.transform).then(&to_origin)
+        } else {
+            Transform::IDENTITY
+        };
+
         // Compute clip rect in NDC - used for clipping the circle to container bounds
         let (clip_rect, clip_radius, clip_curvature) = if let Some(ref clip) = self.clip {
             let cx1 = to_ndc_x(clip.rect.x);
@@ -767,7 +803,7 @@ impl Circle {
             shadow_blur,
             shadow_spread,
             shadow_color,
-            self.transform,
+            centered_transform,
         ));
 
         // Edge vertices
@@ -787,7 +823,7 @@ impl Circle {
                 shadow_blur,
                 shadow_spread,
                 shadow_color,
-                self.transform,
+                centered_transform,
             ));
         }
 

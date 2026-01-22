@@ -78,11 +78,12 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
 
     // Build transform matrix from row vectors
+    // WGSL mat4x4 constructor takes columns, so we transpose by extracting columns from rows
     let transform = mat4x4<f32>(
-        in.transform_row0,
-        in.transform_row1,
-        in.transform_row2,
-        in.transform_row3
+        vec4<f32>(in.transform_row0.x, in.transform_row1.x, in.transform_row2.x, in.transform_row3.x),
+        vec4<f32>(in.transform_row0.y, in.transform_row1.y, in.transform_row2.y, in.transform_row3.y),
+        vec4<f32>(in.transform_row0.z, in.transform_row1.z, in.transform_row2.z, in.transform_row3.z),
+        vec4<f32>(in.transform_row0.w, in.transform_row1.w, in.transform_row2.w, in.transform_row3.w)
     );
 
     // Transform position

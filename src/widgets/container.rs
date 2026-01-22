@@ -576,6 +576,7 @@ impl Container {
 
     /// Rotate this container by the given angle in degrees
     /// Rotation is applied around the center of the widget bounds
+    /// Note: Rotation may appear stretched on non-square aspect ratios
     pub fn rotate(mut self, degrees: impl IntoMaybeDyn<f32>) -> Self {
         let degrees = degrees.into_maybe_dyn();
         self.transform = MaybeDyn::Dynamic(std::sync::Arc::new(move || {
@@ -1168,19 +1169,11 @@ impl Widget for Container {
         let shadow = elevation_to_shadow(elevation_level);
         let transform = self.animated_transform();
 
-        // Compute transform around the center of the widget bounds
-        // This creates: translate_to_origin -> apply_transform -> translate_back
+        // Push transform if not identity
+        // Note: Centering around widget bounds is done in to_vertices() in NDC space
         let has_transform = !transform.is_identity();
         if has_transform {
-            let center_x = self.bounds.x + self.bounds.width / 2.0;
-            let center_y = self.bounds.y + self.bounds.height / 2.0;
-            // Compose: translate(-center) * transform * translate(center)
-            // In our row-major system: we apply translate(center) first (rightmost),
-            // then transform, then translate(-center)
-            let to_origin = Transform::translate(-center_x, -center_y);
-            let from_origin = Transform::translate(center_x, center_y);
-            let composed = from_origin.then(&transform).then(&to_origin);
-            ctx.push_transform(composed);
+            ctx.push_transform(transform);
         }
 
         // Draw background
