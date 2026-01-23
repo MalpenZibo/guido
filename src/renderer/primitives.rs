@@ -1,6 +1,76 @@
 use crate::transform::Transform;
 use crate::widgets::{Color, Rect};
 
+/// Convert a transform from logical screen space to NDC (Normalized Device Coordinates).
+///
+/// This handles aspect ratio correction for rotation and proper translation scaling.
+/// The transform is centered at the specified point (or the default center if None).
+///
+/// # Arguments
+/// * `transform` - The transform in logical screen coordinates
+/// * `transform_origin` - Custom transform origin in logical screen coords, if any
+/// * `default_center` - Default center point in NDC (used if transform_origin is None)
+/// * `screen_width` - Screen width in logical pixels
+/// * `screen_height` - Screen height in logical pixels
+fn transform_to_ndc(
+    transform: &Transform,
+    transform_origin: Option<(f32, f32)>,
+    default_center: (f32, f32),
+    screen_width: f32,
+    screen_height: f32,
+) -> Transform {
+    if transform.is_identity() {
+        return Transform::IDENTITY;
+    }
+
+    let aspect = screen_width / screen_height;
+
+    // Extract rotation and scale from the transform matrix
+    // The transform is in row-major: [a, b, 0, tx; c, d, 0, ty; ...]
+    // For a rotation: a = cos θ, b = -sin θ, c = sin θ, d = cos θ
+    let a = transform.data[0];
+    let b = transform.data[1];
+    let c = transform.data[4];
+    let d = transform.data[5];
+    let tx = transform.data[3];
+    let ty = transform.data[7];
+
+    // Build aspect-corrected transform matrix for NDC
+    // For pure rotation: new_a = a, new_b = b/aspect, new_c = c*aspect, new_d = d
+    let ndc_transform = Transform {
+        data: [
+            a,
+            b / aspect,
+            0.0,
+            tx * 2.0 / screen_width,
+            c * aspect,
+            d,
+            0.0,
+            -ty * 2.0 / screen_height,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ],
+    };
+
+    // Center the transform at the appropriate point in NDC space
+    let (center_x, center_y) = if let Some((ox, oy)) = transform_origin {
+        // Custom origin: convert from logical screen coords to NDC
+        let ndc_ox = (ox / screen_width) * 2.0 - 1.0;
+        let ndc_oy = 1.0 - (oy / screen_height) * 2.0;
+        (ndc_ox, ndc_oy)
+    } else {
+        default_center
+    };
+
+    ndc_transform.center_at(center_x, center_y)
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
@@ -565,60 +635,13 @@ impl RoundedRect {
         let y2 = to_ndc_y(self.rect.y + self.rect.height);
 
         // Convert transform to work correctly in NDC space
-        // NDC is non-isotropic: x and y have different pixel scales due to aspect ratio
-        // For rotation θ in pixel space, the equivalent NDC rotation matrix is:
-        //   [[cos θ, -sin θ / aspect], [aspect * sin θ, cos θ]]
-        // This preserves visual angles when the shape is displayed on screen
-        let aspect = screen_width / screen_height;
-
-        let centered_transform = if !self.transform.is_identity() {
-            // Extract rotation and scale from the transform matrix
-            // The transform is in row-major: [a, b, 0, tx; c, d, 0, ty; ...]
-            // For a rotation: a = cos θ, b = -sin θ, c = sin θ, d = cos θ
-            let a = self.transform.data[0]; // cos θ or scale_x * cos θ
-            let b = self.transform.data[1]; // -sin θ or scale_x * (-sin θ)
-            let c = self.transform.data[4]; // sin θ or scale_y * sin θ
-            let d = self.transform.data[5]; // cos θ or scale_y * cos θ
-            let tx = self.transform.data[3];
-            let ty = self.transform.data[7];
-
-            // Build aspect-corrected transform matrix for NDC
-            // For pure rotation: new_a = a, new_b = b/aspect, new_c = c*aspect, new_d = d
-            let ndc_transform = Transform {
-                data: [
-                    a,
-                    b / aspect,
-                    0.0,
-                    tx * 2.0 / screen_width,
-                    c * aspect,
-                    d,
-                    0.0,
-                    -ty * 2.0 / screen_height,
-                    0.0,
-                    0.0,
-                    1.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    1.0,
-                ],
-            };
-
-            // Center the transform at the appropriate point in NDC space
-            let (center_x, center_y) = if let Some((ox, oy)) = self.transform_origin {
-                // Custom origin: convert from logical screen coords to NDC
-                let ndc_ox = (ox / screen_width) * 2.0 - 1.0;
-                let ndc_oy = 1.0 - (oy / screen_height) * 2.0;
-                (ndc_ox, ndc_oy)
-            } else {
-                // Default: center at shape's center in NDC
-                ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
-            };
-            ndc_transform.center_at(center_x, center_y)
-        } else {
-            Transform::IDENTITY
-        };
+        let centered_transform = transform_to_ndc(
+            &self.transform,
+            self.transform_origin,
+            ((x1 + x2) / 2.0, (y1 + y2) / 2.0), // Default: shape's center in NDC
+            screen_width,
+            screen_height,
+        );
 
         // Compute radius in NDC
         let radius = self
@@ -883,52 +906,14 @@ impl TexturedQuad {
         let x2 = to_ndc_x(self.rect.x + self.rect.width);
         let y2 = to_ndc_y(self.rect.y + self.rect.height);
 
-        // Convert transform to work correctly in NDC space (same as RoundedRect)
-        let aspect = screen_width / screen_height;
-
-        let centered_transform = if !self.transform.is_identity() {
-            let a = self.transform.data[0];
-            let b = self.transform.data[1];
-            let c = self.transform.data[4];
-            let d = self.transform.data[5];
-            let tx = self.transform.data[3];
-            let ty = self.transform.data[7];
-
-            let ndc_transform = Transform {
-                data: [
-                    a,
-                    b / aspect,
-                    0.0,
-                    tx * 2.0 / screen_width,
-                    c * aspect,
-                    d,
-                    0.0,
-                    -ty * 2.0 / screen_height,
-                    0.0,
-                    0.0,
-                    1.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    1.0,
-                ],
-            };
-
-            // Center the transform at the appropriate point in NDC space
-            let (center_x, center_y) = if let Some((ox, oy)) = self.transform_origin {
-                // Custom origin: convert from logical screen coords to NDC
-                let ndc_ox = (ox / screen_width) * 2.0 - 1.0;
-                let ndc_oy = 1.0 - (oy / screen_height) * 2.0;
-                (ndc_ox, ndc_oy)
-            } else {
-                // Default: center at quad's center in NDC
-                ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
-            };
-            ndc_transform.center_at(center_x, center_y)
-        } else {
-            Transform::IDENTITY
-        };
+        // Convert transform to work correctly in NDC space
+        let centered_transform = transform_to_ndc(
+            &self.transform,
+            self.transform_origin,
+            ((x1 + x2) / 2.0, (y1 + y2) / 2.0), // Default: quad's center in NDC
+            screen_width,
+            screen_height,
+        );
 
         // UV coordinates: (0,0) at top-left, (1,1) at bottom-right
         let vertices = vec![

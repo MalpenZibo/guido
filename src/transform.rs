@@ -220,29 +220,28 @@ impl Transform {
         self.data[7] *= factor;
     }
 
+    /// Extract the X and Y scale components from the transform matrix.
+    ///
+    /// For transforms that contain rotation and/or scale:
+    /// - sx = sqrt(a² + b²)
+    /// - sy = sqrt(c² + d²)
+    ///
+    /// This is a private helper used by `extract_scale()`, `without_scale()`, and `rotation_only()`.
+    fn extract_scale_components(&self) -> (f32, f32) {
+        let a = self.data[0];
+        let b = self.data[1];
+        let c = self.data[4];
+        let d = self.data[5];
+        ((a * a + b * b).sqrt(), (c * c + d * d).sqrt())
+    }
+
     /// Extract the uniform scale factor from this transform.
     ///
     /// For transforms that contain rotation and/or scale, this returns the
     /// average scale factor. For pure scale transforms, returns the exact scale.
     /// For transforms with non-uniform scaling, returns the geometric mean.
     pub fn extract_scale(&self) -> f32 {
-        // Matrix layout:
-        // | a  b  0  tx |  where for rotation+scale:
-        // | c  d  0  ty |  a = sx * cos(θ), b = sx * (-sin(θ))
-        // | 0  0  1  0  |  c = sy * sin(θ), d = sy * cos(θ)
-        // | 0  0  0  1  |
-        //
-        // Scale factors can be extracted as:
-        // sx = sqrt(a² + b²)
-        // sy = sqrt(c² + d²)
-        let a = self.data[0];
-        let b = self.data[1];
-        let c = self.data[4];
-        let d = self.data[5];
-
-        let sx = (a * a + b * b).sqrt();
-        let sy = (c * c + d * d).sqrt();
-
+        let (sx, sy) = self.extract_scale_components();
         // Return geometric mean for uniform scale approximation
         (sx * sy).sqrt()
     }
@@ -252,20 +251,19 @@ impl Transform {
     /// This preserves rotation and translation but normalizes scale to 1.0.
     /// Useful for render-to-texture workflows where text is pre-scaled.
     pub fn without_scale(&self) -> Transform {
-        let a = self.data[0];
-        let b = self.data[1];
-        let c = self.data[4];
-        let d = self.data[5];
+        let (sx, sy) = self.extract_scale_components();
         let tx = self.data[3];
         let ty = self.data[7];
-
-        let sx = (a * a + b * b).sqrt();
-        let sy = (c * c + d * d).sqrt();
 
         // Avoid division by zero
         if sx < 1e-10 || sy < 1e-10 {
             return Transform::translate(tx, ty);
         }
+
+        let a = self.data[0];
+        let b = self.data[1];
+        let c = self.data[4];
+        let d = self.data[5];
 
         // Normalize the rotation component
         Transform {
@@ -311,18 +309,17 @@ impl Transform {
     /// This is useful when you need to apply the same rotation to a different
     /// object at a different position (like text inside a transformed container).
     pub fn rotation_only(&self) -> Transform {
-        let a = self.data[0];
-        let b = self.data[1];
-        let c = self.data[4];
-        let d = self.data[5];
-
-        let sx = (a * a + b * b).sqrt();
-        let sy = (c * c + d * d).sqrt();
+        let (sx, sy) = self.extract_scale_components();
 
         // Avoid division by zero
         if sx < 1e-10 || sy < 1e-10 {
             return Transform::IDENTITY;
         }
+
+        let a = self.data[0];
+        let b = self.data[1];
+        let c = self.data[4];
+        let d = self.data[5];
 
         // Extract normalized rotation (no translation)
         Transform {

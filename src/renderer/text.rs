@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use glyphon::{
     Attrs, Buffer, Cache, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution, Shaping,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
@@ -86,10 +88,12 @@ impl TextRenderState {
         }
 
         // Filter to only non-transformed texts for TextArea creation
+        // Use HashSet for O(1) lookup instead of Vec::contains which is O(n)
+        let transformed_set: HashSet<_> = transformed_indices.iter().copied().collect();
         let non_transformed_texts: Vec<_> = texts
             .iter()
             .enumerate()
-            .filter(|(idx, _)| !transformed_indices.contains(idx))
+            .filter(|(idx, _)| !transformed_set.contains(idx))
             .map(|(_, entry)| entry)
             .collect();
 
