@@ -1428,9 +1428,10 @@ impl Widget for Container {
     }
 
     fn event(&mut self, event: &Event) -> EventResponse {
-        // Get transform for coordinate conversion
+        // Get transform and corner radius for hit testing
         let transform = self.animated_transform();
         let transform_origin = self.transform_origin.get();
+        let corner_radius = self.animated_corner_radius();
 
         // Transform the event coordinates from screen space to this container's local space
         let local_event = if !transform.is_identity() {
@@ -1441,13 +1442,18 @@ impl Widget for Container {
                 // Inverse to go from screen space back to local space
                 let inverse = centered_transform.inverse();
 
-                // The transform is applied in NDC space (Y-up) but hit testing is in
-                // screen space (Y-down). For rotation, this inverts the direction.
-                // Apply Y-flip around origin before and after inverse to compensate.
-                let y_flip = Transform::scale_xy(1.0, -1.0).center_at(origin_x, origin_y);
-                let corrected_inverse = y_flip.then(&inverse).then(&y_flip);
+                // Only apply Y-flip compensation for rotation.
+                // Rotation is applied in NDC space (Y-up) but hit testing is in
+                // screen space (Y-down), which inverts the rotation direction.
+                // Translation and scale don't need this compensation.
+                let final_inverse = if transform.has_rotation() {
+                    let y_flip = Transform::scale_xy(1.0, -1.0).center_at(origin_x, origin_y);
+                    y_flip.then(&inverse).then(&y_flip)
+                } else {
+                    inverse
+                };
 
-                let (local_x, local_y) = corrected_inverse.transform_point(x, y);
+                let (local_x, local_y) = final_inverse.transform_point(x, y);
                 event.with_coords(local_x, local_y)
             } else {
                 event.clone()
@@ -1466,7 +1472,7 @@ impl Widget for Container {
         // Handle our own events using transformed coordinates
         match &local_event {
             Event::MouseEnter { x, y } => {
-                if self.bounds.contains(*x, *y) {
+                if self.bounds.contains_rounded(*x, *y, corner_radius) {
                     self.is_hovered = true;
                     self.last_mouse_pos = Some((*x, *y));
                     if let Some(ref callback) = self.on_hover {
@@ -1483,7 +1489,7 @@ impl Widget for Container {
             }
             Event::MouseMove { x, y } => {
                 let was_hovered = self.is_hovered;
-                self.is_hovered = self.bounds.contains(*x, *y);
+                self.is_hovered = self.bounds.contains_rounded(*x, *y, corner_radius);
 
                 if self.is_hovered {
                     self.last_mouse_pos = Some((*x, *y));
@@ -1513,7 +1519,9 @@ impl Widget for Container {
                 }
             }
             Event::MouseDown { x, y, button } => {
-                if self.bounds.contains(*x, *y) && *button == MouseButton::Left {
+                if self.bounds.contains_rounded(*x, *y, corner_radius)
+                    && *button == MouseButton::Left
+                {
                     self.is_pressed = true;
                     if self.ripple_enabled {
                         self.click_ripple_center = Some((*x, *y));
@@ -1536,7 +1544,7 @@ impl Widget for Container {
                         self.click_ripple_release_pos = Some((*x, *y));
                         request_animation_frame();
                     }
-                    if self.bounds.contains(*x, *y) {
+                    if self.bounds.contains_rounded(*x, *y, corner_radius) {
                         if let Some(ref callback) = self.on_click {
                             callback();
                             return EventResponse::Handled;
@@ -1573,7 +1581,7 @@ impl Widget for Container {
                 delta_y,
                 source,
             } => {
-                if self.bounds.contains(*x, *y) {
+                if self.bounds.contains_rounded(*x, *y, corner_radius) {
                     if let Some(ref callback) = self.on_scroll {
                         callback(*delta_x, *delta_y, *source);
                         return EventResponse::Handled;

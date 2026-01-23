@@ -183,6 +183,16 @@ impl Transform {
     pub fn is_identity(&self) -> bool {
         *self == Self::IDENTITY
     }
+
+    /// Check if this transform contains rotation.
+    /// Rotation is present when the off-diagonal elements (b, c) are non-zero.
+    pub fn has_rotation(&self) -> bool {
+        // Matrix layout:
+        // | a  b  0  tx |  indices: [0, 1, 2, 3]
+        // | c  d  0  ty |  indices: [4, 5, 6, 7]
+        // b is at index 1, c is at index 4
+        self.data[1].abs() > 1e-6 || self.data[4].abs() > 1e-6
+    }
 }
 
 impl Default for Transform {
