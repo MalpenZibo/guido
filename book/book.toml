@@ -1,0 +1,24 @@
+[book]
+title = "Guido"
+authors = ["Guido Contributors"]
+description = "A reactive Rust GUI library for Wayland layer shell widgets"
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+git-repository-url = "https://github.com/zibo/guido"
+edit-url-template = "https://github.com/zibo/guido/edit/main/book/{path}"
+
+[output.html.playground]
+editable = false
+copy-js = true
+
+[output.html.code]
+hidelines = { rust = "#" }
+
+[output.html.fold]
+enable = true
+level = 0
