@@ -225,6 +225,9 @@ impl App {
         // Track previous scale factor to detect changes
         let mut previous_scale_factor = wayland_state.scale_factor;
 
+        // Pre-allocate paint context to avoid per-frame allocations
+        let mut paint_ctx = renderer::PaintContext::with_capacity(32, 16, 8);
+
         // Create calloop event loop for event-driven execution
         let mut event_loop: EventLoop<platform::WaylandState> =
             EventLoop::try_new().expect("Failed to create event loop");
@@ -357,8 +360,8 @@ impl App {
                 );
                 root.layout(constraints);
 
-                // Paint
-                let mut paint_ctx = renderer.create_paint_context();
+                // Paint - clear and reuse existing context to avoid allocations
+                paint_ctx.clear();
                 root.paint(&mut paint_ctx);
 
                 renderer.render(&mut surface, &paint_ctx, self.config.background_color);

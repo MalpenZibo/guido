@@ -162,6 +162,26 @@ impl Renderer {
         self.scale_factor = scale;
     }
 
+    /// Create vertex and index GPU buffers for a shape
+    fn create_gpu_buffers(
+        device: &wgpu::Device,
+        vertices: &[Vertex],
+        indices: &[u16],
+        label: &str,
+    ) -> (wgpu::Buffer, wgpu::Buffer) {
+        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{} Vertex Buffer", label)),
+            contents: bytemuck::cast_slice(vertices),
+            usage: BufferUsages::VERTEX,
+        });
+        let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{} Index Buffer", label)),
+            contents: bytemuck::cast_slice(indices),
+            usage: BufferUsages::INDEX,
+        });
+        (vb, ib)
+    }
+
     pub fn create_paint_context(&mut self) -> PaintContext {
         PaintContext {
             shapes: Vec::new(),
@@ -338,21 +358,8 @@ impl Renderer {
                 if vertices.is_empty() || indices.is_empty() {
                     return None;
                 }
-                Some((
-                    self.device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("Shape Vertex Buffer"),
-                            contents: bytemuck::cast_slice(&vertices),
-                            usage: BufferUsages::VERTEX,
-                        }),
-                    self.device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("Shape Index Buffer"),
-                            contents: bytemuck::cast_slice(&indices),
-                            usage: BufferUsages::INDEX,
-                        }),
-                    indices.len(),
-                ))
+                let (vb, ib) = Self::create_gpu_buffers(&self.device, &vertices, &indices, "Shape");
+                Some((vb, ib, indices.len()))
             })
             .collect();
 
@@ -365,21 +372,9 @@ impl Renderer {
                 if vertices.is_empty() || indices.is_empty() {
                     return None;
                 }
-                Some((
-                    self.device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("Overlay Shape Vertex Buffer"),
-                            contents: bytemuck::cast_slice(&vertices),
-                            usage: BufferUsages::VERTEX,
-                        }),
-                    self.device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("Overlay Shape Index Buffer"),
-                            contents: bytemuck::cast_slice(&indices),
-                            usage: BufferUsages::INDEX,
-                        }),
-                    indices.len(),
-                ))
+                let (vb, ib) =
+                    Self::create_gpu_buffers(&self.device, &vertices, &indices, "Overlay Shape");
+                Some((vb, ib, indices.len()))
             })
             .collect();
 
@@ -464,6 +459,26 @@ pub struct PaintContext {
 }
 
 impl PaintContext {
+    /// Create a new PaintContext with pre-allocated capacity to avoid per-frame allocations
+    pub fn with_capacity(shapes: usize, texts: usize, overlay: usize) -> Self {
+        Self {
+            shapes: Vec::with_capacity(shapes),
+            texts: Vec::with_capacity(texts),
+            overlay_shapes: Vec::with_capacity(overlay),
+            clip_stack: Vec::with_capacity(4),
+            transform_stack: Vec::with_capacity(4),
+        }
+    }
+
+    /// Clear all buffers for reuse, preserving allocated capacity
+    pub fn clear(&mut self) {
+        self.shapes.clear();
+        self.texts.clear();
+        self.overlay_shapes.clear();
+        self.clip_stack.clear();
+        self.transform_stack.clear();
+    }
+
     pub fn draw_rect(&mut self, rect: Rect, color: Color) {
         self.push_rounded_rect(RoundedRect::new(rect, color, 0.0));
     }

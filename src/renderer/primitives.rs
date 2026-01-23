@@ -484,20 +484,31 @@ pub struct ClipRegion {
     pub curvature: f32,
 }
 
+impl Default for RoundedRect {
+    fn default() -> Self {
+        Self {
+            rect: Rect::new(0.0, 0.0, 0.0, 0.0),
+            color: Color::TRANSPARENT,
+            radius: 0.0,
+            clip: None,
+            gradient: None,
+            curvature: 1.0,
+            border_width: 0.0,
+            border_color: Color::TRANSPARENT,
+            shadow: Shadow::none(),
+            transform: Transform::IDENTITY,
+            transform_origin: None,
+        }
+    }
+}
+
 impl RoundedRect {
     pub fn new(rect: Rect, color: Color, radius: f32) -> Self {
         Self {
             rect,
             color,
             radius,
-            clip: None,
-            gradient: None,
-            curvature: 1.0, // Default K=1 (circular)
-            border_width: 0.0,
-            border_color: Color::TRANSPARENT,
-            shadow: Shadow::none(),
-            transform: Transform::IDENTITY,
-            transform_origin: None,
+            ..Default::default()
         }
     }
 
@@ -507,13 +518,7 @@ impl RoundedRect {
             color,
             radius,
             clip: Some(clip),
-            gradient: None,
-            curvature: 1.0, // Default K=1 (circular)
-            border_width: 0.0,
-            border_color: Color::TRANSPARENT,
-            shadow: Shadow::none(),
-            transform: Transform::IDENTITY,
-            transform_origin: None,
+            ..Default::default()
         }
     }
 
@@ -522,14 +527,8 @@ impl RoundedRect {
             rect,
             color: gradient.start_color, // fallback
             radius,
-            clip: None,
             gradient: Some(gradient),
-            curvature: 1.0, // Default K=1 (circular)
-            border_width: 0.0,
-            border_color: Color::TRANSPARENT,
-            shadow: Shadow::none(),
-            transform: Transform::IDENTITY,
-            transform_origin: None,
+            ..Default::default()
         }
     }
 
@@ -538,14 +537,8 @@ impl RoundedRect {
             rect,
             color,
             radius,
-            clip: None,
-            gradient: None,
             curvature,
-            border_width: 0.0,
-            border_color: Color::TRANSPARENT,
-            shadow: Shadow::none(),
-            transform: Transform::IDENTITY,
-            transform_origin: None,
+            ..Default::default()
         }
     }
 
@@ -561,14 +554,9 @@ impl RoundedRect {
             rect,
             color: fill_color,
             radius,
-            clip: None,
-            gradient: None,
-            curvature: 1.0,
             border_width,
             border_color,
-            shadow: Shadow::none(),
-            transform: Transform::IDENTITY,
-            transform_origin: None,
+            ..Default::default()
         }
     }
 
@@ -576,16 +564,10 @@ impl RoundedRect {
     pub fn border_only(rect: Rect, radius: f32, border_width: f32, border_color: Color) -> Self {
         Self {
             rect,
-            color: Color::TRANSPARENT,
             radius,
-            clip: None,
-            gradient: None,
-            curvature: 1.0,
             border_width,
             border_color,
-            shadow: Shadow::none(),
-            transform: Transform::IDENTITY,
-            transform_origin: None,
+            ..Default::default()
         }
     }
 
@@ -599,16 +581,22 @@ impl RoundedRect {
     ) -> Self {
         Self {
             rect,
-            color: Color::TRANSPARENT,
             radius,
-            clip: None,
-            gradient: None,
             curvature,
             border_width,
             border_color,
-            shadow: Shadow::none(),
-            transform: Transform::IDENTITY,
-            transform_origin: None,
+            ..Default::default()
+        }
+    }
+
+    /// Calculate safe progress value, avoiding division by zero
+    #[inline]
+    fn safe_progress(value: f32, start: f32, end: f32) -> f32 {
+        let range = end - start;
+        if range.abs() < 0.0001 {
+            0.5
+        } else {
+            (value - start) / range
         }
     }
 
@@ -616,45 +604,19 @@ impl RoundedRect {
     fn color_at(&self, x: f32, y: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> [f32; 4] {
         if let Some(ref grad) = self.gradient {
             let t = match grad.direction {
-                GradientDir::Horizontal => {
-                    if (x2 - x1).abs() < 0.0001 {
-                        0.5
-                    } else {
-                        (x - x1) / (x2 - x1)
-                    }
-                }
+                GradientDir::Horizontal => Self::safe_progress(x, x1, x2),
                 GradientDir::Vertical => {
                     // Note: y1 > y2 in NDC (top is positive)
-                    if (y1 - y2).abs() < 0.0001 {
-                        0.5
-                    } else {
-                        (y1 - y) / (y1 - y2)
-                    }
+                    Self::safe_progress(y, y1, y2)
                 }
                 GradientDir::Diagonal => {
-                    let tx = if (x2 - x1).abs() < 0.0001 {
-                        0.5
-                    } else {
-                        (x - x1) / (x2 - x1)
-                    };
-                    let ty = if (y1 - y2).abs() < 0.0001 {
-                        0.5
-                    } else {
-                        (y1 - y) / (y1 - y2)
-                    };
+                    let tx = Self::safe_progress(x, x1, x2);
+                    let ty = Self::safe_progress(y, y1, y2);
                     (tx + ty) / 2.0
                 }
                 GradientDir::DiagonalReverse => {
-                    let tx = if (x2 - x1).abs() < 0.0001 {
-                        0.5
-                    } else {
-                        (x - x1) / (x2 - x1)
-                    };
-                    let ty = if (y1 - y2).abs() < 0.0001 {
-                        0.5
-                    } else {
-                        (y1 - y) / (y1 - y2)
-                    };
+                    let tx = Self::safe_progress(x, x1, x2);
+                    let ty = Self::safe_progress(y, y1, y2);
                     (tx + (1.0 - ty)) / 2.0
                 }
             };
