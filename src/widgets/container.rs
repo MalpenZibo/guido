@@ -779,6 +779,35 @@ impl Container {
             .unwrap_or_else(|| self.transform.get())
     }
 
+    /// Calculate constraints for children based on container dimensions and padding
+    fn calc_child_constraints(&self) -> Constraints {
+        let padding = self.padding.get();
+        let child_max_width = (self.bounds.width - padding.horizontal()).max(0.0);
+        let child_max_height = (self.bounds.height - padding.vertical()).max(0.0);
+
+        // When container has explicit dimensions, pass them as min constraints
+        // so layouts can use the full space for centering/alignment
+        let width_length = self.width.as_ref().map(|w| w.get()).unwrap_or_default();
+        let height_length = self.height.as_ref().map(|h| h.get()).unwrap_or_default();
+        let child_min_width = if width_length.exact.is_some() {
+            child_max_width
+        } else {
+            0.0
+        };
+        let child_min_height = if height_length.exact.is_some() {
+            child_max_height
+        } else {
+            0.0
+        };
+
+        Constraints {
+            min_width: child_min_width,
+            min_height: child_min_height,
+            max_width: child_max_width,
+            max_height: child_max_height,
+        }
+    }
+
     /// Advance animation state (ripple effects and property animations)
     fn advance_animations(&mut self) {
         let mut any_animating = false;
@@ -1058,9 +1087,22 @@ impl Widget for Container {
         let child_max_height = (current_height - effective_v_padding).max(0.0);
 
         // Calculate constraints for children (accounting for padding)
+        // When container has explicit dimensions, pass them as min constraints
+        // so layouts can use the full space for centering/alignment
+        let child_min_width = if width_length.exact.is_some() {
+            child_max_width
+        } else {
+            0.0
+        };
+        let child_min_height = if height_length.exact.is_some() {
+            child_max_height
+        } else {
+            0.0
+        };
+
         let child_constraints = Constraints {
-            min_width: 0.0,
-            min_height: 0.0,
+            min_width: child_min_width,
+            min_height: child_min_height,
             max_width: child_max_width,
             max_height: child_max_height,
         };
@@ -1519,21 +1561,14 @@ impl Widget for Container {
         self.bounds.x = x;
         self.bounds.y = y;
 
+        // Calculate constraints before borrowing children
+        let child_constraints = self.calc_child_constraints();
         let padding = self.padding.get();
 
         // Re-layout children with current bounds minus padding
+        // The layout will position children relative to the new origin
         let children = self.children_source.reconcile_and_get_mut();
         if !children.is_empty() {
-            let child_max_width = (self.bounds.width - padding.horizontal()).max(0.0);
-            let child_max_height = (self.bounds.height - padding.vertical()).max(0.0);
-
-            let child_constraints = Constraints {
-                min_width: 0.0,
-                min_height: 0.0,
-                max_width: child_max_width,
-                max_height: child_max_height,
-            };
-
             self.layout.layout(
                 children,
                 child_constraints,
