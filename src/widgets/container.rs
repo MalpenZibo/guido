@@ -7,6 +7,7 @@ use crate::reactive::{request_animation_frame, ChangeFlags, IntoMaybeDyn, MaybeD
 use crate::renderer::primitives::{GradientDir, Shadow};
 use crate::renderer::PaintContext;
 use crate::transform::Transform;
+use crate::transform_origin::TransformOrigin;
 
 use super::children::ChildrenSource;
 use super::into_child::{IntoChild, IntoChildren};
@@ -275,6 +276,7 @@ pub struct Container {
     overflow: Overflow,
     bounds: Rect,
     transform: MaybeDyn<Transform>,
+    transform_origin: MaybeDyn<TransformOrigin>,
 
     // Cached values for change detection
     cached_padding: Padding,
@@ -338,6 +340,7 @@ impl Container {
             overflow: Overflow::Visible,
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
             transform: MaybeDyn::Static(Transform::IDENTITY),
+            transform_origin: MaybeDyn::Static(TransformOrigin::CENTER),
             on_click: None,
             on_hover: None,
             on_scroll: None,
@@ -610,6 +613,37 @@ impl Container {
         self.transform = MaybeDyn::Dynamic(std::sync::Arc::new(move || {
             Transform::translate(x.get(), y.get())
         }));
+        self
+    }
+
+    /// Set the transform origin (pivot point) for this container.
+    ///
+    /// The transform origin specifies the point around which rotations and scales are applied.
+    /// By default, transforms are centered on the widget (50%, 50%).
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Rotate around the top-left corner
+    /// container()
+    ///     .rotate(45.0)
+    ///     .transform_origin(TransformOrigin::TOP_LEFT)
+    ///
+    /// // Scale from the bottom-right corner
+    /// container()
+    ///     .scale(1.5)
+    ///     .transform_origin(TransformOrigin::BOTTOM_RIGHT)
+    ///
+    /// // Reactive transform origin
+    /// container()
+    ///     .rotate(30.0)
+    ///     .transform_origin(move || if condition.get() {
+    ///         TransformOrigin::CENTER
+    ///     } else {
+    ///         TransformOrigin::TOP_LEFT
+    ///     })
+    /// ```
+    pub fn transform_origin(mut self, origin: impl IntoMaybeDyn<TransformOrigin>) -> Self {
+        self.transform_origin = origin.into_maybe_dyn();
         self
     }
 
@@ -1171,12 +1205,22 @@ impl Widget for Container {
         let elevation_level = self.elevation.get();
         let shadow = elevation_to_shadow(elevation_level);
         let transform = self.animated_transform();
+        let transform_origin = self.transform_origin.get();
 
         // Push transform if not identity
-        // Note: Centering around widget bounds is done in to_vertices() in NDC space
+        // If we have a custom transform origin (not center), pre-center the transform
+        // around that origin point and mark it as centered
         let has_transform = !transform.is_identity();
         if has_transform {
-            ctx.push_transform(transform);
+            if transform_origin.is_center() {
+                // Default behavior: let the primitives auto-center around their bounds
+                ctx.push_transform(transform);
+            } else {
+                // Custom origin: pre-center the transform around the origin point
+                let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
+                let centered_transform = transform.center_at(origin_x, origin_y);
+                ctx.push_centered_transform(centered_transform);
+            }
         }
 
         // Draw background
