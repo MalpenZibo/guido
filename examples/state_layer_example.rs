@@ -141,14 +141,14 @@ fn create_ripple_with_scale_button() -> Container {
         .child(text("Ripple + scale").color(Color::WHITE))
 }
 
-/// Button with rotation to test transformed ripple
+/// Button with rotation and translation to test transformed ripple
 fn create_rotated_ripple_button() -> Container {
     container()
         .padding(16.0)
         .background(Color::rgb(0.4, 0.6, 0.4))
         .corner_radius(8.0)
-        .rotate(5.0)
+        .transform(Transform::rotate_degrees(5.0).then(&Transform::translate(10.0, 15.0)))
         .hover_state(|s| s.lighter(0.1))
         .pressed_state(|s| s.ripple_with_color(Color::rgba(1.0, 1.0, 1.0, 0.5)))
-        .child(text("Rotated + ripple").color(Color::WHITE))
+        .child(text("Rotated + translated").color(Color::WHITE))
 }
