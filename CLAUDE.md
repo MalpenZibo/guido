@@ -6,6 +6,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Guido is a reactive Rust GUI library using wgpu for rendering Wayland layer shell widgets (status bars, panels, etc.). The library emphasizes composition from minimal primitives, reactive properties, and GPU-accelerated rendering with animations.
 
+## Documentation
+
+Detailed documentation is available in the `docs/` folder:
+
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System design, module structure, and code organization
+- **[docs/STATE_LAYER.md](docs/STATE_LAYER.md)** - Hover/pressed state overrides, ripple effects, animations
+- **[docs/TRANSFORMS.md](docs/TRANSFORMS.md)** - Translate, rotate, scale with transform origins and animations
+- **[docs/REACTIVE.md](docs/REACTIVE.md)** - Signals, computed values, effects, and reactive patterns
+- **[docs/STYLING.md](docs/STYLING.md)** - Colors, gradients, borders, corners, shadows, and layout
+
+Read these docs before making significant changes to understand existing patterns.
+
 ## Build and Development Commands
 
 ```bash
@@ -121,18 +133,37 @@ Containers provide callback builders (`.on_click()`, `.on_hover()`, `.on_scroll(
 
 ## Important Patterns
 
-### Creating Reactive UIs
+### State Layer API
 
-Use the `row![]` and `column![]` macros for building layouts:
+Use the state layer API for hover and pressed visual feedback:
+
+```rust
+container()
+    .background(Color::rgb(0.2, 0.2, 0.3))
+    .corner_radius(8.0)
+    .hover_state(|s| s.lighter(0.1))      // Lighten on hover
+    .pressed_state(|s| s.ripple())         // Ripple on press
+    .on_click(move || count.update(|c| *c += 1))
+    .child(text("Click me"))
+```
+
+See [docs/STATE_LAYER.md](docs/STATE_LAYER.md) for full documentation.
+
+### Creating Reactive UIs
 
 ```rust
 let count = create_signal(0);
-let view = row![
-    text(move || format!("Count: {}", count.get())),
-    container()
-        .on_click(move || count.update(|c| *c += 1))
-        .child(text("Click me"))
-].spacing(8.0);
+let view = container()
+    .layout(Flex::row().spacing(8.0))
+    .children([
+        text(move || format!("Count: {}", count.get())),
+        container()
+            .background(Color::rgb(0.3, 0.3, 0.4))
+            .hover_state(|s| s.lighter(0.1))
+            .pressed_state(|s| s.ripple())
+            .on_click(move || count.update(|c| *c += 1))
+            .child(text("Click me"))
+    ]);
 ```
 
 ### App Configuration
@@ -170,11 +201,19 @@ App::new()
     .run(view);
 ```
 
-### Custom Curvature
+### Corner Curvature
 
-Border radius curvature can be customized (default is 2.0 for circular arcs):
-- Use `draw_rounded_rect_with_curvature()` or `draw_border_frame_with_curvature()`
-- Curvature values: lower = more "squircle-like", higher = more circular
+Corner styles use CSS K-values for superellipse rendering:
+
+```rust
+container().corner_radius(12.0).squircle()  // K=2, iOS-style smooth
+container().corner_radius(12.0)              // K=1, standard circular (default)
+container().corner_radius(12.0).bevel()      // K=0, diagonal cut
+container().corner_radius(12.0).scoop()      // K=-1, concave inward
+container().corner_radius(12.0).corner_curvature(1.5)  // Custom K value
+```
+
+See [docs/STYLING.md](docs/STYLING.md) for full styling reference.
 
 ## Development Workflow
 
@@ -226,9 +265,14 @@ When making visual changes to the renderer:
 
 ## Project Status
 
-This is a work-in-progress GUI library. Current focus areas:
-- Reactive widget system (functional)
-- Basic layout and rendering (functional)
-- Mouse event handling with ripple effects (functional)
-- Additional widgets like input text, images, toggles (planned per TODO.md)
-- Animation system (planned)
+This is a work-in-progress GUI library. Current implemented features:
+- Reactive widget system with signals, computed values, and effects
+- Unified Container widget with pluggable Flex layout
+- State layer API for hover/pressed styles with ripple effects
+- Transform system (translate, rotate, scale) with animations
+- SDF-based rendering with superellipse corners and crisp borders
+- Mouse event handling with proper transform hit testing
+
+Planned features (see TODO.md):
+- Additional widgets (input text, images, toggles)
+- Relayout boundaries for performance optimization
