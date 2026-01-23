@@ -111,12 +111,15 @@ impl Flex {
             total_width += spacing * (children.len() - 1) as f32;
         }
 
-        // For space-based alignments, expand to fill available width
+        // For space-based and centered alignments, expand to fill available width
+        // Center and End need the full width to calculate proper positioning
         let width = match main_align {
             MainAxisAlignment::SpaceBetween
             | MainAxisAlignment::SpaceAround
-            | MainAxisAlignment::SpaceEvenly => constraints.max_width,
-            _ => total_width
+            | MainAxisAlignment::SpaceEvenly
+            | MainAxisAlignment::Center
+            | MainAxisAlignment::End => constraints.max_width,
+            MainAxisAlignment::Start => total_width
                 .max(constraints.min_width)
                 .min(constraints.max_width),
         };
@@ -223,9 +226,18 @@ impl Flex {
             .max(constraints.min_width)
             .min(constraints.max_width);
 
-        let height = total_height
-            .max(constraints.min_height)
-            .min(constraints.max_height);
+        // For space-based and centered alignments, expand to fill available height
+        // Center and End need the full height to calculate proper positioning
+        let height = match main_align {
+            MainAxisAlignment::SpaceBetween
+            | MainAxisAlignment::SpaceAround
+            | MainAxisAlignment::SpaceEvenly
+            | MainAxisAlignment::Center
+            | MainAxisAlignment::End => constraints.max_height,
+            MainAxisAlignment::Start => total_height
+                .max(constraints.min_height)
+                .min(constraints.max_height),
+        };
 
         let size = Size::new(width, height);
 
