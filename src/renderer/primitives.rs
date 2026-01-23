@@ -1,3 +1,4 @@
+use crate::transform::Transform;
 use crate::widgets::{Color, Rect};
 
 #[repr(C)]
@@ -25,6 +26,16 @@ pub struct Vertex {
     pub shadow_spread: f32,
     /// Shadow color RGBA
     pub shadow_color: [f32; 4],
+    /// Transform matrix row 0
+    pub transform_row0: [f32; 4],
+    /// Transform matrix row 1
+    pub transform_row1: [f32; 4],
+    /// Transform matrix row 2
+    pub transform_row2: [f32; 4],
+    /// Transform matrix row 3
+    pub transform_row3: [f32; 4],
+    /// Local position (untransformed) for SDF evaluation in fragment shader
+    pub local_pos: [f32; 2],
 }
 
 impl Vertex {
@@ -93,6 +104,36 @@ impl Vertex {
                     shader_location: 9,
                     format: wgpu::VertexFormat::Float32x4,
                 },
+                // transform_row0
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 28]>() as wgpu::BufferAddress,
+                    shader_location: 10,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // transform_row1
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 32]>() as wgpu::BufferAddress,
+                    shader_location: 11,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // transform_row2
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 36]>() as wgpu::BufferAddress,
+                    shader_location: 12,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // transform_row3
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 40]>() as wgpu::BufferAddress,
+                    shader_location: 13,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // local_pos (untransformed position for SDF)
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 44]>() as wgpu::BufferAddress,
+                    shader_location: 14,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
             ],
         }
     }
@@ -105,20 +146,21 @@ impl Vertex {
         shape_radius: [f32; 2],
         shape_curvature: f32,
     ) -> Self {
-        Self {
+        Self::with_transform(
             position,
+            position, // local_pos = position (no transform)
             color,
             shape_rect,
             shape_radius,
             shape_curvature,
-            _padding: 0.0,
-            border_width: [0.0, 0.0],
-            border_color: [0.0, 0.0, 0.0, 0.0],
-            shadow_offset: [0.0, 0.0],
-            shadow_blur: 0.0,
-            shadow_spread: 0.0,
-            shadow_color: [0.0, 0.0, 0.0, 0.0],
-        }
+            [0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0],
+            0.0,
+            0.0,
+            [0.0, 0.0, 0.0, 0.0],
+            Transform::IDENTITY,
+        )
     }
 
     /// Create a vertex for a shape with SDF rendering and border
@@ -132,20 +174,21 @@ impl Vertex {
         border_width: [f32; 2],
         border_color: [f32; 4],
     ) -> Self {
-        Self {
+        Self::with_transform(
             position,
+            position, // local_pos = position (no transform)
             color,
             shape_rect,
             shape_radius,
             shape_curvature,
-            _padding: 0.0,
             border_width,
             border_color,
-            shadow_offset: [0.0, 0.0],
-            shadow_blur: 0.0,
-            shadow_spread: 0.0,
-            shadow_color: [0.0, 0.0, 0.0, 0.0],
-        }
+            [0.0, 0.0],
+            0.0,
+            0.0,
+            [0.0, 0.0, 0.0, 0.0],
+            Transform::IDENTITY,
+        )
     }
 
     /// Create a vertex for a shape with SDF rendering, border, and shadow
@@ -163,6 +206,41 @@ impl Vertex {
         shadow_spread: f32,
         shadow_color: [f32; 4],
     ) -> Self {
+        Self::with_transform(
+            position,
+            position, // local_pos = position (no transform)
+            color,
+            shape_rect,
+            shape_radius,
+            shape_curvature,
+            border_width,
+            border_color,
+            shadow_offset,
+            shadow_blur,
+            shadow_spread,
+            shadow_color,
+            Transform::IDENTITY,
+        )
+    }
+
+    /// Create a vertex with full transform support
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_transform(
+        position: [f32; 2],
+        local_pos: [f32; 2],
+        color: [f32; 4],
+        shape_rect: [f32; 4],
+        shape_radius: [f32; 2],
+        shape_curvature: f32,
+        border_width: [f32; 2],
+        border_color: [f32; 4],
+        shadow_offset: [f32; 2],
+        shadow_blur: f32,
+        shadow_spread: f32,
+        shadow_color: [f32; 4],
+        transform: Transform,
+    ) -> Self {
+        let rows = transform.rows();
         Self {
             position,
             color,
@@ -176,7 +254,21 @@ impl Vertex {
             shadow_blur,
             shadow_spread,
             shadow_color,
+            transform_row0: rows[0],
+            transform_row1: rows[1],
+            transform_row2: rows[2],
+            transform_row3: rows[3],
+            local_pos,
         }
+    }
+
+    /// Set the transform on an existing vertex
+    pub fn set_transform(&mut self, transform: Transform) {
+        let rows = transform.rows();
+        self.transform_row0 = rows[0];
+        self.transform_row1 = rows[1];
+        self.transform_row2 = rows[2];
+        self.transform_row3 = rows[3];
     }
 }
 
@@ -259,6 +351,8 @@ pub struct RoundedRect {
     pub border_color: Color,
     /// Shadow configuration
     pub shadow: Shadow,
+    /// Transform matrix for this shape
+    pub transform: Transform,
 }
 
 #[derive(Debug, Clone)]
@@ -281,6 +375,7 @@ impl RoundedRect {
             border_width: 0.0,
             border_color: Color::TRANSPARENT,
             shadow: Shadow::none(),
+            transform: Transform::IDENTITY,
         }
     }
 
@@ -295,6 +390,7 @@ impl RoundedRect {
             border_width: 0.0,
             border_color: Color::TRANSPARENT,
             shadow: Shadow::none(),
+            transform: Transform::IDENTITY,
         }
     }
 
@@ -309,6 +405,7 @@ impl RoundedRect {
             border_width: 0.0,
             border_color: Color::TRANSPARENT,
             shadow: Shadow::none(),
+            transform: Transform::IDENTITY,
         }
     }
 
@@ -323,6 +420,7 @@ impl RoundedRect {
             border_width: 0.0,
             border_color: Color::TRANSPARENT,
             shadow: Shadow::none(),
+            transform: Transform::IDENTITY,
         }
     }
 
@@ -344,6 +442,7 @@ impl RoundedRect {
             border_width,
             border_color,
             shadow: Shadow::none(),
+            transform: Transform::IDENTITY,
         }
     }
 
@@ -359,6 +458,7 @@ impl RoundedRect {
             border_width,
             border_color,
             shadow: Shadow::none(),
+            transform: Transform::IDENTITY,
         }
     }
 
@@ -380,6 +480,7 @@ impl RoundedRect {
             border_width,
             border_color,
             shadow: Shadow::none(),
+            transform: Transform::IDENTITY,
         }
     }
 
@@ -453,6 +554,55 @@ impl RoundedRect {
         let x2 = to_ndc_x(self.rect.x + self.rect.width);
         let y2 = to_ndc_y(self.rect.y + self.rect.height);
 
+        // Convert transform to work correctly in NDC space
+        // NDC is non-isotropic: x and y have different pixel scales due to aspect ratio
+        // For rotation θ in pixel space, the equivalent NDC rotation matrix is:
+        //   [[cos θ, -sin θ / aspect], [aspect * sin θ, cos θ]]
+        // This preserves visual angles when the shape is displayed on screen
+        let aspect = screen_width / screen_height;
+
+        let centered_transform = if !self.transform.is_identity() {
+            // Extract rotation and scale from the transform matrix
+            // The transform is in row-major: [a, b, 0, tx; c, d, 0, ty; ...]
+            // For a rotation: a = cos θ, b = -sin θ, c = sin θ, d = cos θ
+            let a = self.transform.data[0]; // cos θ or scale_x * cos θ
+            let b = self.transform.data[1]; // -sin θ or scale_x * (-sin θ)
+            let c = self.transform.data[4]; // sin θ or scale_y * sin θ
+            let d = self.transform.data[5]; // cos θ or scale_y * cos θ
+            let tx = self.transform.data[3];
+            let ty = self.transform.data[7];
+
+            // Build aspect-corrected transform matrix for NDC
+            // For pure rotation: new_a = a, new_b = b/aspect, new_c = c*aspect, new_d = d
+            let ndc_transform = Transform {
+                data: [
+                    a,
+                    b / aspect,
+                    0.0,
+                    tx * 2.0 / screen_width,
+                    c * aspect,
+                    d,
+                    0.0,
+                    -ty * 2.0 / screen_height,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                ],
+            };
+
+            // Center the transform around the shape's center in NDC
+            let center_x = (x1 + x2) / 2.0;
+            let center_y = (y1 + y2) / 2.0;
+            ndc_transform.center_at(center_x, center_y)
+        } else {
+            Transform::IDENTITY
+        };
+
         // Compute radius in NDC
         let radius = self
             .radius
@@ -519,9 +669,11 @@ impl RoundedRect {
 
         // Simple quad - SDF rendering handles the shape in fragment shader
         // Use expanded quad bounds for vertices, but keep original shape_rect for SDF
+        // local_pos = untransformed position for SDF evaluation (same as position)
         let vertices = vec![
-            Vertex::with_shadow(
+            Vertex::with_transform(
                 [quad_x1, quad_y1],
+                [quad_x1, quad_y1], // local_pos
                 self.color_at(x1, y1, x1, y1, x2, y2),
                 shape_rect,
                 shape_radius,
@@ -532,9 +684,11 @@ impl RoundedRect {
                 shadow_blur_ndc,
                 shadow_spread_ndc,
                 shadow_color,
+                centered_transform,
             ),
-            Vertex::with_shadow(
+            Vertex::with_transform(
                 [quad_x2, quad_y1],
+                [quad_x2, quad_y1], // local_pos
                 self.color_at(x2, y1, x1, y1, x2, y2),
                 shape_rect,
                 shape_radius,
@@ -545,9 +699,11 @@ impl RoundedRect {
                 shadow_blur_ndc,
                 shadow_spread_ndc,
                 shadow_color,
+                centered_transform,
             ),
-            Vertex::with_shadow(
+            Vertex::with_transform(
                 [quad_x2, quad_y2],
+                [quad_x2, quad_y2], // local_pos
                 self.color_at(x2, y2, x1, y1, x2, y2),
                 shape_rect,
                 shape_radius,
@@ -558,9 +714,11 @@ impl RoundedRect {
                 shadow_blur_ndc,
                 shadow_spread_ndc,
                 shadow_color,
+                centered_transform,
             ),
-            Vertex::with_shadow(
+            Vertex::with_transform(
                 [quad_x1, quad_y2],
+                [quad_x1, quad_y2], // local_pos
                 self.color_at(x1, y2, x1, y1, x2, y2),
                 shape_rect,
                 shape_radius,
@@ -571,6 +729,7 @@ impl RoundedRect {
                 shadow_blur_ndc,
                 shadow_spread_ndc,
                 shadow_color,
+                centered_transform,
             ),
         ];
 
@@ -587,6 +746,8 @@ pub struct Circle {
     pub radius: f32,
     pub color: Color,
     pub clip: Option<ClipRegion>,
+    /// Transform matrix for this shape
+    pub transform: Transform,
 }
 
 impl Circle {
@@ -597,6 +758,7 @@ impl Circle {
             radius,
             color,
             clip: None,
+            transform: Transform::IDENTITY,
         }
     }
 
@@ -613,6 +775,7 @@ impl Circle {
             radius,
             color,
             clip: Some(clip),
+            transform: Transform::IDENTITY,
         }
     }
 
@@ -627,6 +790,13 @@ impl Circle {
         let cy = to_ndc_y(self.center_y);
         let r_ndc_x = (self.radius / screen_width) * 2.0;
         let r_ndc_y = (self.radius / screen_height) * 2.0;
+
+        // Compute centered transform in NDC space (circle is already centered at cx, cy)
+        let centered_transform = if !self.transform.is_identity() {
+            self.transform.center_at(cx, cy)
+        } else {
+            Transform::IDENTITY
+        };
 
         // Compute clip rect in NDC - used for clipping the circle to container bounds
         let (clip_rect, clip_radius, clip_curvature) = if let Some(ref clip) = self.clip {
@@ -659,8 +829,10 @@ impl Circle {
         let shadow_color = [0.0, 0.0, 0.0, 0.0];
 
         // Center vertex - pass clip region as shape params for clipping
-        vertices.push(Vertex::with_shadow(
+        // local_pos = untransformed position for SDF evaluation
+        vertices.push(Vertex::with_transform(
             [cx, cy],
+            [cx, cy], // local_pos
             color,
             clip_rect,
             clip_radius,
@@ -671,6 +843,7 @@ impl Circle {
             shadow_blur,
             shadow_spread,
             shadow_color,
+            centered_transform,
         ));
 
         // Edge vertices
@@ -678,8 +851,9 @@ impl Circle {
             let angle = (i as f32 / segments as f32) * std::f32::consts::PI * 2.0;
             let vx = cx + angle.cos() * r_ndc_x;
             let vy = cy - angle.sin() * r_ndc_y;
-            vertices.push(Vertex::with_shadow(
+            vertices.push(Vertex::with_transform(
                 [vx, vy],
+                [vx, vy], // local_pos
                 color,
                 clip_rect,
                 clip_radius,
@@ -690,6 +864,7 @@ impl Circle {
                 shadow_blur,
                 shadow_spread,
                 shadow_color,
+                centered_transform,
             ));
         }
 

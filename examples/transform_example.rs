@@ -1,0 +1,126 @@
+//! Example demonstrating the transform system with rotation, scale, and animation.
+//!
+//! This example shows:
+//! - Static transforms (rotate, scale)
+//! - Reactive transforms that change based on signals
+//! - Animated transforms with spring physics
+//! - Nested transforms (parent-child composition)
+
+use guido::prelude::*;
+
+fn main() {
+    // Signals for interactive transforms
+    let rotation = create_signal(0.0f32);
+    let scale_factor = create_signal(1.0f32);
+    let is_scaled = create_signal(false);
+
+    // Build the UI with various transform demonstrations
+    let view = container()
+        .layout(
+            Flex::row()
+                .spacing(20.0)
+                .main_axis_alignment(MainAxisAlignment::Center)
+                .cross_axis_alignment(CrossAxisAlignment::Center),
+        )
+        .padding(16.0)
+        .children([
+            // 1. Static rotation (45 degrees)
+            container()
+                .width(60.0)
+                .height(60.0)
+                .background(Color::rgb(0.8, 0.3, 0.3))
+                .corner_radius(8.0)
+                .rotate(45.0)
+                .child(
+                    container()
+                        .layout(
+                            Flex::column()
+                                .main_axis_alignment(MainAxisAlignment::Center)
+                                .cross_axis_alignment(CrossAxisAlignment::Center),
+                        )
+                        .child(text("45").color(Color::WHITE).font_size(12.0)),
+                ),
+            // 2. Click to rotate (increments by 45 degrees)
+            container()
+                .width(60.0)
+                .height(60.0)
+                .background(Color::rgb(0.3, 0.6, 0.8))
+                .corner_radius(8.0)
+                .rotate(rotation)
+                .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
+                .ripple()
+                .on_click(move || {
+                    rotation.update(|r| *r += 45.0);
+                })
+                .child(
+                    container()
+                        .layout(
+                            Flex::column()
+                                .main_axis_alignment(MainAxisAlignment::Center)
+                                .cross_axis_alignment(CrossAxisAlignment::Center),
+                        )
+                        .child(text("Click").color(Color::WHITE).font_size(10.0).nowrap()),
+                ),
+            // 3. Click to toggle scale with spring animation
+            container()
+                .width(60.0)
+                .height(60.0)
+                .background(Color::rgb(0.3, 0.8, 0.4))
+                .corner_radius(8.0)
+                .scale(scale_factor)
+                .animate_transform(Transition::spring(SpringConfig::BOUNCY))
+                .ripple()
+                .on_click(move || {
+                    is_scaled.update(|s| *s = !*s);
+                    let target = if is_scaled.get() { 1.3 } else { 1.0 };
+                    scale_factor.set(target);
+                })
+                .child(
+                    container()
+                        .layout(
+                            Flex::column()
+                                .main_axis_alignment(MainAxisAlignment::Center)
+                                .cross_axis_alignment(CrossAxisAlignment::Center),
+                        )
+                        .child(text("Scale").color(Color::WHITE).font_size(10.0).nowrap()),
+                ),
+            // 4. Static scale (smaller)
+            container()
+                .width(60.0)
+                .height(60.0)
+                .background(Color::rgb(0.6, 0.4, 0.8))
+                .corner_radius(8.0)
+                .scale(0.7)
+                .child(
+                    container()
+                        .layout(
+                            Flex::column()
+                                .main_axis_alignment(MainAxisAlignment::Center)
+                                .cross_axis_alignment(CrossAxisAlignment::Center),
+                        )
+                        .child(text("0.7x").color(Color::WHITE).font_size(12.0)),
+                ),
+            // 5. Combined rotation + scale
+            container()
+                .width(60.0)
+                .height(60.0)
+                .background(Color::rgb(0.8, 0.6, 0.2))
+                .corner_radius(8.0)
+                .transform(Transform::rotate_degrees(30.0).then(&Transform::scale(0.8)))
+                .child(
+                    container()
+                        .layout(
+                            Flex::column()
+                                .main_axis_alignment(MainAxisAlignment::Center)
+                                .cross_axis_alignment(CrossAxisAlignment::Center),
+                        )
+                        .child(text("Both").color(Color::WHITE).font_size(10.0).nowrap()),
+                ),
+        ]);
+
+    // Run the app with taller height to see transforms
+    App::new()
+        .height(120)
+        .background_color(Color::rgb(0.1, 0.1, 0.15))
+        .run(view);
+}

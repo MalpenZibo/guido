@@ -11,6 +11,7 @@ use wgpu::{BufferUsages, Device, Queue, RenderPipeline};
 
 use self::primitives::{Circle, ClipRegion, Gradient, RoundedRect, Vertex};
 use self::text::TextRenderState;
+use crate::transform::Transform;
 use crate::widgets::{Color, Rect};
 
 pub use context::{GpuContext, SurfaceState};
@@ -87,6 +88,7 @@ impl Renderer {
                     spread: rect.shadow.spread * self.scale_factor,
                     color: rect.shadow.color,
                 };
+                scaled_rect.transform = rect.transform;
                 scaled_rect.to_vertices(self.screen_width, self.screen_height)
             }
             Shape::Circle(circle) => {
@@ -107,6 +109,7 @@ impl Renderer {
                     circle.color,
                 );
                 scaled_circle.clip = scaled_clip;
+                scaled_circle.transform = circle.transform;
                 scaled_circle.to_vertices(self.screen_width, self.screen_height)
             }
         }
@@ -127,6 +130,7 @@ impl Renderer {
             texts: Vec::new(),
             overlay_shapes: Vec::new(),
             clip_stack: Vec::new(),
+            transform_stack: Vec::new(),
         }
     }
 
@@ -301,18 +305,22 @@ pub struct PaintContext {
     /// Clip stack for clipping children to container bounds
     /// Each entry is (clip_rect, corner_radius, curvature)
     clip_stack: Vec<(Rect, f32, f32)>,
+    /// Transform stack for composing parent→child transformations
+    transform_stack: Vec<Transform>,
 }
 
 impl PaintContext {
     pub fn draw_rect(&mut self, rect: Rect, color: Color) {
         let mut shape = RoundedRect::new(rect, color, 0.0);
         shape.clip = self.current_clip();
+        shape.transform = self.current_transform();
         self.shapes.push(Shape::RoundedRect(shape));
     }
 
     pub fn draw_rounded_rect(&mut self, rect: Rect, color: Color, radius: f32) {
         let mut shape = RoundedRect::new(rect, color, radius);
         shape.clip = self.current_clip();
+        shape.transform = self.current_transform();
         self.shapes.push(Shape::RoundedRect(shape));
     }
 
@@ -326,6 +334,7 @@ impl PaintContext {
     ) {
         let mut shape = RoundedRect::with_curvature(rect, color, radius, curvature);
         shape.clip = self.current_clip();
+        shape.transform = self.current_transform();
         self.shapes.push(Shape::RoundedRect(shape));
     }
 
@@ -345,6 +354,7 @@ impl PaintContext {
         };
         let mut shape = RoundedRect::with_gradient(rect, gradient, radius);
         shape.clip = self.current_clip();
+        shape.transform = self.current_transform();
         self.shapes.push(Shape::RoundedRect(shape));
     }
 
@@ -366,6 +376,7 @@ impl PaintContext {
         let mut shape = RoundedRect::with_gradient(rect, gradient, radius);
         shape.curvature = curvature;
         shape.clip = self.current_clip();
+        shape.transform = self.current_transform();
         self.shapes.push(Shape::RoundedRect(shape));
     }
 
@@ -380,6 +391,7 @@ impl PaintContext {
     ) {
         let mut shape = RoundedRect::border_only(rect, corner_radius, border_width, color);
         shape.clip = self.current_clip();
+        shape.transform = self.current_transform();
         self.shapes.push(Shape::RoundedRect(shape));
     }
 
@@ -401,6 +413,7 @@ impl PaintContext {
             curvature,
         );
         shape.clip = self.current_clip();
+        shape.transform = self.current_transform();
         self.shapes.push(Shape::RoundedRect(shape));
     }
 
@@ -416,6 +429,7 @@ impl PaintContext {
         let mut shape =
             RoundedRect::with_border(rect, fill_color, radius, border_width, border_color);
         shape.clip = self.current_clip();
+        shape.transform = self.current_transform();
         self.shapes.push(Shape::RoundedRect(shape));
     }
 
@@ -433,6 +447,7 @@ impl PaintContext {
             RoundedRect::with_border(rect, fill_color, radius, border_width, border_color);
         shape.curvature = curvature;
         shape.clip = self.current_clip();
+        shape.transform = self.current_transform();
         self.shapes.push(Shape::RoundedRect(shape));
     }
 
@@ -440,6 +455,7 @@ impl PaintContext {
     pub fn draw_circle(&mut self, center_x: f32, center_y: f32, radius: f32, color: Color) {
         let mut shape = Circle::new(center_x, center_y, radius, color);
         shape.clip = self.current_clip();
+        shape.transform = self.current_transform();
         self.shapes.push(Shape::Circle(shape));
     }
 
@@ -458,9 +474,9 @@ impl PaintContext {
             radius: clip_corner_radius,
             curvature: 2.0, // Default to circular clipping
         };
-        self.shapes.push(Shape::Circle(Circle::with_clip(
-            center_x, center_y, radius, color, clip,
-        )));
+        let mut shape = Circle::with_clip(center_x, center_y, radius, color, clip);
+        shape.transform = self.current_transform();
+        self.shapes.push(Shape::Circle(shape));
     }
 
     /// Draw a rounded rectangle with a shadow
@@ -473,6 +489,7 @@ impl PaintContext {
     ) {
         let mut rounded_rect = RoundedRect::new(rect, color, radius);
         rounded_rect.shadow = shadow;
+        rounded_rect.transform = self.current_transform();
         self.shapes.push(Shape::RoundedRect(rounded_rect));
     }
 
@@ -488,6 +505,7 @@ impl PaintContext {
         let mut shape = RoundedRect::with_curvature(rect, color, radius, curvature);
         shape.shadow = shadow;
         shape.clip = self.current_clip();
+        shape.transform = self.current_transform();
         self.shapes.push(Shape::RoundedRect(shape));
     }
 
@@ -500,9 +518,9 @@ impl PaintContext {
 
     /// Draw a circle as an overlay (rendered on top of text)
     pub fn draw_overlay_circle(&mut self, center_x: f32, center_y: f32, radius: f32, color: Color) {
-        self.overlay_shapes.push(Shape::Circle(Circle::new(
-            center_x, center_y, radius, color,
-        )));
+        let mut shape = Circle::new(center_x, center_y, radius, color);
+        shape.transform = self.current_transform();
+        self.overlay_shapes.push(Shape::Circle(shape));
     }
 
     /// Draw a circle as an overlay, clipped to a bounding rectangle
@@ -520,9 +538,9 @@ impl PaintContext {
             radius: clip_corner_radius,
             curvature: 2.0, // Default to circular clipping
         };
-        self.overlay_shapes.push(Shape::Circle(Circle::with_clip(
-            center_x, center_y, radius, color, clip,
-        )));
+        let mut shape = Circle::with_clip(center_x, center_y, radius, color, clip);
+        shape.transform = self.current_transform();
+        self.overlay_shapes.push(Shape::Circle(shape));
     }
 
     /// Draw a circle as an overlay, clipped to a bounding rectangle with custom curvature
@@ -542,9 +560,9 @@ impl PaintContext {
             radius: clip_corner_radius,
             curvature: clip_curvature,
         };
-        self.overlay_shapes.push(Shape::Circle(Circle::with_clip(
-            center_x, center_y, radius, color, clip,
-        )));
+        let mut shape = Circle::with_clip(center_x, center_y, radius, color, clip);
+        shape.transform = self.current_transform();
+        self.overlay_shapes.push(Shape::Circle(shape));
     }
 
     /// Push a clip region onto the stack
@@ -567,5 +585,29 @@ impl PaintContext {
                 radius: *radius,
                 curvature: *curvature,
             })
+    }
+
+    /// Push a transform onto the stack
+    /// This transform is composed with the current transform
+    pub fn push_transform(&mut self, transform: Transform) {
+        let composed = if let Some(current) = self.transform_stack.last() {
+            current.then(&transform)
+        } else {
+            transform
+        };
+        self.transform_stack.push(composed);
+    }
+
+    /// Pop a transform from the stack
+    pub fn pop_transform(&mut self) {
+        self.transform_stack.pop();
+    }
+
+    /// Get the current composed transform
+    pub fn current_transform(&self) -> Transform {
+        self.transform_stack
+            .last()
+            .copied()
+            .unwrap_or(Transform::IDENTITY)
     }
 }
