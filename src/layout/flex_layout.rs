@@ -83,11 +83,23 @@ impl Flex {
 
         self.child_sizes.clear();
 
+        // For Stretch alignment, we need to know the container height first
+        // Use min_height if set, otherwise measure children first
+        let stretch_height = if cross_align == CrossAxisAlignment::Stretch {
+            if constraints.min_height > 0.0 {
+                Some(constraints.min_height)
+            } else {
+                None // Will measure children first
+            }
+        } else {
+            None
+        };
+
         let child_constraints = Constraints {
             min_width: 0.0,
-            min_height: 0.0,
+            min_height: stretch_height.unwrap_or(0.0),
             max_width: constraints.max_width,
-            max_height: constraints.max_height,
+            max_height: stretch_height.unwrap_or(constraints.max_height),
         };
 
         // First pass: measure all children
@@ -127,6 +139,23 @@ impl Flex {
         let height = max_height
             .max(constraints.min_height)
             .min(constraints.max_height);
+
+        // For Stretch: if we didn't have a known height before, re-layout children
+        // with the now-known height as both min and max
+        if cross_align == CrossAxisAlignment::Stretch && stretch_height.is_none() && height > 0.0 {
+            self.child_sizes.clear();
+            let stretch_constraints = Constraints {
+                min_width: 0.0,
+                min_height: height,
+                max_width: constraints.max_width,
+                max_height: height,
+            };
+            for child in children.iter_mut() {
+                child.mark_dirty(crate::reactive::ChangeFlags::NEEDS_LAYOUT);
+                let size = child.layout(stretch_constraints);
+                self.child_sizes.push(size);
+            }
+        }
 
         let size = Size::new(width, height);
 
@@ -194,10 +223,22 @@ impl Flex {
 
         self.child_sizes.clear();
 
+        // For Stretch alignment, we need to know the container width first
+        // Use min_width if set, otherwise measure children first
+        let stretch_width = if cross_align == CrossAxisAlignment::Stretch {
+            if constraints.min_width > 0.0 {
+                Some(constraints.min_width)
+            } else {
+                None // Will measure children first
+            }
+        } else {
+            None
+        };
+
         let child_constraints = Constraints {
-            min_width: 0.0,
+            min_width: stretch_width.unwrap_or(0.0),
             min_height: 0.0,
-            max_width: constraints.max_width,
+            max_width: stretch_width.unwrap_or(constraints.max_width),
             max_height: constraints.max_height,
         };
 
@@ -238,6 +279,23 @@ impl Flex {
                 .max(constraints.min_height)
                 .min(constraints.max_height),
         };
+
+        // For Stretch: if we didn't have a known width before, re-layout children
+        // with the now-known width as both min and max
+        if cross_align == CrossAxisAlignment::Stretch && stretch_width.is_none() && width > 0.0 {
+            self.child_sizes.clear();
+            let stretch_constraints = Constraints {
+                min_width: width,
+                min_height: 0.0,
+                max_width: width,
+                max_height: constraints.max_height,
+            };
+            for child in children.iter_mut() {
+                child.mark_dirty(crate::reactive::ChangeFlags::NEEDS_LAYOUT);
+                let size = child.layout(stretch_constraints);
+                self.child_sizes.push(size);
+            }
+        }
 
         let size = Size::new(width, height);
 

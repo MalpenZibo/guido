@@ -94,7 +94,10 @@ fn row_main_axis_tests() -> impl Widget {
         .child(row_main_axis_row("Start", MainAxisAlignment::Start))
         .child(row_main_axis_row("Center", MainAxisAlignment::Center))
         .child(row_main_axis_row("End", MainAxisAlignment::End))
-        .child(row_main_axis_row("Between", MainAxisAlignment::SpaceBetween))
+        .child(row_main_axis_row(
+            "Between",
+            MainAxisAlignment::SpaceBetween,
+        ))
         .child(row_main_axis_row("Around", MainAxisAlignment::SpaceAround))
         .child(row_main_axis_row("Evenly", MainAxisAlignment::SpaceEvenly))
 }
@@ -156,9 +159,18 @@ fn column_main_axis_tests() -> impl Widget {
         .child(column_main_axis_col("Start", MainAxisAlignment::Start))
         .child(column_main_axis_col("Center", MainAxisAlignment::Center))
         .child(column_main_axis_col("End", MainAxisAlignment::End))
-        .child(column_main_axis_col("Between", MainAxisAlignment::SpaceBetween))
-        .child(column_main_axis_col("Around", MainAxisAlignment::SpaceAround))
-        .child(column_main_axis_col("Evenly", MainAxisAlignment::SpaceEvenly))
+        .child(column_main_axis_col(
+            "Between",
+            MainAxisAlignment::SpaceBetween,
+        ))
+        .child(column_main_axis_col(
+            "Around",
+            MainAxisAlignment::SpaceAround,
+        ))
+        .child(column_main_axis_col(
+            "Evenly",
+            MainAxisAlignment::SpaceEvenly,
+        ))
 }
 
 fn column_main_axis_col(name: &'static str, alignment: MainAxisAlignment) -> impl Widget {
@@ -188,7 +200,10 @@ fn column_cross_axis_tests() -> impl Widget {
         .child(column_cross_axis_col("Start", CrossAxisAlignment::Start))
         .child(column_cross_axis_col("Center", CrossAxisAlignment::Center))
         .child(column_cross_axis_col("End", CrossAxisAlignment::End))
-        .child(column_cross_axis_col("Stretch", CrossAxisAlignment::Stretch))
+        .child(column_cross_axis_col(
+            "Stretch",
+            CrossAxisAlignment::Stretch,
+        ))
 }
 
 fn column_cross_axis_col(name: &'static str, alignment: CrossAxisAlignment) -> impl Widget {
