@@ -1643,24 +1643,26 @@ impl Widget for Container {
         // Use Cow to avoid cloning when no transformation is needed
         let local_event: Cow<'_, Event> = if !transform.is_identity() {
             if let Some((x, y)) = event.coords() {
-                // Compute the centered transform (as used in rendering)
+                // Get the transform origin (center of bounds)
                 let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
-                let centered_transform = transform.center_at(origin_x, origin_y);
-                // Inverse to go from screen space back to local space
-                let inverse = centered_transform.inverse();
 
-                // Only apply Y-flip compensation for rotation.
-                // Rotation is applied in NDC space (Y-up) but hit testing is in
-                // screen space (Y-down), which inverts the rotation direction.
-                // Translation and scale don't need this compensation.
-                let final_inverse = if transform.has_rotation() {
-                    let y_flip = Transform::scale_xy(1.0, -1.0).center_at(origin_x, origin_y);
-                    y_flip.then(&inverse).then(&y_flip)
+                // Build the equivalent transform in screen space.
+                // In NDC (Y-up), rotation by θ appears as rotation by -θ in screen space (Y-down).
+                // Translation (tx, ty) in logical coords moves the shape by (tx, ty) in screen space.
+                let screen_space_transform = if transform.has_rotation() {
+                    // Negate the rotation angle for screen space
+                    // The rotation matrix [cos, -sin; sin, cos] becomes [cos, sin; -sin, cos]
+                    // which is the same as negating the angle
+                    let mut screen_transform = transform;
+                    // Negate the sin components (indices 1 and 4 in row-major)
+                    screen_transform.data[1] = -screen_transform.data[1]; // -sin -> sin
+                    screen_transform.data[4] = -screen_transform.data[4]; // sin -> -sin
+                    screen_transform.center_at(origin_x, origin_y)
                 } else {
-                    inverse
+                    transform.center_at(origin_x, origin_y)
                 };
 
-                let (local_x, local_y) = final_inverse.transform_point(x, y);
+                let (local_x, local_y) = screen_space_transform.inverse().transform_point(x, y);
                 Cow::Owned(event.with_coords(local_x, local_y))
             } else {
                 Cow::Borrowed(event)
