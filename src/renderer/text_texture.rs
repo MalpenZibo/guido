@@ -18,6 +18,11 @@ use wgpu::{
 
 use super::TextEntry;
 
+/// Quality multiplier for supersampling text textures.
+/// Renders text at higher resolution for better quality when displayed.
+/// 2.0 provides good quality without excessive memory usage.
+pub const QUALITY_MULTIPLIER: f32 = 2.0;
+
 /// A rendered text texture ready for display as a transformed quad.
 pub struct TextTexture {
     /// The GPU texture containing the rendered text
@@ -78,11 +83,6 @@ impl TextTextureRenderer {
         entry: &TextEntry,
         scale_factor: f32,
     ) -> TextTexture {
-        // Quality multiplier for supersampling - renders text at higher resolution
-        // for better quality when displayed. 2.0 provides good quality without
-        // excessive memory usage.
-        const QUALITY_MULTIPLIER: f32 = 2.0;
-
         // Extract the scale from the transform for crisp rendering
         let transform_scale = entry.transform.extract_scale().max(1.0);
 
