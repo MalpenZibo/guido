@@ -766,6 +766,28 @@ pub struct Circle {
     pub transform_is_centered: bool,
 }
 
+/// Trait for shapes that can have transforms applied.
+///
+/// This allows PaintContext to apply transforms uniformly to all shape types.
+pub trait Transformable {
+    /// Set the transform matrix and whether it's already centered
+    fn set_transform(&mut self, transform: Transform, is_centered: bool);
+}
+
+impl Transformable for RoundedRect {
+    fn set_transform(&mut self, transform: Transform, is_centered: bool) {
+        self.transform = transform;
+        self.transform_is_centered = is_centered;
+    }
+}
+
+impl Transformable for Circle {
+    fn set_transform(&mut self, transform: Transform, is_centered: bool) {
+        self.transform = transform;
+        self.transform_is_centered = is_centered;
+    }
+}
+
 impl Circle {
     pub fn new(center_x: f32, center_y: f32, radius: f32, color: Color) -> Self {
         Self {

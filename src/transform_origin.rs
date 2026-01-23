@@ -179,7 +179,13 @@ impl TransformOrigin {
         (x, y)
     }
 
-    /// Check if this is the center origin (default)
+    /// Check if this is the center origin using the CENTER constant.
+    ///
+    /// Note: This checks the enum variant, not the resolved position.
+    /// `TransformOrigin::percent(50.0, 50.0).is_center()` returns `false`
+    /// even though it resolves to the same point as `CENTER`.
+    /// This is intentional for performance - it enables a fast path
+    /// when using the default center origin.
     pub fn is_center(&self) -> bool {
         matches!(
             self,
