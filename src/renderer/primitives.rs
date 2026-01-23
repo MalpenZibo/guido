@@ -353,6 +353,8 @@ pub struct RoundedRect {
     pub shadow: Shadow,
     /// Transform matrix for this shape
     pub transform: Transform,
+    /// If true, the transform is already centered and should not be auto-centered
+    pub transform_is_centered: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -376,6 +378,7 @@ impl RoundedRect {
             border_color: Color::TRANSPARENT,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
+            transform_is_centered: false,
         }
     }
 
@@ -391,6 +394,7 @@ impl RoundedRect {
             border_color: Color::TRANSPARENT,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
+            transform_is_centered: false,
         }
     }
 
@@ -406,6 +410,7 @@ impl RoundedRect {
             border_color: Color::TRANSPARENT,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
+            transform_is_centered: false,
         }
     }
 
@@ -421,6 +426,7 @@ impl RoundedRect {
             border_color: Color::TRANSPARENT,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
+            transform_is_centered: false,
         }
     }
 
@@ -443,6 +449,7 @@ impl RoundedRect {
             border_color,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
+            transform_is_centered: false,
         }
     }
 
@@ -459,6 +466,7 @@ impl RoundedRect {
             border_color,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
+            transform_is_centered: false,
         }
     }
 
@@ -481,6 +489,7 @@ impl RoundedRect {
             border_color,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
+            transform_is_centered: false,
         }
     }
 
@@ -595,10 +604,15 @@ impl RoundedRect {
                 ],
             };
 
-            // Center the transform around the shape's center in NDC
-            let center_x = (x1 + x2) / 2.0;
-            let center_y = (y1 + y2) / 2.0;
-            ndc_transform.center_at(center_x, center_y)
+            // If transform is already centered (from Container with custom transform_origin),
+            // use it directly. Otherwise, center around the shape's center in NDC.
+            if self.transform_is_centered {
+                ndc_transform
+            } else {
+                let center_x = (x1 + x2) / 2.0;
+                let center_y = (y1 + y2) / 2.0;
+                ndc_transform.center_at(center_x, center_y)
+            }
         } else {
             Transform::IDENTITY
         };
@@ -748,6 +762,8 @@ pub struct Circle {
     pub clip: Option<ClipRegion>,
     /// Transform matrix for this shape
     pub transform: Transform,
+    /// If true, the transform is already centered and should not be auto-centered
+    pub transform_is_centered: bool,
 }
 
 impl Circle {
@@ -759,6 +775,7 @@ impl Circle {
             color,
             clip: None,
             transform: Transform::IDENTITY,
+            transform_is_centered: false,
         }
     }
 
@@ -776,6 +793,7 @@ impl Circle {
             color,
             clip: Some(clip),
             transform: Transform::IDENTITY,
+            transform_is_centered: false,
         }
     }
 
@@ -792,8 +810,14 @@ impl Circle {
         let r_ndc_y = (self.radius / screen_height) * 2.0;
 
         // Compute centered transform in NDC space (circle is already centered at cx, cy)
+        // If transform is already centered (from Container with custom transform_origin),
+        // use it directly.
         let centered_transform = if !self.transform.is_identity() {
-            self.transform.center_at(cx, cy)
+            if self.transform_is_centered {
+                self.transform
+            } else {
+                self.transform.center_at(cx, cy)
+            }
         } else {
             Transform::IDENTITY
         };
