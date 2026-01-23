@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -33,6 +34,17 @@ pub enum GradientDirection {
     Diagonal,
     /// Top-right to bottom-left
     DiagonalReverse,
+}
+
+impl From<GradientDirection> for GradientDir {
+    fn from(direction: GradientDirection) -> Self {
+        match direction {
+            GradientDirection::Horizontal => GradientDir::Horizontal,
+            GradientDirection::Vertical => GradientDir::Vertical,
+            GradientDirection::Diagonal => GradientDir::Diagonal,
+            GradientDirection::DiagonalReverse => GradientDir::DiagonalReverse,
+        }
+    }
 }
 
 /// Linear gradient definition
@@ -1183,17 +1195,11 @@ impl Widget for Container {
 
         // Draw background
         if let Some(ref gradient) = self.gradient {
-            let direction = match gradient.direction {
-                GradientDirection::Horizontal => GradientDir::Horizontal,
-                GradientDirection::Vertical => GradientDir::Vertical,
-                GradientDirection::Diagonal => GradientDir::Diagonal,
-                GradientDirection::DiagonalReverse => GradientDir::DiagonalReverse,
-            };
             ctx.draw_gradient_rect_with_curvature(
                 self.bounds,
                 gradient.start_color,
                 gradient.end_color,
-                direction,
+                gradient.direction.into(),
                 corner_radius,
                 corner_curvature,
             );
@@ -1272,7 +1278,8 @@ impl Widget for Container {
         let corner_radius = self.animated_corner_radius();
 
         // Transform the event coordinates from screen space to this container's local space
-        let local_event = if !transform.is_identity() {
+        // Use Cow to avoid cloning when no transformation is needed
+        let local_event: Cow<'_, Event> = if !transform.is_identity() {
             if let Some((x, y)) = event.coords() {
                 // Compute the centered transform (as used in rendering)
                 let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
@@ -1292,12 +1299,12 @@ impl Widget for Container {
                 };
 
                 let (local_x, local_y) = final_inverse.transform_point(x, y);
-                event.with_coords(local_x, local_y)
+                Cow::Owned(event.with_coords(local_x, local_y))
             } else {
-                event.clone()
+                Cow::Borrowed(event)
             }
         } else {
-            event.clone()
+            Cow::Borrowed(event)
         };
 
         // Let children handle first (with transformed coordinates for nested transforms)
@@ -1308,7 +1315,7 @@ impl Widget for Container {
         }
 
         // Handle our own events using transformed coordinates
-        match &local_event {
+        match local_event.as_ref() {
             Event::MouseEnter { x, y } => {
                 if self.bounds.contains_rounded(*x, *y, corner_radius) {
                     self.is_hovered = true;
