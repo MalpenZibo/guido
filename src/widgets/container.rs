@@ -314,6 +314,18 @@ pub struct Container {
     // State layer styles (hover/pressed overrides)
     hover_state: Option<StateStyle>,
     pressed_state: Option<StateStyle>,
+
+    // Ripple animation state
+    /// Center point of the ripple in local container coordinates
+    ripple_center: Option<(f32, f32)>,
+    /// Current ripple expansion progress (0.0 = start, 1.0 = fully expanded)
+    ripple_progress: f32,
+    /// Current ripple opacity (1.0 = visible, 0.0 = faded out)
+    ripple_opacity: f32,
+    /// Whether the ripple is currently fading out (mouse released)
+    ripple_fading: bool,
+    /// Time when ripple animation started (for smooth animation)
+    ripple_start_time: Option<std::time::Instant>,
 }
 
 impl Container {
@@ -357,6 +369,11 @@ impl Container {
             transform_anim: None,
             hover_state: None,
             pressed_state: None,
+            ripple_center: None,
+            ripple_progress: 0.0,
+            ripple_opacity: 0.0,
+            ripple_fading: false,
+            ripple_start_time: None,
         }
     }
 
@@ -1018,10 +1035,61 @@ impl Container {
         let transform_target = self.effective_transform_target();
         advance_anim!(self, transform_anim, transform_target, any_animating);
 
+        // Advance ripple animation
+        if self.ripple_center.is_some() {
+            let ripple_animating = self.advance_ripple();
+            any_animating = any_animating || ripple_animating;
+        }
+
         // Request next frame if any property animations are running
         if any_animating {
             request_animation_frame();
         }
+    }
+
+    /// Advance ripple animation, returns true if still animating
+    fn advance_ripple(&mut self) -> bool {
+        // Get ripple config from pressed_state
+        let ripple_config = match &self.pressed_state {
+            Some(state) => match &state.ripple {
+                Some(config) => config.clone(),
+                None => return false,
+            },
+            None => return false,
+        };
+
+        let Some(start_time) = self.ripple_start_time else {
+            return false;
+        };
+
+        let elapsed = start_time.elapsed().as_secs_f32();
+
+        // Expansion animation (0.4 seconds base, modified by expand_speed)
+        let expand_duration = 0.4 / ripple_config.expand_speed;
+        if self.ripple_progress < 1.0 {
+            self.ripple_progress = (elapsed / expand_duration).min(1.0);
+            // Use ease-out curve for expansion
+            self.ripple_progress = 1.0 - (1.0 - self.ripple_progress).powi(3);
+        }
+
+        // Fade animation (0.3 seconds base, modified by fade_speed)
+        if self.ripple_fading {
+            let fade_duration = 0.3 / ripple_config.fade_speed;
+            // Start fading after a brief delay once triggered
+            self.ripple_opacity =
+                (1.0 - (elapsed - expand_duration * 0.5) / fade_duration).clamp(0.0, 1.0);
+
+            // Clear ripple when fully faded
+            if self.ripple_opacity <= 0.0 {
+                self.ripple_center = None;
+                self.ripple_start_time = None;
+                self.ripple_fading = false;
+                return false;
+            }
+        }
+
+        // Still animating if expanding or fading
+        self.ripple_progress < 1.0 || self.ripple_fading
     }
 }
 
@@ -1473,6 +1541,47 @@ impl Widget for Container {
             ctx.pop_clip();
         }
 
+        // Draw ripple effect as overlay (rendered after children/text)
+        if let Some((local_cx, local_cy)) = self.ripple_center {
+            if let Some(ref pressed_state) = self.pressed_state {
+                if let Some(ref ripple_config) = pressed_state.ripple {
+                    if self.ripple_opacity > 0.0 {
+                        // Calculate maximum radius to cover entire container
+                        // Use distance to farthest corner from click point
+                        let max_dist_x = local_cx.max(self.bounds.width - local_cx);
+                        let max_dist_y = local_cy.max(self.bounds.height - local_cy);
+                        let max_radius = (max_dist_x * max_dist_x + max_dist_y * max_dist_y).sqrt();
+
+                        // Current radius based on progress
+                        let current_radius = max_radius * self.ripple_progress;
+
+                        // Ripple color with opacity
+                        let ripple_color = Color::rgba(
+                            ripple_config.color.r,
+                            ripple_config.color.g,
+                            ripple_config.color.b,
+                            ripple_config.color.a * self.ripple_opacity,
+                        );
+
+                        // Convert local coordinates to screen coordinates
+                        let screen_cx = self.bounds.x + local_cx;
+                        let screen_cy = self.bounds.y + local_cy;
+
+                        // Draw ripple circle clipped to container bounds
+                        ctx.draw_overlay_circle_clipped(
+                            screen_cx,
+                            screen_cy,
+                            current_radius,
+                            ripple_color,
+                            self.bounds,
+                            corner_radius,
+                            corner_curvature,
+                        );
+                    }
+                }
+            }
+        }
+
         // Pop transform if we pushed one
         if has_transform {
             ctx.pop_transform();
@@ -1559,6 +1668,22 @@ impl Widget for Container {
                 {
                     let was_pressed = self.is_pressed;
                     self.is_pressed = true;
+
+                    // Start ripple animation if configured
+                    let has_ripple = self
+                        .pressed_state
+                        .as_ref()
+                        .is_some_and(|s| s.ripple.is_some());
+                    if has_ripple {
+                        // Store click position relative to container bounds (local coordinates)
+                        self.ripple_center = Some((*x - self.bounds.x, *y - self.bounds.y));
+                        self.ripple_progress = 0.0;
+                        self.ripple_opacity = 1.0;
+                        self.ripple_fading = false;
+                        self.ripple_start_time = Some(std::time::Instant::now());
+                        request_animation_frame();
+                    }
+
                     // Request repaint if state layer is defined and state changed
                     if !was_pressed && self.pressed_state.is_some() {
                         request_animation_frame();
@@ -1573,6 +1698,13 @@ impl Widget for Container {
                 if self.is_pressed && *button == MouseButton::Left {
                     let was_pressed = self.is_pressed;
                     self.is_pressed = false;
+
+                    // Start ripple fade out if ripple is active
+                    if self.ripple_center.is_some() && self.ripple_opacity > 0.0 {
+                        self.ripple_fading = true;
+                        request_animation_frame();
+                    }
+
                     // Request repaint if state layer is defined and state changed
                     if was_pressed && self.pressed_state.is_some() {
                         request_animation_frame();
@@ -1595,6 +1727,13 @@ impl Widget for Container {
                     }
                 }
                 self.is_pressed = false;
+
+                // Start ripple fade out if ripple is active
+                if self.ripple_center.is_some() && self.ripple_opacity > 0.0 {
+                    self.ripple_fading = true;
+                    request_animation_frame();
+                }
+
                 // Request repaint if state layer is defined and state changed
                 if (was_hovered && self.hover_state.is_some())
                     || (was_pressed && self.pressed_state.is_some())

@@ -16,6 +16,42 @@
 use crate::transform::Transform;
 use crate::widgets::Color;
 
+/// Configuration for ripple effect animation.
+#[derive(Clone, Debug)]
+pub struct RippleConfig {
+    /// Color of the ripple (usually semi-transparent white)
+    pub color: Color,
+    /// Speed multiplier for ripple expansion (higher = faster)
+    pub expand_speed: f32,
+    /// Speed multiplier for ripple fade out (higher = faster)
+    pub fade_speed: f32,
+}
+
+impl Default for RippleConfig {
+    fn default() -> Self {
+        Self {
+            color: Color::rgba(1.0, 1.0, 1.0, 0.3),
+            expand_speed: 1.0,
+            fade_speed: 1.0,
+        }
+    }
+}
+
+impl RippleConfig {
+    /// Create a new ripple config with default settings.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a ripple config with a custom color.
+    pub fn with_color(color: Color) -> Self {
+        Self {
+            color,
+            ..Default::default()
+        }
+    }
+}
+
 /// How to override the background color in a state.
 #[derive(Clone, Debug)]
 pub enum BackgroundOverride {
@@ -44,6 +80,8 @@ pub struct StateStyle {
     pub transform: Option<Transform>,
     /// Elevation (shadow) override
     pub elevation: Option<f32>,
+    /// Ripple effect configuration (typically used in pressed_state)
+    pub ripple: Option<RippleConfig>,
 }
 
 impl StateStyle {
@@ -132,6 +170,40 @@ impl StateStyle {
     /// Set the elevation (shadow level) for this state.
     pub fn elevation(mut self, elevation: f32) -> Self {
         self.elevation = Some(elevation);
+        self
+    }
+
+    /// Enable ripple effect with default settings.
+    ///
+    /// The ripple expands from the click point and fades out when released.
+    ///
+    /// # Example
+    /// ```ignore
+    /// container()
+    ///     .pressed_state(|s| s.ripple())
+    ///     .child(text("Click for ripple"))
+    /// ```
+    pub fn ripple(mut self) -> Self {
+        self.ripple = Some(RippleConfig::default());
+        self
+    }
+
+    /// Enable ripple effect with a custom color.
+    ///
+    /// # Example
+    /// ```ignore
+    /// container()
+    ///     .pressed_state(|s| s.ripple_with_color(Color::rgba(1.0, 0.5, 0.0, 0.3)))
+    ///     .child(text("Orange ripple"))
+    /// ```
+    pub fn ripple_with_color(mut self, color: Color) -> Self {
+        self.ripple = Some(RippleConfig::with_color(color));
+        self
+    }
+
+    /// Enable ripple effect with custom configuration.
+    pub fn ripple_config(mut self, config: RippleConfig) -> Self {
+        self.ripple = Some(config);
         self
     }
 }

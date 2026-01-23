@@ -82,8 +82,8 @@ pub struct Vertex {
     pub shape_radius: [f32; 2],
     /// Superellipse curvature (CSS K-value: K=-1 scoop, K=0 bevel, K=1 round, K=2 squircle)
     pub shape_curvature: f32,
-    /// Padding for alignment
-    pub _padding: f32,
+    /// Clip corner radius (uniform value, used when clip_rect is set)
+    pub clip_radius: f32,
     /// Border width in NDC (x and y separately for aspect ratio correction)
     pub border_width: [f32; 2],
     /// Border color RGBA
@@ -106,6 +106,9 @@ pub struct Vertex {
     pub transform_row3: [f32; 4],
     /// Local position (untransformed) for SDF evaluation in fragment shader
     pub local_pos: [f32; 2],
+    /// Clip rectangle in NDC: [min_x, min_y, max_x, max_y] - (0,0,0,0) means no clip
+    /// When clip is enabled, uses shape_radius and shape_curvature for clip corners
+    pub clip_rect: [f32; 4],
 }
 
 impl Vertex {
@@ -203,6 +206,12 @@ impl Vertex {
                     offset: std::mem::size_of::<[f32; 44]>() as wgpu::BufferAddress,
                     shader_location: 14,
                     format: wgpu::VertexFormat::Float32x2,
+                },
+                // clip_rect
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 46]>() as wgpu::BufferAddress,
+                    shader_location: 15,
+                    format: wgpu::VertexFormat::Float32x4,
                 },
             ],
         }
@@ -310,6 +319,44 @@ impl Vertex {
         shadow_color: [f32; 4],
         transform: Transform,
     ) -> Self {
+        Self::with_transform_and_clip(
+            position,
+            local_pos,
+            color,
+            shape_rect,
+            shape_radius,
+            shape_curvature,
+            border_width,
+            border_color,
+            shadow_offset,
+            shadow_blur,
+            shadow_spread,
+            shadow_color,
+            transform,
+            [0.0, 0.0, 0.0, 0.0], // No clip
+            0.0,                  // No clip radius
+        )
+    }
+
+    /// Create a vertex with full transform and clip support
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_transform_and_clip(
+        position: [f32; 2],
+        local_pos: [f32; 2],
+        color: [f32; 4],
+        shape_rect: [f32; 4],
+        shape_radius: [f32; 2],
+        shape_curvature: f32,
+        border_width: [f32; 2],
+        border_color: [f32; 4],
+        shadow_offset: [f32; 2],
+        shadow_blur: f32,
+        shadow_spread: f32,
+        shadow_color: [f32; 4],
+        transform: Transform,
+        clip_rect: [f32; 4],
+        clip_radius: f32,
+    ) -> Self {
         let rows = transform.rows();
         Self {
             position,
@@ -317,7 +364,7 @@ impl Vertex {
             shape_rect,
             shape_radius,
             shape_curvature,
-            _padding: 0.0,
+            clip_radius,
             border_width,
             border_color,
             shadow_offset,
@@ -329,6 +376,7 @@ impl Vertex {
             transform_row2: rows[2],
             transform_row3: rows[3],
             local_pos,
+            clip_rect,
         }
     }
 
@@ -707,11 +755,33 @@ impl RoundedRect {
             (x1, y1, x2, y2)
         };
 
+        // Compute clip region in NDC if present
+        let (clip_rect_ndc, clip_radius_ndc) = if let Some(ref clip) = self.clip {
+            let clip_x1 = to_ndc_x(clip.rect.x);
+            let clip_y1 = to_ndc_y(clip.rect.y);
+            let clip_x2 = to_ndc_x(clip.rect.x + clip.rect.width);
+            let clip_y2 = to_ndc_y(clip.rect.y + clip.rect.height);
+
+            let clip_radius = clip
+                .radius
+                .min(clip.rect.width / 2.0)
+                .min(clip.rect.height / 2.0);
+            // Use height-based NDC for uniform clip radius (aspect-corrected in shader)
+            let clip_r_ndc = (clip_radius / screen_height) * 2.0;
+
+            (
+                [clip_x1, clip_y2, clip_x2, clip_y1], // min_x, min_y, max_x, max_y
+                clip_r_ndc,
+            )
+        } else {
+            ([0.0, 0.0, 0.0, 0.0], 0.0)
+        };
+
         // Simple quad - SDF rendering handles the shape in fragment shader
         // Use expanded quad bounds for vertices, but keep original shape_rect for SDF
         // local_pos = untransformed position for SDF evaluation (same as position)
         let vertices = vec![
-            Vertex::with_transform(
+            Vertex::with_transform_and_clip(
                 [quad_x1, quad_y1],
                 [quad_x1, quad_y1], // local_pos
                 self.color_at(x1, y1, x1, y1, x2, y2),
@@ -725,8 +795,10 @@ impl RoundedRect {
                 shadow_spread_ndc,
                 shadow_color,
                 centered_transform,
+                clip_rect_ndc,
+                clip_radius_ndc,
             ),
-            Vertex::with_transform(
+            Vertex::with_transform_and_clip(
                 [quad_x2, quad_y1],
                 [quad_x2, quad_y1], // local_pos
                 self.color_at(x2, y1, x1, y1, x2, y2),
@@ -740,8 +812,10 @@ impl RoundedRect {
                 shadow_spread_ndc,
                 shadow_color,
                 centered_transform,
+                clip_rect_ndc,
+                clip_radius_ndc,
             ),
-            Vertex::with_transform(
+            Vertex::with_transform_and_clip(
                 [quad_x2, quad_y2],
                 [quad_x2, quad_y2], // local_pos
                 self.color_at(x2, y2, x1, y1, x2, y2),
@@ -755,8 +829,10 @@ impl RoundedRect {
                 shadow_spread_ndc,
                 shadow_color,
                 centered_transform,
+                clip_rect_ndc,
+                clip_radius_ndc,
             ),
-            Vertex::with_transform(
+            Vertex::with_transform_and_clip(
                 [quad_x1, quad_y2],
                 [quad_x1, quad_y2], // local_pos
                 self.color_at(x1, y2, x1, y1, x2, y2),
@@ -770,6 +846,8 @@ impl RoundedRect {
                 shadow_spread_ndc,
                 shadow_color,
                 centered_transform,
+                clip_rect_ndc,
+                clip_radius_ndc,
             ),
         ];
 
