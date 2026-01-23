@@ -316,8 +316,10 @@ pub struct Container {
     pressed_state: Option<StateStyle>,
 
     // Ripple animation state
-    /// Center point of the ripple in local container coordinates
+    /// Center point of the ripple in local container coordinates (start position)
     ripple_center: Option<(f32, f32)>,
+    /// Exit center point where ripple contracts toward (release position)
+    ripple_exit_center: Option<(f32, f32)>,
     /// Current ripple expansion progress (0.0 = start, 1.0 = fully expanded)
     ripple_progress: f32,
     /// Current ripple opacity (1.0 = visible, 0.0 = faded out)
@@ -326,6 +328,10 @@ pub struct Container {
     ripple_fading: bool,
     /// Time when ripple animation started (for smooth animation)
     ripple_start_time: Option<std::time::Instant>,
+    /// Time when ripple fade/contraction started
+    ripple_fade_start_time: Option<std::time::Instant>,
+    /// Progress at which fading started (for smooth contraction)
+    ripple_fade_start_progress: f32,
 }
 
 impl Container {
@@ -370,10 +376,13 @@ impl Container {
             hover_state: None,
             pressed_state: None,
             ripple_center: None,
+            ripple_exit_center: None,
             ripple_progress: 0.0,
             ripple_opacity: 0.0,
             ripple_fading: false,
             ripple_start_time: None,
+            ripple_fade_start_time: None,
+            ripple_fade_start_progress: 0.0,
         }
     }
 
@@ -1066,25 +1075,52 @@ impl Container {
 
         // Expansion animation (0.4 seconds base, modified by expand_speed)
         let expand_duration = 0.4 / ripple_config.expand_speed;
-        if self.ripple_progress < 1.0 {
-            self.ripple_progress = (elapsed / expand_duration).min(1.0);
-            // Use ease-out curve for expansion
-            self.ripple_progress = 1.0 - (1.0 - self.ripple_progress).powi(3);
-        }
 
-        // Fade animation (0.3 seconds base, modified by fade_speed)
         if self.ripple_fading {
-            let fade_duration = 0.3 / ripple_config.fade_speed;
-            // Start fading after a brief delay once triggered
-            self.ripple_opacity =
-                (1.0 - (elapsed - expand_duration * 0.5) / fade_duration).clamp(0.0, 1.0);
-
-            // Clear ripple when fully faded
-            if self.ripple_opacity <= 0.0 {
-                self.ripple_center = None;
-                self.ripple_start_time = None;
-                self.ripple_fading = false;
+            // Reverse animation: contract toward exit point
+            let Some(fade_start) = self.ripple_fade_start_time else {
                 return false;
+            };
+            let fade_elapsed = fade_start.elapsed().as_secs_f32();
+            let fade_duration = 0.3 / ripple_config.fade_speed;
+
+            // Calculate contraction progress (0 = just started fading, 1 = fully contracted)
+            let contraction_t = (fade_elapsed / fade_duration).min(1.0);
+            // Use ease-in curve for contraction (accelerates as it shrinks)
+            let eased_t = contraction_t * contraction_t;
+
+            // Shrink the ripple from its current progress back to 0
+            self.ripple_progress = self.ripple_fade_start_progress * (1.0 - eased_t);
+
+            // Interpolate center from start toward exit point
+            if let (Some((start_x, start_y)), Some((exit_x, exit_y))) =
+                (self.ripple_center, self.ripple_exit_center)
+            {
+                // The effective center moves toward the exit point as it contracts
+                let current_x = start_x + (exit_x - start_x) * eased_t;
+                let current_y = start_y + (exit_y - start_y) * eased_t;
+                self.ripple_center = Some((current_x, current_y));
+            }
+
+            // Fade opacity as well for smooth disappearance
+            self.ripple_opacity = (1.0 - eased_t).max(0.0);
+
+            // Clear ripple when fully contracted
+            if contraction_t >= 1.0 {
+                self.ripple_center = None;
+                self.ripple_exit_center = None;
+                self.ripple_start_time = None;
+                self.ripple_fade_start_time = None;
+                self.ripple_fading = false;
+                self.ripple_fade_start_progress = 0.0;
+                return false;
+            }
+        } else {
+            // Expansion animation
+            if self.ripple_progress < 1.0 {
+                self.ripple_progress = (elapsed / expand_duration).min(1.0);
+                // Use ease-out curve for expansion
+                self.ripple_progress = 1.0 - (1.0 - self.ripple_progress).powi(3);
             }
         }
 
@@ -1699,9 +1735,13 @@ impl Widget for Container {
                     let was_pressed = self.is_pressed;
                     self.is_pressed = false;
 
-                    // Start ripple fade out if ripple is active
+                    // Start ripple reverse animation if ripple is active
                     if self.ripple_center.is_some() && self.ripple_opacity > 0.0 {
+                        // Store the release position as exit center (in local coordinates)
+                        self.ripple_exit_center = Some((*x - self.bounds.x, *y - self.bounds.y));
                         self.ripple_fading = true;
+                        self.ripple_fade_start_time = Some(std::time::Instant::now());
+                        self.ripple_fade_start_progress = self.ripple_progress;
                         request_animation_frame();
                     }
 
@@ -1728,9 +1768,15 @@ impl Widget for Container {
                 }
                 self.is_pressed = false;
 
-                // Start ripple fade out if ripple is active
+                // Start ripple reverse animation if ripple is active
                 if self.ripple_center.is_some() && self.ripple_opacity > 0.0 {
+                    // For MouseLeave, use the center of the container as exit point
+                    // (we don't have the exact leave position)
+                    self.ripple_exit_center =
+                        Some((self.bounds.width / 2.0, self.bounds.height / 2.0));
                     self.ripple_fading = true;
+                    self.ripple_fade_start_time = Some(std::time::Instant::now());
+                    self.ripple_fade_start_progress = self.ripple_progress;
                     request_animation_frame();
                 }
 
