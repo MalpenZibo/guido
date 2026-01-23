@@ -33,12 +33,11 @@ fn main() {
                 .main_axis_alignment(MainAxisAlignment::SpaceBetween),
         )
         .child(
-            // Clickable container with ripple effect - click to increment count
+            // Clickable container - click to increment count
             container()
                 .padding(8.0)
                 .background(hover_color)
                 .corner_radius(4.0)
-                .ripple() // Enable ripple effect on hover
                 .on_click(move || {
                     count.update(|c| *c += 10);
                 })

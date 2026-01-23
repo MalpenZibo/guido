@@ -1,3 +1,5 @@
+use super::Axis;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Size {
     pub width: f32,
@@ -18,6 +20,22 @@ impl Size {
 
     pub fn is_empty(&self) -> bool {
         self.width <= 0.0 || self.height <= 0.0
+    }
+
+    /// Get the size along the main axis
+    pub fn main_axis(&self, axis: Axis) -> f32 {
+        match axis {
+            Axis::Horizontal => self.width,
+            Axis::Vertical => self.height,
+        }
+    }
+
+    /// Get the size along the cross axis
+    pub fn cross_axis(&self, axis: Axis) -> f32 {
+        match axis {
+            Axis::Horizontal => self.height,
+            Axis::Vertical => self.width,
+        }
     }
 }
 

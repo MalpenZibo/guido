@@ -183,6 +183,42 @@ impl Transform {
     pub fn is_identity(&self) -> bool {
         *self == Self::IDENTITY
     }
+
+    /// Check if this transform contains rotation.
+    /// Rotation is present when the off-diagonal elements (b, c) are non-zero.
+    pub fn has_rotation(&self) -> bool {
+        // Matrix layout:
+        // | a  b  0  tx |  indices: [0, 1, 2, 3]
+        // | c  d  0  ty |  indices: [4, 5, 6, 7]
+        // b is at index 1, c is at index 4
+        self.data[1].abs() > 1e-6 || self.data[4].abs() > 1e-6
+    }
+
+    /// Get the X translation component
+    pub fn tx(&self) -> f32 {
+        self.data[3]
+    }
+
+    /// Get the Y translation component
+    pub fn ty(&self) -> f32 {
+        self.data[7]
+    }
+
+    /// Set the X translation component
+    pub fn set_tx(&mut self, val: f32) {
+        self.data[3] = val;
+    }
+
+    /// Set the Y translation component
+    pub fn set_ty(&mut self, val: f32) {
+        self.data[7] = val;
+    }
+
+    /// Scale the translation components by a factor (useful for HiDPI scaling)
+    pub fn scale_translation(&mut self, factor: f32) {
+        self.data[3] *= factor;
+        self.data[7] *= factor;
+    }
 }
 
 impl Default for Transform {

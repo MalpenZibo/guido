@@ -86,6 +86,73 @@ impl Rect {
     pub fn contains(&self, x: f32, y: f32) -> bool {
         x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
     }
+
+    /// Check if a point is inside this rect with rounded corners.
+    /// The corner_radius is clamped to half of the smaller dimension.
+    pub fn contains_rounded(&self, x: f32, y: f32, corner_radius: f32) -> bool {
+        // First check basic bounds
+        if !self.contains(x, y) {
+            return false;
+        }
+
+        // If no corner radius, we're done
+        if corner_radius <= 0.0 {
+            return true;
+        }
+
+        // Clamp radius to half of smaller dimension
+        let max_radius = (self.width.min(self.height) / 2.0).max(0.0);
+        let r = corner_radius.min(max_radius);
+
+        // Check if point is in a corner region
+        let left = self.x;
+        let right = self.x + self.width;
+        let top = self.y;
+        let bottom = self.y + self.height;
+
+        // Corner circle centers
+        let in_left = x < left + r;
+        let in_right = x > right - r;
+        let in_top = y < top + r;
+        let in_bottom = y > bottom - r;
+
+        // If in a corner region, check distance from corner circle center
+        if in_left && in_top {
+            // Top-left corner
+            let cx = left + r;
+            let cy = top + r;
+            let dx = x - cx;
+            let dy = y - cy;
+            return dx * dx + dy * dy <= r * r;
+        }
+        if in_right && in_top {
+            // Top-right corner
+            let cx = right - r;
+            let cy = top + r;
+            let dx = x - cx;
+            let dy = y - cy;
+            return dx * dx + dy * dy <= r * r;
+        }
+        if in_left && in_bottom {
+            // Bottom-left corner
+            let cx = left + r;
+            let cy = bottom - r;
+            let dx = x - cx;
+            let dy = y - cy;
+            return dx * dx + dy * dy <= r * r;
+        }
+        if in_right && in_bottom {
+            // Bottom-right corner
+            let cx = right - r;
+            let cy = bottom - r;
+            let dx = x - cx;
+            let dy = y - cy;
+            return dx * dx + dy * dy <= r * r;
+        }
+
+        // Not in a corner region, so it's inside
+        true
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -184,6 +251,51 @@ pub enum Event {
 pub enum EventResponse {
     Ignored,
     Handled,
+}
+
+impl Event {
+    /// Get the coordinates from this event, if any
+    pub fn coords(&self) -> Option<(f32, f32)> {
+        match self {
+            Event::MouseMove { x, y } => Some((*x, *y)),
+            Event::MouseDown { x, y, .. } => Some((*x, *y)),
+            Event::MouseUp { x, y, .. } => Some((*x, *y)),
+            Event::MouseEnter { x, y } => Some((*x, *y)),
+            Event::Scroll { x, y, .. } => Some((*x, *y)),
+            Event::MouseLeave => None,
+        }
+    }
+
+    /// Create a new event with transformed coordinates
+    pub fn with_coords(&self, new_x: f32, new_y: f32) -> Self {
+        match self {
+            Event::MouseMove { .. } => Event::MouseMove { x: new_x, y: new_y },
+            Event::MouseDown { button, .. } => Event::MouseDown {
+                x: new_x,
+                y: new_y,
+                button: *button,
+            },
+            Event::MouseUp { button, .. } => Event::MouseUp {
+                x: new_x,
+                y: new_y,
+                button: *button,
+            },
+            Event::MouseEnter { .. } => Event::MouseEnter { x: new_x, y: new_y },
+            Event::Scroll {
+                delta_x,
+                delta_y,
+                source,
+                ..
+            } => Event::Scroll {
+                x: new_x,
+                y: new_y,
+                delta_x: *delta_x,
+                delta_y: *delta_y,
+                source: *source,
+            },
+            Event::MouseLeave => Event::MouseLeave,
+        }
+    }
 }
 
 pub trait Widget {

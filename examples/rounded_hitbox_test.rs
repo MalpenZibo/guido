@@ -1,0 +1,91 @@
+//! Test hit testing with rounded corners.
+//!
+//! This example tests that hover and click correctly respect corner radius.
+//! The corners outside the rounded area should NOT trigger events.
+
+use guido::prelude::*;
+
+fn main() {
+    let click_count = create_signal(0);
+
+    let view = container()
+        .layout(
+            Flex::column()
+                .spacing(30.0)
+                .main_axis_alignment(MainAxisAlignment::Center)
+                .cross_axis_alignment(CrossAxisAlignment::Center),
+        )
+        .padding(40.0)
+        .children([
+            // Row with different corner radii
+            container()
+                .layout(
+                    Flex::row()
+                        .spacing(40.0)
+                        .main_axis_alignment(MainAxisAlignment::Center),
+                )
+                .children([
+                    // No corner radius (control)
+                    make_box("r=0", 0.0, Color::rgb(0.5, 0.5, 0.5), click_count),
+                    // Small corner radius
+                    make_box("r=10", 10.0, Color::rgb(0.3, 0.8, 0.3), click_count),
+                    // Medium corner radius
+                    make_box("r=25", 25.0, Color::rgb(0.3, 0.3, 0.8), click_count),
+                    // Large corner radius (half of size = circle-ish)
+                    make_box("r=50", 50.0, Color::rgb(0.8, 0.3, 0.8), click_count),
+                ]),
+            // Instructions
+            container().child(
+                text("Hover over corners - should NOT highlight outside the rounded area")
+                    .font_size(14.0)
+                    .color(Color::rgb(0.7, 0.7, 0.7)),
+            ),
+            // Click counter display
+            container().child(
+                text(move || format!("Clicks: {}", click_count.get()))
+                    .font_size(20.0)
+                    .color(Color::WHITE),
+            ),
+        ]);
+
+    App::new()
+        .height(300)
+        .background_color(Color::rgb(0.1, 0.1, 0.15))
+        .run(view);
+}
+
+fn make_box(
+    label: &'static str,
+    corner_radius: f32,
+    base_color: Color,
+    click_count: Signal<i32>,
+) -> Container {
+    let is_hovered = create_signal(false);
+
+    // Highlight color when hovered (brighter version)
+    let hover_color = Color::rgb(
+        (base_color.r + 0.3).min(1.0),
+        (base_color.g + 0.3).min(1.0),
+        (base_color.b + 0.3).min(1.0),
+    );
+
+    container()
+        .width(100.0)
+        .height(100.0)
+        .background(move || {
+            if is_hovered.get() {
+                hover_color
+            } else {
+                base_color
+            }
+        })
+        .corner_radius(corner_radius)
+        .on_hover(move |hovered| is_hovered.set(hovered))
+        .on_click(move || click_count.update(|c| *c += 1))
+        .layout(
+            Flex::column()
+                .main_axis_alignment(MainAxisAlignment::Center)
+                .cross_axis_alignment(CrossAxisAlignment::Center),
+        )
+        .child(text(label).font_size(14.0).color(Color::WHITE))
+}

@@ -26,7 +26,7 @@ fn main() {
                 .padding(10.0)
                 .background(Color::rgb(0.3, 0.8, 0.3))
                 .corner_radius(8.0)
-                .translate(10.0, 10.0), // Move 10px right, 10px down
+                .translate(100.0, 10.0), // Move 10px right, 10px down
         ]);
 
     App::new()

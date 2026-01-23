@@ -282,7 +282,7 @@ pub enum GradientDir {
 }
 
 /// Optional gradient for shapes
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Gradient {
     pub start_color: Color,
     pub end_color: Color,
@@ -752,20 +752,6 @@ impl RoundedRect {
     }
 }
 
-/// A circle primitive (uses dedicated vertex generation for clean rendering)
-#[derive(Debug, Clone)]
-pub struct Circle {
-    pub center_x: f32,
-    pub center_y: f32,
-    pub radius: f32,
-    pub color: Color,
-    pub clip: Option<ClipRegion>,
-    /// Transform matrix for this shape
-    pub transform: Transform,
-    /// If true, the transform is already centered and should not be auto-centered
-    pub transform_is_centered: bool,
-}
-
 /// Trait for shapes that can have transforms applied.
 ///
 /// This allows PaintContext to apply transforms uniformly to all shape types.
@@ -778,149 +764,5 @@ impl Transformable for RoundedRect {
     fn set_transform(&mut self, transform: Transform, is_centered: bool) {
         self.transform = transform;
         self.transform_is_centered = is_centered;
-    }
-}
-
-impl Transformable for Circle {
-    fn set_transform(&mut self, transform: Transform, is_centered: bool) {
-        self.transform = transform;
-        self.transform_is_centered = is_centered;
-    }
-}
-
-impl Circle {
-    pub fn new(center_x: f32, center_y: f32, radius: f32, color: Color) -> Self {
-        Self {
-            center_x,
-            center_y,
-            radius,
-            color,
-            clip: None,
-            transform: Transform::IDENTITY,
-            transform_is_centered: false,
-        }
-    }
-
-    pub fn with_clip(
-        center_x: f32,
-        center_y: f32,
-        radius: f32,
-        color: Color,
-        clip: ClipRegion,
-    ) -> Self {
-        Self {
-            center_x,
-            center_y,
-            radius,
-            color,
-            clip: Some(clip),
-            transform: Transform::IDENTITY,
-            transform_is_centered: false,
-        }
-    }
-
-    pub fn to_vertices(&self, screen_width: f32, screen_height: f32) -> (Vec<Vertex>, Vec<u16>) {
-        let color = [self.color.r, self.color.g, self.color.b, self.color.a];
-        let segments = 32; // More segments for smooth circle
-
-        let to_ndc_x = |x: f32| (x / screen_width) * 2.0 - 1.0;
-        let to_ndc_y = |y: f32| 1.0 - (y / screen_height) * 2.0;
-
-        let cx = to_ndc_x(self.center_x);
-        let cy = to_ndc_y(self.center_y);
-        let r_ndc_x = (self.radius / screen_width) * 2.0;
-        let r_ndc_y = (self.radius / screen_height) * 2.0;
-
-        // Compute centered transform in NDC space (circle is already centered at cx, cy)
-        // If transform is already centered (from Container with custom transform_origin),
-        // use it directly.
-        let centered_transform = if !self.transform.is_identity() {
-            if self.transform_is_centered {
-                self.transform
-            } else {
-                self.transform.center_at(cx, cy)
-            }
-        } else {
-            Transform::IDENTITY
-        };
-
-        // Compute clip rect in NDC - used for clipping the circle to container bounds
-        let (clip_rect, clip_radius, clip_curvature) = if let Some(ref clip) = self.clip {
-            let cx1 = to_ndc_x(clip.rect.x);
-            let cy1 = to_ndc_y(clip.rect.y);
-            let cx2 = to_ndc_x(clip.rect.x + clip.rect.width);
-            let cy2 = to_ndc_y(clip.rect.y + clip.rect.height);
-            let cr_x = (clip.radius / screen_width) * 2.0;
-            let cr_y = (clip.radius / screen_height) * 2.0;
-            ([cx1, cy2, cx2, cy1], [cr_x, cr_y], clip.curvature)
-        } else {
-            ([0.0, 0.0, 0.0, 0.0], [0.0, 0.0], 1.0)
-        };
-
-        let mut vertices = Vec::with_capacity(segments + 2);
-        let mut indices = Vec::with_capacity(segments * 3);
-
-        // For clipped circles, use a marker to indicate clip-only mode
-        // border_color.r = -1.0 signals the shader to use SDF for clipping only
-        let (border_width, border_color) = if self.clip.is_some() {
-            ([0.0, 0.0], [-1.0, 0.0, 0.0, 0.0]) // Marker for clip-only mode
-        } else {
-            ([0.0, 0.0], [0.0, 0.0, 0.0, 0.0])
-        };
-
-        // No shadow for circles (use default/zero values)
-        let shadow_offset = [0.0, 0.0];
-        let shadow_blur = 0.0;
-        let shadow_spread = 0.0;
-        let shadow_color = [0.0, 0.0, 0.0, 0.0];
-
-        // Center vertex - pass clip region as shape params for clipping
-        // local_pos = untransformed position for SDF evaluation
-        vertices.push(Vertex::with_transform(
-            [cx, cy],
-            [cx, cy], // local_pos
-            color,
-            clip_rect,
-            clip_radius,
-            clip_curvature,
-            border_width,
-            border_color,
-            shadow_offset,
-            shadow_blur,
-            shadow_spread,
-            shadow_color,
-            centered_transform,
-        ));
-
-        // Edge vertices
-        for i in 0..=segments {
-            let angle = (i as f32 / segments as f32) * std::f32::consts::PI * 2.0;
-            let vx = cx + angle.cos() * r_ndc_x;
-            let vy = cy - angle.sin() * r_ndc_y;
-            vertices.push(Vertex::with_transform(
-                [vx, vy],
-                [vx, vy], // local_pos
-                color,
-                clip_rect,
-                clip_radius,
-                clip_curvature,
-                border_width,
-                border_color,
-                shadow_offset,
-                shadow_blur,
-                shadow_spread,
-                shadow_color,
-                centered_transform,
-            ));
-        }
-
-        // Triangle fan indices
-        for i in 1..=segments {
-            indices.push(0);
-            indices.push(i as u16);
-            indices.push((i + 1) as u16);
-        }
-
-        (vertices, indices)
     }
 }

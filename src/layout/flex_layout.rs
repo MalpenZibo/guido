@@ -139,6 +139,7 @@ impl Flex {
         // First pass: measure all children
         let mut total_main = 0.0f32;
         let mut max_cross = 0.0f32;
+        let mut children_main = 0.0f32;
 
         for child in children.iter_mut() {
             let size = if child.needs_layout() {
@@ -147,11 +148,10 @@ impl Flex {
                 let bounds = child.bounds();
                 Size::new(bounds.width, bounds.height)
             };
-            let (main_size, cross_size) = match axis {
-                Axis::Horizontal => (size.width, size.height),
-                Axis::Vertical => (size.height, size.width),
-            };
+            let main_size = size.main_axis(axis);
+            let cross_size = size.cross_axis(axis);
             total_main += main_size;
+            children_main += main_size;
             max_cross = max_cross.max(cross_size);
             self.child_sizes.push(size);
         }
@@ -183,6 +183,7 @@ impl Flex {
         if cross_align == CrossAxisAlignment::Stretch && stretch_cross.is_none() && cross_size > 0.0
         {
             self.child_sizes.clear();
+            children_main = 0.0; // Reset for re-computation
             let stretch_constraints = match axis {
                 Axis::Horizontal => Constraints {
                     min_width: 0.0,
@@ -200,6 +201,7 @@ impl Flex {
             for child in children.iter_mut() {
                 child.mark_dirty(crate::reactive::ChangeFlags::NEEDS_LAYOUT);
                 let size = child.layout(stretch_constraints);
+                children_main += size.main_axis(axis);
                 self.child_sizes.push(size);
             }
         }
@@ -216,14 +218,6 @@ impl Flex {
         } else {
             0.0
         };
-        let children_main: f32 = self
-            .child_sizes
-            .iter()
-            .map(|s| match axis {
-                Axis::Horizontal => s.width,
-                Axis::Vertical => s.height,
-            })
-            .sum();
         let free_space = (main_size - children_main - total_spacing).max(0.0);
 
         let (initial_offset, between_spacing) =
@@ -236,10 +230,8 @@ impl Flex {
 
         for (i, child) in children.iter_mut().enumerate() {
             let child_size = self.child_sizes[i];
-            let (child_main, child_cross) = match axis {
-                Axis::Horizontal => (child_size.width, child_size.height),
-                Axis::Vertical => (child_size.height, child_size.width),
-            };
+            let child_main = child_size.main_axis(axis);
+            let child_cross = child_size.cross_axis(axis);
 
             let cross_pos = match cross_align {
                 CrossAxisAlignment::Start => match axis {

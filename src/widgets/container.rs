@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -33,6 +34,17 @@ pub enum GradientDirection {
     Diagonal,
     /// Top-right to bottom-left
     DiagonalReverse,
+}
+
+impl From<GradientDirection> for GradientDir {
+    fn from(direction: GradientDirection) -> Self {
+        match direction {
+            GradientDirection::Horizontal => GradientDir::Horizontal,
+            GradientDirection::Vertical => GradientDir::Vertical,
+            GradientDirection::Diagonal => GradientDir::Diagonal,
+            GradientDirection::DiagonalReverse => GradientDir::DiagonalReverse,
+        }
+    }
 }
 
 /// Linear gradient definition
@@ -225,12 +237,6 @@ impl<T: Animatable> AnimationState<T> {
     }
 }
 
-// Ripple animation speeds
-const RIPPLE_ENTER_SPEED: f32 = 0.12;
-const RIPPLE_EXIT_SPEED: f32 = 0.20;
-const CLICK_RIPPLE_EXPAND_SPEED: f32 = 0.08;
-const CLICK_RIPPLE_REVERSE_SPEED: f32 = 0.15;
-
 /// Macro to advance an animation field, optionally updating its target first
 macro_rules! advance_anim {
     // Simple advance (no target update)
@@ -294,21 +300,6 @@ pub struct Container {
     is_hovered: bool,
     is_pressed: bool,
 
-    // Ripple effect state
-    ripple_enabled: bool,
-    ripple_center: Option<(f32, f32)>,
-    ripple_progress: f32,
-    ripple_color: Color,
-    ripple_from_click: bool,
-    ripple_is_exit: bool,
-    last_mouse_pos: Option<(f32, f32)>,
-
-    // Click ripple effect
-    click_ripple_center: Option<(f32, f32)>,
-    click_ripple_progress: f32,
-    click_ripple_reversing: bool,
-    click_ripple_release_pos: Option<(f32, f32)>,
-
     // Animation state
     width_anim: Option<AnimationState<f32>>,
     height_anim: Option<AnimationState<f32>>,
@@ -346,17 +337,6 @@ impl Container {
             on_scroll: None,
             is_hovered: false,
             is_pressed: false,
-            ripple_enabled: false,
-            ripple_center: None,
-            ripple_progress: 0.0,
-            ripple_color: Color::rgba(1.0, 1.0, 1.0, 0.3),
-            ripple_from_click: false,
-            ripple_is_exit: false,
-            last_mouse_pos: None,
-            click_ripple_center: None,
-            click_ripple_progress: 0.0,
-            click_ripple_reversing: false,
-            click_ripple_release_pos: None,
             cached_padding: Padding::default(),
             cached_background: Color::TRANSPARENT,
             cached_corner_radius: 0.0,
@@ -551,17 +531,6 @@ impl Container {
         callback: F,
     ) -> Self {
         self.on_scroll = Some(Arc::new(callback));
-        self
-    }
-
-    pub fn ripple(mut self) -> Self {
-        self.ripple_enabled = true;
-        self
-    }
-
-    pub fn ripple_with_color(mut self, color: Color) -> Self {
-        self.ripple_enabled = true;
-        self.ripple_color = color;
         self
     }
 
@@ -808,7 +777,7 @@ impl Container {
         }
     }
 
-    /// Advance animation state (ripple effects and property animations)
+    /// Advance animation state (property animations)
     fn advance_animations(&mut self) {
         let mut any_animating = false;
 
@@ -841,44 +810,6 @@ impl Container {
         // Request next frame if any property animations are running
         if any_animating {
             request_animation_frame();
-        }
-
-        // Advance hover ripple animation
-        if self.ripple_enabled && self.ripple_center.is_some() {
-            if self.ripple_progress < 1.0 {
-                request_animation_frame();
-                let speed = if self.ripple_is_exit {
-                    RIPPLE_EXIT_SPEED
-                } else {
-                    RIPPLE_ENTER_SPEED
-                };
-                self.ripple_progress = (self.ripple_progress + speed).min(1.0);
-            } else if self.ripple_is_exit {
-                request_animation_frame();
-                self.ripple_center = None;
-                self.ripple_progress = 0.0;
-                self.ripple_is_exit = false;
-            }
-        }
-
-        // Advance click ripple animation
-        if self.ripple_enabled && self.click_ripple_center.is_some() {
-            if self.click_ripple_reversing {
-                request_animation_frame();
-                if self.click_ripple_progress > 0.0 {
-                    self.click_ripple_progress =
-                        (self.click_ripple_progress - CLICK_RIPPLE_REVERSE_SPEED).max(0.0);
-                } else {
-                    self.click_ripple_center = None;
-                    self.click_ripple_progress = 0.0;
-                    self.click_ripple_reversing = false;
-                    self.click_ripple_release_pos = None;
-                }
-            } else if self.click_ripple_progress < 1.0 {
-                request_animation_frame();
-                self.click_ripple_progress =
-                    (self.click_ripple_progress + CLICK_RIPPLE_EXPAND_SPEED).min(1.0);
-            }
         }
     }
 }
@@ -942,8 +873,6 @@ impl Widget for Container {
             || elevation != self.cached_elevation;
 
         let child_needs_layout = self.any_child_needs_layout();
-        let has_ripple_animations =
-            self.ripple_center.is_some() || self.click_ripple_center.is_some();
 
         // Size animations require full layout recalculation (for child constraints)
         let has_size_animations = self.width_anim.as_ref().is_some_and(|a| a.is_animating())
@@ -988,7 +917,6 @@ impl Widget for Container {
         let needs_layout = self.needs_layout()
             || padding_changed
             || child_needs_layout
-            || has_ripple_animations // Ripples need layout for animation frame requests
             || has_size_animations
             || has_layout_animations;
 
@@ -1267,17 +1195,11 @@ impl Widget for Container {
 
         // Draw background
         if let Some(ref gradient) = self.gradient {
-            let direction = match gradient.direction {
-                GradientDirection::Horizontal => GradientDir::Horizontal,
-                GradientDirection::Vertical => GradientDir::Vertical,
-                GradientDirection::Diagonal => GradientDir::Diagonal,
-                GradientDirection::DiagonalReverse => GradientDir::DiagonalReverse,
-            };
             ctx.draw_gradient_rect_with_curvature(
                 self.bounds,
                 gradient.start_color,
                 gradient.end_color,
-                direction,
+                gradient.direction.into(),
                 corner_radius,
                 corner_curvature,
             );
@@ -1343,84 +1265,6 @@ impl Widget for Container {
             ctx.pop_clip();
         }
 
-        // Draw ripple effects
-        if self.ripple_enabled {
-            // Hover ripple
-            if let Some((cx, cy)) = self.ripple_center {
-                let dx1 = cx - self.bounds.x;
-                let dx2 = (self.bounds.x + self.bounds.width) - cx;
-                let dy1 = cy - self.bounds.y;
-                let dy2 = (self.bounds.y + self.bounds.height) - cy;
-                let max_radius = (dx1.max(dx2).powi(2) + dy1.max(dy2).powi(2)).sqrt();
-                let current_radius = max_radius * self.ripple_progress;
-
-                let alpha = if self.ripple_is_exit {
-                    self.ripple_color.a * (1.0 - self.ripple_progress).powi(2)
-                } else {
-                    self.ripple_color.a * (1.0 - self.ripple_progress * 0.5)
-                };
-
-                if current_radius > 0.0 && alpha > 0.0 {
-                    let ripple_color = Color::rgba(
-                        self.ripple_color.r,
-                        self.ripple_color.g,
-                        self.ripple_color.b,
-                        alpha,
-                    );
-                    ctx.draw_overlay_circle_clipped_with_curvature(
-                        cx,
-                        cy,
-                        current_radius,
-                        ripple_color,
-                        self.bounds,
-                        corner_radius,
-                        corner_curvature,
-                    );
-                }
-            }
-
-            // Click ripple
-            if let Some((cx, cy)) = self.click_ripple_center {
-                let (center_x, center_y) = if self.click_ripple_reversing {
-                    if let Some((rx, ry)) = self.click_ripple_release_pos {
-                        let t = self.click_ripple_progress;
-                        (cx + (rx - cx) * (1.0 - t), cy + (ry - cy) * (1.0 - t))
-                    } else {
-                        (cx, cy)
-                    }
-                } else {
-                    (cx, cy)
-                };
-
-                let dx1 = center_x - self.bounds.x;
-                let dx2 = (self.bounds.x + self.bounds.width) - center_x;
-                let dy1 = center_y - self.bounds.y;
-                let dy2 = (self.bounds.y + self.bounds.height) - center_y;
-                let max_radius = (dx1.max(dx2).powi(2) + dy1.max(dy2).powi(2)).sqrt();
-                let current_radius = max_radius * self.click_ripple_progress;
-
-                let alpha = self.ripple_color.a * (1.0 - self.click_ripple_progress * 0.5);
-
-                if current_radius > 0.0 && alpha > 0.0 {
-                    let ripple_color = Color::rgba(
-                        self.ripple_color.r,
-                        self.ripple_color.g,
-                        self.ripple_color.b,
-                        alpha,
-                    );
-                    ctx.draw_overlay_circle_clipped_with_curvature(
-                        center_x,
-                        center_y,
-                        current_radius,
-                        ripple_color,
-                        self.bounds,
-                        corner_radius,
-                        corner_curvature,
-                    );
-                }
-            }
-        }
-
         // Pop transform if we pushed one
         if has_transform {
             ctx.pop_transform();
@@ -1428,74 +1272,77 @@ impl Widget for Container {
     }
 
     fn event(&mut self, event: &Event) -> EventResponse {
-        // Let children handle first
+        // Get transform and corner radius for hit testing
+        let transform = self.animated_transform();
+        let transform_origin = self.transform_origin.get();
+        let corner_radius = self.animated_corner_radius();
+
+        // Transform the event coordinates from screen space to this container's local space
+        // Use Cow to avoid cloning when no transformation is needed
+        let local_event: Cow<'_, Event> = if !transform.is_identity() {
+            if let Some((x, y)) = event.coords() {
+                // Compute the centered transform (as used in rendering)
+                let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
+                let centered_transform = transform.center_at(origin_x, origin_y);
+                // Inverse to go from screen space back to local space
+                let inverse = centered_transform.inverse();
+
+                // Only apply Y-flip compensation for rotation.
+                // Rotation is applied in NDC space (Y-up) but hit testing is in
+                // screen space (Y-down), which inverts the rotation direction.
+                // Translation and scale don't need this compensation.
+                let final_inverse = if transform.has_rotation() {
+                    let y_flip = Transform::scale_xy(1.0, -1.0).center_at(origin_x, origin_y);
+                    y_flip.then(&inverse).then(&y_flip)
+                } else {
+                    inverse
+                };
+
+                let (local_x, local_y) = final_inverse.transform_point(x, y);
+                Cow::Owned(event.with_coords(local_x, local_y))
+            } else {
+                Cow::Borrowed(event)
+            }
+        } else {
+            Cow::Borrowed(event)
+        };
+
+        // Let children handle first (with transformed coordinates for nested transforms)
         for child in self.children_source.reconcile_and_get_mut() {
-            if child.event(event) == EventResponse::Handled {
+            if child.event(&local_event) == EventResponse::Handled {
                 return EventResponse::Handled;
             }
         }
 
-        // Handle our own events (same as before)
-        match event {
+        // Handle our own events using transformed coordinates
+        match local_event.as_ref() {
             Event::MouseEnter { x, y } => {
-                if self.bounds.contains(*x, *y) {
+                if self.bounds.contains_rounded(*x, *y, corner_radius) {
                     self.is_hovered = true;
-                    self.last_mouse_pos = Some((*x, *y));
                     if let Some(ref callback) = self.on_hover {
                         callback(true);
-                    }
-                    if self.ripple_enabled && self.ripple_center.is_none() {
-                        self.ripple_center = Some((*x, *y));
-                        self.ripple_progress = 0.0;
-                        self.ripple_from_click = false;
-                        request_animation_frame();
                     }
                     return EventResponse::Handled;
                 }
             }
             Event::MouseMove { x, y } => {
                 let was_hovered = self.is_hovered;
-                self.is_hovered = self.bounds.contains(*x, *y);
-
-                if self.is_hovered {
-                    self.last_mouse_pos = Some((*x, *y));
-                }
+                self.is_hovered = self.bounds.contains_rounded(*x, *y, corner_radius);
 
                 if was_hovered != self.is_hovered {
                     if let Some(ref callback) = self.on_hover {
                         callback(self.is_hovered);
                     }
-
-                    if self.is_hovered {
-                        if self.ripple_enabled && self.ripple_center.is_none() {
-                            self.ripple_center = Some((*x, *y));
-                            self.ripple_progress = 0.0;
-                            self.ripple_from_click = false;
-                            request_animation_frame();
-                        }
-                    } else if self.ripple_enabled && !self.ripple_from_click {
-                        if let Some((lx, ly)) = self.last_mouse_pos {
-                            self.ripple_center = Some((lx, ly));
-                            self.ripple_progress = 0.0;
-                            self.ripple_is_exit = true;
-                            request_animation_frame();
-                        }
-                    }
                     return EventResponse::Handled;
                 }
             }
             Event::MouseDown { x, y, button } => {
-                if self.bounds.contains(*x, *y) && *button == MouseButton::Left {
+                if self.bounds.contains_rounded(*x, *y, corner_radius)
+                    && *button == MouseButton::Left
+                {
                     self.is_pressed = true;
-                    if self.ripple_enabled {
-                        self.click_ripple_center = Some((*x, *y));
-                        self.click_ripple_progress = 0.0;
-                        self.click_ripple_reversing = false;
-                        self.click_ripple_release_pos = None;
-                        request_animation_frame();
-                    }
                     // Only consume the event if we have a click handler
-                    if self.on_click.is_some() || self.ripple_enabled {
+                    if self.on_click.is_some() {
                         return EventResponse::Handled;
                     }
                 }
@@ -1503,25 +1350,15 @@ impl Widget for Container {
             Event::MouseUp { x, y, button } => {
                 if self.is_pressed && *button == MouseButton::Left {
                     self.is_pressed = false;
-                    if self.ripple_enabled && self.click_ripple_center.is_some() {
-                        self.click_ripple_reversing = true;
-                        self.click_ripple_release_pos = Some((*x, *y));
-                        request_animation_frame();
-                    }
-                    if self.bounds.contains(*x, *y) {
+                    if self.bounds.contains_rounded(*x, *y, corner_radius) {
                         if let Some(ref callback) = self.on_click {
                             callback();
-                            return EventResponse::Handled;
-                        }
-                        // If we have ripple but no click handler, still mark as handled
-                        if self.ripple_enabled {
                             return EventResponse::Handled;
                         }
                     }
                 }
             }
             Event::MouseLeave => {
-                let was_hovered = self.is_hovered;
                 if self.is_hovered {
                     self.is_hovered = false;
                     if let Some(ref callback) = self.on_hover {
@@ -1529,14 +1366,6 @@ impl Widget for Container {
                     }
                 }
                 self.is_pressed = false;
-                if was_hovered && self.ripple_enabled && !self.ripple_from_click {
-                    if let Some((x, y)) = self.last_mouse_pos {
-                        self.ripple_center = Some((x, y));
-                        self.ripple_progress = 0.0;
-                        self.ripple_is_exit = true;
-                        request_animation_frame();
-                    }
-                }
             }
             Event::Scroll {
                 x,
@@ -1545,7 +1374,7 @@ impl Widget for Container {
                 delta_y,
                 source,
             } => {
-                if self.bounds.contains(*x, *y) {
+                if self.bounds.contains_rounded(*x, *y, corner_radius) {
                     if let Some(ref callback) = self.on_scroll {
                         callback(*delta_x, *delta_y, *source);
                         return EventResponse::Handled;
@@ -1591,8 +1420,8 @@ impl Widget for Container {
 
     fn mark_dirty_recursive(&mut self, flags: ChangeFlags) {
         self.dirty_flags |= flags;
-        // Use reconcile_and_get_mut to ensure children are available
-        for child in self.children_source.reconcile_and_get_mut() {
+        // Use get_mut since we're operating on existing children (reconciliation already done)
+        for child in self.children_source.get_mut() {
             child.mark_dirty_recursive(flags);
         }
     }
@@ -1607,7 +1436,8 @@ impl Widget for Container {
 
     fn clear_dirty(&mut self) {
         self.dirty_flags = ChangeFlags::empty();
-        for child in self.children_source.reconcile_and_get_mut() {
+        // Use get_mut since we're operating on existing children (reconciliation already done)
+        for child in self.children_source.get_mut() {
             child.clear_dirty();
         }
     }

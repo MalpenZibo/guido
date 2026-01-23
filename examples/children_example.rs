@@ -159,7 +159,6 @@ fn main() {
                                         .padding(6.0)
                                         .background(Color::rgb(0.2, 0.4, 0.2))
                                         .corner_radius(4.0)
-                                        .ripple()
                                         .on_click(move || {
                                             items.update(|list: &mut Vec<Item>| {
                                                 let id = list.len() as u64 + 1;
@@ -181,7 +180,6 @@ fn main() {
                                         .padding(6.0)
                                         .background(Color::rgb(0.4, 0.2, 0.2))
                                         .corner_radius(4.0)
-                                        .ripple()
                                         .on_click(move || {
                                             items.update(|list: &mut Vec<Item>| {
                                                 if !list.is_empty() {
@@ -196,7 +194,6 @@ fn main() {
                                         .padding(6.0)
                                         .background(Color::rgb(0.2, 0.2, 0.4))
                                         .corner_radius(4.0)
-                                        .ripple()
                                         .on_click(move || {
                                             items.update(|list: &mut Vec<Item>| {
                                                 list.reverse();
@@ -206,7 +203,7 @@ fn main() {
                                 )
                         )
                         .child(
-                            text("Notice: Reversing preserves widget state (ripple animations, etc.)")
+                            text("Notice: Reversing preserves widget state (animations, etc.)")
                                 .color(Color::rgb(0.8, 0.8, 0.8))
                         )
                         .child(
@@ -220,7 +217,6 @@ fn main() {
                                             .padding(8.0)
                                             .background(item.color)
                                             .corner_radius(4.0)
-                                            .ripple()
                                             .child(text(item.name).color(Color::WHITE)))
                                     })
                                 })
@@ -249,7 +245,6 @@ fn main() {
                                 .padding(6.0)
                                 .background(Color::rgb(0.3, 0.2, 0.4))
                                 .corner_radius(4.0)
-                                .ripple()
                                 .on_click(move || {
                                     show_optional.update(|v| *v = !*v);
                                 })
@@ -284,7 +279,6 @@ fn main() {
                                                     .padding(8.0)
                                                     .background(Color::rgb(0.5, 0.3, 0.5))
                                                     .corner_radius(4.0)
-                                                    .ripple()
                                                     .child(text("Dynamic Middle!").color(Color::WHITE))
                                             )
                                         } else {
@@ -333,7 +327,6 @@ fn main() {
                                 .padding(6.0)
                                 .background(Color::rgb(0.3, 0.2, 0.4))
                                 .corner_radius(4.0)
-                                .ripple()
                                 .on_click(move || {
                                     show_optional2.update(|v| *v = !*v);
                                 })
@@ -415,7 +408,6 @@ fn main() {
                                             .padding(8.0)
                                             .background(Color::rgb(0.5, 0.3, 0.5))
                                             .corner_radius(4.0)
-                                            .ripple()
                                             .child(text(content).color(Color::WHITE)))
                                     })
                                 })
