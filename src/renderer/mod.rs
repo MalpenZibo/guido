@@ -79,7 +79,7 @@ impl Renderer {
                     rect.radius * self.scale_factor,
                 );
                 scaled_rect.clip = scaled_clip;
-                scaled_rect.gradient = rect.gradient.clone();
+                scaled_rect.gradient = rect.gradient;
                 scaled_rect.curvature = rect.curvature;
                 scaled_rect.border_width = rect.border_width * self.scale_factor;
                 scaled_rect.border_color = rect.border_color;
@@ -146,13 +146,6 @@ impl Renderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Collect vertices and indices for each shape separately to ensure proper draw order
-        let mut shape_buffers: Vec<(Vec<Vertex>, Vec<u16>)> = Vec::new();
-
-        for shape in &paint_ctx.shapes {
-            shape_buffers.push(self.scale_shape(shape));
-        }
-
         // Prepare text
         if !paint_ctx.texts.is_empty() {
             self.text_state.prepare_text(
@@ -171,26 +164,30 @@ impl Renderer {
                 label: Some("Render Encoder"),
             });
 
-        // Pre-create all shape buffers to keep them alive during render pass
-        let shape_gpu_buffers: Vec<_> = shape_buffers
+        // Scale shapes and create GPU buffers in a single pass, filtering empty shapes
+        let shape_gpu_buffers: Vec<_> = paint_ctx
+            .shapes
             .iter()
-            .filter(|(v, i)| !v.is_empty() && !i.is_empty())
-            .map(|(vertices, indices)| {
-                let vb = self
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Shape Vertex Buffer"),
-                        contents: bytemuck::cast_slice(vertices),
-                        usage: BufferUsages::VERTEX,
-                    });
-                let ib = self
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Shape Index Buffer"),
-                        contents: bytemuck::cast_slice(indices),
-                        usage: BufferUsages::INDEX,
-                    });
-                (vb, ib, indices.len())
+            .filter_map(|shape| {
+                let (vertices, indices) = self.scale_shape(shape);
+                if vertices.is_empty() || indices.is_empty() {
+                    return None;
+                }
+                Some((
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Shape Vertex Buffer"),
+                            contents: bytemuck::cast_slice(&vertices),
+                            usage: BufferUsages::VERTEX,
+                        }),
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Shape Index Buffer"),
+                            contents: bytemuck::cast_slice(&indices),
+                            usage: BufferUsages::INDEX,
+                        }),
+                    indices.len(),
+                ))
             })
             .collect();
 

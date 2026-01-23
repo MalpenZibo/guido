@@ -282,7 +282,7 @@ pub enum GradientDir {
 }
 
 /// Optional gradient for shapes
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Gradient {
     pub start_color: Color,
     pub end_color: Color,

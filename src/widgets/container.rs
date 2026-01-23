@@ -1420,8 +1420,8 @@ impl Widget for Container {
 
     fn mark_dirty_recursive(&mut self, flags: ChangeFlags) {
         self.dirty_flags |= flags;
-        // Use reconcile_and_get_mut to ensure children are available
-        for child in self.children_source.reconcile_and_get_mut() {
+        // Use get_mut since we're operating on existing children (reconciliation already done)
+        for child in self.children_source.get_mut() {
             child.mark_dirty_recursive(flags);
         }
     }
@@ -1436,7 +1436,8 @@ impl Widget for Container {
 
     fn clear_dirty(&mut self) {
         self.dirty_flags = ChangeFlags::empty();
-        for child in self.children_source.reconcile_and_get_mut() {
+        // Use get_mut since we're operating on existing children (reconciliation already done)
+        for child in self.children_source.get_mut() {
             child.clear_dirty();
         }
     }
