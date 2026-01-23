@@ -248,27 +248,26 @@ impl Renderer {
                 let display_width = tex.width as f32 / tex.render_scale * self.scale_factor;
                 let display_height = tex.height as f32 / tex.render_scale * self.scale_factor;
 
-                // The text texture has 4.0 logical pixels of padding on each side.
-                // We need to offset the position so the text content (not the padding)
-                // aligns with where the text should appear.
-                let padding_physical = 4.0 * self.scale_factor;
-
-                // Apply HiDPI scaling to position and offset by padding
+                // Position the text at its original layout position (scaled to physical pixels)
+                // The transform will be applied in to_vertices, same as for shapes
                 let display_rect = Rect::new(
-                    tex.entry.rect.x * self.scale_factor - padding_physical,
-                    tex.entry.rect.y * self.scale_factor - padding_physical,
+                    tex.entry.rect.x * self.scale_factor - (display_width - tex.entry.rect.width * self.scale_factor) / 2.0,
+                    tex.entry.rect.y * self.scale_factor - (display_height - tex.entry.rect.height * self.scale_factor) / 2.0,
                     display_width,
                     display_height,
                 );
 
-                // Create the textured quad with just rotation (no scale since text is pre-scaled,
-                // no translation since we position the quad explicitly).
-                // Use None for transform_origin so the quad centers the transform at the
-                // text's own center. This ensures text rotates around its own center.
+                // Scale transform_origin to physical pixels (same as shapes do)
+                let scaled_origin = tex.entry.transform_origin.map(|(x, y)| {
+                    (x * self.scale_factor, y * self.scale_factor)
+                });
+
+                // Create the textured quad with just rotation (no scale since text is pre-scaled).
+                // Pass the transform_origin so to_vertices applies the same centering logic as shapes.
                 let quad = TexturedQuad::new(
                     display_rect,
                     tex.entry.transform.rotation_only(),
-                    None, // Center at text's own position
+                    scaled_origin,
                 );
 
                 let (vertices, indices) = quad.to_vertices(self.screen_width, self.screen_height);
