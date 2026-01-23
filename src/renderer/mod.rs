@@ -12,7 +12,7 @@ use wgpu::{BufferUsages, Device, Queue, RenderPipeline};
 
 use self::primitives::{ClipRegion, Gradient, RoundedRect, TexturedQuad, Transformable, Vertex};
 use self::text::TextRenderState;
-use self::text_texture::TextTextureRenderer;
+use self::text_texture::{TextTextureRenderer, QUALITY_MULTIPLIER};
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
 use crate::widgets::{Color, Rect};
@@ -265,10 +265,11 @@ impl Renderer {
                     ],
                 });
 
-                // Calculate display rect - the texture was rendered at an effective scale,
-                // so we need to display it at the correct logical size
-                let display_width = tex.width as f32 / tex.render_scale * self.scale_factor;
-                let display_height = tex.height as f32 / tex.render_scale * self.scale_factor;
+                // Calculate display rect - divide only by QUALITY_MULTIPLIER to preserve transform_scale.
+                // The texture was rendered at: original_size * scale_factor * transform_scale * QUALITY_MULTIPLIER
+                // We want display size: original_size * scale_factor * transform_scale
+                let display_width = tex.width as f32 / QUALITY_MULTIPLIER;
+                let display_height = tex.height as f32 / QUALITY_MULTIPLIER;
 
                 // Get the scale factor from the transform (we pre-scaled the text for this)
                 let transform_scale = tex.entry.transform.extract_scale();
