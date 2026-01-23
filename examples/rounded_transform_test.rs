@@ -1,7 +1,7 @@
-//! Test hit testing with rounded corners AND transforms combined.
+//! Test transforms on rectangular boxes.
 //!
-//! This verifies that the rounded corner hitbox works correctly
-//! when the container is also translated, rotated, or scaled.
+//! This verifies that transforms (translate, rotate, scale)
+//! work correctly on containers with rounded corners.
 
 use guido::prelude::*;
 
@@ -17,7 +17,7 @@ fn main() {
         )
         .padding(40.0)
         .children([
-            // Row with rounded corners + transforms
+            // Row with transforms
             container()
                 .layout(
                     Flex::row()
@@ -25,25 +25,25 @@ fn main() {
                         .main_axis_alignment(MainAxisAlignment::Center),
                 )
                 .children([
-                    // Rounded + no transform (control)
+                    // No transform (control)
                     make_box("None", Color::rgb(0.5, 0.5, 0.5), click_count),
-                    // Rounded + translate
+                    // Translate
                     make_box("Translate", Color::rgb(0.3, 0.8, 0.3), click_count)
                         .translate(15.0, 10.0),
-                    // Rounded + rotate
+                    // Rotate
                     make_box("Rotate", Color::rgb(0.3, 0.3, 0.8), click_count).rotate(20.0),
-                    // Rounded + rotate + translate + scale (nested to combine transforms)
+                    // All 3 transforms (nested)
                     container()
                         .translate(10.0, 15.0)
                         .child(container().scale(1.15).child(
                             make_box("All 3", Color::rgb(0.8, 0.8, 0.3), click_count).rotate(25.0),
                         )),
-                    // Rounded + scale
+                    // Scale
                     make_box("Scale", Color::rgb(0.8, 0.3, 0.8), click_count).scale(1.2),
                 ]),
             // Instructions
             container().child(
-                text("All boxes have r=30 corners. Hover corners to test hitbox.")
+                text("Rectangular boxes with transforms. Hover and click to test.")
                     .font_size(14.0)
                     .color(Color::rgb(0.7, 0.7, 0.7)),
             ),
@@ -62,27 +62,25 @@ fn main() {
 }
 
 fn make_box(label: &'static str, base_color: Color, click_count: Signal<i32>) -> Container {
-    let is_hovered = create_signal(false);
-
-    let hover_color = Color::rgb(
-        (base_color.r + 0.3).min(1.0),
-        (base_color.g + 0.3).min(1.0),
-        (base_color.b + 0.3).min(1.0),
+    let hover_color = create_signal(base_color);
+    let lighter = Color::rgb(
+        (base_color.r + 0.15).min(1.0),
+        (base_color.g + 0.15).min(1.0),
+        (base_color.b + 0.15).min(1.0),
     );
 
     container()
         .width(100.0)
         .height(100.0)
-        .background(move || {
-            if is_hovered.get() {
-                hover_color
+        .background(hover_color)
+        .on_click(move || click_count.update(|c| *c += 1))
+        .on_hover(move |hovered| {
+            if hovered {
+                hover_color.set(lighter);
             } else {
-                base_color
+                hover_color.set(base_color);
             }
         })
-        .corner_radius(30.0) // Significant rounding to make it obvious
-        .on_hover(move |hovered| is_hovered.set(hovered))
-        .on_click(move || click_count.update(|c| *c += 1))
         .layout(
             Flex::column()
                 .main_axis_alignment(MainAxisAlignment::Center)

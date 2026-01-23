@@ -6,7 +6,7 @@
 //! - Scaled containers
 //! - Nested transforms (parent transformed, child clickable)
 //!
-//! Uses on_hover background color change instead of ripple to test hit testing.
+//! Uses on_hover background color change to test hit testing.
 
 use guido::prelude::*;
 

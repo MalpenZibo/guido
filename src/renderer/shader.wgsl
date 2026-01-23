@@ -158,7 +158,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return in.color;
     }
 
-    // Check if this is a clipped explicit shape (like ripple circles)
+    // Check if this is a clipped explicit shape (like circles)
     // Marker: border_color.r == -1.0 indicates clip-only mode
     let is_clip_only = in.border_color.r < 0.0;
 

@@ -48,7 +48,6 @@ fn main() {
                         .background(Color::rgb(0.2, 0.4, 0.3))
                         .corner_radius(12.0)
                         .scoop() // K=-1 → n=0.5
-                        .ripple()
                         .on_hover(move |hovered| {
                             if hovered {
                                 hover_color.set(Color::rgb(0.3, 0.3, 0.4));
@@ -96,7 +95,6 @@ fn main() {
                         .corner_radius(12.0)
                         .border(2.0, Color::rgb(0.3, 0.7, 0.5))
                         .scoop()
-                        .ripple()
                         .on_hover(move |hovered| {
                             if hovered {
                                 hover_color.set(Color::rgb(0.3, 0.3, 0.4));

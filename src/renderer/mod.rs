@@ -138,7 +138,6 @@ impl Renderer {
         PaintContext {
             shapes: Vec::new(),
             texts: Vec::new(),
-            overlay_shapes: Vec::new(),
             clip_stack: Vec::new(),
             transform_stack: Vec::new(),
         }
@@ -176,44 +175,6 @@ impl Renderer {
         for shape in &paint_ctx.shapes {
             shape_buffers.push(self.scale_shape(shape));
         }
-
-        // Collect overlay vertices and indices (rendered after text)
-        let mut overlay_vertices: Vec<Vertex> = Vec::new();
-        let mut overlay_indices: Vec<u16> = Vec::new();
-
-        for shape in &paint_ctx.overlay_shapes {
-            let (vertices, indices) = self.scale_shape(shape);
-            let base_index = overlay_vertices.len() as u16;
-            overlay_vertices.extend(vertices);
-            overlay_indices.extend(indices.iter().map(|i| i + base_index));
-        }
-
-        // Create overlay buffers
-        let overlay_vertex_buffer = if !overlay_vertices.is_empty() {
-            Some(
-                self.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Overlay Vertex Buffer"),
-                        contents: bytemuck::cast_slice(&overlay_vertices),
-                        usage: BufferUsages::VERTEX,
-                    }),
-            )
-        } else {
-            None
-        };
-
-        let overlay_index_buffer = if !overlay_indices.is_empty() {
-            Some(
-                self.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Overlay Index Buffer"),
-                        contents: bytemuck::cast_slice(&overlay_indices),
-                        usage: BufferUsages::INDEX,
-                    }),
-            )
-        } else {
-            None
-        };
 
         // Prepare text
         if !paint_ctx.texts.is_empty() {
@@ -291,14 +252,6 @@ impl Renderer {
             if !paint_ctx.texts.is_empty() {
                 self.text_state.render(&mut render_pass, &self.device);
             }
-
-            // Draw overlay shapes (on top of text)
-            if let (Some(vb), Some(ib)) = (&overlay_vertex_buffer, &overlay_index_buffer) {
-                render_pass.set_pipeline(&self.pipeline);
-                render_pass.set_vertex_buffer(0, vb.slice(..));
-                render_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint16);
-                render_pass.draw_indexed(0..overlay_indices.len() as u32, 0, 0..1);
-            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -310,8 +263,6 @@ pub struct PaintContext {
     shapes: Vec<Shape>,
     /// Text entries: (text, rect, color, font_size, clip_rect)
     texts: Vec<(String, Rect, Color, f32, Option<Rect>)>,
-    /// Shapes to render after text (for effects like ripples over text)
-    overlay_shapes: Vec<Shape>,
     /// Clip stack for clipping children to container bounds
     /// Each entry is (clip_rect, corner_radius, curvature)
     clip_stack: Vec<(Rect, f32, f32)>,
@@ -526,55 +477,6 @@ impl PaintContext {
         let clip_rect = self.clip_stack.last().map(|(rect, _, _)| *rect);
         self.texts
             .push((text.to_string(), rect, color, font_size, clip_rect));
-    }
-
-    /// Draw a circle as an overlay (rendered on top of text)
-    pub fn draw_overlay_circle(&mut self, center_x: f32, center_y: f32, radius: f32, color: Color) {
-        let mut shape = Circle::new(center_x, center_y, radius, color);
-        self.apply_current_transform(&mut shape);
-        self.overlay_shapes.push(Shape::Circle(shape));
-    }
-
-    /// Draw a circle as an overlay, clipped to a bounding rectangle
-    pub fn draw_overlay_circle_clipped(
-        &mut self,
-        center_x: f32,
-        center_y: f32,
-        radius: f32,
-        color: Color,
-        clip_rect: Rect,
-        clip_corner_radius: f32,
-    ) {
-        let clip = ClipRegion {
-            rect: clip_rect,
-            radius: clip_corner_radius,
-            curvature: 2.0, // Default to circular clipping
-        };
-        let mut shape = Circle::with_clip(center_x, center_y, radius, color, clip);
-        self.apply_current_transform(&mut shape);
-        self.overlay_shapes.push(Shape::Circle(shape));
-    }
-
-    /// Draw a circle as an overlay, clipped to a bounding rectangle with custom curvature
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_overlay_circle_clipped_with_curvature(
-        &mut self,
-        center_x: f32,
-        center_y: f32,
-        radius: f32,
-        color: Color,
-        clip_rect: Rect,
-        clip_corner_radius: f32,
-        clip_curvature: f32,
-    ) {
-        let clip = ClipRegion {
-            rect: clip_rect,
-            radius: clip_corner_radius,
-            curvature: clip_curvature,
-        };
-        let mut shape = Circle::with_clip(center_x, center_y, radius, color, clip);
-        self.apply_current_transform(&mut shape);
-        self.overlay_shapes.push(Shape::Circle(shape));
     }
 
     /// Push a clip region onto the stack

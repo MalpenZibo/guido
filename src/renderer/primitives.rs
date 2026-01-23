@@ -831,14 +831,45 @@ impl Circle {
         let r_ndc_x = (self.radius / screen_width) * 2.0;
         let r_ndc_y = (self.radius / screen_height) * 2.0;
 
-        // Compute centered transform in NDC space (circle is already centered at cx, cy)
-        // If transform is already centered (from Container with custom transform_origin),
-        // use it directly.
+        // Convert transform to work correctly in NDC space
+        // (same as RoundedRect - must convert translation and adjust for aspect ratio)
+        let aspect = screen_width / screen_height;
+
         let centered_transform = if !self.transform.is_identity() {
+            // Extract components from the transform matrix (row-major order)
+            let a = self.transform.data[0];
+            let b = self.transform.data[1];
+            let c = self.transform.data[4];
+            let d = self.transform.data[5];
+            let tx = self.transform.data[3];
+            let ty = self.transform.data[7];
+
+            // Build aspect-corrected transform matrix for NDC
+            let ndc_transform = Transform {
+                data: [
+                    a,
+                    b / aspect,
+                    0.0,
+                    tx * 2.0 / screen_width,
+                    c * aspect,
+                    d,
+                    0.0,
+                    -ty * 2.0 / screen_height,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                ],
+            };
+
             if self.transform_is_centered {
-                self.transform
+                ndc_transform
             } else {
-                self.transform.center_at(cx, cy)
+                ndc_transform.center_at(cx, cy)
             }
         } else {
             Transform::IDENTITY
