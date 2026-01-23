@@ -1,10 +1,12 @@
+use std::collections::HashSet;
+
 use glyphon::{
     Attrs, Buffer, Cache, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution, Shaping,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 use wgpu::{Device, MultisampleState, Queue};
 
-use crate::widgets::{Color, Rect};
+use super::TextEntry;
 
 pub struct TextRenderState {
     font_system: FontSystem,
@@ -38,20 +40,31 @@ impl TextRenderState {
         }
     }
 
+    /// Prepare non-transformed text for rendering directly to screen.
+    /// Returns a list of indices of texts that have transforms and need special handling.
     pub fn prepare_text(
         &mut self,
         device: &Device,
         queue: &Queue,
-        texts: &[(String, Rect, Color, f32, Option<Rect>)],
+        texts: &[TextEntry],
         screen_width: u32,
         screen_height: u32,
         scale_factor: f32,
-    ) {
+    ) -> Vec<usize> {
         self.buffers.clear();
 
-        for (text, rect, _color, font_size, _clip) in texts {
+        // Collect indices of texts that have non-trivial transforms
+        let mut transformed_indices = Vec::new();
+
+        for (idx, entry) in texts.iter().enumerate() {
+            // Check if text has a transform that affects rendering
+            if entry.transform.has_rotation_or_scale() {
+                transformed_indices.push(idx);
+                continue; // Skip transformed text in direct rendering
+            }
+
             // Scale the font size for HiDPI rendering
-            let scaled_font_size = *font_size * scale_factor;
+            let scaled_font_size = entry.font_size * scale_factor;
 
             let mut buffer = Buffer::new(
                 &mut self.font_system,
@@ -60,12 +73,12 @@ impl TextRenderState {
             // Give more space for the text buffer, scaled
             buffer.set_size(
                 &mut self.font_system,
-                Some((rect.width.max(200.0)) * scale_factor),
-                Some((rect.height.max(50.0)) * scale_factor),
+                Some((entry.rect.width.max(200.0)) * scale_factor),
+                Some((entry.rect.height.max(50.0)) * scale_factor),
             );
             buffer.set_text(
                 &mut self.font_system,
-                text,
+                &entry.text,
                 &Attrs::new().family(Family::SansSerif),
                 Shaping::Advanced,
                 None,
@@ -74,16 +87,33 @@ impl TextRenderState {
             self.buffers.push(buffer);
         }
 
-        let text_areas: Vec<TextArea> = texts
+        // Filter to only non-transformed texts for TextArea creation
+        // Use HashSet for O(1) lookup instead of Vec::contains which is O(n)
+        let transformed_set: HashSet<_> = transformed_indices.iter().copied().collect();
+        let non_transformed_texts: Vec<_> = texts
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| !transformed_set.contains(idx))
+            .map(|(_, entry)| entry)
+            .collect();
+
+        let text_areas: Vec<TextArea> = non_transformed_texts
             .iter()
             .zip(self.buffers.iter())
-            .map(|((_text, rect, color, _, clip), buffer)| {
+            .map(|(entry, buffer)| {
+                // Apply translation from transform (if any) to position
+                let (tx, ty) = if entry.transform.is_identity() {
+                    (0.0, 0.0)
+                } else {
+                    (entry.transform.tx(), entry.transform.ty())
+                };
+
                 // Scale positions for HiDPI rendering
-                let scaled_left = rect.x * scale_factor;
-                let scaled_top = rect.y * scale_factor;
+                let scaled_left = (entry.rect.x + tx) * scale_factor;
+                let scaled_top = (entry.rect.y + ty) * scale_factor;
 
                 // Use clip rect if provided, otherwise use full screen
-                let bounds = if let Some(clip_rect) = clip {
+                let bounds = if let Some(clip_rect) = &entry.clip_rect {
                     TextBounds {
                         left: (clip_rect.x * scale_factor) as i32,
                         top: (clip_rect.y * scale_factor) as i32,
@@ -106,10 +136,10 @@ impl TextRenderState {
                     scale: 1.0, // Buffer is already scaled, no additional scaling needed
                     bounds,
                     default_color: GlyphonColor::rgba(
-                        (color.r * 255.0) as u8,
-                        (color.g * 255.0) as u8,
-                        (color.b * 255.0) as u8,
-                        (color.a * 255.0) as u8,
+                        (entry.color.r * 255.0) as u8,
+                        (entry.color.g * 255.0) as u8,
+                        (entry.color.b * 255.0) as u8,
+                        (entry.color.a * 255.0) as u8,
                     ),
                     custom_glyphs: &[],
                 }
@@ -138,6 +168,8 @@ impl TextRenderState {
         if let Err(e) = result {
             log::error!("Text prepare failed: {:?}", e);
         }
+
+        transformed_indices
     }
 
     pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, _device: &Device) {

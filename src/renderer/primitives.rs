@@ -1,6 +1,76 @@
 use crate::transform::Transform;
 use crate::widgets::{Color, Rect};
 
+/// Convert a transform from logical screen space to NDC (Normalized Device Coordinates).
+///
+/// This handles aspect ratio correction for rotation and proper translation scaling.
+/// The transform is centered at the specified point (or the default center if None).
+///
+/// # Arguments
+/// * `transform` - The transform in logical screen coordinates
+/// * `transform_origin` - Custom transform origin in logical screen coords, if any
+/// * `default_center` - Default center point in NDC (used if transform_origin is None)
+/// * `screen_width` - Screen width in logical pixels
+/// * `screen_height` - Screen height in logical pixels
+fn transform_to_ndc(
+    transform: &Transform,
+    transform_origin: Option<(f32, f32)>,
+    default_center: (f32, f32),
+    screen_width: f32,
+    screen_height: f32,
+) -> Transform {
+    if transform.is_identity() {
+        return Transform::IDENTITY;
+    }
+
+    let aspect = screen_width / screen_height;
+
+    // Extract rotation and scale from the transform matrix
+    // The transform is in row-major: [a, b, 0, tx; c, d, 0, ty; ...]
+    // For a rotation: a = cos θ, b = -sin θ, c = sin θ, d = cos θ
+    let a = transform.data[0];
+    let b = transform.data[1];
+    let c = transform.data[4];
+    let d = transform.data[5];
+    let tx = transform.data[3];
+    let ty = transform.data[7];
+
+    // Build aspect-corrected transform matrix for NDC
+    // For pure rotation: new_a = a, new_b = b/aspect, new_c = c*aspect, new_d = d
+    let ndc_transform = Transform {
+        data: [
+            a,
+            b / aspect,
+            0.0,
+            tx * 2.0 / screen_width,
+            c * aspect,
+            d,
+            0.0,
+            -ty * 2.0 / screen_height,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ],
+    };
+
+    // Center the transform at the appropriate point in NDC space
+    let (center_x, center_y) = if let Some((ox, oy)) = transform_origin {
+        // Custom origin: convert from logical screen coords to NDC
+        let ndc_ox = (ox / screen_width) * 2.0 - 1.0;
+        let ndc_oy = 1.0 - (oy / screen_height) * 2.0;
+        (ndc_ox, ndc_oy)
+    } else {
+        default_center
+    };
+
+    ndc_transform.center_at(center_x, center_y)
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
@@ -353,8 +423,9 @@ pub struct RoundedRect {
     pub shadow: Shadow,
     /// Transform matrix for this shape
     pub transform: Transform,
-    /// If true, the transform is already centered and should not be auto-centered
-    pub transform_is_centered: bool,
+    /// Custom transform origin in logical screen coordinates, if any
+    /// If None, transform is centered at the shape's center
+    pub transform_origin: Option<(f32, f32)>,
 }
 
 #[derive(Debug, Clone)]
@@ -378,7 +449,7 @@ impl RoundedRect {
             border_color: Color::TRANSPARENT,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
-            transform_is_centered: false,
+            transform_origin: None,
         }
     }
 
@@ -394,7 +465,7 @@ impl RoundedRect {
             border_color: Color::TRANSPARENT,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
-            transform_is_centered: false,
+            transform_origin: None,
         }
     }
 
@@ -410,7 +481,7 @@ impl RoundedRect {
             border_color: Color::TRANSPARENT,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
-            transform_is_centered: false,
+            transform_origin: None,
         }
     }
 
@@ -426,7 +497,7 @@ impl RoundedRect {
             border_color: Color::TRANSPARENT,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
-            transform_is_centered: false,
+            transform_origin: None,
         }
     }
 
@@ -449,7 +520,7 @@ impl RoundedRect {
             border_color,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
-            transform_is_centered: false,
+            transform_origin: None,
         }
     }
 
@@ -466,7 +537,7 @@ impl RoundedRect {
             border_color,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
-            transform_is_centered: false,
+            transform_origin: None,
         }
     }
 
@@ -489,7 +560,7 @@ impl RoundedRect {
             border_color,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
-            transform_is_centered: false,
+            transform_origin: None,
         }
     }
 
@@ -564,58 +635,13 @@ impl RoundedRect {
         let y2 = to_ndc_y(self.rect.y + self.rect.height);
 
         // Convert transform to work correctly in NDC space
-        // NDC is non-isotropic: x and y have different pixel scales due to aspect ratio
-        // For rotation θ in pixel space, the equivalent NDC rotation matrix is:
-        //   [[cos θ, -sin θ / aspect], [aspect * sin θ, cos θ]]
-        // This preserves visual angles when the shape is displayed on screen
-        let aspect = screen_width / screen_height;
-
-        let centered_transform = if !self.transform.is_identity() {
-            // Extract rotation and scale from the transform matrix
-            // The transform is in row-major: [a, b, 0, tx; c, d, 0, ty; ...]
-            // For a rotation: a = cos θ, b = -sin θ, c = sin θ, d = cos θ
-            let a = self.transform.data[0]; // cos θ or scale_x * cos θ
-            let b = self.transform.data[1]; // -sin θ or scale_x * (-sin θ)
-            let c = self.transform.data[4]; // sin θ or scale_y * sin θ
-            let d = self.transform.data[5]; // cos θ or scale_y * cos θ
-            let tx = self.transform.data[3];
-            let ty = self.transform.data[7];
-
-            // Build aspect-corrected transform matrix for NDC
-            // For pure rotation: new_a = a, new_b = b/aspect, new_c = c*aspect, new_d = d
-            let ndc_transform = Transform {
-                data: [
-                    a,
-                    b / aspect,
-                    0.0,
-                    tx * 2.0 / screen_width,
-                    c * aspect,
-                    d,
-                    0.0,
-                    -ty * 2.0 / screen_height,
-                    0.0,
-                    0.0,
-                    1.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    1.0,
-                ],
-            };
-
-            // If transform is already centered (from Container with custom transform_origin),
-            // use it directly. Otherwise, center around the shape's center in NDC.
-            if self.transform_is_centered {
-                ndc_transform
-            } else {
-                let center_x = (x1 + x2) / 2.0;
-                let center_y = (y1 + y2) / 2.0;
-                ndc_transform.center_at(center_x, center_y)
-            }
-        } else {
-            Transform::IDENTITY
-        };
+        let centered_transform = transform_to_ndc(
+            &self.transform,
+            self.transform_origin,
+            ((x1 + x2) / 2.0, (y1 + y2) / 2.0), // Default: shape's center in NDC
+            screen_width,
+            screen_height,
+        );
 
         // Compute radius in NDC
         let radius = self
@@ -756,13 +782,148 @@ impl RoundedRect {
 ///
 /// This allows PaintContext to apply transforms uniformly to all shape types.
 pub trait Transformable {
-    /// Set the transform matrix and whether it's already centered
-    fn set_transform(&mut self, transform: Transform, is_centered: bool);
+    /// Set the transform matrix and optional custom origin point
+    fn set_transform(&mut self, transform: Transform, origin: Option<(f32, f32)>);
 }
 
 impl Transformable for RoundedRect {
-    fn set_transform(&mut self, transform: Transform, is_centered: bool) {
+    fn set_transform(&mut self, transform: Transform, origin: Option<(f32, f32)>) {
         self.transform = transform;
-        self.transform_is_centered = is_centered;
+        self.transform_origin = origin;
+    }
+}
+
+/// Vertex for textured quads (used for transformed text rendering).
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct TexturedVertex {
+    /// Position in NDC
+    pub position: [f32; 2],
+    /// Texture coordinates (UV)
+    pub tex_coords: [f32; 2],
+    /// Transform matrix row 0
+    pub transform_row0: [f32; 4],
+    /// Transform matrix row 1
+    pub transform_row1: [f32; 4],
+    /// Transform matrix row 2
+    pub transform_row2: [f32; 4],
+    /// Transform matrix row 3
+    pub transform_row3: [f32; 4],
+}
+
+impl TexturedVertex {
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<TexturedVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                // position
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                // tex_coords
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                // transform_row0
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // transform_row1
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 8]>() as wgpu::BufferAddress,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // transform_row2
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 12]>() as wgpu::BufferAddress,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // transform_row3
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 16]>() as wgpu::BufferAddress,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+            ],
+        }
+    }
+
+    pub fn new(position: [f32; 2], tex_coords: [f32; 2], transform: Transform) -> Self {
+        let rows = transform.rows();
+        Self {
+            position,
+            tex_coords,
+            transform_row0: rows[0],
+            transform_row1: rows[1],
+            transform_row2: rows[2],
+            transform_row3: rows[3],
+        }
+    }
+}
+
+/// A textured quad for rendering text textures with transforms.
+pub struct TexturedQuad {
+    /// The rect in logical pixels
+    pub rect: Rect,
+    /// Transform to apply
+    pub transform: Transform,
+    /// Custom transform origin in logical screen coordinates, if any
+    pub transform_origin: Option<(f32, f32)>,
+}
+
+impl TexturedQuad {
+    pub fn new(rect: Rect, transform: Transform, transform_origin: Option<(f32, f32)>) -> Self {
+        Self {
+            rect,
+            transform,
+            transform_origin,
+        }
+    }
+
+    /// Generate vertices for this textured quad.
+    ///
+    /// The vertices are positioned in NDC with UV coordinates for texture sampling.
+    pub fn to_vertices(
+        &self,
+        screen_width: f32,
+        screen_height: f32,
+    ) -> (Vec<TexturedVertex>, Vec<u16>) {
+        // Convert to normalized device coordinates
+        let to_ndc_x = |x: f32| (x / screen_width) * 2.0 - 1.0;
+        let to_ndc_y = |y: f32| 1.0 - (y / screen_height) * 2.0;
+
+        let x1 = to_ndc_x(self.rect.x);
+        let y1 = to_ndc_y(self.rect.y);
+        let x2 = to_ndc_x(self.rect.x + self.rect.width);
+        let y2 = to_ndc_y(self.rect.y + self.rect.height);
+
+        // Convert transform to work correctly in NDC space
+        let centered_transform = transform_to_ndc(
+            &self.transform,
+            self.transform_origin,
+            ((x1 + x2) / 2.0, (y1 + y2) / 2.0), // Default: quad's center in NDC
+            screen_width,
+            screen_height,
+        );
+
+        // UV coordinates: (0,0) at top-left, (1,1) at bottom-right
+        let vertices = vec![
+            TexturedVertex::new([x1, y1], [0.0, 0.0], centered_transform), // top-left
+            TexturedVertex::new([x2, y1], [1.0, 0.0], centered_transform), // top-right
+            TexturedVertex::new([x2, y2], [1.0, 1.0], centered_transform), // bottom-right
+            TexturedVertex::new([x1, y2], [0.0, 1.0], centered_transform), // bottom-left
+        ];
+
+        let indices = vec![0, 1, 2, 0, 2, 3];
+        (vertices, indices)
     }
 }
