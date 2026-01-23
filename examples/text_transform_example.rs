@@ -152,7 +152,11 @@ fn main() {
                         )
                         .transform_origin(TransformOrigin::BOTTOM_RIGHT)
                         .rotate(15.0)
-                        .child(text("Origin: Bot-Right").font_size(12.0).color(Color::WHITE)),
+                        .child(
+                            text("Origin: Bot-Right")
+                                .font_size(12.0)
+                                .color(Color::WHITE),
+                        ),
                     // Custom origin with scale
                     container()
                         .width(130.0)
@@ -227,7 +231,11 @@ fn main() {
                                         .cross_axis_alignment(CrossAxisAlignment::Center),
                                 )
                                 .rotate(15.0)
-                                .child(text("30° Total").font_size(13.0).color(Color::rgb(0.1, 0.1, 0.1))),
+                                .child(
+                                    text("30° Total")
+                                        .font_size(13.0)
+                                        .color(Color::rgb(0.1, 0.1, 0.1)),
+                                ),
                         ),
                     // Nested with scale + translation
                     container()
@@ -254,7 +262,11 @@ fn main() {
                                         .cross_axis_alignment(CrossAxisAlignment::Center),
                                 )
                                 .rotate(-10.0)
-                                .child(text("Scale+Trans").font_size(12.0).color(Color::rgb(0.1, 0.1, 0.1))),
+                                .child(
+                                    text("Scale+Trans")
+                                        .font_size(12.0)
+                                        .color(Color::rgb(0.1, 0.1, 0.1)),
+                                ),
                         ),
                     // Animated rotating text
                     container()

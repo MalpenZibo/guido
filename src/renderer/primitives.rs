@@ -353,8 +353,9 @@ pub struct RoundedRect {
     pub shadow: Shadow,
     /// Transform matrix for this shape
     pub transform: Transform,
-    /// If true, the transform is already centered and should not be auto-centered
-    pub transform_is_centered: bool,
+    /// Custom transform origin in logical screen coordinates, if any
+    /// If None, transform is centered at the shape's center
+    pub transform_origin: Option<(f32, f32)>,
 }
 
 #[derive(Debug, Clone)]
@@ -378,7 +379,7 @@ impl RoundedRect {
             border_color: Color::TRANSPARENT,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
-            transform_is_centered: false,
+            transform_origin: None,
         }
     }
 
@@ -394,7 +395,7 @@ impl RoundedRect {
             border_color: Color::TRANSPARENT,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
-            transform_is_centered: false,
+            transform_origin: None,
         }
     }
 
@@ -410,7 +411,7 @@ impl RoundedRect {
             border_color: Color::TRANSPARENT,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
-            transform_is_centered: false,
+            transform_origin: None,
         }
     }
 
@@ -426,7 +427,7 @@ impl RoundedRect {
             border_color: Color::TRANSPARENT,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
-            transform_is_centered: false,
+            transform_origin: None,
         }
     }
 
@@ -449,7 +450,7 @@ impl RoundedRect {
             border_color,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
-            transform_is_centered: false,
+            transform_origin: None,
         }
     }
 
@@ -466,7 +467,7 @@ impl RoundedRect {
             border_color,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
-            transform_is_centered: false,
+            transform_origin: None,
         }
     }
 
@@ -489,7 +490,7 @@ impl RoundedRect {
             border_color,
             shadow: Shadow::none(),
             transform: Transform::IDENTITY,
-            transform_is_centered: false,
+            transform_origin: None,
         }
     }
 
@@ -604,15 +605,17 @@ impl RoundedRect {
                 ],
             };
 
-            // If transform is already centered (from Container with custom transform_origin),
-            // use it directly. Otherwise, center around the shape's center in NDC.
-            if self.transform_is_centered {
-                ndc_transform
+            // Center the transform at the appropriate point in NDC space
+            let (center_x, center_y) = if let Some((ox, oy)) = self.transform_origin {
+                // Custom origin: convert from logical screen coords to NDC
+                let ndc_ox = (ox / screen_width) * 2.0 - 1.0;
+                let ndc_oy = 1.0 - (oy / screen_height) * 2.0;
+                (ndc_ox, ndc_oy)
             } else {
-                let center_x = (x1 + x2) / 2.0;
-                let center_y = (y1 + y2) / 2.0;
-                ndc_transform.center_at(center_x, center_y)
-            }
+                // Default: center at shape's center in NDC
+                ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+            };
+            ndc_transform.center_at(center_x, center_y)
         } else {
             Transform::IDENTITY
         };
@@ -756,14 +759,14 @@ impl RoundedRect {
 ///
 /// This allows PaintContext to apply transforms uniformly to all shape types.
 pub trait Transformable {
-    /// Set the transform matrix and whether it's already centered
-    fn set_transform(&mut self, transform: Transform, is_centered: bool);
+    /// Set the transform matrix and optional custom origin point
+    fn set_transform(&mut self, transform: Transform, origin: Option<(f32, f32)>);
 }
 
 impl Transformable for RoundedRect {
-    fn set_transform(&mut self, transform: Transform, is_centered: bool) {
+    fn set_transform(&mut self, transform: Transform, origin: Option<(f32, f32)>) {
         self.transform = transform;
-        self.transform_is_centered = is_centered;
+        self.transform_origin = origin;
     }
 }
 
@@ -850,16 +853,16 @@ pub struct TexturedQuad {
     pub rect: Rect,
     /// Transform to apply
     pub transform: Transform,
-    /// Whether transform is already centered
-    pub transform_is_centered: bool,
+    /// Custom transform origin in logical screen coordinates, if any
+    pub transform_origin: Option<(f32, f32)>,
 }
 
 impl TexturedQuad {
-    pub fn new(rect: Rect, transform: Transform, transform_is_centered: bool) -> Self {
+    pub fn new(rect: Rect, transform: Transform, transform_origin: Option<(f32, f32)>) -> Self {
         Self {
             rect,
             transform,
-            transform_is_centered,
+            transform_origin,
         }
     }
 
@@ -912,13 +915,17 @@ impl TexturedQuad {
                 ],
             };
 
-            if self.transform_is_centered {
-                ndc_transform
+            // Center the transform at the appropriate point in NDC space
+            let (center_x, center_y) = if let Some((ox, oy)) = self.transform_origin {
+                // Custom origin: convert from logical screen coords to NDC
+                let ndc_ox = (ox / screen_width) * 2.0 - 1.0;
+                let ndc_oy = 1.0 - (oy / screen_height) * 2.0;
+                (ndc_ox, ndc_oy)
             } else {
-                let center_x = (x1 + x2) / 2.0;
-                let center_y = (y1 + y2) / 2.0;
-                ndc_transform.center_at(center_x, center_y)
-            }
+                // Default: center at quad's center in NDC
+                ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+            };
+            ndc_transform.center_at(center_x, center_y)
         } else {
             Transform::IDENTITY
         };

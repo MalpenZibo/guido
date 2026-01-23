@@ -34,8 +34,8 @@ pub struct TextEntry {
     pub clip_rect: Option<Rect>,
     /// Transform to apply to this text
     pub transform: Transform,
-    /// Whether the transform is already centered around a custom origin
-    pub transform_is_centered: bool,
+    /// Custom transform origin in logical screen coordinates, if any
+    pub transform_origin: Option<(f32, f32)>,
 }
 
 /// Enum to hold different shape types for rendering
@@ -143,7 +143,10 @@ impl Renderer {
                 let mut scaled_transform = rect.transform;
                 scaled_transform.scale_translation(self.scale_factor);
                 scaled_rect.transform = scaled_transform;
-                scaled_rect.transform_is_centered = rect.transform_is_centered;
+                // Scale the transform origin for HiDPI
+                scaled_rect.transform_origin = rect
+                    .transform_origin
+                    .map(|(x, y)| (x * self.scale_factor, y * self.scale_factor));
                 scaled_rect.to_vertices(self.screen_width, self.screen_height)
             }
         }
@@ -260,13 +263,12 @@ impl Renderer {
 
                 // Create the textured quad with just rotation (no scale since text is pre-scaled,
                 // no translation since we position the quad explicitly).
-                // Always use transform_is_centered=false so the quad centers the transform at the
-                // text's own center. This ensures text rotates around its own center regardless
-                // of the container's transform_origin.
+                // Use None for transform_origin so the quad centers the transform at the
+                // text's own center. This ensures text rotates around its own center.
                 let quad = TexturedQuad::new(
                     display_rect,
                     tex.entry.transform.rotation_only(),
-                    false, // Center at text's position
+                    None, // Center at text's own position
                 );
 
                 let (vertices, indices) = quad.to_vertices(self.screen_width, self.screen_height);
@@ -389,9 +391,9 @@ pub struct PaintContext {
     /// Each entry is (clip_rect, corner_radius, curvature)
     clip_stack: Vec<(Rect, f32, f32)>,
     /// Transform stack for composing parent→child transformations
-    /// Each entry is (transform, is_centered) where is_centered indicates
-    /// the transform has already been centered around a custom origin
-    transform_stack: Vec<(Transform, bool)>,
+    /// Each entry is (transform, Option<origin_point>) where origin_point
+    /// is Some((x, y)) if a custom transform origin should be used, None for default (center)
+    transform_stack: Vec<(Transform, Option<(f32, f32)>)>,
 }
 
 impl PaintContext {
@@ -552,7 +554,7 @@ impl PaintContext {
         // Get current clip rect (if any) for text clipping
         let clip_rect = self.clip_stack.last().map(|(rect, _, _)| *rect);
         // Get current transform from the stack
-        let (transform, transform_is_centered) = self.current_transform_with_flag();
+        let (transform, transform_origin) = self.current_transform_with_origin();
 
         self.texts.push(TextEntry {
             text: text.to_string(),
@@ -561,7 +563,7 @@ impl PaintContext {
             font_size,
             clip_rect,
             transform,
-            transform_is_centered,
+            transform_origin,
         });
     }
 
@@ -587,26 +589,30 @@ impl PaintContext {
             })
     }
 
-    /// Push a transform onto the stack
-    /// This transform is composed with the current transform
+    /// Push a transform onto the stack (will be centered at shape's center)
     pub fn push_transform(&mut self, transform: Transform) {
-        let (composed, _) = if let Some((current, _)) = self.transform_stack.last() {
-            (current.then(&transform), false)
+        let composed = if let Some((current, _)) = self.transform_stack.last() {
+            current.then(&transform)
         } else {
-            (transform, false)
+            transform
         };
-        self.transform_stack.push((composed, false));
+        self.transform_stack.push((composed, None));
     }
 
-    /// Push a pre-centered transform onto the stack
-    /// Use this when the transform has already been centered around a custom origin point
-    pub fn push_centered_transform(&mut self, transform: Transform) {
-        let (composed, _) = if let Some((current, _)) = self.transform_stack.last() {
-            (current.then(&transform), true)
+    /// Push a transform with a custom origin point (in logical screen coordinates)
+    pub fn push_transform_with_origin(
+        &mut self,
+        transform: Transform,
+        origin_x: f32,
+        origin_y: f32,
+    ) {
+        let composed = if let Some((current, _)) = self.transform_stack.last() {
+            current.then(&transform)
         } else {
-            (transform, true)
+            transform
         };
-        self.transform_stack.push((composed, true));
+        self.transform_stack
+            .push((composed, Some((origin_x, origin_y))));
     }
 
     /// Pop a transform from the stack
@@ -622,18 +628,18 @@ impl PaintContext {
             .unwrap_or(Transform::IDENTITY)
     }
 
-    /// Get the current transform with its centered flag
-    fn current_transform_with_flag(&self) -> (Transform, bool) {
+    /// Get the current transform with its custom origin (if any)
+    fn current_transform_with_origin(&self) -> (Transform, Option<(f32, f32)>) {
         self.transform_stack
             .last()
-            .copied()
-            .unwrap_or((Transform::IDENTITY, false))
+            .cloned()
+            .unwrap_or((Transform::IDENTITY, None))
     }
 
     /// Apply the current transform from the stack to a shape
     fn apply_current_transform(&self, shape: &mut impl Transformable) {
-        let (transform, is_centered) = self.current_transform_with_flag();
-        shape.set_transform(transform, is_centered);
+        let (transform, origin) = self.current_transform_with_origin();
+        shape.set_transform(transform, origin);
     }
 
     /// Helper to apply clip, transform, and push a rounded rect shape
