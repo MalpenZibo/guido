@@ -12,12 +12,13 @@ Guido is a GPU-accelerated GUI library for building Wayland layer shell applicat
 
 ## Features
 
-- **Fine-Grained Reactivity** - Thread-safe reactive signals with automatic dependency tracking and efficient updates. Signals are `Copy`, eliminating the need for manual cloning
-- **Reusable Components** - Define custom components with the `#[component]` macro and fluent builder API
-- **GPU Rendering** - Hardware-accelerated rendering via wgpu
-- **Superellipse Corners** - Smooth iOS-style "squircle" corners with configurable curvature
+- **Fine-Grained Reactivity** - Thread-safe reactive signals with automatic dependency tracking. Signals are `Copy`, eliminating manual cloning
+- **State Layer System** - Declarative hover/pressed style overrides with animations and Material-style ripple effects
+- **GPU Rendering** - Hardware-accelerated rendering via wgpu with SDF-based shapes
+- **Transform System** - Translate, rotate, and scale widgets with proper hit testing and animations
+- **Superellipse Corners** - Configurable corner curvature from squircle (iOS-style) to bevel to scoop
 - **SDF Borders** - Crisp anti-aliased borders using signed distance field rendering
-- **Composable Widgets** - Build UIs from minimal primitives (Container, Row, Column, Text)
+- **Composable Widgets** - Build UIs from minimal primitives with pluggable Flex layout
 - **Layer Shell Support** - Native Wayland layer shell integration for status bars and panels
 - **HiDPI Support** - Automatic scaling for high-resolution displays
 
@@ -37,7 +38,8 @@ fn main() {
                 .background(Color::rgb(0.3, 0.3, 0.4))
                 .corner_radius(8.0)
                 .padding(8.0)
-                .ripple()
+                .hover_state(|s| s.lighter(0.1))
+                .pressed_state(|s| s.ripple())
                 .on_click(move || count.update(|c| *c += 1))
                 .child(text("Click me").color(Color::WHITE))
         );
@@ -73,9 +75,21 @@ cargo run --example component_example
 ## Examples
 
 - **status_bar** - Basic status bar layout demonstration
-- **reactive_example** - Interactive features with signals, click handlers, and ripple effects
-- **showcase** - Comprehensive feature demo showing different corner curvatures
-- **component_example** - Reusable components (Button, Card) with reactive props
+- **reactive_example** - Interactive features with signals and state layers
+- **state_layer_example** - Hover, pressed states, and ripple effects
+- **transform_example** - Rotation, scale, and animated transforms
+- **animation_example** - Spring and eased animations
+- **showcase** - Corner curvature variations (squircle, circle, bevel, scoop)
+- **component_example** - Reusable components with reactive props
+- **children_example** - Dynamic lists with keyed reconciliation
+
+## Documentation
+
+- [Architecture Overview](docs/ARCHITECTURE.md) - System design and module structure
+- [State Layer API](docs/STATE_LAYER.md) - Hover/pressed styles and ripple effects
+- [Transform System](docs/TRANSFORMS.md) - Translate, rotate, scale with animations
+- [Reactive System](docs/REACTIVE.md) - Signals, computed values, and effects
+- [Styling Guide](docs/STYLING.md) - Colors, gradients, borders, and corners
 
 ## Requirements
 

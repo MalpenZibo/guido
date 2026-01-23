@@ -2,6 +2,7 @@
 //!
 //! This example tests that hover and click correctly respect corner radius.
 //! The corners outside the rounded area should NOT trigger events.
+//! Uses state layer API with ripple effects for visual feedback.
 
 use guido::prelude::*;
 
@@ -60,27 +61,13 @@ fn make_box(
     base_color: Color,
     click_count: Signal<i32>,
 ) -> Container {
-    let is_hovered = create_signal(false);
-
-    // Highlight color when hovered (brighter version)
-    let hover_color = Color::rgb(
-        (base_color.r + 0.3).min(1.0),
-        (base_color.g + 0.3).min(1.0),
-        (base_color.b + 0.3).min(1.0),
-    );
-
     container()
         .width(100.0)
         .height(100.0)
-        .background(move || {
-            if is_hovered.get() {
-                hover_color
-            } else {
-                base_color
-            }
-        })
+        .background(base_color)
         .corner_radius(corner_radius)
-        .on_hover(move |hovered| is_hovered.set(hovered))
+        .hover_state(|s| s.lighter(0.15))
+        .pressed_state(|s| s.ripple())
         .on_click(move || click_count.update(|c| *c += 1))
         .layout(
             Flex::column()

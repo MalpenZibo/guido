@@ -8,7 +8,7 @@ struct VertexInput {
     @location(1) color: vec4<f32>,
     @location(2) shape_rect: vec4<f32>,  // min_x, min_y, max_x, max_y in NDC
     @location(3) shape_radius: vec2<f32>, // corner radius in NDC (x, y)
-    @location(4) shape_curvature: vec2<f32>, // x = curvature, y = padding
+    @location(4) shape_curvature: vec2<f32>, // x = curvature, y = clip_radius (uniform)
     @location(5) border_width: vec2<f32>,  // border width in NDC (x, y)
     @location(6) border_color: vec4<f32>,
     @location(7) shadow_offset: vec2<f32>,  // shadow offset in NDC (x, y)
@@ -19,6 +19,7 @@ struct VertexInput {
     @location(12) transform_row2: vec4<f32>,
     @location(13) transform_row3: vec4<f32>,
     @location(14) local_pos: vec2<f32>,  // untransformed position for SDF
+    @location(15) clip_rect: vec4<f32>,  // clip region: min_x, min_y, max_x, max_y in NDC
 }
 
 struct VertexOutput {
@@ -33,6 +34,8 @@ struct VertexOutput {
     @location(7) shadow_offset: vec2<f32>,
     @location(8) shadow_params: vec2<f32>,  // x = blur, y = spread
     @location(9) shadow_color: vec4<f32>,
+    @location(10) clip_rect: vec4<f32>,  // clip region in NDC
+    @location(11) clip_radius: f32,  // clip corner radius (uniform, height-based NDC)
 }
 
 @vertex
@@ -65,6 +68,9 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.shadow_offset = in.shadow_offset;
     out.shadow_params = in.shadow_params;
     out.shadow_color = in.shadow_color;
+    out.clip_rect = in.clip_rect;
+    // clip_radius comes from shape_curvature.y (packed to save vertex attributes)
+    out.clip_radius = in.shape_curvature.y;
 
     return out;
 }
@@ -290,12 +296,39 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // Composite shadow behind shape
+    var final_result: vec4<f32>;
     if (shadow_contribution.a > 0.0) {
         let final_rgb = shape_result.rgb * shape_result.a +
                         shadow_contribution.rgb * shadow_contribution.a * (1.0 - shape_result.a);
         let final_a = shape_result.a + shadow_contribution.a * (1.0 - shape_result.a);
-        return vec4<f32>(final_rgb, final_a);
+        final_result = vec4<f32>(final_rgb, final_a);
+    } else {
+        final_result = shape_result;
     }
 
-    return shape_result;
+    // Apply clip region if defined (clip_rect width > 0)
+    let clip_width = in.clip_rect.z - in.clip_rect.x;
+    let clip_height = in.clip_rect.w - in.clip_rect.y;
+    if (clip_width > 0.0 && clip_height > 0.0) {
+        // Scale clip region for aspect ratio
+        let scaled_clip_rect = vec4<f32>(
+            in.clip_rect.x * aspect,
+            in.clip_rect.y,
+            in.clip_rect.z * aspect,
+            in.clip_rect.w
+        );
+        // clip_radius is uniform (height-based NDC), which matches scaled space
+        // In scaled space, x coords are scaled by aspect, so distances match y
+        // Therefore we use clip_radius directly for both dimensions
+        let scaled_clip_radius = vec2<f32>(in.clip_radius, in.clip_radius);
+
+        // Compute clip SDF (use K=1.0 for circular corners)
+        let clip_dist = rounded_rect_sdf(scaled_pos, scaled_clip_rect, scaled_clip_radius, 1.0);
+        let clip_aa = fwidth(clip_dist);
+        let clip_alpha = 1.0 - smoothstep(-clip_aa, clip_aa, clip_dist);
+
+        final_result = vec4<f32>(final_result.rgb, final_result.a * clip_alpha);
+    }
+
+    return final_result;
 }

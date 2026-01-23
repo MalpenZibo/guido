@@ -14,6 +14,7 @@ use self::primitives::{ClipRegion, Gradient, RoundedRect, TexturedQuad, Transfor
 use self::text::TextRenderState;
 use self::text_texture::TextTextureRenderer;
 use crate::transform::Transform;
+use crate::transform_origin::TransformOrigin;
 use crate::widgets::{Color, Rect};
 
 pub use context::{GpuContext, SurfaceState};
@@ -161,10 +162,31 @@ impl Renderer {
         self.scale_factor = scale;
     }
 
+    /// Create vertex and index GPU buffers for a shape
+    fn create_gpu_buffers(
+        device: &wgpu::Device,
+        vertices: &[Vertex],
+        indices: &[u16],
+        label: &str,
+    ) -> (wgpu::Buffer, wgpu::Buffer) {
+        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{} Vertex Buffer", label)),
+            contents: bytemuck::cast_slice(vertices),
+            usage: BufferUsages::VERTEX,
+        });
+        let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{} Index Buffer", label)),
+            contents: bytemuck::cast_slice(indices),
+            usage: BufferUsages::INDEX,
+        });
+        (vb, ib)
+    }
+
     pub fn create_paint_context(&mut self) -> PaintContext {
         PaintContext {
             shapes: Vec::new(),
             texts: Vec::new(),
+            overlay_shapes: Vec::new(),
             clip_stack: Vec::new(),
             transform_stack: Vec::new(),
         }
@@ -336,21 +358,23 @@ impl Renderer {
                 if vertices.is_empty() || indices.is_empty() {
                     return None;
                 }
-                Some((
-                    self.device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("Shape Vertex Buffer"),
-                            contents: bytemuck::cast_slice(&vertices),
-                            usage: BufferUsages::VERTEX,
-                        }),
-                    self.device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("Shape Index Buffer"),
-                            contents: bytemuck::cast_slice(&indices),
-                            usage: BufferUsages::INDEX,
-                        }),
-                    indices.len(),
-                ))
+                let (vb, ib) = Self::create_gpu_buffers(&self.device, &vertices, &indices, "Shape");
+                Some((vb, ib, indices.len()))
+            })
+            .collect();
+
+        // Scale overlay shapes and create GPU buffers (rendered after text)
+        let overlay_gpu_buffers: Vec<_> = paint_ctx
+            .overlay_shapes
+            .iter()
+            .filter_map(|shape| {
+                let (vertices, indices) = self.scale_shape(shape);
+                if vertices.is_empty() || indices.is_empty() {
+                    return None;
+                }
+                let (vb, ib) =
+                    Self::create_gpu_buffers(&self.device, &vertices, &indices, "Overlay Shape");
+                Some((vb, ib, indices.len()))
             })
             .collect();
 
@@ -402,6 +426,16 @@ impl Renderer {
                     render_pass.draw_indexed(0..*index_count as u32, 0, 0..1);
                 }
             }
+
+            // Draw overlay shapes (rendered after text, for effects like ripples)
+            if !overlay_gpu_buffers.is_empty() {
+                render_pass.set_pipeline(&self.pipeline);
+                for (vb, ib, index_count) in &overlay_gpu_buffers {
+                    render_pass.set_vertex_buffer(0, vb.slice(..));
+                    render_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint16);
+                    render_pass.draw_indexed(0..*index_count as u32, 0, 0..1);
+                }
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -413,6 +447,8 @@ pub struct PaintContext {
     shapes: Vec<Shape>,
     /// Text entries with full transform support
     texts: Vec<TextEntry>,
+    /// Overlay shapes rendered after text (for effects like ripples)
+    overlay_shapes: Vec<Shape>,
     /// Clip stack for clipping children to container bounds
     /// Each entry is (clip_rect, corner_radius, curvature)
     clip_stack: Vec<(Rect, f32, f32)>,
@@ -423,6 +459,26 @@ pub struct PaintContext {
 }
 
 impl PaintContext {
+    /// Create a new PaintContext with pre-allocated capacity to avoid per-frame allocations
+    pub fn with_capacity(shapes: usize, texts: usize, overlay: usize) -> Self {
+        Self {
+            shapes: Vec::with_capacity(shapes),
+            texts: Vec::with_capacity(texts),
+            overlay_shapes: Vec::with_capacity(overlay),
+            clip_stack: Vec::with_capacity(4),
+            transform_stack: Vec::with_capacity(4),
+        }
+    }
+
+    /// Clear all buffers for reuse, preserving allocated capacity
+    pub fn clear(&mut self) {
+        self.shapes.clear();
+        self.texts.clear();
+        self.overlay_shapes.clear();
+        self.clip_stack.clear();
+        self.transform_stack.clear();
+    }
+
     pub fn draw_rect(&mut self, rect: Rect, color: Color) {
         self.push_rounded_rect(RoundedRect::new(rect, color, 0.0));
     }
@@ -673,5 +729,82 @@ impl PaintContext {
         shape.clip = self.current_clip();
         self.apply_current_transform(&mut shape);
         self.shapes.push(Shape::RoundedRect(shape));
+    }
+
+    /// Helper to apply clip, transform, and push an overlay rounded rect shape
+    fn push_overlay_rounded_rect(&mut self, mut shape: RoundedRect) {
+        shape.clip = self.current_clip();
+        self.apply_current_transform(&mut shape);
+        self.overlay_shapes.push(Shape::RoundedRect(shape));
+    }
+
+    /// Draw a circle as an overlay (rendered after text).
+    /// The circle is drawn centered at (cx, cy) with the given radius.
+    pub fn draw_overlay_circle(&mut self, cx: f32, cy: f32, radius: f32, color: Color) {
+        // A circle is a rounded rect where corner_radius = width/2 = height/2
+        let rect = Rect::new(cx - radius, cy - radius, radius * 2.0, radius * 2.0);
+        self.push_overlay_rounded_rect(RoundedRect::new(rect, color, radius));
+    }
+
+    /// Draw a circle as an overlay with a specific clip region.
+    /// Used for ripple effects that need to be clipped to container bounds.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_overlay_circle_clipped(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        radius: f32,
+        color: Color,
+        clip_rect: Rect,
+        clip_radius: f32,
+        clip_curvature: f32,
+    ) {
+        let rect = Rect::new(cx - radius, cy - radius, radius * 2.0, radius * 2.0);
+        let mut shape = RoundedRect::new(rect, color, radius);
+        // Set explicit clip for this shape
+        shape.clip = Some(ClipRegion {
+            rect: clip_rect,
+            radius: clip_radius,
+            curvature: clip_curvature,
+        });
+        self.apply_current_transform(&mut shape);
+        self.overlay_shapes.push(Shape::RoundedRect(shape));
+    }
+
+    /// Draw a circle as an overlay with a clip region that can have its own transform.
+    /// Used for ripple effects on transformed containers - the ripple uses screen coordinates
+    /// but the clip region needs to match the transformed container bounds.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_overlay_circle_clipped_with_transform(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        radius: f32,
+        color: Color,
+        clip_rect: Rect,
+        clip_radius: f32,
+        clip_curvature: f32,
+        clip_transform: Option<(Transform, TransformOrigin)>,
+    ) {
+        let rect = Rect::new(cx - radius, cy - radius, radius * 2.0, radius * 2.0);
+        let mut shape = RoundedRect::new(rect, color, radius);
+
+        // Set explicit clip for this shape
+        shape.clip = Some(ClipRegion {
+            rect: clip_rect,
+            radius: clip_radius,
+            curvature: clip_curvature,
+        });
+
+        // Apply transform to both shape and clip if provided
+        // This makes the ripple appear at the correct screen position
+        // while clipping to the transformed container bounds
+        if let Some((transform, origin)) = clip_transform {
+            let (origin_x, origin_y) = origin.resolve(clip_rect);
+            shape.transform = transform;
+            shape.transform_origin = Some((origin_x, origin_y));
+        }
+
+        self.overlay_shapes.push(Shape::RoundedRect(shape));
     }
 }

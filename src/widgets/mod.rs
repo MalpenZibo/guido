@@ -1,12 +1,14 @@
 pub mod children;
 pub mod container;
 pub mod into_child;
+pub mod state_layer;
 pub mod text;
 pub mod widget;
 
 pub use children::ChildrenSource;
 pub use container::{container, Border, Container, GradientDirection, LinearGradient, Overflow};
 pub use into_child::{DynamicChildren, IntoChild, IntoChildren, StaticChildren};
+pub use state_layer::{BackgroundOverride, RippleConfig, StateStyle};
 pub use text::{text, Text};
 pub use widget::{Color, Event, EventResponse, MouseButton, Padding, Rect, ScrollSource, Widget};
 

@@ -2,6 +2,7 @@
 //!
 //! This verifies that transforms (translate, rotate, scale)
 //! work correctly on containers with rounded corners.
+//! Uses state layer API with ripple effects for visual feedback.
 
 use guido::prelude::*;
 
@@ -62,25 +63,13 @@ fn main() {
 }
 
 fn make_box(label: &'static str, base_color: Color, click_count: Signal<i32>) -> Container {
-    let hover_color = create_signal(base_color);
-    let lighter = Color::rgb(
-        (base_color.r + 0.15).min(1.0),
-        (base_color.g + 0.15).min(1.0),
-        (base_color.b + 0.15).min(1.0),
-    );
-
     container()
         .width(100.0)
         .height(100.0)
-        .background(hover_color)
+        .background(base_color)
+        .hover_state(|s| s.lighter(0.1))
+        .pressed_state(|s| s.ripple())
         .on_click(move || click_count.update(|c| *c += 1))
-        .on_hover(move |hovered| {
-            if hovered {
-                hover_color.set(lighter);
-            } else {
-                hover_color.set(base_color);
-            }
-        })
         .layout(
             Flex::column()
                 .main_axis_alignment(MainAxisAlignment::Center)
