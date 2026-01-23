@@ -908,7 +908,10 @@ impl Widget for Container {
                 .is_some_and(|a| a.is_animating());
 
         // Downgrade to paint-only if only visuals changed (but not during layout-affecting animations)
+        // Don't downgrade on first layout (when bounds are uninitialized)
+        let bounds_initialized = self.bounds.width > 0.0 || self.bounds.height > 0.0;
         if self.needs_layout()
+            && bounds_initialized
             && !padding_changed
             && !child_needs_layout
             && !has_size_animations
