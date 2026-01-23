@@ -12,6 +12,7 @@ use crate::transform_origin::TransformOrigin;
 
 use super::children::ChildrenSource;
 use super::into_child::{IntoChild, IntoChildren};
+use super::state_layer::{resolve_background, StateStyle};
 use super::widget::{
     Color, Event, EventResponse, MouseButton, Padding, Rect, ScrollSource, Widget,
 };
@@ -309,6 +310,10 @@ pub struct Container {
     border_width_anim: Option<AnimationState<f32>>,
     border_color_anim: Option<AnimationState<Color>>,
     transform_anim: Option<AnimationState<Transform>>,
+
+    // State layer styles (hover/pressed overrides)
+    hover_state: Option<StateStyle>,
+    pressed_state: Option<StateStyle>,
 }
 
 impl Container {
@@ -350,6 +355,8 @@ impl Container {
             border_width_anim: None,
             border_color_anim: None,
             transform_anim: None,
+            hover_state: None,
+            pressed_state: None,
         }
     }
 
@@ -708,6 +715,188 @@ impl Container {
         self
     }
 
+    /// Set style overrides for the hover state.
+    ///
+    /// Properties set in the hover state will override the base properties
+    /// when the container is hovered.
+    ///
+    /// # Example
+    /// ```ignore
+    /// container()
+    ///     .background(Color::rgb(0.2, 0.2, 0.3))
+    ///     .hover_state(|s| s.lighter(0.1))
+    ///     .child(text("Hover me"))
+    /// ```
+    pub fn hover_state<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(StateStyle) -> StateStyle,
+    {
+        self.hover_state = Some(f(StateStyle::new()));
+        self
+    }
+
+    /// Set style overrides for the pressed state.
+    ///
+    /// Properties set in the pressed state will override the base properties
+    /// (and hover state properties) when the container is pressed.
+    ///
+    /// # Example
+    /// ```ignore
+    /// container()
+    ///     .background(Color::rgb(0.2, 0.2, 0.3))
+    ///     .pressed_state(|s| s.darker(0.1).transform(Transform::scale(0.98)))
+    ///     .child(text("Click me"))
+    /// ```
+    pub fn pressed_state<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(StateStyle) -> StateStyle,
+    {
+        self.pressed_state = Some(f(StateStyle::new()));
+        self
+    }
+
+    /// Get the effective background color target considering state layers.
+    ///
+    /// Priority: pressed_state > hover_state > base background
+    fn effective_background_target(&self) -> Color {
+        let base = self.background.get();
+
+        // Pressed state takes precedence
+        if self.is_pressed {
+            if let Some(ref state) = self.pressed_state {
+                if let Some(ref bg) = state.background {
+                    return resolve_background(base, bg);
+                }
+            }
+        }
+
+        // Then hover state
+        if self.is_hovered {
+            if let Some(ref state) = self.hover_state {
+                if let Some(ref bg) = state.background {
+                    return resolve_background(base, bg);
+                }
+            }
+        }
+
+        base
+    }
+
+    /// Get the effective border width target considering state layers.
+    fn effective_border_width_target(&self) -> f32 {
+        let base = self.border_width.get();
+
+        if self.is_pressed {
+            if let Some(ref state) = self.pressed_state {
+                if let Some(width) = state.border_width {
+                    return width;
+                }
+            }
+        }
+
+        if self.is_hovered {
+            if let Some(ref state) = self.hover_state {
+                if let Some(width) = state.border_width {
+                    return width;
+                }
+            }
+        }
+
+        base
+    }
+
+    /// Get the effective border color target considering state layers.
+    fn effective_border_color_target(&self) -> Color {
+        let base = self.border_color.get();
+
+        if self.is_pressed {
+            if let Some(ref state) = self.pressed_state {
+                if let Some(color) = state.border_color {
+                    return color;
+                }
+            }
+        }
+
+        if self.is_hovered {
+            if let Some(ref state) = self.hover_state {
+                if let Some(color) = state.border_color {
+                    return color;
+                }
+            }
+        }
+
+        base
+    }
+
+    /// Get the effective corner radius target considering state layers.
+    fn effective_corner_radius_target(&self) -> f32 {
+        let base = self.corner_radius.get();
+
+        if self.is_pressed {
+            if let Some(ref state) = self.pressed_state {
+                if let Some(radius) = state.corner_radius {
+                    return radius;
+                }
+            }
+        }
+
+        if self.is_hovered {
+            if let Some(ref state) = self.hover_state {
+                if let Some(radius) = state.corner_radius {
+                    return radius;
+                }
+            }
+        }
+
+        base
+    }
+
+    /// Get the effective transform target considering state layers.
+    fn effective_transform_target(&self) -> Transform {
+        let base = self.transform.get();
+
+        if self.is_pressed {
+            if let Some(ref state) = self.pressed_state {
+                if let Some(transform) = state.transform {
+                    return transform;
+                }
+            }
+        }
+
+        if self.is_hovered {
+            if let Some(ref state) = self.hover_state {
+                if let Some(transform) = state.transform {
+                    return transform;
+                }
+            }
+        }
+
+        base
+    }
+
+    /// Get the effective elevation considering state layers (not animated).
+    fn effective_elevation(&self) -> f32 {
+        let base = self.elevation.get();
+
+        if self.is_pressed {
+            if let Some(ref state) = self.pressed_state {
+                if let Some(elevation) = state.elevation {
+                    return elevation;
+                }
+            }
+        }
+
+        if self.is_hovered {
+            if let Some(ref state) = self.hover_state {
+                if let Some(elevation) = state.elevation {
+                    return elevation;
+                }
+            }
+        }
+
+        base
+    }
+
     /// Check if any child widget needs layout
     fn any_child_needs_layout(&self) -> bool {
         // If children haven't been reconciled yet, we need layout
@@ -728,44 +917,44 @@ impl Container {
             .unwrap_or_else(|| self.padding.get())
     }
 
-    /// Get current background color (animated or static)
+    /// Get current background color (animated or effective target)
     fn animated_background(&self) -> Color {
         self.background_anim
             .as_ref()
             .map(|a| *a.current())
-            .unwrap_or_else(|| self.background.get())
+            .unwrap_or_else(|| self.effective_background_target())
     }
 
-    /// Get current corner radius (animated or static)
+    /// Get current corner radius (animated or effective target)
     fn animated_corner_radius(&self) -> f32 {
         self.corner_radius_anim
             .as_ref()
             .map(|a| *a.current())
-            .unwrap_or_else(|| self.corner_radius.get())
+            .unwrap_or_else(|| self.effective_corner_radius_target())
     }
 
-    /// Get current border width (animated or static)
+    /// Get current border width (animated or effective target)
     fn animated_border_width(&self) -> f32 {
         self.border_width_anim
             .as_ref()
             .map(|a| *a.current())
-            .unwrap_or_else(|| self.border_width.get())
+            .unwrap_or_else(|| self.effective_border_width_target())
     }
 
-    /// Get current border color (animated or static)
+    /// Get current border color (animated or effective target)
     fn animated_border_color(&self) -> Color {
         self.border_color_anim
             .as_ref()
             .map(|a| *a.current())
-            .unwrap_or_else(|| self.border_color.get())
+            .unwrap_or_else(|| self.effective_border_color_target())
     }
 
-    /// Get current transform (animated or static)
+    /// Get current transform (animated or effective target)
     fn animated_transform(&self) -> Transform {
         self.transform_anim
             .as_ref()
             .map(|a| *a.current())
-            .unwrap_or_else(|| self.transform.get())
+            .unwrap_or_else(|| self.effective_transform_target())
     }
 
     /// Calculate constraints for children based on container dimensions and padding
@@ -805,27 +994,29 @@ impl Container {
         // Note: width/height animation targets are set in layout() after we know content size
         advance_anim!(self, width_anim, any_animating);
         advance_anim!(self, height_anim, any_animating);
-        advance_anim!(self, background_anim, self.background.get(), any_animating);
+
+        // Use effective targets that consider state layers (hover/pressed overrides)
+        let bg_target = self.effective_background_target();
+        advance_anim!(self, background_anim, bg_target, any_animating);
+
+        let corner_radius_target = self.effective_corner_radius_target();
         advance_anim!(
             self,
             corner_radius_anim,
-            self.corner_radius.get(),
+            corner_radius_target,
             any_animating
         );
+
         advance_anim!(self, padding_anim, self.padding.get(), any_animating);
-        advance_anim!(
-            self,
-            border_width_anim,
-            self.border_width.get(),
-            any_animating
-        );
-        advance_anim!(
-            self,
-            border_color_anim,
-            self.border_color.get(),
-            any_animating
-        );
-        advance_anim!(self, transform_anim, self.transform.get(), any_animating);
+
+        let border_width_target = self.effective_border_width_target();
+        advance_anim!(self, border_width_anim, border_width_target, any_animating);
+
+        let border_color_target = self.effective_border_color_target();
+        advance_anim!(self, border_color_anim, border_color_target, any_animating);
+
+        let transform_target = self.effective_transform_target();
+        advance_anim!(self, transform_anim, transform_target, any_animating);
 
         // Request next frame if any property animations are running
         if any_animating {
@@ -878,7 +1069,7 @@ impl Widget for Container {
         let background = self.animated_background();
         let corner_radius = self.animated_corner_radius();
         let corner_curvature = self.corner_curvature.get();
-        let elevation = self.elevation.get();
+        let elevation = self.effective_elevation();
 
         // Detect layout-affecting changes
         let padding_changed = padding.top != self.cached_padding.top
@@ -1192,7 +1383,7 @@ impl Widget for Container {
         let background = self.animated_background();
         let corner_radius = self.animated_corner_radius();
         let corner_curvature = self.corner_curvature.get();
-        let elevation_level = self.elevation.get();
+        let elevation_level = self.effective_elevation();
         let shadow = elevation_to_shadow(elevation_level);
         let transform = self.animated_transform();
         let transform_origin = self.transform_origin.get();
@@ -1335,7 +1526,12 @@ impl Widget for Container {
         match local_event.as_ref() {
             Event::MouseEnter { x, y } => {
                 if self.bounds.contains_rounded(*x, *y, corner_radius) {
+                    let was_hovered = self.is_hovered;
                     self.is_hovered = true;
+                    // Request repaint if state layer is defined and state changed
+                    if !was_hovered && self.hover_state.is_some() {
+                        request_animation_frame();
+                    }
                     if let Some(ref callback) = self.on_hover {
                         callback(true);
                     }
@@ -1347,6 +1543,10 @@ impl Widget for Container {
                 self.is_hovered = self.bounds.contains_rounded(*x, *y, corner_radius);
 
                 if was_hovered != self.is_hovered {
+                    // Request repaint if state layer is defined
+                    if self.hover_state.is_some() {
+                        request_animation_frame();
+                    }
                     if let Some(ref callback) = self.on_hover {
                         callback(self.is_hovered);
                     }
@@ -1357,7 +1557,12 @@ impl Widget for Container {
                 if self.bounds.contains_rounded(*x, *y, corner_radius)
                     && *button == MouseButton::Left
                 {
+                    let was_pressed = self.is_pressed;
                     self.is_pressed = true;
+                    // Request repaint if state layer is defined and state changed
+                    if !was_pressed && self.pressed_state.is_some() {
+                        request_animation_frame();
+                    }
                     // Only consume the event if we have a click handler
                     if self.on_click.is_some() {
                         return EventResponse::Handled;
@@ -1366,7 +1571,12 @@ impl Widget for Container {
             }
             Event::MouseUp { x, y, button } => {
                 if self.is_pressed && *button == MouseButton::Left {
+                    let was_pressed = self.is_pressed;
                     self.is_pressed = false;
+                    // Request repaint if state layer is defined and state changed
+                    if was_pressed && self.pressed_state.is_some() {
+                        request_animation_frame();
+                    }
                     if self.bounds.contains_rounded(*x, *y, corner_radius) {
                         if let Some(ref callback) = self.on_click {
                             callback();
@@ -1376,6 +1586,8 @@ impl Widget for Container {
                 }
             }
             Event::MouseLeave => {
+                let was_hovered = self.is_hovered;
+                let was_pressed = self.is_pressed;
                 if self.is_hovered {
                     self.is_hovered = false;
                     if let Some(ref callback) = self.on_hover {
@@ -1383,6 +1595,12 @@ impl Widget for Container {
                     }
                 }
                 self.is_pressed = false;
+                // Request repaint if state layer is defined and state changed
+                if (was_hovered && self.hover_state.is_some())
+                    || (was_pressed && self.pressed_state.is_some())
+                {
+                    request_animation_frame();
+                }
             }
             Event::Scroll {
                 x,
