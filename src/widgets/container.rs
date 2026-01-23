@@ -1577,13 +1577,21 @@ impl Widget for Container {
             ctx.pop_clip();
         }
 
-        // Draw ripple effect as overlay (rendered after children/text)
-        if let Some((local_cx, local_cy)) = self.ripple_center {
+        // Pop transform BEFORE drawing ripple so ripple uses screen coordinates
+        if has_transform {
+            ctx.pop_transform();
+        }
+
+        // Draw ripple effect as overlay (rendered after children/text, without transform)
+        // Ripple uses absolute screen coordinates so it appears where user clicked
+        if let Some((screen_cx, screen_cy)) = self.ripple_center {
             if let Some(ref pressed_state) = self.pressed_state {
                 if let Some(ref ripple_config) = pressed_state.ripple {
                     if self.ripple_opacity > 0.0 {
                         // Calculate maximum radius to cover entire container
-                        // Use distance to farthest corner from click point
+                        // Use distance from click point to farthest corner of bounds
+                        let local_cx = screen_cx - self.bounds.x;
+                        let local_cy = screen_cy - self.bounds.y;
                         let max_dist_x = local_cx.max(self.bounds.width - local_cx);
                         let max_dist_y = local_cy.max(self.bounds.height - local_cy);
                         let max_radius = (max_dist_x * max_dist_x + max_dist_y * max_dist_y).sqrt();
@@ -1599,28 +1607,29 @@ impl Widget for Container {
                             ripple_config.color.a * self.ripple_opacity,
                         );
 
-                        // Convert local coordinates to screen coordinates
-                        let screen_cx = self.bounds.x + local_cx;
-                        let screen_cy = self.bounds.y + local_cy;
+                        // For transformed containers, we need to clip to the transformed bounds
+                        // Transform the clip region to match the visual container position
+                        let (clip_bounds, clip_transform) = if has_transform {
+                            // Apply transform to get visual bounds for clipping
+                            (self.bounds, Some((transform, transform_origin)))
+                        } else {
+                            (self.bounds, None)
+                        };
 
                         // Draw ripple circle clipped to container bounds
-                        ctx.draw_overlay_circle_clipped(
+                        ctx.draw_overlay_circle_clipped_with_transform(
                             screen_cx,
                             screen_cy,
                             current_radius,
                             ripple_color,
-                            self.bounds,
+                            clip_bounds,
                             corner_radius,
                             corner_curvature,
+                            clip_transform,
                         );
                     }
                 }
             }
-        }
-
-        // Pop transform if we pushed one
-        if has_transform {
-            ctx.pop_transform();
         }
     }
 
@@ -1711,8 +1720,11 @@ impl Widget for Container {
                         .as_ref()
                         .is_some_and(|s| s.ripple.is_some());
                     if has_ripple {
-                        // Store click position relative to container bounds (local coordinates)
-                        self.ripple_center = Some((*x - self.bounds.x, *y - self.bounds.y));
+                        // Store click position in SCREEN coordinates (absolute)
+                        // We use original event coords, not transformed ones, so ripple
+                        // appears exactly where user clicked regardless of container transform
+                        let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
+                        self.ripple_center = Some((screen_x, screen_y));
                         self.ripple_progress = 0.0;
                         self.ripple_opacity = 1.0;
                         self.ripple_fading = false;
@@ -1737,8 +1749,9 @@ impl Widget for Container {
 
                     // Start ripple reverse animation if ripple is active
                     if self.ripple_center.is_some() && self.ripple_opacity > 0.0 {
-                        // Store the release position as exit center (in local coordinates)
-                        self.ripple_exit_center = Some((*x - self.bounds.x, *y - self.bounds.y));
+                        // Store the release position in SCREEN coordinates (absolute)
+                        let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
+                        self.ripple_exit_center = Some((screen_x, screen_y));
                         self.ripple_fading = true;
                         self.ripple_fade_start_time = Some(std::time::Instant::now());
                         self.ripple_fade_start_progress = self.ripple_progress;

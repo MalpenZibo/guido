@@ -14,6 +14,7 @@ use self::primitives::{ClipRegion, Gradient, RoundedRect, TexturedQuad, Transfor
 use self::text::TextRenderState;
 use self::text_texture::TextTextureRenderer;
 use crate::transform::Transform;
+use crate::transform_origin::TransformOrigin;
 use crate::widgets::{Color, Rect};
 
 pub use context::{GpuContext, SurfaceState};
@@ -752,6 +753,43 @@ impl PaintContext {
             curvature: clip_curvature,
         });
         self.apply_current_transform(&mut shape);
+        self.overlay_shapes.push(Shape::RoundedRect(shape));
+    }
+
+    /// Draw a circle as an overlay with a clip region that can have its own transform.
+    /// Used for ripple effects on transformed containers - the ripple uses screen coordinates
+    /// but the clip region needs to match the transformed container bounds.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_overlay_circle_clipped_with_transform(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        radius: f32,
+        color: Color,
+        clip_rect: Rect,
+        clip_radius: f32,
+        clip_curvature: f32,
+        clip_transform: Option<(Transform, TransformOrigin)>,
+    ) {
+        let rect = Rect::new(cx - radius, cy - radius, radius * 2.0, radius * 2.0);
+        let mut shape = RoundedRect::new(rect, color, radius);
+
+        // Set explicit clip for this shape
+        shape.clip = Some(ClipRegion {
+            rect: clip_rect,
+            radius: clip_radius,
+            curvature: clip_curvature,
+        });
+
+        // Apply transform to both shape and clip if provided
+        // This makes the ripple appear at the correct screen position
+        // while clipping to the transformed container bounds
+        if let Some((transform, origin)) = clip_transform {
+            let (origin_x, origin_y) = origin.resolve(clip_rect);
+            shape.transform = transform;
+            shape.transform_origin = Some((origin_x, origin_y));
+        }
+
         self.overlay_shapes.push(Shape::RoundedRect(shape));
     }
 }
