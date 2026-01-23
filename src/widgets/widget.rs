@@ -186,6 +186,51 @@ pub enum EventResponse {
     Handled,
 }
 
+impl Event {
+    /// Get the coordinates from this event, if any
+    pub fn coords(&self) -> Option<(f32, f32)> {
+        match self {
+            Event::MouseMove { x, y } => Some((*x, *y)),
+            Event::MouseDown { x, y, .. } => Some((*x, *y)),
+            Event::MouseUp { x, y, .. } => Some((*x, *y)),
+            Event::MouseEnter { x, y } => Some((*x, *y)),
+            Event::Scroll { x, y, .. } => Some((*x, *y)),
+            Event::MouseLeave => None,
+        }
+    }
+
+    /// Create a new event with transformed coordinates
+    pub fn with_coords(&self, new_x: f32, new_y: f32) -> Self {
+        match self {
+            Event::MouseMove { .. } => Event::MouseMove { x: new_x, y: new_y },
+            Event::MouseDown { button, .. } => Event::MouseDown {
+                x: new_x,
+                y: new_y,
+                button: *button,
+            },
+            Event::MouseUp { button, .. } => Event::MouseUp {
+                x: new_x,
+                y: new_y,
+                button: *button,
+            },
+            Event::MouseEnter { .. } => Event::MouseEnter { x: new_x, y: new_y },
+            Event::Scroll {
+                delta_x,
+                delta_y,
+                source,
+                ..
+            } => Event::Scroll {
+                x: new_x,
+                y: new_y,
+                delta_x: *delta_x,
+                delta_y: *delta_y,
+                source: *source,
+            },
+            Event::MouseLeave => Event::MouseLeave,
+        }
+    }
+}
+
 pub trait Widget {
     fn layout(&mut self, constraints: Constraints) -> Size;
     fn paint(&self, ctx: &mut PaintContext);

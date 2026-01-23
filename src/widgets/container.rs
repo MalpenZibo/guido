@@ -1428,15 +1428,43 @@ impl Widget for Container {
     }
 
     fn event(&mut self, event: &Event) -> EventResponse {
-        // Let children handle first
+        // Get transform for coordinate conversion
+        let transform = self.animated_transform();
+        let transform_origin = self.transform_origin.get();
+
+        // Transform the event coordinates from screen space to this container's local space
+        let local_event = if !transform.is_identity() {
+            if let Some((x, y)) = event.coords() {
+                // Compute the centered transform (as used in rendering)
+                let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
+                let centered_transform = transform.center_at(origin_x, origin_y);
+                // Inverse to go from screen space back to local space
+                let inverse = centered_transform.inverse();
+
+                // The transform is applied in NDC space (Y-up) but hit testing is in
+                // screen space (Y-down). For rotation, this inverts the direction.
+                // Apply Y-flip around origin before and after inverse to compensate.
+                let y_flip = Transform::scale_xy(1.0, -1.0).center_at(origin_x, origin_y);
+                let corrected_inverse = y_flip.then(&inverse).then(&y_flip);
+
+                let (local_x, local_y) = corrected_inverse.transform_point(x, y);
+                event.with_coords(local_x, local_y)
+            } else {
+                event.clone()
+            }
+        } else {
+            event.clone()
+        };
+
+        // Let children handle first (with transformed coordinates for nested transforms)
         for child in self.children_source.reconcile_and_get_mut() {
-            if child.event(event) == EventResponse::Handled {
+            if child.event(&local_event) == EventResponse::Handled {
                 return EventResponse::Handled;
             }
         }
 
-        // Handle our own events (same as before)
-        match event {
+        // Handle our own events using transformed coordinates
+        match &local_event {
             Event::MouseEnter { x, y } => {
                 if self.bounds.contains(*x, *y) {
                     self.is_hovered = true;

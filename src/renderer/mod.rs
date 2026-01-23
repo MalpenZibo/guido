@@ -88,7 +88,11 @@ impl Renderer {
                     spread: rect.shadow.spread * self.scale_factor,
                     color: rect.shadow.color,
                 };
-                scaled_rect.transform = rect.transform;
+                // Scale the transform translation components for HiDPI
+                let mut scaled_transform = rect.transform;
+                scaled_transform.data[3] *= self.scale_factor; // tx
+                scaled_transform.data[7] *= self.scale_factor; // ty
+                scaled_rect.transform = scaled_transform;
                 scaled_rect.transform_is_centered = rect.transform_is_centered;
                 scaled_rect.to_vertices(self.screen_width, self.screen_height)
             }
@@ -110,7 +114,11 @@ impl Renderer {
                     circle.color,
                 );
                 scaled_circle.clip = scaled_clip;
-                scaled_circle.transform = circle.transform;
+                // Scale the transform translation components for HiDPI
+                let mut scaled_transform = circle.transform;
+                scaled_transform.data[3] *= self.scale_factor; // tx
+                scaled_transform.data[7] *= self.scale_factor; // ty
+                scaled_circle.transform = scaled_transform;
                 scaled_circle.transform_is_centered = circle.transform_is_centered;
                 scaled_circle.to_vertices(self.screen_width, self.screen_height)
             }
