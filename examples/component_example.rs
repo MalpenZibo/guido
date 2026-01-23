@@ -19,6 +19,8 @@ impl Button {
             .padding(self.padding.get())
             .background(self.background.clone())
             .corner_radius(6.0)
+            .hover_state(|s| s.lighter(0.1))
+            .pressed_state(|s| s.ripple())
             .on_click_option(self.on_click.clone())
             .child(text(self.label.clone()).color(Color::WHITE))
     }

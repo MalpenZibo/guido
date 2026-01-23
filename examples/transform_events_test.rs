@@ -6,7 +6,7 @@
 //! - Scaled containers
 //! - Nested transforms (parent transformed, child clickable)
 //!
-//! Uses on_hover background color change to test hit testing.
+//! Uses state layer API with ripple effects to test hit testing.
 
 use guido::prelude::*;
 
@@ -94,27 +94,13 @@ fn main() {
 }
 
 fn make_box(label: &'static str, base_color: Color, click_count: Signal<i32>) -> Container {
-    let is_hovered = create_signal(false);
-
-    // Highlight color when hovered (brighter version)
-    let hover_color = Color::rgb(
-        (base_color.r + 0.3).min(1.0),
-        (base_color.g + 0.3).min(1.0),
-        (base_color.b + 0.3).min(1.0),
-    );
-
     container()
         .width(70.0)
         .height(70.0)
-        .background(move || {
-            if is_hovered.get() {
-                hover_color
-            } else {
-                base_color
-            }
-        })
+        .background(base_color)
         .corner_radius(8.0)
-        .on_hover(move |hovered| is_hovered.set(hovered))
+        .hover_state(|s| s.lighter(0.15))
+        .pressed_state(|s| s.ripple())
         .on_click(move || click_count.update(|c| *c += 1))
         .layout(
             Flex::column()

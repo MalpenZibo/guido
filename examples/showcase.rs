@@ -9,9 +9,6 @@
 use guido::prelude::*;
 
 fn main() {
-    // No need to clone signals anymore - they implement Copy!
-    let hover_color = create_signal(Color::rgb(0.2, 0.2, 0.3));
-
     let view = container()
         .layout(Flex::column().spacing(12.0))
         .child(
@@ -48,13 +45,8 @@ fn main() {
                         .background(Color::rgb(0.2, 0.4, 0.3))
                         .corner_radius(12.0)
                         .scoop() // K=-1 → n=0.5
-                        .on_hover(move |hovered| {
-                            if hovered {
-                                hover_color.set(Color::rgb(0.3, 0.3, 0.4));
-                            } else {
-                                hover_color.set(Color::rgb(0.2, 0.2, 0.3));
-                            }
-                        })
+                        .hover_state(|s| s.lighter(0.1))
+                        .pressed_state(|s| s.ripple())
                         .child(text("Scoop\n(K=-1)").color(Color::WHITE)),
                 ),
         )
@@ -95,13 +87,8 @@ fn main() {
                         .corner_radius(12.0)
                         .border(2.0, Color::rgb(0.3, 0.7, 0.5))
                         .scoop()
-                        .on_hover(move |hovered| {
-                            if hovered {
-                                hover_color.set(Color::rgb(0.3, 0.3, 0.4));
-                            } else {
-                                hover_color.set(Color::rgb(0.2, 0.2, 0.3));
-                            }
-                        })
+                        .hover_state(|s| s.lighter(0.1))
+                        .pressed_state(|s| s.ripple())
                         .child(text("Scoop\nBorder").color(Color::WHITE)),
                 ),
         )
