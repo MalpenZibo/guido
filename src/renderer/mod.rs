@@ -3,19 +3,40 @@ pub mod pipeline;
 pub mod primitives;
 pub mod text;
 mod text_measurer;
+pub mod text_texture;
 
 use std::sync::Arc;
 
 use wgpu::util::DeviceExt;
 use wgpu::{BufferUsages, Device, Queue, RenderPipeline};
 
-use self::primitives::{ClipRegion, Gradient, RoundedRect, Transformable, Vertex};
+use self::primitives::{ClipRegion, Gradient, RoundedRect, TexturedQuad, Transformable, Vertex};
 use self::text::TextRenderState;
+use self::text_texture::TextTextureRenderer;
 use crate::transform::Transform;
 use crate::widgets::{Color, Rect};
 
 pub use context::{GpuContext, SurfaceState};
 pub use text_measurer::measure_text;
+
+/// A text entry for rendering, containing all information needed to render text.
+#[derive(Debug, Clone)]
+pub struct TextEntry {
+    /// The text string to render
+    pub text: String,
+    /// The bounding rectangle for the text in logical pixels
+    pub rect: Rect,
+    /// The text color
+    pub color: Color,
+    /// The font size in logical pixels
+    pub font_size: f32,
+    /// Optional clip rectangle to constrain text rendering
+    pub clip_rect: Option<Rect>,
+    /// Transform to apply to this text
+    pub transform: Transform,
+    /// Whether the transform is already centered around a custom origin
+    pub transform_is_centered: bool,
+}
 
 /// Enum to hold different shape types for rendering
 #[derive(Debug, Clone)]
@@ -27,25 +48,51 @@ pub struct Renderer {
     device: Arc<Device>,
     queue: Arc<Queue>,
     pipeline: RenderPipeline,
+    texture_pipeline: RenderPipeline,
+    texture_bind_group_layout: wgpu::BindGroupLayout,
+    texture_sampler: wgpu::Sampler,
     text_state: TextRenderState,
+    text_texture_renderer: TextTextureRenderer,
     screen_width: f32,
     screen_height: f32,
     scale_factor: f32,
+    #[allow(dead_code)] // May be used for dynamic pipeline creation
+    format: wgpu::TextureFormat,
 }
 
 impl Renderer {
     pub fn new(device: Arc<Device>, queue: Arc<Queue>, format: wgpu::TextureFormat) -> Self {
         let pipeline = pipeline::create_render_pipeline(&device, format);
+        let (texture_pipeline, texture_bind_group_layout) =
+            pipeline::create_texture_pipeline(&device, format);
         let text_state = TextRenderState::new(&device, &queue, format);
+        let text_texture_renderer = TextTextureRenderer::new(&device, &queue, format);
+
+        // Create sampler for text textures
+        let texture_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Text Texture Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
 
         Self {
             device,
             queue,
             pipeline,
+            texture_pipeline,
+            texture_bind_group_layout,
+            texture_sampler,
             text_state,
+            text_texture_renderer,
             screen_width: 1.0,
             screen_height: 1.0,
             scale_factor: 1.0,
+            format,
         }
     }
 
@@ -146,8 +193,8 @@ impl Renderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Prepare text
-        if !paint_ctx.texts.is_empty() {
+        // Prepare non-transformed text and get indices of transformed texts
+        let transformed_text_indices = if !paint_ctx.texts.is_empty() {
             self.text_state.prepare_text(
                 &self.device,
                 &self.queue,
@@ -155,8 +202,96 @@ impl Renderer {
                 self.screen_width as u32,
                 self.screen_height as u32,
                 self.scale_factor,
-            );
-        }
+            )
+        } else {
+            Vec::new()
+        };
+
+        // Render transformed text to textures
+        let text_textures: Vec<_> = transformed_text_indices
+            .iter()
+            .map(|&idx| {
+                self.text_texture_renderer.render_to_texture(
+                    &self.device,
+                    &self.queue,
+                    &paint_ctx.texts[idx],
+                    self.scale_factor,
+                )
+            })
+            .collect();
+
+        // Create bind groups and vertex/index buffers for transformed text quads
+        let textured_quad_data: Vec<_> = text_textures
+            .iter()
+            .filter_map(|tex| {
+                // Create bind group for this texture
+                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Text Texture Bind Group"),
+                    layout: &self.texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&tex.view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.texture_sampler),
+                        },
+                    ],
+                });
+
+                // Calculate display rect - the texture was rendered at an effective scale,
+                // so we need to display it at the correct logical size
+                let display_width = tex.width as f32 / tex.render_scale * self.scale_factor;
+                let display_height = tex.height as f32 / tex.render_scale * self.scale_factor;
+
+                // The text texture has 4.0 logical pixels of padding on each side.
+                // We need to offset the position so the text content (not the padding)
+                // aligns with where the text should appear.
+                let padding_physical = 4.0 * self.scale_factor;
+
+                // Apply HiDPI scaling to position and offset by padding
+                let display_rect = Rect::new(
+                    tex.entry.rect.x * self.scale_factor - padding_physical,
+                    tex.entry.rect.y * self.scale_factor - padding_physical,
+                    display_width,
+                    display_height,
+                );
+
+                // Create the textured quad with just rotation (no scale since text is pre-scaled,
+                // no translation since we position the quad explicitly).
+                // Always use transform_is_centered=false so the quad centers the transform at the
+                // text's own center. This ensures text rotates around its own center regardless
+                // of the container's transform_origin.
+                let quad = TexturedQuad::new(
+                    display_rect,
+                    tex.entry.transform.rotation_only(),
+                    false, // Center at text's position
+                );
+
+                let (vertices, indices) = quad.to_vertices(self.screen_width, self.screen_height);
+                if vertices.is_empty() || indices.is_empty() {
+                    return None;
+                }
+
+                let vb = self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Textured Quad Vertex Buffer"),
+                        contents: bytemuck::cast_slice(&vertices),
+                        usage: BufferUsages::VERTEX,
+                    });
+                let ib = self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Textured Quad Index Buffer"),
+                        contents: bytemuck::cast_slice(&indices),
+                        usage: BufferUsages::INDEX,
+                    });
+
+                Some((bind_group, vb, ib, indices.len()))
+            })
+            .collect();
 
         let mut encoder = self
             .device
@@ -222,9 +357,22 @@ impl Renderer {
                 render_pass.draw_indexed(0..*index_count as u32, 0, 0..1);
             }
 
-            // Draw text
-            if !paint_ctx.texts.is_empty() {
+            // Draw non-transformed text
+            let has_non_transformed_text = !paint_ctx.texts.is_empty()
+                && transformed_text_indices.len() < paint_ctx.texts.len();
+            if has_non_transformed_text {
                 self.text_state.render(&mut render_pass, &self.device);
+            }
+
+            // Draw transformed text (textured quads)
+            if !textured_quad_data.is_empty() {
+                render_pass.set_pipeline(&self.texture_pipeline);
+                for (bind_group, vb, ib, index_count) in &textured_quad_data {
+                    render_pass.set_bind_group(0, bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, vb.slice(..));
+                    render_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint16);
+                    render_pass.draw_indexed(0..*index_count as u32, 0, 0..1);
+                }
             }
         }
 
@@ -235,8 +383,8 @@ impl Renderer {
 
 pub struct PaintContext {
     shapes: Vec<Shape>,
-    /// Text entries: (text, rect, color, font_size, clip_rect)
-    texts: Vec<(String, Rect, Color, f32, Option<Rect>)>,
+    /// Text entries with full transform support
+    texts: Vec<TextEntry>,
     /// Clip stack for clipping children to container bounds
     /// Each entry is (clip_rect, corner_radius, curvature)
     clip_stack: Vec<(Rect, f32, f32)>,
@@ -403,8 +551,18 @@ impl PaintContext {
     pub fn draw_text(&mut self, text: &str, rect: Rect, color: Color, font_size: f32) {
         // Get current clip rect (if any) for text clipping
         let clip_rect = self.clip_stack.last().map(|(rect, _, _)| *rect);
-        self.texts
-            .push((text.to_string(), rect, color, font_size, clip_rect));
+        // Get current transform from the stack
+        let (transform, transform_is_centered) = self.current_transform_with_flag();
+
+        self.texts.push(TextEntry {
+            text: text.to_string(),
+            rect,
+            color,
+            font_size,
+            clip_rect,
+            transform,
+            transform_is_centered,
+        });
     }
 
     /// Push a clip region onto the stack

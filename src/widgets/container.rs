@@ -549,38 +549,48 @@ impl Container {
     /// Rotate this container by the given angle in degrees
     /// Rotation is applied around the center of the widget bounds
     /// Note: Rotation may appear stretched on non-square aspect ratios
+    /// Multiple transform calls are composed (e.g., `.rotate(30).scale(1.5)` applies both)
     pub fn rotate(mut self, degrees: impl IntoMaybeDyn<f32>) -> Self {
         let degrees = degrees.into_maybe_dyn();
+        let prev_transform = std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
         self.transform = MaybeDyn::Dynamic(std::sync::Arc::new(move || {
-            Transform::rotate_degrees(degrees.get())
+            prev_transform.get().then(&Transform::rotate_degrees(degrees.get()))
         }));
         self
     }
 
     /// Scale this container uniformly
     /// Scaling is applied around the center of the widget bounds
+    /// Multiple transform calls are composed (e.g., `.rotate(30).scale(1.5)` applies both)
     pub fn scale(mut self, s: impl IntoMaybeDyn<f32>) -> Self {
         let s = s.into_maybe_dyn();
-        self.transform = MaybeDyn::Dynamic(std::sync::Arc::new(move || Transform::scale(s.get())));
+        let prev_transform = std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
+        self.transform = MaybeDyn::Dynamic(std::sync::Arc::new(move || {
+            prev_transform.get().then(&Transform::scale(s.get()))
+        }));
         self
     }
 
     /// Scale this container non-uniformly
+    /// Multiple transform calls are composed (e.g., `.rotate(30).scale_xy(1.5, 2.0)` applies both)
     pub fn scale_xy(mut self, sx: impl IntoMaybeDyn<f32>, sy: impl IntoMaybeDyn<f32>) -> Self {
         let sx = sx.into_maybe_dyn();
         let sy = sy.into_maybe_dyn();
+        let prev_transform = std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
         self.transform = MaybeDyn::Dynamic(std::sync::Arc::new(move || {
-            Transform::scale_xy(sx.get(), sy.get())
+            prev_transform.get().then(&Transform::scale_xy(sx.get(), sy.get()))
         }));
         self
     }
 
     /// Translate (move) this container by the given offset
+    /// Multiple transform calls are composed (e.g., `.rotate(30).translate(10, 20)` applies both)
     pub fn translate(mut self, x: impl IntoMaybeDyn<f32>, y: impl IntoMaybeDyn<f32>) -> Self {
         let x = x.into_maybe_dyn();
         let y = y.into_maybe_dyn();
+        let prev_transform = std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
         self.transform = MaybeDyn::Dynamic(std::sync::Arc::new(move || {
-            Transform::translate(x.get(), y.get())
+            prev_transform.get().then(&Transform::translate(x.get(), y.get()))
         }));
         self
     }

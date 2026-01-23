@@ -766,3 +766,172 @@ impl Transformable for RoundedRect {
         self.transform_is_centered = is_centered;
     }
 }
+
+/// Vertex for textured quads (used for transformed text rendering).
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct TexturedVertex {
+    /// Position in NDC
+    pub position: [f32; 2],
+    /// Texture coordinates (UV)
+    pub tex_coords: [f32; 2],
+    /// Transform matrix row 0
+    pub transform_row0: [f32; 4],
+    /// Transform matrix row 1
+    pub transform_row1: [f32; 4],
+    /// Transform matrix row 2
+    pub transform_row2: [f32; 4],
+    /// Transform matrix row 3
+    pub transform_row3: [f32; 4],
+}
+
+impl TexturedVertex {
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<TexturedVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                // position
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                // tex_coords
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                // transform_row0
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // transform_row1
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 8]>() as wgpu::BufferAddress,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // transform_row2
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 12]>() as wgpu::BufferAddress,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // transform_row3
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 16]>() as wgpu::BufferAddress,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+            ],
+        }
+    }
+
+    pub fn new(position: [f32; 2], tex_coords: [f32; 2], transform: Transform) -> Self {
+        let rows = transform.rows();
+        Self {
+            position,
+            tex_coords,
+            transform_row0: rows[0],
+            transform_row1: rows[1],
+            transform_row2: rows[2],
+            transform_row3: rows[3],
+        }
+    }
+}
+
+/// A textured quad for rendering text textures with transforms.
+pub struct TexturedQuad {
+    /// The rect in logical pixels
+    pub rect: Rect,
+    /// Transform to apply
+    pub transform: Transform,
+    /// Whether transform is already centered
+    pub transform_is_centered: bool,
+}
+
+impl TexturedQuad {
+    pub fn new(rect: Rect, transform: Transform, transform_is_centered: bool) -> Self {
+        Self {
+            rect,
+            transform,
+            transform_is_centered,
+        }
+    }
+
+    /// Generate vertices for this textured quad.
+    ///
+    /// The vertices are positioned in NDC with UV coordinates for texture sampling.
+    pub fn to_vertices(
+        &self,
+        screen_width: f32,
+        screen_height: f32,
+    ) -> (Vec<TexturedVertex>, Vec<u16>) {
+        // Convert to normalized device coordinates
+        let to_ndc_x = |x: f32| (x / screen_width) * 2.0 - 1.0;
+        let to_ndc_y = |y: f32| 1.0 - (y / screen_height) * 2.0;
+
+        let x1 = to_ndc_x(self.rect.x);
+        let y1 = to_ndc_y(self.rect.y);
+        let x2 = to_ndc_x(self.rect.x + self.rect.width);
+        let y2 = to_ndc_y(self.rect.y + self.rect.height);
+
+        // Convert transform to work correctly in NDC space (same as RoundedRect)
+        let aspect = screen_width / screen_height;
+
+        let centered_transform = if !self.transform.is_identity() {
+            let a = self.transform.data[0];
+            let b = self.transform.data[1];
+            let c = self.transform.data[4];
+            let d = self.transform.data[5];
+            let tx = self.transform.data[3];
+            let ty = self.transform.data[7];
+
+            let ndc_transform = Transform {
+                data: [
+                    a,
+                    b / aspect,
+                    0.0,
+                    tx * 2.0 / screen_width,
+                    c * aspect,
+                    d,
+                    0.0,
+                    -ty * 2.0 / screen_height,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                ],
+            };
+
+            if self.transform_is_centered {
+                ndc_transform
+            } else {
+                let center_x = (x1 + x2) / 2.0;
+                let center_y = (y1 + y2) / 2.0;
+                ndc_transform.center_at(center_x, center_y)
+            }
+        } else {
+            Transform::IDENTITY
+        };
+
+        // UV coordinates: (0,0) at top-left, (1,1) at bottom-right
+        let vertices = vec![
+            TexturedVertex::new([x1, y1], [0.0, 0.0], centered_transform), // top-left
+            TexturedVertex::new([x2, y1], [1.0, 0.0], centered_transform), // top-right
+            TexturedVertex::new([x2, y2], [1.0, 1.0], centered_transform), // bottom-right
+            TexturedVertex::new([x1, y2], [0.0, 1.0], centered_transform), // bottom-left
+        ];
+
+        let indices = vec![0, 1, 2, 0, 2, 3];
+        (vertices, indices)
+    }
+}
