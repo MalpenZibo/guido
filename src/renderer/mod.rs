@@ -248,27 +248,54 @@ impl Renderer {
                 let display_width = tex.width as f32 / tex.render_scale * self.scale_factor;
                 let display_height = tex.height as f32 / tex.render_scale * self.scale_factor;
 
-                // Position the text at its original layout position (scaled to physical pixels)
-                // The transform will be applied in to_vertices, same as for shapes
+                // Get the scale factor from the transform (we pre-scaled the text for this)
+                let transform_scale = tex.entry.transform.extract_scale();
+
+                // Calculate the original center position in physical pixels
+                let original_center_x = tex.entry.rect.x * self.scale_factor
+                    + tex.entry.rect.width * self.scale_factor / 2.0;
+                let original_center_y = tex.entry.rect.y * self.scale_factor
+                    + tex.entry.rect.height * self.scale_factor / 2.0;
+
+                // If there's scale with custom transform_origin, the center moves
+                // offset = (center - origin) * (scale - 1)
+                // This is needed because shapes get scaled outward from origin,
+                // but we pre-scale text so we need to manually offset the position
+                let (center_offset_x, center_offset_y) =
+                    if let Some((ox, oy)) = tex.entry.transform_origin {
+                        let scaled_ox = ox * self.scale_factor;
+                        let scaled_oy = oy * self.scale_factor;
+                        let offset_x = (original_center_x - scaled_ox) * (transform_scale - 1.0);
+                        let offset_y = (original_center_y - scaled_oy) * (transform_scale - 1.0);
+                        (offset_x, offset_y)
+                    } else {
+                        // Default center origin - no offset needed
+                        (0.0, 0.0)
+                    };
+
+                // Position the quad centered at the original text center,
+                // adjusted for any scale-induced offset
                 let display_rect = Rect::new(
-                    tex.entry.rect.x * self.scale_factor - (display_width - tex.entry.rect.width * self.scale_factor) / 2.0,
-                    tex.entry.rect.y * self.scale_factor - (display_height - tex.entry.rect.height * self.scale_factor) / 2.0,
+                    original_center_x + center_offset_x - display_width / 2.0,
+                    original_center_y + center_offset_y - display_height / 2.0,
                     display_width,
                     display_height,
                 );
 
                 // Scale transform_origin to physical pixels (same as shapes do)
-                let scaled_origin = tex.entry.transform_origin.map(|(x, y)| {
-                    (x * self.scale_factor, y * self.scale_factor)
-                });
+                let scaled_origin = tex
+                    .entry
+                    .transform_origin
+                    .map(|(x, y)| (x * self.scale_factor, y * self.scale_factor));
 
-                // Create the textured quad with just rotation (no scale since text is pre-scaled).
+                // Get transform with rotation and translation (no scale since text is pre-scaled)
+                // and scale the translation component for HiDPI
+                let mut quad_transform = tex.entry.transform.without_scale();
+                quad_transform.scale_translation(self.scale_factor);
+
+                // Create the textured quad with rotation + translation.
                 // Pass the transform_origin so to_vertices applies the same centering logic as shapes.
-                let quad = TexturedQuad::new(
-                    display_rect,
-                    tex.entry.transform.rotation_only(),
-                    scaled_origin,
-                );
+                let quad = TexturedQuad::new(display_rect, quad_transform, scaled_origin);
 
                 let (vertices, indices) = quad.to_vertices(self.screen_width, self.screen_height);
                 if vertices.is_empty() || indices.is_empty() {
