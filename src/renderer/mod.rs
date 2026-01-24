@@ -1,4 +1,5 @@
 pub mod context;
+pub mod image_texture;
 pub mod pipeline;
 pub mod primitives;
 pub mod text;
@@ -10,11 +11,13 @@ use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use wgpu::{BufferUsages, Device, Queue, RenderPipeline};
 
+use self::image_texture::ImageTextureRenderer;
 use self::primitives::{ClipRegion, Gradient, RoundedRect, TexturedQuad, Transformable, Vertex};
 use self::text::TextRenderState;
 use self::text_texture::{TextTextureRenderer, QUALITY_MULTIPLIER};
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
+use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::{Color, Rect};
 
 pub use context::{GpuContext, SurfaceState};
@@ -39,6 +42,23 @@ pub struct TextEntry {
     pub transform_origin: Option<(f32, f32)>,
 }
 
+/// An image entry for rendering.
+#[derive(Clone)]
+pub struct ImageEntry {
+    /// The image source
+    pub source: ImageSource,
+    /// The bounding rectangle for the image in logical pixels
+    pub rect: Rect,
+    /// How the image content should fit within its bounds
+    pub content_fit: ContentFit,
+    /// Optional clip rectangle to constrain image rendering
+    pub clip_rect: Option<Rect>,
+    /// Transform to apply to this image
+    pub transform: Transform,
+    /// Custom transform origin in logical screen coordinates, if any
+    pub transform_origin: Option<(f32, f32)>,
+}
+
 /// Enum to hold different shape types for rendering
 #[derive(Debug, Clone)]
 enum Shape {
@@ -54,6 +74,7 @@ pub struct Renderer {
     texture_sampler: wgpu::Sampler,
     text_state: TextRenderState,
     text_texture_renderer: TextTextureRenderer,
+    image_texture_renderer: ImageTextureRenderer,
     screen_width: f32,
     screen_height: f32,
     scale_factor: f32,
@@ -68,10 +89,11 @@ impl Renderer {
             pipeline::create_texture_pipeline(&device, format);
         let text_state = TextRenderState::new(&device, &queue, format);
         let text_texture_renderer = TextTextureRenderer::new(&device, &queue, format);
+        let image_texture_renderer = ImageTextureRenderer::new(format);
 
-        // Create sampler for text textures
+        // Create sampler for textures (text and images)
         let texture_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Text Texture Sampler"),
+            label: Some("Texture Sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
@@ -90,6 +112,7 @@ impl Renderer {
             texture_sampler,
             text_state,
             text_texture_renderer,
+            image_texture_renderer,
             screen_width: 1.0,
             screen_height: 1.0,
             scale_factor: 1.0,
@@ -186,6 +209,7 @@ impl Renderer {
         PaintContext {
             shapes: Vec::new(),
             texts: Vec::new(),
+            images: Vec::new(),
             overlay_shapes: Vec::new(),
             clip_stack: Vec::new(),
             transform_stack: Vec::new(),
@@ -244,6 +268,9 @@ impl Renderer {
                 )
             })
             .collect();
+
+        // Begin frame for image texture cache (for LRU eviction)
+        self.image_texture_renderer.begin_frame();
 
         // Create bind groups and vertex/index buffers for transformed text quads
         let textured_quad_data: Vec<_> = text_textures
@@ -379,6 +406,161 @@ impl Renderer {
             })
             .collect();
 
+        // Prepare image textured quads
+        let image_quad_data: Vec<_> = paint_ctx
+            .images
+            .iter()
+            .filter_map(|entry| {
+                // Extract scale from transform for SVG quality
+                let transform_scale = entry.transform.extract_scale().max(1.0);
+
+                // Get or create the texture
+                let tex = self.image_texture_renderer.get_or_create(
+                    &self.device,
+                    &self.queue,
+                    &entry.source,
+                    transform_scale,
+                    self.scale_factor,
+                )?;
+
+                // Create bind group for this texture
+                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Image Texture Bind Group"),
+                    layout: &self.texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&tex.view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.texture_sampler),
+                        },
+                    ],
+                });
+
+                // Widget rect in physical pixels
+                let widget_x = entry.rect.x * self.scale_factor;
+                let widget_y = entry.rect.y * self.scale_factor;
+                let widget_width = entry.rect.width * self.scale_factor;
+                let widget_height = entry.rect.height * self.scale_factor;
+
+                // Image intrinsic size
+                let img_width = tex.intrinsic_width as f32;
+                let img_height = tex.intrinsic_height as f32;
+                let img_aspect = img_width / img_height;
+                let widget_aspect = widget_width / widget_height;
+
+                // Calculate display rect and UV based on ContentFit
+                let (display_rect, uv) = match entry.content_fit {
+                    ContentFit::Fill => {
+                        // Stretch to fill - use full rect and full UV
+                        (
+                            Rect::new(widget_x, widget_y, widget_width, widget_height),
+                            (0.0, 0.0, 1.0, 1.0),
+                        )
+                    }
+                    ContentFit::Contain => {
+                        // Fit within bounds, preserving aspect ratio (letterbox/pillarbox)
+                        let (scaled_w, scaled_h) = if widget_aspect > img_aspect {
+                            // Widget is wider - fit to height, center horizontally
+                            (widget_height * img_aspect, widget_height)
+                        } else {
+                            // Widget is taller - fit to width, center vertically
+                            (widget_width, widget_width / img_aspect)
+                        };
+                        let offset_x = (widget_width - scaled_w) / 2.0;
+                        let offset_y = (widget_height - scaled_h) / 2.0;
+                        (
+                            Rect::new(widget_x + offset_x, widget_y + offset_y, scaled_w, scaled_h),
+                            (0.0, 0.0, 1.0, 1.0),
+                        )
+                    }
+                    ContentFit::Cover => {
+                        // Cover bounds, cropping as needed (adjust UV to crop)
+                        let (u_min, v_min, u_max, v_max) = if widget_aspect > img_aspect {
+                            // Widget is wider - crop top/bottom
+                            let visible_height = img_aspect / widget_aspect;
+                            let v_offset = (1.0 - visible_height) / 2.0;
+                            (0.0, v_offset, 1.0, v_offset + visible_height)
+                        } else {
+                            // Widget is taller - crop left/right
+                            let visible_width = widget_aspect / img_aspect;
+                            let u_offset = (1.0 - visible_width) / 2.0;
+                            (u_offset, 0.0, u_offset + visible_width, 1.0)
+                        };
+                        (
+                            Rect::new(widget_x, widget_y, widget_width, widget_height),
+                            (u_min, v_min, u_max, v_max),
+                        )
+                    }
+                    ContentFit::None => {
+                        // Use intrinsic size, centered in widget
+                        let scaled_w = img_width * self.scale_factor;
+                        let scaled_h = img_height * self.scale_factor;
+                        let offset_x = (widget_width - scaled_w) / 2.0;
+                        let offset_y = (widget_height - scaled_h) / 2.0;
+                        (
+                            Rect::new(widget_x + offset_x, widget_y + offset_y, scaled_w, scaled_h),
+                            (0.0, 0.0, 1.0, 1.0),
+                        )
+                    }
+                };
+
+                // Scale transform_origin to physical pixels
+                let scaled_origin = entry
+                    .transform_origin
+                    .map(|(x, y)| (x * self.scale_factor, y * self.scale_factor));
+
+                // Scale the translation component for HiDPI
+                let mut quad_transform = entry.transform;
+                quad_transform.scale_translation(self.scale_factor);
+
+                // Scale clip region for HiDPI
+                let clip = entry.clip_rect.map(|rect| ClipRegion {
+                    rect: Rect::new(
+                        rect.x * self.scale_factor,
+                        rect.y * self.scale_factor,
+                        rect.width * self.scale_factor,
+                        rect.height * self.scale_factor,
+                    ),
+                    radius: 0.0, // Images typically have square clip regions
+                    curvature: 1.0,
+                });
+
+                // Create the textured quad with UV coordinates and clip
+                let quad = TexturedQuad::with_uv_and_clip(
+                    display_rect,
+                    quad_transform,
+                    scaled_origin,
+                    uv,
+                    clip,
+                );
+
+                let (vertices, indices) = quad.to_vertices(self.screen_width, self.screen_height);
+                if vertices.is_empty() || indices.is_empty() {
+                    return None;
+                }
+
+                let vb = self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Image Quad Vertex Buffer"),
+                        contents: bytemuck::cast_slice(&vertices),
+                        usage: BufferUsages::VERTEX,
+                    });
+                let ib = self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Image Quad Index Buffer"),
+                        contents: bytemuck::cast_slice(&indices),
+                        usage: BufferUsages::INDEX,
+                    });
+
+                Some((bind_group, vb, ib, indices.len()))
+            })
+            .collect();
+
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
@@ -408,6 +590,17 @@ impl Renderer {
                 render_pass.set_vertex_buffer(0, vb.slice(..));
                 render_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint16);
                 render_pass.draw_indexed(0..*index_count as u32, 0, 0..1);
+            }
+
+            // Draw images (after shapes, before text)
+            if !image_quad_data.is_empty() {
+                render_pass.set_pipeline(&self.texture_pipeline);
+                for (bind_group, vb, ib, index_count) in &image_quad_data {
+                    render_pass.set_bind_group(0, bind_group, &[]);
+                    render_pass.set_vertex_buffer(0, vb.slice(..));
+                    render_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint16);
+                    render_pass.draw_indexed(0..*index_count as u32, 0, 0..1);
+                }
             }
 
             // Draw non-transformed text
@@ -448,6 +641,8 @@ pub struct PaintContext {
     shapes: Vec<Shape>,
     /// Text entries with full transform support
     texts: Vec<TextEntry>,
+    /// Image entries
+    images: Vec<ImageEntry>,
     /// Overlay shapes rendered after text (for effects like ripples)
     overlay_shapes: Vec<Shape>,
     /// Clip stack for clipping children to container bounds
@@ -465,6 +660,7 @@ impl PaintContext {
         Self {
             shapes: Vec::with_capacity(shapes),
             texts: Vec::with_capacity(texts),
+            images: Vec::with_capacity(8),
             overlay_shapes: Vec::with_capacity(overlay),
             clip_stack: Vec::with_capacity(4),
             transform_stack: Vec::with_capacity(4),
@@ -475,6 +671,7 @@ impl PaintContext {
     pub fn clear(&mut self) {
         self.shapes.clear();
         self.texts.clear();
+        self.images.clear();
         self.overlay_shapes.clear();
         self.clip_stack.clear();
         self.transform_stack.clear();
@@ -644,6 +841,23 @@ impl PaintContext {
             rect,
             color,
             font_size,
+            clip_rect,
+            transform,
+            transform_origin,
+        });
+    }
+
+    /// Draw an image at the specified rectangle.
+    pub fn draw_image(&mut self, source: ImageSource, rect: Rect, content_fit: ContentFit) {
+        // Get current clip rect (if any) for image clipping
+        let clip_rect = self.clip_stack.last().map(|(rect, _, _)| *rect);
+        // Get current transform from the stack
+        let (transform, transform_origin) = self.current_transform_with_origin();
+
+        self.images.push(ImageEntry {
+            source,
+            rect,
+            content_fit,
             clip_rect,
             transform,
             transform_origin,

@@ -1,5 +1,6 @@
 pub mod children;
 pub mod container;
+pub mod image;
 pub mod into_child;
 pub mod state_layer;
 pub mod text;
@@ -7,6 +8,7 @@ pub mod widget;
 
 pub use children::ChildrenSource;
 pub use container::{container, Border, Container, GradientDirection, LinearGradient, Overflow};
+pub use image::{image, ContentFit, Image, ImageSource};
 pub use into_child::{DynamicChildren, IntoChild, IntoChildren, StaticChildren};
 pub use state_layer::{BackgroundOverride, RippleConfig, StateStyle};
 pub use text::{text, Text};
