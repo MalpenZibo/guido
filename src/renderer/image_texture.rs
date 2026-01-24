@@ -245,20 +245,24 @@ impl ImageTextureRenderer {
         Self::upload_raster(format, device, queue, &img.to_rgba8())
     }
 
-    /// Upload a raster image to a GPU texture.
-    fn upload_raster(
+    /// Upload raw RGBA data to a GPU texture.
+    ///
+    /// Returns the texture and view, or None if dimensions are zero.
+    fn upload_rgba_texture(
         format: &TextureFormat,
         device: &Arc<Device>,
         queue: &Arc<Queue>,
-        rgba: &image::RgbaImage,
-    ) -> Option<ImageTexture> {
-        let (width, height) = rgba.dimensions();
+        data: &[u8],
+        width: u32,
+        height: u32,
+        label: &str,
+    ) -> Option<(Texture, wgpu::TextureView)> {
         if width == 0 || height == 0 {
             return None;
         }
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Image Texture"),
+            label: Some(label),
             size: Extent3d {
                 width,
                 height,
@@ -279,7 +283,7 @@ impl ImageTextureRenderer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            rgba.as_raw(),
+            data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * width),
@@ -293,6 +297,26 @@ impl ImageTextureRenderer {
         );
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Some((texture, view))
+    }
+
+    /// Upload a raster image to a GPU texture.
+    fn upload_raster(
+        format: &TextureFormat,
+        device: &Arc<Device>,
+        queue: &Arc<Queue>,
+        rgba: &image::RgbaImage,
+    ) -> Option<ImageTexture> {
+        let (width, height) = rgba.dimensions();
+        let (texture, view) = Self::upload_rgba_texture(
+            format,
+            device,
+            queue,
+            rgba.as_raw(),
+            width,
+            height,
+            "Image Texture",
+        )?;
 
         Some(ImageTexture {
             texture,
@@ -335,10 +359,6 @@ impl ImageTextureRenderer {
         let scaled_width = (size.width() * scale).ceil() as u32;
         let scaled_height = (size.height() * scale).ceil() as u32;
 
-        if scaled_width == 0 || scaled_height == 0 {
-            return None;
-        }
-
         // Create a pixmap for rendering
         let mut pixmap = resvg::tiny_skia::Pixmap::new(scaled_width, scaled_height)?;
 
@@ -349,42 +369,15 @@ impl ImageTextureRenderer {
         resvg::render(&tree, transform, &mut pixmap.as_mut());
 
         // Upload to GPU - note: pixmap is already premultiplied alpha RGBA
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("SVG Texture"),
-            size: Extent3d {
-                width: scaled_width,
-                height: scaled_height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: *format,
-            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
+        let (texture, view) = Self::upload_rgba_texture(
+            format,
+            device,
+            queue,
             pixmap.data(),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * scaled_width),
-                rows_per_image: Some(scaled_height),
-            },
-            Extent3d {
-                width: scaled_width,
-                height: scaled_height,
-                depth_or_array_layers: 1,
-            },
-        );
-
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            scaled_width,
+            scaled_height,
+            "SVG Texture",
+        )?;
 
         Some(ImageTexture {
             texture,
