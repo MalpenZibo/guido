@@ -261,6 +261,13 @@ See [docs/STYLING.md](docs/STYLING.md) for full styling reference.
 - Use `cargo clippy --fix --allow-dirty` to auto-fix simple warnings
 - Run `cargo fmt --all` to ensure proper formatting
 
+**IMPORTANT: Use atomic commits.**
+- Each commit should be a single, focused change that can be reviewed and reverted independently
+- Separate new features from refactoring or bug fixes
+- When adding a new feature, commit in logical increments (e.g., data structures first, then rendering, then widget API)
+- This makes it easier to identify and revert regressions without losing unrelated work
+- Run and verify examples/tests after each commit to catch issues early
+
 ```bash
 # Create a feature branch
 git checkout -b feature/my-feature
