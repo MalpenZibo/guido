@@ -109,6 +109,24 @@ impl ImageTextureRenderer {
         }
     }
 
+    /// Hash bytes with improved sampling for collision resistance.
+    ///
+    /// For small images (<1024 bytes), hashes the entire content.
+    /// For larger images, samples first/middle/last 256 bytes each.
+    fn hash_bytes(bytes: &[u8], hasher: &mut impl Hasher) {
+        bytes.len().hash(hasher);
+        if bytes.len() < 1024 {
+            bytes.hash(hasher);
+            return;
+        }
+        // Sample: first 256 + middle 256 + last 256 bytes
+        let sample = 256;
+        bytes[..sample].hash(hasher);
+        let mid = bytes.len() / 2 - sample / 2;
+        bytes[mid..mid + sample].hash(hasher);
+        bytes[bytes.len() - sample..].hash(hasher);
+    }
+
     /// Hash an image source for cache lookup.
     fn hash_source(source: &ImageSource) -> u64 {
         use std::collections::hash_map::DefaultHasher;
@@ -121,12 +139,7 @@ impl ImageTextureRenderer {
             }
             ImageSource::Bytes(bytes) => {
                 "bytes".hash(&mut hasher);
-                bytes.len().hash(&mut hasher);
-                // Hash first and last bytes for quick differentiation
-                if !bytes.is_empty() {
-                    bytes[0].hash(&mut hasher);
-                    bytes[bytes.len() - 1].hash(&mut hasher);
-                }
+                Self::hash_bytes(bytes, &mut hasher);
             }
             ImageSource::SvgPath(path) => {
                 "svg_path".hash(&mut hasher);
@@ -134,11 +147,7 @@ impl ImageTextureRenderer {
             }
             ImageSource::SvgBytes(bytes) => {
                 "svg_bytes".hash(&mut hasher);
-                bytes.len().hash(&mut hasher);
-                if !bytes.is_empty() {
-                    bytes[0].hash(&mut hasher);
-                    bytes[bytes.len() - 1].hash(&mut hasher);
-                }
+                Self::hash_bytes(bytes, &mut hasher);
             }
         }
 
