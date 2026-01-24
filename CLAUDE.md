@@ -8,7 +8,9 @@ Guido is a reactive Rust GUI library using wgpu for rendering Wayland layer shel
 
 ## Documentation
 
-Detailed documentation is available in the `docs/` folder:
+### Developer Reference (`docs/`)
+
+Quick-reference documentation for developers:
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System design, module structure, and code organization
 - **[docs/STATE_LAYER.md](docs/STATE_LAYER.md)** - Hover/pressed state overrides, ripple effects, animations
@@ -17,6 +19,33 @@ Detailed documentation is available in the `docs/` folder:
 - **[docs/STYLING.md](docs/STYLING.md)** - Colors, gradients, borders, corners, shadows, and layout
 
 Read these docs before making significant changes to understand existing patterns.
+
+### User Documentation (`book/`)
+
+The `book/` directory contains an mdbook-based documentation website with tutorials, guides, and screenshots.
+
+```bash
+# Build the book
+mdbook build book
+
+# Serve locally with live reload
+mdbook serve book
+```
+
+**IMPORTANT: Keep the book updated when making changes.**
+
+When adding new features or changing APIs:
+1. Update relevant chapters in `book/src/`
+2. Add new screenshots if the feature has visual components (use `grim` to capture)
+3. Build and verify the book renders correctly: `mdbook build book`
+
+Key sections to update based on change type:
+- **New widget methods** → `book/src/concepts/container.md` or relevant chapter
+- **New styling options** → `book/src/building-ui/`
+- **New state layer features** → `book/src/interactivity/`
+- **New animation options** → `book/src/animations/`
+- **New transform features** → `book/src/transforms/`
+- **API changes** → Update all affected chapters and code examples
 
 ## Build and Development Commands
 

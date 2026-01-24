@@ -1,1 +1,4 @@
 target
+
+# mdbook build output
+book/book/
