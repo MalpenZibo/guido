@@ -1196,7 +1196,7 @@ impl Container {
     }
 
     /// Apply scroll delta and return true if any scrolling occurred
-    fn apply_scroll(&mut self, delta_x: f32, delta_y: f32) -> bool {
+    fn apply_scroll(&mut self, delta_x: f32, delta_y: f32, source: ScrollSource) -> bool {
         let old_x = self.scroll_state.offset_x;
         let old_y = self.scroll_state.offset_y;
 
@@ -1216,6 +1216,24 @@ impl Container {
                     .clamp(0.0, self.scroll_state.max_scroll_y());
             }
             ScrollAxis::None => return false,
+        }
+
+        // Track velocity for kinetic scrolling (touchpad/finger input only)
+        if source == ScrollSource::Finger {
+            // Update velocity based on scroll delta
+            match self.scroll_axis {
+                ScrollAxis::Vertical => {
+                    self.scroll_state.velocity_y = delta_y;
+                }
+                ScrollAxis::Horizontal => {
+                    self.scroll_state.velocity_x = delta_x;
+                }
+                ScrollAxis::Both => {
+                    self.scroll_state.velocity_x = delta_x;
+                    self.scroll_state.velocity_y = delta_y;
+                }
+                ScrollAxis::None => {}
+            }
         }
 
         // Return true if scroll position changed (consumed the event)
@@ -1475,6 +1493,12 @@ impl Container {
         if self.ripple_center.is_some() {
             let ripple_animating = self.advance_ripple();
             any_animating = any_animating || ripple_animating;
+        }
+
+        // Advance kinetic scroll animation (momentum)
+        if self.scroll_state.is_scrolling() {
+            let scroll_animating = self.scroll_state.advance_momentum();
+            any_animating = any_animating || scroll_animating;
         }
 
         // Request next frame if any property animations are running
@@ -2317,7 +2341,7 @@ impl Widget for Container {
                 if self.bounds.contains_rounded(*x, *y, corner_radius) {
                     // For scrollable containers, handle scrolling
                     if self.scroll_axis != ScrollAxis::None {
-                        let consumed = self.apply_scroll(*delta_x, *delta_y);
+                        let consumed = self.apply_scroll(*delta_x, *delta_y, *source);
                         if consumed {
                             request_animation_frame();
                             return EventResponse::Handled;

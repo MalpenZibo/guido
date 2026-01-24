@@ -172,6 +172,9 @@ pub(crate) struct ScrollState {
     pub h_scrollbar_dragging: bool,
     pub h_scrollbar_drag_start_x: f32,
     pub h_scrollbar_drag_start_offset: f32,
+    /// Velocity for kinetic/momentum scrolling
+    pub velocity_x: f32,
+    pub velocity_y: f32,
 }
 
 impl ScrollState {
@@ -199,5 +202,52 @@ impl ScrollState {
     pub fn clamp_offsets(&mut self) {
         self.offset_x = self.offset_x.clamp(0.0, self.max_scroll_x());
         self.offset_y = self.offset_y.clamp(0.0, self.max_scroll_y());
+    }
+
+    /// Check if kinetic scrolling is active
+    pub fn is_scrolling(&self) -> bool {
+        const VELOCITY_THRESHOLD: f32 = 0.5;
+        self.velocity_x.abs() > VELOCITY_THRESHOLD || self.velocity_y.abs() > VELOCITY_THRESHOLD
+    }
+
+    /// Advance kinetic scrolling animation, returns true if still animating
+    pub fn advance_momentum(&mut self) -> bool {
+        const FRICTION: f32 = 0.92;
+        const VELOCITY_THRESHOLD: f32 = 0.5;
+
+        let mut animating = false;
+
+        // Apply velocity to offset
+        if self.velocity_x.abs() > VELOCITY_THRESHOLD {
+            self.offset_x += self.velocity_x;
+            self.velocity_x *= FRICTION;
+            animating = true;
+        } else {
+            self.velocity_x = 0.0;
+        }
+
+        if self.velocity_y.abs() > VELOCITY_THRESHOLD {
+            self.offset_y += self.velocity_y;
+            self.velocity_y *= FRICTION;
+            animating = true;
+        } else {
+            self.velocity_y = 0.0;
+        }
+
+        // Clamp to bounds
+        let max_x = self.max_scroll_x();
+        let max_y = self.max_scroll_y();
+        self.offset_x = self.offset_x.clamp(0.0, max_x);
+        self.offset_y = self.offset_y.clamp(0.0, max_y);
+
+        // Stop velocity at edges
+        if self.offset_x == 0.0 || self.offset_x == max_x {
+            self.velocity_x = 0.0;
+        }
+        if self.offset_y == 0.0 || self.offset_y == max_y {
+            self.velocity_y = 0.0;
+        }
+
+        animating
     }
 }
