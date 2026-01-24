@@ -44,7 +44,8 @@ pub mod prelude {
     pub use crate::widgets::{
         container, image, text, Border, Color, Container, ContentFit, Event, EventResponse,
         GradientDirection, Image, ImageSource, IntoChildren, LinearGradient, MouseButton, Overflow,
-        Padding, Rect, ScrollSource, StateStyle, Text, Widget,
+        Padding, Rect, ScrollAxis, ScrollSource, ScrollbarBuilder, ScrollbarVisibility, StateStyle,
+        Text, Widget,
     };
     pub use crate::{component, App, AppConfig};
 }

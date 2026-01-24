@@ -12,6 +12,9 @@ use crate::transform_origin::TransformOrigin;
 
 use super::children::ChildrenSource;
 use super::into_child::{IntoChild, IntoChildren};
+use super::scroll::{
+    ScrollAxis, ScrollState, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibility,
+};
 use super::state_layer::{resolve_background, StateStyle};
 use super::widget::{
     Color, Event, EventResponse, MouseButton, Padding, Rect, ScrollSource, Widget,
@@ -315,6 +318,12 @@ pub struct Container {
     hover_state: Option<StateStyle>,
     pressed_state: Option<StateStyle>,
 
+    // Scroll configuration
+    scroll_axis: ScrollAxis,
+    scrollbar_visibility: ScrollbarVisibility,
+    scrollbar_config: ScrollbarConfig,
+    scroll_state: ScrollState,
+
     // Ripple animation state
     /// Center point of the ripple in local container coordinates (start position)
     ripple_center: Option<(f32, f32)>,
@@ -375,6 +384,10 @@ impl Container {
             transform_anim: None,
             hover_state: None,
             pressed_state: None,
+            scroll_axis: ScrollAxis::None,
+            scrollbar_visibility: ScrollbarVisibility::Always,
+            scrollbar_config: ScrollbarConfig::default(),
+            scroll_state: ScrollState::default(),
             ripple_center: None,
             ripple_exit_center: None,
             ripple_progress: 0.0,
@@ -540,6 +553,77 @@ impl Container {
     /// Set the overflow behavior for content that exceeds container bounds
     pub fn overflow(mut self, overflow: Overflow) -> Self {
         self.overflow = overflow;
+        self
+    }
+
+    /// Enable scrolling on this container.
+    ///
+    /// When scrolling is enabled, the container will:
+    /// - Allow content to exceed the container's bounds
+    /// - Clip content at the container edges
+    /// - Handle scroll events to pan through the content
+    /// - Show scrollbars when content overflows (unless hidden)
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Vertical scrolling only (most common)
+    /// container()
+    ///     .height(400.0)
+    ///     .scrollable(ScrollAxis::Vertical)
+    ///     .child(long_content)
+    ///
+    /// // Horizontal scrolling
+    /// container()
+    ///     .width(300.0)
+    ///     .scrollable(ScrollAxis::Horizontal)
+    ///     .child(wide_content)
+    ///
+    /// // Both directions
+    /// container()
+    ///     .width(300.0)
+    ///     .height(400.0)
+    ///     .scrollable(ScrollAxis::Both)
+    ///     .child(large_content)
+    /// ```
+    pub fn scrollable(mut self, axis: ScrollAxis) -> Self {
+        self.scroll_axis = axis;
+        self
+    }
+
+    /// Configure scrollbar visibility.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Hidden scrollbar (content still scrollable)
+    /// container()
+    ///     .scrollable(ScrollAxis::Vertical)
+    ///     .scrollbar_visibility(ScrollbarVisibility::Hidden)
+    ///     .child(content)
+    /// ```
+    pub fn scrollbar_visibility(mut self, visibility: ScrollbarVisibility) -> Self {
+        self.scrollbar_visibility = visibility;
+        self
+    }
+
+    /// Customize scrollbar appearance.
+    ///
+    /// # Example
+    /// ```ignore
+    /// container()
+    ///     .scrollable(ScrollAxis::Vertical)
+    ///     .scrollbar(|sb| sb
+    ///         .width(6.0)
+    ///         .handle_color(Color::rgb(0.4, 0.6, 0.9))
+    ///         .handle_corner_radius(3.0)
+    ///     )
+    ///     .child(content)
+    /// ```
+    pub fn scrollbar<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(ScrollbarBuilder) -> ScrollbarBuilder,
+    {
+        let builder = f(ScrollbarBuilder::default());
+        self.scrollbar_config = builder.build();
         self
     }
 
@@ -1012,6 +1096,349 @@ impl Container {
         }
     }
 
+    /// Get the vertical scrollbar track rectangle
+    fn scrollbar_track_rect(&self) -> Rect {
+        let config = &self.scrollbar_config;
+        let margin = config.margin;
+        Rect::new(
+            self.bounds.x + self.bounds.width - config.width - margin,
+            self.bounds.y + margin,
+            config.width,
+            self.bounds.height - margin * 2.0,
+        )
+    }
+
+    /// Get the vertical scrollbar handle rectangle
+    fn scrollbar_handle_rect(&self) -> Rect {
+        let track = self.scrollbar_track_rect();
+        let handle_height = self.scrollbar_handle_height();
+        let handle_y = track.y + self.scrollbar_handle_offset();
+        Rect::new(track.x, handle_y, track.width, handle_height)
+    }
+
+    /// Calculate the height of the vertical scrollbar handle
+    fn scrollbar_handle_height(&self) -> f32 {
+        let viewport = self.scroll_state.viewport_height;
+        let content = self.scroll_state.content_height;
+        if content <= viewport || content == 0.0 {
+            return 0.0; // No scrollbar needed
+        }
+        let ratio = viewport / content;
+        let track = self.scrollbar_track_rect();
+        (track.height * ratio).max(self.scrollbar_config.min_handle_size)
+    }
+
+    /// Calculate the Y offset of the vertical scrollbar handle
+    fn scrollbar_handle_offset(&self) -> f32 {
+        let max_scroll = self.scroll_state.max_scroll_y();
+        if max_scroll <= 0.0 {
+            return 0.0;
+        }
+
+        let track = self.scrollbar_track_rect();
+        let handle_height = self.scrollbar_handle_height();
+        let available_travel = track.height - handle_height;
+
+        (self.scroll_state.offset_y / max_scroll) * available_travel
+    }
+
+    /// Get the horizontal scrollbar track rectangle
+    fn h_scrollbar_track_rect(&self) -> Rect {
+        let config = &self.scrollbar_config;
+        let margin = config.margin;
+        // If vertical scrollbar is also visible, leave space for it
+        let right_padding =
+            if self.scroll_axis.allows_vertical() && self.scroll_state.needs_vertical_scrollbar() {
+                config.width + margin
+            } else {
+                margin
+            };
+        Rect::new(
+            self.bounds.x + margin,
+            self.bounds.y + self.bounds.height - config.width - margin,
+            self.bounds.width - margin - right_padding,
+            config.width,
+        )
+    }
+
+    /// Get the horizontal scrollbar handle rectangle
+    fn h_scrollbar_handle_rect(&self) -> Rect {
+        let track = self.h_scrollbar_track_rect();
+        let handle_width = self.h_scrollbar_handle_width();
+        let handle_x = track.x + self.h_scrollbar_handle_offset();
+        Rect::new(track.x.max(handle_x), track.y, handle_width, track.height)
+    }
+
+    /// Calculate the width of the horizontal scrollbar handle
+    fn h_scrollbar_handle_width(&self) -> f32 {
+        let viewport = self.scroll_state.viewport_width;
+        let content = self.scroll_state.content_width;
+        if content <= viewport || content == 0.0 {
+            return 0.0; // No scrollbar needed
+        }
+        let ratio = viewport / content;
+        let track = self.h_scrollbar_track_rect();
+        (track.width * ratio).max(self.scrollbar_config.min_handle_size)
+    }
+
+    /// Calculate the X offset of the horizontal scrollbar handle
+    fn h_scrollbar_handle_offset(&self) -> f32 {
+        let max_scroll = self.scroll_state.max_scroll_x();
+        if max_scroll <= 0.0 {
+            return 0.0;
+        }
+
+        let track = self.h_scrollbar_track_rect();
+        let handle_width = self.h_scrollbar_handle_width();
+        let available_travel = track.width - handle_width;
+
+        (self.scroll_state.offset_x / max_scroll) * available_travel
+    }
+
+    /// Apply scroll delta and return true if any scrolling occurred
+    fn apply_scroll(&mut self, delta_x: f32, delta_y: f32) -> bool {
+        let old_x = self.scroll_state.offset_x;
+        let old_y = self.scroll_state.offset_y;
+
+        match self.scroll_axis {
+            ScrollAxis::Vertical => {
+                self.scroll_state.offset_y = (self.scroll_state.offset_y + delta_y)
+                    .clamp(0.0, self.scroll_state.max_scroll_y());
+            }
+            ScrollAxis::Horizontal => {
+                self.scroll_state.offset_x = (self.scroll_state.offset_x + delta_x)
+                    .clamp(0.0, self.scroll_state.max_scroll_x());
+            }
+            ScrollAxis::Both => {
+                self.scroll_state.offset_x = (self.scroll_state.offset_x + delta_x)
+                    .clamp(0.0, self.scroll_state.max_scroll_x());
+                self.scroll_state.offset_y = (self.scroll_state.offset_y + delta_y)
+                    .clamp(0.0, self.scroll_state.max_scroll_y());
+            }
+            ScrollAxis::None => return false,
+        }
+
+        // Return true if scroll position changed (consumed the event)
+        old_x != self.scroll_state.offset_x || old_y != self.scroll_state.offset_y
+    }
+
+    /// Paint the scrollbars
+    fn paint_scrollbars(&self, ctx: &mut PaintContext) {
+        // Don't show scrollbar if visibility is Hidden
+        if self.scrollbar_visibility == ScrollbarVisibility::Hidden {
+            return;
+        }
+
+        let config = &self.scrollbar_config;
+
+        // Vertical scrollbar
+        if self.scroll_axis.allows_vertical() && self.scroll_state.needs_vertical_scrollbar() {
+            let track = self.scrollbar_track_rect();
+            let handle = self.scrollbar_handle_rect();
+
+            // Draw track
+            ctx.draw_rounded_rect(track, config.track_color, config.track_corner_radius);
+
+            // Draw handle with appropriate color based on state
+            let handle_color = if self.scroll_state.scrollbar_dragging {
+                config.handle_pressed_color
+            } else if self.scroll_state.scrollbar_hovered {
+                config.handle_hover_color
+            } else {
+                config.handle_color
+            };
+            ctx.draw_rounded_rect(handle, handle_color, config.handle_corner_radius);
+        }
+
+        // Horizontal scrollbar
+        if self.scroll_axis.allows_horizontal() && self.scroll_state.needs_horizontal_scrollbar() {
+            let track = self.h_scrollbar_track_rect();
+            let handle = self.h_scrollbar_handle_rect();
+
+            // Draw track
+            ctx.draw_rounded_rect(track, config.track_color, config.track_corner_radius);
+
+            // Draw handle with appropriate color based on state
+            let handle_color = if self.scroll_state.h_scrollbar_dragging {
+                config.handle_pressed_color
+            } else if self.scroll_state.h_scrollbar_hovered {
+                config.handle_hover_color
+            } else {
+                config.handle_color
+            };
+            ctx.draw_rounded_rect(handle, handle_color, config.handle_corner_radius);
+        }
+    }
+
+    /// Handle scrollbar-related events, returns EventResponse if handled
+    fn handle_scrollbar_event(&mut self, event: &Event) -> Option<EventResponse> {
+        // Only handle scrollbar events if scrolling is enabled and scrollbar is visible
+        if self.scroll_axis == ScrollAxis::None
+            || self.scrollbar_visibility == ScrollbarVisibility::Hidden
+        {
+            return None;
+        }
+
+        match event {
+            Event::MouseDown { x, y, button } if *button == MouseButton::Left => {
+                // Check vertical scrollbar
+                if self.scroll_axis.allows_vertical()
+                    && self.scroll_state.needs_vertical_scrollbar()
+                {
+                    let handle = self.scrollbar_handle_rect();
+                    let track = self.scrollbar_track_rect();
+
+                    if handle.contains(*x, *y) {
+                        // Start dragging handle
+                        self.scroll_state.scrollbar_dragging = true;
+                        self.scroll_state.scrollbar_drag_start_y = *y;
+                        self.scroll_state.scrollbar_drag_start_offset = self.scroll_state.offset_y;
+                        request_animation_frame();
+                        return Some(EventResponse::Handled);
+                    } else if track.contains(*x, *y) {
+                        // Click on track - jump to position
+                        let handle_height = self.scrollbar_handle_height();
+                        let available = track.height - handle_height;
+                        if available > 0.0 {
+                            let click_pos = *y - track.y - handle_height / 2.0;
+                            let ratio = (click_pos / available).clamp(0.0, 1.0);
+                            self.scroll_state.offset_y = ratio * self.scroll_state.max_scroll_y();
+                            request_animation_frame();
+                        }
+                        return Some(EventResponse::Handled);
+                    }
+                }
+
+                // Check horizontal scrollbar
+                if self.scroll_axis.allows_horizontal()
+                    && self.scroll_state.needs_horizontal_scrollbar()
+                {
+                    let handle = self.h_scrollbar_handle_rect();
+                    let track = self.h_scrollbar_track_rect();
+
+                    if handle.contains(*x, *y) {
+                        // Start dragging handle
+                        self.scroll_state.h_scrollbar_dragging = true;
+                        self.scroll_state.h_scrollbar_drag_start_x = *x;
+                        self.scroll_state.h_scrollbar_drag_start_offset =
+                            self.scroll_state.offset_x;
+                        request_animation_frame();
+                        return Some(EventResponse::Handled);
+                    } else if track.contains(*x, *y) {
+                        // Click on track - jump to position
+                        let handle_width = self.h_scrollbar_handle_width();
+                        let available = track.width - handle_width;
+                        if available > 0.0 {
+                            let click_pos = *x - track.x - handle_width / 2.0;
+                            let ratio = (click_pos / available).clamp(0.0, 1.0);
+                            self.scroll_state.offset_x = ratio * self.scroll_state.max_scroll_x();
+                            request_animation_frame();
+                        }
+                        return Some(EventResponse::Handled);
+                    }
+                }
+            }
+
+            Event::MouseMove { x, y } => {
+                // Handle dragging
+                if self.scroll_state.scrollbar_dragging {
+                    let track = self.scrollbar_track_rect();
+                    let handle_height = self.scrollbar_handle_height();
+                    let available = track.height - handle_height;
+                    if available > 0.0 {
+                        let delta_y = *y - self.scroll_state.scrollbar_drag_start_y;
+                        let scroll_delta = (delta_y / available) * self.scroll_state.max_scroll_y();
+                        self.scroll_state.offset_y =
+                            (self.scroll_state.scrollbar_drag_start_offset + scroll_delta)
+                                .clamp(0.0, self.scroll_state.max_scroll_y());
+                        request_animation_frame();
+                    }
+                    return Some(EventResponse::Handled);
+                }
+
+                if self.scroll_state.h_scrollbar_dragging {
+                    let track = self.h_scrollbar_track_rect();
+                    let handle_width = self.h_scrollbar_handle_width();
+                    let available = track.width - handle_width;
+                    if available > 0.0 {
+                        let delta_x = *x - self.scroll_state.h_scrollbar_drag_start_x;
+                        let scroll_delta = (delta_x / available) * self.scroll_state.max_scroll_x();
+                        self.scroll_state.offset_x =
+                            (self.scroll_state.h_scrollbar_drag_start_offset + scroll_delta)
+                                .clamp(0.0, self.scroll_state.max_scroll_x());
+                        request_animation_frame();
+                    }
+                    return Some(EventResponse::Handled);
+                }
+
+                // Update hover state
+                let mut needs_repaint = false;
+
+                if self.scroll_axis.allows_vertical()
+                    && self.scroll_state.needs_vertical_scrollbar()
+                {
+                    let handle = self.scrollbar_handle_rect();
+                    let track = self.scrollbar_track_rect();
+                    let was_hovered = self.scroll_state.scrollbar_hovered;
+                    self.scroll_state.scrollbar_hovered =
+                        handle.contains(*x, *y) || track.contains(*x, *y);
+                    if was_hovered != self.scroll_state.scrollbar_hovered {
+                        needs_repaint = true;
+                    }
+                }
+
+                if self.scroll_axis.allows_horizontal()
+                    && self.scroll_state.needs_horizontal_scrollbar()
+                {
+                    let handle = self.h_scrollbar_handle_rect();
+                    let track = self.h_scrollbar_track_rect();
+                    let was_hovered = self.scroll_state.h_scrollbar_hovered;
+                    self.scroll_state.h_scrollbar_hovered =
+                        handle.contains(*x, *y) || track.contains(*x, *y);
+                    if was_hovered != self.scroll_state.h_scrollbar_hovered {
+                        needs_repaint = true;
+                    }
+                }
+
+                if needs_repaint {
+                    request_animation_frame();
+                }
+            }
+
+            Event::MouseUp { button, .. } if *button == MouseButton::Left => {
+                if self.scroll_state.scrollbar_dragging {
+                    self.scroll_state.scrollbar_dragging = false;
+                    request_animation_frame();
+                    return Some(EventResponse::Handled);
+                }
+                if self.scroll_state.h_scrollbar_dragging {
+                    self.scroll_state.h_scrollbar_dragging = false;
+                    request_animation_frame();
+                    return Some(EventResponse::Handled);
+                }
+            }
+
+            Event::MouseLeave => {
+                // Clear scrollbar hover state
+                if self.scroll_state.scrollbar_hovered || self.scroll_state.h_scrollbar_hovered {
+                    self.scroll_state.scrollbar_hovered = false;
+                    self.scroll_state.h_scrollbar_hovered = false;
+                    request_animation_frame();
+                }
+                // Stop dragging
+                if self.scroll_state.scrollbar_dragging || self.scroll_state.h_scrollbar_dragging {
+                    self.scroll_state.scrollbar_dragging = false;
+                    self.scroll_state.h_scrollbar_dragging = false;
+                    request_animation_frame();
+                }
+            }
+
+            _ => {}
+        }
+
+        None
+    }
+
     /// Advance animation state (property animations)
     fn advance_animations(&mut self) {
         let mut any_animating = false;
@@ -1257,19 +1684,7 @@ impl Widget for Container {
         self.cached_corner_curvature = corner_curvature;
         self.cached_elevation = elevation;
 
-        // Reconcile dynamic children if needed
-        let children = self.children_source.reconcile_and_get_mut();
-
-        // During size animations, force ALL descendants to re-layout with new constraints.
-        // This ensures nested children (like text inside inner containers) don't use
-        // stale cached layouts from before animation.
-        if has_size_animations {
-            for child in children.iter_mut() {
-                child.mark_dirty_recursive(ChangeFlags::NEEDS_LAYOUT);
-            }
-        }
-
-        // Get width/height Length values
+        // Get width/height Length values (before borrowing children)
         let width_length = self.width.as_ref().map(|w| w.get()).unwrap_or_default();
         let height_length = self.height.as_ref().map(|h| h.get()).unwrap_or_default();
 
@@ -1343,23 +1758,81 @@ impl Widget for Container {
             0.0
         };
 
-        let child_constraints = Constraints {
-            min_width: child_min_width,
-            min_height: child_min_height,
-            max_width: child_max_width,
-            max_height: child_max_height,
+        // For scrollable containers, use unbounded constraints in the scroll direction
+        // Also capture scroll state values before borrowing children mutably
+        let scroll_axis = self.scroll_axis;
+        let scroll_offset_x = self.scroll_state.offset_x;
+        let scroll_offset_y = self.scroll_state.offset_y;
+
+        let child_constraints = match scroll_axis {
+            ScrollAxis::Vertical => Constraints {
+                min_width: 0.0,
+                min_height: 0.0,
+                max_width: child_max_width,
+                max_height: f32::INFINITY, // Unbounded in scroll direction
+            },
+            ScrollAxis::Horizontal => Constraints {
+                min_width: 0.0,
+                min_height: 0.0,
+                max_width: f32::INFINITY, // Unbounded in scroll direction
+                max_height: child_max_height,
+            },
+            ScrollAxis::Both => Constraints {
+                min_width: 0.0,
+                min_height: 0.0,
+                max_width: f32::INFINITY,
+                max_height: f32::INFINITY,
+            },
+            ScrollAxis::None => Constraints {
+                min_width: child_min_width,
+                min_height: child_min_height,
+                max_width: child_max_width,
+                max_height: child_max_height,
+            },
         };
 
         // Use the layout strategy to position children
+        // For scrollable containers, position at scroll offset
+        let (child_origin_x, child_origin_y) = if scroll_axis != ScrollAxis::None {
+            (
+                self.bounds.x + padding.left - scroll_offset_x,
+                self.bounds.y + padding.top - scroll_offset_y,
+            )
+        } else {
+            (self.bounds.x + padding.left, self.bounds.y + padding.top)
+        };
+
+        // Reconcile dynamic children if needed
+        let children = self.children_source.reconcile_and_get_mut();
+
+        // During size animations, force ALL descendants to re-layout with new constraints.
+        // This ensures nested children (like text inside inner containers) don't use
+        // stale cached layouts from before animation.
+        if has_size_animations {
+            for child in children.iter_mut() {
+                child.mark_dirty_recursive(ChangeFlags::NEEDS_LAYOUT);
+            }
+        }
+
         let content_size = if !children.is_empty() {
             self.layout.layout(
                 children,
                 child_constraints,
-                (self.bounds.x + padding.left, self.bounds.y + padding.top),
+                (child_origin_x, child_origin_y),
             )
         } else {
             Size::zero()
         };
+
+        // Update scroll state with content and viewport sizes
+        if scroll_axis != ScrollAxis::None {
+            self.scroll_state.content_width = content_size.width + padding.horizontal();
+            self.scroll_state.content_height = content_size.height + padding.vertical();
+            self.scroll_state.viewport_width = child_max_width;
+            self.scroll_state.viewport_height = child_max_height;
+            // Clamp scroll offsets in case content size changed
+            self.scroll_state.clamp_offsets();
+        }
 
         // Calculate container size including padding
         let content_width = content_size.width + padding.horizontal();
@@ -1409,15 +1882,20 @@ impl Widget for Container {
         // This happens when:
         // 1. overflow is Hidden (always clip content), OR
         // 2. A size animation is currently running (temporary clip during animation), OR
-        // 3. Exact width/height is set (user wants that exact size, content clips)
+        // 3. Exact width/height is set (user wants that exact size, content clips), OR
+        // 4. Scrolling is enabled in that direction (content scrolls instead of expanding)
         let width_animating = self.width_anim.as_ref().is_some_and(|a| a.is_animating());
         let height_animating = self.height_anim.as_ref().is_some_and(|a| a.is_animating());
         let has_exact_width = width_length.exact.is_some();
         let has_exact_height = height_length.exact.is_some();
-        let allow_shrink_width =
-            self.overflow == Overflow::Hidden || width_animating || has_exact_width;
-        let allow_shrink_height =
-            self.overflow == Overflow::Hidden || height_animating || has_exact_height;
+        let allow_shrink_width = self.overflow == Overflow::Hidden
+            || width_animating
+            || has_exact_width
+            || self.scroll_axis.allows_horizontal();
+        let allow_shrink_height = self.overflow == Overflow::Hidden
+            || height_animating
+            || has_exact_height
+            || self.scroll_axis.allows_vertical();
 
         // Calculate final width
         // Priority: animation > exact > min constraint > content_width
@@ -1549,7 +2027,7 @@ impl Widget for Container {
         }
 
         // Determine if we need to clip children
-        // Clip when: overflow is Hidden OR a size animation is running OR exact size is set
+        // Clip when: overflow is Hidden OR a size animation is running OR exact size is set OR scrolling is enabled
         let width_animating = self.width_anim.as_ref().is_some_and(|a| a.is_animating());
         let height_animating = self.height_anim.as_ref().is_some_and(|a| a.is_animating());
         let has_exact_size = self.width.as_ref().is_some_and(|w| w.get().exact.is_some())
@@ -1557,10 +2035,12 @@ impl Widget for Container {
                 .height
                 .as_ref()
                 .is_some_and(|h| h.get().exact.is_some());
+        let is_scrollable = self.scroll_axis != ScrollAxis::None;
         let should_clip = self.overflow == Overflow::Hidden
             || width_animating
             || height_animating
-            || has_exact_size;
+            || has_exact_size
+            || is_scrollable;
 
         // Push clip if needed
         if should_clip {
@@ -1575,6 +2055,11 @@ impl Widget for Container {
         // Pop clip if we pushed one
         if should_clip {
             ctx.pop_clip();
+        }
+
+        // Draw scrollbars (outside clip, inside transform)
+        if is_scrollable {
+            self.paint_scrollbars(ctx);
         }
 
         // Pop transform BEFORE drawing ripple so ripple uses screen coordinates
@@ -1671,9 +2156,29 @@ impl Widget for Container {
             Cow::Borrowed(event)
         };
 
-        // Let children handle first (with transformed coordinates for nested transforms)
+        // Handle scrollbar events first (they take priority over content)
+        if let Some(response) = self.handle_scrollbar_event(&local_event) {
+            return response;
+        }
+
+        // For scrollable containers, offset event coordinates by scroll offset for children
+        // This ensures children receive events at their visual (scrolled) positions
+        let child_event: Cow<'_, Event> = if self.scroll_axis != ScrollAxis::None {
+            if let Some((x, y)) = local_event.coords() {
+                // Offset coordinates by scroll offset so children see correct positions
+                let scrolled_x = x + self.scroll_state.offset_x;
+                let scrolled_y = y + self.scroll_state.offset_y;
+                Cow::Owned(local_event.with_coords(scrolled_x, scrolled_y))
+            } else {
+                local_event.clone()
+            }
+        } else {
+            local_event.clone()
+        };
+
+        // Let children handle first (with transformed and scroll-adjusted coordinates)
         for child in self.children_source.reconcile_and_get_mut() {
-            if child.event(&local_event) == EventResponse::Handled {
+            if child.event(&child_event) == EventResponse::Handled {
                 return EventResponse::Handled;
             }
         }
@@ -1810,6 +2315,18 @@ impl Widget for Container {
                 source,
             } => {
                 if self.bounds.contains_rounded(*x, *y, corner_radius) {
+                    // For scrollable containers, handle scrolling
+                    if self.scroll_axis != ScrollAxis::None {
+                        let consumed = self.apply_scroll(*delta_x, *delta_y);
+                        if consumed {
+                            request_animation_frame();
+                            return EventResponse::Handled;
+                        }
+                        // If scroll was not consumed (at edge), fall through to let parent handle
+                        // This enables nested scrolling behavior
+                    }
+
+                    // Call on_scroll callback if set
                     if let Some(ref callback) = self.on_scroll {
                         callback(*delta_x, *delta_y, *source);
                         return EventResponse::Handled;
@@ -1829,6 +2346,16 @@ impl Widget for Container {
         let child_constraints = self.calc_child_constraints();
         let padding = self.padding.get();
 
+        // For scrollable containers, offset children by scroll amount
+        let (child_origin_x, child_origin_y) = if self.scroll_axis != ScrollAxis::None {
+            (
+                x + padding.left - self.scroll_state.offset_x,
+                y + padding.top - self.scroll_state.offset_y,
+            )
+        } else {
+            (x + padding.left, y + padding.top)
+        };
+
         // Re-layout children with current bounds minus padding
         // The layout will position children relative to the new origin
         let children = self.children_source.reconcile_and_get_mut();
@@ -1836,7 +2363,7 @@ impl Widget for Container {
             self.layout.layout(
                 children,
                 child_constraints,
-                (x + padding.left, y + padding.top),
+                (child_origin_x, child_origin_y),
             );
         }
     }
