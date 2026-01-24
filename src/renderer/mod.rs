@@ -831,8 +831,8 @@ impl PaintContext {
     }
 
     pub fn draw_text(&mut self, text: &str, rect: Rect, color: Color, font_size: f32) {
-        // Get current clip rect (if any) for text clipping
-        let clip_rect = self.clip_stack.last().map(|(rect, _, _)| *rect);
+        // Get intersected clip rect (intersection of all clips in stack) for text clipping
+        let clip_rect = self.intersected_clip_rect();
         // Get current transform from the stack
         let (transform, transform_origin) = self.current_transform_with_origin();
 
@@ -849,8 +849,8 @@ impl PaintContext {
 
     /// Draw an image at the specified rectangle.
     pub fn draw_image(&mut self, source: ImageSource, rect: Rect, content_fit: ContentFit) {
-        // Get current clip rect (if any) for image clipping
-        let clip_rect = self.clip_stack.last().map(|(rect, _, _)| *rect);
+        // Get intersected clip rect (intersection of all clips in stack) for image clipping
+        let clip_rect = self.intersected_clip_rect();
         // Get current transform from the stack
         let (transform, transform_origin) = self.current_transform_with_origin();
 
@@ -873,6 +873,42 @@ impl PaintContext {
     /// Pop a clip region from the stack
     pub fn pop_clip(&mut self) {
         self.clip_stack.pop();
+    }
+
+    /// Compute the intersection of all clip regions in the stack.
+    /// Returns the tightest bounding rectangle that satisfies all clips.
+    fn intersected_clip_rect(&self) -> Option<Rect> {
+        if self.clip_stack.is_empty() {
+            return None;
+        }
+
+        let mut result = self.clip_stack[0].0;
+        for (rect, _, _) in self.clip_stack.iter().skip(1) {
+            // Compute intersection
+            let left = result.x.max(rect.x);
+            let top = result.y.max(rect.y);
+            let right = (result.x + result.width).min(rect.x + rect.width);
+            let bottom = (result.y + result.height).min(rect.y + rect.height);
+
+            // Check if intersection is valid (non-empty)
+            if right > left && bottom > top {
+                result = Rect {
+                    x: left,
+                    y: top,
+                    width: right - left,
+                    height: bottom - top,
+                };
+            } else {
+                // No intersection - return a zero-size rect that will cull everything
+                return Some(Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: 0.0,
+                });
+            }
+        }
+        Some(result)
     }
 
     /// Get the current clip region if any
