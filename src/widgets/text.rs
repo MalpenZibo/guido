@@ -2,6 +2,7 @@ use crate::layout::{Constraints, Size};
 use crate::reactive::{ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId};
 use crate::renderer::{measure_text, PaintContext};
 
+use super::impl_dirty_flags;
 use super::widget::{Color, EventResponse, Rect, Widget};
 
 pub struct Text {
@@ -109,21 +110,7 @@ impl Widget for Text {
         self.widget_id
     }
 
-    fn mark_dirty(&mut self, flags: ChangeFlags) {
-        self.dirty_flags |= flags;
-    }
-
-    fn needs_layout(&self) -> bool {
-        self.dirty_flags.contains(ChangeFlags::NEEDS_LAYOUT)
-    }
-
-    fn needs_paint(&self) -> bool {
-        self.dirty_flags.contains(ChangeFlags::NEEDS_PAINT)
-    }
-
-    fn clear_dirty(&mut self) {
-        self.dirty_flags = ChangeFlags::empty();
-    }
+    impl_dirty_flags!();
 }
 
 /// Create a text widget
