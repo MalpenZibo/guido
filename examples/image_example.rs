@@ -34,15 +34,15 @@ fn main() {
     // Panel with two columns: raster images and SVG images
     let view = container()
         .padding(24.0)
-        .layout(Flex::row().spacing(32.0))
+        .layout(Flex::row().spacing(48.0))
         .child(
             // Left column: Raster images
             container()
-                .layout(Flex::column().spacing(16.0))
+                .layout(Flex::column().spacing(32.0))
                 .child(text("Raster Image").font_size(16.0).color(Color::WHITE))
                 .child(
                     container()
-                        .layout(Flex::row().spacing(16.0))
+                        .layout(Flex::row().spacing(32.0))
                         .child(image_card(
                             "Contain",
                             image("examples/assets/photo.webp")
@@ -67,7 +67,7 @@ fn main() {
                 )
                 .child(
                     container()
-                        .layout(Flex::row().spacing(24.0))
+                        .layout(Flex::row().spacing(48.0))
                         .child(transformed_card(
                             "Rotated 10°",
                             image("examples/assets/photo.webp")
@@ -79,8 +79,8 @@ fn main() {
                         .child(transformed_card(
                             "Scaled 1.5x",
                             image("examples/assets/photo.webp")
-                                .width(60.0)
-                                .height(60.0)
+                                .width(90.0)
+                                .height(90.0)
                                 .content_fit(ContentFit::Cover),
                             container().scale(1.5),
                         )),
@@ -89,11 +89,11 @@ fn main() {
         .child(
             // Right column: SVG images
             container()
-                .layout(Flex::column().spacing(16.0))
+                .layout(Flex::column().spacing(32.0))
                 .child(text("SVG Image").font_size(16.0).color(Color::WHITE))
                 .child(
                     container()
-                        .layout(Flex::row().spacing(16.0))
+                        .layout(Flex::row().spacing(32.0))
                         .child(image_card(
                             "Normal",
                             image("examples/assets/logo.svg").width(80.0).height(60.0),
@@ -105,15 +105,15 @@ fn main() {
                         ))
                         .child(transformed_card(
                             "Scaled 1.5x",
-                            image("examples/assets/logo.svg").width(50.0).height(38.0),
+                            image("examples/assets/logo.svg").width(80.0).height(60.0),
                             container().scale(1.5),
                         )),
                 ),
         );
 
     App::new()
-        .width(720)
-        .height(300)
+        .width(820)
+        .height(400)
         .anchor(Anchor::TOP | Anchor::LEFT)
         .layer(Layer::Top)
         .namespace("image-example")

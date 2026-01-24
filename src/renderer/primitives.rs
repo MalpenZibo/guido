@@ -724,10 +724,14 @@ impl RoundedRect {
 
             // Calculate how far shadow extends beyond the scaled shape in each direction
             // Scale shadow extends by the same factor
-            let left_extend = (self.shadow.blur * scale * fadeout - self.shadow.offset.0 * scale).max(0.0);
-            let right_extend = (self.shadow.blur * scale * fadeout + self.shadow.offset.0 * scale).max(0.0);
-            let top_extend = (self.shadow.blur * scale * fadeout - self.shadow.offset.1 * scale).max(0.0);
-            let bottom_extend = (self.shadow.blur * scale * fadeout + self.shadow.offset.1 * scale).max(0.0);
+            let left_extend =
+                (self.shadow.blur * scale * fadeout - self.shadow.offset.0 * scale).max(0.0);
+            let right_extend =
+                (self.shadow.blur * scale * fadeout + self.shadow.offset.0 * scale).max(0.0);
+            let top_extend =
+                (self.shadow.blur * scale * fadeout - self.shadow.offset.1 * scale).max(0.0);
+            let bottom_extend =
+                (self.shadow.blur * scale * fadeout + self.shadow.offset.1 * scale).max(0.0);
 
             (
                 to_ndc_x(scaled_rect.x - left_extend),
