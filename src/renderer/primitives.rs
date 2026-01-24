@@ -589,6 +589,40 @@ impl RoundedRect {
         }
     }
 
+    // Builder methods for chainable configuration
+
+    /// Set the superellipse curvature (K-value).
+    /// K=1 is circular (default), K=2 is squircle, K=0 is bevel, K=-1 is scoop.
+    pub fn curvature(mut self, curvature: f32) -> Self {
+        self.curvature = curvature;
+        self
+    }
+
+    /// Set a linear gradient (overrides solid color).
+    pub fn gradient(mut self, gradient: Gradient) -> Self {
+        self.gradient = Some(gradient);
+        self
+    }
+
+    /// Set a border with width and color.
+    pub fn border(mut self, width: f32, color: Color) -> Self {
+        self.border_width = width;
+        self.border_color = color;
+        self
+    }
+
+    /// Set a clip region for this shape.
+    pub fn clip_region(mut self, clip: ClipRegion) -> Self {
+        self.clip = Some(clip);
+        self
+    }
+
+    /// Set the shadow configuration.
+    pub fn shadow(mut self, shadow: Shadow) -> Self {
+        self.shadow = shadow;
+        self
+    }
+
     /// Calculate safe progress value, avoiding division by zero
     #[inline]
     fn safe_progress(value: f32, start: f32, end: f32) -> f32 {
