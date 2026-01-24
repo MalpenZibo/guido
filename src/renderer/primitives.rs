@@ -862,7 +862,7 @@ impl Transformable for RoundedRect {
     }
 }
 
-/// Vertex for textured quads (used for transformed text rendering).
+/// Vertex for textured quads (used for transformed text and image rendering).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct TexturedVertex {
@@ -878,6 +878,12 @@ pub struct TexturedVertex {
     pub transform_row2: [f32; 4],
     /// Transform matrix row 3
     pub transform_row3: [f32; 4],
+    /// Clip rectangle in NDC: [min_x, min_y, max_x, max_y] - (0,0,0,0) means no clip
+    pub clip_rect: [f32; 4],
+    /// Clip corner radius in NDC (height-based for aspect-correct rendering)
+    pub clip_radius: f32,
+    /// Padding for alignment
+    pub _padding: [f32; 3],
 }
 
 impl TexturedVertex {
@@ -922,11 +928,33 @@ impl TexturedVertex {
                     shader_location: 5,
                     format: wgpu::VertexFormat::Float32x4,
                 },
+                // clip_rect
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 20]>() as wgpu::BufferAddress,
+                    shader_location: 6,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                // clip_radius + padding
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 24]>() as wgpu::BufferAddress,
+                    shader_location: 7,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
             ],
         }
     }
 
     pub fn new(position: [f32; 2], tex_coords: [f32; 2], transform: Transform) -> Self {
+        Self::with_clip(position, tex_coords, transform, [0.0, 0.0, 0.0, 0.0], 0.0)
+    }
+
+    pub fn with_clip(
+        position: [f32; 2],
+        tex_coords: [f32; 2],
+        transform: Transform,
+        clip_rect: [f32; 4],
+        clip_radius: f32,
+    ) -> Self {
         let rows = transform.rows();
         Self {
             position,
@@ -935,11 +963,14 @@ impl TexturedVertex {
             transform_row1: rows[1],
             transform_row2: rows[2],
             transform_row3: rows[3],
+            clip_rect,
+            clip_radius,
+            _padding: [0.0, 0.0, 0.0],
         }
     }
 }
 
-/// A textured quad for rendering text textures with transforms.
+/// A textured quad for rendering text textures and images with transforms.
 pub struct TexturedQuad {
     /// The rect in logical pixels
     pub rect: Rect,
@@ -949,6 +980,8 @@ pub struct TexturedQuad {
     pub transform_origin: Option<(f32, f32)>,
     /// UV coordinates: (u_min, v_min, u_max, v_max), defaults to (0, 0, 1, 1)
     pub uv: (f32, f32, f32, f32),
+    /// Optional clip region for this quad
+    pub clip: Option<ClipRegion>,
 }
 
 impl TexturedQuad {
@@ -958,6 +991,7 @@ impl TexturedQuad {
             transform,
             transform_origin,
             uv: (0.0, 0.0, 1.0, 1.0),
+            clip: None,
         }
     }
 
@@ -973,6 +1007,24 @@ impl TexturedQuad {
             transform,
             transform_origin,
             uv,
+            clip: None,
+        }
+    }
+
+    /// Create a textured quad with custom UV coordinates and clip region.
+    pub fn with_uv_and_clip(
+        rect: Rect,
+        transform: Transform,
+        transform_origin: Option<(f32, f32)>,
+        uv: (f32, f32, f32, f32),
+        clip: Option<ClipRegion>,
+    ) -> Self {
+        Self {
+            rect,
+            transform,
+            transform_origin,
+            uv,
+            clip,
         }
     }
 
@@ -1024,13 +1076,59 @@ impl TexturedQuad {
             screen_height,
         );
 
+        // Compute clip region in NDC if present
+        let (clip_rect_ndc, clip_radius_ndc) = if let Some(ref clip) = self.clip {
+            let clip_x1 = to_ndc_x(clip.rect.x);
+            let clip_y1 = to_ndc_y(clip.rect.y);
+            let clip_x2 = to_ndc_x(clip.rect.x + clip.rect.width);
+            let clip_y2 = to_ndc_y(clip.rect.y + clip.rect.height);
+
+            let clip_radius = clip
+                .radius
+                .min(clip.rect.width / 2.0)
+                .min(clip.rect.height / 2.0);
+            // Use height-based NDC for uniform clip radius (aspect-corrected in shader)
+            let clip_r_ndc = (clip_radius / screen_height) * 2.0;
+
+            (
+                [clip_x1, clip_y2, clip_x2, clip_y1], // min_x, min_y, max_x, max_y
+                clip_r_ndc,
+            )
+        } else {
+            ([0.0, 0.0, 0.0, 0.0], 0.0)
+        };
+
         // UV coordinates from the uv field
         let (u_min, v_min, u_max, v_max) = self.uv;
         let vertices = vec![
-            TexturedVertex::new([x1, y1], [u_min, v_min], centered_transform), // top-left
-            TexturedVertex::new([x2, y1], [u_max, v_min], centered_transform), // top-right
-            TexturedVertex::new([x2, y2], [u_max, v_max], centered_transform), // bottom-right
-            TexturedVertex::new([x1, y2], [u_min, v_max], centered_transform), // bottom-left
+            TexturedVertex::with_clip(
+                [x1, y1],
+                [u_min, v_min],
+                centered_transform,
+                clip_rect_ndc,
+                clip_radius_ndc,
+            ), // top-left
+            TexturedVertex::with_clip(
+                [x2, y1],
+                [u_max, v_min],
+                centered_transform,
+                clip_rect_ndc,
+                clip_radius_ndc,
+            ), // top-right
+            TexturedVertex::with_clip(
+                [x2, y2],
+                [u_max, v_max],
+                centered_transform,
+                clip_rect_ndc,
+                clip_radius_ndc,
+            ), // bottom-right
+            TexturedVertex::with_clip(
+                [x1, y2],
+                [u_min, v_max],
+                centered_transform,
+                clip_rect_ndc,
+                clip_radius_ndc,
+            ), // bottom-left
         ];
 
         let indices = vec![0, 1, 2, 0, 2, 3];

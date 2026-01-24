@@ -8,7 +8,6 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::Arc;
 
-use image::GenericImageView;
 use wgpu::{Device, Extent3d, Queue, Texture, TextureDimension, TextureFormat, TextureUsages};
 
 use crate::widgets::image::ImageSource;
@@ -212,14 +211,7 @@ impl ImageTextureRenderer {
 
     /// Get intrinsic dimensions of an image source without loading the full texture.
     pub fn get_intrinsic_size(&self, source: &ImageSource) -> Option<(u32, u32)> {
-        match source {
-            ImageSource::Path(path) => image::image_dimensions(path).ok(),
-            ImageSource::Bytes(bytes) => image::load_from_memory(bytes)
-                .ok()
-                .map(|img| img.dimensions()),
-            ImageSource::SvgPath(path) => Self::get_svg_size_from_file(path),
-            ImageSource::SvgBytes(bytes) => Self::get_svg_size_from_bytes(bytes),
-        }
+        crate::image_metadata::get_intrinsic_size(source)
     }
 
     /// Load a raster image from a file.
@@ -302,19 +294,6 @@ impl ImageTextureRenderer {
             intrinsic_height: height,
             render_scale: 1.0,
         })
-    }
-
-    /// Get SVG dimensions from a file.
-    fn get_svg_size_from_file(path: &Path) -> Option<(u32, u32)> {
-        let data = std::fs::read(path).ok()?;
-        Self::get_svg_size_from_bytes(&data)
-    }
-
-    /// Get SVG dimensions from bytes.
-    fn get_svg_size_from_bytes(bytes: &[u8]) -> Option<(u32, u32)> {
-        let tree = resvg::usvg::Tree::from_data(bytes, &resvg::usvg::Options::default()).ok()?;
-        let size = tree.size();
-        Some((size.width() as u32, size.height() as u32))
     }
 
     /// Load an SVG from a file and rasterize it.

@@ -13,7 +13,7 @@ use crate::renderer::PaintContext;
 use super::widget::{EventResponse, Rect, Widget};
 
 /// Source for an image - can be a file path or in-memory bytes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ImageSource {
     /// Raster image from a file path (PNG, JPEG, GIF, WebP)
     Path(PathBuf),
@@ -233,8 +233,20 @@ impl Image {
 
 impl Widget for Image {
     fn layout(&mut self, constraints: Constraints) -> Size {
-        // Update cached source
         let current_source = self.source.get();
+
+        // Load intrinsic size if not cached or source changed
+        let source_changed = self
+            .cached_source
+            .as_ref()
+            .map(|cached| cached != &current_source)
+            .unwrap_or(true);
+
+        if source_changed || self.intrinsic_size.is_none() {
+            self.intrinsic_size = crate::image_metadata::get_intrinsic_size(&current_source);
+        }
+
+        // Update cached source
         self.cached_source = Some(current_source);
 
         let size = self.calculate_size(&constraints);

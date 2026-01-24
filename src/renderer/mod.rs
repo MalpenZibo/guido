@@ -516,8 +516,26 @@ impl Renderer {
                 let mut quad_transform = entry.transform;
                 quad_transform.scale_translation(self.scale_factor);
 
-                // Create the textured quad with UV coordinates
-                let quad = TexturedQuad::with_uv(display_rect, quad_transform, scaled_origin, uv);
+                // Scale clip region for HiDPI
+                let clip = entry.clip_rect.map(|rect| ClipRegion {
+                    rect: Rect::new(
+                        rect.x * self.scale_factor,
+                        rect.y * self.scale_factor,
+                        rect.width * self.scale_factor,
+                        rect.height * self.scale_factor,
+                    ),
+                    radius: 0.0, // Images typically have square clip regions
+                    curvature: 1.0,
+                });
+
+                // Create the textured quad with UV coordinates and clip
+                let quad = TexturedQuad::with_uv_and_clip(
+                    display_rect,
+                    quad_transform,
+                    scaled_origin,
+                    uv,
+                    clip,
+                );
 
                 let (vertices, indices) = quad.to_vertices(self.screen_width, self.screen_height);
                 if vertices.is_empty() || indices.is_empty() {

@@ -1,4 +1,5 @@
 pub mod animation;
+pub mod image_metadata;
 pub mod layout;
 pub mod reactive;
 pub mod transform;
