@@ -953,6 +953,20 @@ impl PaintContext {
         self.overlay_shapes.push(Shape::RoundedRect(shape));
     }
 
+    /// Draw a shape with all its configured properties.
+    ///
+    /// This is the unified entry point for drawing pre-configured shapes.
+    /// Use with RoundedRect builder methods for ergonomic shape creation:
+    ///
+    /// ```ignore
+    /// ctx.draw_shape(RoundedRect::new(rect, color, radius)
+    ///     .curvature(2.0)
+    ///     .border(1.0, Color::WHITE));
+    /// ```
+    pub fn draw_shape(&mut self, shape: RoundedRect) {
+        self.push_rounded_rect(shape);
+    }
+
     /// Draw a circle as an overlay (rendered after text).
     /// The circle is drawn centered at (cx, cy) with the given radius.
     pub fn draw_overlay_circle(&mut self, cx: f32, cy: f32, radius: f32, color: Color) {
