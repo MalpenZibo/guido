@@ -41,9 +41,9 @@ pub mod prelude {
     pub use crate::transform::Transform;
     pub use crate::transform_origin::{HorizontalAnchor, TransformOrigin, VerticalAnchor};
     pub use crate::widgets::{
-        container, text, Border, Color, Container, Event, EventResponse, GradientDirection,
-        IntoChildren, LinearGradient, MouseButton, Overflow, Padding, Rect, ScrollSource,
-        StateStyle, Text, Widget,
+        container, image, text, Border, Color, Container, ContentFit, Event, EventResponse,
+        GradientDirection, Image, ImageSource, IntoChildren, LinearGradient, MouseButton, Overflow,
+        Padding, Rect, ScrollSource, StateStyle, Text, Widget,
     };
     pub use crate::{component, App, AppConfig};
 }

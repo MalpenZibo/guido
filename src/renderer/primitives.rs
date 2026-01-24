@@ -635,41 +635,64 @@ impl RoundedRect {
     }
 
     pub fn to_vertices(&self, screen_width: f32, screen_height: f32) -> (Vec<Vertex>, Vec<u16>) {
+        // Extract scale factor from transform - scale is applied to geometry, not via GPU transform
+        // This is necessary because SDF rendering doesn't work correctly with GPU-based scale transforms
+        let scale = self.transform.extract_scale();
+
+        // Get the rotation-only transform (scale removed) for GPU transform
+        // This preserves rotation behavior while allowing geometry-based scaling
+        let rotation_only_transform = self.transform.without_scale();
+
         // Convert to normalized device coordinates
         let to_ndc_x = |x: f32| (x / screen_width) * 2.0 - 1.0;
         let to_ndc_y = |y: f32| 1.0 - (y / screen_height) * 2.0;
 
-        let x1 = to_ndc_x(self.rect.x);
-        let y1 = to_ndc_y(self.rect.y);
-        let x2 = to_ndc_x(self.rect.x + self.rect.width);
-        let y2 = to_ndc_y(self.rect.y + self.rect.height);
+        // Calculate shape center for scaling around center
+        let center_x = self.rect.x + self.rect.width / 2.0;
+        let center_y = self.rect.y + self.rect.height / 2.0;
 
-        // Convert transform to work correctly in NDC space
+        // Pre-scale the rect geometry around its center
+        let scaled_rect = Rect::new(
+            center_x - (self.rect.width / 2.0) * scale,
+            center_y - (self.rect.height / 2.0) * scale,
+            self.rect.width * scale,
+            self.rect.height * scale,
+        );
+
+        // Convert scaled rect to NDC
+        let x1 = to_ndc_x(scaled_rect.x);
+        let y1 = to_ndc_y(scaled_rect.y);
+        let x2 = to_ndc_x(scaled_rect.x + scaled_rect.width);
+        let y2 = to_ndc_y(scaled_rect.y + scaled_rect.height);
+
+        // Convert rotation-only transform to work correctly in NDC space
         let centered_transform = transform_to_ndc(
-            &self.transform,
+            &rotation_only_transform,
             self.transform_origin,
             ((x1 + x2) / 2.0, (y1 + y2) / 2.0), // Default: shape's center in NDC
             screen_width,
             screen_height,
         );
 
-        // Compute radius in NDC
+        // Compute radius in NDC (scaled with the rect)
         let radius = self
             .radius
             .min(self.rect.width / 2.0)
             .min(self.rect.height / 2.0);
-        let r_ndc_x = (radius / screen_width) * 2.0;
-        let r_ndc_y = (radius / screen_height) * 2.0;
+        let scaled_radius = radius * scale;
+        let r_ndc_x = (scaled_radius / screen_width) * 2.0;
+        let r_ndc_y = (scaled_radius / screen_height) * 2.0;
 
         // Shape bounds for SDF in shader
         let shape_rect = [x1, y2, x2, y1]; // min_x, min_y, max_x, max_y
         let shape_radius = [r_ndc_x, r_ndc_y];
         let shape_curvature = self.curvature;
 
-        // Convert border width to NDC separately for x and y (aspect-ratio correct)
+        // Convert border width to NDC separately for x and y (aspect-ratio correct, scaled)
+        let scaled_border = self.border_width * scale;
         let border_width_ndc = [
-            (self.border_width / screen_width) * 2.0,
-            (self.border_width / screen_height) * 2.0,
+            (scaled_border / screen_width) * 2.0,
+            (scaled_border / screen_height) * 2.0,
         ];
         let border_color = [
             self.border_color.r,
@@ -678,13 +701,13 @@ impl RoundedRect {
             self.border_color.a,
         ];
 
-        // Convert shadow parameters to NDC
+        // Convert shadow parameters to NDC (scaled)
         let shadow_offset_ndc = [
-            (self.shadow.offset.0 / screen_width) * 2.0,
-            -(self.shadow.offset.1 / screen_height) * 2.0, // Negative because NDC y is flipped
+            (self.shadow.offset.0 * scale / screen_width) * 2.0,
+            -(self.shadow.offset.1 * scale / screen_height) * 2.0, // Negative because NDC y is flipped
         ];
-        let shadow_blur_ndc = (self.shadow.blur / screen_height) * 2.0; // Use height for uniform blur
-        let shadow_spread_ndc = (self.shadow.spread / screen_height) * 2.0;
+        let shadow_blur_ndc = (self.shadow.blur * scale / screen_height) * 2.0;
+        let shadow_spread_ndc = (self.shadow.spread * scale / screen_height) * 2.0;
         let shadow_color = [
             self.shadow.color.r,
             self.shadow.color.g,
@@ -699,18 +722,18 @@ impl RoundedRect {
             // Shadow fadeout multiplier: 3x ensures smooth gradient to transparent
             let fadeout = 3.0;
 
-            // Calculate how far shadow extends beyond the shape in each direction
-            // Account for offset direction and full fadeout distance
-            let left_extend = (self.shadow.blur * fadeout - self.shadow.offset.0).max(0.0);
-            let right_extend = (self.shadow.blur * fadeout + self.shadow.offset.0).max(0.0);
-            let top_extend = (self.shadow.blur * fadeout - self.shadow.offset.1).max(0.0);
-            let bottom_extend = (self.shadow.blur * fadeout + self.shadow.offset.1).max(0.0);
+            // Calculate how far shadow extends beyond the scaled shape in each direction
+            // Scale shadow extends by the same factor
+            let left_extend = (self.shadow.blur * scale * fadeout - self.shadow.offset.0 * scale).max(0.0);
+            let right_extend = (self.shadow.blur * scale * fadeout + self.shadow.offset.0 * scale).max(0.0);
+            let top_extend = (self.shadow.blur * scale * fadeout - self.shadow.offset.1 * scale).max(0.0);
+            let bottom_extend = (self.shadow.blur * scale * fadeout + self.shadow.offset.1 * scale).max(0.0);
 
             (
-                to_ndc_x(self.rect.x - left_extend),
-                to_ndc_y(self.rect.y - top_extend),
-                to_ndc_x(self.rect.x + self.rect.width + right_extend),
-                to_ndc_y(self.rect.y + self.rect.height + bottom_extend),
+                to_ndc_x(scaled_rect.x - left_extend),
+                to_ndc_y(scaled_rect.y - top_extend),
+                to_ndc_x(scaled_rect.x + scaled_rect.width + right_extend),
+                to_ndc_y(scaled_rect.y + scaled_rect.height + bottom_extend),
             )
         } else {
             // No shadow - use exact bounds
@@ -740,8 +763,7 @@ impl RoundedRect {
         };
 
         // Simple quad - SDF rendering handles the shape in fragment shader
-        // Use expanded quad bounds for vertices, but keep original shape_rect for SDF
-        // local_pos = untransformed position for SDF evaluation (same as position)
+        // local_pos = same as position since geometry is already pre-scaled
         let vertices = vec![
             Vertex::with_transform_and_clip(
                 [quad_x1, quad_y1],
@@ -918,6 +940,8 @@ pub struct TexturedQuad {
     pub transform: Transform,
     /// Custom transform origin in logical screen coordinates, if any
     pub transform_origin: Option<(f32, f32)>,
+    /// UV coordinates: (u_min, v_min, u_max, v_max), defaults to (0, 0, 1, 1)
+    pub uv: (f32, f32, f32, f32),
 }
 
 impl TexturedQuad {
@@ -926,6 +950,22 @@ impl TexturedQuad {
             rect,
             transform,
             transform_origin,
+            uv: (0.0, 0.0, 1.0, 1.0),
+        }
+    }
+
+    /// Create a textured quad with custom UV coordinates for content fit modes.
+    pub fn with_uv(
+        rect: Rect,
+        transform: Transform,
+        transform_origin: Option<(f32, f32)>,
+        uv: (f32, f32, f32, f32),
+    ) -> Self {
+        Self {
+            rect,
+            transform,
+            transform_origin,
+            uv,
         }
     }
 
@@ -937,30 +977,50 @@ impl TexturedQuad {
         screen_width: f32,
         screen_height: f32,
     ) -> (Vec<TexturedVertex>, Vec<u16>) {
+        // Extract scale factor from transform - scale is applied to geometry, not via GPU transform
+        // This matches how RoundedRect handles scale transforms
+        let scale = self.transform.extract_scale();
+
+        // Get the rotation-only transform (scale removed) for GPU transform
+        let rotation_only_transform = self.transform.without_scale();
+
         // Convert to normalized device coordinates
         let to_ndc_x = |x: f32| (x / screen_width) * 2.0 - 1.0;
         let to_ndc_y = |y: f32| 1.0 - (y / screen_height) * 2.0;
 
-        let x1 = to_ndc_x(self.rect.x);
-        let y1 = to_ndc_y(self.rect.y);
-        let x2 = to_ndc_x(self.rect.x + self.rect.width);
-        let y2 = to_ndc_y(self.rect.y + self.rect.height);
+        // Calculate center for scaling around center
+        let center_x = self.rect.x + self.rect.width / 2.0;
+        let center_y = self.rect.y + self.rect.height / 2.0;
 
-        // Convert transform to work correctly in NDC space
+        // Pre-scale the rect geometry around its center
+        let scaled_rect = Rect::new(
+            center_x - (self.rect.width / 2.0) * scale,
+            center_y - (self.rect.height / 2.0) * scale,
+            self.rect.width * scale,
+            self.rect.height * scale,
+        );
+
+        let x1 = to_ndc_x(scaled_rect.x);
+        let y1 = to_ndc_y(scaled_rect.y);
+        let x2 = to_ndc_x(scaled_rect.x + scaled_rect.width);
+        let y2 = to_ndc_y(scaled_rect.y + scaled_rect.height);
+
+        // Convert rotation-only transform to work correctly in NDC space
         let centered_transform = transform_to_ndc(
-            &self.transform,
+            &rotation_only_transform,
             self.transform_origin,
             ((x1 + x2) / 2.0, (y1 + y2) / 2.0), // Default: quad's center in NDC
             screen_width,
             screen_height,
         );
 
-        // UV coordinates: (0,0) at top-left, (1,1) at bottom-right
+        // UV coordinates from the uv field
+        let (u_min, v_min, u_max, v_max) = self.uv;
         let vertices = vec![
-            TexturedVertex::new([x1, y1], [0.0, 0.0], centered_transform), // top-left
-            TexturedVertex::new([x2, y1], [1.0, 0.0], centered_transform), // top-right
-            TexturedVertex::new([x2, y2], [1.0, 1.0], centered_transform), // bottom-right
-            TexturedVertex::new([x1, y2], [0.0, 1.0], centered_transform), // bottom-left
+            TexturedVertex::new([x1, y1], [u_min, v_min], centered_transform), // top-left
+            TexturedVertex::new([x2, y1], [u_max, v_min], centered_transform), // top-right
+            TexturedVertex::new([x2, y2], [u_max, v_max], centered_transform), // bottom-right
+            TexturedVertex::new([x1, y2], [u_min, v_max], centered_transform), // bottom-left
         ];
 
         let indices = vec![0, 1, 2, 0, 2, 3];

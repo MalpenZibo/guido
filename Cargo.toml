@@ -19,7 +19,8 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 raw-window-handle = "0.6"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+resvg = "0.45"
 pollster = "0.4"
 calloop = "0.14"
 calloop-wayland-source = "0.4"
@@ -41,3 +42,7 @@ path = "examples/reactive_example.rs"
 [[example]]
 name = "showcase"
 path = "examples/showcase.rs"
+
+[[example]]
+name = "image_example"
+path = "examples/image_example.rs"
