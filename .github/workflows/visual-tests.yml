@@ -1,0 +1,73 @@
+name: Visual Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      update_references:
+        description: 'Update reference images'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  visual-tests:
+    name: Visual Regression Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./visual_tests
+          load: true
+          tags: guido-visual-tests:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run visual tests
+        if: ${{ github.event.inputs.update_references != 'true' }}
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace:rw \
+            -w /workspace \
+            guido-visual-tests:latest \
+            cargo test --package visual_tests -- --test-threads=1 --nocapture
+
+      - name: Update reference images
+        if: ${{ github.event.inputs.update_references == 'true' }}
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace:rw \
+            -w /workspace \
+            -e UPDATE_REFERENCES=1 \
+            guido-visual-tests:latest \
+            cargo test --package visual_tests -- --test-threads=1 --nocapture
+
+      - name: Upload reference images
+        if: ${{ github.event.inputs.update_references == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: reference-images
+          path: visual_tests/references/
+
+      - name: Upload test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-test-failures
+          path: |
+            visual_tests/output/
+          retention-days: 7
