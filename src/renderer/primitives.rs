@@ -647,14 +647,17 @@ impl RoundedRect {
         let to_ndc_x = |x: f32| (x / screen_width) * 2.0 - 1.0;
         let to_ndc_y = |y: f32| 1.0 - (y / screen_height) * 2.0;
 
-        // Calculate shape center for scaling around center
-        let center_x = self.rect.x + self.rect.width / 2.0;
-        let center_y = self.rect.y + self.rect.height / 2.0;
+        // Determine scale origin: use transform_origin if specified, otherwise shape's center
+        let shape_center_x = self.rect.x + self.rect.width / 2.0;
+        let shape_center_y = self.rect.y + self.rect.height / 2.0;
+        let (scale_origin_x, scale_origin_y) = self
+            .transform_origin
+            .unwrap_or((shape_center_x, shape_center_y));
 
-        // Pre-scale the rect geometry around its center
+        // Pre-scale the rect geometry around the scale origin
         let scaled_rect = Rect::new(
-            center_x - (self.rect.width / 2.0) * scale,
-            center_y - (self.rect.height / 2.0) * scale,
+            scale_origin_x + (self.rect.x - scale_origin_x) * scale,
+            scale_origin_y + (self.rect.y - scale_origin_y) * scale,
             self.rect.width * scale,
             self.rect.height * scale,
         );
@@ -992,14 +995,17 @@ impl TexturedQuad {
         let to_ndc_x = |x: f32| (x / screen_width) * 2.0 - 1.0;
         let to_ndc_y = |y: f32| 1.0 - (y / screen_height) * 2.0;
 
-        // Calculate center for scaling around center
-        let center_x = self.rect.x + self.rect.width / 2.0;
-        let center_y = self.rect.y + self.rect.height / 2.0;
+        // Determine scale origin: use transform_origin if specified, otherwise quad's center
+        let quad_center_x = self.rect.x + self.rect.width / 2.0;
+        let quad_center_y = self.rect.y + self.rect.height / 2.0;
+        let (scale_origin_x, scale_origin_y) = self
+            .transform_origin
+            .unwrap_or((quad_center_x, quad_center_y));
 
-        // Pre-scale the rect geometry around its center
+        // Pre-scale the rect geometry around the scale origin
         let scaled_rect = Rect::new(
-            center_x - (self.rect.width / 2.0) * scale,
-            center_y - (self.rect.height / 2.0) * scale,
+            scale_origin_x + (self.rect.x - scale_origin_x) * scale,
+            scale_origin_y + (self.rect.y - scale_origin_y) * scale,
             self.rect.width * scale,
             self.rect.height * scale,
         );
