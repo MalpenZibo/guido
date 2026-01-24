@@ -513,33 +513,15 @@ impl RoundedRect {
     }
 
     pub fn with_clip(rect: Rect, color: Color, radius: f32, clip: ClipRegion) -> Self {
-        Self {
-            rect,
-            color,
-            radius,
-            clip: Some(clip),
-            ..Default::default()
-        }
+        Self::new(rect, color, radius).clip_region(clip)
     }
 
     pub fn with_gradient(rect: Rect, gradient: Gradient, radius: f32) -> Self {
-        Self {
-            rect,
-            color: gradient.start_color, // fallback
-            radius,
-            gradient: Some(gradient),
-            ..Default::default()
-        }
+        Self::new(rect, gradient.start_color, radius).gradient(gradient)
     }
 
     pub fn with_curvature(rect: Rect, color: Color, radius: f32, curvature: f32) -> Self {
-        Self {
-            rect,
-            color,
-            radius,
-            curvature,
-            ..Default::default()
-        }
+        Self::new(rect, color, radius).curvature(curvature)
     }
 
     /// Create a rounded rect with a border
@@ -550,25 +532,12 @@ impl RoundedRect {
         border_width: f32,
         border_color: Color,
     ) -> Self {
-        Self {
-            rect,
-            color: fill_color,
-            radius,
-            border_width,
-            border_color,
-            ..Default::default()
-        }
+        Self::new(rect, fill_color, radius).border(border_width, border_color)
     }
 
     /// Create a border-only rounded rect (transparent fill)
     pub fn border_only(rect: Rect, radius: f32, border_width: f32, border_color: Color) -> Self {
-        Self {
-            rect,
-            radius,
-            border_width,
-            border_color,
-            ..Default::default()
-        }
+        Self::new(rect, Color::TRANSPARENT, radius).border(border_width, border_color)
     }
 
     /// Create a border-only rounded rect with custom curvature
@@ -579,14 +548,7 @@ impl RoundedRect {
         border_color: Color,
         curvature: f32,
     ) -> Self {
-        Self {
-            rect,
-            radius,
-            curvature,
-            border_width,
-            border_color,
-            ..Default::default()
-        }
+        Self::border_only(rect, radius, border_width, border_color).curvature(curvature)
     }
 
     // Builder methods for chainable configuration
