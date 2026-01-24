@@ -92,7 +92,11 @@ fn main() {
                 )
                 .child(
                     container()
-                        .layout(Flex::row().spacing(24.0).cross_axis_alignment(CrossAxisAlignment::End))
+                        .layout(
+                            Flex::row()
+                                .spacing(24.0)
+                                .cross_axis_alignment(CrossAxisAlignment::End),
+                        )
                         .child(labeled(
                             "60x60",
                             clipped_box(
@@ -142,9 +146,7 @@ fn main() {
                         .background(Color::rgb(0.15, 0.15, 0.2))
                         .corner_radius(8.0)
                         .border(1.0, Color::rgb(0.3, 0.5, 0.3))
-                        .child(
-                            image("examples/assets/logo.svg").content_fit(ContentFit::None),
-                        ),
+                        .child(image("examples/assets/logo.svg").content_fit(ContentFit::None)),
                 )),
         );
 
