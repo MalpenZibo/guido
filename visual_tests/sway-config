@@ -1,0 +1,18 @@
+# Minimal Sway configuration for headless visual testing
+
+# Virtual output for headless mode
+output HEADLESS-1 resolution 1920x1080
+
+# Disable all decorations and bars
+default_border none
+default_floating_border none
+bar {
+    mode invisible
+}
+
+# Disable any gaps
+gaps inner 0
+gaps outer 0
+
+# Background color (shouldn't matter for layer shell)
+output * bg #000000 solid_color

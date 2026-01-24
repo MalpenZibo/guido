@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "guido-macros"]
+members = [".", "guido-macros", "visual_tests"]
 
 [package]
 name = "guido"
@@ -46,3 +46,71 @@ path = "examples/showcase.rs"
 [[example]]
 name = "image_example"
 path = "examples/image_example.rs"
+
+[[example]]
+name = "animation_example"
+path = "examples/animation_example.rs"
+
+[[example]]
+name = "children_example"
+path = "examples/children_example.rs"
+
+[[example]]
+name = "component_example"
+path = "examples/component_example.rs"
+
+[[example]]
+name = "elevation_example"
+path = "examples/elevation_example.rs"
+
+[[example]]
+name = "flex_layout_test"
+path = "examples/flex_layout_test.rs"
+
+[[example]]
+name = "state_layer_example"
+path = "examples/state_layer_example.rs"
+
+[[example]]
+name = "transform_example"
+path = "examples/transform_example.rs"
+
+[[example]]
+name = "nested_transform_example"
+path = "examples/nested_transform_example.rs"
+
+[[example]]
+name = "transform_test"
+path = "examples/transform_test.rs"
+
+[[example]]
+name = "transform_events_test"
+path = "examples/transform_events_test.rs"
+
+[[example]]
+name = "transform_origin_test"
+path = "examples/transform_origin_test.rs"
+
+[[example]]
+name = "transform_scale_test"
+path = "examples/transform_scale_test.rs"
+
+[[example]]
+name = "transform_translate_test"
+path = "examples/transform_translate_test.rs"
+
+[[example]]
+name = "text_transform_example"
+path = "examples/text_transform_example.rs"
+
+[[example]]
+name = "rounded_hitbox_test"
+path = "examples/rounded_hitbox_test.rs"
+
+[[example]]
+name = "rounded_transform_test"
+path = "examples/rounded_transform_test.rs"
+
+[[example]]
+name = "image_fit_none_test"
+path = "examples/image_fit_none_test.rs"

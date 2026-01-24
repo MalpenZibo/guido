@@ -1,0 +1,33 @@
+services:
+  visual-tests:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ..:/workspace:rw
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/workspace/target
+    working_dir: /workspace
+    environment:
+      - RUST_BACKTRACE=1
+      - RUST_LOG=info
+    command: cargo test --package visual_tests -- --test-threads=1
+
+  update-references:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ..:/workspace:rw
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/workspace/target
+    working_dir: /workspace
+    environment:
+      - RUST_BACKTRACE=1
+      - RUST_LOG=info
+      - UPDATE_REFERENCES=1
+    command: cargo test --package visual_tests -- --test-threads=1
+
+volumes:
+  cargo-cache:
+  target-cache:
