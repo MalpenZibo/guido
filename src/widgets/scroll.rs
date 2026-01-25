@@ -577,3 +577,210 @@ impl ScrollState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_scroll_axis_allows_vertical() {
+        assert!(!ScrollAxis::None.allows_vertical());
+        assert!(ScrollAxis::Vertical.allows_vertical());
+        assert!(!ScrollAxis::Horizontal.allows_vertical());
+        assert!(ScrollAxis::Both.allows_vertical());
+    }
+
+    #[test]
+    fn test_scroll_axis_allows_horizontal() {
+        assert!(!ScrollAxis::None.allows_horizontal());
+        assert!(!ScrollAxis::Vertical.allows_horizontal());
+        assert!(ScrollAxis::Horizontal.allows_horizontal());
+        assert!(ScrollAxis::Both.allows_horizontal());
+    }
+
+    #[test]
+    fn test_scroll_state_max_scroll() {
+        let state = ScrollState {
+            content_width: 500.0,
+            content_height: 800.0,
+            viewport_width: 300.0,
+            viewport_height: 400.0,
+            ..Default::default()
+        };
+
+        assert_eq!(state.max_scroll_x(), 200.0);
+        assert_eq!(state.max_scroll_y(), 400.0);
+        assert_eq!(state.max_scroll(ScrollbarAxis::Horizontal), 200.0);
+        assert_eq!(state.max_scroll(ScrollbarAxis::Vertical), 400.0);
+    }
+
+    #[test]
+    fn test_scroll_state_max_scroll_no_overflow() {
+        let state = ScrollState {
+            content_width: 200.0,
+            content_height: 300.0,
+            viewport_width: 300.0,
+            viewport_height: 400.0,
+            ..Default::default()
+        };
+
+        assert_eq!(state.max_scroll_x(), 0.0);
+        assert_eq!(state.max_scroll_y(), 0.0);
+    }
+
+    #[test]
+    fn test_scroll_state_needs_scrollbar() {
+        let state = ScrollState {
+            content_width: 500.0,
+            content_height: 800.0,
+            viewport_width: 300.0,
+            viewport_height: 400.0,
+            ..Default::default()
+        };
+
+        assert!(state.needs_horizontal_scrollbar());
+        assert!(state.needs_vertical_scrollbar());
+    }
+
+    #[test]
+    fn test_scroll_state_needs_scrollbar_no_overflow() {
+        let state = ScrollState {
+            content_width: 200.0,
+            content_height: 300.0,
+            viewport_width: 300.0,
+            viewport_height: 400.0,
+            ..Default::default()
+        };
+
+        assert!(!state.needs_horizontal_scrollbar());
+        assert!(!state.needs_vertical_scrollbar());
+    }
+
+    #[test]
+    fn test_scroll_state_clamp_offsets() {
+        let mut state = ScrollState {
+            content_width: 500.0,
+            content_height: 800.0,
+            viewport_width: 300.0,
+            viewport_height: 400.0,
+            offset_x: 300.0, // Over max
+            offset_y: -50.0, // Under min
+            ..Default::default()
+        };
+
+        state.clamp_offsets();
+
+        assert_eq!(state.offset_x, 200.0); // Clamped to max
+        assert_eq!(state.offset_y, 0.0); // Clamped to min
+    }
+
+    #[test]
+    fn test_scroll_state_set_offset_by_axis() {
+        let mut state = ScrollState::default();
+
+        state.set_offset(ScrollbarAxis::Vertical, 100.0);
+        state.set_offset(ScrollbarAxis::Horizontal, 50.0);
+
+        assert_eq!(state.offset_y, 100.0);
+        assert_eq!(state.offset_x, 50.0);
+    }
+
+    #[test]
+    fn test_scroll_state_hover_states() {
+        let mut state = ScrollState::default();
+
+        assert!(!state.is_track_hovered(ScrollbarAxis::Vertical));
+        assert!(!state.is_handle_hovered(ScrollbarAxis::Vertical));
+
+        state.set_track_hovered(ScrollbarAxis::Vertical, true);
+        state.set_handle_hovered(ScrollbarAxis::Vertical, true);
+
+        assert!(state.is_track_hovered(ScrollbarAxis::Vertical));
+        assert!(state.is_handle_hovered(ScrollbarAxis::Vertical));
+
+        // Horizontal should still be false
+        assert!(!state.is_track_hovered(ScrollbarAxis::Horizontal));
+        assert!(!state.is_handle_hovered(ScrollbarAxis::Horizontal));
+    }
+
+    #[test]
+    fn test_scroll_state_dragging() {
+        let mut state = ScrollState::default();
+
+        assert!(!state.is_dragging(ScrollbarAxis::Vertical));
+        assert!(!state.is_dragging(ScrollbarAxis::Horizontal));
+
+        state.set_dragging(ScrollbarAxis::Vertical, true);
+        assert!(state.is_dragging(ScrollbarAxis::Vertical));
+        assert!(!state.is_dragging(ScrollbarAxis::Horizontal));
+
+        state.set_dragging(ScrollbarAxis::Horizontal, true);
+        assert!(state.is_dragging(ScrollbarAxis::Horizontal));
+    }
+
+    #[test]
+    fn test_scroll_state_drag_start() {
+        let mut state = ScrollState::default();
+
+        state.set_drag_start(ScrollbarAxis::Vertical, 100.0, 50.0);
+        let (pos, offset) = state.drag_start(ScrollbarAxis::Vertical);
+        assert_eq!(pos, 100.0);
+        assert_eq!(offset, 50.0);
+
+        state.set_drag_start(ScrollbarAxis::Horizontal, 200.0, 75.0);
+        let (pos, offset) = state.drag_start(ScrollbarAxis::Horizontal);
+        assert_eq!(pos, 200.0);
+        assert_eq!(offset, 75.0);
+    }
+
+    #[test]
+    fn test_scrollbar_handle_size() {
+        let state = ScrollState {
+            viewport_height: 400.0,
+            content_height: 800.0,
+            viewport_width: 300.0,
+            content_width: 600.0,
+            ..Default::default()
+        };
+
+        let config = ScrollbarConfig::default();
+
+        // Vertical: viewport/content = 0.5, so handle should be 50% of track
+        let v_handle = state.scrollbar_handle_size(ScrollbarAxis::Vertical, 400.0, &config);
+        assert_eq!(v_handle, 200.0);
+
+        // Horizontal: viewport/content = 0.5, so handle should be 50% of track
+        let h_handle = state.scrollbar_handle_size(ScrollbarAxis::Horizontal, 300.0, &config);
+        assert_eq!(h_handle, 150.0);
+    }
+
+    #[test]
+    fn test_scrollbar_handle_size_min() {
+        let state = ScrollState {
+            viewport_height: 100.0,
+            content_height: 10000.0, // Very large content
+            ..Default::default()
+        };
+
+        let config = ScrollbarConfig::default();
+
+        // Handle should be at least min_handle_size
+        let handle = state.scrollbar_handle_size(ScrollbarAxis::Vertical, 400.0, &config);
+        assert_eq!(handle, config.min_handle_size);
+    }
+
+    #[test]
+    fn test_scrollbar_handle_offset() {
+        let state = ScrollState {
+            viewport_height: 400.0,
+            content_height: 800.0,
+            offset_y: 200.0, // 50% scrolled
+            ..Default::default()
+        };
+
+        // With 400px track and 200px handle, available travel is 200px
+        // At 50% scroll, offset should be 100px
+        let offset = state.scrollbar_handle_offset(ScrollbarAxis::Vertical, 400.0, 200.0);
+        assert_eq!(offset, 100.0);
+    }
+}

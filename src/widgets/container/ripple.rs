@@ -137,3 +137,116 @@ impl RippleState {
         self.progress < 1.0 || self.fading
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ripple_state_new() {
+        let state = RippleState::new();
+        assert!(state.center.is_none());
+        assert!(!state.is_active());
+        assert!(!state.is_animating());
+        assert_eq!(state.progress, 0.0);
+        assert_eq!(state.opacity, 0.0);
+    }
+
+    #[test]
+    fn test_ripple_start() {
+        let mut state = RippleState::new();
+        state.start(100.0, 200.0);
+
+        assert!(state.is_active());
+        assert!(state.is_animating());
+        assert_eq!(state.center, Some((100.0, 200.0)));
+        assert_eq!(state.progress, 0.0);
+        assert_eq!(state.opacity, 1.0);
+        assert!(!state.fading);
+        assert!(state.start_time.is_some());
+    }
+
+    #[test]
+    fn test_ripple_start_fade() {
+        let mut state = RippleState::new();
+        state.start(100.0, 200.0);
+        state.progress = 0.5; // Simulate some progress
+
+        state.start_fade(150.0, 250.0);
+
+        assert!(state.fading);
+        assert_eq!(state.exit_center, Some((150.0, 250.0)));
+        assert_eq!(state.fade_start_progress, 0.5);
+        assert!(state.fade_start_time.is_some());
+    }
+
+    #[test]
+    fn test_ripple_start_fade_inactive() {
+        let mut state = RippleState::new();
+        // Don't start the ripple, try to fade
+        state.start_fade(150.0, 250.0);
+
+        // Should not start fading if ripple is not active
+        assert!(!state.fading);
+        assert!(state.exit_center.is_none());
+    }
+
+    #[test]
+    fn test_ripple_start_fade_to_center() {
+        let mut state = RippleState::new();
+        state.start(100.0, 200.0);
+        state.progress = 0.7;
+
+        state.start_fade_to_center(400.0, 300.0);
+
+        assert!(state.fading);
+        assert_eq!(state.exit_center, Some((200.0, 150.0))); // center of 400x300
+        assert_eq!(state.fade_start_progress, 0.7);
+    }
+
+    #[test]
+    fn test_ripple_reset() {
+        let mut state = RippleState::new();
+        state.start(100.0, 200.0);
+        state.progress = 0.5;
+        state.start_fade(150.0, 250.0);
+
+        state.reset();
+
+        assert!(state.center.is_none());
+        assert!(state.exit_center.is_none());
+        assert_eq!(state.progress, 0.0);
+        assert_eq!(state.opacity, 0.0);
+        assert!(!state.fading);
+        assert!(state.start_time.is_none());
+        assert!(state.fade_start_time.is_none());
+        assert_eq!(state.fade_start_progress, 0.0);
+    }
+
+    #[test]
+    fn test_ripple_is_active() {
+        let mut state = RippleState::new();
+        assert!(!state.is_active());
+
+        state.start(0.0, 0.0);
+        assert!(state.is_active());
+
+        state.reset();
+        assert!(!state.is_active());
+    }
+
+    #[test]
+    fn test_ripple_is_animating() {
+        let mut state = RippleState::new();
+        assert!(!state.is_animating());
+
+        state.start(0.0, 0.0);
+        assert!(state.is_animating()); // progress < 1.0
+
+        state.progress = 1.0;
+        assert!(!state.is_animating()); // progress >= 1.0 and not fading
+
+        state.fading = true;
+        assert!(state.is_animating()); // fading
+    }
+}

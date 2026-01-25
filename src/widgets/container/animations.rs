@@ -177,3 +177,87 @@ pub fn get_animated_value<T: Animatable + Clone>(
         .map(|a| a.current().clone())
         .unwrap_or_else(fallback)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::animation::TimingFunction;
+
+    #[test]
+    fn test_animation_state_new() {
+        let transition = Transition::new(300.0, TimingFunction::Linear);
+        let state = AnimationState::new(0.0f32, transition);
+
+        assert_eq!(*state.current(), 0.0);
+        assert_eq!(*state.target(), 0.0);
+        assert!(!state.is_animating()); // Starts completed
+        assert!(state.is_initial()); // Not yet initialized
+    }
+
+    #[test]
+    fn test_animation_state_animate_to() {
+        let transition = Transition::new(300.0, TimingFunction::Linear);
+        let mut state = AnimationState::new(0.0f32, transition);
+
+        state.animate_to(100.0);
+
+        assert_eq!(*state.target(), 100.0);
+        assert!(state.is_animating());
+    }
+
+    #[test]
+    fn test_animation_state_animate_to_same_target() {
+        let transition = Transition::new(300.0, TimingFunction::Linear);
+        let mut state = AnimationState::new(0.0f32, transition);
+
+        state.animate_to(100.0);
+        let first_start_time = state.start_time;
+
+        // Animate to same target should not restart
+        state.animate_to(100.0);
+        assert_eq!(state.start_time, first_start_time);
+    }
+
+    #[test]
+    fn test_animation_state_set_immediate() {
+        let transition = Transition::new(300.0, TimingFunction::Linear);
+        let mut state = AnimationState::new(0.0f32, transition);
+
+        state.set_immediate(50.0);
+
+        assert_eq!(*state.current(), 50.0);
+        assert_eq!(*state.target(), 50.0);
+        assert!(!state.is_animating());
+        assert!(!state.is_initial()); // Now initialized
+    }
+
+    #[test]
+    fn test_animation_state_is_initial() {
+        let transition = Transition::new(300.0, TimingFunction::Linear);
+        let mut state = AnimationState::new(0.0f32, transition);
+
+        assert!(state.is_initial());
+
+        state.set_immediate(10.0);
+        assert!(!state.is_initial());
+    }
+
+    #[test]
+    fn test_get_animated_value_with_some() {
+        let transition = Transition::new(300.0, TimingFunction::Linear);
+        let mut state = AnimationState::new(42.0f32, transition);
+        state.set_immediate(42.0);
+        let opt = Some(state);
+
+        let value = get_animated_value(&opt, || 0.0);
+        assert_eq!(value, 42.0);
+    }
+
+    #[test]
+    fn test_get_animated_value_with_none() {
+        let opt: Option<AnimationState<f32>> = None;
+
+        let value = get_animated_value(&opt, || 99.0);
+        assert_eq!(value, 99.0);
+    }
+}
