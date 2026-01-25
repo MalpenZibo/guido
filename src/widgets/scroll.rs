@@ -1,6 +1,13 @@
 //! Scroll configuration types for scrollable containers.
 
-use super::widget::Color;
+use super::widget::{Color, Rect};
+
+/// Axis for scrollbar calculations (vertical or horizontal)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollbarAxis {
+    Vertical,
+    Horizontal,
+}
 
 /// Axis along which scrolling is enabled
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -340,5 +347,233 @@ impl ScrollState {
         }
 
         animating
+    }
+
+    /// Get scrollbar track rectangle for the given axis
+    pub fn scrollbar_track_rect(
+        &self,
+        axis: ScrollbarAxis,
+        bounds: Rect,
+        config: &ScrollbarConfig,
+        needs_other_scrollbar: bool,
+    ) -> Rect {
+        let margin = config.margin;
+        let width = config.width;
+
+        match axis {
+            ScrollbarAxis::Vertical => Rect::new(
+                bounds.x + bounds.width - width - margin,
+                bounds.y + margin,
+                width,
+                bounds.height - margin * 2.0,
+            ),
+            ScrollbarAxis::Horizontal => {
+                let right_padding = if needs_other_scrollbar {
+                    config.hover_width + margin
+                } else {
+                    margin
+                };
+                Rect::new(
+                    bounds.x + margin,
+                    bounds.y + bounds.height - width - margin,
+                    bounds.width - margin - right_padding,
+                    width,
+                )
+            }
+        }
+    }
+
+    /// Get scrollbar hit test area for the given axis (uses hover_width for easier targeting)
+    pub fn scrollbar_hit_area(
+        &self,
+        axis: ScrollbarAxis,
+        bounds: Rect,
+        config: &ScrollbarConfig,
+        needs_other_scrollbar: bool,
+    ) -> Rect {
+        let margin = config.margin;
+
+        match axis {
+            ScrollbarAxis::Vertical => Rect::new(
+                bounds.x + bounds.width - config.hover_width - margin,
+                bounds.y + margin,
+                config.hover_width,
+                bounds.height - margin * 2.0,
+            ),
+            ScrollbarAxis::Horizontal => {
+                let right_padding = if needs_other_scrollbar {
+                    config.hover_width + margin
+                } else {
+                    margin
+                };
+                Rect::new(
+                    bounds.x + margin,
+                    bounds.y + bounds.height - config.hover_width - margin,
+                    bounds.width - margin - right_padding,
+                    config.hover_width,
+                )
+            }
+        }
+    }
+
+    /// Calculate scrollbar handle size for the given axis
+    pub fn scrollbar_handle_size(
+        &self,
+        axis: ScrollbarAxis,
+        track_size: f32,
+        config: &ScrollbarConfig,
+    ) -> f32 {
+        let (viewport, content) = match axis {
+            ScrollbarAxis::Vertical => (self.viewport_height, self.content_height),
+            ScrollbarAxis::Horizontal => (self.viewport_width, self.content_width),
+        };
+
+        if content <= viewport || content == 0.0 {
+            return 0.0;
+        }
+
+        let ratio = viewport / content;
+        (track_size * ratio).max(config.min_handle_size)
+    }
+
+    /// Calculate scrollbar handle offset for the given axis
+    pub fn scrollbar_handle_offset(
+        &self,
+        axis: ScrollbarAxis,
+        track_size: f32,
+        handle_size: f32,
+    ) -> f32 {
+        let (offset, max_scroll) = match axis {
+            ScrollbarAxis::Vertical => (self.offset_y, self.max_scroll_y()),
+            ScrollbarAxis::Horizontal => (self.offset_x, self.max_scroll_x()),
+        };
+
+        if max_scroll <= 0.0 {
+            return 0.0;
+        }
+
+        let available_travel = track_size - handle_size;
+        (offset / max_scroll) * available_travel
+    }
+
+    /// Get scrollbar handle rectangle for the given axis
+    pub fn scrollbar_handle_rect(
+        &self,
+        axis: ScrollbarAxis,
+        bounds: Rect,
+        config: &ScrollbarConfig,
+        needs_other_scrollbar: bool,
+    ) -> Rect {
+        let track = self.scrollbar_track_rect(axis, bounds, config, needs_other_scrollbar);
+        let track_size = match axis {
+            ScrollbarAxis::Vertical => track.height,
+            ScrollbarAxis::Horizontal => track.width,
+        };
+        let handle_size = self.scrollbar_handle_size(axis, track_size, config);
+        let handle_offset = self.scrollbar_handle_offset(axis, track_size, handle_size);
+
+        match axis {
+            ScrollbarAxis::Vertical => {
+                Rect::new(track.x, track.y + handle_offset, track.width, handle_size)
+            }
+            ScrollbarAxis::Horizontal => Rect::new(
+                track.x.max(track.x + handle_offset),
+                track.y,
+                handle_size,
+                track.height,
+            ),
+        }
+    }
+
+    /// Check if scrollbar for given axis is hovered (track area)
+    pub fn is_track_hovered(&self, axis: ScrollbarAxis) -> bool {
+        match axis {
+            ScrollbarAxis::Vertical => self.scrollbar_track_hovered,
+            ScrollbarAxis::Horizontal => self.h_scrollbar_track_hovered,
+        }
+    }
+
+    /// Check if scrollbar handle for given axis is hovered
+    pub fn is_handle_hovered(&self, axis: ScrollbarAxis) -> bool {
+        match axis {
+            ScrollbarAxis::Vertical => self.scrollbar_hovered,
+            ScrollbarAxis::Horizontal => self.h_scrollbar_hovered,
+        }
+    }
+
+    /// Check if scrollbar for given axis is being dragged
+    pub fn is_dragging(&self, axis: ScrollbarAxis) -> bool {
+        match axis {
+            ScrollbarAxis::Vertical => self.scrollbar_dragging,
+            ScrollbarAxis::Horizontal => self.h_scrollbar_dragging,
+        }
+    }
+
+    /// Set track hover state for given axis
+    pub fn set_track_hovered(&mut self, axis: ScrollbarAxis, hovered: bool) {
+        match axis {
+            ScrollbarAxis::Vertical => self.scrollbar_track_hovered = hovered,
+            ScrollbarAxis::Horizontal => self.h_scrollbar_track_hovered = hovered,
+        }
+    }
+
+    /// Set handle hover state for given axis
+    pub fn set_handle_hovered(&mut self, axis: ScrollbarAxis, hovered: bool) {
+        match axis {
+            ScrollbarAxis::Vertical => self.scrollbar_hovered = hovered,
+            ScrollbarAxis::Horizontal => self.h_scrollbar_hovered = hovered,
+        }
+    }
+
+    /// Set dragging state for given axis
+    pub fn set_dragging(&mut self, axis: ScrollbarAxis, dragging: bool) {
+        match axis {
+            ScrollbarAxis::Vertical => self.scrollbar_dragging = dragging,
+            ScrollbarAxis::Horizontal => self.h_scrollbar_dragging = dragging,
+        }
+    }
+
+    /// Set drag start position for given axis
+    pub fn set_drag_start(&mut self, axis: ScrollbarAxis, pos: f32, offset: f32) {
+        match axis {
+            ScrollbarAxis::Vertical => {
+                self.scrollbar_drag_start_y = pos;
+                self.scrollbar_drag_start_offset = offset;
+            }
+            ScrollbarAxis::Horizontal => {
+                self.h_scrollbar_drag_start_x = pos;
+                self.h_scrollbar_drag_start_offset = offset;
+            }
+        }
+    }
+
+    /// Get drag start position for given axis
+    pub fn drag_start(&self, axis: ScrollbarAxis) -> (f32, f32) {
+        match axis {
+            ScrollbarAxis::Vertical => (
+                self.scrollbar_drag_start_y,
+                self.scrollbar_drag_start_offset,
+            ),
+            ScrollbarAxis::Horizontal => (
+                self.h_scrollbar_drag_start_x,
+                self.h_scrollbar_drag_start_offset,
+            ),
+        }
+    }
+
+    /// Set scroll offset for given axis
+    pub fn set_offset(&mut self, axis: ScrollbarAxis, offset: f32) {
+        match axis {
+            ScrollbarAxis::Vertical => self.offset_y = offset,
+            ScrollbarAxis::Horizontal => self.offset_x = offset,
+        }
+    }
+
+    /// Get max scroll for given axis
+    pub fn max_scroll(&self, axis: ScrollbarAxis) -> f32 {
+        match axis {
+            ScrollbarAxis::Vertical => self.max_scroll_y(),
+            ScrollbarAxis::Horizontal => self.max_scroll_x(),
+        }
     }
 }
