@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::animation::{Animatable, SpringState, Transition};
+use crate::animation::{Animatable, SpringConfig, SpringState, Transition};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{request_animation_frame, ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId};
 use crate::renderer::primitives::{GradientDir, Shadow};
@@ -323,6 +323,11 @@ pub struct Container {
     scrollbar_visibility: ScrollbarVisibility,
     scrollbar_config: ScrollbarConfig,
     scroll_state: ScrollState,
+    // Scrollbar containers (track and handle are separate for independent hover states)
+    v_scrollbar_track: Option<Box<Container>>,
+    v_scrollbar_handle: Option<Box<Container>>,
+    h_scrollbar_track: Option<Box<Container>>,
+    h_scrollbar_handle: Option<Box<Container>>,
 
     // Ripple animation state
     /// Center point of the ripple in local container coordinates (start position)
@@ -388,6 +393,10 @@ impl Container {
             scrollbar_visibility: ScrollbarVisibility::Always,
             scrollbar_config: ScrollbarConfig::default(),
             scroll_state: ScrollState::default(),
+            v_scrollbar_track: None,
+            v_scrollbar_handle: None,
+            h_scrollbar_track: None,
+            h_scrollbar_handle: None,
             ripple_center: None,
             ripple_exit_center: None,
             ripple_progress: 0.0,
@@ -1096,6 +1105,163 @@ impl Container {
         }
     }
 
+    /// Initialize scrollbar containers if scrolling is enabled and they don't exist yet
+    fn ensure_scrollbar_containers(&mut self) {
+        if self.scroll_axis == ScrollAxis::None
+            || self.scrollbar_visibility == ScrollbarVisibility::Hidden
+        {
+            return;
+        }
+
+        // Clone config values to avoid borrow issues with closures
+        let track_color = self.scrollbar_config.track_color;
+        let track_corner_radius = self.scrollbar_config.track_corner_radius;
+        let track_corner_curvature = self.scrollbar_config.track_corner_curvature;
+        let handle_color = self.scrollbar_config.handle_color;
+        let handle_corner_radius = self.scrollbar_config.handle_corner_radius;
+        let handle_corner_curvature = self.scrollbar_config.handle_corner_curvature;
+        let handle_hover_color = self.scrollbar_config.handle_hover_color;
+        let handle_pressed_color = self.scrollbar_config.handle_pressed_color;
+
+        // Create vertical scrollbar containers if needed
+        if self.scroll_axis.allows_vertical() && self.v_scrollbar_track.is_none() {
+            // Track container
+            let track = Container::new()
+                .background(track_color)
+                .corner_radius(track_corner_radius)
+                .corner_curvature(track_corner_curvature);
+            self.v_scrollbar_track = Some(Box::new(track));
+
+            // Handle container with hover state for color change and width animation
+            let handle = Container::new()
+                .background(handle_color)
+                .corner_radius(handle_corner_radius)
+                .corner_curvature(handle_corner_curvature)
+                .animate_width(Transition::spring(SpringConfig::SNAPPY))
+                .hover_state(move |s| s.background(handle_hover_color))
+                .pressed_state(move |s| s.background(handle_pressed_color));
+            self.v_scrollbar_handle = Some(Box::new(handle));
+        }
+
+        // Create horizontal scrollbar containers if needed
+        if self.scroll_axis.allows_horizontal() && self.h_scrollbar_track.is_none() {
+            // Track container
+            let track = Container::new()
+                .background(track_color)
+                .corner_radius(track_corner_radius)
+                .corner_curvature(track_corner_curvature);
+            self.h_scrollbar_track = Some(Box::new(track));
+
+            // Handle container with hover state for color change and height animation
+            let handle = Container::new()
+                .background(handle_color)
+                .corner_radius(handle_corner_radius)
+                .corner_curvature(handle_corner_curvature)
+                .animate_height(Transition::spring(SpringConfig::SNAPPY))
+                .hover_state(move |s| s.background(handle_hover_color))
+                .pressed_state(move |s| s.background(handle_pressed_color));
+            self.h_scrollbar_handle = Some(Box::new(handle));
+        }
+    }
+
+    /// Layout and position scrollbar container widgets
+    fn layout_scrollbar_containers(&mut self) {
+        // Only layout if scrolling is enabled and scrollbar is visible
+        if self.scroll_axis == ScrollAxis::None
+            || self.scrollbar_visibility == ScrollbarVisibility::Hidden
+        {
+            return;
+        }
+
+        // Vertical scrollbar
+        if self.scroll_axis.allows_vertical() && self.scroll_state.needs_vertical_scrollbar() {
+            let track_rect = self.scrollbar_track_rect();
+            let handle_rect = self.scrollbar_handle_rect();
+
+            // Layout and position track container
+            if let Some(ref mut track) = self.v_scrollbar_track {
+                let track_constraints = Constraints {
+                    min_width: track_rect.width,
+                    min_height: track_rect.height,
+                    max_width: track_rect.width,
+                    max_height: track_rect.height,
+                };
+                Widget::layout(track.as_mut(), track_constraints);
+                track.set_origin(track_rect.x, track_rect.y);
+            }
+
+            // Layout and position handle container
+            if let Some(ref mut handle) = self.v_scrollbar_handle {
+                let handle_constraints = Constraints {
+                    min_width: handle_rect.width,
+                    min_height: handle_rect.height,
+                    max_width: handle_rect.width,
+                    max_height: handle_rect.height,
+                };
+                Widget::layout(handle.as_mut(), handle_constraints);
+                handle.set_origin(handle_rect.x, handle_rect.y);
+            }
+        }
+
+        // Horizontal scrollbar
+        if self.scroll_axis.allows_horizontal() && self.scroll_state.needs_horizontal_scrollbar() {
+            let track_rect = self.h_scrollbar_track_rect();
+            let handle_rect = self.h_scrollbar_handle_rect();
+
+            // Layout and position track container
+            if let Some(ref mut track) = self.h_scrollbar_track {
+                let track_constraints = Constraints {
+                    min_width: track_rect.width,
+                    min_height: track_rect.height,
+                    max_width: track_rect.width,
+                    max_height: track_rect.height,
+                };
+                Widget::layout(track.as_mut(), track_constraints);
+                track.set_origin(track_rect.x, track_rect.y);
+            }
+
+            // Layout and position handle container
+            if let Some(ref mut handle) = self.h_scrollbar_handle {
+                let handle_constraints = Constraints {
+                    min_width: handle_rect.width,
+                    min_height: handle_rect.height,
+                    max_width: handle_rect.width,
+                    max_height: handle_rect.height,
+                };
+                Widget::layout(handle.as_mut(), handle_constraints);
+                handle.set_origin(handle_rect.x, handle_rect.y);
+            }
+        }
+    }
+
+    /// Paint scrollbar container widgets
+    fn paint_scrollbar_containers(&self, ctx: &mut PaintContext) {
+        // Don't show scrollbar if visibility is Hidden
+        if self.scrollbar_visibility == ScrollbarVisibility::Hidden {
+            return;
+        }
+
+        // Vertical scrollbar
+        if self.scroll_axis.allows_vertical() && self.scroll_state.needs_vertical_scrollbar() {
+            if let Some(ref track) = self.v_scrollbar_track {
+                track.paint(ctx);
+            }
+            if let Some(ref handle) = self.v_scrollbar_handle {
+                handle.paint(ctx);
+            }
+        }
+
+        // Horizontal scrollbar
+        if self.scroll_axis.allows_horizontal() && self.scroll_state.needs_horizontal_scrollbar() {
+            if let Some(ref track) = self.h_scrollbar_track {
+                track.paint(ctx);
+            }
+            if let Some(ref handle) = self.h_scrollbar_handle {
+                handle.paint(ctx);
+            }
+        }
+    }
+
     /// Get the vertical scrollbar track rectangle
     /// When hovered, expands toward content (left) to make it easier to grab
     fn scrollbar_track_rect(&self) -> Rect {
@@ -1294,73 +1460,6 @@ impl Container {
     }
 
     /// Paint the scrollbars
-    fn paint_scrollbars(&self, ctx: &mut PaintContext) {
-        // Don't show scrollbar if visibility is Hidden
-        if self.scrollbar_visibility == ScrollbarVisibility::Hidden {
-            return;
-        }
-
-        let config = &self.scrollbar_config;
-
-        // Vertical scrollbar
-        if self.scroll_axis.allows_vertical() && self.scroll_state.needs_vertical_scrollbar() {
-            let track = self.scrollbar_track_rect();
-            let handle = self.scrollbar_handle_rect();
-
-            // Draw track
-            ctx.draw_rounded_rect_with_curvature(
-                track,
-                config.track_color,
-                config.track_corner_radius,
-                config.track_corner_curvature,
-            );
-
-            // Draw handle with appropriate color based on state
-            let handle_color = if self.scroll_state.scrollbar_dragging {
-                config.handle_pressed_color
-            } else if self.scroll_state.scrollbar_hovered {
-                config.handle_hover_color
-            } else {
-                config.handle_color
-            };
-            ctx.draw_rounded_rect_with_curvature(
-                handle,
-                handle_color,
-                config.handle_corner_radius,
-                config.handle_corner_curvature,
-            );
-        }
-
-        // Horizontal scrollbar
-        if self.scroll_axis.allows_horizontal() && self.scroll_state.needs_horizontal_scrollbar() {
-            let track = self.h_scrollbar_track_rect();
-            let handle = self.h_scrollbar_handle_rect();
-
-            // Draw track
-            ctx.draw_rounded_rect_with_curvature(
-                track,
-                config.track_color,
-                config.track_corner_radius,
-                config.track_corner_curvature,
-            );
-
-            // Draw handle with appropriate color based on state
-            let handle_color = if self.scroll_state.h_scrollbar_dragging {
-                config.handle_pressed_color
-            } else if self.scroll_state.h_scrollbar_hovered {
-                config.handle_hover_color
-            } else {
-                config.handle_color
-            };
-            ctx.draw_rounded_rect_with_curvature(
-                handle,
-                handle_color,
-                config.handle_corner_radius,
-                config.handle_corner_curvature,
-            );
-        }
-    }
-
     /// Handle scrollbar-related events, returns EventResponse if handled
     fn handle_scrollbar_event(&mut self, event: &Event) -> Option<EventResponse> {
         // Only handle scrollbar events if scrolling is enabled and scrollbar is visible
@@ -1384,6 +1483,10 @@ impl Container {
                         self.scroll_state.scrollbar_dragging = true;
                         self.scroll_state.scrollbar_drag_start_y = *y;
                         self.scroll_state.scrollbar_drag_start_offset = self.scroll_state.offset_y;
+                        // Forward event to handle container for pressed state
+                        if let Some(ref mut handle_container) = self.v_scrollbar_handle {
+                            handle_container.event(event);
+                        }
                         request_animation_frame();
                         return Some(EventResponse::Handled);
                     } else if hit_area.contains(*x, *y) {
@@ -1413,6 +1516,10 @@ impl Container {
                         self.scroll_state.h_scrollbar_drag_start_x = *x;
                         self.scroll_state.h_scrollbar_drag_start_offset =
                             self.scroll_state.offset_x;
+                        // Forward event to handle container for pressed state
+                        if let Some(ref mut handle_container) = self.h_scrollbar_handle {
+                            handle_container.event(event);
+                        }
                         request_animation_frame();
                         return Some(EventResponse::Handled);
                     } else if hit_area.contains(*x, *y) {
@@ -1478,11 +1585,16 @@ impl Container {
                         needs_repaint = true;
                     }
 
-                    // Handle hover (for color change)
+                    // Handle hover (for color change) - forward event to handle container
                     let was_hovered = self.scroll_state.scrollbar_hovered;
                     self.scroll_state.scrollbar_hovered = handle.contains(*x, *y);
                     if was_hovered != self.scroll_state.scrollbar_hovered {
                         needs_repaint = true;
+                    }
+
+                    // Forward event to handle container for state layer hover
+                    if let Some(ref mut handle_container) = self.v_scrollbar_handle {
+                        handle_container.event(event);
                     }
                 }
 
@@ -1499,11 +1611,16 @@ impl Container {
                         needs_repaint = true;
                     }
 
-                    // Handle hover (for color change)
+                    // Handle hover (for color change) - forward event to handle container
                     let was_hovered = self.scroll_state.h_scrollbar_hovered;
                     self.scroll_state.h_scrollbar_hovered = handle.contains(*x, *y);
                     if was_hovered != self.scroll_state.h_scrollbar_hovered {
                         needs_repaint = true;
+                    }
+
+                    // Forward event to handle container for state layer hover
+                    if let Some(ref mut handle_container) = self.h_scrollbar_handle {
+                        handle_container.event(event);
                     }
                 }
 
@@ -1515,11 +1632,19 @@ impl Container {
             Event::MouseUp { button, .. } if *button == MouseButton::Left => {
                 if self.scroll_state.scrollbar_dragging {
                     self.scroll_state.scrollbar_dragging = false;
+                    // Forward event to handle container to clear pressed state
+                    if let Some(ref mut handle_container) = self.v_scrollbar_handle {
+                        handle_container.event(event);
+                    }
                     request_animation_frame();
                     return Some(EventResponse::Handled);
                 }
                 if self.scroll_state.h_scrollbar_dragging {
                     self.scroll_state.h_scrollbar_dragging = false;
+                    // Forward event to handle container to clear pressed state
+                    if let Some(ref mut handle_container) = self.h_scrollbar_handle {
+                        handle_container.event(event);
+                    }
                     request_animation_frame();
                     return Some(EventResponse::Handled);
                 }
@@ -1530,6 +1655,13 @@ impl Container {
                 if self.scroll_state.scrollbar_hovered || self.scroll_state.h_scrollbar_hovered {
                     self.scroll_state.scrollbar_hovered = false;
                     self.scroll_state.h_scrollbar_hovered = false;
+                    // Forward MouseLeave to handle containers
+                    if let Some(ref mut handle) = self.v_scrollbar_handle {
+                        handle.event(event);
+                    }
+                    if let Some(ref mut handle) = self.h_scrollbar_handle {
+                        handle.event(event);
+                    }
                     request_animation_frame();
                 }
                 // Stop dragging
@@ -1708,6 +1840,9 @@ impl Default for Container {
 
 impl Widget for Container {
     fn layout(&mut self, constraints: Constraints) -> Size {
+        // Ensure scrollbar containers exist if scrolling is enabled
+        self.ensure_scrollbar_containers();
+
         // Always advance animations first
         self.advance_animations();
 
@@ -2086,6 +2221,9 @@ impl Widget for Container {
         self.bounds.width = size.width;
         self.bounds.height = size.height;
 
+        // Layout scrollbar containers after bounds are set
+        self.layout_scrollbar_containers();
+
         size
     }
 
@@ -2186,9 +2324,9 @@ impl Widget for Container {
             ctx.pop_clip();
         }
 
-        // Draw scrollbars (outside clip, inside transform)
+        // Draw scrollbar containers (outside clip, inside transform)
         if is_scrollable {
-            self.paint_scrollbars(ctx);
+            self.paint_scrollbar_containers(ctx);
         }
 
         // Pop transform BEFORE drawing ripple so ripple uses screen coordinates
