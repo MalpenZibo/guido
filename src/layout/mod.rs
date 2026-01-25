@@ -1,8 +1,10 @@
 pub mod flex;
 pub mod flex_layout;
+pub mod overlay;
 
 pub use flex::{Constraints, Size};
 pub use flex_layout::Flex;
+pub use overlay::Overlay;
 
 use crate::reactive::{IntoMaybeDyn, MaybeDyn};
 use crate::widgets::Widget;
