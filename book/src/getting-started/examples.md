@@ -198,6 +198,38 @@ cargo run --example elevation_example
 - Elevation changes on hover/press
 - Animated elevation transitions
 
+---
+
+### image_example
+
+Displaying raster and SVG images.
+
+```bash
+cargo run --example image_example
+```
+
+**Features demonstrated:**
+- PNG/WebP raster images
+- SVG vector images
+- ContentFit modes (Contain, Cover, Fill)
+- Images with transforms
+
+---
+
+### scroll_example
+
+Scrollable containers with customizable scrollbars.
+
+```bash
+cargo run --example scroll_example
+```
+
+**Features demonstrated:**
+- Vertical and horizontal scrolling
+- Custom scrollbar styling (colors, width, radius)
+- Hidden scrollbars
+- Kinetic/momentum scrolling
+
 ## Exploring the Code
 
 Each example's source code is in the `examples/` directory. Reading through them is a great way to learn Guido patterns:
