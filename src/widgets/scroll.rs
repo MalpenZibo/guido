@@ -76,11 +76,11 @@ impl Default for ScrollbarConfig {
             hover_width: 10.0,
             margin: 2.0,
             track_color: Color::rgba(1.0, 1.0, 1.0, 0.05),
-            track_corner_radius: 3.0,
-            track_corner_curvature: 1.0, // Circular corners by default
+            track_corner_radius: 100.0, // Large value to ensure pill shape (clamped to half width)
+            track_corner_curvature: 1.0, // Circular corners (standard)
             handle_color: Color::rgba(1.0, 1.0, 1.0, 0.3),
-            handle_corner_radius: 3.0,
-            handle_corner_curvature: 1.0, // Circular corners by default
+            handle_corner_radius: 100.0, // Large value to ensure pill shape (clamped to half width)
+            handle_corner_curvature: 1.0, // Circular corners (standard)
             handle_hover_color: Color::rgba(1.0, 1.0, 1.0, 0.5),
             handle_pressed_color: Color::rgba(1.0, 1.0, 1.0, 0.6),
             min_handle_size: 20.0,
