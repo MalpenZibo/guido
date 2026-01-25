@@ -52,15 +52,34 @@ impl Text {
         self
     }
 
-    fn refresh(&mut self) {
-        self.cached_text = self.content.get();
-        self.cached_font_size = self.font_size.get();
+    /// Refresh cached values only when they've changed.
+    /// Returns true if any value changed (requiring re-measurement).
+    fn refresh(&mut self) -> bool {
+        let new_text = self.content.get();
+        let new_font_size = self.font_size.get();
+
+        let text_changed = new_text != self.cached_text;
+        let font_changed = (new_font_size - self.cached_font_size).abs() > f32::EPSILON;
+
+        if text_changed {
+            self.cached_text = new_text;
+        }
+        if font_changed {
+            self.cached_font_size = new_font_size;
+        }
+
+        text_changed || font_changed
     }
 }
 
 impl Widget for Text {
     fn layout(&mut self, constraints: Constraints) -> Size {
-        self.refresh();
+        let content_changed = self.refresh();
+
+        // Skip re-measurement if nothing changed and we don't need layout
+        if !content_changed && !self.needs_layout() && self.bounds.width > 0.0 {
+            return Size::new(self.bounds.width, self.bounds.height);
+        }
 
         // Use actual font metrics for accurate measurement
         // If nowrap is true, don't pass max_width so text won't wrap

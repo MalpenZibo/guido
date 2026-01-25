@@ -701,6 +701,7 @@ dependencies = [
  "pollster",
  "raw-window-handle",
  "resvg",
+ "smallvec",
  "smithay-client-toolkit",
  "wayland-backend",
  "wayland-client",

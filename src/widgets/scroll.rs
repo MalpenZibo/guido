@@ -1,6 +1,13 @@
 //! Scroll configuration types for scrollable containers.
 
-use super::widget::Color;
+use super::widget::{Color, Rect};
+
+/// Axis for scrollbar calculations (vertical or horizontal)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollbarAxis {
+    Vertical,
+    Horizontal,
+}
 
 /// Axis along which scrolling is enabled
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -340,5 +347,440 @@ impl ScrollState {
         }
 
         animating
+    }
+
+    /// Get scrollbar track rectangle for the given axis
+    pub fn scrollbar_track_rect(
+        &self,
+        axis: ScrollbarAxis,
+        bounds: Rect,
+        config: &ScrollbarConfig,
+        needs_other_scrollbar: bool,
+    ) -> Rect {
+        let margin = config.margin;
+        let width = config.width;
+
+        match axis {
+            ScrollbarAxis::Vertical => Rect::new(
+                bounds.x + bounds.width - width - margin,
+                bounds.y + margin,
+                width,
+                bounds.height - margin * 2.0,
+            ),
+            ScrollbarAxis::Horizontal => {
+                let right_padding = if needs_other_scrollbar {
+                    config.hover_width + margin
+                } else {
+                    margin
+                };
+                Rect::new(
+                    bounds.x + margin,
+                    bounds.y + bounds.height - width - margin,
+                    bounds.width - margin - right_padding,
+                    width,
+                )
+            }
+        }
+    }
+
+    /// Get scrollbar hit test area for the given axis (uses hover_width for easier targeting)
+    pub fn scrollbar_hit_area(
+        &self,
+        axis: ScrollbarAxis,
+        bounds: Rect,
+        config: &ScrollbarConfig,
+        needs_other_scrollbar: bool,
+    ) -> Rect {
+        let margin = config.margin;
+
+        match axis {
+            ScrollbarAxis::Vertical => Rect::new(
+                bounds.x + bounds.width - config.hover_width - margin,
+                bounds.y + margin,
+                config.hover_width,
+                bounds.height - margin * 2.0,
+            ),
+            ScrollbarAxis::Horizontal => {
+                let right_padding = if needs_other_scrollbar {
+                    config.hover_width + margin
+                } else {
+                    margin
+                };
+                Rect::new(
+                    bounds.x + margin,
+                    bounds.y + bounds.height - config.hover_width - margin,
+                    bounds.width - margin - right_padding,
+                    config.hover_width,
+                )
+            }
+        }
+    }
+
+    /// Calculate scrollbar handle size for the given axis
+    pub fn scrollbar_handle_size(
+        &self,
+        axis: ScrollbarAxis,
+        track_size: f32,
+        config: &ScrollbarConfig,
+    ) -> f32 {
+        let (viewport, content) = match axis {
+            ScrollbarAxis::Vertical => (self.viewport_height, self.content_height),
+            ScrollbarAxis::Horizontal => (self.viewport_width, self.content_width),
+        };
+
+        if content <= viewport || content == 0.0 {
+            return 0.0;
+        }
+
+        let ratio = viewport / content;
+        (track_size * ratio).max(config.min_handle_size)
+    }
+
+    /// Calculate scrollbar handle offset for the given axis
+    pub fn scrollbar_handle_offset(
+        &self,
+        axis: ScrollbarAxis,
+        track_size: f32,
+        handle_size: f32,
+    ) -> f32 {
+        let (offset, max_scroll) = match axis {
+            ScrollbarAxis::Vertical => (self.offset_y, self.max_scroll_y()),
+            ScrollbarAxis::Horizontal => (self.offset_x, self.max_scroll_x()),
+        };
+
+        if max_scroll <= 0.0 {
+            return 0.0;
+        }
+
+        let available_travel = track_size - handle_size;
+        (offset / max_scroll) * available_travel
+    }
+
+    /// Get scrollbar handle rectangle for the given axis
+    pub fn scrollbar_handle_rect(
+        &self,
+        axis: ScrollbarAxis,
+        bounds: Rect,
+        config: &ScrollbarConfig,
+        needs_other_scrollbar: bool,
+    ) -> Rect {
+        let track = self.scrollbar_track_rect(axis, bounds, config, needs_other_scrollbar);
+        let track_size = match axis {
+            ScrollbarAxis::Vertical => track.height,
+            ScrollbarAxis::Horizontal => track.width,
+        };
+        let handle_size = self.scrollbar_handle_size(axis, track_size, config);
+        let handle_offset = self.scrollbar_handle_offset(axis, track_size, handle_size);
+
+        match axis {
+            ScrollbarAxis::Vertical => {
+                Rect::new(track.x, track.y + handle_offset, track.width, handle_size)
+            }
+            ScrollbarAxis::Horizontal => Rect::new(
+                track.x.max(track.x + handle_offset),
+                track.y,
+                handle_size,
+                track.height,
+            ),
+        }
+    }
+
+    /// Check if scrollbar for given axis is hovered (track area)
+    pub fn is_track_hovered(&self, axis: ScrollbarAxis) -> bool {
+        match axis {
+            ScrollbarAxis::Vertical => self.scrollbar_track_hovered,
+            ScrollbarAxis::Horizontal => self.h_scrollbar_track_hovered,
+        }
+    }
+
+    /// Check if scrollbar handle for given axis is hovered
+    pub fn is_handle_hovered(&self, axis: ScrollbarAxis) -> bool {
+        match axis {
+            ScrollbarAxis::Vertical => self.scrollbar_hovered,
+            ScrollbarAxis::Horizontal => self.h_scrollbar_hovered,
+        }
+    }
+
+    /// Check if scrollbar for given axis is being dragged
+    pub fn is_dragging(&self, axis: ScrollbarAxis) -> bool {
+        match axis {
+            ScrollbarAxis::Vertical => self.scrollbar_dragging,
+            ScrollbarAxis::Horizontal => self.h_scrollbar_dragging,
+        }
+    }
+
+    /// Set track hover state for given axis
+    pub fn set_track_hovered(&mut self, axis: ScrollbarAxis, hovered: bool) {
+        match axis {
+            ScrollbarAxis::Vertical => self.scrollbar_track_hovered = hovered,
+            ScrollbarAxis::Horizontal => self.h_scrollbar_track_hovered = hovered,
+        }
+    }
+
+    /// Set handle hover state for given axis
+    pub fn set_handle_hovered(&mut self, axis: ScrollbarAxis, hovered: bool) {
+        match axis {
+            ScrollbarAxis::Vertical => self.scrollbar_hovered = hovered,
+            ScrollbarAxis::Horizontal => self.h_scrollbar_hovered = hovered,
+        }
+    }
+
+    /// Set dragging state for given axis
+    pub fn set_dragging(&mut self, axis: ScrollbarAxis, dragging: bool) {
+        match axis {
+            ScrollbarAxis::Vertical => self.scrollbar_dragging = dragging,
+            ScrollbarAxis::Horizontal => self.h_scrollbar_dragging = dragging,
+        }
+    }
+
+    /// Set drag start position for given axis
+    pub fn set_drag_start(&mut self, axis: ScrollbarAxis, pos: f32, offset: f32) {
+        match axis {
+            ScrollbarAxis::Vertical => {
+                self.scrollbar_drag_start_y = pos;
+                self.scrollbar_drag_start_offset = offset;
+            }
+            ScrollbarAxis::Horizontal => {
+                self.h_scrollbar_drag_start_x = pos;
+                self.h_scrollbar_drag_start_offset = offset;
+            }
+        }
+    }
+
+    /// Get drag start position for given axis
+    pub fn drag_start(&self, axis: ScrollbarAxis) -> (f32, f32) {
+        match axis {
+            ScrollbarAxis::Vertical => (
+                self.scrollbar_drag_start_y,
+                self.scrollbar_drag_start_offset,
+            ),
+            ScrollbarAxis::Horizontal => (
+                self.h_scrollbar_drag_start_x,
+                self.h_scrollbar_drag_start_offset,
+            ),
+        }
+    }
+
+    /// Set scroll offset for given axis
+    pub fn set_offset(&mut self, axis: ScrollbarAxis, offset: f32) {
+        match axis {
+            ScrollbarAxis::Vertical => self.offset_y = offset,
+            ScrollbarAxis::Horizontal => self.offset_x = offset,
+        }
+    }
+
+    /// Get max scroll for given axis
+    pub fn max_scroll(&self, axis: ScrollbarAxis) -> f32 {
+        match axis {
+            ScrollbarAxis::Vertical => self.max_scroll_y(),
+            ScrollbarAxis::Horizontal => self.max_scroll_x(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_scroll_axis_allows_vertical() {
+        assert!(!ScrollAxis::None.allows_vertical());
+        assert!(ScrollAxis::Vertical.allows_vertical());
+        assert!(!ScrollAxis::Horizontal.allows_vertical());
+        assert!(ScrollAxis::Both.allows_vertical());
+    }
+
+    #[test]
+    fn test_scroll_axis_allows_horizontal() {
+        assert!(!ScrollAxis::None.allows_horizontal());
+        assert!(!ScrollAxis::Vertical.allows_horizontal());
+        assert!(ScrollAxis::Horizontal.allows_horizontal());
+        assert!(ScrollAxis::Both.allows_horizontal());
+    }
+
+    #[test]
+    fn test_scroll_state_max_scroll() {
+        let state = ScrollState {
+            content_width: 500.0,
+            content_height: 800.0,
+            viewport_width: 300.0,
+            viewport_height: 400.0,
+            ..Default::default()
+        };
+
+        assert_eq!(state.max_scroll_x(), 200.0);
+        assert_eq!(state.max_scroll_y(), 400.0);
+        assert_eq!(state.max_scroll(ScrollbarAxis::Horizontal), 200.0);
+        assert_eq!(state.max_scroll(ScrollbarAxis::Vertical), 400.0);
+    }
+
+    #[test]
+    fn test_scroll_state_max_scroll_no_overflow() {
+        let state = ScrollState {
+            content_width: 200.0,
+            content_height: 300.0,
+            viewport_width: 300.0,
+            viewport_height: 400.0,
+            ..Default::default()
+        };
+
+        assert_eq!(state.max_scroll_x(), 0.0);
+        assert_eq!(state.max_scroll_y(), 0.0);
+    }
+
+    #[test]
+    fn test_scroll_state_needs_scrollbar() {
+        let state = ScrollState {
+            content_width: 500.0,
+            content_height: 800.0,
+            viewport_width: 300.0,
+            viewport_height: 400.0,
+            ..Default::default()
+        };
+
+        assert!(state.needs_horizontal_scrollbar());
+        assert!(state.needs_vertical_scrollbar());
+    }
+
+    #[test]
+    fn test_scroll_state_needs_scrollbar_no_overflow() {
+        let state = ScrollState {
+            content_width: 200.0,
+            content_height: 300.0,
+            viewport_width: 300.0,
+            viewport_height: 400.0,
+            ..Default::default()
+        };
+
+        assert!(!state.needs_horizontal_scrollbar());
+        assert!(!state.needs_vertical_scrollbar());
+    }
+
+    #[test]
+    fn test_scroll_state_clamp_offsets() {
+        let mut state = ScrollState {
+            content_width: 500.0,
+            content_height: 800.0,
+            viewport_width: 300.0,
+            viewport_height: 400.0,
+            offset_x: 300.0, // Over max
+            offset_y: -50.0, // Under min
+            ..Default::default()
+        };
+
+        state.clamp_offsets();
+
+        assert_eq!(state.offset_x, 200.0); // Clamped to max
+        assert_eq!(state.offset_y, 0.0); // Clamped to min
+    }
+
+    #[test]
+    fn test_scroll_state_set_offset_by_axis() {
+        let mut state = ScrollState::default();
+
+        state.set_offset(ScrollbarAxis::Vertical, 100.0);
+        state.set_offset(ScrollbarAxis::Horizontal, 50.0);
+
+        assert_eq!(state.offset_y, 100.0);
+        assert_eq!(state.offset_x, 50.0);
+    }
+
+    #[test]
+    fn test_scroll_state_hover_states() {
+        let mut state = ScrollState::default();
+
+        assert!(!state.is_track_hovered(ScrollbarAxis::Vertical));
+        assert!(!state.is_handle_hovered(ScrollbarAxis::Vertical));
+
+        state.set_track_hovered(ScrollbarAxis::Vertical, true);
+        state.set_handle_hovered(ScrollbarAxis::Vertical, true);
+
+        assert!(state.is_track_hovered(ScrollbarAxis::Vertical));
+        assert!(state.is_handle_hovered(ScrollbarAxis::Vertical));
+
+        // Horizontal should still be false
+        assert!(!state.is_track_hovered(ScrollbarAxis::Horizontal));
+        assert!(!state.is_handle_hovered(ScrollbarAxis::Horizontal));
+    }
+
+    #[test]
+    fn test_scroll_state_dragging() {
+        let mut state = ScrollState::default();
+
+        assert!(!state.is_dragging(ScrollbarAxis::Vertical));
+        assert!(!state.is_dragging(ScrollbarAxis::Horizontal));
+
+        state.set_dragging(ScrollbarAxis::Vertical, true);
+        assert!(state.is_dragging(ScrollbarAxis::Vertical));
+        assert!(!state.is_dragging(ScrollbarAxis::Horizontal));
+
+        state.set_dragging(ScrollbarAxis::Horizontal, true);
+        assert!(state.is_dragging(ScrollbarAxis::Horizontal));
+    }
+
+    #[test]
+    fn test_scroll_state_drag_start() {
+        let mut state = ScrollState::default();
+
+        state.set_drag_start(ScrollbarAxis::Vertical, 100.0, 50.0);
+        let (pos, offset) = state.drag_start(ScrollbarAxis::Vertical);
+        assert_eq!(pos, 100.0);
+        assert_eq!(offset, 50.0);
+
+        state.set_drag_start(ScrollbarAxis::Horizontal, 200.0, 75.0);
+        let (pos, offset) = state.drag_start(ScrollbarAxis::Horizontal);
+        assert_eq!(pos, 200.0);
+        assert_eq!(offset, 75.0);
+    }
+
+    #[test]
+    fn test_scrollbar_handle_size() {
+        let state = ScrollState {
+            viewport_height: 400.0,
+            content_height: 800.0,
+            viewport_width: 300.0,
+            content_width: 600.0,
+            ..Default::default()
+        };
+
+        let config = ScrollbarConfig::default();
+
+        // Vertical: viewport/content = 0.5, so handle should be 50% of track
+        let v_handle = state.scrollbar_handle_size(ScrollbarAxis::Vertical, 400.0, &config);
+        assert_eq!(v_handle, 200.0);
+
+        // Horizontal: viewport/content = 0.5, so handle should be 50% of track
+        let h_handle = state.scrollbar_handle_size(ScrollbarAxis::Horizontal, 300.0, &config);
+        assert_eq!(h_handle, 150.0);
+    }
+
+    #[test]
+    fn test_scrollbar_handle_size_min() {
+        let state = ScrollState {
+            viewport_height: 100.0,
+            content_height: 10000.0, // Very large content
+            ..Default::default()
+        };
+
+        let config = ScrollbarConfig::default();
+
+        // Handle should be at least min_handle_size
+        let handle = state.scrollbar_handle_size(ScrollbarAxis::Vertical, 400.0, &config);
+        assert_eq!(handle, config.min_handle_size);
+    }
+
+    #[test]
+    fn test_scrollbar_handle_offset() {
+        let state = ScrollState {
+            viewport_height: 400.0,
+            content_height: 800.0,
+            offset_y: 200.0, // 50% scrolled
+            ..Default::default()
+        };
+
+        // With 400px track and 200px handle, available travel is 200px
+        // At 50% scroll, offset should be 100px
+        let offset = state.scrollbar_handle_offset(ScrollbarAxis::Vertical, 400.0, 200.0);
+        assert_eq!(offset, 100.0);
     }
 }
