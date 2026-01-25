@@ -1125,11 +1125,12 @@ impl Container {
 
         // Create vertical scrollbar containers if needed
         if self.scroll_axis.allows_vertical() && self.v_scrollbar_track.is_none() {
-            // Track container
+            // Track container with width animation to sync with handle
             let track = Container::new()
                 .background(track_color)
                 .corner_radius(track_corner_radius)
-                .corner_curvature(track_corner_curvature);
+                .corner_curvature(track_corner_curvature)
+                .animate_width(Transition::spring(SpringConfig::SNAPPY));
             self.v_scrollbar_track = Some(Box::new(track));
 
             // Handle container with hover state for color change and width animation
@@ -1145,11 +1146,12 @@ impl Container {
 
         // Create horizontal scrollbar containers if needed
         if self.scroll_axis.allows_horizontal() && self.h_scrollbar_track.is_none() {
-            // Track container
+            // Track container with height animation to sync with handle
             let track = Container::new()
                 .background(track_color)
                 .corner_radius(track_corner_radius)
-                .corner_curvature(track_corner_curvature);
+                .corner_curvature(track_corner_curvature)
+                .animate_height(Transition::spring(SpringConfig::SNAPPY));
             self.h_scrollbar_track = Some(Box::new(track));
 
             // Handle container with hover state for color change and height animation
