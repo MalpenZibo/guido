@@ -41,38 +41,50 @@ pub enum ScrollbarVisibility {
 /// Configuration for scrollbar appearance
 #[derive(Debug, Clone)]
 pub struct ScrollbarConfig {
-    /// Width of the scrollbar track and handle
+    /// Width of the scrollbar track and handle (normal state)
     pub width: f32,
+    /// Width of the scrollbar when hovered (expanded state)
+    pub hover_width: f32,
     /// Margin from the edge of the container
     pub margin: f32,
     /// Color of the scrollbar track
     pub track_color: Color,
     /// Corner radius of the track
     pub track_corner_radius: f32,
+    /// Corner curvature of the track (K-value: 0=bevel, 1=circular, 2=squircle)
+    pub track_corner_curvature: f32,
     /// Color of the scrollbar handle
     pub handle_color: Color,
     /// Corner radius of the handle
     pub handle_corner_radius: f32,
+    /// Corner curvature of the handle (K-value: 0=bevel, 1=circular, 2=squircle)
+    pub handle_corner_curvature: f32,
     /// Color of the handle when hovered
     pub handle_hover_color: Color,
     /// Color of the handle when pressed/dragged
     pub handle_pressed_color: Color,
     /// Minimum size of the handle (to ensure it's always grabbable)
     pub min_handle_size: f32,
+    /// Whether scrollbar reserves gutter space in layout
+    pub reserve_gutter: bool,
 }
 
 impl Default for ScrollbarConfig {
     fn default() -> Self {
         Self {
-            width: 8.0,
+            width: 6.0,
+            hover_width: 10.0,
             margin: 2.0,
             track_color: Color::rgba(1.0, 1.0, 1.0, 0.05),
-            track_corner_radius: 4.0,
+            track_corner_radius: 3.0,
+            track_corner_curvature: 1.0, // Circular corners by default
             handle_color: Color::rgba(1.0, 1.0, 1.0, 0.3),
-            handle_corner_radius: 4.0,
-            handle_hover_color: Color::rgba(1.0, 1.0, 1.0, 0.4),
-            handle_pressed_color: Color::rgba(1.0, 1.0, 1.0, 0.5),
+            handle_corner_radius: 3.0,
+            handle_corner_curvature: 1.0, // Circular corners by default
+            handle_hover_color: Color::rgba(1.0, 1.0, 1.0, 0.5),
+            handle_pressed_color: Color::rgba(1.0, 1.0, 1.0, 0.6),
             min_handle_size: 20.0,
+            reserve_gutter: true,
         }
     }
 }
@@ -89,9 +101,15 @@ impl ScrollbarBuilder {
         Self::default()
     }
 
-    /// Set the width of the scrollbar
+    /// Set the width of the scrollbar (normal state)
     pub fn width(mut self, width: f32) -> Self {
         self.config.width = width;
+        self
+    }
+
+    /// Set the width of the scrollbar when hovered (expanded state)
+    pub fn hover_width(mut self, width: f32) -> Self {
+        self.config.hover_width = width;
         self
     }
 
@@ -113,6 +131,21 @@ impl ScrollbarBuilder {
         self
     }
 
+    /// Set the track corner curvature (K-value)
+    /// - 0.0 = bevel (diagonal cut)
+    /// - 1.0 = circular (standard, default)
+    /// - 2.0 = squircle (iOS-style smooth)
+    pub fn track_corner_curvature(mut self, curvature: f32) -> Self {
+        self.config.track_corner_curvature = curvature;
+        self
+    }
+
+    /// Set the track to use squircle corners (K=2, iOS-style)
+    pub fn track_squircle(mut self) -> Self {
+        self.config.track_corner_curvature = 2.0;
+        self
+    }
+
     /// Set the handle color
     pub fn handle_color(mut self, color: Color) -> Self {
         self.config.handle_color = color;
@@ -122,6 +155,28 @@ impl ScrollbarBuilder {
     /// Set the handle corner radius
     pub fn handle_corner_radius(mut self, radius: f32) -> Self {
         self.config.handle_corner_radius = radius;
+        self
+    }
+
+    /// Set the handle corner curvature (K-value)
+    /// - 0.0 = bevel (diagonal cut)
+    /// - 1.0 = circular (standard, default)
+    /// - 2.0 = squircle (iOS-style smooth)
+    pub fn handle_corner_curvature(mut self, curvature: f32) -> Self {
+        self.config.handle_corner_curvature = curvature;
+        self
+    }
+
+    /// Set the handle to use squircle corners (K=2, iOS-style)
+    pub fn handle_squircle(mut self) -> Self {
+        self.config.handle_corner_curvature = 2.0;
+        self
+    }
+
+    /// Set both track and handle to use squircle corners (K=2, iOS-style)
+    pub fn squircle(mut self) -> Self {
+        self.config.track_corner_curvature = 2.0;
+        self.config.handle_corner_curvature = 2.0;
         self
     }
 
@@ -140,6 +195,20 @@ impl ScrollbarBuilder {
     /// Set the minimum handle size
     pub fn min_handle_size(mut self, size: f32) -> Self {
         self.config.min_handle_size = size;
+        self
+    }
+
+    /// Set whether scrollbar reserves gutter space in layout
+    /// When true (default), content area is reduced to make room for scrollbar
+    /// When false, scrollbar overlays the content
+    pub fn reserve_gutter(mut self, reserve: bool) -> Self {
+        self.config.reserve_gutter = reserve;
+        self
+    }
+
+    /// Make the scrollbar overlay content (no gutter space reserved)
+    pub fn overlay(mut self) -> Self {
+        self.config.reserve_gutter = false;
         self
     }
 
@@ -164,17 +233,21 @@ pub(crate) struct ScrollState {
     pub viewport_height: f32,
     /// Scrollbar interaction state
     pub scrollbar_hovered: bool,
+    pub scrollbar_track_hovered: bool, // Mouse is over the track area (for expansion)
     pub scrollbar_dragging: bool,
     pub scrollbar_drag_start_y: f32,
     pub scrollbar_drag_start_offset: f32,
     /// Horizontal scrollbar state (for Both axis)
     pub h_scrollbar_hovered: bool,
+    pub h_scrollbar_track_hovered: bool, // Mouse is over the track area (for expansion)
     pub h_scrollbar_dragging: bool,
     pub h_scrollbar_drag_start_x: f32,
     pub h_scrollbar_drag_start_offset: f32,
     /// Velocity for kinetic/momentum scrolling
     pub velocity_x: f32,
     pub velocity_y: f32,
+    /// Timestamp of last scroll event (for detecting when scrolling stops)
+    pub last_scroll_time: Option<std::time::Instant>,
 }
 
 impl ScrollState {
@@ -204,16 +277,34 @@ impl ScrollState {
         self.offset_y = self.offset_y.clamp(0.0, self.max_scroll_y());
     }
 
-    /// Check if kinetic scrolling is active
-    pub fn is_scrolling(&self) -> bool {
+    /// Check if momentum scrolling should be active (user stopped scrolling but has velocity)
+    pub fn should_apply_momentum(&self) -> bool {
         const VELOCITY_THRESHOLD: f32 = 0.5;
-        self.velocity_x.abs() > VELOCITY_THRESHOLD || self.velocity_y.abs() > VELOCITY_THRESHOLD
+        const SCROLL_TIMEOUT_MS: u128 = 50; // Wait 50ms after last scroll event
+
+        // Only apply momentum if we have velocity AND enough time has passed since last scroll
+        let has_velocity = self.velocity_x.abs() > VELOCITY_THRESHOLD
+            || self.velocity_y.abs() > VELOCITY_THRESHOLD;
+
+        let scroll_stopped = self
+            .last_scroll_time
+            .map(|t| t.elapsed().as_millis() > SCROLL_TIMEOUT_MS)
+            .unwrap_or(true);
+
+        has_velocity && scroll_stopped
     }
 
     /// Advance kinetic scrolling animation, returns true if still animating
     pub fn advance_momentum(&mut self) -> bool {
         const FRICTION: f32 = 0.92;
         const VELOCITY_THRESHOLD: f32 = 0.5;
+
+        // Don't apply momentum while actively scrolling
+        if !self.should_apply_momentum() {
+            // Still animating if we have velocity (waiting for timeout)
+            return self.velocity_x.abs() > VELOCITY_THRESHOLD
+                || self.velocity_y.abs() > VELOCITY_THRESHOLD;
+        }
 
         let mut animating = false;
 

@@ -1097,13 +1097,35 @@ impl Container {
     }
 
     /// Get the vertical scrollbar track rectangle
+    /// When hovered, expands toward content (left) to make it easier to grab
     fn scrollbar_track_rect(&self) -> Rect {
         let config = &self.scrollbar_config;
         let margin = config.margin;
+        let is_hovered = self.scroll_state.scrollbar_track_hovered
+            || self.scroll_state.scrollbar_hovered
+            || self.scroll_state.scrollbar_dragging;
+        let width = if is_hovered {
+            config.hover_width
+        } else {
+            config.width
+        };
+        // Right edge stays fixed, expands leftward when hovered
         Rect::new(
-            self.bounds.x + self.bounds.width - config.width - margin,
+            self.bounds.x + self.bounds.width - width - margin,
             self.bounds.y + margin,
-            config.width,
+            width,
+            self.bounds.height - margin * 2.0,
+        )
+    }
+
+    /// Get the vertical scrollbar hit test area (uses hover_width for easier targeting)
+    fn scrollbar_hit_area(&self) -> Rect {
+        let config = &self.scrollbar_config;
+        let margin = config.margin;
+        Rect::new(
+            self.bounds.x + self.bounds.width - config.hover_width - margin,
+            self.bounds.y + margin,
+            config.hover_width,
             self.bounds.height - margin * 2.0,
         )
     }
@@ -1143,21 +1165,50 @@ impl Container {
     }
 
     /// Get the horizontal scrollbar track rectangle
+    /// Get the horizontal scrollbar track rectangle
+    /// When hovered, expands toward content (up) to make it easier to grab
     fn h_scrollbar_track_rect(&self) -> Rect {
         let config = &self.scrollbar_config;
         let margin = config.margin;
+        let is_hovered = self.scroll_state.h_scrollbar_track_hovered
+            || self.scroll_state.h_scrollbar_hovered
+            || self.scroll_state.h_scrollbar_dragging;
+        let height = if is_hovered {
+            config.hover_width
+        } else {
+            config.width
+        };
         // If vertical scrollbar is also visible, leave space for it
         let right_padding =
             if self.scroll_axis.allows_vertical() && self.scroll_state.needs_vertical_scrollbar() {
-                config.width + margin
+                config.hover_width + margin
+            } else {
+                margin
+            };
+        // Bottom edge stays fixed, expands upward when hovered
+        Rect::new(
+            self.bounds.x + margin,
+            self.bounds.y + self.bounds.height - height - margin,
+            self.bounds.width - margin - right_padding,
+            height,
+        )
+    }
+
+    /// Get the horizontal scrollbar hit test area (uses hover_width for easier targeting)
+    fn h_scrollbar_hit_area(&self) -> Rect {
+        let config = &self.scrollbar_config;
+        let margin = config.margin;
+        let right_padding =
+            if self.scroll_axis.allows_vertical() && self.scroll_state.needs_vertical_scrollbar() {
+                config.hover_width + margin
             } else {
                 margin
             };
         Rect::new(
             self.bounds.x + margin,
-            self.bounds.y + self.bounds.height - config.width - margin,
+            self.bounds.y + self.bounds.height - config.hover_width - margin,
             self.bounds.width - margin - right_padding,
-            config.width,
+            config.hover_width,
         )
     }
 
@@ -1234,6 +1285,8 @@ impl Container {
                 }
                 ScrollAxis::None => {}
             }
+            // Record time of this scroll event for momentum detection
+            self.scroll_state.last_scroll_time = Some(std::time::Instant::now());
         }
 
         // Return true if scroll position changed (consumed the event)
@@ -1255,7 +1308,12 @@ impl Container {
             let handle = self.scrollbar_handle_rect();
 
             // Draw track
-            ctx.draw_rounded_rect(track, config.track_color, config.track_corner_radius);
+            ctx.draw_rounded_rect_with_curvature(
+                track,
+                config.track_color,
+                config.track_corner_radius,
+                config.track_corner_curvature,
+            );
 
             // Draw handle with appropriate color based on state
             let handle_color = if self.scroll_state.scrollbar_dragging {
@@ -1265,7 +1323,12 @@ impl Container {
             } else {
                 config.handle_color
             };
-            ctx.draw_rounded_rect(handle, handle_color, config.handle_corner_radius);
+            ctx.draw_rounded_rect_with_curvature(
+                handle,
+                handle_color,
+                config.handle_corner_radius,
+                config.handle_corner_curvature,
+            );
         }
 
         // Horizontal scrollbar
@@ -1274,7 +1337,12 @@ impl Container {
             let handle = self.h_scrollbar_handle_rect();
 
             // Draw track
-            ctx.draw_rounded_rect(track, config.track_color, config.track_corner_radius);
+            ctx.draw_rounded_rect_with_curvature(
+                track,
+                config.track_color,
+                config.track_corner_radius,
+                config.track_corner_curvature,
+            );
 
             // Draw handle with appropriate color based on state
             let handle_color = if self.scroll_state.h_scrollbar_dragging {
@@ -1284,7 +1352,12 @@ impl Container {
             } else {
                 config.handle_color
             };
-            ctx.draw_rounded_rect(handle, handle_color, config.handle_corner_radius);
+            ctx.draw_rounded_rect_with_curvature(
+                handle,
+                handle_color,
+                config.handle_corner_radius,
+                config.handle_corner_curvature,
+            );
         }
     }
 
@@ -1299,12 +1372,12 @@ impl Container {
 
         match event {
             Event::MouseDown { x, y, button } if *button == MouseButton::Left => {
-                // Check vertical scrollbar
+                // Check vertical scrollbar (use hit area for click detection)
                 if self.scroll_axis.allows_vertical()
                     && self.scroll_state.needs_vertical_scrollbar()
                 {
                     let handle = self.scrollbar_handle_rect();
-                    let track = self.scrollbar_track_rect();
+                    let hit_area = self.scrollbar_hit_area();
 
                     if handle.contains(*x, *y) {
                         // Start dragging handle
@@ -1313,12 +1386,12 @@ impl Container {
                         self.scroll_state.scrollbar_drag_start_offset = self.scroll_state.offset_y;
                         request_animation_frame();
                         return Some(EventResponse::Handled);
-                    } else if track.contains(*x, *y) {
+                    } else if hit_area.contains(*x, *y) {
                         // Click on track - jump to position
                         let handle_height = self.scrollbar_handle_height();
-                        let available = track.height - handle_height;
+                        let available = hit_area.height - handle_height;
                         if available > 0.0 {
-                            let click_pos = *y - track.y - handle_height / 2.0;
+                            let click_pos = *y - hit_area.y - handle_height / 2.0;
                             let ratio = (click_pos / available).clamp(0.0, 1.0);
                             self.scroll_state.offset_y = ratio * self.scroll_state.max_scroll_y();
                             request_animation_frame();
@@ -1327,12 +1400,12 @@ impl Container {
                     }
                 }
 
-                // Check horizontal scrollbar
+                // Check horizontal scrollbar (use hit area for click detection)
                 if self.scroll_axis.allows_horizontal()
                     && self.scroll_state.needs_horizontal_scrollbar()
                 {
                     let handle = self.h_scrollbar_handle_rect();
-                    let track = self.h_scrollbar_track_rect();
+                    let hit_area = self.h_scrollbar_hit_area();
 
                     if handle.contains(*x, *y) {
                         // Start dragging handle
@@ -1342,12 +1415,12 @@ impl Container {
                             self.scroll_state.offset_x;
                         request_animation_frame();
                         return Some(EventResponse::Handled);
-                    } else if track.contains(*x, *y) {
+                    } else if hit_area.contains(*x, *y) {
                         // Click on track - jump to position
                         let handle_width = self.h_scrollbar_handle_width();
-                        let available = track.width - handle_width;
+                        let available = hit_area.width - handle_width;
                         if available > 0.0 {
-                            let click_pos = *x - track.x - handle_width / 2.0;
+                            let click_pos = *x - hit_area.x - handle_width / 2.0;
                             let ratio = (click_pos / available).clamp(0.0, 1.0);
                             self.scroll_state.offset_x = ratio * self.scroll_state.max_scroll_x();
                             request_animation_frame();
@@ -1389,17 +1462,25 @@ impl Container {
                     return Some(EventResponse::Handled);
                 }
 
-                // Update hover state
+                // Update hover state using hit area (expanded for easier targeting)
                 let mut needs_repaint = false;
 
                 if self.scroll_axis.allows_vertical()
                     && self.scroll_state.needs_vertical_scrollbar()
                 {
+                    let hit_area = self.scrollbar_hit_area();
                     let handle = self.scrollbar_handle_rect();
-                    let track = self.scrollbar_track_rect();
+
+                    // Track area hover (for expansion effect)
+                    let was_track_hovered = self.scroll_state.scrollbar_track_hovered;
+                    self.scroll_state.scrollbar_track_hovered = hit_area.contains(*x, *y);
+                    if was_track_hovered != self.scroll_state.scrollbar_track_hovered {
+                        needs_repaint = true;
+                    }
+
+                    // Handle hover (for color change)
                     let was_hovered = self.scroll_state.scrollbar_hovered;
-                    self.scroll_state.scrollbar_hovered =
-                        handle.contains(*x, *y) || track.contains(*x, *y);
+                    self.scroll_state.scrollbar_hovered = handle.contains(*x, *y);
                     if was_hovered != self.scroll_state.scrollbar_hovered {
                         needs_repaint = true;
                     }
@@ -1408,11 +1489,19 @@ impl Container {
                 if self.scroll_axis.allows_horizontal()
                     && self.scroll_state.needs_horizontal_scrollbar()
                 {
+                    let hit_area = self.h_scrollbar_hit_area();
                     let handle = self.h_scrollbar_handle_rect();
-                    let track = self.h_scrollbar_track_rect();
+
+                    // Track area hover (for expansion effect)
+                    let was_track_hovered = self.scroll_state.h_scrollbar_track_hovered;
+                    self.scroll_state.h_scrollbar_track_hovered = hit_area.contains(*x, *y);
+                    if was_track_hovered != self.scroll_state.h_scrollbar_track_hovered {
+                        needs_repaint = true;
+                    }
+
+                    // Handle hover (for color change)
                     let was_hovered = self.scroll_state.h_scrollbar_hovered;
-                    self.scroll_state.h_scrollbar_hovered =
-                        handle.contains(*x, *y) || track.contains(*x, *y);
+                    self.scroll_state.h_scrollbar_hovered = handle.contains(*x, *y);
                     if was_hovered != self.scroll_state.h_scrollbar_hovered {
                         needs_repaint = true;
                     }
@@ -1496,7 +1585,10 @@ impl Container {
         }
 
         // Advance kinetic scroll animation (momentum)
-        if self.scroll_state.is_scrolling() {
+        // Check if we have velocity (either actively scrolling or coasting)
+        let has_scroll_velocity =
+            self.scroll_state.velocity_x.abs() > 0.5 || self.scroll_state.velocity_y.abs() > 0.5;
+        if has_scroll_velocity {
             let scroll_animating = self.scroll_state.advance_momentum();
             any_animating = any_animating || scroll_animating;
         }
@@ -1765,8 +1857,21 @@ impl Widget for Container {
         // During undershoot, we reduce padding to give children more space
         let effective_h_padding = (padding.horizontal() - width_undershoot).max(0.0);
         let effective_v_padding = (padding.vertical() - height_undershoot).max(0.0);
-        let child_max_width = (current_width - effective_h_padding).max(0.0);
-        let child_max_height = (current_height - effective_v_padding).max(0.0);
+        let mut child_max_width = (current_width - effective_h_padding).max(0.0);
+        let mut child_max_height = (current_height - effective_v_padding).max(0.0);
+
+        // Reserve gutter space for scrollbars when enabled
+        if self.scrollbar_config.reserve_gutter
+            && self.scrollbar_visibility != ScrollbarVisibility::Hidden
+        {
+            let gutter = self.scrollbar_config.width + self.scrollbar_config.margin * 2.0;
+            if self.scroll_axis.allows_vertical() {
+                child_max_width = (child_max_width - gutter).max(0.0);
+            }
+            if self.scroll_axis.allows_horizontal() {
+                child_max_height = (child_max_height - gutter).max(0.0);
+            }
+        }
 
         // Calculate constraints for children (accounting for padding)
         // When container has explicit dimensions, pass them as min constraints
