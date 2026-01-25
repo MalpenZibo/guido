@@ -53,10 +53,42 @@ impl TextRenderState {
     ) -> Vec<usize> {
         self.buffers.clear();
 
-        // Collect indices of texts that have non-trivial transforms
+        // Collect indices of texts that have non-trivial transforms (for texture-based rendering)
         let mut transformed_indices = Vec::new();
+        // Collect indices of texts that are completely outside their clip region (to skip entirely)
+        let mut culled_indices = HashSet::new();
 
         for (idx, entry) in texts.iter().enumerate() {
+            // Skip text that is completely outside its clip region (culling optimization)
+            // Check this FIRST so culled texts don't get rendered via texture path either
+            if let Some(clip) = &entry.clip_rect {
+                // Get text position (applying translation if any)
+                let (tx, ty) = if entry.transform.is_identity() {
+                    (0.0, 0.0)
+                } else {
+                    (entry.transform.tx(), entry.transform.ty())
+                };
+                let text_left = entry.rect.x + tx;
+                let text_top = entry.rect.y + ty;
+                let text_right = text_left + entry.rect.width;
+                let text_bottom = text_top + entry.rect.height;
+
+                let clip_right = clip.x + clip.width;
+                let clip_bottom = clip.y + clip.height;
+
+                // Check if text is completely outside clip region
+                let outside = text_right <= clip.x
+                    || text_left >= clip_right
+                    || text_bottom <= clip.y
+                    || text_top >= clip_bottom;
+
+                if outside {
+                    // Text is completely outside clip - skip it entirely
+                    culled_indices.insert(idx);
+                    continue;
+                }
+            }
+
             // Check if text has a transform that affects rendering
             if entry.transform.has_rotation_or_scale() {
                 transformed_indices.push(idx);
@@ -87,13 +119,13 @@ impl TextRenderState {
             self.buffers.push(buffer);
         }
 
-        // Filter to only non-transformed texts for TextArea creation
+        // Filter to only non-transformed, non-culled texts for TextArea creation
         // Use HashSet for O(1) lookup instead of Vec::contains which is O(n)
         let transformed_set: HashSet<_> = transformed_indices.iter().copied().collect();
         let non_transformed_texts: Vec<_> = texts
             .iter()
             .enumerate()
-            .filter(|(idx, _)| !transformed_set.contains(idx))
+            .filter(|(idx, _)| !transformed_set.contains(idx) && !culled_indices.contains(idx))
             .map(|(_, entry)| entry)
             .collect();
 
