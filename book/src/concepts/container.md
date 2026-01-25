@@ -132,6 +132,48 @@ container()
 
 See [Animations](../animations/README.md) for timing and spring options.
 
+## Scrolling
+
+Make containers scrollable when content overflows:
+
+```rust
+container()
+    .width(200.0)
+    .height(200.0)
+    .scrollable(ScrollAxis::Vertical)
+    .child(large_content())
+```
+
+### Scroll Axes
+
+| Axis | Description |
+|------|-------------|
+| `ScrollAxis::None` | No scrolling (default) |
+| `ScrollAxis::Vertical` | Vertical scrolling only |
+| `ScrollAxis::Horizontal` | Horizontal scrolling only |
+| `ScrollAxis::Both` | Both directions |
+
+### Custom Scrollbars
+
+```rust
+container()
+    .scrollable(ScrollAxis::Vertical)
+    .scrollbar(|sb| {
+        sb.width(6.0)
+          .handle_color(Color::rgb(0.4, 0.6, 0.9))
+          .handle_hover_color(Color::rgb(0.5, 0.7, 1.0))
+          .handle_corner_radius(3.0)
+    })
+```
+
+### Hidden Scrollbars
+
+```rust
+container()
+    .scrollable(ScrollAxis::Vertical)
+    .scrollbar_visibility(ScrollbarVisibility::Hidden)
+```
+
 ## Complete Example
 
 Here's a fully-styled interactive button:
@@ -214,3 +256,8 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 - `.animate_transform(transition)` - Animate transform
 - `.animate_border_width(transition)` - Animate border width
 - `.animate_border_color(transition)` - Animate border color
+
+### Scrolling
+- `.scrollable(axis)` - Enable scrolling (None, Vertical, Horizontal, Both)
+- `.scrollbar(|sb| ...)` - Customize scrollbar appearance
+- `.scrollbar_visibility(visibility)` - Show or hide scrollbar

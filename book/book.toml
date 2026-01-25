@@ -11,6 +11,7 @@ build-dir = "book"
 [output.html]
 git-repository-url = "https://github.com/zibo/guido"
 edit-url-template = "https://github.com/zibo/guido/edit/main/book/{path}"
+additional-css = ["theme/css/custom.css"]
 
 [output.html.playground]
 editable = false

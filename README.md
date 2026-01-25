@@ -1,3 +1,11 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo_text_light.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/logo_text_dark.svg">
+    <img alt="Guido Logo" src="assets/logo_text_dark.svg" width="300">
+  </picture>
+</p>
+
 # Guido
 
 A reactive Rust GUI library for Wayland layer shell widgets.
@@ -21,6 +29,8 @@ Guido is a GPU-accelerated GUI library for building Wayland layer shell applicat
 - **Composable Widgets** - Build UIs from minimal primitives with pluggable Flex layout
 - **Layer Shell Support** - Native Wayland layer shell integration for status bars and panels
 - **HiDPI Support** - Automatic scaling for high-resolution displays
+- **Image Widget** - Display raster images (PNG, JPEG, WebP) and SVGs with GPU texture caching
+- **Scrollable Containers** - Vertical/horizontal scrolling with customizable scrollbars and momentum
 
 ## Quick Start
 
@@ -82,6 +92,8 @@ cargo run --example component_example
 - **showcase** - Corner curvature variations (squircle, circle, bevel, scoop)
 - **component_example** - Reusable components with reactive props
 - **children_example** - Dynamic lists with keyed reconciliation
+- **image_example** - Raster and SVG images with content fit modes
+- **scroll_example** - Scrollable containers with custom scrollbar styling
 
 ## Documentation
 
@@ -90,6 +102,7 @@ cargo run --example component_example
 - [Transform System](docs/TRANSFORMS.md) - Translate, rotate, scale with animations
 - [Reactive System](docs/REACTIVE.md) - Signals, computed values, and effects
 - [Styling Guide](docs/STYLING.md) - Colors, gradients, borders, and corners
+- [Image Widget](docs/IMAGES.md) - Displaying raster and SVG images
 
 ## Requirements
 

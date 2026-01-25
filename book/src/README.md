@@ -1,3 +1,8 @@
+<p align="center">
+  <img class="logo-dark" src="images/logo_text_dark.svg" alt="Guido Logo" width="280">
+  <img class="logo-light" src="images/logo_text_light.svg" alt="Guido Logo" width="280">
+</p>
+
 # Guido
 
 **A reactive Rust GUI library for Wayland layer shell widgets**
@@ -14,6 +19,8 @@ Guido is a GPU-accelerated GUI library built with Rust and wgpu, designed specif
 - **State Layer API** - Declarative hover/pressed states with automatic animations and ripple effects
 - **Transform System** - Translate, rotate, and scale widgets with spring physics animations
 - **Composable Widgets** - Build complex UIs from simple, composable primitives
+- **Image Widget** - Display PNG, JPEG, WebP, and SVG images with GPU texture caching
+- **Scrollable Containers** - Vertical and horizontal scrolling with customizable scrollbars
 
 ## Quick Example
 

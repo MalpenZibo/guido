@@ -1,0 +1,33 @@
+/* Theme-aware logo switching */
+/* logo-dark = dark colored logo (for light backgrounds) */
+/* logo-light = light colored logo (for dark backgrounds) */
+
+/* By default, show light logo (for dark themes) */
+.logo-dark {
+    display: none;
+}
+.logo-light {
+    display: block;
+}
+
+/* Light themes: show dark logo, hide light logo */
+.light .logo-dark,
+.rust .logo-dark {
+    display: block;
+}
+.light .logo-light,
+.rust .logo-light {
+    display: none;
+}
+
+/* Dark themes (coal, navy, ayu): show light logo, hide dark logo */
+.coal .logo-dark,
+.navy .logo-dark,
+.ayu .logo-dark {
+    display: none;
+}
+.coal .logo-light,
+.navy .logo-light,
+.ayu .logo-light {
+    display: block;
+}
