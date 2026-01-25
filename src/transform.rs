@@ -226,8 +226,8 @@ impl Transform {
     /// - sx = sqrt(a² + b²)
     /// - sy = sqrt(c² + d²)
     ///
-    /// This is a private helper used by `extract_scale()`, `without_scale()`, and `rotation_only()`.
-    fn extract_scale_components(&self) -> (f32, f32) {
+    /// Returns `(scale_x, scale_y)` as a tuple.
+    pub fn extract_scale_components(&self) -> (f32, f32) {
         let a = self.data[0];
         let b = self.data[1];
         let c = self.data[4];

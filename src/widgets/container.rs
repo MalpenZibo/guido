@@ -769,6 +769,18 @@ impl Container {
         self
     }
 
+    /// Set the transform on an existing container (non-builder pattern)
+    /// Used internally for scrollbar containers
+    pub(crate) fn set_transform(&mut self, t: Transform) {
+        self.transform = MaybeDyn::Static(t);
+    }
+
+    /// Set the transform origin on an existing container (non-builder pattern)
+    /// Used internally for scrollbar containers
+    pub(crate) fn set_transform_origin(&mut self, origin: TransformOrigin) {
+        self.transform_origin = MaybeDyn::Static(origin);
+    }
+
     /// Enable animation for width changes
     pub fn animate_width(mut self, transition: Transition) -> Self {
         // Initialize with current width (exact or min) or 0
@@ -1140,19 +1152,25 @@ impl Container {
                 .corner_curvature(track_corner_curvature);
             self.v_scrollbar_track = Some(Box::new(track));
 
-            // Handle container with hover state for color change
+            // Handle container with hover state for color change and ripple on press
             let handle = Container::new()
                 .background(handle_color)
                 .corner_radius(handle_corner_radius)
                 .corner_curvature(handle_corner_curvature)
                 .hover_state(move |s| s.background(handle_hover_color))
-                .pressed_state(move |s| s.background(handle_pressed_color));
+                .pressed_state(move |s| s.background(handle_pressed_color).ripple());
             self.v_scrollbar_handle = Some(Box::new(handle));
 
             // Scale animation for hover expansion (starts at 1.0 = normal size)
+            // Custom spring: high stiffness (fast) + low damping (bouncy)
+            let scrollbar_spring = SpringConfig {
+                mass: 1.0,
+                stiffness: 400.0, // Higher = faster
+                damping: 15.0,    // Lower = more bounce
+            };
             self.v_scrollbar_scale_anim = Some(AnimationState::new(
                 1.0,
-                Transition::spring(SpringConfig::SNAPPY),
+                Transition::spring(scrollbar_spring),
             ));
         }
 
@@ -1165,19 +1183,25 @@ impl Container {
                 .corner_curvature(track_corner_curvature);
             self.h_scrollbar_track = Some(Box::new(track));
 
-            // Handle container with hover state for color change
+            // Handle container with hover state for color change and ripple on press
             let handle = Container::new()
                 .background(handle_color)
                 .corner_radius(handle_corner_radius)
                 .corner_curvature(handle_corner_curvature)
                 .hover_state(move |s| s.background(handle_hover_color))
-                .pressed_state(move |s| s.background(handle_pressed_color));
+                .pressed_state(move |s| s.background(handle_pressed_color).ripple());
             self.h_scrollbar_handle = Some(Box::new(handle));
 
             // Scale animation for hover expansion (starts at 1.0 = normal size)
+            // Custom spring: high stiffness (fast) + low damping (bouncy)
+            let scrollbar_spring = SpringConfig {
+                mass: 1.0,
+                stiffness: 400.0, // Higher = faster
+                damping: 15.0,    // Lower = more bounce
+            };
             self.h_scrollbar_scale_anim = Some(AnimationState::new(
                 1.0,
-                Transition::spring(SpringConfig::SNAPPY),
+                Transition::spring(scrollbar_spring),
             ));
         }
     }
@@ -1211,6 +1235,13 @@ impl Container {
                 }
             }
 
+            // Get current scale for setting transform on containers
+            let current_scale = self
+                .v_scrollbar_scale_anim
+                .as_ref()
+                .map(|a| *a.current())
+                .unwrap_or(1.0);
+
             // Layout and position track container
             if let Some(ref mut track) = self.v_scrollbar_track {
                 let track_constraints = Constraints {
@@ -1221,6 +1252,15 @@ impl Container {
                 };
                 Widget::layout(track.as_mut(), track_constraints);
                 track.set_origin(track_rect.x, track_rect.y);
+
+                // Set scale transform directly on the track container
+                // Origin is right-center for vertical scrollbar
+                let transform = Transform::scale_xy(current_scale, 1.0);
+                track.set_transform(transform);
+                track.set_transform_origin(TransformOrigin::px(
+                    track_rect.width,
+                    track_rect.height / 2.0,
+                ));
             }
 
             // Layout and position handle container
@@ -1233,6 +1273,15 @@ impl Container {
                 };
                 Widget::layout(handle.as_mut(), handle_constraints);
                 handle.set_origin(handle_rect.x, handle_rect.y);
+
+                // Set scale transform directly on the handle container
+                // Origin is right-center for vertical scrollbar
+                let transform = Transform::scale_xy(current_scale, 1.0);
+                handle.set_transform(transform);
+                handle.set_transform_origin(TransformOrigin::px(
+                    handle_rect.width,
+                    handle_rect.height / 2.0,
+                ));
             }
         }
 
@@ -1254,6 +1303,13 @@ impl Container {
                 }
             }
 
+            // Get current scale for setting transform on containers
+            let current_scale = self
+                .h_scrollbar_scale_anim
+                .as_ref()
+                .map(|a| *a.current())
+                .unwrap_or(1.0);
+
             // Layout and position track container
             if let Some(ref mut track) = self.h_scrollbar_track {
                 let track_constraints = Constraints {
@@ -1264,6 +1320,15 @@ impl Container {
                 };
                 Widget::layout(track.as_mut(), track_constraints);
                 track.set_origin(track_rect.x, track_rect.y);
+
+                // Set scale transform directly on the track container
+                // Origin is bottom-center for horizontal scrollbar
+                let transform = Transform::scale_xy(1.0, current_scale);
+                track.set_transform(transform);
+                track.set_transform_origin(TransformOrigin::px(
+                    track_rect.width / 2.0,
+                    track_rect.height,
+                ));
             }
 
             // Layout and position handle container
@@ -1276,78 +1341,43 @@ impl Container {
                 };
                 Widget::layout(handle.as_mut(), handle_constraints);
                 handle.set_origin(handle_rect.x, handle_rect.y);
+
+                // Set scale transform directly on the handle container
+                // Origin is bottom-center for horizontal scrollbar
+                let transform = Transform::scale_xy(1.0, current_scale);
+                handle.set_transform(transform);
+                handle.set_transform_origin(TransformOrigin::px(
+                    handle_rect.width / 2.0,
+                    handle_rect.height,
+                ));
             }
         }
     }
 
-    /// Paint scrollbar container widgets with scale transform for hover expansion
+    /// Paint scrollbar container widgets (transforms are set on containers directly)
     fn paint_scrollbar_containers(&self, ctx: &mut PaintContext) {
         // Don't show scrollbar if visibility is Hidden
         if self.scrollbar_visibility == ScrollbarVisibility::Hidden {
             return;
         }
 
-        // Vertical scrollbar
+        // Vertical scrollbar - containers have their own scale transforms set in layout
         if self.scroll_axis.allows_vertical() && self.scroll_state.needs_vertical_scrollbar() {
-            // Get current scale from animation
-            let scale = self
-                .v_scrollbar_scale_anim
-                .as_ref()
-                .map(|a| *a.current())
-                .unwrap_or(1.0);
-
-            // Apply scale transform if not 1.0 (origin on right edge)
-            let has_transform = (scale - 1.0).abs() > 0.001;
-            if has_transform {
-                let track_rect = self.scrollbar_track_rect();
-                // Transform origin is right center of the track
-                let origin_x = track_rect.x + track_rect.width;
-                let origin_y = track_rect.y + track_rect.height / 2.0;
-                let transform = Transform::scale_xy(scale, 1.0);
-                ctx.push_transform_with_origin(transform, origin_x, origin_y);
-            }
-
             if let Some(ref track) = self.v_scrollbar_track {
                 track.paint(ctx);
             }
             if let Some(ref handle) = self.v_scrollbar_handle {
                 handle.paint(ctx);
             }
-
-            if has_transform {
-                ctx.pop_transform();
-            }
         }
 
-        // Horizontal scrollbar
+        // Horizontal scrollbar - containers have their own scale transforms set in layout
         if self.scroll_axis.allows_horizontal() && self.scroll_state.needs_horizontal_scrollbar() {
-            // Get current scale from animation
-            let scale = self
-                .h_scrollbar_scale_anim
-                .as_ref()
-                .map(|a| *a.current())
-                .unwrap_or(1.0);
-
-            // Apply scale transform if not 1.0 (origin on bottom edge)
-            let has_transform = (scale - 1.0).abs() > 0.001;
-            if has_transform {
-                let track_rect = self.h_scrollbar_track_rect();
-                // Transform origin is bottom center of the track
-                let origin_x = track_rect.x + track_rect.width / 2.0;
-                let origin_y = track_rect.y + track_rect.height;
-                let transform = Transform::scale_xy(1.0, scale);
-                ctx.push_transform_with_origin(transform, origin_x, origin_y);
-            }
-
             if let Some(ref track) = self.h_scrollbar_track {
                 track.paint(ctx);
             }
             if let Some(ref handle) = self.h_scrollbar_handle {
                 handle.paint(ctx);
-            }
-
-            if has_transform {
-                ctx.pop_transform();
             }
         }
     }

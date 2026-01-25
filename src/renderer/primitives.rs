@@ -631,9 +631,9 @@ impl RoundedRect {
     }
 
     pub fn to_vertices(&self, screen_width: f32, screen_height: f32) -> (Vec<Vertex>, Vec<u16>) {
-        // Extract scale factor from transform - scale is applied to geometry, not via GPU transform
+        // Extract non-uniform scale factors from transform - scale is applied to geometry, not via GPU transform
         // This is necessary because SDF rendering doesn't work correctly with GPU-based scale transforms
-        let scale = self.transform.extract_scale();
+        let (scale_x, scale_y) = self.transform.extract_scale_components();
 
         // Get the rotation-only transform (scale removed) for GPU transform
         // This preserves rotation behavior while allowing geometry-based scaling
@@ -650,12 +650,12 @@ impl RoundedRect {
             .transform_origin
             .unwrap_or((shape_center_x, shape_center_y));
 
-        // Pre-scale the rect geometry around the scale origin
+        // Pre-scale the rect geometry around the scale origin (non-uniform scaling)
         let scaled_rect = Rect::new(
-            scale_origin_x + (self.rect.x - scale_origin_x) * scale,
-            scale_origin_y + (self.rect.y - scale_origin_y) * scale,
-            self.rect.width * scale,
-            self.rect.height * scale,
+            scale_origin_x + (self.rect.x - scale_origin_x) * scale_x,
+            scale_origin_y + (self.rect.y - scale_origin_y) * scale_y,
+            self.rect.width * scale_x,
+            self.rect.height * scale_y,
         );
 
         // Convert scaled rect to NDC
@@ -673,14 +673,19 @@ impl RoundedRect {
             screen_height,
         );
 
-        // Compute radius in NDC (scaled with the rect)
+        // Compute radius in NDC
+        // Clamp radius to half the smaller dimension of the SCALED rect
+        // This ensures corner radius scales properly with non-uniform transforms
+        // (e.g., scrollbar expanding horizontally maintains pill shape)
         let radius = self
             .radius
-            .min(self.rect.width / 2.0)
-            .min(self.rect.height / 2.0);
-        let scaled_radius = radius * scale;
-        let r_ndc_x = (scaled_radius / screen_width) * 2.0;
-        let r_ndc_y = (scaled_radius / screen_height) * 2.0;
+            .min(scaled_rect.width / 2.0)
+            .min(scaled_rect.height / 2.0);
+        let r_ndc_x = (radius / screen_width) * 2.0;
+        let r_ndc_y = (radius / screen_height) * 2.0;
+
+        // For border and shadow, use minimum scale to keep them consistent
+        let min_scale = scale_x.min(scale_y);
 
         // Shape bounds for SDF in shader
         let shape_rect = [x1, y2, x2, y1]; // min_x, min_y, max_x, max_y
@@ -688,7 +693,8 @@ impl RoundedRect {
         let shape_curvature = self.curvature;
 
         // Convert border width to NDC separately for x and y (aspect-ratio correct, scaled)
-        let scaled_border = self.border_width * scale;
+        // For non-uniform scaling, use minimum scale to keep border consistent
+        let scaled_border = self.border_width * min_scale;
         let border_width_ndc = [
             (scaled_border / screen_width) * 2.0,
             (scaled_border / screen_height) * 2.0,
@@ -701,12 +707,13 @@ impl RoundedRect {
         ];
 
         // Convert shadow parameters to NDC (scaled)
+        // For shadows, use min_scale to keep them uniform even with non-uniform scaling
         let shadow_offset_ndc = [
-            (self.shadow.offset.0 * scale / screen_width) * 2.0,
-            -(self.shadow.offset.1 * scale / screen_height) * 2.0, // Negative because NDC y is flipped
+            (self.shadow.offset.0 * min_scale / screen_width) * 2.0,
+            -(self.shadow.offset.1 * min_scale / screen_height) * 2.0, // Negative because NDC y is flipped
         ];
-        let shadow_blur_ndc = (self.shadow.blur * scale / screen_height) * 2.0;
-        let shadow_spread_ndc = (self.shadow.spread * scale / screen_height) * 2.0;
+        let shadow_blur_ndc = (self.shadow.blur * min_scale / screen_height) * 2.0;
+        let shadow_spread_ndc = (self.shadow.spread * min_scale / screen_height) * 2.0;
         let shadow_color = [
             self.shadow.color.r,
             self.shadow.color.g,
@@ -722,15 +729,15 @@ impl RoundedRect {
             let fadeout = 3.0;
 
             // Calculate how far shadow extends beyond the scaled shape in each direction
-            // Scale shadow extends by the same factor
+            // Scale shadow extends by the same factor (use min_scale for uniform shadow)
             let left_extend =
-                (self.shadow.blur * scale * fadeout - self.shadow.offset.0 * scale).max(0.0);
+                (self.shadow.blur * min_scale * fadeout - self.shadow.offset.0 * min_scale).max(0.0);
             let right_extend =
-                (self.shadow.blur * scale * fadeout + self.shadow.offset.0 * scale).max(0.0);
+                (self.shadow.blur * min_scale * fadeout + self.shadow.offset.0 * min_scale).max(0.0);
             let top_extend =
-                (self.shadow.blur * scale * fadeout - self.shadow.offset.1 * scale).max(0.0);
+                (self.shadow.blur * min_scale * fadeout - self.shadow.offset.1 * min_scale).max(0.0);
             let bottom_extend =
-                (self.shadow.blur * scale * fadeout + self.shadow.offset.1 * scale).max(0.0);
+                (self.shadow.blur * min_scale * fadeout + self.shadow.offset.1 * min_scale).max(0.0);
 
             (
                 to_ndc_x(scaled_rect.x - left_extend),
@@ -744,16 +751,33 @@ impl RoundedRect {
         };
 
         // Compute clip region in NDC if present
+        // Apply the same scale transform to clip region so it matches the scaled shape
         let (clip_rect_ndc, clip_radius_ndc) = if let Some(ref clip) = self.clip {
-            let clip_x1 = to_ndc_x(clip.rect.x);
-            let clip_y1 = to_ndc_y(clip.rect.y);
-            let clip_x2 = to_ndc_x(clip.rect.x + clip.rect.width);
-            let clip_y2 = to_ndc_y(clip.rect.y + clip.rect.height);
+            // Use transform_origin if set, otherwise clip center
+            let clip_center_x = clip.rect.x + clip.rect.width / 2.0;
+            let clip_center_y = clip.rect.y + clip.rect.height / 2.0;
+            let (clip_origin_x, clip_origin_y) = self
+                .transform_origin
+                .unwrap_or((clip_center_x, clip_center_y));
 
+            // Scale the clip rect around the transform origin (same as shape scaling)
+            let scaled_clip = Rect::new(
+                clip_origin_x + (clip.rect.x - clip_origin_x) * scale_x,
+                clip_origin_y + (clip.rect.y - clip_origin_y) * scale_y,
+                clip.rect.width * scale_x,
+                clip.rect.height * scale_y,
+            );
+
+            let clip_x1 = to_ndc_x(scaled_clip.x);
+            let clip_y1 = to_ndc_y(scaled_clip.y);
+            let clip_x2 = to_ndc_x(scaled_clip.x + scaled_clip.width);
+            let clip_y2 = to_ndc_y(scaled_clip.y + scaled_clip.height);
+
+            // Scale clip radius to match scaled clip dimensions
             let clip_radius = clip
                 .radius
-                .min(clip.rect.width / 2.0)
-                .min(clip.rect.height / 2.0);
+                .min(scaled_clip.width / 2.0)
+                .min(scaled_clip.height / 2.0);
             // Use height-based NDC for uniform clip radius (aspect-corrected in shader)
             let clip_r_ndc = (clip_radius / screen_height) * 2.0;
 
@@ -1032,9 +1056,9 @@ impl TexturedQuad {
         screen_width: f32,
         screen_height: f32,
     ) -> (Vec<TexturedVertex>, Vec<u16>) {
-        // Extract scale factor from transform - scale is applied to geometry, not via GPU transform
+        // Extract non-uniform scale factors from transform - scale is applied to geometry, not via GPU transform
         // This matches how RoundedRect handles scale transforms
-        let scale = self.transform.extract_scale();
+        let (scale_x, scale_y) = self.transform.extract_scale_components();
 
         // Get the rotation-only transform (scale removed) for GPU transform
         let rotation_only_transform = self.transform.without_scale();
@@ -1050,12 +1074,12 @@ impl TexturedQuad {
             .transform_origin
             .unwrap_or((quad_center_x, quad_center_y));
 
-        // Pre-scale the rect geometry around the scale origin
+        // Pre-scale the rect geometry around the scale origin (non-uniform scaling)
         let scaled_rect = Rect::new(
-            scale_origin_x + (self.rect.x - scale_origin_x) * scale,
-            scale_origin_y + (self.rect.y - scale_origin_y) * scale,
-            self.rect.width * scale,
-            self.rect.height * scale,
+            scale_origin_x + (self.rect.x - scale_origin_x) * scale_x,
+            scale_origin_y + (self.rect.y - scale_origin_y) * scale_y,
+            self.rect.width * scale_x,
+            self.rect.height * scale_y,
         );
 
         let x1 = to_ndc_x(scaled_rect.x);
