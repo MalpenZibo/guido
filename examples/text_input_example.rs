@@ -7,6 +7,7 @@
 //! - Submit handling with Enter key
 //! - Focused state styling on input containers
 //! - Clipboard support (Ctrl+C/V/X)
+//! - Undo/redo history (Ctrl+Z/Y)
 
 use guido::prelude::*;
 
@@ -169,6 +170,11 @@ fn main() {
                 )
                 .child(
                     text("• Ctrl+C/X/V to copy/cut/paste")
+                        .color(Color::rgb(0.5, 0.5, 0.6))
+                        .font_size(11.0),
+                )
+                .child(
+                    text("• Ctrl+Z to undo, Ctrl+Y to redo")
                         .color(Color::rgb(0.5, 0.5, 0.6))
                         .font_size(11.0),
                 ),

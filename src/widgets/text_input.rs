@@ -29,8 +29,87 @@ const KEY_REPEAT_DELAY_MS: u64 = 400;
 /// Key repeat interval (time between repeats) in milliseconds
 const KEY_REPEAT_INTERVAL_MS: u64 = 35;
 
+/// Maximum number of undo history entries
+const MAX_HISTORY_SIZE: usize = 100;
+
 /// Type alias for text input callbacks
 type TextCallback = Box<dyn Fn(&str)>;
+
+/// A snapshot of text input state for undo/redo
+#[derive(Clone, Debug)]
+struct HistoryEntry {
+    /// The text content
+    text: String,
+    /// Cursor position
+    cursor: usize,
+    /// Selection anchor
+    anchor: usize,
+}
+
+/// Undo/redo history manager
+#[derive(Default)]
+struct History {
+    /// Stack of past states (most recent at end)
+    undo_stack: Vec<HistoryEntry>,
+    /// Stack of undone states for redo
+    redo_stack: Vec<HistoryEntry>,
+}
+
+impl History {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Push a new state to history (clears redo stack)
+    fn push(&mut self, entry: HistoryEntry) {
+        // Don't push if it's the same as the last entry
+        if let Some(last) = self.undo_stack.last() {
+            if last.text == entry.text {
+                return;
+            }
+        }
+
+        self.undo_stack.push(entry);
+        self.redo_stack.clear();
+
+        // Limit history size
+        if self.undo_stack.len() > MAX_HISTORY_SIZE {
+            self.undo_stack.remove(0);
+        }
+    }
+
+    /// Undo: pop from undo stack, push current to redo stack
+    fn undo(&mut self, current: HistoryEntry) -> Option<HistoryEntry> {
+        if let Some(previous) = self.undo_stack.pop() {
+            self.redo_stack.push(current);
+            Some(previous)
+        } else {
+            None
+        }
+    }
+
+    /// Redo: pop from redo stack, push current to undo stack
+    fn redo(&mut self, current: HistoryEntry) -> Option<HistoryEntry> {
+        if let Some(next) = self.redo_stack.pop() {
+            self.undo_stack.push(current);
+            Some(next)
+        } else {
+            None
+        }
+    }
+
+    /// Check if undo is available
+    #[allow(dead_code)]
+    fn can_undo(&self) -> bool {
+        !self.undo_stack.is_empty()
+    }
+
+    /// Check if redo is available
+    #[allow(dead_code)]
+    fn can_redo(&self) -> bool {
+        !self.redo_stack.is_empty()
+    }
+}
 
 /// Selection state tracking anchor and cursor positions
 #[derive(Clone, Copy, Debug, Default)]
@@ -104,6 +183,9 @@ pub struct TextInput {
     // Mouse drag selection
     is_dragging: bool,
 
+    // Undo/redo history
+    history: History,
+
     // Layout
     bounds: Rect,
 
@@ -135,6 +217,7 @@ impl TextInput {
             key_press_time: Instant::now(),
             last_repeat_time: Instant::now(),
             is_dragging: false,
+            history: History::new(),
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
             on_change: None,
             on_submit: None,
@@ -278,6 +361,9 @@ impl TextInput {
 
     /// Insert text at cursor, replacing any selection
     fn insert_text(&mut self, text: &str) {
+        // Save state before modification
+        self.save_to_history();
+
         let (start, end) = self.selection.range();
 
         // Convert character indices to byte indices
@@ -309,6 +395,20 @@ impl TextInput {
 
     /// Delete selected text or character before/after cursor
     fn delete(&mut self, forward: bool) {
+        // Check if there's anything to delete
+        let has_content_to_delete = if self.selection.has_selection() {
+            true
+        } else if forward {
+            self.selection.cursor < self.cached_value.chars().count()
+        } else {
+            self.selection.cursor > 0
+        };
+
+        // Save state before modification (only if we'll actually delete something)
+        if has_content_to_delete {
+            self.save_to_history();
+        }
+
         if self.selection.has_selection() {
             // Delete selection
             let (start, end) = self.selection.range();
@@ -473,6 +573,48 @@ impl TextInput {
         }
     }
 
+    /// Save current state to history (call before making changes)
+    fn save_to_history(&mut self) {
+        self.history.push(HistoryEntry {
+            text: self.cached_value.clone(),
+            cursor: self.selection.cursor,
+            anchor: self.selection.anchor,
+        });
+    }
+
+    /// Get current state as a history entry
+    fn current_history_entry(&self) -> HistoryEntry {
+        HistoryEntry {
+            text: self.cached_value.clone(),
+            cursor: self.selection.cursor,
+            anchor: self.selection.anchor,
+        }
+    }
+
+    /// Undo the last change
+    fn undo(&mut self) {
+        let current = self.current_history_entry();
+        if let Some(previous) = self.history.undo(current) {
+            self.cached_value = previous.text;
+            self.selection.cursor = previous.cursor;
+            self.selection.anchor = previous.anchor;
+            self.notify_change();
+            self.reset_cursor_blink();
+        }
+    }
+
+    /// Redo the last undone change
+    fn redo(&mut self) {
+        let current = self.current_history_entry();
+        if let Some(next) = self.history.redo(current) {
+            self.cached_value = next.text;
+            self.selection.cursor = next.cursor;
+            self.selection.anchor = next.anchor;
+            self.notify_change();
+            self.reset_cursor_blink();
+        }
+    }
+
     /// Notify change callback
     fn notify_change(&self) {
         if let Some(ref callback) = self.on_change {
@@ -544,6 +686,20 @@ impl TextInput {
                         }
                         'v' => {
                             self.paste();
+                            EventResponse::Handled
+                        }
+                        'z' => {
+                            // Ctrl+Shift+Z = redo, Ctrl+Z = undo
+                            if shift {
+                                self.redo();
+                            } else {
+                                self.undo();
+                            }
+                            EventResponse::Handled
+                        }
+                        'y' => {
+                            // Ctrl+Y = redo
+                            self.redo();
                             EventResponse::Handled
                         }
                         _ => EventResponse::Ignored,
