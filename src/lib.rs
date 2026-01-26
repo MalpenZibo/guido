@@ -35,7 +35,7 @@ pub mod prelude {
     pub use crate::animation::{SpringConfig, TimingFunction, Transition};
     pub use crate::layout::{
         Axis, Constraints, CrossAxisAlignment, Flex, Length, MainAxisAlignment, Overlay, Size,
-        at_least, at_most,
+        at_least, at_most, fill,
     };
     pub use crate::platform::{Anchor, Layer};
     pub use crate::reactive::{

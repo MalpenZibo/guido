@@ -33,6 +33,8 @@ pub struct Length {
     pub min: Option<f32>,
     pub max: Option<f32>,
     pub exact: Option<f32>,
+    /// When true, expand to fill all available space
+    pub fill: bool,
 }
 
 impl Length {
@@ -63,6 +65,7 @@ pub fn at_least(min: f32) -> Length {
         min: Some(min),
         max: None,
         exact: None,
+        fill: false,
     }
 }
 
@@ -80,6 +83,28 @@ pub fn at_most(max: f32) -> Length {
         min: None,
         max: Some(max),
         exact: None,
+        fill: false,
+    }
+}
+
+/// Create a length that fills all available space.
+///
+/// # Examples
+/// ```
+/// use guido::prelude::*;
+///
+/// // Fill available width
+/// container().width(fill());
+///
+/// // Fill available height
+/// container().height(fill());
+/// ```
+pub fn fill() -> Length {
+    Length {
+        min: None,
+        max: None,
+        exact: None,
+        fill: true,
     }
 }
 
@@ -90,6 +115,7 @@ impl From<f32> for Length {
             min: None,
             max: None,
             exact: Some(value),
+            fill: false,
         }
     }
 }
