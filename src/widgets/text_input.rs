@@ -481,14 +481,19 @@ impl Widget for TextInput {
         let display = self.display_text();
         let measured = measure_text(&display, self.cached_font_size, None);
 
-        // Use measured width but ensure minimum height for empty text
+        // Ensure minimum height for empty text
         let height = measured.height.max(self.cached_font_size * 1.2);
 
+        // Text inputs should fill available width (like HTML input elements)
+        // Use max_width if available, otherwise fall back to measured width
+        let width = if constraints.max_width.is_finite() && constraints.max_width > 0.0 {
+            constraints.max_width
+        } else {
+            measured.width.max(100.0) // Minimum 100px if unconstrained
+        };
+
         let size = Size::new(
-            measured
-                .width
-                .max(constraints.min_width)
-                .min(constraints.max_width),
+            width.max(constraints.min_width).min(constraints.max_width),
             height
                 .max(constraints.min_height)
                 .min(constraints.max_height),
