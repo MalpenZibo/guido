@@ -60,46 +60,43 @@ impl TextMeasurer {
         self.measure(prefix, font_size, None).width
     }
 
-    /// Find the character index from an x-coordinate.
+    /// Find the character index from an x-coordinate using binary search.
     /// This is useful for click-to-position in text input widgets.
     pub fn char_from_x(&mut self, text: &str, font_size: f32, x: f32) -> usize {
         if text.is_empty() || x <= 0.0 {
             return 0;
         }
 
+        let char_count = text.chars().count();
         let total_width = self.measure(text, font_size, None).width;
         if x >= total_width {
-            return text.chars().count();
+            return char_count;
         }
 
         // Binary search for the character position
-        let char_count = text.chars().count();
-        let mut best_index = 0;
-        let mut best_distance = x.abs();
+        let mut left = 0;
+        let mut right = char_count;
 
-        for i in 0..=char_count {
-            let width = self.measure_to_char(text, font_size, i);
-            let distance = (width - x).abs();
-
-            if distance < best_distance {
-                best_distance = distance;
-                best_index = i;
-            }
-
-            // Early exit if we've passed the target
-            if width > x && i > 0 {
-                // Check if we're closer to this character or the previous one
-                let prev_width = self.measure_to_char(text, font_size, i - 1);
-                let mid = (prev_width + width) / 2.0;
-                if x < mid {
-                    return i - 1;
-                } else {
-                    return i;
-                }
+        while left < right {
+            let mid = (left + right) / 2;
+            let width = self.measure_to_char(text, font_size, mid);
+            if width < x {
+                left = mid + 1;
+            } else {
+                right = mid;
             }
         }
 
-        best_index
+        // Check if click is closer to previous character
+        if left > 0 {
+            let prev_width = self.measure_to_char(text, font_size, left - 1);
+            let curr_width = self.measure_to_char(text, font_size, left);
+            if (x - prev_width) < (curr_width - x) {
+                return left - 1;
+            }
+        }
+
+        left.min(char_count)
     }
 }
 

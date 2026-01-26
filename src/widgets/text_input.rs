@@ -8,6 +8,7 @@
 //!
 //! Styling (background, borders, etc.) should be handled by wrapping in a Container.
 
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::layout::{Constraints, Size};
@@ -32,6 +33,12 @@ const KEY_REPEAT_INTERVAL_MS: u64 = 35;
 /// Maximum number of undo history entries
 const MAX_HISTORY_SIZE: usize = 100;
 
+/// Padding from edges before scrolling starts
+const SCROLL_PADDING: f32 = 2.0;
+
+/// Time window for coalescing similar edits (in milliseconds)
+const HISTORY_COALESCE_MS: u64 = 500;
+
 /// Type alias for text input callbacks
 type TextCallback = Box<dyn Fn(&str)>;
 
@@ -46,42 +53,83 @@ struct HistoryEntry {
     anchor: usize,
 }
 
+/// Type of edit operation for history coalescing
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditType {
+    Insert,
+    Delete,
+}
+
 /// Undo/redo history manager
-#[derive(Default)]
 struct History {
     /// Stack of past states (most recent at end)
-    undo_stack: Vec<HistoryEntry>,
+    undo_stack: VecDeque<HistoryEntry>,
     /// Stack of undone states for redo
-    redo_stack: Vec<HistoryEntry>,
+    redo_stack: VecDeque<HistoryEntry>,
+    /// Time of last edit (for coalescing)
+    last_edit_time: Instant,
+    /// Type of last edit (for coalescing)
+    last_edit_type: Option<EditType>,
 }
 
 impl History {
     fn new() -> Self {
-        Self::default()
+        Self {
+            undo_stack: VecDeque::new(),
+            redo_stack: VecDeque::new(),
+            last_edit_time: Instant::now(),
+            last_edit_type: None,
+        }
     }
 
     /// Push a new state to history (clears redo stack)
-    fn push(&mut self, entry: HistoryEntry) {
+    /// Uses coalescing to merge similar edits within a time window
+    fn push(&mut self, entry: HistoryEntry, edit_type: EditType) {
+        let now = Instant::now();
+        let since_last = now.duration_since(self.last_edit_time);
+
         // Don't push if it's the same as the last entry
-        if let Some(last) = self.undo_stack.last() {
+        if let Some(last) = self.undo_stack.back() {
             if last.text == entry.text {
                 return;
             }
         }
 
-        self.undo_stack.push(entry);
-        self.redo_stack.clear();
+        // Coalesce similar edits within the time window
+        let should_coalesce = self.last_edit_type == Some(edit_type)
+            && since_last < Duration::from_millis(HISTORY_COALESCE_MS)
+            && !self.undo_stack.is_empty();
 
-        // Limit history size
-        if self.undo_stack.len() > MAX_HISTORY_SIZE {
-            self.undo_stack.remove(0);
+        if should_coalesce {
+            // Update the last entry instead of creating a new one
+            if let Some(last) = self.undo_stack.back_mut() {
+                last.cursor = entry.cursor;
+                last.anchor = entry.anchor;
+                // Keep the original text (state before the sequence of edits)
+            }
+        } else {
+            self.undo_stack.push_back(entry);
+            self.redo_stack.clear();
+
+            // Limit history size
+            if self.undo_stack.len() > MAX_HISTORY_SIZE {
+                self.undo_stack.pop_front();
+            }
         }
+
+        self.last_edit_time = now;
+        self.last_edit_type = Some(edit_type);
+    }
+
+    /// Reset coalescing state (call after non-edit operations like undo/redo)
+    fn reset_coalescing(&mut self) {
+        self.last_edit_type = None;
     }
 
     /// Undo: pop from undo stack, push current to redo stack
     fn undo(&mut self, current: HistoryEntry) -> Option<HistoryEntry> {
-        if let Some(previous) = self.undo_stack.pop() {
-            self.redo_stack.push(current);
+        if let Some(previous) = self.undo_stack.pop_back() {
+            self.redo_stack.push_back(current);
             Some(previous)
         } else {
             None
@@ -90,8 +138,8 @@ impl History {
 
     /// Redo: pop from redo stack, push current to undo stack
     fn redo(&mut self, current: HistoryEntry) -> Option<HistoryEntry> {
-        if let Some(next) = self.redo_stack.pop() {
-            self.undo_stack.push(current);
+        if let Some(next) = self.redo_stack.pop_back() {
+            self.undo_stack.push_back(current);
             Some(next)
         } else {
             None
@@ -156,6 +204,8 @@ pub struct TextInput {
     // Content (actual value, never masked)
     value: MaybeDyn<String>,
     cached_value: String,
+    cached_display_text: String,
+    display_text_dirty: bool,
 
     // Styling
     text_color: MaybeDyn<Color>,
@@ -206,6 +256,8 @@ impl TextInput {
             dirty_flags: ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT,
             value,
             cached_value,
+            cached_display_text: String::new(),
+            display_text_dirty: true,
             text_color: MaybeDyn::Static(Color::WHITE),
             cursor_color: MaybeDyn::Static(Color::rgb(0.4, 0.8, 1.0)),
             selection_color: MaybeDyn::Static(Color::rgba(0.4, 0.6, 1.0, 0.4)),
@@ -276,15 +328,40 @@ impl TextInput {
         self
     }
 
-    /// Get the display text (masked if password mode)
-    fn display_text(&self) -> String {
-        if self.is_password {
-            self.mask_char
-                .to_string()
-                .repeat(self.cached_value.chars().count())
-        } else {
-            self.cached_value.clone()
+    /// Get the display text (masked if password mode), using cache when clean
+    fn display_text(&mut self) -> &str {
+        if self.display_text_dirty {
+            self.cached_display_text = if self.is_password {
+                self.mask_char
+                    .to_string()
+                    .repeat(self.cached_value.chars().count())
+            } else {
+                self.cached_value.clone()
+            };
+            self.display_text_dirty = false;
         }
+        &self.cached_display_text
+    }
+
+    /// Get the display text for immutable contexts (for paint)
+    fn display_text_cached(&self) -> &str {
+        &self.cached_display_text
+    }
+
+    /// Convert a character index to a byte index in the cached value
+    fn char_to_byte_index(&self, char_index: usize) -> usize {
+        self.cached_value
+            .char_indices()
+            .nth(char_index)
+            .map(|(i, _)| i)
+            .unwrap_or(self.cached_value.len())
+    }
+
+    /// Convert a character range to a byte range in the cached value
+    fn char_range_to_byte_range(&self, start: usize, end: usize) -> (usize, usize) {
+        let byte_start = self.char_to_byte_index(start);
+        let byte_end = self.char_to_byte_index(end);
+        (byte_start, byte_end)
     }
 
     /// Refresh cached values and return true if changed
@@ -297,6 +374,7 @@ impl TextInput {
 
         if value_changed {
             self.cached_value = new_value;
+            self.display_text_dirty = true;
             // Clamp selection to valid range
             let char_count = self.cached_value.chars().count();
             self.selection.cursor = self.selection.cursor.min(char_count);
@@ -357,29 +435,30 @@ impl TextInput {
 
     /// Get character index from x coordinate relative to text start
     fn char_index_at_x(&self, x: f32) -> usize {
-        let display = self.display_text();
+        let display = self.display_text_cached();
         let text_x = self.bounds.x;
         // Account for scroll offset
         let relative_x = x - text_x + self.scroll_offset;
-        char_index_from_x(&display, self.cached_font_size, relative_x)
+        char_index_from_x(display, self.cached_font_size, relative_x)
     }
 
     /// Ensure the cursor is visible by adjusting scroll offset
     fn ensure_cursor_visible(&mut self) {
-        let display = self.display_text();
-        let cursor_x = measure_text_to_char(&display, self.cached_font_size, self.selection.cursor);
+        let cursor_x = measure_text_to_char(
+            self.display_text_cached(),
+            self.cached_font_size,
+            self.selection.cursor,
+        );
 
-        // Padding from edges to start scrolling
-        let padding = 2.0;
-        let visible_width = self.bounds.width - padding * 2.0;
+        let visible_width = self.bounds.width - SCROLL_PADDING * 2.0;
 
         if visible_width <= 0.0 {
             return;
         }
 
         // If cursor is to the left of visible area, scroll left
-        if cursor_x < self.scroll_offset + padding {
-            self.scroll_offset = (cursor_x - padding).max(0.0);
+        if cursor_x < self.scroll_offset + SCROLL_PADDING {
+            self.scroll_offset = (cursor_x - SCROLL_PADDING).max(0.0);
         }
         // If cursor is to the right of visible area, scroll right
         else if cursor_x > self.scroll_offset + visible_width {
@@ -393,23 +472,10 @@ impl TextInput {
     /// Insert text at cursor, replacing any selection
     fn insert_text(&mut self, text: &str) {
         // Save state before modification
-        self.save_to_history();
+        self.save_to_history(EditType::Insert);
 
         let (start, end) = self.selection.range();
-
-        // Convert character indices to byte indices
-        let byte_start = self
-            .cached_value
-            .char_indices()
-            .nth(start)
-            .map(|(i, _)| i)
-            .unwrap_or(self.cached_value.len());
-        let byte_end = self
-            .cached_value
-            .char_indices()
-            .nth(end)
-            .map(|(i, _)| i)
-            .unwrap_or(self.cached_value.len());
+        let (byte_start, byte_end) = self.char_range_to_byte_range(start, end);
 
         // Replace selection with new text
         let mut new_value = String::with_capacity(self.cached_value.len() + text.len());
@@ -418,6 +484,7 @@ impl TextInput {
         new_value.push_str(&self.cached_value[byte_end..]);
 
         self.cached_value = new_value;
+        self.display_text_dirty = true;
         self.selection = Selection::new(start + text.chars().count());
 
         self.notify_change();
@@ -438,7 +505,7 @@ impl TextInput {
 
         // Save state before modification (only if we'll actually delete something)
         if has_content_to_delete {
-            self.save_to_history();
+            self.save_to_history(EditType::Delete);
         }
 
         if self.selection.has_selection() {
@@ -465,24 +532,14 @@ impl TextInput {
 
     /// Delete a range of characters
     fn delete_range(&mut self, start: usize, end: usize) {
-        let byte_start = self
-            .cached_value
-            .char_indices()
-            .nth(start)
-            .map(|(i, _)| i)
-            .unwrap_or(self.cached_value.len());
-        let byte_end = self
-            .cached_value
-            .char_indices()
-            .nth(end)
-            .map(|(i, _)| i)
-            .unwrap_or(self.cached_value.len());
+        let (byte_start, byte_end) = self.char_range_to_byte_range(start, end);
 
         let mut new_value = String::with_capacity(self.cached_value.len());
         new_value.push_str(&self.cached_value[..byte_start]);
         new_value.push_str(&self.cached_value[byte_end..]);
 
         self.cached_value = new_value;
+        self.display_text_dirty = true;
         self.notify_change();
     }
 
@@ -569,18 +626,7 @@ impl TextInput {
     fn get_selected_text(&self) -> Option<String> {
         if self.selection.has_selection() {
             let (start, end) = self.selection.range();
-            let byte_start = self
-                .cached_value
-                .char_indices()
-                .nth(start)
-                .map(|(i, _)| i)
-                .unwrap_or(self.cached_value.len());
-            let byte_end = self
-                .cached_value
-                .char_indices()
-                .nth(end)
-                .map(|(i, _)| i)
-                .unwrap_or(self.cached_value.len());
+            let (byte_start, byte_end) = self.char_range_to_byte_range(start, end);
             Some(self.cached_value[byte_start..byte_end].to_string())
         } else {
             None
@@ -610,12 +656,15 @@ impl TextInput {
     }
 
     /// Save current state to history (call before making changes)
-    fn save_to_history(&mut self) {
-        self.history.push(HistoryEntry {
-            text: self.cached_value.clone(),
-            cursor: self.selection.cursor,
-            anchor: self.selection.anchor,
-        });
+    fn save_to_history(&mut self, edit_type: EditType) {
+        self.history.push(
+            HistoryEntry {
+                text: self.cached_value.clone(),
+                cursor: self.selection.cursor,
+                anchor: self.selection.anchor,
+            },
+            edit_type,
+        );
     }
 
     /// Get current state as a history entry
@@ -632,8 +681,10 @@ impl TextInput {
         let current = self.current_history_entry();
         if let Some(previous) = self.history.undo(current) {
             self.cached_value = previous.text;
+            self.display_text_dirty = true;
             self.selection.cursor = previous.cursor;
             self.selection.anchor = previous.anchor;
+            self.history.reset_coalescing();
             self.notify_change();
             self.reset_cursor_blink();
             self.ensure_cursor_visible();
@@ -645,8 +696,10 @@ impl TextInput {
         let current = self.current_history_entry();
         if let Some(next) = self.history.redo(current) {
             self.cached_value = next.text;
+            self.display_text_dirty = true;
             self.selection.cursor = next.cursor;
             self.selection.anchor = next.anchor;
+            self.history.reset_coalescing();
             self.notify_change();
             self.reset_cursor_blink();
             self.ensure_cursor_visible();
@@ -769,8 +822,9 @@ impl Widget for TextInput {
             return Size::new(self.bounds.width, self.bounds.height);
         }
 
-        let display = self.display_text();
-        let measured = measure_text(&display, self.cached_font_size, None);
+        // Refresh display text cache if dirty
+        let _ = self.display_text();
+        let measured = measure_text(self.display_text_cached(), self.cached_font_size, None);
 
         // Ensure minimum height for empty text
         let height = measured.height.max(self.cached_font_size * 1.2);
@@ -797,7 +851,7 @@ impl Widget for TextInput {
     }
 
     fn paint(&self, ctx: &mut PaintContext) {
-        let display = self.display_text();
+        let display = self.display_text_cached();
         let text_color = self.text_color.get();
         let is_focused = has_focus(self.widget_id);
 
@@ -808,9 +862,9 @@ impl Widget for TextInput {
         if is_focused && self.selection.has_selection() {
             let (start, end) = self.selection.range();
             let start_x =
-                measure_text_to_char(&display, self.cached_font_size, start) - self.scroll_offset;
+                measure_text_to_char(display, self.cached_font_size, start) - self.scroll_offset;
             let end_x =
-                measure_text_to_char(&display, self.cached_font_size, end) - self.scroll_offset;
+                measure_text_to_char(display, self.cached_font_size, end) - self.scroll_offset;
 
             let selection_rect = Rect::new(
                 self.bounds.x + start_x,
@@ -823,19 +877,19 @@ impl Widget for TextInput {
 
         // Draw text with scroll offset
         // Use a very large width to prevent word wrapping - the clip rect handles clipping
-        let text_width = measure_text(&display, self.cached_font_size, None).width;
+        let text_width = measure_text(display, self.cached_font_size, None).width;
         let text_bounds = Rect::new(
             self.bounds.x - self.scroll_offset,
             self.bounds.y,
             text_width.max(self.bounds.width), // Use actual text width to prevent wrapping
             self.bounds.height,
         );
-        ctx.draw_text(&display, text_bounds, text_color, self.cached_font_size);
+        ctx.draw_text(display, text_bounds, text_color, self.cached_font_size);
 
         // Draw cursor if focused and visible
         if is_focused && self.cursor_visible {
             let cursor_x =
-                measure_text_to_char(&display, self.cached_font_size, self.selection.cursor)
+                measure_text_to_char(display, self.cached_font_size, self.selection.cursor)
                     - self.scroll_offset;
             let cursor_rect = Rect::new(
                 self.bounds.x + cursor_x,
