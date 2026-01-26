@@ -822,10 +822,12 @@ impl Widget for TextInput {
         }
 
         // Draw text with scroll offset
+        // Use a very large width to prevent word wrapping - the clip rect handles clipping
+        let text_width = measure_text(&display, self.cached_font_size, None).width;
         let text_bounds = Rect::new(
             self.bounds.x - self.scroll_offset,
             self.bounds.y,
-            self.bounds.width + self.scroll_offset * 2.0, // Allow text to extend
+            text_width.max(self.bounds.width), // Use actual text width to prevent wrapping
             self.bounds.height,
         );
         ctx.draw_text(&display, text_bounds, text_color, self.cached_font_size);
