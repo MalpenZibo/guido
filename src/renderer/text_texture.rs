@@ -84,7 +84,8 @@ impl TextTextureRenderer {
         scale_factor: f32,
     ) -> TextTexture {
         // Extract the scale from the transform for crisp rendering
-        let transform_scale = entry.transform.extract_scale().max(1.0);
+        // Use actual scale (not clamped) so text size matches cursor/selection positioning
+        let transform_scale = entry.transform.extract_scale();
 
         // Calculate the effective scale for text rendering (includes quality multiplier)
         let effective_scale = scale_factor * transform_scale * QUALITY_MULTIPLIER;

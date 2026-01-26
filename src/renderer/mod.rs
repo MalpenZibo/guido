@@ -320,7 +320,7 @@ impl Renderer {
                 // The texture has padding added around the text content (see text_texture.rs).
                 // The padding is 4.0 * effective_scale, where effective_scale = scale_factor * transform_scale * QUALITY_MULTIPLIER.
                 // After dividing by QUALITY_MULTIPLIER for display, the padding becomes:
-                let display_padding = 4.0 * self.scale_factor * transform_scale.max(1.0);
+                let display_padding = 4.0 * self.scale_factor * transform_scale;
 
                 // Position the display_rect by scaling the original rect's top-left from the transform origin.
                 // Subtract the display padding so that the text content (not the texture edge) aligns
