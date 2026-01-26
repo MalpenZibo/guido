@@ -307,45 +307,104 @@ impl Renderer {
                 let original_center_y = tex.entry.rect.y * self.scale_factor
                     + tex.entry.rect.height * self.scale_factor / 2.0;
 
-                // If there's scale with custom transform_origin, the center moves
-                // offset = (center - origin) * (scale - 1)
-                // This is needed because shapes get scaled outward from origin,
-                // but we pre-scale text so we need to manually offset the position
-                let (center_offset_x, center_offset_y) =
-                    if let Some((ox, oy)) = tex.entry.transform_origin {
-                        let scaled_ox = ox * self.scale_factor;
-                        let scaled_oy = oy * self.scale_factor;
-                        let offset_x = (original_center_x - scaled_ox) * (transform_scale - 1.0);
-                        let offset_y = (original_center_y - scaled_oy) * (transform_scale - 1.0);
-                        (offset_x, offset_y)
-                    } else {
-                        // Default center origin - no offset needed
-                        (0.0, 0.0)
-                    };
-
-                // Position the quad centered at the original text center,
-                // adjusted for any scale-induced offset
-                let display_rect = Rect::new(
-                    original_center_x + center_offset_x - display_width / 2.0,
-                    original_center_y + center_offset_y - display_height / 2.0,
-                    display_width,
-                    display_height,
-                );
-
                 // Scale transform_origin to physical pixels (same as shapes do)
                 let scaled_origin = tex
                     .entry
                     .transform_origin
                     .map(|(x, y)| (x * self.scale_factor, y * self.scale_factor));
 
+                // Calculate the original rect in physical pixels
+                let original_left = tex.entry.rect.x * self.scale_factor;
+                let original_top = tex.entry.rect.y * self.scale_factor;
+
+                // The texture has padding added around the text content (see text_texture.rs).
+                // The padding is 4.0 * effective_scale, where effective_scale = scale_factor * transform_scale * QUALITY_MULTIPLIER.
+                // After dividing by QUALITY_MULTIPLIER for display, the padding becomes:
+                let display_padding = 4.0 * self.scale_factor * transform_scale.max(1.0);
+
+                // Position the display_rect by scaling the original rect's top-left from the transform origin.
+                // Subtract the display padding so that the text content (not the texture edge) aligns
+                // with the original rect position.
+                let display_rect = if let Some((ox, oy)) = scaled_origin {
+                    Rect::new(
+                        ox + (original_left - ox) * transform_scale - display_padding,
+                        oy + (original_top - oy) * transform_scale - display_padding,
+                        display_width,
+                        display_height,
+                    )
+                } else {
+                    // No custom origin - just center the rect at original center
+                    Rect::new(
+                        original_center_x - display_width / 2.0,
+                        original_center_y - display_height / 2.0,
+                        display_width,
+                        display_height,
+                    )
+                };
+
                 // Get transform with rotation and translation (no scale since text is pre-scaled)
                 // and scale the translation component for HiDPI
+                // transform_to_ndc will handle centering the rotation AND preserving the translation
                 let mut quad_transform = tex.entry.transform.without_scale();
                 quad_transform.scale_translation(self.scale_factor);
 
+                // Scale clip rect for HiDPI, and apply transform scale only for non-rotated transforms
+                //
+                // For transforms WITH rotation:
+                // - The clip is compared against pre-transform vertex positions in the shader
+                // - Scaling the clip would place it in the wrong position relative to the content
+                // - The content (at 0.9x or similar) fits within the original clip bounds
+                //
+                // For transforms WITHOUT rotation (pure scale):
+                // - Content at 1.2x extends beyond the original bounds
+                // - The clip must also be scaled so content isn't cut off
+                let clip = tex.entry.clip_rect.map(|rect| {
+                    // First scale by HiDPI
+                    let hidpi_rect = Rect::new(
+                        rect.x * self.scale_factor,
+                        rect.y * self.scale_factor,
+                        rect.width * self.scale_factor,
+                        rect.height * self.scale_factor,
+                    );
+
+                    // Only apply transform scale for non-rotated transforms
+                    if !tex.entry.transform.has_rotation() && transform_scale != 1.0 {
+                        // Get transform origin in physical pixels (or use clip center)
+                        let clip_center_x = hidpi_rect.x + hidpi_rect.width / 2.0;
+                        let clip_center_y = hidpi_rect.y + hidpi_rect.height / 2.0;
+                        let (origin_x, origin_y) =
+                            scaled_origin.unwrap_or((clip_center_x, clip_center_y));
+
+                        // Apply scale transform around origin
+                        ClipRegion {
+                            rect: Rect::new(
+                                origin_x + (hidpi_rect.x - origin_x) * transform_scale,
+                                origin_y + (hidpi_rect.y - origin_y) * transform_scale,
+                                hidpi_rect.width * transform_scale,
+                                hidpi_rect.height * transform_scale,
+                            ),
+                            radius: 0.0,
+                            curvature: 1.0,
+                        }
+                    } else {
+                        // No scaling needed for rotated transforms or scale = 1.0
+                        ClipRegion {
+                            rect: hidpi_rect,
+                            radius: 0.0,
+                            curvature: 1.0,
+                        }
+                    }
+                });
+
                 // Create the textured quad with rotation + translation.
                 // Pass the transform_origin so to_vertices applies the same centering logic as shapes.
-                let quad = TexturedQuad::new(display_rect, quad_transform, scaled_origin);
+                let quad = TexturedQuad::with_uv_and_clip(
+                    display_rect,
+                    quad_transform,
+                    scaled_origin,
+                    (0.0, 0.0, 1.0, 1.0), // default UV coordinates
+                    clip,
+                );
 
                 let (vertices, indices) = quad.to_vertices(self.screen_width, self.screen_height);
                 if vertices.is_empty() || indices.is_empty() {

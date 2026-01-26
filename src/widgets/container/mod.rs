@@ -1224,14 +1224,11 @@ impl Widget for Container {
         let transform_origin = self.transform_origin.get();
 
         // Push transform if not identity
+        // Always resolve the transform origin so child elements (like text) know where to center
         let has_transform = !transform.is_identity();
         if has_transform {
-            if transform_origin.is_center() {
-                ctx.push_transform(transform);
-            } else {
-                let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
-                ctx.push_transform_with_origin(transform, origin_x, origin_y);
-            }
+            let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
+            ctx.push_transform_with_origin(transform, origin_x, origin_y);
         }
 
         // Draw background
