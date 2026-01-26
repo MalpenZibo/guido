@@ -32,13 +32,13 @@ macro_rules! impl_dirty_flags {
 pub(crate) use impl_dirty_flags;
 
 pub use children::ChildrenSource;
-pub use container::{container, Border, Container, GradientDirection, LinearGradient, Overflow};
-pub use image::{image, ContentFit, Image, ImageSource};
+pub use container::{Border, Container, GradientDirection, LinearGradient, Overflow, container};
+pub use image::{ContentFit, Image, ImageSource, image};
 pub use into_child::{DynamicChildren, IntoChild, IntoChildren, StaticChildren};
 pub use scroll::{ScrollAxis, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibility};
 pub use state_layer::{BackgroundOverride, RippleConfig, StateStyle};
-pub use text::{text, Text};
-pub use text_input::{text_input, Selection, TextInput};
+pub use text::{Text, text};
+pub use text_input::{Selection, TextInput, text_input};
 pub use widget::{
     Color, Event, EventResponse, Key, Modifiers, MouseButton, Padding, Rect, ScrollSource, Widget,
 };

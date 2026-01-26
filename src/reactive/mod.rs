@@ -14,14 +14,15 @@ pub use clipboard::{
     request_clipboard_read, set_system_clipboard, take_clipboard_change,
     take_clipboard_read_request,
 };
-pub use computed::{create_computed, Computed};
-pub use cursor::{get_current_cursor, set_cursor, take_cursor_change, CursorIcon};
-pub use effect::{create_effect, Effect};
+pub use computed::{Computed, create_computed};
+pub use cursor::{CursorIcon, get_current_cursor, set_cursor, take_cursor_change};
+pub use effect::{Effect, create_effect};
 pub use focus::{clear_focus, focused_widget, has_focus, release_focus, request_focus};
 pub use invalidation::{
-    clear_animation_flag, init_wakeup, request_animation_frame, request_frame, request_layout,
-    request_paint, take_frame_request, with_app_state, with_app_state_mut, ChangeFlags, WidgetId,
+    ChangeFlags, WidgetId, clear_animation_flag, init_wakeup, request_animation_frame,
+    request_frame, request_layout, request_paint, take_frame_request, with_app_state,
+    with_app_state_mut,
 };
 pub use maybe_dyn::{IntoMaybeDyn, MaybeDyn};
 pub use runtime::batch;
-pub use signal::{create_signal, ReadSignal, Signal, WriteSignal};
+pub use signal::{ReadSignal, Signal, WriteSignal, create_signal};

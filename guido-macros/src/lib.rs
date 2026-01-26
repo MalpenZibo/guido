@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Fields, ItemStruct, Meta, Type};
+use syn::{Fields, ItemStruct, Meta, Type, parse_macro_input};
 
 /// Attribute macro to create a reusable component with builder pattern that automatically implements Widget
 ///
@@ -75,10 +75,10 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
 
             if tokens_str.contains("default") {
                 // Extract default value between quotes
-                if let Some(start) = tokens_str.find('"') {
-                    if let Some(end) = tokens_str[start + 1..].find('"') {
-                        default_value = Some(tokens_str[start + 1..start + 1 + end].to_string());
-                    }
+                if let Some(start) = tokens_str.find('"')
+                    && let Some(end) = tokens_str[start + 1..].find('"')
+                {
+                    default_value = Some(tokens_str[start + 1..start + 1 + end].to_string());
                 }
             }
         }

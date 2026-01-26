@@ -13,10 +13,10 @@ use std::time::{Duration, Instant};
 
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
-    clipboard_copy, clipboard_paste, has_focus, release_focus, request_animation_frame,
-    request_focus, set_cursor, ChangeFlags, CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, WidgetId,
+    ChangeFlags, CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, WidgetId, clipboard_copy,
+    clipboard_paste, has_focus, release_focus, request_animation_frame, request_focus, set_cursor,
 };
-use crate::renderer::{char_index_from_x, measure_text, PaintContext};
+use crate::renderer::{PaintContext, char_index_from_x, measure_text};
 
 use super::impl_dirty_flags;
 use super::widget::{Color, Event, EventResponse, Key, Modifiers, MouseButton, Rect, Widget};
@@ -89,10 +89,10 @@ impl History {
         let since_last = now.duration_since(self.last_edit_time);
 
         // Don't push if it's the same as the last entry
-        if let Some(last) = self.undo_stack.back() {
-            if last.text == entry.text {
-                return;
-            }
+        if let Some(last) = self.undo_stack.back()
+            && last.text == entry.text
+        {
+            return;
         }
 
         // Coalesce similar edits within the time window
@@ -1090,10 +1090,10 @@ impl Widget for TextInput {
             }
             Event::KeyUp { key, .. } => {
                 // Stop repeating when key is released
-                if let Some((pressed_key, _)) = self.pressed_key {
-                    if pressed_key == *key {
-                        self.pressed_key = None;
-                    }
+                if let Some((pressed_key, _)) = self.pressed_key
+                    && pressed_key == *key
+                {
+                    self.pressed_key = None;
                 }
             }
             Event::FocusOut => {

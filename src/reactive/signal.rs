@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use super::invalidation::request_frame;
-use super::runtime::{try_with_runtime, SignalId};
+use super::runtime::{SignalId, try_with_runtime};
 use super::storage::{
     create_signal_value, get_signal_value, set_signal_value, update_signal_value, with_signal_value,
 };

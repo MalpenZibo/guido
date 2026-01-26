@@ -9,8 +9,8 @@ use crate::transform_origin::TransformOrigin;
 use crate::widgets::scroll::{ScrollAxis, ScrollbarAxis, ScrollbarVisibility};
 use crate::widgets::widget::{Event, EventResponse, MouseButton, ScrollSource, Widget};
 
-use super::animations::AnimationState;
 use super::Container;
+use super::animations::AnimationState;
 
 impl Container {
     /// Initialize scrollbar containers if scrolling is enabled and they don't exist yet
@@ -141,7 +141,7 @@ impl Container {
             ),
         };
 
-        if let Some(ref mut anim) = scale_anim {
+        if let Some(anim) = scale_anim {
             anim.animate_to(target_scale);
             if anim.is_animating() {
                 anim.advance();
@@ -152,7 +152,7 @@ impl Container {
         let current_scale = scale_anim.as_ref().map(|a| *a.current()).unwrap_or(1.0);
 
         // Layout and position track container
-        if let Some(ref mut track) = track_container {
+        if let Some(track) = track_container {
             let track_constraints = Constraints {
                 min_width: track_rect.width,
                 min_height: track_rect.height,
@@ -178,7 +178,7 @@ impl Container {
         }
 
         // Layout and position handle container
-        if let Some(ref mut handle) = handle_container {
+        if let Some(handle) = handle_container {
             let handle_constraints = Constraints {
                 min_width: handle_rect.width,
                 min_height: handle_rect.height,
@@ -244,23 +244,19 @@ impl Container {
                 // Check vertical scrollbar
                 if self.scroll_axis.allows_vertical()
                     && self.scroll_state.needs_vertical_scrollbar()
-                {
-                    if let Some(response) =
+                    && let Some(response) =
                         self.handle_scrollbar_click(ScrollbarAxis::Vertical, *x, *y, event)
-                    {
-                        return Some(response);
-                    }
+                {
+                    return Some(response);
                 }
 
                 // Check horizontal scrollbar
                 if self.scroll_axis.allows_horizontal()
                     && self.scroll_state.needs_horizontal_scrollbar()
-                {
-                    if let Some(response) =
+                    && let Some(response) =
                         self.handle_scrollbar_click(ScrollbarAxis::Horizontal, *x, *y, event)
-                    {
-                        return Some(response);
-                    }
+                {
+                    return Some(response);
                 }
             }
 
@@ -379,7 +375,7 @@ impl Container {
                 ScrollbarAxis::Vertical => &mut self.v_scrollbar_handle,
                 ScrollbarAxis::Horizontal => &mut self.h_scrollbar_handle,
             };
-            if let Some(ref mut handle) = handle_container {
+            if let Some(handle) = handle_container {
                 handle.event(event);
             }
 
@@ -512,7 +508,7 @@ impl Container {
             ScrollbarAxis::Vertical => &mut self.v_scrollbar_handle,
             ScrollbarAxis::Horizontal => &mut self.h_scrollbar_handle,
         };
-        if let Some(ref mut handle) = handle_container {
+        if let Some(handle) = handle_container {
             handle.event(event);
         }
 
