@@ -26,7 +26,8 @@ fn main() {
                     .layout(
                         Flex::row()
                             .spacing(8.0)
-                            .main_axis_alignment(MainAxisAlignment::SpaceBetween),
+                            .main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                            .cross_axis_alignment(CrossAxisAlignment::Center),
                     )
                     .padding_xy(16.0, 0.0)
                     .child(
@@ -54,7 +55,8 @@ fn main() {
                     .layout(
                         Flex::row()
                             .spacing(16.0)
-                            .main_axis_alignment(MainAxisAlignment::Center),
+                            .main_axis_alignment(MainAxisAlignment::Center)
+                            .cross_axis_alignment(CrossAxisAlignment::Center),
                     )
                     .children([
                         container()
