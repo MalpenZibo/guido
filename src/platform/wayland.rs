@@ -720,6 +720,7 @@ fn keysym_to_key(keysym: Keysym, utf8: Option<&str>) -> Option<Key> {
         Keysym::Down => return Some(Key::Down),
         Keysym::Home => return Some(Key::Home),
         Keysym::End => return Some(Key::End),
+        Keysym::space => return Some(Key::Char(' ')),
         _ => {}
     }
 

@@ -186,6 +186,9 @@ pub struct TextInput {
     // Undo/redo history
     history: History,
 
+    // Horizontal scroll offset for text overflow
+    scroll_offset: f32,
+
     // Layout
     bounds: Rect,
 
@@ -218,6 +221,7 @@ impl TextInput {
             last_repeat_time: Instant::now(),
             is_dragging: false,
             history: History::new(),
+            scroll_offset: 0.0,
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
             on_change: None,
             on_submit: None,
@@ -355,8 +359,35 @@ impl TextInput {
     fn char_index_at_x(&self, x: f32) -> usize {
         let display = self.display_text();
         let text_x = self.bounds.x;
-        let relative_x = x - text_x;
+        // Account for scroll offset
+        let relative_x = x - text_x + self.scroll_offset;
         char_index_from_x(&display, self.cached_font_size, relative_x)
+    }
+
+    /// Ensure the cursor is visible by adjusting scroll offset
+    fn ensure_cursor_visible(&mut self) {
+        let display = self.display_text();
+        let cursor_x = measure_text_to_char(&display, self.cached_font_size, self.selection.cursor);
+
+        // Padding from edges to start scrolling
+        let padding = 2.0;
+        let visible_width = self.bounds.width - padding * 2.0;
+
+        if visible_width <= 0.0 {
+            return;
+        }
+
+        // If cursor is to the left of visible area, scroll left
+        if cursor_x < self.scroll_offset + padding {
+            self.scroll_offset = (cursor_x - padding).max(0.0);
+        }
+        // If cursor is to the right of visible area, scroll right
+        else if cursor_x > self.scroll_offset + visible_width {
+            self.scroll_offset = cursor_x - visible_width;
+        }
+
+        // Don't scroll past the start
+        self.scroll_offset = self.scroll_offset.max(0.0);
     }
 
     /// Insert text at cursor, replacing any selection
@@ -391,6 +422,7 @@ impl TextInput {
 
         self.notify_change();
         self.reset_cursor_blink();
+        self.ensure_cursor_visible();
     }
 
     /// Delete selected text or character before/after cursor
@@ -428,6 +460,7 @@ impl TextInput {
             }
         }
         self.reset_cursor_blink();
+        self.ensure_cursor_visible();
     }
 
     /// Delete a range of characters
@@ -469,6 +502,7 @@ impl TextInput {
             self.selection.collapse();
         }
         self.reset_cursor_blink();
+        self.ensure_cursor_visible();
     }
 
     /// Find word boundary in given direction
@@ -520,6 +554,7 @@ impl TextInput {
             self.selection.collapse();
         }
         self.reset_cursor_blink();
+        self.ensure_cursor_visible();
     }
 
     /// Select all text
@@ -527,6 +562,7 @@ impl TextInput {
         self.selection.anchor = 0;
         self.selection.cursor = self.cached_value.chars().count();
         self.reset_cursor_blink();
+        self.ensure_cursor_visible();
     }
 
     /// Get selected text
@@ -600,6 +636,7 @@ impl TextInput {
             self.selection.anchor = previous.anchor;
             self.notify_change();
             self.reset_cursor_blink();
+            self.ensure_cursor_visible();
         }
     }
 
@@ -612,6 +649,7 @@ impl TextInput {
             self.selection.anchor = next.anchor;
             self.notify_change();
             self.reset_cursor_blink();
+            self.ensure_cursor_visible();
         }
     }
 
@@ -763,11 +801,16 @@ impl Widget for TextInput {
         let text_color = self.text_color.get();
         let is_focused = has_focus(self.widget_id);
 
+        // Clip to bounds (prevents text overflow)
+        ctx.push_clip(self.bounds, 0.0, 1.0);
+
         // Draw selection highlight if focused and has selection
         if is_focused && self.selection.has_selection() {
             let (start, end) = self.selection.range();
-            let start_x = measure_text_to_char(&display, self.cached_font_size, start);
-            let end_x = measure_text_to_char(&display, self.cached_font_size, end);
+            let start_x =
+                measure_text_to_char(&display, self.cached_font_size, start) - self.scroll_offset;
+            let end_x =
+                measure_text_to_char(&display, self.cached_font_size, end) - self.scroll_offset;
 
             let selection_rect = Rect::new(
                 self.bounds.x + start_x,
@@ -778,13 +821,20 @@ impl Widget for TextInput {
             ctx.draw_rect(selection_rect, self.selection_color.get());
         }
 
-        // Draw text
-        ctx.draw_text(&display, self.bounds, text_color, self.cached_font_size);
+        // Draw text with scroll offset
+        let text_bounds = Rect::new(
+            self.bounds.x - self.scroll_offset,
+            self.bounds.y,
+            self.bounds.width + self.scroll_offset * 2.0, // Allow text to extend
+            self.bounds.height,
+        );
+        ctx.draw_text(&display, text_bounds, text_color, self.cached_font_size);
 
         // Draw cursor if focused and visible
         if is_focused && self.cursor_visible {
             let cursor_x =
-                measure_text_to_char(&display, self.cached_font_size, self.selection.cursor);
+                measure_text_to_char(&display, self.cached_font_size, self.selection.cursor)
+                    - self.scroll_offset;
             let cursor_rect = Rect::new(
                 self.bounds.x + cursor_x,
                 self.bounds.y,
@@ -793,6 +843,8 @@ impl Widget for TextInput {
             );
             ctx.draw_rect(cursor_rect, self.cursor_color.get());
         }
+
+        ctx.pop_clip();
     }
 
     fn event(&mut self, event: &Event) -> EventResponse {
@@ -808,21 +860,19 @@ impl Widget for TextInput {
                     self.selection = Selection::new(char_index);
                     self.is_dragging = true;
                     self.reset_cursor_blink();
+                    self.ensure_cursor_visible();
 
                     return EventResponse::Handled;
                 }
             }
-            Event::MouseMove { x, y } => {
+            Event::MouseMove { x, .. } => {
                 if self.is_dragging {
                     // Extend selection while dragging
                     let char_index = self.char_index_at_x(*x);
                     self.selection.cursor = char_index;
+                    self.ensure_cursor_visible();
                     request_animation_frame();
                     return EventResponse::Handled;
-                }
-                // Check if we're over the text input for cursor styling (future)
-                if self.bounds.contains(*x, *y) {
-                    // Could set cursor to text cursor here
                 }
             }
             Event::MouseUp { button, .. } => {
