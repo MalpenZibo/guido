@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
     clipboard_copy, clipboard_paste, has_focus, release_focus, request_animation_frame,
-    request_focus, ChangeFlags, IntoMaybeDyn, MaybeDyn, Signal, WidgetId,
+    request_focus, set_cursor, ChangeFlags, CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, WidgetId,
 };
 use crate::renderer::{char_index_from_x, measure_text, PaintContext};
 
@@ -244,6 +244,9 @@ pub struct TextInput {
     // Mouse drag selection
     is_dragging: bool,
 
+    // Mouse hover state (for cursor icon)
+    is_hovered: bool,
+
     // Undo/redo history
     history: History,
 
@@ -289,6 +292,7 @@ impl TextInput {
             key_press_time: Instant::now(),
             last_repeat_time: Instant::now(),
             is_dragging: false,
+            is_hovered: false,
             history: History::new(),
             scroll_offset: 0.0,
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
@@ -1042,7 +1046,18 @@ impl Widget for TextInput {
                     return EventResponse::Handled;
                 }
             }
-            Event::MouseMove { x, .. } => {
+            Event::MouseMove { x, y, .. } => {
+                let in_bounds = self.bounds.contains(*x, *y);
+
+                // Update hover state and cursor
+                if in_bounds && !self.is_hovered {
+                    self.is_hovered = true;
+                    set_cursor(CursorIcon::Text);
+                } else if !in_bounds && self.is_hovered {
+                    self.is_hovered = false;
+                    set_cursor(CursorIcon::Default);
+                }
+
                 if self.is_dragging {
                     // Extend selection while dragging
                     let char_index = self.char_index_at_x(*x);
@@ -1087,6 +1102,12 @@ impl Widget for TextInput {
                     self.cursor_visible = false;
                     self.is_dragging = false;
                     request_animation_frame();
+                }
+            }
+            Event::MouseLeave => {
+                if self.is_hovered {
+                    self.is_hovered = false;
+                    set_cursor(CursorIcon::Default);
                 }
             }
             _ => {}

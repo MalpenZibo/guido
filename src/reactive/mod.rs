@@ -1,5 +1,6 @@
 pub mod clipboard;
 pub mod computed;
+pub mod cursor;
 pub mod effect;
 pub mod focus;
 pub mod invalidation;
@@ -14,6 +15,7 @@ pub use clipboard::{
     take_clipboard_read_request,
 };
 pub use computed::{create_computed, Computed};
+pub use cursor::{get_current_cursor, set_cursor, take_cursor_change, CursorIcon};
 pub use effect::{create_effect, Effect};
 pub use focus::{clear_focus, focused_widget, has_focus, release_focus, request_focus};
 pub use invalidation::{

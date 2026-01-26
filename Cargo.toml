@@ -15,6 +15,7 @@ bytemuck = { version = "1.24", features = ["derive"] }
 glyphon = "0.10"
 cosmic-text = "0.16"
 smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop", "xkbcommon"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }

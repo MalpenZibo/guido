@@ -17,7 +17,9 @@ use smithay_client_toolkit::{
     registry_handlers,
     seat::{
         keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers as WlModifiers, RawModifiers},
-        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+        pointer::{
+            cursor_shape::CursorShapeManager, PointerEvent, PointerEventKind, PointerHandler,
+        },
         Capability, SeatHandler, SeatState,
     },
     shell::wlr_layer::{
@@ -34,12 +36,14 @@ use wayland_client::{
     },
     Connection, EventQueue, Proxy, QueueHandle,
 };
+use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape as WpCursorShape;
 
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::AsFd;
 use std::os::unix::io::OwnedFd;
 
+use crate::reactive::CursorIcon;
 use crate::widgets::{Event, Key, Modifiers, MouseButton, ScrollSource};
 
 /// Pixels per line for discrete scroll (mouse wheel)
@@ -68,6 +72,10 @@ pub struct WaylandState {
     pointer_x: f32,
     pointer_y: f32,
     pointer_over_surface: bool,
+    pointer_enter_serial: u32,
+
+    // Cursor shape
+    cursor_shape_manager: Option<CursorShapeManager>,
 
     // Keyboard state
     keyboard: Option<wl_keyboard::WlKeyboard>,
@@ -109,6 +117,12 @@ pub fn create_wayland_app() -> (
         log::warn!("Data device manager not available - clipboard will not work");
     }
 
+    // Initialize cursor shape manager for cursor changes
+    let cursor_shape_manager = CursorShapeManager::bind(&globals, &qh).ok();
+    if cursor_shape_manager.is_none() {
+        log::warn!("Cursor shape manager not available - cursor changes will not work");
+    }
+
     let state = WaylandState {
         registry_state: RegistryState::new(&globals),
         compositor_state,
@@ -128,6 +142,8 @@ pub fn create_wayland_app() -> (
         pointer_x: 0.0,
         pointer_y: 0.0,
         pointer_over_surface: false,
+        pointer_enter_serial: 0,
+        cursor_shape_manager,
         keyboard: None,
         modifiers: Modifiers::default(),
         keyboard_serial: 0,
@@ -304,6 +320,44 @@ impl WaylandState {
             }
         }
         None
+    }
+
+    /// Set the cursor shape
+    pub fn set_cursor(&self, cursor: CursorIcon, qh: &QueueHandle<Self>) {
+        let Some(ref manager) = self.cursor_shape_manager else {
+            return;
+        };
+        let Some(ref pointer) = self.pointer else {
+            return;
+        };
+
+        // Convert our CursorIcon to Wayland cursor shape
+        let shape = match cursor {
+            CursorIcon::Default => WpCursorShape::Default,
+            CursorIcon::Text => WpCursorShape::Text,
+            CursorIcon::Pointer => WpCursorShape::Pointer,
+            CursorIcon::Crosshair => WpCursorShape::Crosshair,
+            CursorIcon::Move => WpCursorShape::Move,
+            CursorIcon::NotAllowed => WpCursorShape::NotAllowed,
+            CursorIcon::Grab => WpCursorShape::Grab,
+            CursorIcon::Grabbing => WpCursorShape::Grabbing,
+            CursorIcon::ResizeNorth => WpCursorShape::NResize,
+            CursorIcon::ResizeSouth => WpCursorShape::SResize,
+            CursorIcon::ResizeEast => WpCursorShape::EResize,
+            CursorIcon::ResizeWest => WpCursorShape::WResize,
+            CursorIcon::ResizeNorthEast => WpCursorShape::NeResize,
+            CursorIcon::ResizeNorthWest => WpCursorShape::NwResize,
+            CursorIcon::ResizeSouthEast => WpCursorShape::SeResize,
+            CursorIcon::ResizeSouthWest => WpCursorShape::SwResize,
+            CursorIcon::ColResize => WpCursorShape::ColResize,
+            CursorIcon::RowResize => WpCursorShape::RowResize,
+            CursorIcon::Wait => WpCursorShape::Wait,
+            CursorIcon::Progress => WpCursorShape::Progress,
+        };
+
+        // Get cursor shape device and set shape
+        let device = manager.get_shape_device(pointer, qh);
+        device.set_shape(self.pointer_enter_serial, shape);
     }
 }
 
@@ -561,8 +615,9 @@ impl PointerHandler for WaylandState {
             }
 
             match event.kind {
-                PointerEventKind::Enter { .. } => {
+                PointerEventKind::Enter { serial } => {
                     self.pointer_over_surface = true;
+                    self.pointer_enter_serial = serial;
                     self.pointer_x = event.position.0 as f32;
                     self.pointer_y = event.position.1 as f32;
                     self.pending_events.push(Event::MouseEnter {

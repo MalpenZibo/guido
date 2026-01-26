@@ -17,7 +17,7 @@ use layout::Constraints;
 use platform::{create_wayland_app, Anchor, Layer, WaylandWindowWrapper};
 use reactive::{
     clear_animation_flag, init_wakeup, set_system_clipboard, take_clipboard_change,
-    take_frame_request, with_app_state, with_app_state_mut,
+    take_cursor_change, take_frame_request, with_app_state, with_app_state_mut,
 };
 use renderer::{GpuContext, Renderer};
 use widgets::{Color, Widget};
@@ -35,8 +35,8 @@ pub mod prelude {
     };
     pub use crate::platform::{Anchor, Layer};
     pub use crate::reactive::{
-        batch, create_computed, create_effect, create_signal, Computed, Effect, IntoMaybeDyn,
-        MaybeDyn, ReadSignal, Signal, WriteSignal,
+        batch, create_computed, create_effect, create_signal, set_cursor, Computed, CursorIcon,
+        Effect, IntoMaybeDyn, MaybeDyn, ReadSignal, Signal, WriteSignal,
     };
     pub use crate::renderer::primitives::Shadow;
     pub use crate::renderer::{measure_text, PaintContext};
@@ -317,6 +317,11 @@ impl App {
             // Sync clipboard to Wayland if it changed (copy operations)
             if let Some(text) = take_clipboard_change() {
                 wayland_state.set_clipboard(text, &qh);
+            }
+
+            // Sync cursor to Wayland if it changed
+            if let Some(cursor) = take_cursor_change() {
+                wayland_state.set_cursor(cursor, &qh);
             }
 
             // Calculate physical pixel dimensions (for HiDPI)
