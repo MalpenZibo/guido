@@ -23,6 +23,7 @@ fn main() {
                 .background_color(Color::rgb(0.1, 0.1, 0.15)),
             move || {
                 container()
+                    .height(32.0)
                     .layout(
                         Flex::row()
                             .spacing(8.0)
@@ -52,6 +53,7 @@ fn main() {
                 .background_color(Color::rgb(0.15, 0.15, 0.2)),
             move || {
                 container()
+                    .height(48.0)
                     .layout(
                         Flex::row()
                             .spacing(16.0)
