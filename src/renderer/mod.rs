@@ -21,7 +21,7 @@ use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::{Color, Rect};
 
 pub use context::{GpuContext, SurfaceState};
-pub use text_measurer::measure_text;
+pub use text_measurer::{char_index_from_x, measure_text, measure_text_to_char};
 
 /// A text entry for rendering, containing all information needed to render text.
 #[derive(Debug, Clone)]
