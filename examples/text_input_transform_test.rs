@@ -40,7 +40,7 @@ fn main() {
                         .border(1.0, Color::rgb(0.3, 0.8, 0.3))
                         .corner_radius(6.0)
                         .child(
-                            text_input(input1)
+                            text_input_signal(input1)
                                 .text_color(Color::WHITE)
                                 .cursor_color(Color::rgb(0.4, 0.8, 1.0))
                                 .font_size(14.0),
@@ -65,7 +65,7 @@ fn main() {
                         .corner_radius(6.0)
                         .rotate(15.0)
                         .child(
-                            text_input(input2)
+                            text_input_signal(input2)
                                 .text_color(Color::WHITE)
                                 .cursor_color(Color::rgb(0.4, 0.8, 1.0))
                                 .font_size(14.0),
@@ -90,7 +90,7 @@ fn main() {
                         .corner_radius(6.0)
                         .scale(1.2)
                         .child(
-                            text_input(input3)
+                            text_input_signal(input3)
                                 .text_color(Color::WHITE)
                                 .cursor_color(Color::rgb(0.4, 0.8, 1.0))
                                 .font_size(14.0),
@@ -115,7 +115,7 @@ fn main() {
                         .corner_radius(6.0)
                         .translate(50.0, 10.0)
                         .child(
-                            text_input(input4)
+                            text_input_signal(input4)
                                 .text_color(Color::WHITE)
                                 .cursor_color(Color::rgb(0.4, 0.8, 1.0))
                                 .font_size(14.0),
@@ -144,7 +144,7 @@ fn main() {
                                 .then(&Transform::scale(0.9)),
                         )
                         .child(
-                            text_input(input5)
+                            text_input_signal(input5)
                                 .text_color(Color::WHITE)
                                 .cursor_color(Color::rgb(0.4, 0.8, 1.0))
                                 .font_size(14.0),
