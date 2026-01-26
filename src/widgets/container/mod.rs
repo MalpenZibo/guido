@@ -1019,12 +1019,12 @@ impl Widget for Container {
             }
         }
 
-        let child_min_width = if width_length.exact.is_some() {
+        let child_min_width = if width_length.exact.is_some() || width_length.fill {
             child_max_width
         } else {
             0.0
         };
-        let child_min_height = if height_length.exact.is_some() {
+        let child_min_height = if height_length.exact.is_some() || height_length.fill {
             child_max_height
         } else {
             0.0
@@ -1160,6 +1160,8 @@ impl Widget for Container {
             }
         } else if let Some(exact) = width_length.exact {
             exact
+        } else if width_length.fill {
+            constraints.max_width
         } else if let Some(min) = width_length.min {
             content_width.max(min)
         } else {
@@ -1178,6 +1180,8 @@ impl Widget for Container {
             }
         } else if let Some(exact) = height_length.exact {
             exact
+        } else if height_length.fill {
+            constraints.max_height
         } else if let Some(min) = height_length.min {
             content_height.max(min)
         } else {

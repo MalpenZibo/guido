@@ -288,14 +288,19 @@ fn main() {
     let start_time = std::time::Instant::now();
 
     App::new()
-        .width(900)
-        .height(450)
-        .background_color(Color::rgb(0.1, 0.1, 0.15))
+        .add_surface(
+            SurfaceConfig::new()
+                .width(900)
+                .height(450)
+                .anchor(Anchor::TOP | Anchor::LEFT)
+                .background_color(Color::rgb(0.1, 0.1, 0.15)),
+            move || view,
+        )
         .on_update(move || {
             // Update animation angle (full rotation every 4 seconds)
             let elapsed = start_time.elapsed().as_secs_f32();
             let new_angle = (elapsed * PI / 2.0).to_degrees() % 360.0;
             angle.set(new_angle);
         })
-        .run(view);
+        .run();
 }

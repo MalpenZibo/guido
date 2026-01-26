@@ -174,8 +174,13 @@ fn main() {
 
     // Run the app with a larger window for the demo
     App::new()
-        .width(900)
-        .height(300)
-        .background_color(Color::rgb(0.1, 0.1, 0.15))
-        .run(view);
+        .add_surface(
+            SurfaceConfig::new()
+                .width(900)
+                .height(300)
+                .anchor(Anchor::TOP | Anchor::LEFT)
+                .background_color(Color::rgb(0.1, 0.1, 0.15)),
+            move || view,
+        )
+        .run();
 }

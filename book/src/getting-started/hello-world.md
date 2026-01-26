@@ -22,32 +22,39 @@ Replace `src/main.rs` with:
 use guido::prelude::*;
 
 fn main() {
-    let view = container()
-        .layout(
-            Flex::row()
-                .spacing(8.0)
-                .main_axis_alignment(MainAxisAlignment::SpaceBetween),
-        )
-        .child(
-            container()
-                .padding(8.0)
-                .background(Color::rgb(0.2, 0.2, 0.3))
-                .corner_radius(4.0)
-                .child(text("Guido")),
-        )
-        .child(container().padding(8.0).child(text("Hello World!")))
-        .child(
-            container()
-                .padding(8.0)
-                .background(Color::rgb(0.3, 0.2, 0.2))
-                .corner_radius(4.0)
-                .child(text("Status Bar")),
-        );
-
     App::new()
-        .height(32)
-        .background_color(Color::rgb(0.1, 0.1, 0.15))
-        .run(view);
+        .add_surface(
+            SurfaceConfig::new()
+                .height(32)
+                .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+                .background_color(Color::rgb(0.1, 0.1, 0.15)),
+            || {
+                container()
+                    .height(fill())
+                    .layout(
+                        Flex::row()
+                            .spacing(8.0)
+                            .main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                    )
+                    .child(
+                        container()
+                            .padding(8.0)
+                            .background(Color::rgb(0.2, 0.2, 0.3))
+                            .corner_radius(4.0)
+                            .child(text("Guido")),
+                    )
+                    .child(container().padding(8.0).child(text("Hello World!")))
+                    .child(
+                        container()
+                            .padding(8.0)
+                            .background(Color::rgb(0.3, 0.2, 0.2))
+                            .corner_radius(4.0)
+                            .child(text("Status Bar")),
+                    )
+            },
+        )
+        .run();
 }
 ```
 
@@ -65,17 +72,45 @@ use guido::prelude::*;
 
 The prelude imports everything you need: widgets, colors, layout types, and reactive primitives.
 
+### Surface Configuration
+
+```rust
+App::new()
+    .add_surface(
+        SurfaceConfig::new()
+            .height(32)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+            .background_color(Color::rgb(0.1, 0.1, 0.15)),
+        || { /* widget tree */ },
+    )
+    .run();
+```
+
+The `SurfaceConfig` defines how the window appears:
+- **Height** - 32 pixels tall
+- **Anchor** - Attached to top, left, and right edges (full width)
+- **Background color** - Dark background for the bar
+
 ### Building the View
 
 The view is built using **containers** - the primary building block in Guido:
 
 ```rust
-let view = container()
-    .layout(Flex::row().spacing(8.0).main_axis_alignment(MainAxisAlignment::SpaceBetween))
-    // ... children
+container()
+    .height(fill())
+    .layout(
+        Flex::row()
+            .spacing(8.0)
+            .main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .cross_axis_alignment(CrossAxisAlignment::Center),
+    )
 ```
 
-This creates a container with a horizontal flex layout. The `SpaceBetween` alignment spreads children across the available space.
+This creates a container that:
+- Fills the available height with `fill()`
+- Uses a horizontal flex layout
+- Centers children vertically with `cross_axis_alignment`
+- Spreads children across the space with `SpaceBetween`
 
 ### Adding Children
 
@@ -105,20 +140,6 @@ text("Hello World!")
 
 The `text()` function creates a text widget. Text inherits styling from its container by default, with white text color.
 
-### Running the App
-
-```rust
-App::new()
-    .height(32)
-    .background_color(Color::rgb(0.1, 0.1, 0.15))
-    .run(view);
-```
-
-The `App` configures the window:
-- **Height** - 32 pixels tall (width defaults to full screen for layer shell)
-- **Background color** - Dark background for the bar
-- **run()** - Starts the event loop with our view
-
 ## Adding Interactivity
 
 Let's make it interactive with a click counter. Update your code:
@@ -129,35 +150,42 @@ use guido::prelude::*;
 fn main() {
     let count = create_signal(0);
 
-    let view = container()
-        .layout(
-            Flex::row()
-                .spacing(8.0)
-                .main_axis_alignment(MainAxisAlignment::SpaceBetween),
-        )
-        .child(
-            container()
-                .padding(8.0)
-                .background(Color::rgb(0.2, 0.2, 0.3))
-                .corner_radius(4.0)
-                .hover_state(|s| s.lighter(0.1))
-                .pressed_state(|s| s.ripple())
-                .on_click(move || count.update(|c| *c += 1))
-                .child(text(move || format!("Clicks: {}", count.get()))),
-        )
-        .child(container().padding(8.0).child(text("Hello World!")))
-        .child(
-            container()
-                .padding(8.0)
-                .background(Color::rgb(0.3, 0.2, 0.2))
-                .corner_radius(4.0)
-                .child(text("Status Bar")),
-        );
-
     App::new()
-        .height(32)
-        .background_color(Color::rgb(0.1, 0.1, 0.15))
-        .run(view);
+        .add_surface(
+            SurfaceConfig::new()
+                .height(32)
+                .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+                .background_color(Color::rgb(0.1, 0.1, 0.15)),
+            move || {
+                container()
+                    .height(fill())
+                    .layout(
+                        Flex::row()
+                            .spacing(8.0)
+                            .main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                    )
+                    .child(
+                        container()
+                            .padding(8.0)
+                            .background(Color::rgb(0.2, 0.2, 0.3))
+                            .corner_radius(4.0)
+                            .hover_state(|s| s.lighter(0.1))
+                            .pressed_state(|s| s.ripple())
+                            .on_click(move || count.update(|c| *c += 1))
+                            .child(text(move || format!("Clicks: {}", count.get()))),
+                    )
+                    .child(container().padding(8.0).child(text("Hello World!")))
+                    .child(
+                        container()
+                            .padding(8.0)
+                            .background(Color::rgb(0.3, 0.2, 0.2))
+                            .corner_radius(4.0)
+                            .child(text("Status Bar")),
+                    )
+            },
+        )
+        .run();
 }
 ```
 
