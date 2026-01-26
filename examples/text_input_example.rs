@@ -179,11 +179,15 @@ fn main() {
         );
 
     App::new()
-        .width(400)
-        .height(500)
-        .anchor(Anchor::TOP | Anchor::LEFT)
-        .layer(Layer::Top)
-        .namespace("text-input-example")
-        .background_color(Color::rgb(0.12, 0.12, 0.18))
-        .run(view);
+        .add_surface(
+            SurfaceConfig::new()
+                .width(400)
+                .height(500)
+                .anchor(Anchor::TOP | Anchor::LEFT)
+                .layer(Layer::Top)
+                .namespace("text-input-example")
+                .background_color(Color::rgb(0.12, 0.12, 0.18)),
+            move || view,
+        )
+        .run();
 }

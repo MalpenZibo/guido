@@ -7,47 +7,52 @@
 use guido::prelude::*;
 
 fn main() {
-    let view = container()
-        .background(Color::rgb(0.08, 0.08, 0.12))
-        .padding(24.0)
-        .layout(Flex::column().spacing(16.0))
-        .child(
-            // Title section
-            container().layout(Flex::column().spacing(8.0)).children([
-                text("State Layer Demo")
-                    .font_size(24.0)
-                    .color(Color::rgb(0.9, 0.9, 0.95)),
-                text("Hover and click the buttons to see state changes and ripple effects")
-                    .font_size(14.0)
-                    .color(Color::rgb(0.6, 0.6, 0.7)),
-            ]),
-        )
-        .child(
-            // Buttons container - two columns
-            container().layout(Flex::row().spacing(16.0)).children([
-                // Left column - basic effects
-                container().layout(Flex::column().spacing(12.0)).children([
-                    create_lighter_button(),
-                    create_explicit_colors_button(),
-                    create_transform_button(),
-                    create_animated_button(),
-                    create_border_button(),
-                ]),
-                // Right column - ripple effects
-                container().layout(Flex::column().spacing(12.0)).children([
-                    create_ripple_button(),
-                    create_colored_ripple_button(),
-                    create_ripple_with_scale_button(),
-                    create_rotated_ripple_button(),
-                ]),
-            ]),
-        );
-
     App::new()
-        .width(700)
-        .height(400)
-        .background_color(Color::rgb(0.08, 0.08, 0.12))
-        .run(view);
+        .add_surface(
+            SurfaceConfig::new()
+                .width(700)
+                .height(400)
+                .anchor(Anchor::TOP | Anchor::LEFT)
+                .background_color(Color::rgb(0.08, 0.08, 0.12)),
+            || {
+                container()
+                    .background(Color::rgb(0.08, 0.08, 0.12))
+                    .padding(24.0)
+                    .layout(Flex::column().spacing(16.0))
+                    .child(
+                        // Title section
+                        container().layout(Flex::column().spacing(8.0)).children([
+                            text("State Layer Demo")
+                                .font_size(24.0)
+                                .color(Color::rgb(0.9, 0.9, 0.95)),
+                            text("Hover and click the buttons to see state changes and ripple effects")
+                                .font_size(14.0)
+                                .color(Color::rgb(0.6, 0.6, 0.7)),
+                        ]),
+                    )
+                    .child(
+                        // Buttons container - two columns
+                        container().layout(Flex::row().spacing(16.0)).children([
+                            // Left column - basic effects
+                            container().layout(Flex::column().spacing(12.0)).children([
+                                create_lighter_button(),
+                                create_explicit_colors_button(),
+                                create_transform_button(),
+                                create_animated_button(),
+                                create_border_button(),
+                            ]),
+                            // Right column - ripple effects
+                            container().layout(Flex::column().spacing(12.0)).children([
+                                create_ripple_button(),
+                                create_colored_ripple_button(),
+                                create_ripple_with_scale_button(),
+                                create_rotated_ripple_button(),
+                            ]),
+                        ]),
+                    )
+            },
+        )
+        .run();
 }
 
 /// Button with lighter() hover effect

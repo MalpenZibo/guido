@@ -4,29 +4,33 @@ fn main() {
     // State signals for animations
     let expanded = create_signal(false);
 
-    // Main view with animated cards in a 2-column grid
-    let view = container()
-        .background(Color::rgb(0.08, 0.08, 0.12))
-        .padding(20.0)
-        .layout(Flex::column().spacing(20.0))
-        .children([
-            // Row 1
-            container().layout(Flex::row().spacing(20.0)).children([
-                create_width_animation_card(expanded),
-                create_color_animation_card(),
-            ]),
-            // Row 2
-            container().layout(Flex::row().spacing(20.0)).children([
-                create_combined_animation_card(),
-                create_border_animation_card(),
-            ]),
-        ]);
-
     App::new()
-        .width(800)
-        .height(400)
-        .background_color(Color::rgb(0.08, 0.08, 0.12))
-        .run(view);
+        .add_surface(
+            SurfaceConfig::new()
+                .width(800)
+                .height(400)
+                .anchor(Anchor::TOP | Anchor::LEFT)
+                .background_color(Color::rgb(0.08, 0.08, 0.12)),
+            move || {
+                container()
+                    .background(Color::rgb(0.08, 0.08, 0.12))
+                    .padding(20.0)
+                    .layout(Flex::column().spacing(20.0))
+                    .children([
+                        // Row 1
+                        container().layout(Flex::row().spacing(20.0)).children([
+                            create_width_animation_card(expanded),
+                            create_color_animation_card(),
+                        ]),
+                        // Row 2
+                        container().layout(Flex::row().spacing(20.0)).children([
+                            create_combined_animation_card(),
+                            create_border_animation_card(),
+                        ]),
+                    ])
+            },
+        )
+        .run();
 }
 
 /// Card demonstrating width animation with spring physics

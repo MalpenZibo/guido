@@ -17,14 +17,14 @@ pub use guido_macros::component;
 use std::collections::HashMap;
 
 use layout::Constraints;
-use platform::{Anchor, Layer, WaylandWindowWrapper, create_wayland_app};
+use platform::{WaylandWindowWrapper, create_wayland_app};
 use reactive::{
     clear_animation_flag, init_wakeup, set_system_clipboard, take_clipboard_change,
     take_cursor_change, take_frame_request, with_app_state, with_app_state_mut,
 };
 use renderer::{GpuContext, Renderer, SurfaceState};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, init_surface_commands};
-use widgets::{Color, Widget};
+use widgets::Widget;
 
 // Calloop imports for event-driven main loop (via smithay-client-toolkit re-exports)
 use smithay_client_toolkit::reexports::calloop::EventLoop;
@@ -53,29 +53,7 @@ pub mod prelude {
         Rect, ScrollAxis, ScrollSource, ScrollbarBuilder, ScrollbarVisibility, Selection,
         StateStyle, Text, TextInput, Widget, container, image, text, text_input,
     };
-    pub use crate::{App, AppConfig, component};
-}
-
-pub struct AppConfig {
-    pub width: u32,
-    pub height: u32,
-    pub anchor: Anchor,
-    pub layer: Layer,
-    pub namespace: String,
-    pub background_color: Color,
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            width: 1920,
-            height: 32,
-            anchor: Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
-            layer: Layer::Top,
-            namespace: "guido".to_string(),
-            background_color: Color::rgb(0.1, 0.1, 0.15),
-        }
-    }
+    pub use crate::{App, component};
 }
 
 /// A callback that gets called each frame before rendering.
@@ -86,7 +64,7 @@ pub type UpdateCallback = Box<dyn FnMut()>;
 struct SurfaceDefinition {
     id: SurfaceId,
     config: SurfaceConfig,
-    widget_fn: Box<dyn FnOnce() -> Box<dyn Widget> + Send>,
+    widget_fn: Box<dyn FnOnce() -> Box<dyn Widget>>,
 }
 
 /// Per-surface runtime state during the event loop.
@@ -101,8 +79,6 @@ struct SurfaceEntry {
 }
 
 pub struct App {
-    /// Legacy config for backward-compatible single-surface API
-    config: AppConfig,
     on_update: Option<UpdateCallback>,
     /// Surface definitions added via add_surface()
     surface_definitions: Vec<SurfaceDefinition>,
@@ -111,48 +87,9 @@ pub struct App {
 impl App {
     pub fn new() -> Self {
         Self {
-            config: AppConfig::default(),
             on_update: None,
             surface_definitions: Vec::new(),
         }
-    }
-
-    pub fn with_config(config: AppConfig) -> Self {
-        Self {
-            config,
-            on_update: None,
-            surface_definitions: Vec::new(),
-        }
-    }
-
-    pub fn width(mut self, width: u32) -> Self {
-        self.config.width = width;
-        self
-    }
-
-    pub fn height(mut self, height: u32) -> Self {
-        self.config.height = height;
-        self
-    }
-
-    pub fn anchor(mut self, anchor: Anchor) -> Self {
-        self.config.anchor = anchor;
-        self
-    }
-
-    pub fn layer(mut self, layer: Layer) -> Self {
-        self.config.layer = layer;
-        self
-    }
-
-    pub fn namespace(mut self, namespace: impl Into<String>) -> Self {
-        self.config.namespace = namespace.into();
-        self
-    }
-
-    pub fn background_color(mut self, color: Color) -> Self {
-        self.config.background_color = color;
-        self
     }
 
     /// Set a callback that gets called each frame before rendering.
@@ -217,7 +154,7 @@ impl App {
     pub fn add_surface<W, F>(mut self, config: SurfaceConfig, widget_fn: F) -> Self
     where
         W: Widget + 'static,
-        F: FnOnce() -> W + Send + 'static,
+        F: FnOnce() -> W + 'static,
     {
         let id = SurfaceId::next();
         self.surface_definitions.push(SurfaceDefinition {
@@ -228,15 +165,18 @@ impl App {
         self
     }
 
-    /// Run the app with a single surface (backward-compatible API).
-    pub fn run<W: Widget + 'static>(self, root: W) {
-        // For backward compatibility, we create a single surface using the legacy config
-        // Store the widget in a separate field to avoid the Send requirement
-        self.run_with_legacy_widget(Some(Box::new(root)));
-    }
+    /// Run the application.
+    ///
+    /// This requires at least one surface to have been added via `add_surface()`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no surfaces were added via `add_surface()`.
+    pub fn run(mut self) {
+        if self.surface_definitions.is_empty() {
+            panic!("No surfaces defined. Use add_surface() to add at least one surface.");
+        }
 
-    /// Internal method to run with an optional legacy widget.
-    fn run_with_legacy_widget(mut self, legacy_widget: Option<Box<dyn Widget>>) {
         let _ = env_logger::try_init();
 
         // Initialize the surface command channel for dynamic surface spawning
@@ -244,25 +184,7 @@ impl App {
 
         let (connection, mut event_queue, mut wayland_state, qh) = create_wayland_app();
 
-        // Create the legacy single surface if we have a legacy widget
-        let legacy_id = if legacy_widget.is_some() {
-            let id = SurfaceId::next();
-            wayland_state.create_surface_with_id(
-                &qh,
-                id,
-                self.config.width,
-                self.config.height,
-                self.config.anchor,
-                self.config.layer,
-                &self.config.namespace,
-                None, // Use default exclusive zone (height)
-            );
-            Some(id)
-        } else {
-            None
-        };
-
-        // Also create any surfaces from add_surface() calls
+        // Create surfaces from add_surface() calls
         for def in &self.surface_definitions {
             wayland_state.create_surface_with_id(
                 &qh,
@@ -293,73 +215,6 @@ impl App {
         // Create runtime entries for each surface
         let mut surface_entries: HashMap<SurfaceId, SurfaceEntry> = HashMap::new();
         let mut renderer: Option<Renderer> = None;
-
-        // Create entry for legacy widget if present
-        if let (Some(id), Some(widget)) = (legacy_id, legacy_widget) {
-            let wayland_surface = wayland_state
-                .get_surface(id)
-                .expect("Legacy surface should exist after configure");
-
-            let window_handle = WaylandWindowWrapper::new(&connection, &wayland_surface.wl_surface);
-
-            let initial_scale = wayland_surface.scale_factor.max(1.0) as u32;
-            let physical_width = wayland_surface.width * initial_scale;
-            let physical_height = wayland_surface.height * initial_scale;
-
-            log::info!(
-                "Creating wgpu surface for legacy {:?}: logical {}x{}, physical {}x{}, scale {}",
-                id,
-                wayland_surface.width,
-                wayland_surface.height,
-                physical_width,
-                physical_height,
-                initial_scale
-            );
-
-            let wgpu_surface =
-                gpu_context.create_surface(window_handle, physical_width, physical_height);
-
-            if renderer.is_none() {
-                let r = Renderer::new(
-                    wgpu_surface.device.clone(),
-                    wgpu_surface.queue.clone(),
-                    wgpu_surface.config.format,
-                );
-                renderer = Some(r);
-            }
-
-            let mut widget = widget;
-            let constraints = Constraints::new(
-                0.0,
-                0.0,
-                wayland_surface.width as f32,
-                wayland_surface.height as f32,
-            );
-            widget.layout(constraints);
-            widget.set_origin(0.0, 0.0);
-
-            let config = SurfaceConfig {
-                width: self.config.width,
-                height: self.config.height,
-                anchor: self.config.anchor,
-                layer: self.config.layer,
-                namespace: self.config.namespace.clone(),
-                background_color: self.config.background_color,
-                exclusive_zone: None,
-            };
-
-            surface_entries.insert(
-                id,
-                SurfaceEntry {
-                    id,
-                    config,
-                    widget,
-                    paint_ctx: renderer::PaintContext::with_capacity(32, 16, 8),
-                    wgpu_surface: Some(wgpu_surface),
-                    previous_scale_factor: wayland_surface.scale_factor,
-                },
-            );
-        }
 
         // Create entries for surfaces added via add_surface()
         for def in self.surface_definitions.drain(..) {
@@ -710,17 +565,6 @@ impl App {
             connection.flush().expect("Failed to flush connection");
         }
     }
-
-    /// Run the app without any arguments (for multi-surface API).
-    ///
-    /// This requires at least one surface to have been added via `add_surface()`.
-    /// If no surfaces were added, this will panic.
-    pub fn run_without_widget(self) {
-        if self.surface_definitions.is_empty() {
-            panic!("No surfaces defined. Use add_surface() or run() with a widget.");
-        }
-        self.run_with_legacy_widget(None);
-    }
 }
 
 impl Default for App {
@@ -728,15 +572,3 @@ impl Default for App {
         Self::new()
     }
 }
-
-impl App {
-    /// Alias for `run_without_widget()` - run the app with surfaces added via `add_surface()`.
-    ///
-    /// This method is called when you want to run with only surfaces added via `add_surface()`,
-    /// without passing a widget to `run()`.
-    pub fn run_surfaces(self) {
-        self.run_without_widget();
-    }
-}
-
-// Note: Multi-surface event loop is implemented in run_with_legacy_widget

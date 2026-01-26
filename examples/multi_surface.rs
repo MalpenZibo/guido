@@ -84,5 +84,5 @@ fn main() {
                     ])
             },
         )
-        .run_without_widget();
+        .run();
 }

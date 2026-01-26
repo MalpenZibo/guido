@@ -151,11 +151,15 @@ fn main() {
         );
 
     App::new()
-        .width(900)
-        .height(700)
-        .anchor(Anchor::TOP | Anchor::LEFT)
-        .layer(Layer::Top)
-        .namespace("image-fit-none-test")
-        .background_color(Color::rgb(0.1, 0.1, 0.15))
-        .run(view);
+        .add_surface(
+            SurfaceConfig::new()
+                .width(900)
+                .height(700)
+                .anchor(Anchor::TOP | Anchor::LEFT)
+                .layer(Layer::Top)
+                .namespace("image-fit-none-test")
+                .background_color(Color::rgb(0.1, 0.1, 0.15)),
+            || view,
+        )
+        .run();
 }
