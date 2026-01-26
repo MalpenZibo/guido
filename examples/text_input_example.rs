@@ -47,8 +47,7 @@ fn main() {
                                 .text_color(Color::WHITE)
                                 .cursor_color(Color::rgb(0.4, 0.8, 1.0))
                                 .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
-                                .font_size(14.0)
-                                .on_change(move |text| username.set(text.to_string())),
+                                .font_size(14.0),
                         ),
                 ),
         )
@@ -77,7 +76,6 @@ fn main() {
                                 .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
                                 .font_size(14.0)
                                 .password(true)
-                                .on_change(move |text| password.set(text.to_string()))
                                 .on_submit(move |_| {
                                     let msg = format!("Login attempt: {}", username.get());
                                     submitted.set(msg);

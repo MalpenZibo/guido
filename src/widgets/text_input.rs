@@ -202,9 +202,8 @@ pub struct TextInput {
     dirty_flags: ChangeFlags,
 
     // Content (actual value, never masked)
-    value: MaybeDyn<String>,
-    /// Signal for two-way binding (write-back when text changes)
-    value_signal: Option<Signal<String>>,
+    /// Signal for two-way binding
+    value: Signal<String>,
     cached_value: String,
     cached_display_text: String,
     display_text_dirty: bool,
@@ -250,48 +249,14 @@ pub struct TextInput {
 }
 
 impl TextInput {
-    pub fn new(value: impl IntoMaybeDyn<String>) -> Self {
-        let value = value.into_maybe_dyn();
-        let cached_value = value.get();
-        Self {
-            widget_id: WidgetId::next(),
-            dirty_flags: ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT,
-            value,
-            value_signal: None,
-            cached_value,
-            cached_display_text: String::new(),
-            display_text_dirty: true,
-            text_color: MaybeDyn::Static(Color::WHITE),
-            cursor_color: MaybeDyn::Static(Color::rgb(0.4, 0.8, 1.0)),
-            selection_color: MaybeDyn::Static(Color::rgba(0.4, 0.6, 1.0, 0.4)),
-            font_size: MaybeDyn::Static(14.0),
-            cached_font_size: 14.0,
-            is_password: false,
-            mask_char: '•',
-            selection: Selection::new(0),
-            cursor_visible: true,
-            last_cursor_toggle: Instant::now(),
-            pressed_key: None,
-            key_press_time: Instant::now(),
-            last_repeat_time: Instant::now(),
-            is_dragging: false,
-            history: History::new(),
-            scroll_offset: 0.0,
-            bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
-            on_change: None,
-            on_submit: None,
-        }
-    }
-
     /// Create a TextInput with a Signal for two-way binding.
     /// Changes made in the TextInput will be written back to the signal.
-    pub fn from_signal(signal: Signal<String>) -> Self {
+    pub fn new(signal: Signal<String>) -> Self {
         let cached_value = signal.get();
         Self {
             widget_id: WidgetId::next(),
             dirty_flags: ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT,
-            value: MaybeDyn::Dynamic(std::sync::Arc::new(move || signal.get())),
-            value_signal: Some(signal),
+            value: signal,
             cached_value,
             cached_display_text: String::new(),
             display_text_dirty: true,
@@ -746,9 +711,7 @@ impl TextInput {
     /// Notify change callback and sync to signal
     fn notify_change(&self) {
         // Update the signal for two-way binding
-        if let Some(ref signal) = self.value_signal {
-            signal.set(self.cached_value.clone());
-        }
+        self.value.set(self.cached_value.clone());
         // Call the on_change callback
         if let Some(ref callback) = self.on_change {
             callback(&self.cached_value);
@@ -1032,26 +995,13 @@ impl Widget for TextInput {
     impl_dirty_flags!();
 }
 
-/// Create a text input widget (one-way binding)
-///
-/// Accepts static strings, closures, or signals:
-/// ```ignore
-/// text_input("default value")  // static initial value
-/// text_input(move || some_signal.get())  // reactive closure
-/// ```
-///
-/// Note: For two-way binding with a signal, use [`text_input_signal`] instead.
-pub fn text_input(value: impl IntoMaybeDyn<String>) -> TextInput {
-    TextInput::new(value)
-}
-
-/// Create a text input widget with two-way signal binding
+/// Create a text input widget with two-way signal binding.
 ///
 /// Changes made in the text input will be written back to the signal.
 /// ```ignore
 /// let username = create_signal(String::new());
-/// text_input_signal(username)  // two-way binding
+/// text_input(username)
 /// ```
-pub fn text_input_signal(signal: Signal<String>) -> TextInput {
-    TextInput::from_signal(signal)
+pub fn text_input(signal: Signal<String>) -> TextInput {
+    TextInput::new(signal)
 }

@@ -38,7 +38,7 @@ pub use into_child::{DynamicChildren, IntoChild, IntoChildren, StaticChildren};
 pub use scroll::{ScrollAxis, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibility};
 pub use state_layer::{BackgroundOverride, RippleConfig, StateStyle};
 pub use text::{text, Text};
-pub use text_input::{text_input, text_input_signal, Selection, TextInput};
+pub use text_input::{text_input, Selection, TextInput};
 pub use widget::{
     Color, Event, EventResponse, Key, Modifiers, MouseButton, Padding, Rect, ScrollSource, Widget,
 };
