@@ -16,7 +16,8 @@ pub use guido_macros::component;
 use layout::Constraints;
 use platform::{create_wayland_app, Anchor, Layer, WaylandWindowWrapper};
 use reactive::{
-    clear_animation_flag, init_wakeup, take_frame_request, with_app_state, with_app_state_mut,
+    clear_animation_flag, init_wakeup, take_clipboard_change, take_frame_request, with_app_state,
+    with_app_state_mut,
 };
 use renderer::{GpuContext, Renderer};
 use widgets::{Color, Widget};
@@ -290,6 +291,11 @@ impl App {
             // Dispatch input events to widgets
             for event in wayland_state.take_events() {
                 root.event(&event);
+            }
+
+            // Sync clipboard to Wayland if it changed
+            if let Some(text) = take_clipboard_change() {
+                wayland_state.set_clipboard(text, &qh);
             }
 
             // Calculate physical pixel dimensions (for HiDPI)

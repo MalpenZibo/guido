@@ -12,16 +12,22 @@ use std::time::{Duration, Instant};
 
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
-    has_focus, release_focus, request_animation_frame, request_focus, ChangeFlags, IntoMaybeDyn,
-    MaybeDyn, WidgetId,
+    clipboard_copy, clipboard_paste, has_focus, release_focus, request_animation_frame,
+    request_focus, ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId,
 };
 use crate::renderer::{char_index_from_x, measure_text, measure_text_to_char, PaintContext};
 
 use super::impl_dirty_flags;
-use super::widget::{Color, Event, EventResponse, Key, MouseButton, Rect, Widget};
+use super::widget::{Color, Event, EventResponse, Key, Modifiers, MouseButton, Rect, Widget};
 
 /// Cursor blink interval in milliseconds
 const CURSOR_BLINK_MS: u64 = 530;
+
+/// Key repeat delay (time before repeat starts) in milliseconds
+const KEY_REPEAT_DELAY_MS: u64 = 400;
+
+/// Key repeat interval (time between repeats) in milliseconds
+const KEY_REPEAT_INTERVAL_MS: u64 = 35;
 
 /// Type alias for text input callbacks
 type TextCallback = Box<dyn Fn(&str)>;
@@ -90,6 +96,11 @@ pub struct TextInput {
     cursor_visible: bool,
     last_cursor_toggle: Instant,
 
+    // Key repeat state
+    pressed_key: Option<(Key, Modifiers)>,
+    key_press_time: Instant,
+    last_repeat_time: Instant,
+
     // Mouse drag selection
     is_dragging: bool,
 
@@ -120,6 +131,9 @@ impl TextInput {
             selection: Selection::new(0),
             cursor_visible: true,
             last_cursor_toggle: Instant::now(),
+            pressed_key: None,
+            key_press_time: Instant::now(),
+            last_repeat_time: Instant::now(),
             is_dragging: false,
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
             on_change: None,
@@ -226,6 +240,32 @@ impl TextInput {
     fn reset_cursor_blink(&mut self) {
         self.cursor_visible = true;
         self.last_cursor_toggle = Instant::now();
+    }
+
+    /// Handle key repeat for held keys
+    fn handle_key_repeat(&mut self) {
+        if !has_focus(self.widget_id) {
+            self.pressed_key = None;
+            return;
+        }
+
+        if let Some((key, modifiers)) = self.pressed_key {
+            let now = Instant::now();
+            let since_press = now.duration_since(self.key_press_time);
+            let since_repeat = now.duration_since(self.last_repeat_time);
+
+            // Check if we're past the initial delay
+            if since_press >= Duration::from_millis(KEY_REPEAT_DELAY_MS) {
+                // Check if it's time for another repeat
+                if since_repeat >= Duration::from_millis(KEY_REPEAT_INTERVAL_MS) {
+                    self.handle_key(&key, modifiers.ctrl, modifiers.shift);
+                    self.last_repeat_time = now;
+                }
+            }
+
+            // Keep requesting frames while a key is held
+            request_animation_frame();
+        }
     }
 
     /// Get character index from x coordinate relative to text start
@@ -389,6 +429,50 @@ impl TextInput {
         self.reset_cursor_blink();
     }
 
+    /// Get selected text
+    fn get_selected_text(&self) -> Option<String> {
+        if self.selection.has_selection() {
+            let (start, end) = self.selection.range();
+            let byte_start = self
+                .cached_value
+                .char_indices()
+                .nth(start)
+                .map(|(i, _)| i)
+                .unwrap_or(self.cached_value.len());
+            let byte_end = self
+                .cached_value
+                .char_indices()
+                .nth(end)
+                .map(|(i, _)| i)
+                .unwrap_or(self.cached_value.len());
+            Some(self.cached_value[byte_start..byte_end].to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Copy selected text to clipboard
+    fn copy_selection(&self) {
+        if let Some(text) = self.get_selected_text() {
+            clipboard_copy(&text);
+        }
+    }
+
+    /// Cut selected text (copy and delete)
+    fn cut_selection(&mut self) {
+        if self.selection.has_selection() {
+            self.copy_selection();
+            self.delete(false); // Delete the selection
+        }
+    }
+
+    /// Paste text from clipboard
+    fn paste(&mut self) {
+        if let Some(text) = clipboard_paste() {
+            self.insert_text(&text);
+        }
+    }
+
     /// Notify change callback
     fn notify_change(&self) {
         if let Some(ref callback) = self.on_change {
@@ -450,8 +534,18 @@ impl TextInput {
                             self.select_all();
                             EventResponse::Handled
                         }
-                        // Note: Clipboard operations (Ctrl+C/V/X) require Wayland data device
-                        // protocol which is not implemented yet
+                        'c' => {
+                            self.copy_selection();
+                            EventResponse::Handled
+                        }
+                        'x' => {
+                            self.cut_selection();
+                            EventResponse::Handled
+                        }
+                        'v' => {
+                            self.paste();
+                            EventResponse::Handled
+                        }
                         _ => EventResponse::Ignored,
                     }
                 } else if !c.is_control() {
@@ -472,6 +566,9 @@ impl Widget for TextInput {
 
         // Update cursor blink if focused
         self.update_cursor_blink();
+
+        // Handle key repeat for held keys
+        self.handle_key_repeat();
 
         // Skip re-measurement if nothing changed and we don't need layout
         if !content_changed && !self.needs_layout() && self.bounds.width > 0.0 {
@@ -580,11 +677,25 @@ impl Widget for TextInput {
             }
             Event::KeyDown { key, modifiers } => {
                 if has_focus(self.widget_id) {
+                    // Track key for repeat
+                    let now = Instant::now();
+                    self.pressed_key = Some((*key, *modifiers));
+                    self.key_press_time = now;
+                    self.last_repeat_time = now;
+
                     let response = self.handle_key(key, modifiers.ctrl, modifiers.shift);
                     if response == EventResponse::Handled {
                         request_animation_frame();
                     }
                     return response;
+                }
+            }
+            Event::KeyUp { key, .. } => {
+                // Stop repeating when key is released
+                if let Some((pressed_key, _)) = self.pressed_key {
+                    if pressed_key == *key {
+                        self.pressed_key = None;
+                    }
                 }
             }
             Event::FocusOut => {

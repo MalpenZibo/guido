@@ -4,8 +4,14 @@ use raw_window_handle::{
 };
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
-    delegate_registry, delegate_seat,
+    data_device_manager::{
+        data_device::{DataDevice, DataDeviceHandler},
+        data_offer::DataOfferHandler,
+        data_source::{CopyPasteSource, DataSourceHandler},
+        DataDeviceManagerState, ReadPipe,
+    },
+    delegate_compositor, delegate_data_device, delegate_keyboard, delegate_layer, delegate_output,
+    delegate_pointer, delegate_registry, delegate_seat,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
@@ -22,9 +28,17 @@ use smithay_client_toolkit::{
 use wayland_backend::sys::client::ObjectId;
 use wayland_client::{
     globals::registry_queue_init,
-    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
+    protocol::{
+        wl_data_device::WlDataDevice, wl_data_device_manager::DndAction,
+        wl_data_source::WlDataSource, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface,
+    },
     Connection, EventQueue, Proxy, QueueHandle,
 };
+
+use std::fs::File;
+use std::io::{Read, Write};
+use std::os::fd::AsFd;
+use std::os::unix::io::OwnedFd;
 
 use crate::widgets::{Event, Key, Modifiers, MouseButton, ScrollSource};
 
@@ -58,6 +72,14 @@ pub struct WaylandState {
     // Keyboard state
     keyboard: Option<wl_keyboard::WlKeyboard>,
     modifiers: Modifiers,
+    keyboard_serial: u32,
+
+    // Clipboard state
+    data_device_manager: Option<DataDeviceManagerState>,
+    data_device: Option<DataDevice>,
+    clipboard_content: Option<String>,
+    pending_clipboard_read: Option<ReadPipe>,
+    clipboard_source: Option<CopyPasteSource>,
 
     // Pending events to be processed by the main loop
     pub pending_events: Vec<Event>,
@@ -80,6 +102,12 @@ pub fn create_wayland_app() -> (
     let output_state = OutputState::new(&globals, &qh);
     let seat_state = SeatState::new(&globals, &qh);
 
+    // Initialize data device manager for clipboard support
+    let data_device_manager = DataDeviceManagerState::bind(&globals, &qh).ok();
+    if data_device_manager.is_none() {
+        log::warn!("Data device manager not available - clipboard will not work");
+    }
+
     let state = WaylandState {
         registry_state: RegistryState::new(&globals),
         compositor_state,
@@ -101,6 +129,12 @@ pub fn create_wayland_app() -> (
         pointer_over_surface: false,
         keyboard: None,
         modifiers: Modifiers::default(),
+        keyboard_serial: 0,
+        data_device_manager,
+        data_device: None,
+        clipboard_content: None,
+        pending_clipboard_read: None,
+        clipboard_source: None,
         pending_events: Vec::new(),
     };
 
@@ -156,6 +190,52 @@ impl WaylandState {
     /// Take all pending events (drains the queue)
     pub fn take_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.pending_events)
+    }
+
+    /// Set clipboard content (copy)
+    pub fn set_clipboard(&mut self, text: String, qh: &QueueHandle<Self>) {
+        if let Some(ref manager) = self.data_device_manager {
+            // Create a data source for the clipboard
+            let source = manager.create_copy_paste_source(
+                qh,
+                vec!["text/plain;charset=utf-8", "UTF8_STRING", "TEXT", "STRING"],
+            );
+
+            // Store the text to write when compositor requests it
+            self.clipboard_content = Some(text);
+
+            // Set selection using the keyboard serial
+            if let Some(ref device) = self.data_device {
+                source.set_selection(device, self.keyboard_serial);
+                self.clipboard_source = Some(source);
+            }
+        }
+    }
+
+    /// Get clipboard content (paste)
+    /// Returns the content if available, or None if clipboard is empty
+    pub fn get_clipboard(&self) -> Option<String> {
+        self.clipboard_content.clone()
+    }
+
+    /// Check if there's pending clipboard data to read
+    pub fn poll_clipboard(&mut self) -> Option<String> {
+        if let Some(ref mut pipe) = self.pending_clipboard_read.take() {
+            let mut contents = String::new();
+            // Read with a small timeout - this is blocking but typically fast
+            match pipe.as_fd().try_clone_to_owned() {
+                Ok(fd) => {
+                    let mut file = std::fs::File::from(fd);
+                    if file.read_to_string(&mut contents).is_ok() && !contents.is_empty() {
+                        return Some(contents);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to clone clipboard fd: {}", e);
+                }
+            }
+        }
+        None
     }
 }
 
@@ -355,6 +435,15 @@ impl SeatHandler for WaylandState {
                 .get_keyboard(qh, &seat, None)
                 .expect("Failed to get keyboard");
             self.keyboard = Some(keyboard);
+
+            // Create data device for clipboard when we have a seat
+            if self.data_device.is_none() {
+                if let Some(ref manager) = self.data_device_manager {
+                    log::info!("Creating data device for clipboard");
+                    let data_device = manager.get_data_device(qh, &seat);
+                    self.data_device = Some(data_device);
+                }
+            }
         }
     }
 
@@ -550,9 +639,12 @@ impl KeyboardHandler for WaylandState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _keyboard: &wl_keyboard::WlKeyboard,
-        _serial: u32,
+        serial: u32,
         event: KeyEvent,
     ) {
+        // Track serial for clipboard operations
+        self.keyboard_serial = serial;
+
         if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref()) {
             self.pending_events.push(Event::KeyDown {
                 key,
@@ -663,10 +755,140 @@ impl ProvidesRegistryState for WaylandState {
     registry_handlers![OutputState, SeatState];
 }
 
+impl DataDeviceHandler for WaylandState {
+    fn enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+        _x: f64,
+        _y: f64,
+        _surface: &wl_surface::WlSurface,
+    ) {
+        // Drag and drop enter - not used for clipboard
+    }
+
+    fn leave(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _data_device: &WlDataDevice) {
+        // Drag and drop leave - not used for clipboard
+    }
+
+    fn motion(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+        _x: f64,
+        _y: f64,
+    ) {
+        // Drag and drop motion - not used for clipboard
+    }
+
+    fn drop_performed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+    ) {
+        // Drag and drop performed - not used for clipboard
+    }
+
+    fn selection(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+    ) {
+        log::debug!("Clipboard selection changed");
+    }
+}
+
+impl DataOfferHandler for WaylandState {
+    fn source_actions(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _offer: &mut smithay_client_toolkit::data_device_manager::data_offer::DragOffer,
+        _actions: DndAction,
+    ) {
+        // Drag and drop actions - not used for clipboard
+    }
+
+    fn selected_action(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _offer: &mut smithay_client_toolkit::data_device_manager::data_offer::DragOffer,
+        _action: DndAction,
+    ) {
+        // Drag and drop selected action - not used for clipboard
+    }
+}
+
+impl DataSourceHandler for WaylandState {
+    fn accept_mime(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &WlDataSource,
+        _mime: Option<String>,
+    ) {
+        // Mime type accepted notification
+    }
+
+    fn send_request(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &WlDataSource,
+        mime: String,
+        fd: smithay_client_toolkit::data_device_manager::WritePipe,
+    ) {
+        log::debug!("Clipboard send request for mime type: {}", mime);
+
+        // Write clipboard content to the file descriptor
+        if let Some(ref content) = self.clipboard_content {
+            let owned_fd = OwnedFd::from(fd);
+            let mut file = File::from(owned_fd);
+            if let Err(e) = file.write_all(content.as_bytes()) {
+                log::warn!("Failed to write clipboard content: {}", e);
+            }
+        }
+    }
+
+    fn cancelled(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource) {
+        log::debug!("Clipboard source cancelled");
+        self.clipboard_source = None;
+    }
+
+    fn dnd_dropped(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource) {
+        // Drag and drop completed - not used for clipboard
+    }
+
+    fn dnd_finished(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &WlDataSource,
+    ) {
+        // Drag and drop finished - not used for clipboard
+    }
+
+    fn action(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &WlDataSource,
+        _action: DndAction,
+    ) {
+        // Action notification - not used for clipboard
+    }
+}
+
 delegate_compositor!(WaylandState);
 delegate_output!(WaylandState);
 delegate_layer!(WaylandState);
 delegate_seat!(WaylandState);
 delegate_pointer!(WaylandState);
 delegate_keyboard!(WaylandState);
+delegate_data_device!(WaylandState);
 delegate_registry!(WaylandState);

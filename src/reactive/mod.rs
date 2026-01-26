@@ -1,3 +1,4 @@
+pub mod clipboard;
 pub mod computed;
 pub mod effect;
 pub mod focus;
@@ -7,6 +8,11 @@ pub mod runtime;
 pub mod signal;
 pub mod storage;
 
+pub use clipboard::{
+    clear_system_clipboard, clipboard_copy, clipboard_has_content, clipboard_paste,
+    request_clipboard_read, set_system_clipboard, take_clipboard_change,
+    take_clipboard_read_request,
+};
 pub use computed::{create_computed, Computed};
 pub use effect::{create_effect, Effect};
 pub use focus::{clear_focus, focused_widget, has_focus, release_focus, request_focus};
