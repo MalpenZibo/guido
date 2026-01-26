@@ -16,8 +16,8 @@ pub use guido_macros::component;
 use layout::Constraints;
 use platform::{create_wayland_app, Anchor, Layer, WaylandWindowWrapper};
 use reactive::{
-    clear_animation_flag, init_wakeup, take_clipboard_change, take_frame_request, with_app_state,
-    with_app_state_mut,
+    clear_animation_flag, init_wakeup, set_system_clipboard, take_clipboard_change,
+    take_frame_request, with_app_state, with_app_state_mut,
 };
 use renderer::{GpuContext, Renderer};
 use widgets::{Color, Widget};
@@ -288,12 +288,26 @@ impl App {
                 callback();
             }
 
+            // Get pending events
+            let events = wayland_state.take_events();
+
+            // Sync external clipboard before keyboard event dispatch (for paste operations)
+            // Only read if there are keyboard events (potential Ctrl+V)
+            let has_keyboard_events = events
+                .iter()
+                .any(|e| matches!(e, widgets::Event::KeyDown { .. }));
+            if has_keyboard_events {
+                if let Some(text) = wayland_state.read_external_clipboard() {
+                    set_system_clipboard(text);
+                }
+            }
+
             // Dispatch input events to widgets
-            for event in wayland_state.take_events() {
+            for event in events {
                 root.event(&event);
             }
 
-            // Sync clipboard to Wayland if it changed
+            // Sync clipboard to Wayland if it changed (copy operations)
             if let Some(text) = take_clipboard_change() {
                 wayland_state.set_clipboard(text, &qh);
             }

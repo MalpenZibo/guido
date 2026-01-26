@@ -6,7 +6,7 @@ use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     data_device_manager::{
         data_device::{DataDevice, DataDeviceHandler},
-        data_offer::DataOfferHandler,
+        data_offer::{DataOfferHandler, SelectionOffer},
         data_source::{CopyPasteSource, DataSourceHandler},
         DataDeviceManagerState, ReadPipe,
     },
@@ -80,6 +80,7 @@ pub struct WaylandState {
     clipboard_content: Option<String>,
     pending_clipboard_read: Option<ReadPipe>,
     clipboard_source: Option<CopyPasteSource>,
+    selection_offer: Option<SelectionOffer>,
 
     // Pending events to be processed by the main loop
     pub pending_events: Vec<Event>,
@@ -135,6 +136,7 @@ pub fn create_wayland_app() -> (
         clipboard_content: None,
         pending_clipboard_read: None,
         clipboard_source: None,
+        selection_offer: None,
         pending_events: Vec::new(),
     };
 
@@ -216,6 +218,50 @@ impl WaylandState {
     /// Returns the content if available, or None if clipboard is empty
     pub fn get_clipboard(&self) -> Option<String> {
         self.clipboard_content.clone()
+    }
+
+    /// Read clipboard content from external selection (from other applications)
+    /// This reads from the Wayland selection offer if available
+    pub fn read_external_clipboard(&mut self) -> Option<String> {
+        let offer = self.selection_offer.take()?;
+
+        // Try different mime types in order of preference
+        let mime_types = [
+            "text/plain;charset=utf-8",
+            "UTF8_STRING",
+            "text/plain",
+            "TEXT",
+            "STRING",
+        ];
+
+        for mime_type in mime_types {
+            // Check if this mime type is offered
+            if !offer.with_mime_types(|types| types.iter().any(|t| t == mime_type)) {
+                continue;
+            }
+
+            // Try to receive data with this mime type
+            match offer.receive(mime_type.to_string()) {
+                Ok(pipe) => {
+                    // Read from the pipe (blocking but typically fast)
+                    let fd = std::os::unix::io::OwnedFd::from(pipe);
+                    let mut file = File::from(fd);
+                    let mut contents = String::new();
+                    if file.read_to_string(&mut contents).is_ok() && !contents.is_empty() {
+                        // Store back the offer for future use
+                        self.selection_offer = Some(offer);
+                        return Some(contents);
+                    }
+                }
+                Err(e) => {
+                    log::debug!("Failed to receive clipboard data as {}: {:?}", mime_type, e);
+                }
+            }
+        }
+
+        // Store back the offer even if we couldn't read
+        self.selection_offer = Some(offer);
+        None
     }
 
     /// Check if there's pending clipboard data to read
@@ -720,11 +766,10 @@ fn keysym_to_key(keysym: Keysym, utf8: Option<&str>) -> Option<Key> {
         Keysym::Down => return Some(Key::Down),
         Keysym::Home => return Some(Key::Home),
         Keysym::End => return Some(Key::End),
-        Keysym::space => return Some(Key::Char(' ')),
         _ => {}
     }
 
-    // Character input - use utf8 if available, or convert keysym to char
+    // Character input - use utf8 if available
     if let Some(text) = utf8 {
         if let Some(c) = text.chars().next() {
             // Only return printable characters or control characters we care about
@@ -734,15 +779,20 @@ fn keysym_to_key(keysym: Keysym, utf8: Option<&str>) -> Option<Key> {
         }
     }
 
-    // Fallback: convert keysym directly for A-Z (for Ctrl+A style shortcuts)
+    // Fallback: convert keysym directly for printable ASCII characters
+    // This is needed for KeyUp events where utf8 may be None
     let raw = keysym.raw();
-    if (0x61..=0x7a).contains(&raw) {
-        // lowercase a-z
+
+    // Printable ASCII range (space through tilde): 0x20-0x7E
+    // XKB keysyms for these characters have the same value as ASCII
+    if (0x20..=0x7e).contains(&raw) {
         return Some(Key::Char(char::from_u32(raw)?));
     }
-    if (0x41..=0x5a).contains(&raw) {
-        // uppercase A-Z
-        return Some(Key::Char(char::from_u32(raw + 32)?)); // convert to lowercase
+
+    // Handle keypad numbers (KP_0 through KP_9)
+    // XKB_KEY_KP_0 = 0xffb0, XKB_KEY_KP_9 = 0xffb9
+    if (0xffb0..=0xffb9).contains(&raw) {
+        return Some(Key::Char(char::from_u32(raw - 0xffb0 + 0x30)?)); // Convert to '0'-'9'
     }
 
     None
@@ -800,6 +850,10 @@ impl DataDeviceHandler for WaylandState {
         _data_device: &WlDataDevice,
     ) {
         log::debug!("Clipboard selection changed");
+        // Store the selection offer for later paste operations
+        if let Some(ref device) = self.data_device {
+            self.selection_offer = device.data().selection_offer();
+        }
     }
 }
 
