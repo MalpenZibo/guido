@@ -690,8 +690,6 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.10.0",
  "bytemuck",
- "calloop",
- "calloop-wayland-source",
  "cosmic-text 0.16.0",
  "env_logger",
  "glyphon",
@@ -705,9 +703,6 @@ dependencies = [
  "smallvec",
  "smithay-client-toolkit",
  "wayland-backend",
- "wayland-client",
- "wayland-protocols",
- "wayland-protocols-wlr",
  "wgpu",
 ]
 

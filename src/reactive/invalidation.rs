@@ -1,10 +1,10 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use bitflags::bitflags;
-use calloop::ping::Ping;
+use smithay_client_toolkit::reexports::calloop::ping::Ping;
 
 bitflags! {
     /// Flags indicating what aspects of rendering need to be updated

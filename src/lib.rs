@@ -14,7 +14,7 @@ pub mod renderer;
 pub use guido_macros::component;
 
 use layout::Constraints;
-use platform::{create_wayland_app, Anchor, Layer, WaylandWindowWrapper};
+use platform::{Anchor, Layer, WaylandWindowWrapper, create_wayland_app};
 use reactive::{
     clear_animation_flag, init_wakeup, set_system_clipboard, take_clipboard_change,
     take_cursor_change, take_frame_request, with_app_state, with_app_state_mut,
@@ -22,33 +22,33 @@ use reactive::{
 use renderer::{GpuContext, Renderer};
 use widgets::{Color, Widget};
 
-// Calloop imports for event-driven main loop
-use calloop::ping::make_ping;
-use calloop::EventLoop;
-use calloop_wayland_source::WaylandSource;
+// Calloop imports for event-driven main loop (via smithay-client-toolkit re-exports)
+use smithay_client_toolkit::reexports::calloop::EventLoop;
+use smithay_client_toolkit::reexports::calloop::ping::make_ping;
+use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 
 pub mod prelude {
     pub use crate::animation::{SpringConfig, TimingFunction, Transition};
     pub use crate::layout::{
-        at_least, at_most, Axis, Constraints, CrossAxisAlignment, Flex, Length, MainAxisAlignment,
-        Overlay, Size,
+        Axis, Constraints, CrossAxisAlignment, Flex, Length, MainAxisAlignment, Overlay, Size,
+        at_least, at_most,
     };
     pub use crate::platform::{Anchor, Layer};
     pub use crate::reactive::{
-        batch, create_computed, create_effect, create_signal, set_cursor, Computed, CursorIcon,
-        Effect, IntoMaybeDyn, MaybeDyn, ReadSignal, Signal, WriteSignal,
+        Computed, CursorIcon, Effect, IntoMaybeDyn, MaybeDyn, ReadSignal, Signal, WriteSignal,
+        batch, create_computed, create_effect, create_signal, set_cursor,
     };
     pub use crate::renderer::primitives::Shadow;
-    pub use crate::renderer::{measure_text, PaintContext};
+    pub use crate::renderer::{PaintContext, measure_text};
     pub use crate::transform::Transform;
     pub use crate::transform_origin::{HorizontalAnchor, TransformOrigin, VerticalAnchor};
     pub use crate::widgets::{
-        container, image, text, text_input, Border, Color, Container, ContentFit, Event,
-        EventResponse, GradientDirection, Image, ImageSource, IntoChildren, Key, LinearGradient,
-        Modifiers, MouseButton, Overflow, Padding, Rect, ScrollAxis, ScrollSource,
-        ScrollbarBuilder, ScrollbarVisibility, Selection, StateStyle, Text, TextInput, Widget,
+        Border, Color, Container, ContentFit, Event, EventResponse, GradientDirection, Image,
+        ImageSource, IntoChildren, Key, LinearGradient, Modifiers, MouseButton, Overflow, Padding,
+        Rect, ScrollAxis, ScrollSource, ScrollbarBuilder, ScrollbarVisibility, Selection,
+        StateStyle, Text, TextInput, Widget, container, image, text, text_input,
     };
-    pub use crate::{component, App, AppConfig};
+    pub use crate::{App, AppConfig, component};
 }
 
 pub struct AppConfig {
@@ -303,10 +303,10 @@ impl App {
                     }
                 )
             });
-            if has_paste_event {
-                if let Some(text) = wayland_state.read_external_clipboard(&connection) {
-                    set_system_clipboard(text);
-                }
+            if has_paste_event
+                && let Some(text) = wayland_state.read_external_clipboard(&connection)
+            {
+                set_system_clipboard(text);
             }
 
             // Dispatch input events to widgets

@@ -27,8 +27,7 @@ use smithay_client_toolkit::{
         LayerSurfaceConfigure,
     },
 };
-use wayland_backend::sys::client::ObjectId;
-use wayland_client::{
+use smithay_client_toolkit::reexports::client::{
     globals::registry_queue_init,
     protocol::{
         wl_data_device::WlDataDevice, wl_data_device_manager::DndAction,
@@ -36,7 +35,8 @@ use wayland_client::{
     },
     Connection, EventQueue, Proxy, QueueHandle,
 };
-use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape as WpCursorShape;
+use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape as WpCursorShape;
+use wayland_backend::sys::client::ObjectId;
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -459,7 +459,9 @@ impl CompositorHandler for WaylandState {
         _time: u32,
     ) {
         if !self.first_frame_presented {
-            log::info!("First frame presented by compositor - initialization complete, switching to on-demand rendering");
+            log::info!(
+                "First frame presented by compositor - initialization complete, switching to on-demand rendering"
+            );
             self.first_frame_presented = true;
         }
     }
@@ -559,12 +561,12 @@ impl SeatHandler for WaylandState {
             self.keyboard = Some(keyboard);
 
             // Create data device for clipboard when we have a seat
-            if self.data_device.is_none() {
-                if let Some(ref manager) = self.data_device_manager {
-                    log::info!("Creating data device for clipboard");
-                    let data_device = manager.get_data_device(qh, &seat);
-                    self.data_device = Some(data_device);
-                }
+            if self.data_device.is_none()
+                && let Some(ref manager) = self.data_device_manager
+            {
+                log::info!("Creating data device for clipboard");
+                let data_device = manager.get_data_device(qh, &seat);
+                self.data_device = Some(data_device);
             }
         }
     }
@@ -669,18 +671,10 @@ impl PointerHandler for WaylandState {
                 } => {
                     // Determine scroll source
                     let scroll_source = match source {
-                        Some(wayland_client::protocol::wl_pointer::AxisSource::Wheel) => {
-                            ScrollSource::Wheel
-                        }
-                        Some(wayland_client::protocol::wl_pointer::AxisSource::Finger) => {
-                            ScrollSource::Finger
-                        }
-                        Some(wayland_client::protocol::wl_pointer::AxisSource::Continuous) => {
-                            ScrollSource::Continuous
-                        }
-                        Some(wayland_client::protocol::wl_pointer::AxisSource::WheelTilt) => {
-                            ScrollSource::Wheel
-                        }
+                        Some(wl_pointer::AxisSource::Wheel) => ScrollSource::Wheel,
+                        Some(wl_pointer::AxisSource::Finger) => ScrollSource::Finger,
+                        Some(wl_pointer::AxisSource::Continuous) => ScrollSource::Continuous,
+                        Some(wl_pointer::AxisSource::WheelTilt) => ScrollSource::Wheel,
                         _ => ScrollSource::Wheel,
                     };
 
@@ -847,12 +841,12 @@ fn keysym_to_key(keysym: Keysym, utf8: Option<&str>) -> Option<Key> {
     }
 
     // Character input - use utf8 if available
-    if let Some(text) = utf8 {
-        if let Some(c) = text.chars().next() {
-            // Only return printable characters or control characters we care about
-            if !c.is_control() || c == '\n' || c == '\r' || c == '\t' {
-                return Some(Key::Char(c));
-            }
+    if let Some(text) = utf8
+        && let Some(c) = text.chars().next()
+    {
+        // Only return printable characters or control characters we care about
+        if !c.is_control() || c == '\n' || c == '\r' || c == '\t' {
+            return Some(Key::Char(c));
         }
     }
 
