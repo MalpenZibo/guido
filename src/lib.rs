@@ -292,12 +292,19 @@ impl App {
             let events = wayland_state.take_events();
 
             // Sync external clipboard before keyboard event dispatch (for paste operations)
-            // Only read if there are keyboard events (potential Ctrl+V)
-            let has_keyboard_events = events
-                .iter()
-                .any(|e| matches!(e, widgets::Event::KeyDown { .. }));
-            if has_keyboard_events {
-                if let Some(text) = wayland_state.read_external_clipboard() {
+            // Only read if Ctrl+V is pressed (actual paste operation)
+            let has_paste_event = events.iter().any(|e| {
+                matches!(
+                    e,
+                    widgets::Event::KeyDown {
+                        key: widgets::Key::Char('v'),
+                        modifiers: widgets::Modifiers { ctrl: true, .. },
+                        ..
+                    }
+                )
+            });
+            if has_paste_event {
+                if let Some(text) = wayland_state.read_external_clipboard(&connection) {
                     set_system_clipboard(text);
                 }
             }

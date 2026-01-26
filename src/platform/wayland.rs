@@ -222,7 +222,7 @@ impl WaylandState {
 
     /// Read clipboard content from external selection (from other applications)
     /// This reads from the Wayland selection offer if available
-    pub fn read_external_clipboard(&mut self) -> Option<String> {
+    pub fn read_external_clipboard(&mut self, connection: &Connection) -> Option<String> {
         let offer = self.selection_offer.take()?;
 
         // Try different mime types in order of preference
@@ -243,14 +243,36 @@ impl WaylandState {
             // Try to receive data with this mime type
             match offer.receive(mime_type.to_string()) {
                 Ok(pipe) => {
-                    // Read from the pipe (blocking but typically fast)
-                    let fd = std::os::unix::io::OwnedFd::from(pipe);
+                    // Flush the connection to send the receive request to the compositor
+                    // The compositor then notifies the source app to write data to the pipe
+                    let _ = connection.flush();
+
+                    // Convert to file for reading
+                    let fd = OwnedFd::from(pipe);
                     let mut file = File::from(fd);
-                    let mut contents = String::new();
-                    if file.read_to_string(&mut contents).is_ok() && !contents.is_empty() {
-                        // Store back the offer for future use
-                        self.selection_offer = Some(offer);
-                        return Some(contents);
+
+                    // Use poll() to wait for data with a timeout
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::io::AsRawFd;
+                        let raw_fd = file.as_raw_fd();
+
+                        let mut poll_fd = libc::pollfd {
+                            fd: raw_fd,
+                            events: libc::POLLIN,
+                            revents: 0,
+                        };
+
+                        // Wait up to 500ms for data to be available
+                        let ret = unsafe { libc::poll(&mut poll_fd, 1, 500) };
+
+                        if ret > 0 && (poll_fd.revents & libc::POLLIN) != 0 {
+                            let mut contents = String::new();
+                            if file.read_to_string(&mut contents).is_ok() && !contents.is_empty() {
+                                self.selection_offer = Some(offer);
+                                return Some(contents);
+                            }
+                        }
                     }
                 }
                 Err(e) => {
