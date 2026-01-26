@@ -25,6 +25,7 @@
     - [Borders & Corners](building-ui/borders.md)
     - [Elevation & Shadows](building-ui/elevation.md)
     - [Text](building-ui/text.md)
+    - [Text Input](building-ui/text-input.md)
     - [Images](building-ui/images.md)
 
 # Interactivity
