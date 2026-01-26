@@ -14,7 +14,7 @@ use wgpu::{BufferUsages, Device, Queue, RenderPipeline};
 use self::image_texture::ImageTextureRenderer;
 use self::primitives::{ClipRegion, Gradient, RoundedRect, TexturedQuad, Transformable, Vertex};
 use self::text::TextRenderState;
-use self::text_texture::{TextTextureRenderer, QUALITY_MULTIPLIER};
+use self::text_texture::{QUALITY_MULTIPLIER, TextTextureRenderer};
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
 use crate::widgets::image::{ContentFit, ImageSource};

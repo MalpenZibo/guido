@@ -1,5 +1,5 @@
-use super::children::{ChildrenSource, DynItem};
 use super::Widget;
+use super::children::{ChildrenSource, DynItem};
 
 /// Marker type for static child (widget value)
 pub struct StaticChild;

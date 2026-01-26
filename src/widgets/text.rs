@@ -1,6 +1,6 @@
 use crate::layout::{Constraints, Size};
 use crate::reactive::{ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId};
-use crate::renderer::{measure_text, PaintContext};
+use crate::renderer::{PaintContext, measure_text};
 
 use super::impl_dirty_flags;
 use super::widget::{Color, EventResponse, Rect, Widget};

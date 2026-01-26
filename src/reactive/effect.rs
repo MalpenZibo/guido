@@ -1,4 +1,4 @@
-use super::runtime::{with_runtime, EffectId};
+use super::runtime::{EffectId, with_runtime};
 
 pub struct Effect {
     id: EffectId,

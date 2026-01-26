@@ -4,7 +4,7 @@ mod animations;
 mod ripple;
 mod scrollable;
 
-pub use animations::{get_animated_value, AnimationState};
+pub use animations::{AnimationState, get_animated_value};
 pub use ripple::RippleState;
 
 use std::borrow::Cow;
@@ -14,10 +14,10 @@ use crate::advance_anim;
 use crate::animation::Transition;
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
-    focused_widget, request_animation_frame, ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId,
+    ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId, focused_widget, request_animation_frame,
 };
-use crate::renderer::primitives::{GradientDir, Shadow};
 use crate::renderer::PaintContext;
+use crate::renderer::primitives::{GradientDir, Shadow};
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
 
@@ -26,7 +26,7 @@ use super::into_child::{IntoChild, IntoChildren};
 use super::scroll::{
     ScrollAxis, ScrollState, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibility,
 };
-use super::state_layer::{resolve_background, StateStyle};
+use super::state_layer::{StateStyle, resolve_background};
 use super::widget::{
     Color, Event, EventResponse, MouseButton, Padding, Rect, ScrollSource, Widget,
 };
@@ -638,27 +638,25 @@ impl Container {
         base: T,
         extractor: impl Fn(&StateStyle) -> Option<T>,
     ) -> T {
-        if self.is_pressed {
-            if let Some(ref state) = self.pressed_state {
-                if let Some(value) = extractor(state) {
-                    return value;
-                }
-            }
+        if self.is_pressed
+            && let Some(ref state) = self.pressed_state
+            && let Some(value) = extractor(state)
+        {
+            return value;
         }
         // Check focused state
-        if self.focused_state.is_some() && self.has_child_focus() {
-            if let Some(ref state) = self.focused_state {
-                if let Some(value) = extractor(state) {
-                    return value;
-                }
-            }
+        if self.focused_state.is_some()
+            && self.has_child_focus()
+            && let Some(ref state) = self.focused_state
+            && let Some(value) = extractor(state)
+        {
+            return value;
         }
-        if self.is_hovered {
-            if let Some(ref state) = self.hover_state {
-                if let Some(value) = extractor(state) {
-                    return value;
-                }
-            }
+        if self.is_hovered
+            && let Some(ref state) = self.hover_state
+            && let Some(value) = extractor(state)
+        {
+            return value;
         }
         base
     }
@@ -810,13 +808,12 @@ impl Container {
         advance_anim!(self, transform_anim, transform_target, any_animating);
 
         // Advance ripple animation
-        if self.ripple.is_active() {
-            if let Some(ref state) = self.pressed_state {
-                if let Some(ref config) = state.ripple {
-                    let ripple_animating = self.ripple.advance(config);
-                    any_animating = any_animating || ripple_animating;
-                }
-            }
+        if self.ripple.is_active()
+            && let Some(ref state) = self.pressed_state
+            && let Some(ref config) = state.ripple
+        {
+            let ripple_animating = self.ripple.advance(config);
+            any_animating = any_animating || ripple_animating;
         }
 
         // Advance kinetic scroll animation
@@ -1313,43 +1310,41 @@ impl Widget for Container {
         }
 
         // Draw ripple effect as overlay
-        if let Some((screen_cx, screen_cy)) = self.ripple.center {
-            if let Some(ref pressed_state) = self.pressed_state {
-                if let Some(ref ripple_config) = pressed_state.ripple {
-                    if self.ripple.opacity > 0.0 {
-                        let local_cx = screen_cx - self.bounds.x;
-                        let local_cy = screen_cy - self.bounds.y;
-                        let max_dist_x = local_cx.max(self.bounds.width - local_cx);
-                        let max_dist_y = local_cy.max(self.bounds.height - local_cy);
-                        let max_radius = (max_dist_x * max_dist_x + max_dist_y * max_dist_y).sqrt();
-                        let current_radius = max_radius * self.ripple.progress;
+        if let Some((screen_cx, screen_cy)) = self.ripple.center
+            && let Some(ref pressed_state) = self.pressed_state
+            && let Some(ref ripple_config) = pressed_state.ripple
+            && self.ripple.opacity > 0.0
+        {
+            let local_cx = screen_cx - self.bounds.x;
+            let local_cy = screen_cy - self.bounds.y;
+            let max_dist_x = local_cx.max(self.bounds.width - local_cx);
+            let max_dist_y = local_cy.max(self.bounds.height - local_cy);
+            let max_radius = (max_dist_x * max_dist_x + max_dist_y * max_dist_y).sqrt();
+            let current_radius = max_radius * self.ripple.progress;
 
-                        let ripple_color = Color::rgba(
-                            ripple_config.color.r,
-                            ripple_config.color.g,
-                            ripple_config.color.b,
-                            ripple_config.color.a * self.ripple.opacity,
-                        );
+            let ripple_color = Color::rgba(
+                ripple_config.color.r,
+                ripple_config.color.g,
+                ripple_config.color.b,
+                ripple_config.color.a * self.ripple.opacity,
+            );
 
-                        let (clip_bounds, clip_transform) = if has_transform {
-                            (self.bounds, Some((transform, transform_origin)))
-                        } else {
-                            (self.bounds, None)
-                        };
+            let (clip_bounds, clip_transform) = if has_transform {
+                (self.bounds, Some((transform, transform_origin)))
+            } else {
+                (self.bounds, None)
+            };
 
-                        ctx.draw_overlay_circle_clipped_with_transform(
-                            screen_cx,
-                            screen_cy,
-                            current_radius,
-                            ripple_color,
-                            clip_bounds,
-                            corner_radius,
-                            corner_curvature,
-                            clip_transform,
-                        );
-                    }
-                }
-            }
+            ctx.draw_overlay_circle_clipped_with_transform(
+                screen_cx,
+                screen_cy,
+                current_radius,
+                ripple_color,
+                clip_bounds,
+                corner_radius,
+                corner_curvature,
+                clip_transform,
+            );
         }
     }
 
@@ -1474,11 +1469,11 @@ impl Widget for Container {
                     if was_pressed && self.pressed_state.is_some() {
                         request_animation_frame();
                     }
-                    if self.bounds.contains_rounded(*x, *y, corner_radius) {
-                        if let Some(ref callback) = self.on_click {
-                            callback();
-                            return EventResponse::Handled;
-                        }
+                    if self.bounds.contains_rounded(*x, *y, corner_radius)
+                        && let Some(ref callback) = self.on_click
+                    {
+                        callback();
+                        return EventResponse::Handled;
                     }
                 }
             }

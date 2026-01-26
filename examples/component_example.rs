@@ -14,7 +14,7 @@ pub struct Button {
 }
 
 impl Button {
-    fn render(&self) -> impl Widget {
+    fn render(&self) -> impl Widget + use<> {
         container()
             .padding(self.padding.get())
             .background(self.background.clone())
@@ -38,7 +38,7 @@ pub struct Card {
 }
 
 impl Card {
-    fn render(&self) -> impl Widget {
+    fn render(&self) -> impl Widget + use<> {
         container()
             .padding(16.0)
             .background(self.background.get())

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::effect::Effect;
-use super::signal::{create_signal, Signal};
+use super::signal::{Signal, create_signal};
 
 struct ComputedInner<T> {
     signal: Signal<T>,
