@@ -10,7 +10,11 @@ let username = create_signal(String::new());
 text_input(username)
 ```
 
-The widget automatically syncs with the signal, updating when the signal changes and notifying via callbacks when the user edits.
+TextInput uses **two-way binding** with signals:
+- When the user types, the signal is automatically updated
+- When the signal changes programmatically, the input reflects the new value
+
+No manual synchronization is needed - just pass a `Signal<String>` and the binding works automatically.
 
 ## Styling
 
@@ -222,7 +226,7 @@ fn login_form() -> Container {
 ## API Reference
 
 ```rust
-text_input(value: impl IntoMaybeDyn<String>) -> TextInput
+text_input(signal: Signal<String>) -> TextInput
 
 impl TextInput {
     pub fn text_color(self, color: impl IntoMaybeDyn<Color>) -> Self;
@@ -235,3 +239,5 @@ impl TextInput {
     pub fn on_submit<F: Fn(&str) + 'static>(self, callback: F) -> Self;
 }
 ```
+
+**Note:** The `on_change` callback is optional and is called *in addition* to the automatic signal update. Use it for side effects like validation or logging, not for updating the signal (that happens automatically).
