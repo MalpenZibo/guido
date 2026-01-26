@@ -16,6 +16,7 @@ Guido is a GPU-accelerated GUI library built with Rust and wgpu, designed specif
 - **Reactive System** - Fine-grained reactivity inspired by SolidJS with signals, computed values, and effects
 - **GPU Rendering** - Hardware-accelerated rendering using wgpu with SDF-based shapes for crisp anti-aliasing
 - **Wayland Layer Shell** - Native support for layer shell positioning, anchoring, and exclusive zones
+- **Multi-Surface Apps** - Create multiple surfaces (windows) that share reactive state
 - **State Layer API** - Declarative hover/pressed states with automatic animations and ripple effects
 - **Transform System** - Translate, rotate, and scale widgets with spring physics animations
 - **Composable Widgets** - Build complex UIs from simple, composable primitives
@@ -30,19 +31,33 @@ use guido::prelude::*;
 fn main() {
     let count = create_signal(0);
 
-    let view = container()
-        .padding(16.0)
-        .background(Color::rgb(0.2, 0.2, 0.3))
-        .corner_radius(8.0)
-        .hover_state(|s| s.lighter(0.1))
-        .pressed_state(|s| s.ripple())
-        .on_click(move || count.update(|c| *c += 1))
-        .child(text(move || format!("Clicked {} times", count.get())));
-
     App::new()
-        .width(300)
-        .height(100)
-        .run(view);
+        .add_surface(
+            SurfaceConfig::new()
+                .width(300)
+                .height(100)
+                .background_color(Color::rgb(0.1, 0.1, 0.15)),
+            move || {
+                container()
+                    .height(fill())
+                    .layout(
+                        Flex::row()
+                            .main_axis_alignment(MainAxisAlignment::Center)
+                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                    )
+                    .child(
+                        container()
+                            .padding(16.0)
+                            .background(Color::rgb(0.2, 0.2, 0.3))
+                            .corner_radius(8.0)
+                            .hover_state(|s| s.lighter(0.1))
+                            .pressed_state(|s| s.ripple())
+                            .on_click(move || count.update(|c| *c += 1))
+                            .child(text(move || format!("Clicked {} times", count.get())))
+                    )
+            },
+        )
+        .run();
 }
 ```
 

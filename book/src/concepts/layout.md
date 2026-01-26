@@ -194,6 +194,29 @@ container()
     .width(at_least(200.0))  // At least 200px, can grow
 ```
 
+### Fill Available Space
+
+Make a container expand to fill all available space:
+
+```rust
+container()
+    .height(fill())  // Fills available height
+    .width(fill())   // Fills available width
+```
+
+This is particularly useful for root containers that should fill their surface, or for creating layouts where children are centered within the full available space:
+
+```rust
+container()
+    .height(fill())
+    .layout(
+        Flex::row()
+            .main_axis_alignment(MainAxisAlignment::Center)
+            .cross_axis_alignment(CrossAxisAlignment::Center)
+    )
+    .child(text("Centered in available space"))
+```
+
 ## Layout Without Explicit Flex
 
 Containers without `.layout()` stack children (each child fills the container):
