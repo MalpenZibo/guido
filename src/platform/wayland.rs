@@ -38,16 +38,67 @@ use smithay_client_toolkit::reexports::client::{
 use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape as WpCursorShape;
 use wayland_backend::sys::client::ObjectId;
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::AsFd;
 use std::os::unix::io::OwnedFd;
 
 use crate::reactive::CursorIcon;
+use crate::surface::SurfaceId;
 use crate::widgets::{Event, Key, Modifiers, MouseButton, ScrollSource};
 
 /// Pixels per line for discrete scroll (mouse wheel)
 const SCROLL_PIXELS_PER_LINE: f32 = 40.0;
+
+/// Per-surface state for multi-surface support.
+pub struct WaylandSurfaceState {
+    /// The layer surface protocol object
+    pub layer_surface: LayerSurface,
+    /// The underlying wl_surface
+    pub wl_surface: wl_surface::WlSurface,
+    /// Whether the surface has been configured
+    pub configured: bool,
+    /// Logical width of the surface
+    pub width: u32,
+    /// Logical height of the surface
+    pub height: u32,
+    /// Scale factor for HiDPI
+    pub scale_factor: f32,
+    /// Whether scale factor has been received
+    pub scale_factor_received: bool,
+    /// Whether the first frame has been presented
+    pub first_frame_presented: bool,
+    /// Pending events for this surface
+    pub pending_events: Vec<Event>,
+}
+
+impl WaylandSurfaceState {
+    /// Create a new surface state.
+    pub fn new(
+        layer_surface: LayerSurface,
+        wl_surface: wl_surface::WlSurface,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        Self {
+            layer_surface,
+            wl_surface,
+            configured: false,
+            width,
+            height,
+            scale_factor: 1.0,
+            scale_factor_received: false,
+            first_frame_presented: false,
+            pending_events: Vec::new(),
+        }
+    }
+
+    /// Take all pending events (drains the queue)
+    pub fn take_events(&mut self) -> Vec<Event> {
+        std::mem::take(&mut self.pending_events)
+    }
+}
 
 pub struct WaylandState {
     pub registry_state: RegistryState,
@@ -55,6 +106,8 @@ pub struct WaylandState {
     pub output_state: OutputState,
     pub seat_state: SeatState,
     pub layer_shell: LayerShell,
+
+    // Legacy single-surface fields (for backward compatibility)
     pub layer_surface: Option<LayerSurface>,
     pub surface: Option<wl_surface::WlSurface>,
     pub configured: bool,
@@ -66,6 +119,16 @@ pub struct WaylandState {
     // Initialization tracking for event-driven startup
     pub scale_factor_received: bool,
     pub first_frame_presented: bool,
+
+    // Multi-surface tracking
+    /// All surfaces indexed by SurfaceId
+    pub surfaces: HashMap<SurfaceId, WaylandSurfaceState>,
+    /// Lookup from wl_surface ObjectId to SurfaceId
+    pub surface_lookup: HashMap<ObjectId, SurfaceId>,
+    /// Which surface currently has pointer focus
+    pub current_pointer_surface: Option<SurfaceId>,
+    /// Which surface currently has keyboard focus
+    pub current_keyboard_surface: Option<SurfaceId>,
 
     // Pointer state
     pointer: Option<wl_pointer::WlPointer>,
@@ -90,7 +153,7 @@ pub struct WaylandState {
     clipboard_source: Option<CopyPasteSource>,
     selection_offer: Option<SelectionOffer>,
 
-    // Pending events to be processed by the main loop
+    // Pending events to be processed by the main loop (legacy single-surface)
     pub pending_events: Vec<Event>,
 }
 
@@ -138,6 +201,10 @@ pub fn create_wayland_app() -> (
         exit: false,
         scale_factor_received: false,
         first_frame_presented: false,
+        surfaces: HashMap::new(),
+        surface_lookup: HashMap::new(),
+        current_pointer_surface: None,
+        current_keyboard_surface: None,
         pointer: None,
         pointer_x: 0.0,
         pointer_y: 0.0,
@@ -160,6 +227,7 @@ pub fn create_wayland_app() -> (
 }
 
 impl WaylandState {
+    /// Create a layer surface (legacy single-surface API).
     pub fn create_layer_surface(
         &mut self,
         qh: &QueueHandle<Self>,
@@ -203,6 +271,120 @@ impl WaylandState {
         self.layer_surface = Some(layer_surface);
         self.width = width;
         self.height = height;
+    }
+
+    /// Create a layer surface with a specific SurfaceId (multi-surface API).
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_surface_with_id(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        id: SurfaceId,
+        width: u32,
+        height: u32,
+        anchor: Anchor,
+        layer: Layer,
+        namespace: &str,
+        exclusive_zone: Option<i32>,
+    ) {
+        let wl_surface = self.compositor_state.create_surface(qh);
+        let layer_surface = self.layer_shell.create_layer_surface(
+            qh,
+            wl_surface.clone(),
+            layer,
+            Some(namespace.to_string()),
+            None,
+        );
+
+        layer_surface.set_anchor(anchor);
+
+        // When anchored to both edges on an axis, set that dimension to 0
+        // to let the compositor stretch the surface to fill
+        let use_width = if anchor.contains(Anchor::LEFT) && anchor.contains(Anchor::RIGHT) {
+            0 // Let compositor decide
+        } else {
+            width
+        };
+        let use_height = if anchor.contains(Anchor::TOP) && anchor.contains(Anchor::BOTTOM) {
+            0 // Let compositor decide
+        } else {
+            height
+        };
+
+        layer_surface.set_size(use_width, use_height);
+        layer_surface.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+
+        // Set exclusive zone: None means use height, Some(0) means no exclusive zone
+        let zone = exclusive_zone.unwrap_or(height as i32);
+        layer_surface.set_exclusive_zone(zone);
+
+        wl_surface.commit();
+
+        // Register in lookup table
+        let object_id = wl_surface.id();
+        self.surface_lookup.insert(object_id, id);
+
+        // Create and store surface state
+        let surface_state = WaylandSurfaceState::new(layer_surface, wl_surface, width, height);
+        self.surfaces.insert(id, surface_state);
+
+        log::info!(
+            "Created surface {:?} with size {}x{}, anchor {:?}, layer {:?}",
+            id,
+            width,
+            height,
+            anchor,
+            layer
+        );
+    }
+
+    /// Destroy a surface by its SurfaceId.
+    pub fn destroy_surface(&mut self, id: SurfaceId) {
+        if let Some(surface_state) = self.surfaces.remove(&id) {
+            // Remove from lookup table
+            let object_id = surface_state.wl_surface.id();
+            self.surface_lookup.remove(&object_id);
+
+            // Clear pointer/keyboard focus if this surface had it
+            if self.current_pointer_surface == Some(id) {
+                self.current_pointer_surface = None;
+            }
+            if self.current_keyboard_surface == Some(id) {
+                self.current_keyboard_surface = None;
+            }
+
+            // The LayerSurface and WlSurface will be destroyed when dropped
+            log::info!("Destroyed surface {:?}", id);
+        }
+    }
+
+    /// Get a surface state by SurfaceId.
+    pub fn get_surface(&self, id: SurfaceId) -> Option<&WaylandSurfaceState> {
+        self.surfaces.get(&id)
+    }
+
+    /// Get a mutable surface state by SurfaceId.
+    pub fn get_surface_mut(&mut self, id: SurfaceId) -> Option<&mut WaylandSurfaceState> {
+        self.surfaces.get_mut(&id)
+    }
+
+    /// Get a surface ID from a wl_surface.
+    pub fn surface_id_from_wl_surface(
+        &self,
+        wl_surface: &wl_surface::WlSurface,
+    ) -> Option<SurfaceId> {
+        self.surface_lookup.get(&wl_surface.id()).copied()
+    }
+
+    /// Check if all surfaces are configured.
+    pub fn all_surfaces_configured(&self) -> bool {
+        self.surfaces.values().all(|s| s.configured)
+    }
+
+    /// Check if any surface needs rendering.
+    pub fn any_surface_needs_render(&self) -> bool {
+        self.surfaces
+            .values()
+            .any(|s| !s.first_frame_presented || !s.scale_factor_received)
     }
 
     /// Take all pending events (drains the queue)
@@ -417,9 +599,22 @@ impl CompositorHandler for WaylandState {
         surface: &wl_surface::WlSurface,
         new_factor: i32,
     ) {
-        log::info!("Scale factor changed to: {}", new_factor);
-        self.scale_factor = new_factor as f32;
-        self.scale_factor_received = true;
+        // Find which surface this is for
+        let surface_id = self.surface_lookup.get(&surface.id()).copied();
+
+        if let Some(id) = surface_id {
+            if let Some(surface_state) = self.surfaces.get_mut(&id) {
+                log::info!("Surface {:?} scale factor changed to: {}", id, new_factor);
+                surface_state.scale_factor = new_factor as f32;
+                surface_state.scale_factor_received = true;
+            }
+        } else {
+            // Legacy single-surface mode
+            log::info!("Scale factor changed to: {}", new_factor);
+            self.scale_factor = new_factor as f32;
+            self.scale_factor_received = true;
+        }
+
         // Set the buffer scale on the surface for proper HiDPI rendering
         surface.set_buffer_scale(new_factor);
     }
@@ -455,14 +650,30 @@ impl CompositorHandler for WaylandState {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
+        surface: &wl_surface::WlSurface,
         _time: u32,
     ) {
-        if !self.first_frame_presented {
-            log::info!(
-                "First frame presented by compositor - initialization complete, switching to on-demand rendering"
-            );
-            self.first_frame_presented = true;
+        // Find which surface this is for
+        let surface_id = self.surface_lookup.get(&surface.id()).copied();
+
+        if let Some(id) = surface_id {
+            if let Some(surface_state) = self.surfaces.get_mut(&id)
+                && !surface_state.first_frame_presented
+            {
+                log::info!(
+                    "Surface {:?} first frame presented by compositor - initialization complete",
+                    id
+                );
+                surface_state.first_frame_presented = true;
+            }
+        } else {
+            // Legacy single-surface mode
+            if !self.first_frame_presented {
+                log::info!(
+                    "First frame presented by compositor - initialization complete, switching to on-demand rendering"
+                );
+                self.first_frame_presented = true;
+            }
         }
     }
 }
@@ -498,32 +709,83 @@ impl OutputHandler for WaylandState {
 }
 
 impl LayerShellHandler for WaylandState {
-    fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _layer: &LayerSurface) {
-        self.exit = true;
+    fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
+        // Find which surface was closed
+        let closed_id = self
+            .surfaces
+            .iter()
+            .find(|(_, state)| &state.layer_surface == layer)
+            .map(|(id, _)| *id);
+
+        if let Some(id) = closed_id {
+            log::info!("Surface {:?} closed by compositor", id);
+            self.destroy_surface(id);
+
+            // If no surfaces left, exit
+            if self.surfaces.is_empty() {
+                self.exit = true;
+            }
+        } else {
+            // Legacy single-surface mode
+            self.exit = true;
+        }
     }
 
     fn configure(
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _layer: &LayerSurface,
+        layer: &LayerSurface,
         configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
-        log::info!(
-            "Layer shell configure: requested size {:?}, current {}x{}",
-            configure.new_size,
-            self.width,
-            self.height
-        );
-        if configure.new_size.0 > 0 {
-            self.width = configure.new_size.0;
+        // Find which surface this configure is for
+        let surface_id = self
+            .surfaces
+            .iter()
+            .find(|(_, state)| &state.layer_surface == layer)
+            .map(|(id, _)| *id);
+
+        if let Some(id) = surface_id {
+            if let Some(surface_state) = self.surfaces.get_mut(&id) {
+                log::info!(
+                    "Surface {:?} configure: requested size {:?}, current {}x{}",
+                    id,
+                    configure.new_size,
+                    surface_state.width,
+                    surface_state.height
+                );
+                if configure.new_size.0 > 0 {
+                    surface_state.width = configure.new_size.0;
+                }
+                if configure.new_size.1 > 0 {
+                    surface_state.height = configure.new_size.1;
+                }
+                log::info!(
+                    "Surface {:?} using size: {}x{}",
+                    id,
+                    surface_state.width,
+                    surface_state.height
+                );
+                surface_state.configured = true;
+            }
+        } else {
+            // Legacy single-surface mode
+            log::info!(
+                "Layer shell configure: requested size {:?}, current {}x{}",
+                configure.new_size,
+                self.width,
+                self.height
+            );
+            if configure.new_size.0 > 0 {
+                self.width = configure.new_size.0;
+            }
+            if configure.new_size.1 > 0 {
+                self.height = configure.new_size.1;
+            }
+            log::info!("Layer shell using size: {}x{}", self.width, self.height);
+            self.configured = true;
         }
-        if configure.new_size.1 > 0 {
-            self.height = configure.new_size.1;
-        }
-        log::info!("Layer shell using size: {}x{}", self.width, self.height);
-        self.configured = true;
     }
 }
 
@@ -605,16 +867,29 @@ impl PointerHandler for WaylandState {
         events: &[PointerEvent],
     ) {
         for event in events {
-            // Check if this event is for our surface
-            let is_our_surface = self
+            // Try to find the surface ID for this event's wl_surface
+            let surface_id = self.surface_lookup.get(&event.surface.id()).copied();
+
+            // Check if this event is for our legacy single surface (backward compatibility)
+            let is_legacy_surface = self
                 .surface
                 .as_ref()
                 .map(|s| s == &event.surface)
                 .unwrap_or(false);
 
-            if !is_our_surface && !matches!(event.kind, PointerEventKind::Leave { .. }) {
+            // Determine which event queue to push to
+            let target_events: Option<&mut Vec<Event>> = if let Some(id) = surface_id {
+                // Multi-surface mode: push to the specific surface's event queue
+                self.surfaces.get_mut(&id).map(|s| &mut s.pending_events)
+            } else if is_legacy_surface {
+                // Legacy single-surface mode: push to the global pending_events
+                Some(&mut self.pending_events)
+            } else if !matches!(event.kind, PointerEventKind::Leave { .. }) {
+                // Not our surface and not a leave event, skip
                 continue;
-            }
+            } else {
+                None
+            };
 
             match event.kind {
                 PointerEventKind::Enter { serial } => {
@@ -622,32 +897,52 @@ impl PointerHandler for WaylandState {
                     self.pointer_enter_serial = serial;
                     self.pointer_x = event.position.0 as f32;
                     self.pointer_y = event.position.1 as f32;
-                    self.pending_events.push(Event::MouseEnter {
-                        x: self.pointer_x,
-                        y: self.pointer_y,
-                    });
-                    self.pending_events.push(Event::MouseMove {
-                        x: self.pointer_x,
-                        y: self.pointer_y,
-                    });
+
+                    // Track which surface has pointer focus
+                    self.current_pointer_surface = surface_id;
+
+                    if let Some(events) = target_events {
+                        events.push(Event::MouseEnter {
+                            x: self.pointer_x,
+                            y: self.pointer_y,
+                        });
+                        events.push(Event::MouseMove {
+                            x: self.pointer_x,
+                            y: self.pointer_y,
+                        });
+                    }
                 }
                 PointerEventKind::Leave { .. } => {
                     if self.pointer_over_surface {
                         self.pointer_over_surface = false;
-                        self.pending_events.push(Event::MouseLeave);
+
+                        // Send leave event to the surface that had focus
+                        if let Some(id) = self.current_pointer_surface {
+                            if let Some(surface_state) = self.surfaces.get_mut(&id) {
+                                surface_state.pending_events.push(Event::MouseLeave);
+                            }
+                        } else if is_legacy_surface {
+                            self.pending_events.push(Event::MouseLeave);
+                        }
+
+                        self.current_pointer_surface = None;
                     }
                 }
                 PointerEventKind::Motion { .. } => {
                     self.pointer_x = event.position.0 as f32;
                     self.pointer_y = event.position.1 as f32;
-                    self.pending_events.push(Event::MouseMove {
-                        x: self.pointer_x,
-                        y: self.pointer_y,
-                    });
+                    if let Some(events) = target_events {
+                        events.push(Event::MouseMove {
+                            x: self.pointer_x,
+                            y: self.pointer_y,
+                        });
+                    }
                 }
                 PointerEventKind::Press { button, .. } => {
-                    if let Some(mouse_button) = wayland_button_to_mouse_button(button) {
-                        self.pending_events.push(Event::MouseDown {
+                    if let Some(mouse_button) = wayland_button_to_mouse_button(button)
+                        && let Some(events) = target_events
+                    {
+                        events.push(Event::MouseDown {
                             x: self.pointer_x,
                             y: self.pointer_y,
                             button: mouse_button,
@@ -655,8 +950,10 @@ impl PointerHandler for WaylandState {
                     }
                 }
                 PointerEventKind::Release { button, .. } => {
-                    if let Some(mouse_button) = wayland_button_to_mouse_button(button) {
-                        self.pending_events.push(Event::MouseUp {
+                    if let Some(mouse_button) = wayland_button_to_mouse_button(button)
+                        && let Some(events) = target_events
+                    {
+                        events.push(Event::MouseUp {
                             x: self.pointer_x,
                             y: self.pointer_y,
                             button: mouse_button,
@@ -694,8 +991,10 @@ impl PointerHandler for WaylandState {
                     };
 
                     // Only emit scroll event if there's actual scroll delta
-                    if delta_x != 0.0 || delta_y != 0.0 {
-                        self.pending_events.push(Event::Scroll {
+                    if (delta_x != 0.0 || delta_y != 0.0)
+                        && let Some(events) = target_events
+                    {
+                        events.push(Event::Scroll {
                             x: self.pointer_x,
                             y: self.pointer_y,
                             delta_x,
@@ -730,13 +1029,25 @@ impl KeyboardHandler for WaylandState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _keyboard: &wl_keyboard::WlKeyboard,
-        _surface: &wl_surface::WlSurface,
+        surface: &wl_surface::WlSurface,
         _serial: u32,
         _raw: &[u32],
         _keysyms: &[Keysym],
     ) {
         log::debug!("Keyboard focus entered");
-        self.pending_events.push(Event::FocusIn);
+
+        // Track which surface has keyboard focus
+        let surface_id = self.surface_lookup.get(&surface.id()).copied();
+        self.current_keyboard_surface = surface_id;
+
+        // Route event to correct surface
+        if let Some(id) = surface_id {
+            if let Some(surface_state) = self.surfaces.get_mut(&id) {
+                surface_state.pending_events.push(Event::FocusIn);
+            }
+        } else {
+            self.pending_events.push(Event::FocusIn);
+        }
     }
 
     fn leave(
@@ -744,11 +1055,22 @@ impl KeyboardHandler for WaylandState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _keyboard: &wl_keyboard::WlKeyboard,
-        _surface: &wl_surface::WlSurface,
+        surface: &wl_surface::WlSurface,
         _serial: u32,
     ) {
         log::debug!("Keyboard focus left");
-        self.pending_events.push(Event::FocusOut);
+
+        // Route event to correct surface
+        let surface_id = self.surface_lookup.get(&surface.id()).copied();
+        if let Some(id) = surface_id {
+            if let Some(surface_state) = self.surfaces.get_mut(&id) {
+                surface_state.pending_events.push(Event::FocusOut);
+            }
+        } else {
+            self.pending_events.push(Event::FocusOut);
+        }
+
+        self.current_keyboard_surface = None;
     }
 
     fn press_key(
@@ -763,10 +1085,19 @@ impl KeyboardHandler for WaylandState {
         self.keyboard_serial = serial;
 
         if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref()) {
-            self.pending_events.push(Event::KeyDown {
+            let key_event = Event::KeyDown {
                 key,
                 modifiers: self.modifiers,
-            });
+            };
+
+            // Route to the surface with keyboard focus
+            if let Some(id) = self.current_keyboard_surface
+                && let Some(surface_state) = self.surfaces.get_mut(&id)
+            {
+                surface_state.pending_events.push(key_event);
+                return;
+            }
+            self.pending_events.push(key_event);
         }
     }
 
@@ -779,10 +1110,19 @@ impl KeyboardHandler for WaylandState {
         event: KeyEvent,
     ) {
         if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref()) {
-            self.pending_events.push(Event::KeyUp {
+            let key_event = Event::KeyUp {
                 key,
                 modifiers: self.modifiers,
-            });
+            };
+
+            // Route to the surface with keyboard focus
+            if let Some(id) = self.current_keyboard_surface
+                && let Some(surface_state) = self.surfaces.get_mut(&id)
+            {
+                surface_state.pending_events.push(key_event);
+                return;
+            }
+            self.pending_events.push(key_event);
         }
     }
 
@@ -814,10 +1154,19 @@ impl KeyboardHandler for WaylandState {
     ) {
         // Treat key repeat as a new key press
         if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref()) {
-            self.pending_events.push(Event::KeyDown {
+            let key_event = Event::KeyDown {
                 key,
                 modifiers: self.modifiers,
-            });
+            };
+
+            // Route to the surface with keyboard focus
+            if let Some(id) = self.current_keyboard_surface
+                && let Some(surface_state) = self.surfaces.get_mut(&id)
+            {
+                surface_state.pending_events.push(key_event);
+                return;
+            }
+            self.pending_events.push(key_event);
         }
     }
 }
