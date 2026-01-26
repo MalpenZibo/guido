@@ -5,6 +5,7 @@ pub mod into_child;
 pub mod scroll;
 pub mod state_layer;
 pub mod text;
+pub mod text_input;
 pub mod widget;
 
 /// Macro to implement common dirty flag methods for simple widgets.
@@ -37,7 +38,10 @@ pub use into_child::{DynamicChildren, IntoChild, IntoChildren, StaticChildren};
 pub use scroll::{ScrollAxis, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibility};
 pub use state_layer::{BackgroundOverride, RippleConfig, StateStyle};
 pub use text::{text, Text};
-pub use widget::{Color, Event, EventResponse, MouseButton, Padding, Rect, ScrollSource, Widget};
+pub use text_input::{text_input, Selection, TextInput};
+pub use widget::{
+    Color, Event, EventResponse, Key, Modifiers, MouseButton, Padding, Rect, ScrollSource, Widget,
+};
 
 // IntoMaybeDyn implementations for widget types
 use crate::reactive::{IntoMaybeDyn, MaybeDyn};

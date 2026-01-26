@@ -4,12 +4,13 @@ use raw_window_handle::{
 };
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
-    delegate_seat,
+    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
+    delegate_registry, delegate_seat,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     seat::{
+        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers as WlModifiers, RawModifiers},
         pointer::{PointerEvent, PointerEventKind, PointerHandler},
         Capability, SeatHandler, SeatState,
     },
@@ -21,11 +22,11 @@ use smithay_client_toolkit::{
 use wayland_backend::sys::client::ObjectId;
 use wayland_client::{
     globals::registry_queue_init,
-    protocol::{wl_output, wl_pointer, wl_seat, wl_surface},
+    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface},
     Connection, EventQueue, Proxy, QueueHandle,
 };
 
-use crate::widgets::{Event, MouseButton, ScrollSource};
+use crate::widgets::{Event, Key, Modifiers, MouseButton, ScrollSource};
 
 /// Pixels per line for discrete scroll (mouse wheel)
 const SCROLL_PIXELS_PER_LINE: f32 = 40.0;
@@ -53,6 +54,10 @@ pub struct WaylandState {
     pointer_x: f32,
     pointer_y: f32,
     pointer_over_surface: bool,
+
+    // Keyboard state
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    modifiers: Modifiers,
 
     // Pending events to be processed by the main loop
     pub pending_events: Vec<Event>,
@@ -94,6 +99,8 @@ pub fn create_wayland_app() -> (
         pointer_x: 0.0,
         pointer_y: 0.0,
         pointer_over_surface: false,
+        keyboard: None,
+        modifiers: Modifiers::default(),
         pending_events: Vec::new(),
     };
 
@@ -135,7 +142,7 @@ impl WaylandState {
         };
 
         layer_surface.set_size(use_width, use_height);
-        layer_surface.set_keyboard_interactivity(KeyboardInteractivity::None);
+        layer_surface.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
         layer_surface.set_exclusive_zone(height as i32);
 
         surface.commit();
@@ -339,6 +346,16 @@ impl SeatHandler for WaylandState {
                 .expect("Failed to get pointer");
             self.pointer = Some(pointer);
         }
+
+        // Handle keyboard capability
+        if capability == Capability::Keyboard && self.keyboard.is_none() {
+            log::info!("Keyboard capability available, creating keyboard");
+            let keyboard = self
+                .seat_state
+                .get_keyboard(qh, &seat, None)
+                .expect("Failed to get keyboard");
+            self.keyboard = Some(keyboard);
+        }
     }
 
     fn remove_capability(
@@ -352,6 +369,12 @@ impl SeatHandler for WaylandState {
             log::info!("Pointer capability removed");
             if let Some(pointer) = self.pointer.take() {
                 pointer.release();
+            }
+        }
+        if capability == Capability::Keyboard {
+            log::info!("Keyboard capability removed");
+            if let Some(keyboard) = self.keyboard.take() {
+                keyboard.release();
             }
         }
     }
@@ -495,6 +518,143 @@ fn wayland_button_to_mouse_button(button: u32) -> Option<MouseButton> {
     }
 }
 
+impl KeyboardHandler for WaylandState {
+    fn enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _surface: &wl_surface::WlSurface,
+        _serial: u32,
+        _raw: &[u32],
+        _keysyms: &[Keysym],
+    ) {
+        log::debug!("Keyboard focus entered");
+        self.pending_events.push(Event::FocusIn);
+    }
+
+    fn leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _surface: &wl_surface::WlSurface,
+        _serial: u32,
+    ) {
+        log::debug!("Keyboard focus left");
+        self.pending_events.push(Event::FocusOut);
+    }
+
+    fn press_key(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        event: KeyEvent,
+    ) {
+        if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref()) {
+            self.pending_events.push(Event::KeyDown {
+                key,
+                modifiers: self.modifiers,
+            });
+        }
+    }
+
+    fn release_key(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        event: KeyEvent,
+    ) {
+        if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref()) {
+            self.pending_events.push(Event::KeyUp {
+                key,
+                modifiers: self.modifiers,
+            });
+        }
+    }
+
+    fn update_modifiers(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        modifiers: WlModifiers,
+        _raw_modifiers: RawModifiers,
+        _layout: u32,
+    ) {
+        self.modifiers = Modifiers {
+            ctrl: modifiers.ctrl,
+            alt: modifiers.alt,
+            shift: modifiers.shift,
+            logo: modifiers.logo,
+        };
+    }
+
+    fn repeat_key(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        event: KeyEvent,
+    ) {
+        // Treat key repeat as a new key press
+        if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref()) {
+            self.pending_events.push(Event::KeyDown {
+                key,
+                modifiers: self.modifiers,
+            });
+        }
+    }
+}
+
+/// Convert XKB keysym to our Key type
+fn keysym_to_key(keysym: Keysym, utf8: Option<&str>) -> Option<Key> {
+    // Named keys first
+    match keysym {
+        Keysym::BackSpace => return Some(Key::Backspace),
+        Keysym::Delete => return Some(Key::Delete),
+        Keysym::Return | Keysym::KP_Enter => return Some(Key::Enter),
+        Keysym::Tab | Keysym::ISO_Left_Tab => return Some(Key::Tab),
+        Keysym::Escape => return Some(Key::Escape),
+        Keysym::Left => return Some(Key::Left),
+        Keysym::Right => return Some(Key::Right),
+        Keysym::Up => return Some(Key::Up),
+        Keysym::Down => return Some(Key::Down),
+        Keysym::Home => return Some(Key::Home),
+        Keysym::End => return Some(Key::End),
+        _ => {}
+    }
+
+    // Character input - use utf8 if available, or convert keysym to char
+    if let Some(text) = utf8 {
+        if let Some(c) = text.chars().next() {
+            // Only return printable characters or control characters we care about
+            if !c.is_control() || c == '\n' || c == '\r' || c == '\t' {
+                return Some(Key::Char(c));
+            }
+        }
+    }
+
+    // Fallback: convert keysym directly for A-Z (for Ctrl+A style shortcuts)
+    let raw = keysym.raw();
+    if (0x61..=0x7a).contains(&raw) {
+        // lowercase a-z
+        return Some(Key::Char(char::from_u32(raw)?));
+    }
+    if (0x41..=0x5a).contains(&raw) {
+        // uppercase A-Z
+        return Some(Key::Char(char::from_u32(raw + 32)?)); // convert to lowercase
+    }
+
+    None
+}
+
 impl ProvidesRegistryState for WaylandState {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
@@ -508,4 +668,5 @@ delegate_output!(WaylandState);
 delegate_layer!(WaylandState);
 delegate_seat!(WaylandState);
 delegate_pointer!(WaylandState);
+delegate_keyboard!(WaylandState);
 delegate_registry!(WaylandState);

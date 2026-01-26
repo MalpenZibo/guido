@@ -14,7 +14,7 @@ wgpu = { version = "28.0", features = ["fragile-send-sync-non-atomic-wasm"] }
 bytemuck = { version = "1.24", features = ["derive"] }
 glyphon = "0.10"
 cosmic-text = "0.16"
-smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop"] }
+smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop", "xkbcommon"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
@@ -47,3 +47,7 @@ path = "examples/showcase.rs"
 [[example]]
 name = "image_example"
 path = "examples/image_example.rs"
+
+[[example]]
+name = "text_input_example"
+path = "examples/text_input_example.rs"

@@ -1477,6 +1477,8 @@ impl Widget for Container {
                     }
                 }
             }
+            // Keyboard and focus events are handled by focused widgets, not containers
+            Event::KeyDown { .. } | Event::KeyUp { .. } | Event::FocusIn | Event::FocusOut => {}
         }
 
         EventResponse::Ignored
