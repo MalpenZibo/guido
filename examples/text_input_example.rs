@@ -5,6 +5,8 @@
 //! - Password field with masking
 //! - Real-time display of input values
 //! - Submit handling with Enter key
+//! - Focused state styling on input containers
+//! - Clipboard support (Ctrl+C/V/X)
 
 use guido::prelude::*;
 
@@ -37,6 +39,8 @@ fn main() {
                         .background(Color::rgb(0.18, 0.18, 0.24))
                         .border(1.0, Color::rgb(0.3, 0.3, 0.4))
                         .corner_radius(6.0)
+                        // Highlight border when text input is focused
+                        .focused_state(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
                         .child(
                             text_input(username)
                                 .text_color(Color::WHITE)
@@ -63,6 +67,8 @@ fn main() {
                         .background(Color::rgb(0.18, 0.18, 0.24))
                         .border(1.0, Color::rgb(0.3, 0.3, 0.4))
                         .corner_radius(6.0)
+                        // Highlight border when text input is focused
+                        .focused_state(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
                         .child(
                             text_input(password)
                                 .text_color(Color::WHITE)
@@ -158,6 +164,11 @@ fn main() {
                 )
                 .child(
                     text("• Enter to submit (in password field)")
+                        .color(Color::rgb(0.5, 0.5, 0.6))
+                        .font_size(11.0),
+                )
+                .child(
+                    text("• Ctrl+C/X/V to copy/cut/paste")
                         .color(Color::rgb(0.5, 0.5, 0.6))
                         .font_size(11.0),
                 ),

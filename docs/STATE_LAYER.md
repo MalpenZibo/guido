@@ -1,12 +1,13 @@
 # State Layer API
 
-The state layer system provides declarative style overrides based on widget interaction state (hover, pressed). This enables rich visual feedback without manual signal management.
+The state layer system provides declarative style overrides based on widget interaction state (hover, pressed, focused). This enables rich visual feedback without manual signal management.
 
 ## Overview
 
 State layers allow containers to define how they should look when:
 - **Hovered**: Mouse cursor is over the widget
 - **Pressed**: Mouse button is held down on the widget
+- **Focused**: Any child widget has keyboard focus (e.g., text input)
 
 Style changes are defined declaratively using builder methods, and the framework handles all state transitions, animations, and rendering automatically.
 
@@ -21,6 +22,18 @@ container()
     .hover_state(|s| s.lighter(0.1))      // Lighten on hover
     .pressed_state(|s| s.ripple())         // Ripple on press
     .child(text("Click me"))
+```
+
+### Focused State for Input Containers
+
+The `focused_state` is applied when any child widget has keyboard focus. This is particularly useful for styling input containers:
+
+```rust
+container()
+    .border(1.0, Color::rgb(0.3, 0.3, 0.4))
+    .corner_radius(6.0)
+    .focused_state(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))  // Highlight when focused
+    .child(text_input(value))
 ```
 
 ## State Style Methods

@@ -402,6 +402,13 @@ pub trait Widget {
 
     /// Clear dirty flags after processing
     fn clear_dirty(&mut self);
+
+    /// Check if this widget has a descendant with the given ID.
+    /// Used by containers to check if a child has focus.
+    /// Default implementation returns false (leaf widgets have no children).
+    fn has_focus_descendant(&self, _id: WidgetId) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
