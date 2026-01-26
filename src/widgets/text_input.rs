@@ -16,7 +16,7 @@ use crate::reactive::{
     clipboard_copy, clipboard_paste, has_focus, release_focus, request_animation_frame,
     request_focus, ChangeFlags, IntoMaybeDyn, MaybeDyn, Signal, WidgetId,
 };
-use crate::renderer::{char_index_from_x, measure_text, measure_text_to_char, PaintContext};
+use crate::renderer::{char_index_from_x, measure_text, PaintContext};
 
 use super::impl_dirty_flags;
 use super::widget::{Color, Event, EventResponse, Key, Modifiers, MouseButton, Rect, Widget};
@@ -205,8 +205,18 @@ pub struct TextInput {
     /// Signal for two-way binding
     value: Signal<String>,
     cached_value: String,
+    cached_char_count: usize,
     cached_display_text: String,
     display_text_dirty: bool,
+
+    // Measurement cache (avoid repeated text shaping in paint)
+    /// Total width of display text
+    cached_text_width: f32,
+    /// Cumulative width at each character index (length = char_count + 1)
+    /// cached_glyph_positions[i] = width of text[0..i]
+    cached_glyph_positions: Vec<f32>,
+    /// Whether measurements need to be recalculated
+    measurements_dirty: bool,
 
     // Styling
     text_color: MaybeDyn<Color>,
@@ -253,13 +263,18 @@ impl TextInput {
     /// Changes made in the TextInput will be written back to the signal.
     pub fn new(signal: Signal<String>) -> Self {
         let cached_value = signal.get();
+        let cached_char_count = cached_value.chars().count();
         Self {
             widget_id: WidgetId::next(),
             dirty_flags: ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT,
             value: signal,
             cached_value,
+            cached_char_count,
             cached_display_text: String::new(),
             display_text_dirty: true,
+            cached_text_width: 0.0,
+            cached_glyph_positions: Vec::new(),
+            measurements_dirty: true,
             text_color: MaybeDyn::Static(Color::WHITE),
             cursor_color: MaybeDyn::Static(Color::rgb(0.4, 0.8, 1.0)),
             selection_color: MaybeDyn::Static(Color::rgba(0.4, 0.6, 1.0, 0.4)),
@@ -334,9 +349,7 @@ impl TextInput {
     fn display_text(&mut self) -> &str {
         if self.display_text_dirty {
             self.cached_display_text = if self.is_password {
-                self.mask_char
-                    .to_string()
-                    .repeat(self.cached_value.chars().count())
+                self.mask_char.to_string().repeat(self.cached_char_count)
             } else {
                 self.cached_value.clone()
             };
@@ -348,6 +361,55 @@ impl TextInput {
     /// Get the display text for immutable contexts (for paint)
     fn display_text_cached(&self) -> &str {
         &self.cached_display_text
+    }
+
+    /// Update cached glyph positions if measurements are dirty.
+    /// Call this from layout() to ensure measurements are ready for paint().
+    fn update_measurements(&mut self) {
+        if !self.measurements_dirty {
+            return;
+        }
+
+        // Ensure display text is current
+        let _ = self.display_text();
+        let display = &self.cached_display_text;
+        let font_size = self.cached_font_size;
+
+        // Build cumulative position array: positions[i] = width of text[0..i]
+        // Length is char_count + 1 to include position 0 and position at end
+        let char_count = self.cached_char_count;
+        self.cached_glyph_positions.clear();
+        self.cached_glyph_positions.reserve(char_count + 1);
+        self.cached_glyph_positions.push(0.0); // Position at index 0
+
+        // Measure width at each character boundary
+        for (i, (byte_idx, _)) in display.char_indices().enumerate() {
+            // Width up to this character
+            let prefix = &display[..byte_idx];
+            let width = if prefix.is_empty() {
+                0.0
+            } else {
+                measure_text(prefix, font_size, None).width
+            };
+            // Update position for this index (already have 0 at index 0)
+            if i > 0 {
+                self.cached_glyph_positions.push(width);
+            }
+        }
+
+        // Add final position (total width)
+        self.cached_text_width = measure_text(display, font_size, None).width;
+        self.cached_glyph_positions.push(self.cached_text_width);
+
+        self.measurements_dirty = false;
+    }
+
+    /// Get cached width at a character index (0 to char_count inclusive)
+    fn cached_width_at_char(&self, char_index: usize) -> f32 {
+        self.cached_glyph_positions
+            .get(char_index)
+            .copied()
+            .unwrap_or(self.cached_text_width)
     }
 
     /// Convert a character index to a byte index in the cached value
@@ -376,14 +438,16 @@ impl TextInput {
 
         if value_changed {
             self.cached_value = new_value;
+            self.cached_char_count = self.cached_value.chars().count();
             self.display_text_dirty = true;
+            self.measurements_dirty = true;
             // Clamp selection to valid range
-            let char_count = self.cached_value.chars().count();
-            self.selection.cursor = self.selection.cursor.min(char_count);
-            self.selection.anchor = self.selection.anchor.min(char_count);
+            self.selection.cursor = self.selection.cursor.min(self.cached_char_count);
+            self.selection.anchor = self.selection.anchor.min(self.cached_char_count);
         }
         if font_changed {
             self.cached_font_size = new_font_size;
+            self.measurements_dirty = true;
         }
 
         value_changed || font_changed
@@ -435,23 +499,59 @@ impl TextInput {
         }
     }
 
-    /// Get character index from x coordinate relative to text start
+    /// Get character index from x coordinate relative to text start.
+    /// Uses cached glyph positions for O(log n) binary search.
     fn char_index_at_x(&self, x: f32) -> usize {
-        let display = self.display_text_cached();
         let text_x = self.bounds.x;
         // Account for scroll offset
         let relative_x = x - text_x + self.scroll_offset;
-        char_index_from_x(display, self.cached_font_size, relative_x)
+
+        if relative_x <= 0.0 {
+            return 0;
+        }
+        if relative_x >= self.cached_text_width {
+            return self.cached_char_count;
+        }
+
+        // Binary search on cached glyph positions
+        let positions = &self.cached_glyph_positions;
+        if positions.is_empty() {
+            // Fallback if cache not populated (shouldn't happen after layout)
+            let display = self.display_text_cached();
+            return char_index_from_x(display, self.cached_font_size, relative_x);
+        }
+
+        // Find the insertion point using binary search
+        let mut left = 0;
+        let mut right = positions.len();
+        while left < right {
+            let mid = (left + right) / 2;
+            if positions[mid] < relative_x {
+                left = mid + 1;
+            } else {
+                right = mid;
+            }
+        }
+
+        // left now points to first position >= relative_x
+        // Check if click is closer to the previous character
+        if left > 0 && left < positions.len() {
+            let prev_x = positions[left - 1];
+            let curr_x = positions[left];
+            if (relative_x - prev_x) < (curr_x - relative_x) {
+                return left - 1;
+            }
+        }
+
+        left.min(self.cached_char_count)
     }
 
     /// Ensure the cursor is visible by adjusting scroll offset
     fn ensure_cursor_visible(&mut self) {
-        let cursor_x = measure_text_to_char(
-            self.display_text_cached(),
-            self.cached_font_size,
-            self.selection.cursor,
-        );
+        // Ensure measurements are up to date
+        self.update_measurements();
 
+        let cursor_x = self.cached_width_at_char(self.selection.cursor);
         let visible_width = self.bounds.width - SCROLL_PADDING * 2.0;
 
         if visible_width <= 0.0 {
@@ -478,6 +578,7 @@ impl TextInput {
 
         let (start, end) = self.selection.range();
         let (byte_start, byte_end) = self.char_range_to_byte_range(start, end);
+        let inserted_char_count = text.chars().count();
 
         // Replace selection with new text
         let mut new_value = String::with_capacity(self.cached_value.len() + text.len());
@@ -486,8 +587,11 @@ impl TextInput {
         new_value.push_str(&self.cached_value[byte_end..]);
 
         self.cached_value = new_value;
+        // Update cached char count: old - deleted + inserted
+        self.cached_char_count = self.cached_char_count - (end - start) + inserted_char_count;
         self.display_text_dirty = true;
-        self.selection = Selection::new(start + text.chars().count());
+        self.measurements_dirty = true;
+        self.selection = Selection::new(start + inserted_char_count);
 
         self.notify_change();
         self.reset_cursor_blink();
@@ -500,7 +604,7 @@ impl TextInput {
         let has_content_to_delete = if self.selection.has_selection() {
             true
         } else if forward {
-            self.selection.cursor < self.cached_value.chars().count()
+            self.selection.cursor < self.cached_char_count
         } else {
             self.selection.cursor > 0
         };
@@ -517,8 +621,7 @@ impl TextInput {
             self.selection = Selection::new(start);
         } else if forward {
             // Delete character after cursor
-            let char_count = self.cached_value.chars().count();
-            if self.selection.cursor < char_count {
+            if self.selection.cursor < self.cached_char_count {
                 self.delete_range(self.selection.cursor, self.selection.cursor + 1);
             }
         } else {
@@ -541,19 +644,20 @@ impl TextInput {
         new_value.push_str(&self.cached_value[byte_end..]);
 
         self.cached_value = new_value;
+        self.cached_char_count -= end - start;
         self.display_text_dirty = true;
+        self.measurements_dirty = true;
         self.notify_change();
     }
 
     /// Move cursor left/right, optionally extending selection
     fn move_cursor(&mut self, direction: i32, extend_selection: bool, word: bool) {
-        let char_count = self.cached_value.chars().count();
         let new_pos = if word {
             self.find_word_boundary(self.selection.cursor, direction)
         } else if direction < 0 {
             self.selection.cursor.saturating_sub(1)
         } else {
-            (self.selection.cursor + 1).min(char_count)
+            (self.selection.cursor + 1).min(self.cached_char_count)
         };
 
         self.selection.cursor = new_pos;
@@ -566,49 +670,58 @@ impl TextInput {
 
     /// Find word boundary in given direction
     fn find_word_boundary(&self, start: usize, direction: i32) -> usize {
-        let chars: Vec<char> = self.cached_value.chars().collect();
-        let len = chars.len();
+        let len = self.cached_char_count;
 
         if direction < 0 {
-            // Move left
+            // Move left - collect only the prefix up to cursor (not entire string)
             if start == 0 {
                 return 0;
             }
-            let mut pos = start - 1;
-            // Skip whitespace
-            while pos > 0 && chars[pos].is_whitespace() {
+
+            // Collect characters before cursor position
+            let prefix: Vec<char> = self.cached_value.chars().take(start).collect();
+            let mut pos = prefix.len() - 1;
+
+            // Skip whitespace going backwards
+            while pos > 0 && prefix[pos].is_whitespace() {
                 pos -= 1;
             }
-            // Skip word characters
-            while pos > 0 && !chars[pos - 1].is_whitespace() {
+            // Skip word characters going backwards
+            while pos > 0 && !prefix[pos - 1].is_whitespace() {
                 pos -= 1;
             }
             pos
         } else {
-            // Move right
+            // Move right - use iterator directly, no allocation
             if start >= len {
                 return len;
             }
+
             let mut pos = start;
+            let mut chars = self.cached_value.chars().skip(start).peekable();
+
             // Skip word characters
-            while pos < len && !chars[pos].is_whitespace() {
+            while let Some(&c) = chars.peek() {
+                if c.is_whitespace() {
+                    break;
+                }
+                chars.next();
                 pos += 1;
             }
             // Skip whitespace
-            while pos < len && chars[pos].is_whitespace() {
+            for c in chars {
+                if !c.is_whitespace() {
+                    break;
+                }
                 pos += 1;
             }
-            pos
+            pos.min(len)
         }
     }
 
     /// Move cursor to start/end
     fn move_to_edge(&mut self, to_start: bool, extend_selection: bool) {
-        self.selection.cursor = if to_start {
-            0
-        } else {
-            self.cached_value.chars().count()
-        };
+        self.selection.cursor = if to_start { 0 } else { self.cached_char_count };
         if !extend_selection {
             self.selection.collapse();
         }
@@ -619,7 +732,7 @@ impl TextInput {
     /// Select all text
     fn select_all(&mut self) {
         self.selection.anchor = 0;
-        self.selection.cursor = self.cached_value.chars().count();
+        self.selection.cursor = self.cached_char_count;
         self.reset_cursor_blink();
         self.ensure_cursor_visible();
     }
@@ -683,7 +796,9 @@ impl TextInput {
         let current = self.current_history_entry();
         if let Some(previous) = self.history.undo(current) {
             self.cached_value = previous.text;
+            self.cached_char_count = self.cached_value.chars().count();
             self.display_text_dirty = true;
+            self.measurements_dirty = true;
             self.selection.cursor = previous.cursor;
             self.selection.anchor = previous.anchor;
             self.history.reset_coalescing();
@@ -698,7 +813,9 @@ impl TextInput {
         let current = self.current_history_entry();
         if let Some(next) = self.history.redo(current) {
             self.cached_value = next.text;
+            self.cached_char_count = self.cached_value.chars().count();
             self.display_text_dirty = true;
+            self.measurements_dirty = true;
             self.selection.cursor = next.cursor;
             self.selection.anchor = next.anchor;
             self.history.reset_coalescing();
@@ -824,11 +941,13 @@ impl Widget for TextInput {
 
         // Skip re-measurement if nothing changed and we don't need layout
         if !content_changed && !self.needs_layout() && self.bounds.width > 0.0 {
+            // Still update measurements if dirty (e.g., after text edit)
+            self.update_measurements();
             return Size::new(self.bounds.width, self.bounds.height);
         }
 
-        // Refresh display text cache if dirty
-        let _ = self.display_text();
+        // Update measurement cache (also refreshes display text)
+        self.update_measurements();
         let measured = measure_text(self.display_text_cached(), self.cached_font_size, None);
 
         // Ensure minimum height for empty text
@@ -866,10 +985,9 @@ impl Widget for TextInput {
         // Draw selection highlight if focused and has selection
         if is_focused && self.selection.has_selection() {
             let (start, end) = self.selection.range();
-            let start_x =
-                measure_text_to_char(display, self.cached_font_size, start) - self.scroll_offset;
-            let end_x =
-                measure_text_to_char(display, self.cached_font_size, end) - self.scroll_offset;
+            // Use cached glyph positions instead of measuring
+            let start_x = self.cached_width_at_char(start) - self.scroll_offset;
+            let end_x = self.cached_width_at_char(end) - self.scroll_offset;
 
             let selection_rect = Rect::new(
                 self.bounds.x + start_x,
@@ -881,21 +999,19 @@ impl Widget for TextInput {
         }
 
         // Draw text with scroll offset
-        // Use a very large width to prevent word wrapping - the clip rect handles clipping
-        let text_width = measure_text(display, self.cached_font_size, None).width;
+        // Use cached text width to prevent word wrapping - the clip rect handles clipping
         let text_bounds = Rect::new(
             self.bounds.x - self.scroll_offset,
             self.bounds.y,
-            text_width.max(self.bounds.width), // Use actual text width to prevent wrapping
+            self.cached_text_width.max(self.bounds.width),
             self.bounds.height,
         );
         ctx.draw_text(display, text_bounds, text_color, self.cached_font_size);
 
         // Draw cursor if focused and visible
         if is_focused && self.cursor_visible {
-            let cursor_x =
-                measure_text_to_char(display, self.cached_font_size, self.selection.cursor)
-                    - self.scroll_offset;
+            // Use cached glyph position
+            let cursor_x = self.cached_width_at_char(self.selection.cursor) - self.scroll_offset;
             let cursor_rect = Rect::new(
                 self.bounds.x + cursor_x,
                 self.bounds.y,
