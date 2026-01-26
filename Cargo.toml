@@ -1,15 +1,34 @@
 [workspace]
 members = [".", "guido-macros"]
 
-[package]
-name = "guido"
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
-description = "A reactive Rust GUI library using wgpu for Wayland layer shell widgets"
+authors = ["Simone Camito"]
+categories = ["gui", "reactive", "wayland", "leyershell", "wgpu"]
+keywords = ["gui", "reactive", "wayland", "leyershell", "wgpu", "guido"]
+readme = "README.md"
+documentation = "https://docs.rs/guido"
+repository = "https://github.com/MalpenZibo/guido"
+homepage = "https://malpenzibo.github.io/guido"
 license = "MIT"
 
+[workspace.dependencies]
+guido-macros = { path = "guido-macros", version = "0.1.0" }
+
+[package]
+name = "guido"
+description = "A reactive Rust GUI library using wgpu for Wayland layer shell widgets"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+documentation.workspace = true
+homepage.workspace = true
+license.workspace = true
+
 [dependencies]
-guido-macros = { path = "guido-macros" }
+guido-macros = { workspace = true }
 wgpu = { version = "28.0", features = ["fragile-send-sync-non-atomic-wasm"] }
 bytemuck = { version = "1.24", features = ["derive"] }
 glyphon = "0.10"
@@ -18,7 +37,7 @@ smithay-client-toolkit = { version = "0.20", default-features = false, features 
 wayland-backend = { version = "0.3", features = ["client_system"] }
 raw-window-handle = "0.6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
-resvg = "0.45"
+resvg = "0.46"
 pollster = "0.4"
 log = "0.4"
 env_logger = "0.11"
