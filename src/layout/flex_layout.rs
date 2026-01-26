@@ -17,12 +17,16 @@ pub struct Flex {
 
 impl Flex {
     /// Create a new flex layout with the given direction
+    ///
+    /// Default alignments match CSS Flexbox:
+    /// - `main_axis_alignment`: `Start` (CSS `justify-content: flex-start`)
+    /// - `cross_axis_alignment`: `Stretch` (CSS `align-items: stretch`)
     pub fn new(direction: Axis) -> Self {
         Self {
             direction: MaybeDyn::Static(direction),
             spacing: MaybeDyn::Static(0.0),
             main_axis_alignment: MaybeDyn::Static(MainAxisAlignment::Start),
-            cross_axis_alignment: MaybeDyn::Static(CrossAxisAlignment::Center),
+            cross_axis_alignment: MaybeDyn::Static(CrossAxisAlignment::Stretch),
             child_sizes: SmallVec::new(),
         }
     }

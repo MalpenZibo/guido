@@ -220,6 +220,44 @@ pub enum ScrollSource {
     Continuous,
 }
 
+/// Keyboard modifier state
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Modifiers {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub logo: bool,
+}
+
+/// Named keys for special keyboard keys
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Key {
+    /// Backspace key
+    Backspace,
+    /// Delete key
+    Delete,
+    /// Enter/Return key
+    Enter,
+    /// Tab key
+    Tab,
+    /// Escape key
+    Escape,
+    /// Left arrow
+    Left,
+    /// Right arrow
+    Right,
+    /// Up arrow
+    Up,
+    /// Down arrow
+    Down,
+    /// Home key
+    Home,
+    /// End key
+    End,
+    /// Character input (includes A-Z for Ctrl+A shortcuts)
+    Char(char),
+}
+
 #[derive(Debug, Clone)]
 pub enum Event {
     /// Mouse/pointer moved
@@ -245,6 +283,24 @@ pub enum Event {
         /// Source of the scroll event
         source: ScrollSource,
     },
+    /// Key pressed
+    KeyDown {
+        /// The key that was pressed
+        key: Key,
+        /// Current modifier state
+        modifiers: Modifiers,
+    },
+    /// Key released
+    KeyUp {
+        /// The key that was released
+        key: Key,
+        /// Current modifier state
+        modifiers: Modifiers,
+    },
+    /// Widget gained keyboard focus
+    FocusIn,
+    /// Widget lost keyboard focus
+    FocusOut,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -262,7 +318,11 @@ impl Event {
             Event::MouseUp { x, y, .. } => Some((*x, *y)),
             Event::MouseEnter { x, y } => Some((*x, *y)),
             Event::Scroll { x, y, .. } => Some((*x, *y)),
-            Event::MouseLeave => None,
+            Event::MouseLeave
+            | Event::KeyDown { .. }
+            | Event::KeyUp { .. }
+            | Event::FocusIn
+            | Event::FocusOut => None,
         }
     }
 
@@ -294,6 +354,17 @@ impl Event {
                 source: *source,
             },
             Event::MouseLeave => Event::MouseLeave,
+            // Keyboard/focus events don't have coordinates
+            Event::KeyDown { key, modifiers } => Event::KeyDown {
+                key: *key,
+                modifiers: *modifiers,
+            },
+            Event::KeyUp { key, modifiers } => Event::KeyUp {
+                key: *key,
+                modifiers: *modifiers,
+            },
+            Event::FocusIn => Event::FocusIn,
+            Event::FocusOut => Event::FocusOut,
         }
     }
 }
@@ -331,6 +402,13 @@ pub trait Widget {
 
     /// Clear dirty flags after processing
     fn clear_dirty(&mut self);
+
+    /// Check if this widget has a descendant with the given ID.
+    /// Used by containers to check if a child has focus.
+    /// Default implementation returns false (leaf widgets have no children).
+    fn has_focus_descendant(&self, _id: WidgetId) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

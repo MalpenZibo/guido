@@ -4,13 +4,22 @@ use raw_window_handle::{
 };
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
-    delegate_seat,
+    data_device_manager::{
+        data_device::{DataDevice, DataDeviceHandler},
+        data_offer::{DataOfferHandler, SelectionOffer},
+        data_source::{CopyPasteSource, DataSourceHandler},
+        DataDeviceManagerState, ReadPipe,
+    },
+    delegate_compositor, delegate_data_device, delegate_keyboard, delegate_layer, delegate_output,
+    delegate_pointer, delegate_registry, delegate_seat,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     seat::{
-        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers as WlModifiers, RawModifiers},
+        pointer::{
+            cursor_shape::CursorShapeManager, PointerEvent, PointerEventKind, PointerHandler,
+        },
         Capability, SeatHandler, SeatState,
     },
     shell::wlr_layer::{
@@ -21,11 +30,21 @@ use smithay_client_toolkit::{
 use wayland_backend::sys::client::ObjectId;
 use wayland_client::{
     globals::registry_queue_init,
-    protocol::{wl_output, wl_pointer, wl_seat, wl_surface},
+    protocol::{
+        wl_data_device::WlDataDevice, wl_data_device_manager::DndAction,
+        wl_data_source::WlDataSource, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface,
+    },
     Connection, EventQueue, Proxy, QueueHandle,
 };
+use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape as WpCursorShape;
 
-use crate::widgets::{Event, MouseButton, ScrollSource};
+use std::fs::File;
+use std::io::{Read, Write};
+use std::os::fd::AsFd;
+use std::os::unix::io::OwnedFd;
+
+use crate::reactive::CursorIcon;
+use crate::widgets::{Event, Key, Modifiers, MouseButton, ScrollSource};
 
 /// Pixels per line for discrete scroll (mouse wheel)
 const SCROLL_PIXELS_PER_LINE: f32 = 40.0;
@@ -53,6 +72,23 @@ pub struct WaylandState {
     pointer_x: f32,
     pointer_y: f32,
     pointer_over_surface: bool,
+    pointer_enter_serial: u32,
+
+    // Cursor shape
+    cursor_shape_manager: Option<CursorShapeManager>,
+
+    // Keyboard state
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    modifiers: Modifiers,
+    keyboard_serial: u32,
+
+    // Clipboard state
+    data_device_manager: Option<DataDeviceManagerState>,
+    data_device: Option<DataDevice>,
+    clipboard_content: Option<String>,
+    pending_clipboard_read: Option<ReadPipe>,
+    clipboard_source: Option<CopyPasteSource>,
+    selection_offer: Option<SelectionOffer>,
 
     // Pending events to be processed by the main loop
     pub pending_events: Vec<Event>,
@@ -75,6 +111,18 @@ pub fn create_wayland_app() -> (
     let output_state = OutputState::new(&globals, &qh);
     let seat_state = SeatState::new(&globals, &qh);
 
+    // Initialize data device manager for clipboard support
+    let data_device_manager = DataDeviceManagerState::bind(&globals, &qh).ok();
+    if data_device_manager.is_none() {
+        log::warn!("Data device manager not available - clipboard will not work");
+    }
+
+    // Initialize cursor shape manager for cursor changes
+    let cursor_shape_manager = CursorShapeManager::bind(&globals, &qh).ok();
+    if cursor_shape_manager.is_none() {
+        log::warn!("Cursor shape manager not available - cursor changes will not work");
+    }
+
     let state = WaylandState {
         registry_state: RegistryState::new(&globals),
         compositor_state,
@@ -94,6 +142,17 @@ pub fn create_wayland_app() -> (
         pointer_x: 0.0,
         pointer_y: 0.0,
         pointer_over_surface: false,
+        pointer_enter_serial: 0,
+        cursor_shape_manager,
+        keyboard: None,
+        modifiers: Modifiers::default(),
+        keyboard_serial: 0,
+        data_device_manager,
+        data_device: None,
+        clipboard_content: None,
+        pending_clipboard_read: None,
+        clipboard_source: None,
+        selection_offer: None,
         pending_events: Vec::new(),
     };
 
@@ -135,7 +194,7 @@ impl WaylandState {
         };
 
         layer_surface.set_size(use_width, use_height);
-        layer_surface.set_keyboard_interactivity(KeyboardInteractivity::None);
+        layer_surface.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
         layer_surface.set_exclusive_zone(height as i32);
 
         surface.commit();
@@ -149,6 +208,156 @@ impl WaylandState {
     /// Take all pending events (drains the queue)
     pub fn take_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.pending_events)
+    }
+
+    /// Set clipboard content (copy)
+    pub fn set_clipboard(&mut self, text: String, qh: &QueueHandle<Self>) {
+        if let Some(ref manager) = self.data_device_manager {
+            // Create a data source for the clipboard
+            let source = manager.create_copy_paste_source(
+                qh,
+                vec!["text/plain;charset=utf-8", "UTF8_STRING", "TEXT", "STRING"],
+            );
+
+            // Store the text to write when compositor requests it
+            self.clipboard_content = Some(text);
+
+            // Set selection using the keyboard serial
+            if let Some(ref device) = self.data_device {
+                source.set_selection(device, self.keyboard_serial);
+                self.clipboard_source = Some(source);
+            }
+        }
+    }
+
+    /// Get clipboard content (paste)
+    /// Returns the content if available, or None if clipboard is empty
+    pub fn get_clipboard(&self) -> Option<String> {
+        self.clipboard_content.clone()
+    }
+
+    /// Read clipboard content from external selection (from other applications)
+    /// This reads from the Wayland selection offer if available
+    pub fn read_external_clipboard(&mut self, connection: &Connection) -> Option<String> {
+        let offer = self.selection_offer.take()?;
+
+        // Try different mime types in order of preference
+        let mime_types = [
+            "text/plain;charset=utf-8",
+            "UTF8_STRING",
+            "text/plain",
+            "TEXT",
+            "STRING",
+        ];
+
+        for mime_type in mime_types {
+            // Check if this mime type is offered
+            if !offer.with_mime_types(|types| types.iter().any(|t| t == mime_type)) {
+                continue;
+            }
+
+            // Try to receive data with this mime type
+            match offer.receive(mime_type.to_string()) {
+                Ok(pipe) => {
+                    // Flush the connection to send the receive request to the compositor
+                    // The compositor then notifies the source app to write data to the pipe
+                    let _ = connection.flush();
+
+                    // Convert to file for reading
+                    let fd = OwnedFd::from(pipe);
+                    let mut file = File::from(fd);
+
+                    // Use poll() to wait for data with a timeout
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::io::AsRawFd;
+                        let raw_fd = file.as_raw_fd();
+
+                        let mut poll_fd = libc::pollfd {
+                            fd: raw_fd,
+                            events: libc::POLLIN,
+                            revents: 0,
+                        };
+
+                        // Wait up to 500ms for data to be available
+                        let ret = unsafe { libc::poll(&mut poll_fd, 1, 500) };
+
+                        if ret > 0 && (poll_fd.revents & libc::POLLIN) != 0 {
+                            let mut contents = String::new();
+                            if file.read_to_string(&mut contents).is_ok() && !contents.is_empty() {
+                                self.selection_offer = Some(offer);
+                                return Some(contents);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::debug!("Failed to receive clipboard data as {}: {:?}", mime_type, e);
+                }
+            }
+        }
+
+        // Store back the offer even if we couldn't read
+        self.selection_offer = Some(offer);
+        None
+    }
+
+    /// Check if there's pending clipboard data to read
+    pub fn poll_clipboard(&mut self) -> Option<String> {
+        if let Some(ref mut pipe) = self.pending_clipboard_read.take() {
+            let mut contents = String::new();
+            // Read with a small timeout - this is blocking but typically fast
+            match pipe.as_fd().try_clone_to_owned() {
+                Ok(fd) => {
+                    let mut file = std::fs::File::from(fd);
+                    if file.read_to_string(&mut contents).is_ok() && !contents.is_empty() {
+                        return Some(contents);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to clone clipboard fd: {}", e);
+                }
+            }
+        }
+        None
+    }
+
+    /// Set the cursor shape
+    pub fn set_cursor(&self, cursor: CursorIcon, qh: &QueueHandle<Self>) {
+        let Some(ref manager) = self.cursor_shape_manager else {
+            return;
+        };
+        let Some(ref pointer) = self.pointer else {
+            return;
+        };
+
+        // Convert our CursorIcon to Wayland cursor shape
+        let shape = match cursor {
+            CursorIcon::Default => WpCursorShape::Default,
+            CursorIcon::Text => WpCursorShape::Text,
+            CursorIcon::Pointer => WpCursorShape::Pointer,
+            CursorIcon::Crosshair => WpCursorShape::Crosshair,
+            CursorIcon::Move => WpCursorShape::Move,
+            CursorIcon::NotAllowed => WpCursorShape::NotAllowed,
+            CursorIcon::Grab => WpCursorShape::Grab,
+            CursorIcon::Grabbing => WpCursorShape::Grabbing,
+            CursorIcon::ResizeNorth => WpCursorShape::NResize,
+            CursorIcon::ResizeSouth => WpCursorShape::SResize,
+            CursorIcon::ResizeEast => WpCursorShape::EResize,
+            CursorIcon::ResizeWest => WpCursorShape::WResize,
+            CursorIcon::ResizeNorthEast => WpCursorShape::NeResize,
+            CursorIcon::ResizeNorthWest => WpCursorShape::NwResize,
+            CursorIcon::ResizeSouthEast => WpCursorShape::SeResize,
+            CursorIcon::ResizeSouthWest => WpCursorShape::SwResize,
+            CursorIcon::ColResize => WpCursorShape::ColResize,
+            CursorIcon::RowResize => WpCursorShape::RowResize,
+            CursorIcon::Wait => WpCursorShape::Wait,
+            CursorIcon::Progress => WpCursorShape::Progress,
+        };
+
+        // Get cursor shape device and set shape
+        let device = manager.get_shape_device(pointer, qh);
+        device.set_shape(self.pointer_enter_serial, shape);
     }
 }
 
@@ -339,6 +548,25 @@ impl SeatHandler for WaylandState {
                 .expect("Failed to get pointer");
             self.pointer = Some(pointer);
         }
+
+        // Handle keyboard capability
+        if capability == Capability::Keyboard && self.keyboard.is_none() {
+            log::info!("Keyboard capability available, creating keyboard");
+            let keyboard = self
+                .seat_state
+                .get_keyboard(qh, &seat, None)
+                .expect("Failed to get keyboard");
+            self.keyboard = Some(keyboard);
+
+            // Create data device for clipboard when we have a seat
+            if self.data_device.is_none() {
+                if let Some(ref manager) = self.data_device_manager {
+                    log::info!("Creating data device for clipboard");
+                    let data_device = manager.get_data_device(qh, &seat);
+                    self.data_device = Some(data_device);
+                }
+            }
+        }
     }
 
     fn remove_capability(
@@ -352,6 +580,12 @@ impl SeatHandler for WaylandState {
             log::info!("Pointer capability removed");
             if let Some(pointer) = self.pointer.take() {
                 pointer.release();
+            }
+        }
+        if capability == Capability::Keyboard {
+            log::info!("Keyboard capability removed");
+            if let Some(keyboard) = self.keyboard.take() {
+                keyboard.release();
             }
         }
     }
@@ -381,8 +615,9 @@ impl PointerHandler for WaylandState {
             }
 
             match event.kind {
-                PointerEventKind::Enter { .. } => {
+                PointerEventKind::Enter { serial } => {
                     self.pointer_over_surface = true;
+                    self.pointer_enter_serial = serial;
                     self.pointer_x = event.position.0 as f32;
                     self.pointer_y = event.position.1 as f32;
                     self.pending_events.push(Event::MouseEnter {
@@ -495,6 +730,151 @@ fn wayland_button_to_mouse_button(button: u32) -> Option<MouseButton> {
     }
 }
 
+impl KeyboardHandler for WaylandState {
+    fn enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _surface: &wl_surface::WlSurface,
+        _serial: u32,
+        _raw: &[u32],
+        _keysyms: &[Keysym],
+    ) {
+        log::debug!("Keyboard focus entered");
+        self.pending_events.push(Event::FocusIn);
+    }
+
+    fn leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _surface: &wl_surface::WlSurface,
+        _serial: u32,
+    ) {
+        log::debug!("Keyboard focus left");
+        self.pending_events.push(Event::FocusOut);
+    }
+
+    fn press_key(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        serial: u32,
+        event: KeyEvent,
+    ) {
+        // Track serial for clipboard operations
+        self.keyboard_serial = serial;
+
+        if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref()) {
+            self.pending_events.push(Event::KeyDown {
+                key,
+                modifiers: self.modifiers,
+            });
+        }
+    }
+
+    fn release_key(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        event: KeyEvent,
+    ) {
+        if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref()) {
+            self.pending_events.push(Event::KeyUp {
+                key,
+                modifiers: self.modifiers,
+            });
+        }
+    }
+
+    fn update_modifiers(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        modifiers: WlModifiers,
+        _raw_modifiers: RawModifiers,
+        _layout: u32,
+    ) {
+        self.modifiers = Modifiers {
+            ctrl: modifiers.ctrl,
+            alt: modifiers.alt,
+            shift: modifiers.shift,
+            logo: modifiers.logo,
+        };
+    }
+
+    fn repeat_key(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        event: KeyEvent,
+    ) {
+        // Treat key repeat as a new key press
+        if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref()) {
+            self.pending_events.push(Event::KeyDown {
+                key,
+                modifiers: self.modifiers,
+            });
+        }
+    }
+}
+
+/// Convert XKB keysym to our Key type
+fn keysym_to_key(keysym: Keysym, utf8: Option<&str>) -> Option<Key> {
+    // Named keys first
+    match keysym {
+        Keysym::BackSpace => return Some(Key::Backspace),
+        Keysym::Delete => return Some(Key::Delete),
+        Keysym::Return | Keysym::KP_Enter => return Some(Key::Enter),
+        Keysym::Tab | Keysym::ISO_Left_Tab => return Some(Key::Tab),
+        Keysym::Escape => return Some(Key::Escape),
+        Keysym::Left => return Some(Key::Left),
+        Keysym::Right => return Some(Key::Right),
+        Keysym::Up => return Some(Key::Up),
+        Keysym::Down => return Some(Key::Down),
+        Keysym::Home => return Some(Key::Home),
+        Keysym::End => return Some(Key::End),
+        _ => {}
+    }
+
+    // Character input - use utf8 if available
+    if let Some(text) = utf8 {
+        if let Some(c) = text.chars().next() {
+            // Only return printable characters or control characters we care about
+            if !c.is_control() || c == '\n' || c == '\r' || c == '\t' {
+                return Some(Key::Char(c));
+            }
+        }
+    }
+
+    // Fallback: convert keysym directly for printable ASCII characters
+    // This is needed for KeyUp events where utf8 may be None
+    let raw = keysym.raw();
+
+    // Printable ASCII range (space through tilde): 0x20-0x7E
+    // XKB keysyms for these characters have the same value as ASCII
+    if (0x20..=0x7e).contains(&raw) {
+        return Some(Key::Char(char::from_u32(raw)?));
+    }
+
+    // Handle keypad numbers (KP_0 through KP_9)
+    // XKB_KEY_KP_0 = 0xffb0, XKB_KEY_KP_9 = 0xffb9
+    if (0xffb0..=0xffb9).contains(&raw) {
+        return Some(Key::Char(char::from_u32(raw - 0xffb0 + 0x30)?)); // Convert to '0'-'9'
+    }
+
+    None
+}
+
 impl ProvidesRegistryState for WaylandState {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
@@ -503,9 +883,144 @@ impl ProvidesRegistryState for WaylandState {
     registry_handlers![OutputState, SeatState];
 }
 
+impl DataDeviceHandler for WaylandState {
+    fn enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+        _x: f64,
+        _y: f64,
+        _surface: &wl_surface::WlSurface,
+    ) {
+        // Drag and drop enter - not used for clipboard
+    }
+
+    fn leave(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _data_device: &WlDataDevice) {
+        // Drag and drop leave - not used for clipboard
+    }
+
+    fn motion(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+        _x: f64,
+        _y: f64,
+    ) {
+        // Drag and drop motion - not used for clipboard
+    }
+
+    fn drop_performed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+    ) {
+        // Drag and drop performed - not used for clipboard
+    }
+
+    fn selection(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _data_device: &WlDataDevice,
+    ) {
+        log::debug!("Clipboard selection changed");
+        // Store the selection offer for later paste operations
+        if let Some(ref device) = self.data_device {
+            self.selection_offer = device.data().selection_offer();
+        }
+    }
+}
+
+impl DataOfferHandler for WaylandState {
+    fn source_actions(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _offer: &mut smithay_client_toolkit::data_device_manager::data_offer::DragOffer,
+        _actions: DndAction,
+    ) {
+        // Drag and drop actions - not used for clipboard
+    }
+
+    fn selected_action(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _offer: &mut smithay_client_toolkit::data_device_manager::data_offer::DragOffer,
+        _action: DndAction,
+    ) {
+        // Drag and drop selected action - not used for clipboard
+    }
+}
+
+impl DataSourceHandler for WaylandState {
+    fn accept_mime(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &WlDataSource,
+        _mime: Option<String>,
+    ) {
+        // Mime type accepted notification
+    }
+
+    fn send_request(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &WlDataSource,
+        mime: String,
+        fd: smithay_client_toolkit::data_device_manager::WritePipe,
+    ) {
+        log::debug!("Clipboard send request for mime type: {}", mime);
+
+        // Write clipboard content to the file descriptor
+        if let Some(ref content) = self.clipboard_content {
+            let owned_fd = OwnedFd::from(fd);
+            let mut file = File::from(owned_fd);
+            if let Err(e) = file.write_all(content.as_bytes()) {
+                log::warn!("Failed to write clipboard content: {}", e);
+            }
+        }
+    }
+
+    fn cancelled(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource) {
+        log::debug!("Clipboard source cancelled");
+        self.clipboard_source = None;
+    }
+
+    fn dnd_dropped(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource) {
+        // Drag and drop completed - not used for clipboard
+    }
+
+    fn dnd_finished(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &WlDataSource,
+    ) {
+        // Drag and drop finished - not used for clipboard
+    }
+
+    fn action(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _source: &WlDataSource,
+        _action: DndAction,
+    ) {
+        // Action notification - not used for clipboard
+    }
+}
+
 delegate_compositor!(WaylandState);
 delegate_output!(WaylandState);
 delegate_layer!(WaylandState);
 delegate_seat!(WaylandState);
 delegate_pointer!(WaylandState);
+delegate_keyboard!(WaylandState);
+delegate_data_device!(WaylandState);
 delegate_registry!(WaylandState);

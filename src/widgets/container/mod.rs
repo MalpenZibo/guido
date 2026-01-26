@@ -13,7 +13,9 @@ use std::sync::Arc;
 use crate::advance_anim;
 use crate::animation::Transition;
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
-use crate::reactive::{request_animation_frame, ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId};
+use crate::reactive::{
+    focused_widget, request_animation_frame, ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId,
+};
 use crate::renderer::primitives::{GradientDir, Shadow};
 use crate::renderer::PaintContext;
 use crate::transform::Transform;
@@ -159,9 +161,10 @@ pub struct Container {
     pub(super) border_color_anim: Option<AnimationState<Color>>,
     pub(super) transform_anim: Option<AnimationState<Transform>>,
 
-    // State layer styles (hover/pressed overrides)
+    // State layer styles (hover/pressed/focused overrides)
     pub(super) hover_state: Option<StateStyle>,
     pub(super) pressed_state: Option<StateStyle>,
+    pub(super) focused_state: Option<StateStyle>,
 
     // Scroll configuration
     pub(super) scroll_axis: ScrollAxis,
@@ -224,6 +227,7 @@ impl Container {
             transform_anim: None,
             hover_state: None,
             pressed_state: None,
+            focused_state: None,
             scroll_axis: ScrollAxis::None,
             scrollbar_visibility: ScrollbarVisibility::Always,
             scrollbar_config: ScrollbarConfig::default(),
@@ -586,7 +590,49 @@ impl Container {
         self
     }
 
+    /// Set style overrides for when any child widget has focus.
+    ///
+    /// This is useful for styling input containers when their child text input is focused.
+    ///
+    /// # Example
+    /// ```ignore
+    /// container()
+    ///     .border(1.0, Color::rgb(0.3, 0.3, 0.4))
+    ///     .focused_state(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
+    ///     .child(text_input(value))
+    /// ```
+    pub fn focused_state<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(StateStyle) -> StateStyle,
+    {
+        self.focused_state = Some(f(StateStyle::new()));
+        self
+    }
+
+    /// Check if any child widget has focus
+    fn has_child_focus(&self) -> bool {
+        if let Some(focused_id) = focused_widget() {
+            return self.widget_has_focus(focused_id);
+        }
+        false
+    }
+
+    /// Recursively check if this widget or any child matches the focused widget ID
+    fn widget_has_focus(&self, focused_id: WidgetId) -> bool {
+        for child in self.children_source.get() {
+            if child.id() == focused_id {
+                return true;
+            }
+            // Recursively check nested containers/widgets
+            if child.has_focus_descendant(focused_id) {
+                return true;
+            }
+        }
+        false
+    }
+
     // State layer resolution helper
+    // Priority: pressed > focused > hovered
     fn resolve_state_value<T: Clone>(
         &self,
         base: T,
@@ -594,6 +640,14 @@ impl Container {
     ) -> T {
         if self.is_pressed {
             if let Some(ref state) = self.pressed_state {
+                if let Some(value) = extractor(state) {
+                    return value;
+                }
+            }
+        }
+        // Check focused state
+        if self.focused_state.is_some() && self.has_child_focus() {
+            if let Some(ref state) = self.focused_state {
                 if let Some(value) = extractor(state) {
                     return value;
                 }
@@ -1170,14 +1224,11 @@ impl Widget for Container {
         let transform_origin = self.transform_origin.get();
 
         // Push transform if not identity
+        // Always resolve the transform origin so child elements (like text) know where to center
         let has_transform = !transform.is_identity();
         if has_transform {
-            if transform_origin.is_center() {
-                ctx.push_transform(transform);
-            } else {
-                let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
-                ctx.push_transform_with_origin(transform, origin_x, origin_y);
-            }
+            let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
+            ctx.push_transform_with_origin(transform, origin_x, origin_y);
         }
 
         // Draw background
@@ -1477,6 +1528,8 @@ impl Widget for Container {
                     }
                 }
             }
+            // Keyboard and focus events are handled by focused widgets, not containers
+            Event::KeyDown { .. } | Event::KeyUp { .. } | Event::FocusIn | Event::FocusOut => {}
         }
 
         EventResponse::Ignored
@@ -1540,6 +1593,10 @@ impl Widget for Container {
         for child in self.children_source.get_mut() {
             child.clear_dirty();
         }
+    }
+
+    fn has_focus_descendant(&self, id: WidgetId) -> bool {
+        self.widget_has_focus(id)
     }
 }
 

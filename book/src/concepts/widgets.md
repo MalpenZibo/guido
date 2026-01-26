@@ -52,6 +52,20 @@ text("Hello, World!")
 
 See [Text](../building-ui/text.md) for styling options.
 
+### TextInput
+
+Single-line text editing with selection, clipboard, and undo/redo:
+
+```rust
+let username = create_signal(String::new());
+
+text_input(username)
+    .text_color(Color::WHITE)
+    .on_submit(|text| println!("Submitted: {}", text))
+```
+
+See [Text Input](../building-ui/text-input.md) for details.
+
 ## Composition
 
 Guido UIs are built through composition - nesting widgets inside containers:

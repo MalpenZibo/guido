@@ -16,7 +16,8 @@ pub use guido_macros::component;
 use layout::Constraints;
 use platform::{create_wayland_app, Anchor, Layer, WaylandWindowWrapper};
 use reactive::{
-    clear_animation_flag, init_wakeup, take_frame_request, with_app_state, with_app_state_mut,
+    clear_animation_flag, init_wakeup, set_system_clipboard, take_clipboard_change,
+    take_cursor_change, take_frame_request, with_app_state, with_app_state_mut,
 };
 use renderer::{GpuContext, Renderer};
 use widgets::{Color, Widget};
@@ -34,18 +35,18 @@ pub mod prelude {
     };
     pub use crate::platform::{Anchor, Layer};
     pub use crate::reactive::{
-        batch, create_computed, create_effect, create_signal, Computed, Effect, IntoMaybeDyn,
-        MaybeDyn, ReadSignal, Signal, WriteSignal,
+        batch, create_computed, create_effect, create_signal, set_cursor, Computed, CursorIcon,
+        Effect, IntoMaybeDyn, MaybeDyn, ReadSignal, Signal, WriteSignal,
     };
     pub use crate::renderer::primitives::Shadow;
     pub use crate::renderer::{measure_text, PaintContext};
     pub use crate::transform::Transform;
     pub use crate::transform_origin::{HorizontalAnchor, TransformOrigin, VerticalAnchor};
     pub use crate::widgets::{
-        container, image, text, Border, Color, Container, ContentFit, Event, EventResponse,
-        GradientDirection, Image, ImageSource, IntoChildren, LinearGradient, MouseButton, Overflow,
-        Padding, Rect, ScrollAxis, ScrollSource, ScrollbarBuilder, ScrollbarVisibility, StateStyle,
-        Text, Widget,
+        container, image, text, text_input, Border, Color, Container, ContentFit, Event,
+        EventResponse, GradientDirection, Image, ImageSource, IntoChildren, Key, LinearGradient,
+        Modifiers, MouseButton, Overflow, Padding, Rect, ScrollAxis, ScrollSource,
+        ScrollbarBuilder, ScrollbarVisibility, Selection, StateStyle, Text, TextInput, Widget,
     };
     pub use crate::{component, App, AppConfig};
 }
@@ -287,9 +288,40 @@ impl App {
                 callback();
             }
 
+            // Get pending events
+            let events = wayland_state.take_events();
+
+            // Sync external clipboard before keyboard event dispatch (for paste operations)
+            // Only read if Ctrl+V is pressed (actual paste operation)
+            let has_paste_event = events.iter().any(|e| {
+                matches!(
+                    e,
+                    widgets::Event::KeyDown {
+                        key: widgets::Key::Char('v'),
+                        modifiers: widgets::Modifiers { ctrl: true, .. },
+                        ..
+                    }
+                )
+            });
+            if has_paste_event {
+                if let Some(text) = wayland_state.read_external_clipboard(&connection) {
+                    set_system_clipboard(text);
+                }
+            }
+
             // Dispatch input events to widgets
-            for event in wayland_state.take_events() {
+            for event in events {
                 root.event(&event);
+            }
+
+            // Sync clipboard to Wayland if it changed (copy operations)
+            if let Some(text) = take_clipboard_change() {
+                wayland_state.set_clipboard(text, &qh);
+            }
+
+            // Sync cursor to Wayland if it changed
+            if let Some(cursor) = take_cursor_change() {
+                wayland_state.set_cursor(cursor, &qh);
             }
 
             // Calculate physical pixel dimensions (for HiDPI)
