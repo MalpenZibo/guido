@@ -5,6 +5,7 @@ pub mod effect;
 pub mod focus;
 pub mod invalidation;
 pub mod maybe_dyn;
+pub mod owner;
 pub mod runtime;
 pub mod signal;
 pub mod storage;
@@ -24,5 +25,16 @@ pub use invalidation::{
     with_app_state_mut,
 };
 pub use maybe_dyn::{IntoMaybeDyn, MaybeDyn};
+// Only on_cleanup is public API - with_owner, dispose_owner, and OwnerId are
+// internal and automatically used by the dynamic children system
+pub use owner::on_cleanup;
+pub(crate) use owner::{OwnerId, dispose_owner, with_owner};
+
+/// Internal module for macro support. NOT PART OF PUBLIC API.
+/// Do not use directly - these are re-exported for proc macros only.
+#[doc(hidden)]
+pub mod __internal {
+    pub use super::owner::{OwnerId, dispose_owner, with_owner};
+}
 pub use runtime::batch;
 pub use signal::{ReadSignal, Signal, WriteSignal, create_signal};

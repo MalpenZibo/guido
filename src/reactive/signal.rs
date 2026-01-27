@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 
 use super::invalidation::request_frame;
+use super::owner::register_signal;
 use super::runtime::{SignalId, try_with_runtime};
 use super::storage::{
     create_signal_value, get_signal_value, set_signal_value, update_signal_value, with_signal_value,
@@ -189,6 +190,8 @@ pub fn create_signal<T: Clone + PartialEq + Send + Sync + 'static>(value: T) -> 
     let id = create_signal_value(value);
     // Register with thread-local runtime for subscriber tracking
     try_with_runtime(|rt| rt.register_signal(id));
+    // Register with current owner for automatic cleanup
+    register_signal(id);
     Signal {
         id,
         _marker: PhantomData,

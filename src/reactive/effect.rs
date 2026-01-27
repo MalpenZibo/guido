@@ -1,3 +1,4 @@
+use super::owner::{effect_has_owner, register_effect};
 use super::runtime::{EffectId, with_runtime};
 
 pub struct Effect {
@@ -15,13 +16,20 @@ impl Effect {
             id
         });
 
+        // Register with current owner for automatic cleanup
+        register_effect(id);
+
         Self { id }
     }
 }
 
 impl Drop for Effect {
     fn drop(&mut self) {
-        with_runtime(|rt| rt.dispose_effect(self.id));
+        // Only dispose if not owned - owned effects are disposed by their owner.
+        // This prevents double disposal and allows the owner to control cleanup order.
+        if !effect_has_owner(self.id) {
+            with_runtime(|rt| rt.dispose_effect(self.id));
+        }
     }
 }
 

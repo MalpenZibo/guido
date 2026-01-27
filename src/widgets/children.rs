@@ -1,7 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::layout::{Constraints, Size};
+use crate::reactive::{ChangeFlags, OwnerId, WidgetId, dispose_owner};
+use crate::renderer::PaintContext;
+
 use super::Widget;
+use super::widget::{Event, EventResponse, Rect};
 
 /// A slot in the children list - either a static widget or a dynamic source
 enum ChildSlot {
@@ -118,7 +123,7 @@ impl ChildrenSource {
                     cached,
                     order,
                 } => {
-                    // Get new items from the function
+                    // Get new items from the function (closures, not constructed widgets!)
                     let new_items = items_fn();
                     let new_keys: Vec<u64> = new_items.iter().map(|item| item.key).collect();
 
@@ -137,15 +142,15 @@ impl ChildrenSource {
                                 // Reuse existing widget (preserves state!)
                                 self.merged.push(widget);
                             } else {
-                                // Create new widget
-                                self.merged.push(item.widget);
+                                // Create new widget - only now do we call the closure!
+                                self.merged.push((item.widget_fn)());
                             }
                         }
 
                         // Update order
                         *order = new_keys;
 
-                        // Clear remaining cache
+                        // Clear remaining cache (drops removed widgets, triggering cleanup)
                         cached.clear();
                     } else {
                         // Keys unchanged - reuse widgets from old_iter
@@ -198,18 +203,90 @@ impl super::Widget for DummyWidget {
     fn clear_dirty(&mut self) {}
 }
 
-/// Wrapper for dynamic items with key + widget
+/// Wrapper for dynamic items with key + widget factory.
+/// The widget is created lazily only when needed (for new keys).
 pub struct DynItem {
     pub key: u64,
-    pub widget: Box<dyn Widget>,
+    /// Factory function to create the widget. Only called for NEW keys.
+    pub widget_fn: Box<dyn FnOnce() -> Box<dyn Widget>>,
 }
 
 impl DynItem {
-    /// Create a new dynamic item
-    pub fn new(key: u64, widget: impl Widget + 'static) -> Self {
+    /// Create a new dynamic item with a widget factory closure.
+    pub fn new<W: Widget + 'static>(key: u64, widget_fn: impl FnOnce() -> W + 'static) -> Self {
         Self {
             key,
-            widget: Box::new(widget),
+            widget_fn: Box::new(move || Box::new(widget_fn())),
         }
+    }
+}
+
+/// Widget wrapper that owns a reactive scope.
+/// When dropped, automatically disposes the owner and all its signals/effects.
+pub struct OwnedWidget {
+    inner: Box<dyn Widget>,
+    owner_id: OwnerId,
+}
+
+impl OwnedWidget {
+    /// Create a new owned widget with the given inner widget and owner ID.
+    pub fn new(inner: Box<dyn Widget>, owner_id: OwnerId) -> Self {
+        Self { inner, owner_id }
+    }
+}
+
+impl Drop for OwnedWidget {
+    fn drop(&mut self) {
+        dispose_owner(self.owner_id);
+    }
+}
+
+impl Widget for OwnedWidget {
+    fn layout(&mut self, constraints: Constraints) -> Size {
+        self.inner.layout(constraints)
+    }
+
+    fn paint(&self, ctx: &mut PaintContext) {
+        self.inner.paint(ctx)
+    }
+
+    fn event(&mut self, event: &Event) -> EventResponse {
+        self.inner.event(event)
+    }
+
+    fn set_origin(&mut self, x: f32, y: f32) {
+        self.inner.set_origin(x, y)
+    }
+
+    fn bounds(&self) -> Rect {
+        self.inner.bounds()
+    }
+
+    fn id(&self) -> WidgetId {
+        self.inner.id()
+    }
+
+    fn mark_dirty(&mut self, flags: ChangeFlags) {
+        self.inner.mark_dirty(flags)
+    }
+
+    fn mark_dirty_recursive(&mut self, flags: ChangeFlags) {
+        self.inner.mark_dirty_recursive(flags)
+    }
+
+    fn needs_layout(&self) -> bool {
+        self.inner.needs_layout()
+    }
+
+    fn needs_paint(&self) -> bool {
+        self.inner.needs_paint()
+    }
+
+    fn clear_dirty(&mut self) {
+        self.inner.clear_dirty()
+    }
+
+    fn has_focus_descendant(&self, id: WidgetId) -> bool {
+        self.inner.has_focus_descendant(id)
     }
 }

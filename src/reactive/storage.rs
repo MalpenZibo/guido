@@ -48,23 +48,50 @@ pub fn create_signal_value<T: Send + Sync + 'static>(value: T) -> SignalId {
     })
 }
 
+/// Dispose a signal, marking it as unavailable.
+///
+/// After disposal, any attempt to read or write the signal will panic
+/// with a clear error message.
+pub fn dispose_signal(id: SignalId) {
+    with_storage(|storage| {
+        if id < storage.values.len() {
+            storage.values[id] = None;
+        }
+    });
+}
+
 /// Get a signal's value (clones it)
 pub fn get_signal_value<T: Clone + Send + Sync + 'static>(id: SignalId) -> T {
-    let arc = with_storage_read(|storage| storage.values[id].clone().expect("Signal disposed"));
+    let arc = with_storage_read(|storage| {
+        storage.values[id].clone().expect(
+            "Signal was disposed - cannot read after owner cleanup. \
+             This usually means the signal's owner was disposed while you still hold a reference to the signal.",
+        )
+    });
     let guard = arc.read().unwrap();
     guard.downcast_ref::<T>().expect("Type mismatch").clone()
 }
 
 /// Set a signal's value
 pub fn set_signal_value<T: Send + Sync + 'static>(id: SignalId, value: T) {
-    let arc = with_storage_read(|storage| storage.values[id].clone().expect("Signal disposed"));
+    let arc = with_storage_read(|storage| {
+        storage.values[id].clone().expect(
+            "Signal was disposed - cannot write after owner cleanup. \
+             This usually means the signal's owner was disposed while you still hold a reference to the signal.",
+        )
+    });
     let mut guard = arc.write().unwrap();
     *guard = Box::new(value);
 }
 
 /// Update a signal's value with a closure
 pub fn update_signal_value<T: Clone + Send + Sync + 'static>(id: SignalId, f: impl FnOnce(&mut T)) {
-    let arc = with_storage_read(|storage| storage.values[id].clone().expect("Signal disposed"));
+    let arc = with_storage_read(|storage| {
+        storage.values[id].clone().expect(
+            "Signal was disposed - cannot update after owner cleanup. \
+             This usually means the signal's owner was disposed while you still hold a reference to the signal.",
+        )
+    });
     let mut guard = arc.write().unwrap();
     let value = guard.downcast_mut::<T>().expect("Type mismatch");
     f(value);
@@ -72,7 +99,12 @@ pub fn update_signal_value<T: Clone + Send + Sync + 'static>(id: SignalId, f: im
 
 /// Borrow a signal's value for reading
 pub fn with_signal_value<T: Send + Sync + 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -> R {
-    let arc = with_storage_read(|storage| storage.values[id].clone().expect("Signal disposed"));
+    let arc = with_storage_read(|storage| {
+        storage.values[id].clone().expect(
+            "Signal was disposed - cannot borrow after owner cleanup. \
+             This usually means the signal's owner was disposed while you still hold a reference to the signal.",
+        )
+    });
     let guard = arc.read().unwrap();
     f(guard.downcast_ref::<T>().expect("Type mismatch"))
 }
