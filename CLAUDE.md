@@ -81,6 +81,7 @@ cargo test
 - `MaybeDyn<T>`: Enum allowing widget properties to accept either static values or reactive signals/closures
 - `Computed<T>`: Derived values that automatically update when dependencies change
 - `Effect`: Side effects that re-run when tracked signals change
+- `Owner`: Ownership system for automatic resource cleanup (signals, effects, custom callbacks)
 - Runtime uses thread-local storage for automatic dependency tracking on the main thread
 - Background threads can update signal values; effects only run on main thread
 

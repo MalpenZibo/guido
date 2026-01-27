@@ -48,31 +48,140 @@ pub fn create_signal_value<T: Send + Sync + 'static>(value: T) -> SignalId {
     })
 }
 
+/// Dispose a signal, marking it as unavailable.
+///
+/// After disposal, any attempt to read or write the signal will panic
+/// with a clear error message.
+pub fn dispose_signal(id: SignalId) {
+    with_storage(|storage| {
+        if id < storage.values.len() {
+            storage.values[id] = None;
+        }
+    });
+}
+
 /// Get a signal's value (clones it)
 pub fn get_signal_value<T: Clone + Send + Sync + 'static>(id: SignalId) -> T {
-    let arc = with_storage_read(|storage| storage.values[id].clone().expect("Signal disposed"));
+    let arc = with_storage_read(|storage| {
+        storage
+            .values
+            .get(id)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Invalid signal ID {}: out of bounds (max ID is {})",
+                    id,
+                    storage.values.len().saturating_sub(1)
+                )
+            })
+            .clone()
+            .unwrap_or_else(|| {
+                panic!(
+                    "Signal {} was disposed - cannot read after owner cleanup. \
+                     This usually means the signal's owner was disposed while you still hold a reference to the signal.",
+                    id
+                )
+            })
+    });
     let guard = arc.read().unwrap();
-    guard.downcast_ref::<T>().expect("Type mismatch").clone()
+    guard
+        .downcast_ref::<T>()
+        .unwrap_or_else(|| {
+            panic!(
+                "Signal {} type mismatch: stored type does not match requested type {}",
+                id,
+                std::any::type_name::<T>()
+            )
+        })
+        .clone()
 }
 
 /// Set a signal's value
 pub fn set_signal_value<T: Send + Sync + 'static>(id: SignalId, value: T) {
-    let arc = with_storage_read(|storage| storage.values[id].clone().expect("Signal disposed"));
+    let arc = with_storage_read(|storage| {
+        storage
+            .values
+            .get(id)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Invalid signal ID {}: out of bounds (max ID is {})",
+                    id,
+                    storage.values.len().saturating_sub(1)
+                )
+            })
+            .clone()
+            .unwrap_or_else(|| {
+                panic!(
+                    "Signal {} was disposed - cannot write after owner cleanup. \
+                     This usually means the signal's owner was disposed while you still hold a reference to the signal.",
+                    id
+                )
+            })
+    });
     let mut guard = arc.write().unwrap();
     *guard = Box::new(value);
 }
 
 /// Update a signal's value with a closure
 pub fn update_signal_value<T: Clone + Send + Sync + 'static>(id: SignalId, f: impl FnOnce(&mut T)) {
-    let arc = with_storage_read(|storage| storage.values[id].clone().expect("Signal disposed"));
+    let arc = with_storage_read(|storage| {
+        storage
+            .values
+            .get(id)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Invalid signal ID {}: out of bounds (max ID is {})",
+                    id,
+                    storage.values.len().saturating_sub(1)
+                )
+            })
+            .clone()
+            .unwrap_or_else(|| {
+                panic!(
+                    "Signal {} was disposed - cannot update after owner cleanup. \
+                     This usually means the signal's owner was disposed while you still hold a reference to the signal.",
+                    id
+                )
+            })
+    });
     let mut guard = arc.write().unwrap();
-    let value = guard.downcast_mut::<T>().expect("Type mismatch");
+    let value = guard.downcast_mut::<T>().unwrap_or_else(|| {
+        panic!(
+            "Signal {} type mismatch: stored type does not match requested type {}",
+            id,
+            std::any::type_name::<T>()
+        )
+    });
     f(value);
 }
 
 /// Borrow a signal's value for reading
 pub fn with_signal_value<T: Send + Sync + 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -> R {
-    let arc = with_storage_read(|storage| storage.values[id].clone().expect("Signal disposed"));
+    let arc = with_storage_read(|storage| {
+        storage
+            .values
+            .get(id)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Invalid signal ID {}: out of bounds (max ID is {})",
+                    id,
+                    storage.values.len().saturating_sub(1)
+                )
+            })
+            .clone()
+            .unwrap_or_else(|| {
+                panic!(
+                    "Signal {} was disposed - cannot borrow after owner cleanup. \
+                     This usually means the signal's owner was disposed while you still hold a reference to the signal.",
+                    id
+                )
+            })
+    });
     let guard = arc.read().unwrap();
-    f(guard.downcast_ref::<T>().expect("Type mismatch"))
+    f(guard.downcast_ref::<T>().unwrap_or_else(|| {
+        panic!(
+            "Signal {} type mismatch: stored type does not match requested type {}",
+            id,
+            std::any::type_name::<T>()
+        )
+    }))
 }

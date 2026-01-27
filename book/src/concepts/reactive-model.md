@@ -127,6 +127,29 @@ let value = count.get_untracked();
 
 This is useful in effects where you want to read initial values without re-running on changes.
 
+## Ownership & Cleanup
+
+Signals and effects created inside dynamic children are automatically cleaned up when the child is removed. Use `on_cleanup` to register custom cleanup logic:
+
+```rust
+container().children(move || {
+    items.get().into_iter().map(|id| (id, move || {
+        // These are automatically owned and disposed
+        let count = create_signal(0);
+        create_effect(move || println!("Count: {}", count.get()));
+
+        // Register custom cleanup for non-reactive resources
+        on_cleanup(move || {
+            println!("Child {} removed", id);
+        });
+
+        container().child(text(move || count.get().to_string()))
+    }))
+})
+```
+
+See [Dynamic Children](../advanced/dynamic-children.md) for more details on automatic ownership.
+
 ## Best Practices
 
 ### Read Close to Usage
@@ -194,4 +217,11 @@ impl<T: Clone> Signal<T> {
 impl<T: Clone> Computed<T> {
     pub fn get(&self) -> T; // Read with tracking
 }
+```
+
+### Cleanup
+
+```rust
+// Register cleanup callback (for use in dynamic children)
+pub fn on_cleanup(f: impl FnOnce() + 'static);
 ```

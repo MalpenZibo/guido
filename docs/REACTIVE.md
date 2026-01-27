@@ -87,17 +87,21 @@ text(move || format!("Count: {}", count.get()))
 Dynamic lists with keyed reconciliation:
 
 ```rust
-let items = create_signal(vec!["A", "B", "C"]);
+let items = create_signal(vec![
+    ("a", "Item A"),
+    ("b", "Item B"),
+    ("c", "Item C"),
+]);
 
-container()
-    .children_dyn(
-        move || items.get(),
-        |item| item.to_string(),  // Key function
-        |item| text(*item),       // View function
-    )
+container().children(move || {
+    items.get().into_iter().map(|(id, label)| {
+        let key = id.as_ptr() as u64;  // Use stable key
+        (key, move || text(label))     // Closure returns widget
+    })
+})
 ```
 
-The key function ensures widget state is preserved when items are reordered.
+The key ensures widget state is preserved when items are reordered.
 
 ## MaybeDyn Pattern
 
@@ -212,6 +216,169 @@ first_name.set("John");
 last_name.set("Doe");
 ```
 
+## Reactive Ownership (Resource Cleanup)
+
+Signals and effects persist in memory by default. The **reactive owner** system provides automatic cleanup when components are removed.
+
+### Automatic Ownership for Dynamic Children
+
+**Dynamic children automatically get owner scopes.** Return `(key, closure)` pairs where the closure produces the widget. Any signals, effects, or cleanup callbacks created inside the closure are automatically owned and cleaned up when the child is removed:
+
+```rust
+let items = create_signal(vec![1u64, 2, 3]);
+
+container().children(move || {
+    items.get().into_iter().map(|id| {
+        // Return (key, closure) - the closure runs inside an owner scope
+        (id, move || {
+            // ========================================================
+            // Everything created inside this closure is AUTOMATICALLY
+            // owned by the child's owner scope. When the child is
+            // removed, all these resources are automatically cleaned up!
+            // ========================================================
+
+            // This signal is owned by the child
+            let local_count = create_signal(0);
+
+            // This effect is also owned - disposed when child is removed
+            create_effect(move || {
+                println!("Child {} count: {}", id, local_count.get());
+            });
+
+            // Register cleanup for non-reactive resources
+            on_cleanup(move || {
+                println!("Child {} was removed!", id);
+            });
+
+            container()
+                .on_click(move || local_count.update(|c| *c += 1))
+                .child(text(move || format!("Child {} ({})", id, local_count.get())))
+        })
+    })
+});
+
+// When an item is removed from the list:
+// 1. The child's OwnedWidget is dropped
+// 2. dispose_owner() is called automatically
+// 3. on_cleanup callbacks run
+// 4. Effects are disposed
+// 5. Signals are disposed
+```
+
+**Important:** The closure syntax `(key, move || { ... })` is required for proper ownership. Signals created outside the closure won't be owned:
+
+```rust
+// WRONG - signal not owned (created outside closure)
+.map(|id| {
+    let signal = create_signal(0);  // NOT OWNED!
+    (id, container().child(...))
+})
+
+// CORRECT - signal owned (created inside closure)
+.map(|id| (id, move || {
+    let signal = create_signal(0);  // OWNED!
+    container().child(...)
+}))
+```
+
+You can also extract the child creation into a function:
+```rust
+fn create_child(id: u64) -> impl Widget {
+    let signal = create_signal(0);  // OWNED!
+    on_cleanup(|| println!("Child {} cleaned up", id));
+    container().child(text(move || signal.get().to_string()))
+}
+
+// Call the function inside the closure
+container().children(move || {
+    items.get().into_iter().map(|id| (id, move || create_child(id)))
+})
+```
+
+### Custom Cleanup Callbacks
+
+Use `on_cleanup` inside dynamic children or component render methods to register cleanup logic for non-reactive resources:
+
+```rust
+container().children(move || {
+    items.get().into_iter().map(|id| (id, move || {
+        // Start a background thread
+        let running = Arc::new(AtomicBool::new(true));
+        let running_clone = running.clone();
+
+        std::thread::spawn(move || {
+            while running_clone.load(Ordering::SeqCst) {
+                // ... do work
+            }
+        });
+
+        // Register cleanup to stop the thread when child is removed
+        on_cleanup(move || {
+            running.store(false, Ordering::SeqCst);
+        });
+
+        container().child(text(format!("Child {}", id)))
+    }))
+});
+```
+
+### Nested Owners
+
+Owner scopes are automatically nested. When a parent owner is disposed, children are disposed first (depth-first). This happens automatically when removing nested dynamic children.
+
+### Component Macro Integration
+
+Components created with `#[component]` automatically wrap their `render()` in an owner scope. When the component is dropped, all its reactive resources are cleaned up:
+
+```rust
+#[component]
+pub struct Counter {
+    #[prop]
+    initial: i32,
+}
+
+impl Counter {
+    fn render(&self) -> impl Widget {
+        // This signal is owned by the component
+        let count = create_signal(self.initial.get());
+
+        // This effect is also owned
+        create_effect(move || {
+            println!("Count: {}", count.get());
+        });
+
+        // When Counter is dropped, signal and effect are disposed
+        container()
+            .on_click(move || count.update(|c| *c += 1))
+            .child(text(move || count.get().to_string()))
+    }
+}
+```
+
+### Accessing Disposed Signals
+
+Attempting to read or write a disposed signal will panic with a clear error message. This typically happens if you store a signal reference outside its owner scope and try to use it after the child is removed:
+
+```rust
+// DON'T DO THIS - signal may be accessed after disposal
+let leaked_signal: Option<Signal<i32>> = None;
+
+container().children(move || {
+    items.get().into_iter().map(|id| {
+        let signal = create_signal(0);
+        // WRONG: Don't leak signals outside their owner
+        // leaked_signal = Some(signal);
+
+        (id, container().child(text(move || signal.get().to_string())))
+    })
+});
+
+// If you access leaked_signal after the child is removed,
+// you'll get a panic: "Signal was disposed - cannot read after owner cleanup."
+```
+
+This behavior helps catch bugs where signals are used after their owner has been disposed.
+
 ## API Reference
 
 ### Signal Creation
@@ -221,6 +388,17 @@ pub fn create_signal<T: Clone + 'static>(value: T) -> Signal<T>;
 pub fn create_computed<T: Clone + 'static>(f: impl Fn() -> T + 'static) -> Computed<T>;
 pub fn create_effect(f: impl Fn() + 'static);
 ```
+
+### Cleanup Functions
+
+```rust
+/// Register a cleanup callback for the current owner.
+/// Use this inside dynamic children or component render() methods
+/// to clean up non-reactive resources (timers, threads, connections).
+pub fn on_cleanup(f: impl FnOnce() + 'static);
+```
+
+**Note:** `with_owner` and `dispose_owner` are internal functions used by the framework. User code should rely on automatic ownership via dynamic children and the `#[component]` macro.
 
 ### Signal Methods
 

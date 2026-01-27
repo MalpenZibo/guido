@@ -219,7 +219,8 @@ fn main() {
                                 .children(move || {
                                     items.get().into_iter().map(|item| {
                                         // Key by ID - preserves widget state on reorder!
-                                        (item.id, container()
+                                        // Return (key, closure) - closure runs in owner scope
+                                        (item.id, move || container()
                                             .padding(8.0)
                                             .background(item.color)
                                             .corner_radius(4.0)
@@ -414,7 +415,8 @@ fn main() {
                                         let mut hasher = DefaultHasher::new();
                                         content.hash(&mut hasher);
                                         let key = hasher.finish();
-                                        (key, container()
+                                        // Return (key, closure) - closure runs in owner scope
+                                        (key, move || container()
                                             .padding(8.0)
                                             .background(Color::rgb(0.5, 0.3, 0.5))
                                             .corner_radius(4.0)

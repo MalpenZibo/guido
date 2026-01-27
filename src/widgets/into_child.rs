@@ -1,5 +1,7 @@
+use crate::reactive::with_owner;
+
 use super::Widget;
-use super::children::{ChildrenSource, DynItem};
+use super::children::{ChildrenSource, DynItem, OwnedWidget};
 
 /// Marker type for static child (widget value)
 pub struct StaticChild;
@@ -25,19 +27,25 @@ impl<W: Widget + 'static> IntoChild<StaticChild> for W {
     }
 }
 
-// Implementation for dynamic closures
+// Implementation for dynamic closures returning Option<Widget>
+// Note: For single optional children, ownership is handled at the item level.
+// Use keyed .children() for proper ownership with dynamic lists.
 impl<F, W> IntoChild<DynamicChild> for F
 where
     F: Fn() -> Option<W> + Send + Sync + 'static,
     W: Widget + 'static,
 {
     fn add_to_container(self, children_source: &mut ChildrenSource) {
-        let child_fn = self;
+        let child_fn = std::sync::Arc::new(self);
 
-        // Build a dynamic children source with this single optional child
         let items_fn = move || {
+            let child_fn = child_fn.clone();
             if let Some(widget) = child_fn() {
-                vec![DynItem::new(0, widget)]
+                // For single optional child, wrap in owner at creation time
+                vec![DynItem::new(0, move || {
+                    let (widget, owner_id) = with_owner(|| widget);
+                    OwnedWidget::new(Box::new(widget), owner_id)
+                })]
             } else {
                 vec![]
             }
@@ -78,19 +86,47 @@ where
     }
 }
 
-// Implementation for dynamic children - Fn() -> I where I: IntoIterator<Item = (u64, W)>
-// Adds a single dynamic slot with keyed reconciliation
-impl<F, I, W> IntoChildren<DynamicChildren> for F
+// Implementation for dynamic children with closures
+// Fn() -> Iterator<Item = (key, FnOnce() -> Widget)>
+//
+// Each child's closure runs inside an owner scope, so signals and effects
+// created during widget construction are automatically owned and cleaned up
+// when the child is removed.
+//
+// IMPORTANT: The widget closure is only called for NEW keys. Existing keys
+// reuse their cached widgets, so signals/effects persist across frames.
+//
+// Example:
+// ```
+// .children(move || {
+//     items.get().iter().map(|item| {
+//         (item.id, move || {
+//             let signal = create_signal(0);  // Owned by this child!
+//             create_child(item, signal)
+//         })
+//     })
+// })
+// ```
+impl<F, I, G, W> IntoChildren<DynamicChildren> for F
 where
     F: Fn() -> I + Send + Sync + 'static,
-    I: IntoIterator<Item = (u64, W)>,
+    I: IntoIterator<Item = (u64, G)>,
+    G: FnOnce() -> W + 'static,
     W: Widget + 'static,
 {
     fn add_to_container(self, children_source: &mut ChildrenSource) {
         let items_fn = move || {
             self()
                 .into_iter()
-                .map(|(key, widget)| DynItem::new(key, widget))
+                .map(|(key, widget_fn)| {
+                    // Return DynItem with a LAZY widget factory.
+                    // The closure is only called by reconciliation for NEW keys.
+                    // with_owner wraps the widget creation for automatic cleanup.
+                    DynItem::new(key, move || {
+                        let (widget, owner_id) = with_owner(widget_fn);
+                        OwnedWidget::new(Box::new(widget), owner_id)
+                    })
+                })
                 .collect()
         };
         children_source.add_dynamic(items_fn);

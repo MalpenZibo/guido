@@ -194,6 +194,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         #vis struct #struct_name {
             #(#field_defs,)*
             __inner: std::cell::RefCell<Option<Box<dyn ::guido::widgets::Widget>>>,
+            __owner_id: std::cell::Cell<Option<::guido::reactive::__internal::OwnerId>>,
         }
 
         impl #struct_name {
@@ -201,6 +202,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 Self {
                     #(#field_inits,)*
                     __inner: std::cell::RefCell::new(None),
+                    __owner_id: std::cell::Cell::new(None),
                 }
             }
 
@@ -210,8 +212,21 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
 
             fn ensure_built(&self) {
                 if self.__inner.borrow().is_none() {
-                    let widget = self.render();
+                    // Wrap render() in an owner scope for automatic cleanup
+                    let (widget, owner_id) = ::guido::reactive::__internal::with_owner(|| {
+                        self.render()
+                    });
+                    self.__owner_id.set(Some(owner_id));
                     *self.__inner.borrow_mut() = Some(Box::new(widget));
+                }
+            }
+        }
+
+        impl Drop for #struct_name {
+            fn drop(&mut self) {
+                // Dispose the owner and all its signals/effects/cleanups
+                if let Some(owner_id) = self.__owner_id.get() {
+                    ::guido::reactive::__internal::dispose_owner(owner_id);
                 }
             }
         }
