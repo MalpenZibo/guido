@@ -46,6 +46,34 @@ text_input(value)
     .font_size(16.0)
 ```
 
+### Font Family
+
+```rust
+// Predefined families
+text_input(value)
+    .font_family(FontFamily::Monospace)
+
+// Shorthand for monospace
+text_input(value)
+    .mono()
+
+// Custom font
+text_input(value)
+    .font_family(FontFamily::Name("JetBrains Mono".into()))
+```
+
+### Font Weight
+
+```rust
+// Using constants
+text_input(value)
+    .font_weight(FontWeight::BOLD)
+
+// Shorthand for bold
+text_input(value)
+    .bold()
+```
+
 ## Password Mode
 
 Hide text input for sensitive data like passwords:
@@ -233,6 +261,10 @@ impl TextInput {
     pub fn cursor_color(self, color: impl IntoMaybeDyn<Color>) -> Self;
     pub fn selection_color(self, color: impl IntoMaybeDyn<Color>) -> Self;
     pub fn font_size(self, size: impl IntoMaybeDyn<f32>) -> Self;
+    pub fn font_family(self, family: impl IntoMaybeDyn<FontFamily>) -> Self;
+    pub fn font_weight(self, weight: impl IntoMaybeDyn<FontWeight>) -> Self;
+    pub fn bold(self) -> Self;      // Shorthand for FontWeight::BOLD
+    pub fn mono(self) -> Self;      // Shorthand for FontFamily::Monospace
     pub fn password(self, enabled: bool) -> Self;
     pub fn mask_char(self, c: char) -> Self;
     pub fn on_change<F: Fn(&str) + 'static>(self, callback: F) -> Self;
