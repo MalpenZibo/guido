@@ -427,14 +427,13 @@ fn main() {
         )
         );
 
-    App::new()
-        .add_surface(
-            SurfaceConfig::new()
-                .width(1800)
-                .height(450)
-                .anchor(Anchor::TOP | Anchor::LEFT)
-                .background_color(Color::rgb(0.1, 0.1, 0.15)),
-            move || view,
-        )
-        .run();
+    let (app, _) = App::new().add_surface(
+        SurfaceConfig::new()
+            .width(1800)
+            .height(450)
+            .anchor(Anchor::TOP | Anchor::LEFT)
+            .background_color(Color::rgb(0.1, 0.1, 0.15)),
+        move || view,
+    );
+    app.run();
 }
