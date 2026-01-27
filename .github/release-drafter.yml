@@ -1,0 +1,47 @@
+name-template: 'v$RESOLVED_VERSION'
+tag-template: 'v$RESOLVED_VERSION'
+template: |
+  ## What's Changed
+
+  $CHANGES
+
+  **Full Changelog**: https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
+
+categories:
+  - title: 'Breaking Changes'
+    labels: ['breaking', 'breaking-change']
+  - title: 'Features'
+    labels: ['feature', 'enhancement']
+  - title: 'Bug Fixes'
+    labels: ['bug', 'fix']
+  - title: 'Documentation'
+    labels: ['documentation', 'docs']
+  - title: 'Dependencies'
+    labels: ['dependencies']
+  - title: 'Maintenance'
+    labels: ['chore', 'internal', 'ci']
+
+version-resolver:
+  major:
+    labels: ['breaking', 'breaking-change']
+  minor:
+    labels: ['feature', 'enhancement']
+  patch:
+    labels: ['bug', 'fix', 'documentation', 'dependencies', 'chore']
+  default: patch
+
+exclude-labels:
+  - 'skip-changelog'
+
+autolabeler:
+  - label: 'documentation'
+    files: ['docs/**', 'book/**', '*.md']
+    branch: ['/docs?[-/].+/']
+  - label: 'feature'
+    branch: ['/feature[-/].+/', '/feat[-/].+/']
+  - label: 'bug'
+    branch: ['/fix[-/].+/', '/bug[-/].+/', '/hotfix[-/].+/']
+  - label: 'dependencies'
+    files: ['Cargo.toml', 'Cargo.lock']
+  - label: 'ci'
+    files: ['.github/**']
