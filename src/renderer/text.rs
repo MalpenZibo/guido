@@ -1,12 +1,13 @@
 use std::collections::HashSet;
 
 use glyphon::{
-    Attrs, Buffer, Cache, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution, Shaping,
+    Attrs, Buffer, Cache, Color as GlyphonColor, FontSystem, Metrics, Resolution, Shaping,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 use wgpu::{Device, MultisampleState, Queue};
 
 use super::TextEntry;
+use crate::widgets::font::FontWeight;
 
 pub struct TextRenderState {
     font_system: FontSystem,
@@ -108,10 +109,18 @@ impl TextRenderState {
                 Some((entry.rect.width.max(200.0)) * scale_factor),
                 Some((entry.rect.height.max(50.0)) * scale_factor),
             );
+            // Use entry's font properties, defaulting to NORMAL weight if default (0)
+            let weight = if entry.font_weight == FontWeight::default() {
+                FontWeight::NORMAL
+            } else {
+                entry.font_weight
+            };
             buffer.set_text(
                 &mut self.font_system,
                 &entry.text,
-                &Attrs::new().family(Family::SansSerif),
+                &Attrs::new()
+                    .family(entry.font_family.to_cosmic())
+                    .weight(weight.to_cosmic()),
                 Shaping::Advanced,
                 None,
             );

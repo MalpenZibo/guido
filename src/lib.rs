@@ -14,6 +14,7 @@ pub mod renderer;
 // Re-export macros
 pub use guido_macros::component;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use layout::Constraints;
@@ -25,11 +26,38 @@ use reactive::{
 use renderer::{GpuContext, Renderer, SurfaceState};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, init_surface_commands};
 use widgets::Widget;
+use widgets::font::FontFamily;
 
 // Calloop imports for event-driven main loop (via smithay-client-toolkit re-exports)
 use smithay_client_toolkit::reexports::calloop::EventLoop;
 use smithay_client_toolkit::reexports::calloop::ping::make_ping;
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
+
+// Thread-local storage for the default font family
+thread_local! {
+    static DEFAULT_FONT_FAMILY: RefCell<FontFamily> = const { RefCell::new(FontFamily::SansSerif) };
+}
+
+/// Set the application-wide default font family.
+///
+/// This should be called before creating any widgets. Widgets created after this
+/// call will use the specified font family as their default.
+///
+/// # Example
+///
+/// ```ignore
+/// set_default_font_family(FontFamily::Name("Inter".into()));
+/// ```
+pub fn set_default_font_family(family: FontFamily) {
+    DEFAULT_FONT_FAMILY.with(|f| {
+        *f.borrow_mut() = family;
+    });
+}
+
+/// Get the current application-wide default font family.
+pub fn default_font_family() -> FontFamily {
+    DEFAULT_FONT_FAMILY.with(|f| f.borrow().clone())
+}
 
 pub mod prelude {
     pub use crate::animation::{SpringConfig, TimingFunction, Transition};
@@ -50,12 +78,13 @@ pub mod prelude {
     pub use crate::transform::Transform;
     pub use crate::transform_origin::{HorizontalAnchor, TransformOrigin, VerticalAnchor};
     pub use crate::widgets::{
-        Border, Color, Container, ContentFit, Event, EventResponse, GradientDirection, Image,
-        ImageSource, IntoChildren, Key, LinearGradient, Modifiers, MouseButton, Overflow, Padding,
-        Rect, ScrollAxis, ScrollSource, ScrollbarBuilder, ScrollbarVisibility, Selection,
-        StateStyle, Text, TextInput, Widget, container, image, text, text_input,
+        Border, Color, Container, ContentFit, Event, EventResponse, FontFamily, FontWeight,
+        GradientDirection, Image, ImageSource, IntoChildren, Key, LinearGradient, Modifiers,
+        MouseButton, Overflow, Padding, Rect, ScrollAxis, ScrollSource, ScrollbarBuilder,
+        ScrollbarVisibility, Selection, StateStyle, Text, TextInput, Widget, container, image,
+        text, text_input,
     };
-    pub use crate::{App, component};
+    pub use crate::{App, component, default_font_family, set_default_font_family};
 }
 
 /// A callback that gets called each frame before rendering.
@@ -92,6 +121,24 @@ impl App {
             on_update: None,
             surface_definitions: Vec::new(),
         }
+    }
+
+    /// Set the application-wide default font family.
+    ///
+    /// This sets the default font family that will be used by all text widgets
+    /// that don't explicitly specify a font family.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// App::new()
+    ///     .default_font_family(FontFamily::Name("Inter".into()))
+    ///     .add_surface(config, || view)
+    ///     .run();
+    /// ```
+    pub fn default_font_family(self, family: FontFamily) -> Self {
+        set_default_font_family(family);
+        self
     }
 
     /// Set a callback that gets called each frame before rendering.
