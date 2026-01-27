@@ -39,7 +39,7 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use crate::platform::{Anchor, Layer};
+use crate::platform::{Anchor, KeyboardInteractivity, Layer};
 use crate::widgets::{Color, Widget};
 
 /// Unique identifier for each surface in the application.
@@ -69,6 +69,7 @@ impl SurfaceId {
 ///     .height(200)
 ///     .anchor(Anchor::TOP | Anchor::RIGHT)
 ///     .layer(Layer::Overlay)
+///     .keyboard_interactivity(KeyboardInteractivity::Exclusive)
 ///     .namespace("my-popup")
 ///     .background_color(Color::rgb(0.2, 0.2, 0.3))
 /// ```
@@ -82,6 +83,8 @@ pub struct SurfaceConfig {
     pub anchor: Anchor,
     /// Layer shell layer (background, bottom, top, overlay).
     pub layer: Layer,
+    /// Keyboard interactivity mode.
+    pub keyboard_interactivity: KeyboardInteractivity,
     /// Namespace identifier for the surface.
     pub namespace: String,
     /// Background color for the surface.
@@ -97,6 +100,7 @@ impl Default for SurfaceConfig {
             height: 300,
             anchor: Anchor::empty(),
             layer: Layer::Top,
+            keyboard_interactivity: KeyboardInteractivity::OnDemand,
             namespace: "guido-surface".to_string(),
             background_color: Color::rgb(0.1, 0.1, 0.15),
             exclusive_zone: None,
@@ -152,6 +156,16 @@ impl SurfaceConfig {
         self.exclusive_zone = zone;
         self
     }
+
+    /// Set the keyboard interactivity mode.
+    ///
+    /// - `KeyboardInteractivity::None`: Surface never receives keyboard focus.
+    /// - `KeyboardInteractivity::OnDemand`: Surface receives focus when clicked (default).
+    /// - `KeyboardInteractivity::Exclusive`: Surface grabs keyboard focus exclusively.
+    pub fn keyboard_interactivity(mut self, mode: KeyboardInteractivity) -> Self {
+        self.keyboard_interactivity = mode;
+        self
+    }
 }
 
 /// Handle to a spawned surface for controlling it from widget code.
@@ -179,9 +193,79 @@ impl SurfaceHandle {
     pub fn id(&self) -> SurfaceId {
         self.id
     }
+
+    /// Set the layer shell layer for this surface.
+    ///
+    /// Changes take effect immediately. Use `Layer::Overlay` to appear above
+    /// other windows, `Layer::Top` for normal status bars, etc.
+    pub fn set_layer(&self, layer: Layer) {
+        let _ = self
+            .command_sender
+            .send(SurfaceCommand::SetLayer { id: self.id, layer });
+    }
+
+    /// Set the keyboard interactivity mode for this surface.
+    ///
+    /// - `KeyboardInteractivity::None`: Surface never receives keyboard focus.
+    /// - `KeyboardInteractivity::OnDemand`: Surface receives focus when clicked.
+    /// - `KeyboardInteractivity::Exclusive`: Surface grabs keyboard focus exclusively.
+    pub fn set_keyboard_interactivity(&self, mode: KeyboardInteractivity) {
+        let _ = self
+            .command_sender
+            .send(SurfaceCommand::SetKeyboardInteractivity { id: self.id, mode });
+    }
+
+    /// Set the anchor edges for this surface.
+    ///
+    /// Anchor determines which screen edges the surface attaches to.
+    /// For example, `Anchor::TOP | Anchor::LEFT | Anchor::RIGHT` creates a
+    /// top bar that spans the width of the screen.
+    pub fn set_anchor(&self, anchor: Anchor) {
+        let _ = self.command_sender.send(SurfaceCommand::SetAnchor {
+            id: self.id,
+            anchor,
+        });
+    }
+
+    /// Set the size of this surface in logical pixels.
+    ///
+    /// Note: When anchored to both edges on an axis (e.g., LEFT and RIGHT),
+    /// the compositor may override that dimension.
+    pub fn set_size(&self, width: u32, height: u32) {
+        let _ = self.command_sender.send(SurfaceCommand::SetSize {
+            id: self.id,
+            width,
+            height,
+        });
+    }
+
+    /// Set the exclusive zone for this surface.
+    ///
+    /// The exclusive zone reserves screen space so other windows don't
+    /// overlap. Pass 0 for no exclusive zone, or a positive value for
+    /// the number of pixels to reserve.
+    pub fn set_exclusive_zone(&self, zone: i32) {
+        let _ = self
+            .command_sender
+            .send(SurfaceCommand::SetExclusiveZone { id: self.id, zone });
+    }
+
+    /// Set the margin for this surface.
+    ///
+    /// Margins add space between the surface and the screen edge it's
+    /// anchored to.
+    pub fn set_margin(&self, top: i32, right: i32, bottom: i32, left: i32) {
+        let _ = self.command_sender.send(SurfaceCommand::SetMargin {
+            id: self.id,
+            top,
+            right,
+            bottom,
+            left,
+        });
+    }
 }
 
-/// Commands for dynamic surface creation/destruction.
+/// Commands for dynamic surface creation/destruction and property modification.
 pub(crate) enum SurfaceCommand {
     /// Create a new surface with the given configuration and widget factory.
     Create {
@@ -191,6 +275,31 @@ pub(crate) enum SurfaceCommand {
     },
     /// Close and destroy a surface by ID.
     Close(SurfaceId),
+    /// Set the layer shell layer for a surface.
+    SetLayer { id: SurfaceId, layer: Layer },
+    /// Set the keyboard interactivity mode for a surface.
+    SetKeyboardInteractivity {
+        id: SurfaceId,
+        mode: KeyboardInteractivity,
+    },
+    /// Set the anchor edges for a surface.
+    SetAnchor { id: SurfaceId, anchor: Anchor },
+    /// Set the size of a surface.
+    SetSize {
+        id: SurfaceId,
+        width: u32,
+        height: u32,
+    },
+    /// Set the exclusive zone for a surface.
+    SetExclusiveZone { id: SurfaceId, zone: i32 },
+    /// Set the margin for a surface.
+    SetMargin {
+        id: SurfaceId,
+        top: i32,
+        right: i32,
+        bottom: i32,
+        left: i32,
+    },
 }
 
 // Thread-local storage for the surface command channel.
@@ -263,5 +372,40 @@ where
     };
     tx.send(cmd).expect("Event loop closed");
 
+    SurfaceHandle::new(id, tx)
+}
+
+/// Get a handle to control an existing surface.
+///
+/// This can be used to modify surfaces added via `add_surface()` or `spawn_surface()`.
+/// The handle allows changing surface properties like layer, keyboard interactivity,
+/// anchor, size, exclusive zone, and margin.
+///
+/// # Panics
+///
+/// Panics if called before `App::run()` has initialized the command channel.
+///
+/// # Example
+///
+/// ```ignore
+/// // Store the ID when adding the surface
+/// let (app, status_bar_id) = App::new()
+///     .add_surface(config, move || {
+///         container()
+///             .on_click(move || {
+///                 // Get handle and modify properties
+///                 let handle = surface_handle(status_bar_id);
+///                 handle.set_layer(Layer::Overlay);
+///             })
+///             .child(text("Click to promote to overlay"))
+///     });
+/// app.run();
+/// ```
+pub fn surface_handle(id: SurfaceId) -> SurfaceHandle {
+    let tx = SURFACE_COMMAND_TX.with(|cell| {
+        cell.borrow()
+            .clone()
+            .expect("surface_handle called before App::run()")
+    });
     SurfaceHandle::new(id, tx)
 }

@@ -285,6 +285,7 @@ impl WaylandState {
         layer: Layer,
         namespace: &str,
         exclusive_zone: Option<i32>,
+        keyboard_interactivity: KeyboardInteractivity,
     ) {
         let wl_surface = self.compositor_state.create_surface(qh);
         let layer_surface = self.layer_shell.create_layer_surface(
@@ -311,7 +312,7 @@ impl WaylandState {
         };
 
         layer_surface.set_size(use_width, use_height);
-        layer_surface.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+        layer_surface.set_keyboard_interactivity(keyboard_interactivity);
 
         // Set exclusive zone: None means use height, Some(0) means no exclusive zone
         let zone = exclusive_zone.unwrap_or(height as i32);
@@ -328,12 +329,13 @@ impl WaylandState {
         self.surfaces.insert(id, surface_state);
 
         log::info!(
-            "Created surface {:?} with size {}x{}, anchor {:?}, layer {:?}",
+            "Created surface {:?} with size {}x{}, anchor {:?}, layer {:?}, keyboard {:?}",
             id,
             width,
             height,
             anchor,
-            layer
+            layer,
+            keyboard_interactivity
         );
     }
 
@@ -354,6 +356,80 @@ impl WaylandState {
 
             // The LayerSurface and WlSurface will be destroyed when dropped
             log::info!("Destroyed surface {:?}", id);
+        }
+    }
+
+    /// Set the layer for a surface.
+    pub fn set_surface_layer(&mut self, id: SurfaceId, layer: Layer) {
+        if let Some(surface_state) = self.surfaces.get_mut(&id) {
+            surface_state.layer_surface.set_layer(layer);
+            surface_state.wl_surface.commit();
+            log::info!("Surface {:?} layer set to {:?}", id, layer);
+        }
+    }
+
+    /// Set the keyboard interactivity for a surface.
+    pub fn set_surface_keyboard_interactivity(
+        &mut self,
+        id: SurfaceId,
+        mode: KeyboardInteractivity,
+    ) {
+        if let Some(surface_state) = self.surfaces.get_mut(&id) {
+            surface_state.layer_surface.set_keyboard_interactivity(mode);
+            surface_state.wl_surface.commit();
+            log::info!("Surface {:?} keyboard interactivity set to {:?}", id, mode);
+        }
+    }
+
+    /// Set the anchor edges for a surface.
+    pub fn set_surface_anchor(&mut self, id: SurfaceId, anchor: Anchor) {
+        if let Some(surface_state) = self.surfaces.get_mut(&id) {
+            surface_state.layer_surface.set_anchor(anchor);
+            surface_state.wl_surface.commit();
+            log::info!("Surface {:?} anchor set to {:?}", id, anchor);
+        }
+    }
+
+    /// Set the size of a surface.
+    pub fn set_surface_size(&mut self, id: SurfaceId, width: u32, height: u32) {
+        if let Some(surface_state) = self.surfaces.get_mut(&id) {
+            surface_state.layer_surface.set_size(width, height);
+            surface_state.wl_surface.commit();
+            log::info!("Surface {:?} size set to {}x{}", id, width, height);
+        }
+    }
+
+    /// Set the exclusive zone for a surface.
+    pub fn set_surface_exclusive_zone(&mut self, id: SurfaceId, zone: i32) {
+        if let Some(surface_state) = self.surfaces.get_mut(&id) {
+            surface_state.layer_surface.set_exclusive_zone(zone);
+            surface_state.wl_surface.commit();
+            log::info!("Surface {:?} exclusive zone set to {}", id, zone);
+        }
+    }
+
+    /// Set the margin for a surface.
+    pub fn set_surface_margin(
+        &mut self,
+        id: SurfaceId,
+        top: i32,
+        right: i32,
+        bottom: i32,
+        left: i32,
+    ) {
+        if let Some(surface_state) = self.surfaces.get_mut(&id) {
+            surface_state
+                .layer_surface
+                .set_margin(top, right, bottom, left);
+            surface_state.wl_surface.commit();
+            log::info!(
+                "Surface {:?} margin set to top={}, right={}, bottom={}, left={}",
+                id,
+                top,
+                right,
+                bottom,
+                left
+            );
         }
     }
 
