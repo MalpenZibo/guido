@@ -111,16 +111,15 @@ fn main() {
                 ),
         );
 
-    App::new()
-        .add_surface(
-            SurfaceConfig::new()
-                .width(820)
-                .height(400)
-                .anchor(Anchor::TOP | Anchor::LEFT)
-                .layer(Layer::Top)
-                .namespace("image-example")
-                .background_color(Color::rgb(0.1, 0.1, 0.15)),
-            || view,
-        )
-        .run();
+    let (app, _) = App::new().add_surface(
+        SurfaceConfig::new()
+            .width(820)
+            .height(400)
+            .anchor(Anchor::TOP | Anchor::LEFT)
+            .layer(Layer::Top)
+            .namespace("image-example")
+            .background_color(Color::rgb(0.1, 0.1, 0.15)),
+        || view,
+    );
+    app.run();
 }

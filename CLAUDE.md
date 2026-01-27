@@ -102,8 +102,15 @@ cargo test
 **`platform/`** - Wayland layer shell integration
 - Uses smithay-client-toolkit for Wayland protocol handling
 - Supports layer shell positioning (top, bottom, overlay) and anchoring
+- Keyboard interactivity modes (None, OnDemand, Exclusive)
 - Event loop integration via calloop
-- Mouse and scroll event handling
+- Mouse, scroll, and keyboard event handling
+
+**`surface.rs`** - Multi-surface management
+- `SurfaceConfig`: Configuration for surfaces (size, anchor, layer, keyboard mode)
+- `SurfaceHandle`: Control handle for modifying surface properties at runtime
+- `spawn_surface()`: Create surfaces dynamically
+- `surface_handle()`: Get a handle for any surface by ID
 
 **`layout/`** - Constraint-based layout system
 - `Constraints`: min/max width/height bounds for sizing
@@ -198,14 +205,28 @@ let view = container()
 ### App Configuration
 
 ```rust
-App::new()
-    .width(1920)
-    .height(32)
-    .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
-    .layer(Layer::Top)
-    .namespace("my-app")
-    .background_color(Color::rgb(0.1, 0.1, 0.15))
-    .run(view);
+let (app, surface_id) = App::new().add_surface(
+    SurfaceConfig::new()
+        .height(32)
+        .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+        .layer(Layer::Top)
+        .keyboard_interactivity(KeyboardInteractivity::OnDemand)
+        .namespace("my-app")
+        .background_color(Color::rgb(0.1, 0.1, 0.15)),
+    move || view,
+);
+app.run();
+```
+
+### Dynamic Surface Properties
+
+Modify surface properties at runtime via `SurfaceHandle`:
+
+```rust
+// Get handle for a surface added via add_surface()
+let handle = surface_handle(surface_id);
+handle.set_layer(Layer::Overlay);
+handle.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
 ```
 
 ### Integrating Background Threads
@@ -308,7 +329,10 @@ This is a work-in-progress GUI library. Current implemented features:
 - Transform system (translate, rotate, scale) with animations
 - SDF-based rendering with superellipse corners and crisp borders
 - Mouse event handling with proper transform hit testing
+- Multi-surface support with shared reactive state
+- Dynamic surface property modification (layer, keyboard interactivity, anchor, size, margins)
+- Text input widget with full editing support
+- Image widget with raster and SVG support
 
 Planned features (see TODO.md):
-- Additional widgets (input text, images, toggles)
 - Relayout boundaries for performance optimization

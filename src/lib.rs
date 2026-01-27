@@ -37,14 +37,16 @@ pub mod prelude {
         Axis, Constraints, CrossAxisAlignment, Flex, Length, MainAxisAlignment, Overlay, Size,
         at_least, at_most, fill,
     };
-    pub use crate::platform::{Anchor, Layer};
+    pub use crate::platform::{Anchor, KeyboardInteractivity, Layer};
     pub use crate::reactive::{
         Computed, CursorIcon, Effect, IntoMaybeDyn, MaybeDyn, ReadSignal, Signal, WriteSignal,
         batch, create_computed, create_effect, create_signal, set_cursor,
     };
     pub use crate::renderer::primitives::Shadow;
     pub use crate::renderer::{PaintContext, measure_text};
-    pub use crate::surface::{SurfaceConfig, SurfaceHandle, SurfaceId, spawn_surface};
+    pub use crate::surface::{
+        SurfaceConfig, SurfaceHandle, SurfaceId, spawn_surface, surface_handle,
+    };
     pub use crate::transform::Transform;
     pub use crate::transform_origin::{HorizontalAnchor, TransformOrigin, VerticalAnchor};
     pub use crate::widgets::{
@@ -129,10 +131,13 @@ impl App {
     /// Each surface has its own widget tree but all surfaces share the same reactive
     /// signals and app state.
     ///
+    /// Returns a tuple of `(Self, SurfaceId)` where `SurfaceId` can be used to get
+    /// a `SurfaceHandle` later via `surface_handle()` to modify surface properties.
+    ///
     /// # Example
     ///
     /// ```ignore
-    /// App::new()
+    /// let (app, bar_id) = App::new()
     ///     .add_surface(
     ///         SurfaceConfig::new()
     ///             .height(32)
@@ -140,18 +145,18 @@ impl App {
     ///             .layer(Layer::Top)
     ///             .namespace("status-bar"),
     ///         move || status_bar_widget()
-    ///     )
-    ///     .add_surface(
-    ///         SurfaceConfig::new()
-    ///             .height(48)
-    ///             .anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT)
-    ///             .layer(Layer::Top)
-    ///             .namespace("dock"),
-    ///         move || dock_widget()
-    ///     )
-    ///     .run();
+    ///     );
+    /// let (app, dock_id) = app.add_surface(
+    ///     SurfaceConfig::new()
+    ///         .height(48)
+    ///         .anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT)
+    ///         .layer(Layer::Top)
+    ///         .namespace("dock"),
+    ///     move || dock_widget()
+    /// );
+    /// app.run();
     /// ```
-    pub fn add_surface<W, F>(mut self, config: SurfaceConfig, widget_fn: F) -> Self
+    pub fn add_surface<W, F>(mut self, config: SurfaceConfig, widget_fn: F) -> (Self, SurfaceId)
     where
         W: Widget + 'static,
         F: FnOnce() -> W + 'static,
@@ -162,7 +167,7 @@ impl App {
             config,
             widget_fn: Box::new(move || Box::new(widget_fn())),
         });
-        self
+        (self, id)
     }
 
     /// Run the application.
@@ -195,6 +200,7 @@ impl App {
                 def.config.layer,
                 &def.config.namespace,
                 def.config.exclusive_zone,
+                def.config.keyboard_interactivity,
             );
         }
 
@@ -347,6 +353,7 @@ impl App {
                             config.layer,
                             &config.namespace,
                             config.exclusive_zone,
+                            config.keyboard_interactivity,
                         );
 
                         // Create the widget
@@ -373,6 +380,30 @@ impl App {
                         if surface_entries.is_empty() {
                             wayland_state.exit = true;
                         }
+                    }
+                    SurfaceCommand::SetLayer { id, layer } => {
+                        wayland_state.set_surface_layer(id, layer);
+                    }
+                    SurfaceCommand::SetKeyboardInteractivity { id, mode } => {
+                        wayland_state.set_surface_keyboard_interactivity(id, mode);
+                    }
+                    SurfaceCommand::SetAnchor { id, anchor } => {
+                        wayland_state.set_surface_anchor(id, anchor);
+                    }
+                    SurfaceCommand::SetSize { id, width, height } => {
+                        wayland_state.set_surface_size(id, width, height);
+                    }
+                    SurfaceCommand::SetExclusiveZone { id, zone } => {
+                        wayland_state.set_surface_exclusive_zone(id, zone);
+                    }
+                    SurfaceCommand::SetMargin {
+                        id,
+                        top,
+                        right,
+                        bottom,
+                        left,
+                    } => {
+                        wayland_state.set_surface_margin(id, top, right, bottom, left);
                     }
                 }
             }

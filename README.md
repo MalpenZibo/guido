@@ -24,7 +24,7 @@ Guido is a GPU-accelerated GUI library for building Wayland layer shell applicat
 - **State Layer System** - Declarative hover/pressed style overrides with animations and Material-style ripple effects
 - **GPU Rendering** - Hardware-accelerated rendering via wgpu with SDF-based shapes
 - **Transform System** - Translate, rotate, and scale widgets with proper hit testing and animations
-- **Multi-Surface Apps** - Create multiple layer shell surfaces that share reactive state
+- **Multi-Surface Apps** - Create multiple layer shell surfaces that share reactive state, with dynamic property modification
 - **Superellipse Corners** - Configurable corner curvature from squircle (iOS-style) to bevel to scoop
 - **SDF Borders** - Crisp anti-aliased borders using signed distance field rendering
 - **Composable Widgets** - Build UIs from minimal primitives with pluggable Flex layout
@@ -41,36 +41,35 @@ use guido::prelude::*;
 fn main() {
     let count = create_signal(0);
 
-    App::new()
-        .add_surface(
-            SurfaceConfig::new()
-                .height(48)
-                .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
-                .layer(Layer::Top)
-                .background_color(Color::rgb(0.1, 0.1, 0.15)),
-            move || {
-                container()
-                    .height(fill())
-                    .layout(
-                        Flex::row()
-                            .spacing(16.0)
-                            .cross_axis_alignment(CrossAxisAlignment::Center),
-                    )
-                    .padding_xy(16.0, 0.0)
-                    .child(text(move || format!("Count: {}", count.get())).color(Color::WHITE))
-                    .child(
-                        container()
-                            .background(Color::rgb(0.3, 0.3, 0.4))
-                            .corner_radius(8.0)
-                            .padding(8.0)
-                            .hover_state(|s| s.lighter(0.1))
-                            .pressed_state(|s| s.ripple())
-                            .on_click(move || count.update(|c| *c += 1))
-                            .child(text("Click me").color(Color::WHITE)),
-                    )
-            },
-        )
-        .run();
+    let (app, _) = App::new().add_surface(
+        SurfaceConfig::new()
+            .height(48)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+            .layer(Layer::Top)
+            .background_color(Color::rgb(0.1, 0.1, 0.15)),
+        move || {
+            container()
+                .height(fill())
+                .layout(
+                    Flex::row()
+                        .spacing(16.0)
+                        .cross_axis_alignment(CrossAxisAlignment::Center),
+                )
+                .padding_xy(16.0, 0.0)
+                .child(text(move || format!("Count: {}", count.get())).color(Color::WHITE))
+                .child(
+                    container()
+                        .background(Color::rgb(0.3, 0.3, 0.4))
+                        .corner_radius(8.0)
+                        .padding(8.0)
+                        .hover_state(|s| s.lighter(0.1))
+                        .pressed_state(|s| s.ripple())
+                        .on_click(move || count.update(|c| *c += 1))
+                        .child(text("Click me").color(Color::WHITE)),
+                )
+        },
+    );
+    app.run();
 }
 ```
 
@@ -98,6 +97,7 @@ cargo run --example component_example
 - **status_bar** - Basic status bar layout demonstration
 - **reactive_example** - Interactive features with signals and state layers
 - **multi_surface** - Multiple surfaces with shared reactive state
+- **surface_properties_example** - Dynamic surface property modification (layer, keyboard interactivity)
 - **state_layer_example** - Hover, pressed states, and ripple effects
 - **transform_example** - Rotation, scale, and animated transforms
 - **animation_example** - Spring and eased animations

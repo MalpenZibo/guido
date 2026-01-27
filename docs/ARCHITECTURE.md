@@ -112,8 +112,29 @@ Layer shell protocol implementation for desktop widgets.
 - Smithay-client-toolkit for Wayland protocols
 - Layer shell positioning (Top, Bottom, Overlay, Background)
 - Anchor edges (TOP, BOTTOM, LEFT, RIGHT combinations)
+- Keyboard interactivity modes (None, OnDemand, Exclusive)
 - Exclusive zones for panels
 - Event loop via calloop
+- Dynamic surface property modification via `SurfaceHandle`
+
+### `surface.rs` - Surface Management
+
+Handles surface creation, configuration, and runtime modification.
+
+**Key Types:**
+- `SurfaceConfig` - Configuration for new surfaces (size, anchor, layer, keyboard mode)
+- `SurfaceId` - Unique identifier for each surface
+- `SurfaceHandle` - Control handle for modifying surface properties
+
+**Dynamic Properties:**
+Surfaces can be modified at runtime through `SurfaceHandle`:
+```rust
+let handle = surface_handle(surface_id);
+handle.set_layer(Layer::Overlay);
+handle.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
+handle.set_anchor(Anchor::TOP | Anchor::RIGHT);
+handle.set_size(400, 300);
+```
 
 ### `transform.rs` - 2D Transforms
 
@@ -212,6 +233,7 @@ Planned optimization to limit layout recalculation scope. See TODO.md for detail
 | File | Purpose |
 |------|---------|
 | `src/lib.rs` | App entry, main event loop |
+| `src/surface.rs` | Surface config, handles, dynamic properties |
 | `src/widgets/container.rs` | Container widget implementation |
 | `src/widgets/state_layer.rs` | State layer types and logic |
 | `src/renderer/mod.rs` | Main renderer, GPU setup |

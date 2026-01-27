@@ -158,16 +158,15 @@ fn main() {
                 .font_size(11.0),
         );
 
-    App::new()
-        .add_surface(
-            SurfaceConfig::new()
-                .width(550)
-                .height(680)
-                .anchor(Anchor::TOP | Anchor::LEFT)
-                .layer(Layer::Top)
-                .namespace("text-input-transform-test")
-                .background_color(Color::rgb(0.1, 0.1, 0.15)),
-            move || view,
-        )
-        .run();
+    let (app, _) = App::new().add_surface(
+        SurfaceConfig::new()
+            .width(550)
+            .height(680)
+            .anchor(Anchor::TOP | Anchor::LEFT)
+            .layer(Layer::Top)
+            .namespace("text-input-transform-test")
+            .background_color(Color::rgb(0.1, 0.1, 0.15)),
+        move || view,
+    );
+    app.run();
 }
