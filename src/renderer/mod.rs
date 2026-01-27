@@ -17,11 +17,15 @@ use self::text::TextRenderState;
 use self::text_texture::{QUALITY_MULTIPLIER, TextTextureRenderer};
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
+use crate::widgets::font::{FontFamily, FontWeight};
 use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::{Color, Rect};
 
 pub use context::{GpuContext, SurfaceState};
-pub use text_measurer::{char_index_from_x, measure_text, measure_text_to_char};
+pub use text_measurer::{
+    char_index_from_x, char_index_from_x_styled, measure_text, measure_text_styled,
+    measure_text_to_char, measure_text_to_char_styled,
+};
 
 /// A text entry for rendering, containing all information needed to render text.
 #[derive(Debug, Clone)]
@@ -34,6 +38,10 @@ pub struct TextEntry {
     pub color: Color,
     /// The font size in logical pixels
     pub font_size: f32,
+    /// The font family
+    pub font_family: FontFamily,
+    /// The font weight
+    pub font_weight: FontWeight,
     /// Optional clip rectangle to constrain text rendering
     pub clip_rect: Option<Rect>,
     /// Transform to apply to this text
@@ -889,7 +897,28 @@ impl PaintContext {
         self.push_rounded_rect(shape);
     }
 
+    /// Draw text with default font (SansSerif, normal weight).
     pub fn draw_text(&mut self, text: &str, rect: Rect, color: Color, font_size: f32) {
+        self.draw_text_styled(
+            text,
+            rect,
+            color,
+            font_size,
+            FontFamily::default(),
+            FontWeight::NORMAL,
+        );
+    }
+
+    /// Draw text with specified font family and weight.
+    pub fn draw_text_styled(
+        &mut self,
+        text: &str,
+        rect: Rect,
+        color: Color,
+        font_size: f32,
+        font_family: FontFamily,
+        font_weight: FontWeight,
+    ) {
         // Get intersected clip rect (intersection of all clips in stack) for text clipping
         let clip_rect = self.intersected_clip_rect();
         // Get current transform from the stack
@@ -900,6 +929,8 @@ impl PaintContext {
             rect,
             color,
             font_size,
+            font_family,
+            font_weight,
             clip_rect,
             transform,
             transform_origin,

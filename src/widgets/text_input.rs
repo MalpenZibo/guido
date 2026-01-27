@@ -11,13 +11,15 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+use crate::default_font_family;
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
     ChangeFlags, CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, WidgetId, clipboard_copy,
     clipboard_paste, has_focus, release_focus, request_animation_frame, request_focus, set_cursor,
 };
-use crate::renderer::{PaintContext, char_index_from_x, measure_text};
+use crate::renderer::{PaintContext, char_index_from_x_styled, measure_text_styled};
 
+use super::font::{FontFamily, FontWeight};
 use super::impl_dirty_flags;
 use super::widget::{Color, Event, EventResponse, Key, Modifiers, MouseButton, Rect, Widget};
 
@@ -223,7 +225,11 @@ pub struct TextInput {
     cursor_color: MaybeDyn<Color>,
     selection_color: MaybeDyn<Color>,
     font_size: MaybeDyn<f32>,
+    font_family: MaybeDyn<FontFamily>,
+    font_weight: MaybeDyn<FontWeight>,
     cached_font_size: f32,
+    cached_font_family: FontFamily,
+    cached_font_weight: FontWeight,
 
     // Password mode
     is_password: bool,
@@ -267,6 +273,7 @@ impl TextInput {
     pub fn new(signal: Signal<String>) -> Self {
         let cached_value = signal.get();
         let cached_char_count = cached_value.chars().count();
+        let default_family = default_font_family();
         Self {
             widget_id: WidgetId::next(),
             dirty_flags: ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT,
@@ -282,7 +289,11 @@ impl TextInput {
             cursor_color: MaybeDyn::Static(Color::rgb(0.4, 0.8, 1.0)),
             selection_color: MaybeDyn::Static(Color::rgba(0.4, 0.6, 1.0, 0.4)),
             font_size: MaybeDyn::Static(14.0),
+            font_family: MaybeDyn::Static(default_family.clone()),
+            font_weight: MaybeDyn::Static(FontWeight::NORMAL),
             cached_font_size: 14.0,
+            cached_font_family: default_family,
+            cached_font_weight: FontWeight::NORMAL,
             is_password: false,
             mask_char: '•',
             selection: Selection::new(0),
@@ -323,6 +334,40 @@ impl TextInput {
     pub fn font_size(mut self, size: impl IntoMaybeDyn<f32>) -> Self {
         self.font_size = size.into_maybe_dyn();
         self
+    }
+
+    /// Set the font family.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// text_input(signal).font_family(FontFamily::Monospace)
+    /// ```
+    pub fn font_family(mut self, family: impl IntoMaybeDyn<FontFamily>) -> Self {
+        self.font_family = family.into_maybe_dyn();
+        self
+    }
+
+    /// Set the font weight.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// text_input(signal).font_weight(FontWeight::BOLD)
+    /// ```
+    pub fn font_weight(mut self, weight: impl IntoMaybeDyn<FontWeight>) -> Self {
+        self.font_weight = weight.into_maybe_dyn();
+        self
+    }
+
+    /// Shorthand for bold text (FontWeight::BOLD).
+    pub fn bold(self) -> Self {
+        self.font_weight(FontWeight::BOLD)
+    }
+
+    /// Shorthand for monospace font (FontFamily::Monospace).
+    pub fn mono(self) -> Self {
+        self.font_family(FontFamily::Monospace)
     }
 
     /// Enable password mode (masks text with bullet characters)
@@ -378,6 +423,8 @@ impl TextInput {
         let _ = self.display_text();
         let display = &self.cached_display_text;
         let font_size = self.cached_font_size;
+        let font_family = &self.cached_font_family;
+        let font_weight = self.cached_font_weight;
 
         // Build cumulative position array: positions[i] = width of text[0..i]
         // Length is char_count + 1 to include position 0 and position at end
@@ -393,7 +440,7 @@ impl TextInput {
             let width = if prefix.is_empty() {
                 0.0
             } else {
-                measure_text(prefix, font_size, None).width
+                measure_text_styled(prefix, font_size, None, font_family, font_weight).width
             };
             // Update position for this index (already have 0 at index 0)
             if i > 0 {
@@ -402,7 +449,8 @@ impl TextInput {
         }
 
         // Add final position (total width)
-        self.cached_text_width = measure_text(display, font_size, None).width;
+        self.cached_text_width =
+            measure_text_styled(display, font_size, None, font_family, font_weight).width;
         self.cached_glyph_positions.push(self.cached_text_width);
 
         self.measurements_dirty = false;
@@ -436,9 +484,13 @@ impl TextInput {
     fn refresh(&mut self) -> bool {
         let new_value = self.value.get();
         let new_font_size = self.font_size.get();
+        let new_font_family = self.font_family.get();
+        let new_font_weight = self.font_weight.get();
 
         let value_changed = new_value != self.cached_value;
-        let font_changed = (new_font_size - self.cached_font_size).abs() > f32::EPSILON;
+        let font_size_changed = (new_font_size - self.cached_font_size).abs() > f32::EPSILON;
+        let font_family_changed = new_font_family != self.cached_font_family;
+        let font_weight_changed = new_font_weight != self.cached_font_weight;
 
         if value_changed {
             self.cached_value = new_value;
@@ -449,12 +501,20 @@ impl TextInput {
             self.selection.cursor = self.selection.cursor.min(self.cached_char_count);
             self.selection.anchor = self.selection.anchor.min(self.cached_char_count);
         }
-        if font_changed {
+        if font_size_changed {
             self.cached_font_size = new_font_size;
             self.measurements_dirty = true;
         }
+        if font_family_changed {
+            self.cached_font_family = new_font_family;
+            self.measurements_dirty = true;
+        }
+        if font_weight_changed {
+            self.cached_font_weight = new_font_weight;
+            self.measurements_dirty = true;
+        }
 
-        value_changed || font_changed
+        value_changed || font_size_changed || font_family_changed || font_weight_changed
     }
 
     /// Update cursor blink state
@@ -522,7 +582,13 @@ impl TextInput {
         if positions.is_empty() {
             // Fallback if cache not populated (shouldn't happen after layout)
             let display = self.display_text_cached();
-            return char_index_from_x(display, self.cached_font_size, relative_x);
+            return char_index_from_x_styled(
+                display,
+                self.cached_font_size,
+                relative_x,
+                &self.cached_font_family,
+                self.cached_font_weight,
+            );
         }
 
         // Find the insertion point using binary search
@@ -952,7 +1018,13 @@ impl Widget for TextInput {
 
         // Update measurement cache (also refreshes display text)
         self.update_measurements();
-        let measured = measure_text(self.display_text_cached(), self.cached_font_size, None);
+        let measured = measure_text_styled(
+            self.display_text_cached(),
+            self.cached_font_size,
+            None,
+            &self.cached_font_family,
+            self.cached_font_weight,
+        );
 
         // Ensure minimum height for empty text
         let height = measured.height.max(self.cached_font_size * 1.2);
@@ -1010,7 +1082,14 @@ impl Widget for TextInput {
             self.cached_text_width.max(self.bounds.width),
             self.bounds.height,
         );
-        ctx.draw_text(display, text_bounds, text_color, self.cached_font_size);
+        ctx.draw_text_styled(
+            display,
+            text_bounds,
+            text_color,
+            self.cached_font_size,
+            self.cached_font_family.clone(),
+            self.cached_font_weight,
+        );
 
         // Draw cursor if focused and visible
         if is_focused && self.cursor_visible {

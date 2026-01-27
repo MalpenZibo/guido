@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use glyphon::{
-    Attrs, Buffer, Cache, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution, Shaping,
+    Attrs, Buffer, Cache, Color as GlyphonColor, FontSystem, Metrics, Resolution, Shaping,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 use wgpu::{
@@ -17,6 +17,7 @@ use wgpu::{
 };
 
 use super::TextEntry;
+use crate::widgets::font::FontWeight;
 
 /// Quality multiplier for supersampling text textures.
 /// Renders text at higher resolution for better quality when displayed.
@@ -108,10 +109,18 @@ impl TextTextureRenderer {
             Some(buffer_width),
             Some(buffer_height),
         );
+        // Use entry's font properties, defaulting to NORMAL weight if default (0)
+        let weight = if entry.font_weight == FontWeight::default() {
+            FontWeight::NORMAL
+        } else {
+            entry.font_weight
+        };
         buffer.set_text(
             &mut self.font_system,
             &entry.text,
-            &Attrs::new().family(Family::SansSerif),
+            &Attrs::new()
+                .family(entry.font_family.to_cosmic())
+                .weight(weight.to_cosmic()),
             Shaping::Advanced,
             None,
         );

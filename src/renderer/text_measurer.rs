@@ -1,5 +1,6 @@
 use crate::layout::Size;
-use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping};
+use crate::widgets::font::{FontFamily, FontWeight};
+use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping};
 use std::cell::RefCell;
 
 pub struct TextMeasurer {
@@ -14,6 +15,23 @@ impl TextMeasurer {
     }
 
     pub fn measure(&mut self, text: &str, font_size: f32, max_width: Option<f32>) -> Size {
+        self.measure_styled(
+            text,
+            font_size,
+            max_width,
+            &FontFamily::default(),
+            FontWeight::NORMAL,
+        )
+    }
+
+    pub fn measure_styled(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        max_width: Option<f32>,
+        font_family: &FontFamily,
+        font_weight: FontWeight,
+    ) -> Size {
         let metrics = Metrics::new(font_size, font_size * 1.2);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
 
@@ -21,7 +39,9 @@ impl TextMeasurer {
         buffer.set_text(
             &mut self.font_system,
             text,
-            &Attrs::new().family(Family::SansSerif),
+            &Attrs::new()
+                .family(font_family.to_cosmic())
+                .weight(font_weight.to_cosmic()),
             Shaping::Advanced,
             None,
         );
@@ -45,6 +65,24 @@ impl TextMeasurer {
     /// Measure text width up to a specific character index.
     /// This is useful for cursor positioning in text input widgets.
     pub fn measure_to_char(&mut self, text: &str, font_size: f32, char_index: usize) -> f32 {
+        self.measure_to_char_styled(
+            text,
+            font_size,
+            char_index,
+            &FontFamily::default(),
+            FontWeight::NORMAL,
+        )
+    }
+
+    /// Measure text width up to a specific character index with font styling.
+    pub fn measure_to_char_styled(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        char_index: usize,
+        font_family: &FontFamily,
+        font_weight: FontWeight,
+    ) -> f32 {
         if char_index == 0 || text.is_empty() {
             return 0.0;
         }
@@ -57,18 +95,39 @@ impl TextMeasurer {
             .unwrap_or(text.len());
 
         let prefix = &text[..byte_pos];
-        self.measure(prefix, font_size, None).width
+        self.measure_styled(prefix, font_size, None, font_family, font_weight)
+            .width
     }
 
     /// Find the character index from an x-coordinate using binary search.
     /// This is useful for click-to-position in text input widgets.
     pub fn char_from_x(&mut self, text: &str, font_size: f32, x: f32) -> usize {
+        self.char_from_x_styled(
+            text,
+            font_size,
+            x,
+            &FontFamily::default(),
+            FontWeight::NORMAL,
+        )
+    }
+
+    /// Find the character index from an x-coordinate with font styling.
+    pub fn char_from_x_styled(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        x: f32,
+        font_family: &FontFamily,
+        font_weight: FontWeight,
+    ) -> usize {
         if text.is_empty() || x <= 0.0 {
             return 0;
         }
 
         let char_count = text.chars().count();
-        let total_width = self.measure(text, font_size, None).width;
+        let total_width = self
+            .measure_styled(text, font_size, None, font_family, font_weight)
+            .width;
         if x >= total_width {
             return char_count;
         }
@@ -79,7 +138,7 @@ impl TextMeasurer {
 
         while left < right {
             let mid = (left + right) / 2;
-            let width = self.measure_to_char(text, font_size, mid);
+            let width = self.measure_to_char_styled(text, font_size, mid, font_family, font_weight);
             if width < x {
                 left = mid + 1;
             } else {
@@ -89,8 +148,10 @@ impl TextMeasurer {
 
         // Check if click is closer to previous character
         if left > 0 {
-            let prev_width = self.measure_to_char(text, font_size, left - 1);
-            let curr_width = self.measure_to_char(text, font_size, left);
+            let prev_width =
+                self.measure_to_char_styled(text, font_size, left - 1, font_family, font_weight);
+            let curr_width =
+                self.measure_to_char_styled(text, font_size, left, font_family, font_weight);
             if (x - prev_width) < (curr_width - x) {
                 return left - 1;
             }
@@ -109,12 +170,49 @@ pub fn measure_text(text: &str, font_size: f32, max_width: Option<f32>) -> Size 
     TEXT_MEASURER.with_borrow_mut(|m| m.measure(text, font_size, max_width))
 }
 
+/// Measure text dimensions with specified font family and weight
+pub fn measure_text_styled(
+    text: &str,
+    font_size: f32,
+    max_width: Option<f32>,
+    font_family: &FontFamily,
+    font_weight: FontWeight,
+) -> Size {
+    TEXT_MEASURER
+        .with_borrow_mut(|m| m.measure_styled(text, font_size, max_width, font_family, font_weight))
+}
+
 /// Measure text width up to a specific character index (for cursor positioning)
 pub fn measure_text_to_char(text: &str, font_size: f32, char_index: usize) -> f32 {
     TEXT_MEASURER.with_borrow_mut(|m| m.measure_to_char(text, font_size, char_index))
 }
 
+/// Measure text width up to a character index with font styling
+pub fn measure_text_to_char_styled(
+    text: &str,
+    font_size: f32,
+    char_index: usize,
+    font_family: &FontFamily,
+    font_weight: FontWeight,
+) -> f32 {
+    TEXT_MEASURER.with_borrow_mut(|m| {
+        m.measure_to_char_styled(text, font_size, char_index, font_family, font_weight)
+    })
+}
+
 /// Find the character index from an x-coordinate (for click-to-position)
 pub fn char_index_from_x(text: &str, font_size: f32, x: f32) -> usize {
     TEXT_MEASURER.with_borrow_mut(|m| m.char_from_x(text, font_size, x))
+}
+
+/// Find character index from x-coordinate with font styling
+pub fn char_index_from_x_styled(
+    text: &str,
+    font_size: f32,
+    x: f32,
+    font_family: &FontFamily,
+    font_weight: FontWeight,
+) -> usize {
+    TEXT_MEASURER
+        .with_borrow_mut(|m| m.char_from_x_styled(text, font_size, x, font_family, font_weight))
 }

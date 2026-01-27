@@ -1,5 +1,6 @@
 pub mod children;
 pub mod container;
+pub mod font;
 pub mod image;
 pub mod into_child;
 pub mod scroll;
@@ -33,6 +34,7 @@ pub(crate) use impl_dirty_flags;
 
 pub use children::ChildrenSource;
 pub use container::{Border, Container, GradientDirection, LinearGradient, Overflow, container};
+pub use font::{FontFamily, FontWeight};
 pub use image::{ContentFit, Image, ImageSource, image};
 pub use into_child::{DynamicChildren, IntoChild, IntoChildren, StaticChildren};
 pub use scroll::{ScrollAxis, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibility};
@@ -68,6 +70,18 @@ impl IntoMaybeDyn<Transform> for Transform {
 
 impl IntoMaybeDyn<TransformOrigin> for TransformOrigin {
     fn into_maybe_dyn(self) -> MaybeDyn<TransformOrigin> {
+        MaybeDyn::Static(self)
+    }
+}
+
+impl IntoMaybeDyn<FontFamily> for FontFamily {
+    fn into_maybe_dyn(self) -> MaybeDyn<FontFamily> {
+        MaybeDyn::Static(self)
+    }
+}
+
+impl IntoMaybeDyn<FontWeight> for FontWeight {
+    fn into_maybe_dyn(self) -> MaybeDyn<FontWeight> {
         MaybeDyn::Static(self)
     }
 }

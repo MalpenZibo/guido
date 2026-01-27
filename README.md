@@ -32,6 +32,7 @@ Guido is a GPU-accelerated GUI library for building Wayland layer shell applicat
 - **HiDPI Support** - Automatic scaling for high-resolution displays
 - **Image Widget** - Display raster images (PNG, JPEG, WebP) and SVGs with GPU texture caching
 - **Scrollable Containers** - Vertical/horizontal scrolling with customizable scrollbars and momentum
+- **Text Styling** - Font family (sans-serif, serif, monospace, custom) and weight (thin to black) support
 
 ## Quick Start
 
@@ -106,6 +107,7 @@ cargo run --example component_example
 - **children_example** - Dynamic lists with keyed reconciliation
 - **image_example** - Raster and SVG images with content fit modes
 - **scroll_example** - Scrollable containers with custom scrollbar styling
+- **text_styling_example** - Font families and weights for text styling
 
 ## Documentation
 
