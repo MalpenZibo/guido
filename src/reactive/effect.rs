@@ -21,6 +21,13 @@ impl Effect {
 
         Self { id }
     }
+
+    /// Get the effect's ID.
+    /// Used internally for testing the ownership system.
+    #[cfg(test)]
+    pub(crate) fn id(&self) -> EffectId {
+        self.id
+    }
 }
 
 impl Drop for Effect {

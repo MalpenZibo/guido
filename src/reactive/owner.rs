@@ -35,6 +35,7 @@
 //! ```
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use super::runtime::{EffectId, SignalId, with_runtime};
 use super::storage::dispose_signal;
@@ -44,10 +45,6 @@ pub type OwnerId = usize;
 
 /// An owner that manages the lifecycle of reactive primitives.
 struct Owner {
-    #[allow(dead_code)]
-    id: OwnerId,
-    #[allow(dead_code)]
-    parent: Option<OwnerId>,
     signals: Vec<SignalId>,
     effects: Vec<EffectId>,
     cleanups: Vec<Box<dyn FnOnce()>>,
@@ -55,10 +52,8 @@ struct Owner {
 }
 
 impl Owner {
-    fn new(id: OwnerId, parent: Option<OwnerId>) -> Self {
+    fn new() -> Self {
         Self {
-            id,
-            parent,
             signals: Vec::new(),
             effects: Vec::new(),
             cleanups: Vec::new(),
@@ -70,6 +65,9 @@ impl Owner {
 /// Arena-based storage for owners.
 struct OwnerArena {
     owners: Vec<Option<Owner>>,
+    /// Reverse mapping from effect ID to owner ID for O(1) lookup.
+    /// This avoids linear search through all owners when checking if an effect is owned.
+    effect_owners: HashMap<EffectId, OwnerId>,
     next_id: OwnerId,
 }
 
@@ -77,21 +75,16 @@ impl OwnerArena {
     fn new() -> Self {
         Self {
             owners: Vec::new(),
+            effect_owners: HashMap::new(),
             next_id: 0,
         }
     }
 
-    fn allocate(&mut self, parent: Option<OwnerId>) -> OwnerId {
+    fn allocate(&mut self) -> OwnerId {
         let id = self.next_id;
         self.next_id += 1;
-        let owner = Owner::new(id, parent);
-        self.owners.push(Some(owner));
+        self.owners.push(Some(Owner::new()));
         id
-    }
-
-    #[allow(dead_code)]
-    fn get(&self, id: OwnerId) -> Option<&Owner> {
-        self.owners.get(id).and_then(|o| o.as_ref())
     }
 
     fn get_mut(&mut self, id: OwnerId) -> Option<&mut Owner> {
@@ -122,16 +115,13 @@ thread_local! {
 /// **Note:** This function is not part of the public API and may change.
 /// Use `on_cleanup` for registering cleanup callbacks in user code.
 pub fn with_owner<T>(f: impl FnOnce() -> T) -> (T, OwnerId) {
-    // Get current owner as parent
-    let parent = CURRENT_OWNER.with(|current| *current.borrow());
-
-    // Allocate new owner
+    // Allocate new owner and register as child of current owner (if any)
     let owner_id = OWNERS.with(|owners| {
         let mut owners = owners.borrow_mut();
-        let id = owners.allocate(parent);
+        let id = owners.allocate();
 
-        // Register as child of parent
-        if let Some(parent_id) = parent
+        // Register as child of current owner
+        if let Some(parent_id) = CURRENT_OWNER.with(|current| *current.borrow())
             && let Some(parent_owner) = owners.get_mut(parent_id)
         {
             parent_owner.children.push(id);
@@ -196,7 +186,12 @@ pub fn dispose_owner(id: OwnerId) {
         cleanup();
     }
 
-    // Dispose effects
+    // Dispose effects and remove from reverse mapping
+    for effect_id in &owner.effects {
+        OWNERS.with(|owners| {
+            owners.borrow_mut().effect_owners.remove(effect_id);
+        });
+    }
     for effect_id in owner.effects {
         with_runtime(|rt| rt.dispose_effect(effect_id));
     }
@@ -263,8 +258,10 @@ pub(crate) fn register_signal(id: SignalId) {
 pub(crate) fn register_effect(id: EffectId) {
     if let Some(owner_id) = current_owner() {
         OWNERS.with(|owners| {
-            if let Some(owner) = owners.borrow_mut().get_mut(owner_id) {
+            let mut owners = owners.borrow_mut();
+            if let Some(owner) = owners.get_mut(owner_id) {
                 owner.effects.push(id);
+                owners.effect_owners.insert(id, owner_id);
             }
         });
     }
@@ -274,16 +271,10 @@ pub(crate) fn register_effect(id: EffectId) {
 ///
 /// This is used by Effect's Drop impl to determine if it should dispose
 /// the effect or let the owner handle it.
+///
+/// Uses O(1) lookup via the reverse mapping instead of linear search.
 pub(crate) fn effect_has_owner(id: EffectId) -> bool {
-    OWNERS.with(|owners| {
-        let owners = owners.borrow();
-        for owner in owners.owners.iter().flatten() {
-            if owner.effects.contains(&id) {
-                return true;
-            }
-        }
-        false
-    })
+    OWNERS.with(|owners| owners.borrow().effect_owners.contains_key(&id))
 }
 
 #[cfg(test)]
@@ -382,5 +373,120 @@ mod tests {
         // Should not panic
         dispose_owner(owner_id);
         dispose_owner(owner_id);
+    }
+
+    #[test]
+    fn test_effect_registration_and_reverse_mapping() {
+        use super::super::effect::create_effect;
+        use super::super::signal::create_signal;
+
+        let effect_ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let effect_ran_clone = effect_ran.clone();
+
+        let (effect_id, owner_id) = with_owner(|| {
+            let signal = create_signal(0);
+            let effect = create_effect(move || {
+                let _ = signal.get();
+                effect_ran_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+            });
+            effect.id()
+        });
+
+        // Effect should be owned via reverse mapping
+        assert!(
+            effect_has_owner(effect_id),
+            "Effect should be owned after registration"
+        );
+
+        // Dispose the owner
+        dispose_owner(owner_id);
+
+        // Effect should no longer be owned (removed from reverse mapping)
+        assert!(
+            !effect_has_owner(effect_id),
+            "Effect should not be owned after disposal"
+        );
+    }
+
+    #[test]
+    fn test_signal_registration() {
+        use super::super::signal::create_signal;
+
+        let (signal, owner_id) = with_owner(|| create_signal(42));
+
+        // Should be able to read before disposal
+        assert_eq!(signal.get(), 42);
+
+        // Dispose the owner
+        dispose_owner(owner_id);
+
+        // Note: accessing disposed signal should panic, but we don't test that
+        // here since it would terminate the test. The storage.rs tests cover
+        // the panic messages.
+    }
+
+    #[test]
+    fn test_multiple_effects_registration() {
+        use super::super::effect::create_effect;
+        use super::super::signal::create_signal;
+
+        let (effect_ids, owner_id) = with_owner(|| {
+            let signal = create_signal(0);
+            let e1 = create_effect(move || {
+                let _ = signal.get();
+            });
+            let e2 = create_effect(move || {
+                let _ = signal.get();
+            });
+            let e3 = create_effect(move || {
+                let _ = signal.get();
+            });
+            (e1.id(), e2.id(), e3.id())
+        });
+
+        // All effects should be owned
+        assert!(effect_has_owner(effect_ids.0));
+        assert!(effect_has_owner(effect_ids.1));
+        assert!(effect_has_owner(effect_ids.2));
+
+        // Dispose
+        dispose_owner(owner_id);
+
+        // None should be owned anymore
+        assert!(!effect_has_owner(effect_ids.0));
+        assert!(!effect_has_owner(effect_ids.1));
+        assert!(!effect_has_owner(effect_ids.2));
+    }
+
+    #[test]
+    fn test_nested_owners_effect_cleanup() {
+        use super::super::effect::create_effect;
+        use super::super::signal::create_signal;
+
+        let ((inner_effect, outer_effect), outer_id) = with_owner(|| {
+            let signal = create_signal(0);
+            let outer = create_effect(move || {
+                let _ = signal.get();
+            });
+
+            let (inner, _inner_id) = with_owner(|| {
+                create_effect(move || {
+                    let _ = signal.get();
+                })
+            });
+
+            (inner.id(), outer.id())
+        });
+
+        // Both should be owned
+        assert!(effect_has_owner(inner_effect));
+        assert!(effect_has_owner(outer_effect));
+
+        // Dispose outer (which should dispose inner first due to depth-first)
+        dispose_owner(outer_id);
+
+        // Both should be disposed
+        assert!(!effect_has_owner(inner_effect));
+        assert!(!effect_has_owner(outer_effect));
     }
 }
