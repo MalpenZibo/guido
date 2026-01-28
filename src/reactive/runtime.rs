@@ -40,6 +40,14 @@ impl Runtime {
         id
     }
 
+    /// Replace the callback for an existing effect.
+    /// Used by lazy computed values to set up their dirty-marking callback.
+    pub fn set_effect_callback(&mut self, effect_id: EffectId, callback: Box<dyn FnMut()>) {
+        if effect_id < self.effect_callbacks.len() {
+            self.effect_callbacks[effect_id] = Some(callback);
+        }
+    }
+
     pub fn track_read(&mut self, signal_id: SignalId) {
         // Check if this signal exists in our runtime (it might not if called from another thread)
         if signal_id >= self.signal_subscribers.len() {
@@ -86,9 +94,40 @@ impl Runtime {
         self.current_effect = prev_effect;
     }
 
+    /// Run a closure with dependency tracking for the given effect ID.
+    /// This clears old dependencies and tracks new ones read during the closure.
+    /// Used by lazy computed values to recompute with proper dependency tracking.
+    pub fn run_with_tracking<F, R>(&mut self, effect_id: EffectId, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        // Ensure effect_dependencies has space for this effect
+        while self.effect_dependencies.len() <= effect_id {
+            self.effect_dependencies.push(HashSet::new());
+        }
+
+        // Clear old dependencies
+        let old_deps = std::mem::take(&mut self.effect_dependencies[effect_id]);
+        for signal_id in old_deps {
+            if signal_id < self.signal_subscribers.len() {
+                self.signal_subscribers[signal_id].remove(&effect_id);
+            }
+        }
+
+        // Run closure with tracking
+        let prev_effect = self.current_effect;
+        self.current_effect = Some(effect_id);
+
+        let result = f();
+
+        self.current_effect = prev_effect;
+        result
+    }
+
     pub fn flush_effects(&mut self) {
         while !self.pending_effects.is_empty() {
-            let effects: Vec<_> = self.pending_effects.drain().collect();
+            // Use mem::take to avoid Vec allocation - swaps in empty HashSet without allocation
+            let effects = std::mem::take(&mut self.pending_effects);
             for effect_id in effects {
                 self.run_effect(effect_id);
             }
