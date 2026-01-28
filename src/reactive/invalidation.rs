@@ -113,10 +113,13 @@ pub fn init_wakeup(ping: Ping) {
 
 /// Request that the main event loop process a frame
 pub fn request_frame() {
-    FRAME_REQUESTED.store(true, Ordering::Relaxed);
-    // Wake up the event loop immediately
-    if let Some(ping) = WAKEUP_PING.get() {
-        ping.ping();
+    // Only ping on first request - avoids redundant syscalls when multiple signals update
+    let was_requested = FRAME_REQUESTED.swap(true, Ordering::Relaxed);
+    if !was_requested {
+        // Wake up the event loop immediately
+        if let Some(ping) = WAKEUP_PING.get() {
+            ping.ping();
+        }
     }
 }
 
