@@ -225,3 +225,15 @@ impl<T: Clone> Computed<T> {
 // Register cleanup callback (for use in dynamic children)
 pub fn on_cleanup(f: impl FnOnce() + 'static);
 ```
+
+### Background Services
+
+```rust
+// Create a background service with automatic cleanup
+pub fn create_service<Cmd, F>(f: F) -> Service<Cmd>
+where
+    Cmd: Send + 'static,
+    F: FnOnce(Receiver<Cmd>, ServiceContext) + Send + 'static;
+```
+
+See [Background Threads](../advanced/background-threads.md) for detailed usage.

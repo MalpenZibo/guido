@@ -108,6 +108,7 @@ cargo run --example component_example
 - **image_example** - Raster and SVG images with content fit modes
 - **scroll_example** - Scrollable containers with custom scrollbar styling
 - **text_styling_example** - Font families and weights for text styling
+- **service_example** - Background services with automatic cleanup
 
 ## Documentation
 

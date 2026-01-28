@@ -246,3 +246,19 @@ After exploring the examples, dive deeper into the concepts:
 - [Core Concepts](../concepts/README.md) - Understand the reactive model
 - [Building UI](../building-ui/README.md) - Master styling and layout
 - [Interactivity](../interactivity/README.md) - Add hover states and events
+
+---
+
+### service_example
+
+Background services with automatic cleanup.
+
+```bash
+cargo run --example service_example
+```
+
+**Features demonstrated:**
+- `create_service` for background threads
+- Bidirectional communication with commands
+- Read-only services for periodic updates
+- Automatic cleanup when component unmounts
