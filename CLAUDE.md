@@ -232,24 +232,28 @@ handle.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
 
 ### Integrating Background Threads
 
-Use `.on_update()` callback to poll channels and update signals:
+Use `create_service` for background tasks that are automatically cleaned up:
 
 ```rust
-let (tx, rx) = std::sync::mpsc::channel();
 let data = create_signal(String::new());
 
-std::thread::spawn(move || {
-    // Send updates from background thread
-    tx.send("update").ok();
+// Read-only service (ignore receiver)
+let _ = create_service::<(), _>(move |_rx, ctx| {
+    while ctx.is_running() {
+        data.set(fetch_data());
+        std::thread::sleep(Duration::from_secs(1));
+    }
 });
 
-App::new()
-    .on_update(move || {
-        while let Ok(msg) = rx.try_recv() {
-            data.set(msg);
+// Bidirectional service (with commands)
+let service = create_service(move |rx, ctx| {
+    while ctx.is_running() {
+        while let Ok(cmd) = rx.try_recv() {
+            // handle commands
         }
-    })
-    .run(view);
+    }
+});
+service.send(MyCommand::DoSomething);
 ```
 
 ### Corner Curvature

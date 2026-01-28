@@ -7,6 +7,7 @@ pub mod invalidation;
 pub mod maybe_dyn;
 pub mod owner;
 pub mod runtime;
+pub mod service;
 pub mod signal;
 pub mod storage;
 
@@ -37,4 +38,5 @@ pub mod __internal {
     pub use super::owner::{OwnerId, dispose_owner, with_owner};
 }
 pub use runtime::batch;
+pub use service::{Service, ServiceContext, create_service};
 pub use signal::{ReadSignal, Signal, WriteSignal, create_signal};

@@ -11,16 +11,21 @@
 
 use guido::prelude::*;
 use std::f32::consts::PI;
+use std::time::Duration;
 
 fn main() {
     // Animated rotation angle
     let angle = create_signal(0.0_f32);
 
-    // Animation effect - the signal is Copy so we can use it directly
-    create_effect(move || {
-        let current = angle.get();
-        // This will be updated by the on_update callback
-        let _ = current;
+    // Animation service - updates the angle signal continuously
+    let start_time = std::time::Instant::now();
+    let _ = create_service::<(), _>(move |_rx, ctx| {
+        while ctx.is_running() {
+            let elapsed = start_time.elapsed().as_secs_f32();
+            let new_angle = (elapsed * PI / 2.0).to_degrees() % 360.0;
+            angle.set(new_angle);
+            std::thread::sleep(Duration::from_millis(16));
+        }
     });
 
     let view = container()
@@ -284,9 +289,6 @@ fn main() {
                 ]),
         ]);
 
-    // Track time for animation
-    let start_time = std::time::Instant::now();
-
     let (app, _) = App::new().add_surface(
         SurfaceConfig::new()
             .width(900)
@@ -295,11 +297,5 @@ fn main() {
             .background_color(Color::rgb(0.1, 0.1, 0.15)),
         move || view,
     );
-    app.on_update(move || {
-        // Update animation angle (full rotation every 4 seconds)
-        let elapsed = start_time.elapsed().as_secs_f32();
-        let new_angle = (elapsed * PI / 2.0).to_degrees() % 360.0;
-        angle.set(new_angle);
-    })
-    .run();
+    app.run();
 }

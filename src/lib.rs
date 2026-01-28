@@ -67,8 +67,9 @@ pub mod prelude {
     };
     pub use crate::platform::{Anchor, KeyboardInteractivity, Layer};
     pub use crate::reactive::{
-        Computed, CursorIcon, Effect, IntoMaybeDyn, MaybeDyn, ReadSignal, Signal, WriteSignal,
-        batch, create_computed, create_effect, create_signal, on_cleanup, set_cursor,
+        Computed, CursorIcon, Effect, IntoMaybeDyn, MaybeDyn, ReadSignal, Service, ServiceContext,
+        Signal, WriteSignal, batch, create_computed, create_effect, create_service, create_signal,
+        on_cleanup, set_cursor,
     };
     pub use crate::renderer::primitives::Shadow;
     pub use crate::renderer::{PaintContext, measure_text};
@@ -86,10 +87,6 @@ pub mod prelude {
     };
     pub use crate::{App, component, default_font_family, set_default_font_family};
 }
-
-/// A callback that gets called each frame before rendering.
-/// Use this to process external events (like channel messages) and update signals.
-pub type UpdateCallback = Box<dyn FnMut()>;
 
 /// A surface definition that stores configuration and widget factory.
 struct SurfaceDefinition {
@@ -110,7 +107,6 @@ struct SurfaceEntry {
 }
 
 pub struct App {
-    on_update: Option<UpdateCallback>,
     /// Surface definitions added via add_surface()
     surface_definitions: Vec<SurfaceDefinition>,
 }
@@ -118,7 +114,6 @@ pub struct App {
 impl App {
     pub fn new() -> Self {
         Self {
-            on_update: None,
             surface_definitions: Vec::new(),
         }
     }
@@ -138,37 +133,6 @@ impl App {
     /// ```
     pub fn default_font_family(self, family: FontFamily) -> Self {
         set_default_font_family(family);
-        self
-    }
-
-    /// Set a callback that gets called each frame before rendering.
-    /// Use this to process external events (like channel messages from background threads)
-    /// and update signals.
-    ///
-    /// # Example
-    /// ```ignore
-    /// let (tx, rx) = std::sync::mpsc::channel();
-    /// let count = create_signal(0);
-    ///
-    /// // Spawn background thread that sends updates
-    /// std::thread::spawn(move || {
-    ///     loop {
-    ///         std::thread::sleep(Duration::from_secs(1));
-    ///         tx.send(1).ok();
-    ///     }
-    /// });
-    ///
-    /// App::new()
-    ///     .on_update(move || {
-    ///         // Process all pending messages
-    ///         while let Ok(delta) = rx.try_recv() {
-    ///             count.update(|c| *c += delta);
-    ///         }
-    ///     })
-    ///     .run(view);
-    /// ```
-    pub fn on_update<F: FnMut() + 'static>(mut self, callback: F) -> Self {
-        self.on_update = Some(Box::new(callback));
         self
     }
 
@@ -358,7 +322,7 @@ impl App {
 
             // Check if we need to actively poll (from previous frame's animations)
             let has_animations = with_app_state(|state| state.has_animations);
-            let needs_polling = has_animations || self.on_update.is_some() || force_render;
+            let needs_polling = has_animations || force_render;
 
             // Clear animation flag - widgets will set it during layout if they need another frame
             clear_animation_flag();
@@ -453,11 +417,6 @@ impl App {
                         wayland_state.set_surface_margin(id, top, right, bottom, left);
                     }
                 }
-            }
-
-            // Call the update callback to process external events
-            if let Some(ref mut callback) = self.on_update {
-                callback();
             }
 
             // Process each surface

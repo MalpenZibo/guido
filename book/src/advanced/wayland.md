@@ -462,7 +462,6 @@ impl App {
     where
         W: Widget + 'static,
         F: FnOnce() -> W + 'static;
-    pub fn on_update(self, callback: impl Fn() + 'static) -> Self;
     pub fn run(self);
 }
 ```

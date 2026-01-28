@@ -121,29 +121,41 @@ Properties use `impl IntoMaybeDyn<T>` to accept any of:
 
 ## Background Thread Updates
 
-Signals are thread-safe and can be updated from background threads:
+Signals are thread-safe and can be updated from background threads. Use `create_service` to spawn a background service that is automatically cleaned up when the component unmounts:
 
 ```rust
 let data = create_signal(String::new());
-let (tx, rx) = std::sync::mpsc::channel();
 
-// Spawn background worker
-std::thread::spawn(move || {
-    loop {
+// Spawn a background service - automatically cleaned up on unmount
+let _ = create_service::<(), _>(move |_rx, ctx| {
+    while ctx.is_running() {
         let new_data = fetch_data();
-        tx.send(new_data).ok();
+        data.set(new_data);
         std::thread::sleep(Duration::from_secs(1));
     }
 });
+```
 
-// Poll for updates in the render loop
-App::new()
-    .on_update(move || {
-        while let Ok(msg) = rx.try_recv() {
-            data.set(msg);
+For bidirectional communication (sending commands to the service):
+
+```rust
+enum Cmd { Refresh, Stop }
+
+let service = create_service(move |rx, ctx| {
+    while ctx.is_running() {
+        // Handle commands from UI
+        while let Ok(cmd) = rx.try_recv() {
+            match cmd {
+                Cmd::Refresh => { /* refresh data */ }
+                Cmd::Stop => break,
+            }
         }
-    })
-    .run(view);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+});
+
+// Send commands from UI callbacks
+service.send(Cmd::Refresh);
 ```
 
 ## Signal Internals

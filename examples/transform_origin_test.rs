@@ -3,10 +3,21 @@
 //! This helps isolate transform_origin behavior from text rendering issues.
 
 use guido::prelude::*;
+use std::time::Duration;
 
 fn main() {
     let angle = create_signal(0.0_f32);
+
+    // Animation service - updates the angle signal continuously
     let start_time = std::time::Instant::now();
+    let _ = create_service::<(), _>(move |_rx, ctx| {
+        while ctx.is_running() {
+            let elapsed = start_time.elapsed().as_secs_f32();
+            let new_angle = (elapsed * 45.0) % 360.0; // 45 degrees per second
+            angle.set(new_angle);
+            std::thread::sleep(Duration::from_millis(16));
+        }
+    });
 
     let (app, _) = App::new().add_surface(
         SurfaceConfig::new()
@@ -191,10 +202,5 @@ fn main() {
                 ])
         },
     );
-    app.on_update(move || {
-        let elapsed = start_time.elapsed().as_secs_f32();
-        let new_angle = (elapsed * 45.0) % 360.0; // 45 degrees per second
-        angle.set(new_angle);
-    })
-    .run();
+    app.run();
 }
