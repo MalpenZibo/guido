@@ -194,14 +194,11 @@ loop {
     // 1. Process Wayland events
     event_queue.dispatch_pending()?;
 
-    // 2. Run on_update callback
-    (self.on_update)();
-
-    // 3. Layout and paint
+    // 2. Layout and paint
     widget.layout(constraints);
     widget.paint(&mut ctx);
 
-    // 4. Render to screen
+    // 3. Render to screen
     renderer.render(&ctx);
 }
 ```

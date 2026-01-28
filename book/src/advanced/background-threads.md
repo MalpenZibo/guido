@@ -1,51 +1,71 @@
 # Background Threads
 
-Guido signals are thread-safe and can be updated from background threads. This enables live data updates, async operations, and real-time applications.
+Guido signals are thread-safe and can be updated from background threads. The `create_service` API provides a convenient way to spawn background services that are automatically cleaned up when the component unmounts.
 
-## Basic Pattern
+## Basic Pattern: Read-Only Service
+
+For services that only push data to signals (no commands from UI):
 
 ```rust
-use std::sync::mpsc;
-use std::thread;
+use std::time::Duration;
 
-let data = create_signal(String::new());
-let (tx, rx) = mpsc::channel();
+let time = create_signal(String::new());
 
-// Background thread
-thread::spawn(move || {
-    loop {
-        let result = fetch_data(); // Your async operation
-        tx.send(result).ok();
-        thread::sleep(Duration::from_secs(1));
+// Spawn a read-only service - use () as command type
+let _ = create_service::<(), _>(move |_rx, ctx| {
+    while ctx.is_running() {
+        time.set(chrono::Local::now().format("%H:%M:%S").to_string());
+        std::thread::sleep(Duration::from_secs(1));
     }
 });
 
-// Poll for updates in the render loop
-App::new()
-    .on_update(move || {
-        while let Ok(msg) = rx.try_recv() {
-            data.set(msg);
-        }
-    })
-    .run(view);
+// The service automatically stops when the component unmounts
 ```
 
-## Why Channels?
+## Bidirectional Service
 
-Signals are thread-safe, but effects only run on the main thread. The channel pattern:
+For services that also receive commands from the UI:
 
-1. Background thread does work and sends results
-2. Main thread polls the channel in `on_update`
-3. Signal updates trigger reactive UI changes
+```rust
+enum Cmd {
+    Refresh,
+    SetInterval(u64),
+}
 
-This keeps the main thread responsive while safely integrating async work.
+let data = create_signal(String::new());
+
+let service = create_service(move |rx, ctx| {
+    let mut interval = Duration::from_secs(1);
+
+    while ctx.is_running() {
+        // Handle commands from UI
+        while let Ok(cmd) = rx.try_recv() {
+            match cmd {
+                Cmd::Refresh => {
+                    data.set(fetch_data());
+                }
+                Cmd::SetInterval(secs) => {
+                    interval = Duration::from_secs(secs);
+                }
+            }
+        }
+
+        // Periodic update
+        data.set(fetch_data());
+        std::thread::sleep(interval);
+    }
+});
+
+// Send commands from UI callbacks
+container()
+    .on_click(move || service.send(Cmd::Refresh))
+    .child(text("Refresh"))
+```
 
 ## Complete Example: System Monitor
 
 ```rust
 use guido::prelude::*;
-use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
 fn main() {
@@ -54,20 +74,15 @@ fn main() {
     let memory_usage = create_signal(0.0f32);
     let time = create_signal(String::new());
 
-    // Channel for updates
-    let (tx, rx) = mpsc::channel::<SystemUpdate>();
-
-    // Background monitoring thread
-    thread::spawn(move || {
-        loop {
+    // Background monitoring service
+    let _ = create_service::<(), _>(move |_rx, ctx| {
+        while ctx.is_running() {
             // Simulate system monitoring
-            tx.send(SystemUpdate {
-                cpu: rand::random::<f32>() * 100.0,
-                memory: rand::random::<f32>() * 100.0,
-                time: chrono::Local::now().format("%H:%M:%S").to_string(),
-            }).ok();
+            cpu_usage.set(rand::random::<f32>() * 100.0);
+            memory_usage.set(rand::random::<f32>() * 100.0);
+            time.set(chrono::Local::now().format("%H:%M:%S").to_string());
 
-            thread::sleep(Duration::from_secs(1));
+            std::thread::sleep(Duration::from_secs(1));
         }
     });
 
@@ -81,155 +96,164 @@ fn main() {
             text(move || format!("Time: {}", time.get())).color(Color::WHITE),
         ]);
 
-    // Run with update callback
-    App::new()
-        .width(200)
-        .height(100)
-        .on_update(move || {
-            while let Ok(update) = rx.try_recv() {
-                cpu_usage.set(update.cpu);
-                memory_usage.set(update.memory);
-                time.set(update.time);
-            }
-        })
-        .run(view);
-}
-
-struct SystemUpdate {
-    cpu: f32,
-    memory: f32,
-    time: String,
+    let (app, _) = App::new().add_surface(
+        SurfaceConfig::new()
+            .width(200)
+            .height(100)
+            .background_color(Color::rgb(0.1, 0.1, 0.15)),
+        move || view,
+    );
+    app.run();
 }
 ```
 
-## Multiple Data Sources
+## Multiple Services
+
+You can create multiple independent services:
 
 ```rust
-let (weather_tx, weather_rx) = mpsc::channel();
-let (news_tx, news_rx) = mpsc::channel();
+let weather = create_signal(String::new());
+let news = create_signal(String::new());
 
-// Spawn multiple background threads
-thread::spawn(move || { /* fetch weather */ });
-thread::spawn(move || { /* fetch news */ });
+// Weather service
+let _ = create_service::<(), _>(move |_rx, ctx| {
+    while ctx.is_running() {
+        weather.set(fetch_weather());
+        std::thread::sleep(Duration::from_secs(300)); // Every 5 minutes
+    }
+});
 
-App::new()
-    .on_update(move || {
-        // Poll all channels
-        while let Ok(weather) = weather_rx.try_recv() {
-            weather_signal.set(weather);
-        }
-        while let Ok(news) = news_rx.try_recv() {
-            news_signal.set(news);
-        }
-    })
-    .run(view);
+// News service
+let _ = create_service::<(), _>(move |_rx, ctx| {
+    while ctx.is_running() {
+        news.set(fetch_news());
+        std::thread::sleep(Duration::from_secs(60)); // Every minute
+    }
+});
 ```
 
 ## Error Handling
 
-Handle errors from background threads:
+Handle errors from background services:
 
 ```rust
-enum DataUpdate {
+enum DataState {
+    Loading,
     Success(String),
     Error(String),
 }
 
-let status = create_signal(DataUpdate::Success(String::new()));
+let status = create_signal(DataState::Loading);
 
-thread::spawn(move || {
-    match fetch_data() {
-        Ok(data) => tx.send(DataUpdate::Success(data)),
-        Err(e) => tx.send(DataUpdate::Error(e.to_string())),
-    }.ok();
+let _ = create_service::<(), _>(move |_rx, ctx| {
+    while ctx.is_running() {
+        match fetch_data() {
+            Ok(data) => status.set(DataState::Success(data)),
+            Err(e) => status.set(DataState::Error(e.to_string())),
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
 });
 
 // In UI
 text(move || match status.get() {
-    DataUpdate::Success(s) => s,
-    DataUpdate::Error(e) => format!("Error: {}", e),
+    DataState::Loading => "Loading...".to_string(),
+    DataState::Success(s) => s,
+    DataState::Error(e) => format!("Error: {}", e),
 })
 ```
 
 ## Timer Example
 
-Simple clock using background thread:
+Simple clock using a service:
 
 ```rust
 let time = create_signal(String::new());
-let (tx, rx) = mpsc::channel();
 
-thread::spawn(move || {
-    loop {
+let _ = create_service::<(), _>(move |_rx, ctx| {
+    while ctx.is_running() {
         let now = chrono::Local::now();
-        tx.send(now.format("%H:%M:%S").to_string()).ok();
-        thread::sleep(Duration::from_millis(100));
+        time.set(now.format("%H:%M:%S").to_string());
+        std::thread::sleep(Duration::from_millis(100));
     }
 });
 
 let view = container()
     .padding(20.0)
     .child(text(move || time.get()).font_size(48.0).color(Color::WHITE));
-
-App::new()
-    .on_update(move || {
-        if let Ok(t) = rx.try_recv() {
-            time.set(t);
-        }
-    })
-    .run(view);
 ```
 
 ## Best Practices
 
-### Use Non-Blocking Receives
+### Check `is_running()` Frequently
 
 ```rust
-// Good: Non-blocking, processes all pending messages
-while let Ok(msg) = rx.try_recv() {
-    signal.set(msg);
+// Good: Check frequently so service stops promptly
+while ctx.is_running() {
+    // Short sleep
+    std::thread::sleep(Duration::from_millis(50));
 }
 
-// Bad: Would block the main thread
-let msg = rx.recv().unwrap();
-```
-
-### Batch Updates
-
-If multiple signals update together, batch them:
-
-```rust
-struct Update {
-    cpu: f32,
-    memory: f32,
-    disk: f32,
-}
-
-// Single channel for all related data
-while let Ok(update) = rx.try_recv() {
-    cpu.set(update.cpu);
-    memory.set(update.memory);
-    disk.set(update.disk);
+// Less responsive: Long sleep means slow shutdown
+while ctx.is_running() {
+    std::thread::sleep(Duration::from_secs(60));
 }
 ```
 
-### Handle Thread Termination
-
-For clean shutdown:
+### Use Non-Blocking Operations
 
 ```rust
-let (tx, rx) = mpsc::channel();
-let running = Arc::new(AtomicBool::new(true));
-let running_clone = running.clone();
+// Good: Non-blocking receive with timeout
+while ctx.is_running() {
+    if let Ok(cmd) = rx.try_recv() {
+        handle_command(cmd);
+    }
+    std::thread::sleep(Duration::from_millis(16));
+}
 
-let handle = thread::spawn(move || {
-    while running_clone.load(Ordering::Relaxed) {
-        // Work...
-        thread::sleep(Duration::from_secs(1));
+// Bad: Blocking receive prevents checking is_running()
+while ctx.is_running() {
+    let cmd = rx.recv().unwrap(); // Blocks forever!
+}
+```
+
+### Batch Signal Updates
+
+If multiple signals update together, update them in sequence:
+
+```rust
+let _ = create_service::<(), _>(move |_rx, ctx| {
+    while ctx.is_running() {
+        let data = fetch_all_data();
+
+        // All updates happen before next render
+        cpu.set(data.cpu);
+        memory.set(data.memory);
+        disk.set(data.disk);
+
+        std::thread::sleep(Duration::from_secs(1));
     }
 });
+```
 
-// On app shutdown
-running.store(false, Ordering::Relaxed);
-handle.join().ok();
+### Clone Service Handle for Multiple Callbacks
+
+```rust
+let service = create_service(...);
+
+// Clone for each callback that needs it
+let svc1 = service.clone();
+let svc2 = service.clone();
+
+container()
+    .child(
+        container()
+            .on_click(move || svc1.send(Cmd::Action1))
+            .child(text("Action 1"))
+    )
+    .child(
+        container()
+            .on_click(move || svc2.send(Cmd::Action2))
+            .child(text("Action 2"))
+    )
 ```
