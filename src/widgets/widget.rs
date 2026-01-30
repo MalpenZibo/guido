@@ -1,5 +1,5 @@
 use crate::layout::{Constraints, Size};
-use crate::reactive::{ChangeFlags, WidgetId};
+use crate::reactive::WidgetId;
 use crate::renderer::PaintContext;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -391,25 +391,6 @@ pub trait Widget {
     /// Get the widget's unique identifier
     fn id(&self) -> WidgetId;
 
-    /// Mark this widget as needing layout and/or paint
-    fn mark_dirty(&mut self, flags: ChangeFlags);
-
-    /// Mark this widget and all descendants as needing layout and/or paint.
-    /// Default implementation just calls mark_dirty. Containers override this
-    /// to recursively mark children.
-    fn mark_dirty_recursive(&mut self, flags: ChangeFlags) {
-        self.mark_dirty(flags);
-    }
-
-    /// Check if this widget needs layout
-    fn needs_layout(&self) -> bool;
-
-    /// Check if this widget needs paint
-    fn needs_paint(&self) -> bool;
-
-    /// Clear dirty flags after processing
-    fn clear_dirty(&mut self);
-
     /// Check if this widget has a descendant with the given ID.
     /// Used by containers to check if a child has focus.
     /// Default implementation returns false (leaf widgets have no children).
@@ -423,21 +404,6 @@ pub trait Widget {
     /// Default returns false (most widgets are not boundaries).
     fn is_relayout_boundary(&self) -> bool {
         false
-    }
-
-    /// Mark this widget as needing layout.
-    /// Bubbles up to parent until hitting a relayout boundary.
-    /// Default implementation marks dirty and requests frame.
-    fn mark_needs_layout(&mut self) {
-        self.mark_dirty(ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT);
-        crate::reactive::request_frame();
-    }
-
-    /// Mark this widget as needing paint only (doesn't affect layout).
-    /// Default implementation marks paint dirty and requests frame.
-    fn mark_needs_paint(&mut self) {
-        self.mark_dirty(ChangeFlags::NEEDS_PAINT);
-        crate::reactive::request_frame();
     }
 }
 

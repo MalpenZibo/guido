@@ -78,10 +78,12 @@ impl TextRenderState {
                 let clip_bottom = clip.y + clip.height;
 
                 // Check if text is completely outside clip region
-                let outside = text_right <= clip.x
-                    || text_left >= clip_right
-                    || text_bottom <= clip.y
-                    || text_top >= clip_bottom;
+                // Use small epsilon to avoid floating point precision issues at boundaries
+                let epsilon = 0.1;
+                let outside = text_right < clip.x - epsilon
+                    || text_left > clip_right + epsilon
+                    || text_bottom < clip.y - epsilon
+                    || text_top > clip_bottom + epsilon;
 
                 if outside {
                     // Text is completely outside clip - skip it entirely
@@ -154,13 +156,14 @@ impl TextRenderState {
                 let scaled_top = (entry.rect.y + ty) * scale_factor;
 
                 // Use clip rect if provided, otherwise use full screen
-                // Apply translation offset to clip bounds to match text position
+                // Clip bounds stay in screen space - don't apply transform translation
+                // (text position is transformed, but clip region should remain fixed)
                 let bounds = if let Some(clip_rect) = &entry.clip_rect {
                     TextBounds {
-                        left: ((clip_rect.x + tx) * scale_factor) as i32,
-                        top: ((clip_rect.y + ty) * scale_factor) as i32,
-                        right: ((clip_rect.x + clip_rect.width + tx) * scale_factor) as i32,
-                        bottom: ((clip_rect.y + clip_rect.height + ty) * scale_factor) as i32,
+                        left: (clip_rect.x * scale_factor) as i32,
+                        top: (clip_rect.y * scale_factor) as i32,
+                        right: ((clip_rect.x + clip_rect.width) * scale_factor) as i32,
+                        bottom: ((clip_rect.y + clip_rect.height) * scale_factor) as i32,
                     }
                 } else {
                     TextBounds {

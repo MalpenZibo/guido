@@ -7,10 +7,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::layout::{Constraints, Size};
-use crate::reactive::{ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId};
+use crate::reactive::{IntoMaybeDyn, MaybeDyn, WidgetId};
 use crate::renderer::PaintContext;
 
-use super::impl_dirty_flags;
 use super::widget::{EventResponse, Rect, Widget};
 
 /// Source for an image - can be a file path or in-memory bytes.
@@ -109,7 +108,6 @@ pub enum ContentFit {
 /// Image widget for displaying raster and SVG images.
 pub struct Image {
     widget_id: WidgetId,
-    dirty_flags: ChangeFlags,
     source: MaybeDyn<ImageSource>,
     width: Option<MaybeDyn<f32>>,
     height: Option<MaybeDyn<f32>>,
@@ -126,7 +124,6 @@ impl Image {
     pub fn new(source: impl IntoMaybeDyn<ImageSource>) -> Self {
         Self {
             widget_id: WidgetId::next(),
-            dirty_flags: ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT,
             source: source.into_maybe_dyn(),
             width: None,
             height: None,
@@ -278,8 +275,6 @@ impl Widget for Image {
     fn id(&self) -> WidgetId {
         self.widget_id
     }
-
-    impl_dirty_flags!();
 }
 
 /// Create an image widget from a source.

@@ -261,25 +261,6 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 self.ensure_built();
                 self.__inner.borrow().as_ref().unwrap().id()
             }
-
-            fn mark_dirty(&mut self, flags: ::guido::reactive::ChangeFlags) {
-                self.ensure_built();
-                self.__inner.borrow_mut().as_mut().unwrap().mark_dirty(flags)
-            }
-
-            fn needs_layout(&self) -> bool {
-                self.__inner.borrow().as_ref().map_or(true, |w| w.needs_layout())
-            }
-
-            fn needs_paint(&self) -> bool {
-                self.__inner.borrow().as_ref().map_or(true, |w| w.needs_paint())
-            }
-
-            fn clear_dirty(&mut self) {
-                if let Some(w) = self.__inner.borrow_mut().as_mut() {
-                    w.clear_dirty()
-                }
-            }
         }
 
         #vis fn #constructor_name() -> #struct_name {

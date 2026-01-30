@@ -148,12 +148,7 @@ impl Flex {
         let mut children_main = 0.0f32;
 
         for child in children.iter_mut() {
-            let size = if child.needs_layout() {
-                child.layout(child_constraints)
-            } else {
-                let bounds = child.bounds();
-                Size::new(bounds.width, bounds.height)
-            };
+            let size = child.layout(child_constraints);
             let main_size = size.main_axis(axis);
             let cross_size = size.cross_axis(axis);
             total_main += main_size;

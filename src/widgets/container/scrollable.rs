@@ -204,6 +204,170 @@ impl Container {
         }
     }
 
+    /// Advance scrollbar scale animations and apply transforms.
+    /// Called from advance_animations since scroll is paint-only and layout
+    /// may not run during hover events.
+    pub(super) fn advance_scrollbar_scale_animations(&mut self) -> bool {
+        if self.scroll_axis == ScrollAxis::None
+            || self.scrollbar_visibility == ScrollbarVisibility::Hidden
+        {
+            return false;
+        }
+
+        let scale_factor = self.scrollbar_config.hover_width / self.scrollbar_config.width;
+        let needs_vertical = self.scroll_state.needs_vertical_scrollbar();
+        let needs_horizontal = self.scroll_state.needs_horizontal_scrollbar();
+        let mut any_animating = false;
+
+        // Advance vertical scrollbar scale animation
+        if self.scroll_axis.allows_vertical() && needs_vertical {
+            any_animating |= self.advance_scrollbar_scale_axis(
+                ScrollbarAxis::Vertical,
+                scale_factor,
+                needs_horizontal,
+            );
+        }
+
+        // Advance horizontal scrollbar scale animation
+        if self.scroll_axis.allows_horizontal() && needs_horizontal {
+            any_animating |= self.advance_scrollbar_scale_axis(
+                ScrollbarAxis::Horizontal,
+                scale_factor,
+                needs_vertical,
+            );
+        }
+
+        any_animating
+    }
+
+    fn advance_scrollbar_scale_axis(
+        &mut self,
+        axis: ScrollbarAxis,
+        scale_factor: f32,
+        needs_other_scrollbar: bool,
+    ) -> bool {
+        // Determine target scale based on hover state
+        let is_hovered = self.scroll_state.is_track_hovered(axis)
+            || self.scroll_state.is_handle_hovered(axis)
+            || self.scroll_state.is_dragging(axis);
+        let target_scale = if is_hovered { scale_factor } else { 1.0 };
+
+        let (scale_anim, track_container, handle_container) = match axis {
+            ScrollbarAxis::Vertical => (
+                &mut self.v_scrollbar_scale_anim,
+                &mut self.v_scrollbar_track,
+                &mut self.v_scrollbar_handle,
+            ),
+            ScrollbarAxis::Horizontal => (
+                &mut self.h_scrollbar_scale_anim,
+                &mut self.h_scrollbar_track,
+                &mut self.h_scrollbar_handle,
+            ),
+        };
+
+        // Advance the animation
+        let mut animating = false;
+        if let Some(anim) = scale_anim {
+            anim.animate_to(target_scale);
+            if anim.is_animating() {
+                anim.advance();
+                animating = true;
+            }
+        }
+
+        let current_scale = scale_anim.as_ref().map(|a| *a.current()).unwrap_or(1.0);
+
+        // Get track rect for transform origin
+        let track_rect = self.scroll_state.scrollbar_track_rect(
+            axis,
+            self.bounds,
+            &self.scrollbar_config,
+            needs_other_scrollbar,
+        );
+        let handle_rect = self.scroll_state.scrollbar_handle_rect(
+            axis,
+            self.bounds,
+            &self.scrollbar_config,
+            needs_other_scrollbar,
+        );
+
+        // Apply scale transform to track
+        if let Some(track) = track_container {
+            let (transform, origin) = match axis {
+                ScrollbarAxis::Vertical => (
+                    Transform::scale_xy(current_scale, 1.0),
+                    TransformOrigin::px(track_rect.width, track_rect.height / 2.0),
+                ),
+                ScrollbarAxis::Horizontal => (
+                    Transform::scale_xy(1.0, current_scale),
+                    TransformOrigin::px(track_rect.width / 2.0, track_rect.height),
+                ),
+            };
+            track.set_transform(transform);
+            track.set_transform_origin(origin);
+        }
+
+        // Apply scale transform to handle
+        if let Some(handle) = handle_container {
+            let (transform, origin) = match axis {
+                ScrollbarAxis::Vertical => (
+                    Transform::scale_xy(current_scale, 1.0),
+                    TransformOrigin::px(handle_rect.width, handle_rect.height / 2.0),
+                ),
+                ScrollbarAxis::Horizontal => (
+                    Transform::scale_xy(1.0, current_scale),
+                    TransformOrigin::px(handle_rect.width / 2.0, handle_rect.height),
+                ),
+            };
+            handle.set_transform(transform);
+            handle.set_transform_origin(origin);
+        }
+
+        animating
+    }
+
+    /// Update scrollbar handle positions based on current scroll offset.
+    /// Called from advance_animations to ensure handles are positioned correctly
+    /// even when layout doesn't run (scroll is paint-only).
+    pub(super) fn update_scrollbar_handle_positions(&mut self) {
+        if self.scroll_axis == ScrollAxis::None
+            || self.scrollbar_visibility == ScrollbarVisibility::Hidden
+        {
+            return;
+        }
+
+        let needs_vertical = self.scroll_state.needs_vertical_scrollbar();
+        let needs_horizontal = self.scroll_state.needs_horizontal_scrollbar();
+
+        // Update vertical scrollbar handle position
+        if self.scroll_axis.allows_vertical()
+            && needs_vertical
+            && let Some(ref mut handle) = self.v_scrollbar_handle
+        {
+            let handle_rect = self.scroll_state.scrollbar_handle_rect(
+                ScrollbarAxis::Vertical,
+                self.bounds,
+                &self.scrollbar_config,
+                needs_horizontal,
+            );
+            handle.set_origin(handle_rect.x, handle_rect.y);
+        }
+
+        // Update horizontal scrollbar handle position
+        if self.scroll_axis.allows_horizontal()
+            && needs_horizontal
+            && let Some(ref mut handle) = self.h_scrollbar_handle
+        {
+            let handle_rect = self.scroll_state.scrollbar_handle_rect(
+                ScrollbarAxis::Horizontal,
+                self.bounds,
+                &self.scrollbar_config,
+                needs_vertical,
+            );
+            handle.set_origin(handle_rect.x, handle_rect.y);
+        }
+    }
+
     /// Paint scrollbar container widgets
     pub(super) fn paint_scrollbar_containers(&self, ctx: &mut PaintContext) {
         if self.scrollbar_visibility == ScrollbarVisibility::Hidden {

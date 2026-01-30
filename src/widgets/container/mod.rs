@@ -14,8 +14,8 @@ use crate::advance_anim;
 use crate::animation::Transition;
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
-    ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId, add_layout_root, focused_widget,
-    get_widget_parent, request_animation_frame, request_frame, set_widget_parent,
+    IntoMaybeDyn, MaybeDyn, WidgetId, focused_widget, get_reactive_version,
+    request_animation_frame, set_widget_parent,
 };
 use crate::renderer::PaintContext;
 use crate::renderer::primitives::{GradientDir, Shadow};
@@ -114,7 +114,6 @@ pub enum Overflow {
 
 pub struct Container {
     pub(super) widget_id: WidgetId,
-    pub(super) dirty_flags: ChangeFlags,
 
     // Layout and children
     pub(super) layout: Box<dyn Layout>,
@@ -188,13 +187,15 @@ pub struct Container {
 
     // Constraint caching for layout skip optimization
     pub(super) last_constraints: Option<Constraints>,
+
+    // Reactive version tracking for detecting signal changes
+    pub(super) last_reactive_version: Option<u64>,
 }
 
 impl Container {
     pub fn new() -> Self {
         Self {
             widget_id: WidgetId::next(),
-            dirty_flags: ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT,
             layout: Box::new(Flex::column()),
             children_source: ChildrenSource::default(),
             padding: MaybeDyn::Static(Padding::default()),
@@ -244,6 +245,7 @@ impl Container {
             h_scrollbar_scale_anim: None,
             ripple: RippleState::new(),
             last_constraints: None,
+            last_reactive_version: None,
         }
     }
 
@@ -707,14 +709,6 @@ impl Container {
         self.resolve_state_value(base, |state| state.elevation)
     }
 
-    /// Check if any child widget needs layout
-    fn any_child_needs_layout(&self) -> bool {
-        self.children_source
-            .get()
-            .iter()
-            .any(|child| child.needs_layout())
-    }
-
     /// Get current padding (animated or static)
     fn animated_padding(&self) -> Padding {
         get_animated_value(&self.padding_anim, || self.padding.get())
@@ -890,6 +884,18 @@ impl Widget for Container {
             any_animating = true;
         }
 
+        // Update scrollbar handle positions based on current scroll offset
+        // (scroll is paint-only, so layout may not run during scrolling)
+        if self.scroll_axis != ScrollAxis::None {
+            self.update_scrollbar_handle_positions();
+        }
+
+        // Advance scrollbar scale animations (for hover expansion effect)
+        // Must be done here since scroll/hover is paint-only and layout may not run
+        if self.advance_scrollbar_scale_animations() {
+            any_animating = true;
+        }
+
         any_animating
     }
 
@@ -916,8 +922,6 @@ impl Widget for Container {
             || corner_curvature != self.cached_corner_curvature
             || elevation != self.cached_elevation;
 
-        let child_needs_layout = self.any_child_needs_layout();
-
         // Size animations require full layout recalculation
         let has_size_animations = self.width_anim.as_ref().is_some_and(|a| a.is_animating())
             || self.height_anim.as_ref().is_some_and(|a| a.is_animating());
@@ -929,27 +933,19 @@ impl Widget for Container {
                 .as_ref()
                 .is_some_and(|a| a.is_animating());
 
-        // Downgrade to paint-only if only visuals changed
-        let bounds_initialized = self.bounds.width > 0.0 || self.bounds.height > 0.0;
-        if self.needs_layout()
-            && bounds_initialized
-            && !padding_changed
-            && !child_needs_layout
-            && !has_size_animations
-            && !has_layout_animations
-            && visual_changed
-        {
-            self.dirty_flags = ChangeFlags::NEEDS_PAINT;
-        }
-
         let constraints_changed = self.last_constraints != Some(constraints);
 
-        let needs_layout = self.needs_layout()
+        // Check if reactive state has changed (signals updated)
+        let reactive_version = get_reactive_version();
+        let reactive_changed = self.last_reactive_version != Some(reactive_version);
+
+        // Layout is needed if constraints changed, any layout-affecting property animated,
+        // or reactive state changed (e.g., dynamic children list updated)
+        let needs_layout = constraints_changed
             || padding_changed
-            || child_needs_layout
             || has_size_animations
             || has_layout_animations
-            || constraints_changed;
+            || reactive_changed;
 
         if !needs_layout {
             if visual_changed {
@@ -968,6 +964,7 @@ impl Widget for Container {
         self.cached_corner_curvature = corner_curvature;
         self.cached_elevation = elevation;
         self.last_constraints = Some(constraints);
+        self.last_reactive_version = Some(reactive_version);
 
         // Get width/height Length values
         let width_length = self.width.as_ref().map(|w| w.get()).unwrap_or_default();
@@ -1043,8 +1040,6 @@ impl Widget for Container {
 
         // For scrollable containers, use unbounded constraints in scroll direction
         let scroll_axis = self.scroll_axis;
-        let scroll_offset_x = self.scroll_state.offset_x;
-        let scroll_offset_y = self.scroll_state.offset_y;
 
         let child_constraints = match scroll_axis {
             ScrollAxis::Vertical => Constraints {
@@ -1073,14 +1068,10 @@ impl Widget for Container {
             },
         };
 
-        let (child_origin_x, child_origin_y) = if scroll_axis != ScrollAxis::None {
-            (
-                self.bounds.x + padding.left - scroll_offset_x,
-                self.bounds.y + padding.top - scroll_offset_y,
-            )
-        } else {
-            (self.bounds.x + padding.left, self.bounds.y + padding.top)
-        };
+        // Children are positioned at their "unscrolled" positions.
+        // Scroll offset is applied as a transform in paint().
+        let (child_origin_x, child_origin_y) =
+            (self.bounds.x + padding.left, self.bounds.y + padding.top);
 
         // Reconcile and layout children
         let children = self.children_source.reconcile_and_get_mut();
@@ -1088,12 +1079,6 @@ impl Widget for Container {
         // Update parent tracking for all children
         for child in children.iter() {
             set_widget_parent(child.id(), self.widget_id);
-        }
-
-        if has_size_animations {
-            for child in children.iter_mut() {
-                child.mark_dirty_recursive(ChangeFlags::NEEDS_LAYOUT);
-            }
         }
 
         let content_size = if !children.is_empty() {
@@ -1306,8 +1291,18 @@ impl Widget for Container {
             || has_exact_size
             || is_scrollable;
 
+        // Push clip first (in screen space), then scroll transform
+        // The text renderer adjusts both text position and clip bounds by the transform,
+        // so they stay in the same coordinate space for culling checks
         if should_clip {
             ctx.push_clip(self.bounds, corner_radius, corner_curvature);
+        }
+
+        // Apply scroll offset as a transform (paint-only, doesn't affect layout)
+        if is_scrollable {
+            let scroll_transform =
+                Transform::translate(-self.scroll_state.offset_x, -self.scroll_state.offset_y);
+            ctx.push_transform(scroll_transform);
         }
 
         // Draw children
@@ -1315,6 +1310,12 @@ impl Widget for Container {
             child.paint(ctx);
         }
 
+        // Pop scroll transform first (reverse order of push)
+        if is_scrollable {
+            ctx.pop_transform();
+        }
+
+        // Pop clip
         if should_clip {
             ctx.pop_clip();
         }
@@ -1557,14 +1558,9 @@ impl Widget for Container {
         let child_constraints = self.calc_child_constraints();
         let padding = self.padding.get();
 
-        let (child_origin_x, child_origin_y) = if self.scroll_axis != ScrollAxis::None {
-            (
-                x + padding.left - self.scroll_state.offset_x,
-                y + padding.top - self.scroll_state.offset_y,
-            )
-        } else {
-            (x + padding.left, y + padding.top)
-        };
+        // Children are positioned at their "unscrolled" positions.
+        // Scroll offset is applied as a transform in paint().
+        let (child_origin_x, child_origin_y) = (x + padding.left, y + padding.top);
 
         // Layout already reconciled children, just get them
         let children = self.children_source.get_mut();
@@ -1585,32 +1581,6 @@ impl Widget for Container {
         self.widget_id
     }
 
-    fn mark_dirty(&mut self, flags: ChangeFlags) {
-        self.dirty_flags |= flags;
-    }
-
-    fn mark_dirty_recursive(&mut self, flags: ChangeFlags) {
-        self.dirty_flags |= flags;
-        for child in self.children_source.get_mut() {
-            child.mark_dirty_recursive(flags);
-        }
-    }
-
-    fn needs_layout(&self) -> bool {
-        self.dirty_flags.contains(ChangeFlags::NEEDS_LAYOUT)
-    }
-
-    fn needs_paint(&self) -> bool {
-        self.dirty_flags.contains(ChangeFlags::NEEDS_PAINT)
-    }
-
-    fn clear_dirty(&mut self) {
-        self.dirty_flags = ChangeFlags::empty();
-        for child in self.children_source.get_mut() {
-            child.clear_dirty();
-        }
-    }
-
     fn has_focus_descendant(&self, id: WidgetId) -> bool {
         self.widget_has_focus(id)
     }
@@ -1623,39 +1593,6 @@ impl Widget for Container {
             .as_ref()
             .is_some_and(|h| h.get().exact.is_some());
         has_fixed_width && has_fixed_height
-    }
-
-    fn mark_needs_layout(&mut self) {
-        // If already dirty, parent was already notified
-        if self.dirty_flags.contains(ChangeFlags::NEEDS_LAYOUT) {
-            return;
-        }
-
-        self.dirty_flags |= ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT;
-
-        if self.is_relayout_boundary() {
-            // Stop here - add to layout roots
-            add_layout_root(self.widget_id);
-            request_frame();
-        } else if let Some(parent_id) = get_widget_parent(self.widget_id) {
-            // Bubble up to parent by requesting layout on parent widget
-            // Note: We can't directly call parent.mark_needs_layout() since we don't have
-            // a reference to it. Instead, we add ourselves to layout roots and request frame.
-            // The parent tracking is for future use when we can look up widgets by ID.
-            add_layout_root(self.widget_id);
-            request_frame();
-            // Mark the parent as needing layout too (global flag)
-            parent_id.request_layout();
-        } else {
-            // At root - add to layout roots
-            add_layout_root(self.widget_id);
-            request_frame();
-        }
-    }
-
-    fn mark_needs_paint(&mut self) {
-        self.dirty_flags |= ChangeFlags::NEEDS_PAINT;
-        request_frame();
     }
 }
 

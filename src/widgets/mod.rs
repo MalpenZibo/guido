@@ -9,29 +9,6 @@ pub mod text;
 pub mod text_input;
 pub mod widget;
 
-/// Macro to implement common dirty flag methods for simple widgets.
-///
-/// Container keeps its custom implementation because it recurses to children.
-macro_rules! impl_dirty_flags {
-    () => {
-        fn mark_dirty(&mut self, flags: crate::reactive::ChangeFlags) {
-            self.dirty_flags |= flags;
-        }
-        fn needs_layout(&self) -> bool {
-            self.dirty_flags
-                .contains(crate::reactive::ChangeFlags::NEEDS_LAYOUT)
-        }
-        fn needs_paint(&self) -> bool {
-            self.dirty_flags
-                .contains(crate::reactive::ChangeFlags::NEEDS_PAINT)
-        }
-        fn clear_dirty(&mut self) {
-            self.dirty_flags = crate::reactive::ChangeFlags::empty();
-        }
-    };
-}
-pub(crate) use impl_dirty_flags;
-
 pub use children::ChildrenSource;
 pub use container::{Border, Container, GradientDirection, LinearGradient, Overflow, container};
 pub use font::{FontFamily, FontWeight};

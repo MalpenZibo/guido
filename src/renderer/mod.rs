@@ -955,9 +955,27 @@ impl PaintContext {
     }
 
     /// Push a clip region onto the stack
-    /// All children drawn after this will be clipped to the given bounds
+    /// All children drawn after this will be clipped to the given bounds.
+    ///
+    /// The clip rect is automatically adjusted by the current transform's translation
+    /// to ensure all clips are in screen space. This is important for scrollable
+    /// containers where child clips are pushed in layout space but need to be
+    /// compared against screen-space positions in the shader.
     pub fn push_clip(&mut self, rect: Rect, corner_radius: f32, curvature: f32) {
-        self.clip_stack.push((rect, corner_radius, curvature));
+        // Adjust clip position by current transform's translation to convert to screen space.
+        // This ensures child clips inside scrollable containers are properly positioned.
+        let adjusted_rect = if let Some((transform, _)) = self.transform_stack.last() {
+            Rect::new(
+                rect.x + transform.tx(),
+                rect.y + transform.ty(),
+                rect.width,
+                rect.height,
+            )
+        } else {
+            rect
+        };
+        self.clip_stack
+            .push((adjusted_rect, corner_radius, curvature));
     }
 
     /// Pop a clip region from the stack
@@ -967,6 +985,10 @@ impl PaintContext {
 
     /// Compute the intersection of all clip regions in the stack.
     /// Returns the tightest bounding rectangle that satisfies all clips.
+    ///
+    /// When clips don't intersect (e.g., child container is outside parent's visible area
+    /// during layout but will be scrolled into view), returns the last valid intersection
+    /// rather than culling everything. The actual clipping will handle visibility correctly.
     fn intersected_clip_rect(&self) -> Option<Rect> {
         if self.clip_stack.is_empty() {
             return None;
@@ -988,15 +1010,11 @@ impl PaintContext {
                     width: right - left,
                     height: bottom - top,
                 };
-            } else {
-                // No intersection - return a zero-size rect that will cull everything
-                return Some(Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 0.0,
-                    height: 0.0,
-                });
             }
+            // If intersection is invalid, keep the previous result.
+            // This handles scrollable containers where child clips may be outside
+            // the parent's visible area in layout coordinates but will be
+            // scrolled into view via transform.
         }
         Some(result)
     }

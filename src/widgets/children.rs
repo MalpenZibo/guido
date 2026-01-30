@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::layout::{Constraints, Size};
-use crate::reactive::{ChangeFlags, OwnerId, WidgetId, dispose_owner, get_reactive_version};
+use crate::reactive::{OwnerId, WidgetId, dispose_owner, get_reactive_version};
 use crate::renderer::PaintContext;
 
 use super::Widget;
@@ -367,39 +367,11 @@ impl Widget for OwnedWidget {
         self.inner.id()
     }
 
-    fn mark_dirty(&mut self, flags: ChangeFlags) {
-        self.inner.mark_dirty(flags)
-    }
-
-    fn mark_dirty_recursive(&mut self, flags: ChangeFlags) {
-        self.inner.mark_dirty_recursive(flags)
-    }
-
-    fn needs_layout(&self) -> bool {
-        self.inner.needs_layout()
-    }
-
-    fn needs_paint(&self) -> bool {
-        self.inner.needs_paint()
-    }
-
-    fn clear_dirty(&mut self) {
-        self.inner.clear_dirty()
-    }
-
     fn has_focus_descendant(&self, id: WidgetId) -> bool {
         self.inner.has_focus_descendant(id)
     }
 
     fn is_relayout_boundary(&self) -> bool {
         self.inner.is_relayout_boundary()
-    }
-
-    fn mark_needs_layout(&mut self) {
-        self.inner.mark_needs_layout()
-    }
-
-    fn mark_needs_paint(&mut self) {
-        self.inner.mark_needs_paint()
     }
 }

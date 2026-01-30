@@ -34,8 +34,9 @@ struct VertexOutput {
     @location(7) shadow_offset: vec2<f32>,
     @location(8) shadow_params: vec2<f32>,  // x = blur, y = spread
     @location(9) shadow_color: vec4<f32>,
-    @location(10) clip_rect: vec4<f32>,  // clip region in NDC
+    @location(10) clip_rect: vec4<f32>,  // clip region in NDC (screen space)
     @location(11) clip_radius: f32,  // clip corner radius (uniform, height-based NDC)
+    @location(12) screen_pos: vec2<f32>,  // transformed position for clipping (screen space)
 }
 
 @vertex
@@ -71,6 +72,8 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.clip_rect = in.clip_rect;
     // clip_radius comes from shape_curvature.y (packed to save vertex attributes)
     out.clip_radius = in.shape_curvature.y;
+    // Pass transformed position for screen-space clipping
+    out.screen_pos = transformed.xy;
 
     return out;
 }
@@ -307,10 +310,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // Apply clip region if defined (clip_rect width > 0)
+    // Use screen_pos (transformed) for clipping since clip_rect is in screen space
     let clip_width = in.clip_rect.z - in.clip_rect.x;
     let clip_height = in.clip_rect.w - in.clip_rect.y;
     if (clip_width > 0.0 && clip_height > 0.0) {
-        // Scale clip region for aspect ratio
+        // Scale screen position and clip region for aspect ratio
+        let scaled_screen_pos = vec2<f32>(in.screen_pos.x * aspect, in.screen_pos.y);
         let scaled_clip_rect = vec4<f32>(
             in.clip_rect.x * aspect,
             in.clip_rect.y,
@@ -323,7 +328,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let scaled_clip_radius = vec2<f32>(in.clip_radius, in.clip_radius);
 
         // Compute clip SDF (use K=1.0 for circular corners)
-        let clip_dist = rounded_rect_sdf(scaled_pos, scaled_clip_rect, scaled_clip_radius, 1.0);
+        let clip_dist = rounded_rect_sdf(scaled_screen_pos, scaled_clip_rect, scaled_clip_radius, 1.0);
         let clip_aa = fwidth(clip_dist);
         let clip_alpha = 1.0 - smoothstep(-clip_aa, clip_aa, clip_dist);
 

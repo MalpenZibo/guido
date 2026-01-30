@@ -19,7 +19,7 @@ struct VertexOutput {
     @location(0) tex_coords: vec2<f32>,
     @location(1) clip_rect: vec4<f32>,
     @location(2) clip_radius: f32,
-    @location(3) frag_pos: vec2<f32>,  // position in NDC for clip evaluation
+    @location(3) screen_pos: vec2<f32>,  // transformed position for screen-space clipping
 }
 
 @vertex
@@ -45,8 +45,8 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.clip_rect = in.clip_rect;
     out.clip_radius = in.clip_data.x;
 
-    // Pass local position for clip evaluation (untransformed for correct clipping)
-    out.frag_pos = in.position;
+    // Pass transformed position for screen-space clipping
+    out.screen_pos = transformed.xy;
 
     return out;
 }
@@ -85,6 +85,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var color = textureSample(t_texture, s_sampler, in.tex_coords);
 
     // Apply clip region if defined (clip_rect width > 0)
+    // Use screen_pos (transformed) for clipping since clip_rect is in screen space
     let clip_width = in.clip_rect.z - in.clip_rect.x;
     let clip_height = in.clip_rect.w - in.clip_rect.y;
     if (clip_width > 0.0 && clip_height > 0.0) {
@@ -93,7 +94,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let aspect = clip_height / clip_width;
 
         // Scale x coordinates to make clip region appear with correct aspect ratio
-        let scaled_pos = vec2<f32>(in.frag_pos.x * aspect, in.frag_pos.y);
+        let scaled_pos = vec2<f32>(in.screen_pos.x * aspect, in.screen_pos.y);
         let scaled_clip_rect = vec4<f32>(
             in.clip_rect.x * aspect,
             in.clip_rect.y,
