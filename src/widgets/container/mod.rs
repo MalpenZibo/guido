@@ -1344,18 +1344,6 @@ impl Widget for Container {
             self.paint_scrollbar_containers(ctx);
         }
 
-        // Capture the composed transform (all parents + this container) BEFORE popping.
-        // This is needed for ripple to properly clip to the transformed container bounds.
-        let composed_transform_for_ripple = if has_transform {
-            // We have our own transform, so composed transform includes it
-            Some(ctx.current_transform_with_origin())
-        } else if !ctx.current_transform().is_identity() {
-            // Even if this container has no transform, parents might
-            Some(ctx.current_transform_with_origin())
-        } else {
-            None
-        };
-
         // Pop transform BEFORE drawing ripple
         if has_transform {
             ctx.pop_transform();
@@ -1381,29 +1369,18 @@ impl Widget for Container {
                 ripple_config.color.a * self.ripple.opacity,
             );
 
-            // Use the COMPOSED transform (all parents + this container) for clipping.
-            // This ensures nested transforms are properly applied to the ripple clip region.
-            let clip_transform =
-                composed_transform_for_ripple.map(|(composed_transform, origin)| {
-                    // Convert origin from absolute coordinates to TransformOrigin
-                    // The origin from current_transform_with_origin() is already resolved,
-                    // so we convert to pixel offset from bounds.
-                    let transform_origin = if let Some((ox, oy)) = origin {
-                        // Convert absolute coords to offset from bounds
-                        TransformOrigin::px(ox - self.bounds.x, oy - self.bounds.y)
-                    } else {
-                        // Default to container center if no origin specified
-                        TransformOrigin::CENTER
-                    };
-                    (composed_transform, transform_origin)
-                });
+            let (clip_bounds, clip_transform) = if has_transform {
+                (self.bounds, Some((transform, transform_origin)))
+            } else {
+                (self.bounds, None)
+            };
 
             ctx.draw_overlay_circle_clipped_with_transform(
                 screen_cx,
                 screen_cy,
                 current_radius,
                 ripple_color,
-                self.bounds,
+                clip_bounds,
                 corner_radius,
                 corner_curvature,
                 clip_transform,
