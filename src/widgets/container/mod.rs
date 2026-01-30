@@ -4,7 +4,7 @@ mod animations;
 mod ripple;
 mod scrollable;
 
-pub use animations::{AnimationState, get_animated_value};
+pub use animations::{AdvanceResult, AnimationState, get_animated_value};
 pub use ripple::RippleState;
 
 use std::borrow::Cow;
@@ -136,13 +136,6 @@ pub struct Container {
     pub(super) transform: MaybeDyn<Transform>,
     pub(super) transform_origin: MaybeDyn<TransformOrigin>,
 
-    // Cached values for change detection
-    pub(super) cached_padding: Padding,
-    pub(super) cached_background: Color,
-    pub(super) cached_corner_radius: f32,
-    pub(super) cached_corner_curvature: f32,
-    pub(super) cached_elevation: f32,
-
     // Event callbacks
     pub(super) on_click: Option<ClickCallback>,
     pub(super) on_hover: Option<HoverCallback>,
@@ -215,11 +208,6 @@ impl Container {
             on_scroll: None,
             is_hovered: false,
             is_pressed: false,
-            cached_padding: Padding::default(),
-            cached_background: Color::TRANSPARENT,
-            cached_corner_radius: 0.0,
-            cached_corner_curvature: 1.0,
-            cached_elevation: 0.0,
             width_anim: None,
             height_anim: None,
             background_anim: None,
@@ -808,32 +796,50 @@ impl Widget for Container {
     fn advance_animations(&mut self) -> bool {
         let mut any_animating = false;
 
-        // Advance property animations
-        advance_anim!(self, width_anim, any_animating);
-        advance_anim!(self, height_anim, any_animating);
+        // Layout-affecting animations: width, height, padding, border_width
+        advance_anim!(self, width_anim, any_animating, layout);
+        advance_anim!(self, height_anim, any_animating, layout);
+        advance_anim!(
+            self,
+            padding_anim,
+            self.padding.get(),
+            any_animating,
+            layout
+        );
 
-        // Use effective targets that consider state layers
+        let border_width_target = self.effective_border_width_target();
+        advance_anim!(
+            self,
+            border_width_anim,
+            border_width_target,
+            any_animating,
+            layout
+        );
+
+        // Paint-only animations: background, corner_radius, border_color, transform
         let bg_target = self.effective_background_target();
-        advance_anim!(self, background_anim, bg_target, any_animating);
+        advance_anim!(self, background_anim, bg_target, any_animating, paint);
 
         let corner_radius_target = self.effective_corner_radius_target();
         advance_anim!(
             self,
             corner_radius_anim,
             corner_radius_target,
-            any_animating
+            any_animating,
+            paint
         );
 
-        advance_anim!(self, padding_anim, self.padding.get(), any_animating);
-
-        let border_width_target = self.effective_border_width_target();
-        advance_anim!(self, border_width_anim, border_width_target, any_animating);
-
         let border_color_target = self.effective_border_color_target();
-        advance_anim!(self, border_color_anim, border_color_target, any_animating);
+        advance_anim!(
+            self,
+            border_color_anim,
+            border_color_target,
+            any_animating,
+            paint
+        );
 
         let transform_target = self.effective_transform_target();
-        advance_anim!(self, transform_anim, transform_target, any_animating);
+        advance_anim!(self, transform_anim, transform_target, any_animating, paint);
 
         // Advance ripple animation
         if self.ripple.is_active()
@@ -906,56 +912,15 @@ impl Widget for Container {
         // Ensure scrollbar containers exist if scrolling is enabled
         self.ensure_scrollbar_containers();
 
-        // Get current property values (use animated values if available)
-        let padding = self.animated_padding();
-        let background = self.animated_background();
-        let corner_radius = self.animated_corner_radius();
-        let corner_curvature = self.corner_curvature.get();
-        let elevation = self.effective_elevation();
-
-        // Detect layout-affecting changes
-        let padding_changed = padding.top != self.cached_padding.top
-            || padding.right != self.cached_padding.right
-            || padding.bottom != self.cached_padding.bottom
-            || padding.left != self.cached_padding.left;
-
-        // Detect paint-only changes
-        let visual_changed = background != self.cached_background
-            || corner_radius != self.cached_corner_radius
-            || corner_curvature != self.cached_corner_curvature
-            || elevation != self.cached_elevation;
-
-        // Size animations require full layout recalculation
-        let has_size_animations = self.width_anim.as_ref().is_some_and(|a| a.is_animating())
-            || self.height_anim.as_ref().is_some_and(|a| a.is_animating());
-
-        // Layout-affecting animations
-        let has_layout_animations = self.padding_anim.as_ref().is_some_and(|a| a.is_animating())
-            || self
-                .border_width_anim
-                .as_ref()
-                .is_some_and(|a| a.is_animating());
-
         let constraints_changed = self.last_constraints != Some(constraints);
 
-        // Check if this widget was marked dirty by signal changes
+        // Check if this widget was marked dirty by signal changes or animations
+        // (animations call mark_needs_layout directly when their value changes)
         let reactive_changed = get_needs_layout_flag(self.widget_id);
 
-        // Layout is needed if constraints changed, any layout-affecting property animated,
-        // or this widget was marked dirty by signal changes
-        let needs_layout = constraints_changed
-            || padding_changed
-            || has_size_animations
-            || has_layout_animations
-            || reactive_changed;
+        let needs_layout = constraints_changed || reactive_changed;
 
         if !needs_layout {
-            if visual_changed {
-                self.cached_background = background;
-                self.cached_corner_radius = corner_radius;
-                self.cached_corner_curvature = corner_curvature;
-                self.cached_elevation = elevation;
-            }
             crate::layout_stats::record_layout_skipped();
             finish_layout_tracking();
             return Size::new(self.bounds.width, self.bounds.height);
@@ -964,23 +929,17 @@ impl Widget for Container {
         crate::layout_stats::record_layout_executed_with_reasons(
             crate::layout_stats::LayoutReasons {
                 constraints_changed,
-                padding_changed,
-                size_animations: has_size_animations,
-                layout_animations: has_layout_animations,
                 reactive_changed,
             },
         );
 
-        // Update all cached values
-        self.cached_padding = padding;
-        self.cached_background = background;
-        self.cached_corner_radius = corner_radius;
-        self.cached_corner_curvature = corner_curvature;
-        self.cached_elevation = elevation;
         self.last_constraints = Some(constraints);
 
         // Clear dirty flag since we're doing layout now
         set_needs_layout_flag(self.widget_id, false);
+
+        // Get current animated padding for layout calculations
+        let padding = self.animated_padding();
 
         // Get width/height Length values
         let width_length = self.width.as_ref().map(|w| w.get()).unwrap_or_default();

@@ -147,18 +147,6 @@ impl History {
             None
         }
     }
-
-    /// Check if undo is available
-    #[allow(dead_code)]
-    fn can_undo(&self) -> bool {
-        !self.undo_stack.is_empty()
-    }
-
-    /// Check if redo is available
-    #[allow(dead_code)]
-    fn can_redo(&self) -> bool {
-        !self.redo_stack.is_empty()
-    }
 }
 
 /// Selection state tracking anchor and cursor positions

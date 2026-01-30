@@ -86,8 +86,6 @@ pub struct Renderer {
     screen_width: f32,
     screen_height: f32,
     scale_factor: f32,
-    #[allow(dead_code)] // May be used for dynamic pipeline creation
-    format: wgpu::TextureFormat,
 }
 
 impl Renderer {
@@ -124,7 +122,6 @@ impl Renderer {
             screen_width: 1.0,
             screen_height: 1.0,
             scale_factor: 1.0,
-            format,
         }
     }
 

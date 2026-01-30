@@ -42,7 +42,7 @@ impl<T: Clone + 'static> Clone for MaybeDyn<T> {
 unsafe impl<T: Send + Sync + 'static> Send for MaybeDyn<T> {}
 unsafe impl<T: Send + Sync + 'static> Sync for MaybeDyn<T> {}
 
-/// Trait for types that can be converted into MaybeDyn<T>
+/// Trait for types that can be converted into `MaybeDyn<T>`
 pub trait IntoMaybeDyn<T: Clone + 'static> {
     fn into_maybe_dyn(self) -> MaybeDyn<T>;
 }

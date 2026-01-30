@@ -28,12 +28,6 @@ impl TextMeasurer {
         }
     }
 
-    /// Clear the measurement cache. Useful for memory management.
-    #[allow(dead_code)]
-    pub fn clear_cache(&mut self) {
-        self.measure_cache.clear();
-    }
-
     pub fn measure(&mut self, text: &str, font_size: f32, max_width: Option<f32>) -> Size {
         self.measure_styled(
             text,

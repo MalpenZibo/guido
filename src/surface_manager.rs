@@ -130,12 +130,6 @@ impl SurfaceManager {
         self.surfaces.remove(&id)
     }
 
-    /// Get a surface by ID.
-    #[allow(dead_code)]
-    pub fn get(&self, id: SurfaceId) -> Option<&ManagedSurface> {
-        self.surfaces.get(&id)
-    }
-
     /// Get a mutable surface by ID.
     pub fn get_mut(&mut self, id: SurfaceId) -> Option<&mut ManagedSurface> {
         self.surfaces.get_mut(&id)
@@ -144,18 +138,6 @@ impl SurfaceManager {
     /// Iterate over all surface IDs.
     pub fn ids(&self) -> impl Iterator<Item = SurfaceId> + '_ {
         self.surfaces.keys().copied()
-    }
-
-    /// Iterate over all surfaces.
-    #[allow(dead_code)]
-    pub fn iter(&self) -> impl Iterator<Item = (&SurfaceId, &ManagedSurface)> {
-        self.surfaces.iter()
-    }
-
-    /// Iterate over all surfaces mutably.
-    #[allow(dead_code)]
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&SurfaceId, &mut ManagedSurface)> {
-        self.surfaces.iter_mut()
     }
 
     /// Check if empty.

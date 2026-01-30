@@ -13,12 +13,11 @@
 //! - Breakdown of why layouts were executed
 
 /// Reasons why a layout was executed (can be multiple).
+/// Note: Animations and property changes flow through the reactive system via mark_needs_layout(),
+/// so animation-triggered and signal-triggered layouts appear under reactive_changed.
 #[derive(Default, Clone, Copy)]
 pub struct LayoutReasons {
     pub constraints_changed: bool,
-    pub padding_changed: bool,
-    pub size_animations: bool,
-    pub layout_animations: bool,
     pub reactive_changed: bool,
 }
 
@@ -41,9 +40,6 @@ mod inner {
         executed: u64,
         /// Primary (first) reason - mutually exclusive
         primary_constraints: u64,
-        primary_padding: u64,
-        primary_size_anim: u64,
-        primary_layout_anim: u64,
         primary_reactive: u64,
         /// Last time stats were printed
         last_print: Instant,
@@ -58,9 +54,6 @@ mod inner {
                 skipped: 0,
                 executed: 0,
                 primary_constraints: 0,
-                primary_padding: 0,
-                primary_size_anim: 0,
-                primary_layout_anim: 0,
                 primary_reactive: 0,
                 last_print: Instant::now(),
                 frames: 0,
@@ -72,9 +65,6 @@ mod inner {
             self.skipped = 0;
             self.executed = 0;
             self.primary_constraints = 0;
-            self.primary_padding = 0;
-            self.primary_size_anim = 0;
-            self.primary_layout_anim = 0;
             self.primary_reactive = 0;
             self.frames = 0;
             self.last_print = Instant::now();
@@ -101,14 +91,9 @@ mod inner {
             stats.executed += 1;
 
             // Track primary (first) reason - order matches evaluation in Container::layout
+            // Note: Animation and signal-triggered layouts appear under reactive_changed
             if reasons.constraints_changed {
                 stats.primary_constraints += 1;
-            } else if reasons.padding_changed {
-                stats.primary_padding += 1;
-            } else if reasons.size_animations {
-                stats.primary_size_anim += 1;
-            } else if reasons.layout_animations {
-                stats.primary_layout_anim += 1;
             } else if reasons.reactive_changed {
                 stats.primary_reactive += 1;
             }
@@ -136,12 +121,8 @@ mod inner {
                 );
                 if stats.executed > 0 {
                     eprintln!(
-                        "  primary: constraints={} padding={} size_anim={} layout_anim={} reactive={}",
-                        stats.primary_constraints,
-                        stats.primary_padding,
-                        stats.primary_size_anim,
-                        stats.primary_layout_anim,
-                        stats.primary_reactive
+                        "  primary: constraints={} reactive={}",
+                        stats.primary_constraints, stats.primary_reactive
                     );
                 }
 
