@@ -170,6 +170,10 @@ impl ChildrenSource {
 struct DummyWidget;
 
 impl super::Widget for DummyWidget {
+    fn advance_animations(&mut self) -> bool {
+        false
+    }
+
     fn layout(&mut self, _constraints: crate::layout::Constraints) -> crate::layout::Size {
         crate::layout::Size::zero()
     }
@@ -332,6 +336,10 @@ impl Drop for OwnedWidget {
 }
 
 impl Widget for OwnedWidget {
+    fn advance_animations(&mut self) -> bool {
+        self.inner.advance_animations()
+    }
+
     fn layout(&mut self, constraints: Constraints) -> Size {
         self.inner.layout(constraints)
     }

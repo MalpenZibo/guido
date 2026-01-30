@@ -184,6 +184,9 @@ pub struct Container {
 
     // Ripple animation state
     pub(super) ripple: RippleState,
+
+    // Constraint caching for layout skip optimization
+    pub(super) last_constraints: Option<Constraints>,
 }
 
 impl Container {
@@ -239,6 +242,7 @@ impl Container {
             h_scrollbar_handle: None,
             h_scrollbar_scale_anim: None,
             ripple: RippleState::new(),
+            last_constraints: None,
         }
     }
 
@@ -775,9 +779,44 @@ impl Container {
             max_height: child_max_height,
         }
     }
+}
 
-    /// Advance animation state (property animations)
-    fn advance_animations(&mut self) {
+/// Convert elevation level to shadow parameters
+fn elevation_to_shadow(level: f32) -> Shadow {
+    if level <= 0.0 {
+        return Shadow::none();
+    }
+
+    let (offset_y, blur, alpha) = match level as i32 {
+        1 => (1.0, 3.0, 0.12),
+        2 => (2.0, 4.0, 0.16),
+        3 => (3.0, 6.0, 0.19),
+        4 => (4.0, 8.0, 0.20),
+        5 => (6.0, 10.0, 0.22),
+        _ => {
+            let offset = (level * 1.2).min(12.0);
+            let blur = (level * 2.0).min(24.0);
+            let alpha = (0.12 + level * 0.02).min(0.25);
+            (offset, blur, alpha)
+        }
+    };
+
+    Shadow::new(
+        (0.0, offset_y),
+        blur,
+        0.0,
+        Color::rgba(0.0, 0.0, 0.0, alpha),
+    )
+}
+
+impl Default for Container {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Widget for Container {
+    fn advance_animations(&mut self) -> bool {
         let mut any_animating = false;
 
         // Advance property animations
@@ -824,53 +863,41 @@ impl Container {
             any_animating = any_animating || scroll_animating;
         }
 
-        if any_animating {
-            request_animation_frame();
+        // Recurse to children
+        for child in self.children_source.get_mut() {
+            if child.advance_animations() {
+                any_animating = true;
+            }
         }
-    }
-}
 
-/// Convert elevation level to shadow parameters
-fn elevation_to_shadow(level: f32) -> Shadow {
-    if level <= 0.0 {
-        return Shadow::none();
-    }
-
-    let (offset_y, blur, alpha) = match level as i32 {
-        1 => (1.0, 3.0, 0.12),
-        2 => (2.0, 4.0, 0.16),
-        3 => (3.0, 6.0, 0.19),
-        4 => (4.0, 8.0, 0.20),
-        5 => (6.0, 10.0, 0.22),
-        _ => {
-            let offset = (level * 1.2).min(12.0);
-            let blur = (level * 2.0).min(24.0);
-            let alpha = (0.12 + level * 0.02).min(0.25);
-            (offset, blur, alpha)
+        // Advance scrollbar animations
+        if let Some(ref mut track) = self.v_scrollbar_track
+            && track.advance_animations()
+        {
+            any_animating = true;
         }
-    };
+        if let Some(ref mut handle) = self.v_scrollbar_handle
+            && handle.advance_animations()
+        {
+            any_animating = true;
+        }
+        if let Some(ref mut track) = self.h_scrollbar_track
+            && track.advance_animations()
+        {
+            any_animating = true;
+        }
+        if let Some(ref mut handle) = self.h_scrollbar_handle
+            && handle.advance_animations()
+        {
+            any_animating = true;
+        }
 
-    Shadow::new(
-        (0.0, offset_y),
-        blur,
-        0.0,
-        Color::rgba(0.0, 0.0, 0.0, alpha),
-    )
-}
-
-impl Default for Container {
-    fn default() -> Self {
-        Self::new()
+        any_animating
     }
-}
 
-impl Widget for Container {
     fn layout(&mut self, constraints: Constraints) -> Size {
         // Ensure scrollbar containers exist if scrolling is enabled
         self.ensure_scrollbar_containers();
-
-        // Always advance animations first
-        self.advance_animations();
 
         // Get current property values (use animated values if available)
         let padding = self.animated_padding();
@@ -904,20 +931,6 @@ impl Widget for Container {
                 .as_ref()
                 .is_some_and(|a| a.is_animating());
 
-        // Paint-only animations
-        let has_paint_animations = self
-            .background_anim
-            .as_ref()
-            .is_some_and(|a| a.is_animating())
-            || self
-                .corner_radius_anim
-                .as_ref()
-                .is_some_and(|a| a.is_animating())
-            || self
-                .border_color_anim
-                .as_ref()
-                .is_some_and(|a| a.is_animating());
-
         // Downgrade to paint-only if only visuals changed
         let bounds_initialized = self.bounds.width > 0.0 || self.bounds.height > 0.0;
         if self.needs_layout()
@@ -931,15 +944,14 @@ impl Widget for Container {
             self.dirty_flags = ChangeFlags::NEEDS_PAINT;
         }
 
+        let constraints_changed = self.last_constraints != Some(constraints);
+
         let needs_layout = self.needs_layout()
             || padding_changed
             || child_needs_layout
             || has_size_animations
-            || has_layout_animations;
-
-        if has_paint_animations && !needs_layout {
-            request_animation_frame();
-        }
+            || has_layout_animations
+            || constraints_changed;
 
         if !needs_layout {
             if visual_changed {
@@ -957,6 +969,7 @@ impl Widget for Container {
         self.cached_corner_radius = corner_radius;
         self.cached_corner_curvature = corner_curvature;
         self.cached_elevation = elevation;
+        self.last_constraints = Some(constraints);
 
         // Get width/height Length values
         let width_length = self.width.as_ref().map(|w| w.get()).unwrap_or_default();

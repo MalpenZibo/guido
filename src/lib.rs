@@ -294,6 +294,12 @@ fn render_surface(
         renderer.set_screen_size(physical_width as f32, physical_height as f32);
         renderer.set_scale_factor(scale_factor);
 
+        // Advance animations first (separate from layout)
+        let animations_active = surface.widget.advance_animations();
+        if animations_active {
+            reactive::request_animation_frame();
+        }
+
         // Re-layout (for reactive updates)
         let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
         surface.widget.layout(constraints);
