@@ -14,7 +14,8 @@ use crate::advance_anim;
 use crate::animation::Transition;
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
-    IntoMaybeDyn, MaybeDyn, WidgetId, focused_widget, request_animation_frame, set_widget_parent,
+    IntoMaybeDyn, MaybeDyn, WidgetId, focused_widget, get_reactive_version,
+    request_animation_frame, set_widget_parent,
 };
 use crate::renderer::PaintContext;
 use crate::renderer::primitives::{GradientDir, Shadow};
@@ -186,6 +187,9 @@ pub struct Container {
 
     // Constraint caching for layout skip optimization
     pub(super) last_constraints: Option<Constraints>,
+
+    // Reactive version tracking for detecting signal changes
+    pub(super) last_reactive_version: Option<u64>,
 }
 
 impl Container {
@@ -241,6 +245,7 @@ impl Container {
             h_scrollbar_scale_anim: None,
             ripple: RippleState::new(),
             last_constraints: None,
+            last_reactive_version: None,
         }
     }
 
@@ -918,9 +923,17 @@ impl Widget for Container {
 
         let constraints_changed = self.last_constraints != Some(constraints);
 
-        // Layout is needed if constraints changed or any layout-affecting property animated
-        let needs_layout =
-            constraints_changed || padding_changed || has_size_animations || has_layout_animations;
+        // Check if reactive state has changed (signals updated)
+        let reactive_version = get_reactive_version();
+        let reactive_changed = self.last_reactive_version != Some(reactive_version);
+
+        // Layout is needed if constraints changed, any layout-affecting property animated,
+        // or reactive state changed (e.g., dynamic children list updated)
+        let needs_layout = constraints_changed
+            || padding_changed
+            || has_size_animations
+            || has_layout_animations
+            || reactive_changed;
 
         if !needs_layout {
             if visual_changed {
@@ -939,6 +952,7 @@ impl Widget for Container {
         self.cached_corner_curvature = corner_curvature;
         self.cached_elevation = elevation;
         self.last_constraints = Some(constraints);
+        self.last_reactive_version = Some(reactive_version);
 
         // Get width/height Length values
         let width_length = self.width.as_ref().map(|w| w.get()).unwrap_or_default();
@@ -1265,10 +1279,6 @@ impl Widget for Container {
             || has_exact_size
             || is_scrollable;
 
-        if should_clip {
-            ctx.push_clip(self.bounds, corner_radius, corner_curvature);
-        }
-
         // Apply scroll offset as a transform (paint-only, doesn't affect layout)
         if is_scrollable {
             let scroll_transform =
@@ -1276,18 +1286,36 @@ impl Widget for Container {
             ctx.push_transform(scroll_transform);
         }
 
+        // For scrollable containers, offset clip bounds by scroll amount so clipping
+        // happens in content coordinate space (after the scroll transform)
+        let clip_bounds = if is_scrollable {
+            Rect::new(
+                self.bounds.x + self.scroll_state.offset_x,
+                self.bounds.y + self.scroll_state.offset_y,
+                self.bounds.width,
+                self.bounds.height,
+            )
+        } else {
+            self.bounds
+        };
+
+        if should_clip {
+            ctx.push_clip(clip_bounds, corner_radius, corner_curvature);
+        }
+
         // Draw children
         for child in self.children_source.get() {
             child.paint(ctx);
         }
 
+        // Pop clip before scroll transform (reverse order of push)
+        if should_clip {
+            ctx.pop_clip();
+        }
+
         // Pop scroll transform
         if is_scrollable {
             ctx.pop_transform();
-        }
-
-        if should_clip {
-            ctx.pop_clip();
         }
 
         // Draw scrollbar containers
