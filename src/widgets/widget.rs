@@ -370,6 +370,13 @@ impl Event {
 }
 
 pub trait Widget {
+    /// Advance animations for this widget and children.
+    /// Returns true if any animations are still active and need another frame.
+    /// Called once per frame before layout.
+    fn advance_animations(&mut self) -> bool {
+        false
+    }
+
     fn layout(&mut self, constraints: Constraints) -> Size;
     fn paint(&self, ctx: &mut PaintContext);
     fn event(&mut self, event: &Event) -> EventResponse {
