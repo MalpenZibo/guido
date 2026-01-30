@@ -1,15 +1,13 @@
 use crate::default_font_family;
 use crate::layout::{Constraints, Size};
-use crate::reactive::{ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId};
+use crate::reactive::{IntoMaybeDyn, MaybeDyn, WidgetId};
 use crate::renderer::{PaintContext, measure_text_styled};
 
 use super::font::{FontFamily, FontWeight};
-use super::impl_dirty_flags;
 use super::widget::{Color, EventResponse, Rect, Widget};
 
 pub struct Text {
     widget_id: WidgetId,
-    dirty_flags: ChangeFlags,
     content: MaybeDyn<String>,
     color: MaybeDyn<Color>,
     font_size: MaybeDyn<f32>,
@@ -32,7 +30,6 @@ impl Text {
         let default_family = default_font_family();
         Self {
             widget_id: WidgetId::next(),
-            dirty_flags: ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT,
             content,
             color: MaybeDyn::Static(Color::WHITE),
             font_size: MaybeDyn::Static(14.0),
@@ -191,8 +188,6 @@ impl Widget for Text {
     fn id(&self) -> WidgetId {
         self.widget_id
     }
-
-    impl_dirty_flags!();
 }
 
 /// Create a text widget

@@ -14,13 +14,12 @@ use std::time::{Duration, Instant};
 use crate::default_font_family;
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
-    ChangeFlags, CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, WidgetId, clipboard_copy,
-    clipboard_paste, has_focus, release_focus, request_animation_frame, request_focus, set_cursor,
+    CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, WidgetId, clipboard_copy, clipboard_paste,
+    has_focus, release_focus, request_animation_frame, request_focus, set_cursor,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled, measure_text_styled};
 
 use super::font::{FontFamily, FontWeight};
-use super::impl_dirty_flags;
 use super::widget::{Color, Event, EventResponse, Key, Modifiers, MouseButton, Rect, Widget};
 
 /// Cursor blink interval in milliseconds
@@ -201,7 +200,6 @@ impl Selection {
 
 pub struct TextInput {
     widget_id: WidgetId,
-    dirty_flags: ChangeFlags,
 
     // Content (actual value, never masked)
     /// Signal for two-way binding
@@ -276,7 +274,6 @@ impl TextInput {
         let default_family = default_font_family();
         Self {
             widget_id: WidgetId::next(),
-            dirty_flags: ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT,
             value: signal,
             cached_value,
             cached_char_count,
@@ -1190,8 +1187,6 @@ impl Widget for TextInput {
     fn id(&self) -> WidgetId {
         self.widget_id
     }
-
-    impl_dirty_flags!();
 }
 
 /// Create a text input widget with two-way signal binding.
