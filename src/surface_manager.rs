@@ -29,7 +29,8 @@ pub struct ManagedSurface {
     pub config: SurfaceConfig,
     /// The root widget for this surface
     pub widget: Box<dyn Widget>,
-    /// Paint context for rendering
+    /// Paint context for rendering (unused when renderer_v2 is enabled)
+    #[cfg_attr(feature = "renderer_v2", allow(dead_code))]
     pub paint_ctx: PaintContext,
     /// The wgpu surface state (None until GPU init)
     pub wgpu_surface: Option<SurfaceState>,

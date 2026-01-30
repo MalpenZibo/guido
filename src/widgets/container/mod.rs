@@ -20,6 +20,8 @@ use crate::reactive::{
 };
 use crate::renderer::PaintContext;
 use crate::renderer::primitives::{GradientDir, Shadow};
+#[cfg(feature = "renderer_v2")]
+use crate::renderer_v2::PaintContextV2;
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
 
@@ -1571,6 +1573,128 @@ impl Widget for Container {
             .as_ref()
             .is_some_and(|h| h.get().exact.is_some());
         has_fixed_width && has_fixed_height
+    }
+
+    #[cfg(feature = "renderer_v2")]
+    fn paint_v2(&self, ctx: &mut PaintContextV2) {
+        let background = self.animated_background();
+        let corner_radius = self.animated_corner_radius();
+        let corner_curvature = self.corner_curvature.get();
+        let elevation_level = self.effective_elevation();
+        let shadow = elevation_to_shadow(elevation_level);
+        let transform = self.animated_transform();
+        let transform_origin = self.transform_origin.get();
+
+        // Set node properties
+        ctx.set_bounds(self.bounds);
+        if !transform.is_identity() {
+            ctx.set_transform_with_origin(transform, transform_origin);
+        }
+
+        // Draw background
+        if let Some(ref gradient) = self.gradient {
+            ctx.draw_gradient_rect(
+                self.bounds,
+                crate::renderer::primitives::Gradient {
+                    start_color: gradient.start_color,
+                    end_color: gradient.end_color,
+                    direction: gradient.direction.into(),
+                },
+                corner_radius,
+                corner_curvature,
+            );
+        } else if background.a > 0.0 {
+            if elevation_level > 0.0 {
+                ctx.draw_rounded_rect_with_shadow(
+                    self.bounds,
+                    background,
+                    corner_radius,
+                    corner_curvature,
+                    shadow,
+                );
+            } else {
+                ctx.draw_rounded_rect_with_curvature(
+                    self.bounds,
+                    background,
+                    corner_radius,
+                    corner_curvature,
+                );
+            }
+        }
+
+        // Draw border
+        let border_width = self.animated_border_width();
+        let border_color = self.animated_border_color();
+
+        if border_width > 0.0 {
+            ctx.draw_border_frame_with_curvature(
+                self.bounds,
+                border_color,
+                corner_radius,
+                border_width,
+                corner_curvature,
+            );
+        }
+
+        // Determine if we need to clip children
+        let width_animating = self.width_anim.as_ref().is_some_and(|a| a.is_animating());
+        let height_animating = self.height_anim.as_ref().is_some_and(|a| a.is_animating());
+        let has_exact_size = self.width.as_ref().is_some_and(|w| w.get().exact.is_some())
+            || self
+                .height
+                .as_ref()
+                .is_some_and(|h| h.get().exact.is_some());
+        let is_scrollable = self.scroll_axis != ScrollAxis::None;
+        let should_clip = self.overflow == Overflow::Hidden
+            || width_animating
+            || height_animating
+            || has_exact_size
+            || is_scrollable;
+
+        if should_clip {
+            ctx.set_clip(self.bounds, corner_radius, corner_curvature);
+        }
+
+        // Draw children - each gets its own node
+        // TODO: Handle scroll offset in children's transforms
+        for child in self.children_source.get() {
+            let child_bounds = child.bounds();
+            let mut child_ctx = ctx.add_child(0, child_bounds); // Use 0 as placeholder ID
+
+            // Apply scroll offset as child transform if scrollable
+            if is_scrollable {
+                let scroll_transform =
+                    Transform::translate(-self.scroll_state.offset_x, -self.scroll_state.offset_y);
+                child_ctx.set_transform(scroll_transform);
+            }
+
+            child.paint_v2(&mut child_ctx);
+        }
+
+        // TODO: Draw scrollbar containers when V2 is ready
+
+        // Draw ripple effect as overlay
+        if let Some((screen_cx, screen_cy)) = self.ripple.center
+            && let Some(ref pressed_state) = self.pressed_state
+            && let Some(ref ripple_config) = pressed_state.ripple
+            && self.ripple.opacity > 0.0
+        {
+            let local_cx = screen_cx - self.bounds.x;
+            let local_cy = screen_cy - self.bounds.y;
+            let max_dist_x = local_cx.max(self.bounds.width - local_cx);
+            let max_dist_y = local_cy.max(self.bounds.height - local_cy);
+            let max_radius = (max_dist_x * max_dist_x + max_dist_y * max_dist_y).sqrt();
+            let current_radius = max_radius * self.ripple.progress;
+
+            let ripple_color = Color::rgba(
+                ripple_config.color.r,
+                ripple_config.color.g,
+                ripple_config.color.b,
+                ripple_config.color.a * self.ripple.opacity,
+            );
+
+            ctx.draw_overlay_circle(local_cx, local_cy, current_radius, ripple_color);
+        }
     }
 }
 

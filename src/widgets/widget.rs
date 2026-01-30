@@ -1,6 +1,8 @@
 use crate::layout::{Constraints, Size};
 use crate::reactive::WidgetId;
 use crate::renderer::PaintContext;
+#[cfg(feature = "renderer_v2")]
+use crate::renderer_v2::PaintContextV2;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Color {
@@ -404,6 +406,21 @@ pub trait Widget {
     /// Default returns false (most widgets are not boundaries).
     fn is_relayout_boundary(&self) -> bool {
         false
+    }
+
+    /// Paint to the V2 hierarchical renderer.
+    ///
+    /// This method is used when the `renderer_v2` feature is enabled.
+    /// Widgets should implement this to paint using the hierarchical render tree.
+    ///
+    /// Default implementation panics - widgets must implement this when using V2.
+    #[cfg(feature = "renderer_v2")]
+    fn paint_v2(&self, ctx: &mut PaintContextV2) {
+        let _ = ctx;
+        panic!(
+            "Widget::paint_v2() not implemented for {}",
+            std::any::type_name::<Self>()
+        );
     }
 }
 
