@@ -89,11 +89,239 @@ pub mod prelude {
     pub use crate::{App, component, default_font_family, set_default_font_family};
 }
 
+use std::sync::mpsc::Receiver;
+
+use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
+
 /// A surface definition that stores configuration and widget factory.
 struct SurfaceDefinition {
     id: SurfaceId,
     config: SurfaceConfig,
     widget_fn: Box<dyn FnOnce() -> Box<dyn Widget>>,
+}
+
+/// Process dynamic surface commands (create, close, property changes).
+/// Returns false if all surfaces have been closed and the app should exit.
+fn process_surface_commands(
+    surface_rx: &Receiver<SurfaceCommand>,
+    surface_manager: &mut SurfaceManager,
+    wayland_state: &mut platform::WaylandState,
+    qh: &QueueHandle<platform::WaylandState>,
+) -> bool {
+    while let Ok(cmd) = surface_rx.try_recv() {
+        match cmd {
+            SurfaceCommand::Create {
+                id,
+                config,
+                widget_fn,
+            } => {
+                log::info!("Creating dynamic surface {:?}", id);
+
+                // Create Wayland surface
+                wayland_state.create_surface_with_id(qh, id, &config);
+
+                // Create the widget and managed surface (GPU init happens later)
+                let widget = widget_fn();
+                let managed = ManagedSurface::new(id, config, widget);
+                surface_manager.add(managed);
+            }
+            SurfaceCommand::Close(id) => {
+                log::info!("Closing dynamic surface {:?}", id);
+                wayland_state.destroy_surface(id);
+                surface_manager.remove(id);
+
+                // If no surfaces left, exit
+                if surface_manager.is_empty() {
+                    wayland_state.exit = true;
+                    return false;
+                }
+            }
+            SurfaceCommand::SetLayer { id, layer } => {
+                wayland_state.set_surface_layer(id, layer);
+            }
+            SurfaceCommand::SetKeyboardInteractivity { id, mode } => {
+                wayland_state.set_surface_keyboard_interactivity(id, mode);
+            }
+            SurfaceCommand::SetAnchor { id, anchor } => {
+                wayland_state.set_surface_anchor(id, anchor);
+            }
+            SurfaceCommand::SetSize { id, width, height } => {
+                wayland_state.set_surface_size(id, width, height);
+            }
+            SurfaceCommand::SetExclusiveZone { id, zone } => {
+                wayland_state.set_surface_exclusive_zone(id, zone);
+            }
+            SurfaceCommand::SetMargin {
+                id,
+                top,
+                right,
+                bottom,
+                left,
+            } => {
+                wayland_state.set_surface_margin(id, top, right, bottom, left);
+            }
+        }
+    }
+    true
+}
+
+/// Render a single surface if it needs updating.
+#[allow(clippy::too_many_arguments)]
+fn render_surface(
+    id: SurfaceId,
+    surface: &mut surface_manager::ManagedSurface,
+    wayland_state: &mut platform::WaylandState,
+    renderer: &mut Renderer,
+    connection: &Connection,
+    qh: &QueueHandle<platform::WaylandState>,
+) {
+    // Get wayland surface state
+    let Some(wayland_surface) = wayland_state.get_surface_mut(id) else {
+        return;
+    };
+
+    // Skip if not configured yet
+    if !wayland_surface.configured {
+        return;
+    }
+
+    // Get pending events for this surface
+    let events = wayland_surface.take_events();
+    let scale_factor = wayland_surface.scale_factor;
+    let width = wayland_surface.width;
+    let height = wayland_surface.height;
+    let first_frame_presented = wayland_surface.first_frame_presented;
+    let scale_factor_received = wayland_surface.scale_factor_received;
+    let wl_surface = wayland_surface.wl_surface.clone();
+
+    // Skip if GPU not ready (will be initialized next frame)
+    if !surface.is_gpu_ready() {
+        return;
+    }
+
+    // Check for paste events
+    let has_paste_event = events.iter().any(|e| {
+        matches!(
+            e,
+            widgets::Event::KeyDown {
+                key: widgets::Key::Char('v'),
+                modifiers: widgets::Modifiers { ctrl: true, .. },
+                ..
+            }
+        )
+    });
+    if has_paste_event && let Some(text) = wayland_state.read_external_clipboard(connection) {
+        set_system_clipboard(text);
+    }
+
+    // Dispatch events to widget
+    for event in events {
+        surface.widget.event(&event);
+    }
+
+    // Sync clipboard to Wayland if it changed (copy operations)
+    if let Some(text) = take_clipboard_change() {
+        wayland_state.set_clipboard(text, qh);
+    }
+
+    // Sync cursor to Wayland if it changed
+    if let Some(cursor) = take_cursor_change() {
+        wayland_state.set_cursor(cursor, qh);
+    }
+
+    // Calculate physical pixel dimensions (for HiDPI)
+    let scale = scale_factor as u32;
+    let physical_width = width * scale;
+    let physical_height = height * scale;
+
+    let wgpu_surface = surface.wgpu_surface.as_mut().unwrap();
+
+    // Check for resize or scale change
+    let needs_resize =
+        wgpu_surface.width() != physical_width || wgpu_surface.height() != physical_height;
+    let scale_changed = scale_factor != surface.previous_scale_factor;
+
+    if needs_resize {
+        log::info!(
+            "Resizing surface {:?} to {}x{} (physical), scale {}",
+            id,
+            physical_width,
+            physical_height,
+            scale
+        );
+        wgpu_surface.resize(physical_width, physical_height);
+
+        // Mark that we need layout and paint due to resize
+        with_app_state_mut(|state| {
+            state.change_flags |=
+                reactive::ChangeFlags::NEEDS_LAYOUT | reactive::ChangeFlags::NEEDS_PAINT;
+        });
+    }
+
+    if scale_changed {
+        log::info!(
+            "Surface {:?} scale factor changed: {} -> {}",
+            id,
+            surface.previous_scale_factor,
+            scale_factor
+        );
+        surface.previous_scale_factor = scale_factor;
+
+        // Mark that we need to re-render with new scale factor
+        with_app_state_mut(|state| {
+            state.change_flags |= reactive::ChangeFlags::NEEDS_PAINT;
+        });
+    }
+
+    // Check render conditions
+    let fully_initialized = first_frame_presented && scale_factor_received;
+    let force_render_surface = !fully_initialized;
+    let frame_requested = take_frame_request();
+    let needs_layout = with_app_state(|state| state.needs_layout());
+    let needs_paint = with_app_state(|state| state.needs_paint());
+    let has_animations_now = with_app_state(|state| state.has_animations);
+
+    // Only render if something changed (or during initialization)
+    if force_render_surface
+        || frame_requested
+        || needs_layout
+        || needs_paint
+        || needs_resize
+        || scale_changed
+        || has_animations_now
+    {
+        // Update renderer for this surface
+        renderer.set_screen_size(physical_width as f32, physical_height as f32);
+        renderer.set_scale_factor(scale_factor);
+
+        // Re-layout (for reactive updates)
+        let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
+        surface.widget.layout(constraints);
+
+        // Paint - clear and reuse existing context to avoid allocations
+        surface.paint_ctx.clear();
+        surface.widget.paint(&mut surface.paint_ctx);
+
+        renderer.render(
+            wgpu_surface,
+            &surface.paint_ctx,
+            surface.config.background_color,
+        );
+
+        // Clear flags after rendering
+        with_app_state_mut(|state| {
+            state.clear_layout_flag();
+            state.clear_paint_flag();
+        });
+
+        // Commit surface
+        wl_surface.commit();
+
+        // Request frame callback if not yet initialized
+        if !first_frame_presented {
+            wl_surface.frame(qh, wl_surface.clone());
+        }
+    }
 }
 
 pub struct App {
@@ -302,221 +530,28 @@ impl App {
             }
 
             // Process dynamic surface commands
-            while let Ok(cmd) = surface_rx.try_recv() {
-                match cmd {
-                    SurfaceCommand::Create {
-                        id,
-                        config,
-                        widget_fn,
-                    } => {
-                        log::info!("Creating dynamic surface {:?}", id);
-
-                        // Create Wayland surface
-                        wayland_state.create_surface_with_id(&qh, id, &config);
-
-                        // Create the widget and managed surface (GPU init happens later)
-                        let widget = widget_fn();
-                        let managed = ManagedSurface::new(id, config, widget);
-                        surface_manager.add(managed);
-                    }
-                    SurfaceCommand::Close(id) => {
-                        log::info!("Closing dynamic surface {:?}", id);
-                        wayland_state.destroy_surface(id);
-                        surface_manager.remove(id);
-
-                        // If no surfaces left, exit
-                        if surface_manager.is_empty() {
-                            wayland_state.exit = true;
-                        }
-                    }
-                    SurfaceCommand::SetLayer { id, layer } => {
-                        wayland_state.set_surface_layer(id, layer);
-                    }
-                    SurfaceCommand::SetKeyboardInteractivity { id, mode } => {
-                        wayland_state.set_surface_keyboard_interactivity(id, mode);
-                    }
-                    SurfaceCommand::SetAnchor { id, anchor } => {
-                        wayland_state.set_surface_anchor(id, anchor);
-                    }
-                    SurfaceCommand::SetSize { id, width, height } => {
-                        wayland_state.set_surface_size(id, width, height);
-                    }
-                    SurfaceCommand::SetExclusiveZone { id, zone } => {
-                        wayland_state.set_surface_exclusive_zone(id, zone);
-                    }
-                    SurfaceCommand::SetMargin {
-                        id,
-                        top,
-                        right,
-                        bottom,
-                        left,
-                    } => {
-                        wayland_state.set_surface_margin(id, top, right, bottom, left);
-                    }
-                }
+            if !process_surface_commands(&surface_rx, &mut surface_manager, &mut wayland_state, &qh)
+            {
+                break;
             }
 
             // Initialize GPU for any pending surfaces (newly created dynamic surfaces)
             surface_manager.init_pending_gpu(&gpu_context, &connection, &wayland_state);
 
-            // Process each surface
+            // Render each surface
             let surface_ids: Vec<SurfaceId> = surface_manager.ids().collect();
-
             for id in surface_ids {
-                // Get wayland surface state
-                let Some(wayland_surface) = wayland_state.get_surface_mut(id) else {
-                    continue;
-                };
-
-                // Skip if not configured yet
-                if !wayland_surface.configured {
-                    continue;
-                }
-
-                // Get pending events for this surface
-                let events = wayland_surface.take_events();
-                let scale_factor = wayland_surface.scale_factor;
-                let width = wayland_surface.width;
-                let height = wayland_surface.height;
-                let first_frame_presented = wayland_surface.first_frame_presented;
-                let scale_factor_received = wayland_surface.scale_factor_received;
-                let wl_surface = wayland_surface.wl_surface.clone();
-
-                // Get surface entry
                 let Some(surface) = surface_manager.get_mut(id) else {
                     continue;
                 };
-
-                // Skip if GPU not ready (will be initialized next frame)
-                if !surface.is_gpu_ready() {
-                    continue;
-                }
-
-                // Check for paste events
-                let has_paste_event = events.iter().any(|e| {
-                    matches!(
-                        e,
-                        widgets::Event::KeyDown {
-                            key: widgets::Key::Char('v'),
-                            modifiers: widgets::Modifiers { ctrl: true, .. },
-                            ..
-                        }
-                    )
-                });
-                if has_paste_event
-                    && let Some(text) = wayland_state.read_external_clipboard(&connection)
-                {
-                    set_system_clipboard(text);
-                }
-
-                // Dispatch events to widget
-                for event in events {
-                    surface.widget.event(&event);
-                }
-
-                // Sync clipboard to Wayland if it changed (copy operations)
-                if let Some(text) = take_clipboard_change() {
-                    wayland_state.set_clipboard(text, &qh);
-                }
-
-                // Sync cursor to Wayland if it changed
-                if let Some(cursor) = take_cursor_change() {
-                    wayland_state.set_cursor(cursor, &qh);
-                }
-
-                // Calculate physical pixel dimensions (for HiDPI)
-                let scale = scale_factor as u32;
-                let physical_width = width * scale;
-                let physical_height = height * scale;
-
-                let wgpu_surface = surface.wgpu_surface.as_mut().unwrap();
-
-                // Check for resize or scale change
-                let needs_resize = wgpu_surface.width() != physical_width
-                    || wgpu_surface.height() != physical_height;
-                let scale_changed = scale_factor != surface.previous_scale_factor;
-
-                if needs_resize {
-                    log::info!(
-                        "Resizing surface {:?} to {}x{} (physical), scale {}",
-                        id,
-                        physical_width,
-                        physical_height,
-                        scale
-                    );
-                    wgpu_surface.resize(physical_width, physical_height);
-
-                    // Mark that we need layout and paint due to resize
-                    with_app_state_mut(|state| {
-                        state.change_flags |= reactive::ChangeFlags::NEEDS_LAYOUT
-                            | reactive::ChangeFlags::NEEDS_PAINT;
-                    });
-                }
-
-                if scale_changed {
-                    log::info!(
-                        "Surface {:?} scale factor changed: {} -> {}",
-                        id,
-                        surface.previous_scale_factor,
-                        scale_factor
-                    );
-                    surface.previous_scale_factor = scale_factor;
-
-                    // Mark that we need to re-render with new scale factor
-                    with_app_state_mut(|state| {
-                        state.change_flags |= reactive::ChangeFlags::NEEDS_PAINT;
-                    });
-                }
-
-                // Check render conditions
-                let fully_initialized = first_frame_presented && scale_factor_received;
-                let force_render_surface = !fully_initialized;
-                let frame_requested = take_frame_request();
-                let needs_layout = with_app_state(|state| state.needs_layout());
-                let needs_paint = with_app_state(|state| state.needs_paint());
-                let has_animations_now = with_app_state(|state| state.has_animations);
-
-                // Only render if something changed (or during initialization)
-                if force_render_surface
-                    || frame_requested
-                    || needs_layout
-                    || needs_paint
-                    || needs_resize
-                    || scale_changed
-                    || has_animations_now
-                {
-                    // Update renderer for this surface
-                    renderer.set_screen_size(physical_width as f32, physical_height as f32);
-                    renderer.set_scale_factor(scale_factor);
-
-                    // Re-layout (for reactive updates)
-                    let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
-                    surface.widget.layout(constraints);
-
-                    // Paint - clear and reuse existing context to avoid allocations
-                    surface.paint_ctx.clear();
-                    surface.widget.paint(&mut surface.paint_ctx);
-
-                    renderer.render(
-                        wgpu_surface,
-                        &surface.paint_ctx,
-                        surface.config.background_color,
-                    );
-
-                    // Clear flags after rendering
-                    with_app_state_mut(|state| {
-                        state.clear_layout_flag();
-                        state.clear_paint_flag();
-                    });
-
-                    // Commit surface
-                    wl_surface.commit();
-
-                    // Request frame callback if not yet initialized
-                    if !first_frame_presented {
-                        wl_surface.frame(&qh, wl_surface.clone());
-                    }
-                }
+                render_surface(
+                    id,
+                    surface,
+                    &mut wayland_state,
+                    &mut renderer,
+                    &connection,
+                    &qh,
+                );
             }
 
             // Flush the connection once for all surfaces
