@@ -1285,6 +1285,13 @@ impl Widget for Container {
             || has_exact_size
             || is_scrollable;
 
+        // Push clip first (in screen space), then scroll transform
+        // The text renderer adjusts both text position and clip bounds by the transform,
+        // so they stay in the same coordinate space for culling checks
+        if should_clip {
+            ctx.push_clip(self.bounds, corner_radius, corner_curvature);
+        }
+
         // Apply scroll offset as a transform (paint-only, doesn't affect layout)
         if is_scrollable {
             let scroll_transform =
@@ -1292,36 +1299,19 @@ impl Widget for Container {
             ctx.push_transform(scroll_transform);
         }
 
-        // For scrollable containers, offset clip bounds by scroll amount so clipping
-        // happens in content coordinate space (after the scroll transform)
-        let clip_bounds = if is_scrollable {
-            Rect::new(
-                self.bounds.x + self.scroll_state.offset_x,
-                self.bounds.y + self.scroll_state.offset_y,
-                self.bounds.width,
-                self.bounds.height,
-            )
-        } else {
-            self.bounds
-        };
-
-        if should_clip {
-            ctx.push_clip(clip_bounds, corner_radius, corner_curvature);
-        }
-
         // Draw children
         for child in self.children_source.get() {
             child.paint(ctx);
         }
 
-        // Pop clip before scroll transform (reverse order of push)
-        if should_clip {
-            ctx.pop_clip();
-        }
-
-        // Pop scroll transform
+        // Pop scroll transform first (reverse order of push)
         if is_scrollable {
             ctx.pop_transform();
+        }
+
+        // Pop clip
+        if should_clip {
+            ctx.pop_clip();
         }
 
         // Draw scrollbar containers
