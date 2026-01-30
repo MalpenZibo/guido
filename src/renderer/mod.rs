@@ -967,6 +967,10 @@ impl PaintContext {
 
     /// Compute the intersection of all clip regions in the stack.
     /// Returns the tightest bounding rectangle that satisfies all clips.
+    ///
+    /// When clips don't intersect (e.g., child container is outside parent's visible area
+    /// during layout but will be scrolled into view), returns the last valid intersection
+    /// rather than culling everything. The actual clipping will handle visibility correctly.
     fn intersected_clip_rect(&self) -> Option<Rect> {
         if self.clip_stack.is_empty() {
             return None;
@@ -988,15 +992,11 @@ impl PaintContext {
                     width: right - left,
                     height: bottom - top,
                 };
-            } else {
-                // No intersection - return a zero-size rect that will cull everything
-                return Some(Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 0.0,
-                    height: 0.0,
-                });
             }
+            // If intersection is invalid, keep the previous result.
+            // This handles scrollable containers where child clips may be outside
+            // the parent's visible area in layout coordinates but will be
+            // scrolled into view via transform.
         }
         Some(result)
     }

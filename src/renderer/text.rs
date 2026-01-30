@@ -78,10 +78,12 @@ impl TextRenderState {
                 let clip_bottom = clip.y + clip.height;
 
                 // Check if text is completely outside clip region
-                let outside = text_right <= clip.x
-                    || text_left >= clip_right
-                    || text_bottom <= clip.y
-                    || text_top >= clip_bottom;
+                // Use small epsilon to avoid floating point precision issues at boundaries
+                let epsilon = 0.1;
+                let outside = text_right < clip.x - epsilon
+                    || text_left > clip_right + epsilon
+                    || text_bottom < clip.y - epsilon
+                    || text_top > clip_bottom + epsilon;
 
                 if outside {
                     // Text is completely outside clip - skip it entirely
