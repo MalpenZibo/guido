@@ -13,7 +13,7 @@ pub struct DynamicChild;
 ///
 /// This trait uses a marker type parameter to disambiguate between:
 /// - Static widgets (evaluated once at creation) - uses `StaticChild` marker
-/// - Dynamic closures returning Option<Widget> (reactive) - uses `DynamicChild` marker
+/// - Dynamic closures returning `Option<Widget>` (reactive) - uses `DynamicChild` marker
 ///
 /// The marker parameter defaults to `StaticChild` for backwards compatibility.
 pub trait IntoChild<Marker = StaticChild> {
