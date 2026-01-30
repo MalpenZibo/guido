@@ -18,6 +18,11 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use layout::Constraints;
+
+// PaintContext capacity constants to avoid magic numbers
+const PAINT_CTX_SHAPES: usize = 32;
+const PAINT_CTX_TEXTS: usize = 16;
+const PAINT_CTX_OVERLAYS: usize = 8;
 use platform::{WaylandWindowWrapper, create_wayland_app};
 use reactive::{
     clear_animation_flag, init_wakeup, set_system_clipboard, take_clipboard_change,
@@ -284,7 +289,11 @@ impl App {
                     id: def.id,
                     config: def.config,
                     widget,
-                    paint_ctx: renderer::PaintContext::with_capacity(32, 16, 8),
+                    paint_ctx: renderer::PaintContext::with_capacity(
+                        PAINT_CTX_SHAPES,
+                        PAINT_CTX_TEXTS,
+                        PAINT_CTX_OVERLAYS,
+                    ),
                     wgpu_surface: Some(wgpu_surface),
                     previous_scale_factor: wayland_surface.scale_factor,
                 },
@@ -376,7 +385,11 @@ impl App {
                                 id,
                                 config,
                                 widget,
-                                paint_ctx: renderer::PaintContext::with_capacity(32, 16, 8),
+                                paint_ctx: renderer::PaintContext::with_capacity(
+                                    PAINT_CTX_SHAPES,
+                                    PAINT_CTX_TEXTS,
+                                    PAINT_CTX_OVERLAYS,
+                                ),
                                 wgpu_surface: None, // Will be created after configure
                                 previous_scale_factor: 1.0,
                             },
