@@ -205,7 +205,8 @@ impl Flex {
                 },
             };
             for child in children.iter_mut() {
-                child.mark_dirty(crate::reactive::ChangeFlags::NEEDS_LAYOUT);
+                // Don't mark dirty - just call layout with new constraints.
+                // Child will decide if it needs to re-layout based on constraint changes.
                 let size = child.layout(stretch_constraints);
                 children_main += size.main_axis(axis);
                 self.child_sizes.push(size);

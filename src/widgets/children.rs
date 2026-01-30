@@ -2,81 +2,199 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::layout::{Constraints, Size};
-use crate::reactive::{ChangeFlags, OwnerId, WidgetId, dispose_owner};
+use crate::reactive::{ChangeFlags, OwnerId, WidgetId, dispose_owner, get_reactive_version};
 use crate::renderer::PaintContext;
 
 use super::Widget;
 use super::widget::{Event, EventResponse, Rect};
 
-/// A slot in the children list - either a static widget or a dynamic source
-enum ChildSlot {
-    /// Static widget (pending to be added to merged list)
-    StaticPending(Box<dyn Widget>),
-
-    /// Static widget (already in merged list at the given index)
-    Static,
-
-    /// Dynamic children source with keyed reconciliation
+/// Segment metadata - tracks what kind of source each segment is
+enum SegmentType {
+    /// Static widgets - just a count (widgets stored in merged)
+    Static(usize),
+    /// Dynamic source with keyed reconciliation
     Dynamic {
         items_fn: Arc<dyn Fn() -> Vec<DynItem> + Send + Sync>,
+        /// Cached widgets by key (for reuse during reconciliation)
         cached: HashMap<u64, Box<dyn Widget>>,
-        order: Vec<u64>,
+        /// Current keys in display order
+        current_keys: Vec<u64>,
+        /// Version when last reconciled - skip items_fn if unchanged
+        last_version: u64,
     },
 }
 
 /// Represents the source of children for a container
 ///
-/// Uses a slot-based architecture where each `.child()` call adds a slot.
-/// Slots can be either static (one widget) or dynamic (0+ widgets from a closure).
+/// Uses a segment-based architecture:
+/// - Static segments: widgets added directly, stored in `merged`
+/// - Dynamic segments: widgets from reactive closures with keyed reconciliation
+///
+/// All widgets live in the `merged` vec for Layout compatibility.
+/// Segment metadata tracks boundaries and reconciliation state.
 #[derive(Default)]
 pub struct ChildrenSource {
-    /// Slots in the order they were added
-    slots: Vec<ChildSlot>,
-
-    /// Merged widgets from all slots (rebuilt during reconciliation)
+    /// All widgets in order (static and dynamic interleaved)
     merged: Vec<Box<dyn Widget>>,
-
-    /// Whether reconciliation is needed
-    needs_reconcile: bool,
+    /// Segment metadata (boundaries and reconciliation info)
+    segments: Vec<SegmentType>,
 }
 
 impl ChildrenSource {
     /// Add a static child widget
     pub fn add_static(&mut self, widget: Box<dyn Widget>) {
-        self.slots.push(ChildSlot::StaticPending(widget));
-        self.needs_reconcile = true;
+        self.merged.push(widget);
+
+        // Track in segment metadata
+        if let Some(SegmentType::Static(count)) = self.segments.last_mut() {
+            *count += 1;
+        } else {
+            self.segments.push(SegmentType::Static(1));
+        }
     }
 
     /// Add a dynamic children source
     pub fn add_dynamic(&mut self, items_fn: impl Fn() -> Vec<DynItem> + Send + Sync + 'static) {
-        self.slots.push(ChildSlot::Dynamic {
+        self.segments.push(SegmentType::Dynamic {
             items_fn: Arc::new(items_fn),
             cached: HashMap::new(),
-            order: Vec::new(),
+            current_keys: Vec::new(),
+            // Start at max to force initial reconciliation
+            last_version: u64::MAX,
         });
-        self.needs_reconcile = true;
     }
 
-    /// Get mutable access to the children vec, reconciling if needed
-    pub fn reconcile_and_get_mut(&mut self) -> &mut Vec<Box<dyn Widget>> {
-        // Always reconcile if we have dynamic slots (they need to be re-evaluated each frame)
-        let has_dynamic = self
-            .slots
+    /// Check if any dynamic segments exist
+    fn has_dynamic(&self) -> bool {
+        self.segments
             .iter()
-            .any(|slot| matches!(slot, ChildSlot::Dynamic { .. }));
+            .any(|s| matches!(s, SegmentType::Dynamic { .. }))
+    }
 
-        if self.needs_reconcile || has_dynamic {
+    /// Reconcile all dynamic segments and rebuild merged list
+    fn reconcile(&mut self) {
+        let current_version = get_reactive_version();
+
+        // First pass: check if any dynamic segment needs reconciliation
+        // Skip items_fn() entirely if the segment's version matches current version
+        let mut segments_with_changes: Vec<(usize, Vec<DynItem>)> = Vec::new();
+
+        for (idx, segment) in self.segments.iter_mut().enumerate() {
+            if let SegmentType::Dynamic {
+                items_fn,
+                current_keys,
+                last_version,
+                ..
+            } = segment
+            {
+                // Skip if no signals have changed since last reconcile
+                if *last_version == current_version {
+                    continue;
+                }
+
+                // Update version before calling items_fn
+                *last_version = current_version;
+
+                let new_items = items_fn();
+                let new_keys: Vec<u64> = new_items.iter().map(|i| i.key).collect();
+
+                if new_keys != *current_keys {
+                    segments_with_changes.push((idx, new_items));
+                }
+            }
+        }
+
+        // If nothing changed, skip the entire rebuild
+        if segments_with_changes.is_empty() {
+            return;
+        }
+
+        // Take ownership of old merged vec to avoid borrow conflicts
+        let old_merged = std::mem::take(&mut self.merged);
+        let mut old_merged_iter = old_merged.into_iter();
+
+        // Build new merged vec by walking through segments
+        let mut new_merged = Vec::with_capacity(old_merged_iter.len());
+        let mut change_idx = 0;
+
+        for (idx, segment) in self.segments.iter_mut().enumerate() {
+            match segment {
+                SegmentType::Static(count) => {
+                    // Static widgets: take from old merged
+                    for _ in 0..*count {
+                        if let Some(widget) = old_merged_iter.next() {
+                            new_merged.push(widget);
+                        }
+                    }
+                }
+                SegmentType::Dynamic {
+                    cached,
+                    current_keys,
+                    ..
+                } => {
+                    // Check if this segment has changes
+                    let has_changes = change_idx < segments_with_changes.len()
+                        && segments_with_changes[change_idx].0 == idx;
+
+                    if has_changes {
+                        // Keys changed - reconcile using pre-computed items
+                        let (_, new_items) = std::mem::take(&mut segments_with_changes[change_idx]);
+                        change_idx += 1;
+
+                        let new_keys: Vec<u64> = new_items.iter().map(|i| i.key).collect();
+
+                        // Move current widgets to cache
+                        for key in current_keys.drain(..) {
+                            if let Some(widget) = old_merged_iter.next() {
+                                cached.insert(key, widget);
+                            }
+                        }
+
+                        // Build new widgets list by reusing or creating
+                        for item in new_items {
+                            if let Some(widget) = cached.remove(&item.key) {
+                                // Reuse existing widget (preserves state!)
+                                new_merged.push(widget);
+                            } else {
+                                // Create new widget
+                                new_merged.push((item.widget_fn)());
+                            }
+                        }
+
+                        // Update current keys
+                        *current_keys = new_keys;
+
+                        // Clear remaining cache (drops removed widgets, triggering cleanup)
+                        cached.clear();
+                    } else {
+                        // Keys unchanged - just move widgets from old merged to new merged
+                        for _ in 0..current_keys.len() {
+                            if let Some(widget) = old_merged_iter.next() {
+                                new_merged.push(widget);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        self.merged = new_merged;
+    }
+
+    /// Reconcile and get mutable access (for layout)
+    pub fn reconcile_and_get_mut(&mut self) -> &mut Vec<Box<dyn Widget>> {
+        if self.has_dynamic() {
             self.reconcile();
         }
         &mut self.merged
     }
 
-    /// Get immutable access to the children vec
+    /// Get immutable access (for paint)
     pub fn get(&self) -> &Vec<Box<dyn Widget>> {
         &self.merged
     }
 
-    /// Get mutable access to the children vec without reconciliation
+    /// Get mutable access without reconciliation (for advance_animations)
     pub fn get_mut(&mut self) -> &mut Vec<Box<dyn Widget>> {
         &mut self.merged
     }
@@ -90,121 +208,6 @@ impl ChildrenSource {
     pub fn len(&self) -> usize {
         self.merged.len()
     }
-
-    /// Check if reconciliation is needed (children were added but not yet merged)
-    pub fn needs_reconcile(&self) -> bool {
-        self.needs_reconcile
-    }
-
-    /// Reconcile all slots and rebuild the merged children list
-    fn reconcile(&mut self) {
-        // Take the current merged list and convert to iterator
-        let old_merged = std::mem::take(&mut self.merged);
-        let mut old_iter = old_merged.into_iter();
-
-        // Process each slot
-        for slot in &mut self.slots {
-            match slot {
-                ChildSlot::StaticPending(widget) => {
-                    // Move the widget from the slot to merged
-                    let w = std::mem::replace(widget, Box::new(DummyWidget));
-                    self.merged.push(w);
-                    // Mark slot as no longer pending
-                    *slot = ChildSlot::Static;
-                }
-                ChildSlot::Static => {
-                    // Widget is already in old_merged - take next one
-                    if let Some(widget) = old_iter.next() {
-                        self.merged.push(widget);
-                    }
-                }
-                ChildSlot::Dynamic {
-                    items_fn,
-                    cached,
-                    order,
-                } => {
-                    // Get new items from the function (closures, not constructed widgets!)
-                    let new_items = items_fn();
-                    let new_keys: Vec<u64> = new_items.iter().map(|item| item.key).collect();
-
-                    // Check if keys changed
-                    if new_keys != *order {
-                        // Save current widgets from old_iter to cache
-                        for (i, widget) in old_iter.by_ref().take(order.len()).enumerate() {
-                            if let Some(&key) = order.get(i) {
-                                cached.insert(key, widget);
-                            }
-                        }
-
-                        // Build new widgets list by reusing or creating
-                        for item in new_items {
-                            if let Some(widget) = cached.remove(&item.key) {
-                                // Reuse existing widget (preserves state!)
-                                self.merged.push(widget);
-                            } else {
-                                // Create new widget - only now do we call the closure!
-                                self.merged.push((item.widget_fn)());
-                            }
-                        }
-
-                        // Update order
-                        *order = new_keys;
-
-                        // Clear remaining cache (drops removed widgets, triggering cleanup)
-                        cached.clear();
-                    } else {
-                        // Keys unchanged - reuse widgets from old_iter
-                        for widget in old_iter.by_ref().take(order.len()) {
-                            self.merged.push(widget);
-                        }
-                    }
-                }
-            }
-        }
-
-        self.needs_reconcile = false;
-    }
-}
-
-/// Dummy widget used as placeholder during slot state transitions
-struct DummyWidget;
-
-impl super::Widget for DummyWidget {
-    fn advance_animations(&mut self) -> bool {
-        false
-    }
-
-    fn layout(&mut self, _constraints: crate::layout::Constraints) -> crate::layout::Size {
-        crate::layout::Size::zero()
-    }
-
-    fn paint(&self, _ctx: &mut crate::renderer::PaintContext) {}
-
-    fn event(&mut self, _event: &super::widget::Event) -> super::widget::EventResponse {
-        super::widget::EventResponse::Ignored
-    }
-
-    fn set_origin(&mut self, _x: f32, _y: f32) {}
-
-    fn bounds(&self) -> super::widget::Rect {
-        super::widget::Rect::new(0.0, 0.0, 0.0, 0.0)
-    }
-
-    fn id(&self) -> crate::reactive::WidgetId {
-        crate::reactive::WidgetId::next()
-    }
-
-    fn mark_dirty(&mut self, _flags: crate::reactive::ChangeFlags) {}
-
-    fn needs_layout(&self) -> bool {
-        false
-    }
-
-    fn needs_paint(&self) -> bool {
-        false
-    }
-
-    fn clear_dirty(&mut self) {}
 }
 
 /// Wrapper for dynamic items with key + widget factory.

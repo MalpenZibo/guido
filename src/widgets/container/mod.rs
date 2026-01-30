@@ -709,9 +709,6 @@ impl Container {
 
     /// Check if any child widget needs layout
     fn any_child_needs_layout(&self) -> bool {
-        if self.children_source.needs_reconcile() {
-            return true;
-        }
         self.children_source
             .get()
             .iter()
@@ -1415,8 +1412,8 @@ impl Widget for Container {
             local_event.clone()
         };
 
-        // Let children handle first
-        for child in self.children_source.reconcile_and_get_mut() {
+        // Let children handle first (layout already reconciled)
+        for child in self.children_source.get_mut() {
             if child.event(&child_event) == EventResponse::Handled {
                 return EventResponse::Handled;
             }
@@ -1569,7 +1566,8 @@ impl Widget for Container {
             (x + padding.left, y + padding.top)
         };
 
-        let children = self.children_source.reconcile_and_get_mut();
+        // Layout already reconciled children, just get them
+        let children = self.children_source.get_mut();
         if !children.is_empty() {
             self.layout.layout(
                 children,

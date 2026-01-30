@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use super::invalidation::request_frame;
+use super::invalidation::{bump_reactive_version, request_frame};
 use super::owner::register_signal;
 use super::runtime::{SignalId, try_with_runtime};
 use super::storage::{
@@ -66,6 +66,7 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Signal<T> {
         let changed = with_signal_value(self.id, |old: &T| *old != value);
         if changed {
             set_signal_value(self.id, value);
+            bump_reactive_version();
             // Notify runtime (only on main thread)
             try_with_runtime(|rt| rt.notify_write(self.id));
             request_frame();
@@ -81,6 +82,7 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Signal<T> {
             old != new
         };
         if changed {
+            bump_reactive_version();
             try_with_runtime(|rt| rt.notify_write(self.id));
             request_frame();
         }
@@ -157,6 +159,7 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> WriteSignal<T> {
         let changed = with_signal_value(self.id, |old: &T| *old != value);
         if changed {
             set_signal_value(self.id, value);
+            bump_reactive_version();
             try_with_runtime(|rt| rt.notify_write(self.id));
             request_frame();
         }
@@ -174,6 +177,7 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> WriteSignal<T> {
             old != new
         };
         if changed {
+            bump_reactive_version();
             try_with_runtime(|rt| rt.notify_write(self.id));
             request_frame();
         }
