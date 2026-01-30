@@ -69,14 +69,40 @@ impl ChildrenSource {
 
     /// Reconcile all dynamic segments and rebuild merged list
     fn reconcile(&mut self) {
+        // First pass: check if any dynamic segment has changed keys
+        // We call items_fn() here, but avoid the expensive Vec rebuild if keys match
+        let mut segments_with_changes: Vec<(usize, Vec<DynItem>)> = Vec::new();
+
+        for (idx, segment) in self.segments.iter().enumerate() {
+            if let SegmentType::Dynamic {
+                items_fn,
+                current_keys,
+                ..
+            } = segment
+            {
+                let new_items = items_fn();
+                let new_keys: Vec<u64> = new_items.iter().map(|i| i.key).collect();
+
+                if new_keys != *current_keys {
+                    segments_with_changes.push((idx, new_items));
+                }
+            }
+        }
+
+        // If nothing changed, skip the entire rebuild
+        if segments_with_changes.is_empty() {
+            return;
+        }
+
         // Take ownership of old merged vec to avoid borrow conflicts
         let old_merged = std::mem::take(&mut self.merged);
         let mut old_merged_iter = old_merged.into_iter();
 
         // Build new merged vec by walking through segments
         let mut new_merged = Vec::with_capacity(old_merged_iter.len());
+        let mut change_idx = 0;
 
-        for segment in &mut self.segments {
+        for (idx, segment) in self.segments.iter_mut().enumerate() {
             match segment {
                 SegmentType::Static(count) => {
                     // Static widgets: take from old merged
@@ -87,24 +113,20 @@ impl ChildrenSource {
                     }
                 }
                 SegmentType::Dynamic {
-                    items_fn,
                     cached,
                     current_keys,
+                    ..
                 } => {
-                    // Get new items from the function
-                    let new_items = items_fn();
-                    let new_keys: Vec<u64> = new_items.iter().map(|item| item.key).collect();
+                    // Check if this segment has changes
+                    let has_changes = change_idx < segments_with_changes.len()
+                        && segments_with_changes[change_idx].0 == idx;
 
-                    // Check if keys changed
-                    if new_keys == *current_keys {
-                        // Keys unchanged - just move widgets from old merged to new merged
-                        for _ in 0..current_keys.len() {
-                            if let Some(widget) = old_merged_iter.next() {
-                                new_merged.push(widget);
-                            }
-                        }
-                    } else {
-                        // Keys changed - reconcile
+                    if has_changes {
+                        // Keys changed - reconcile using pre-computed items
+                        let (_, new_items) = std::mem::take(&mut segments_with_changes[change_idx]);
+                        change_idx += 1;
+
+                        let new_keys: Vec<u64> = new_items.iter().map(|i| i.key).collect();
 
                         // Move current widgets to cache
                         for key in current_keys.drain(..) {
@@ -129,6 +151,13 @@ impl ChildrenSource {
 
                         // Clear remaining cache (drops removed widgets, triggering cleanup)
                         cached.clear();
+                    } else {
+                        // Keys unchanged - just move widgets from old merged to new merged
+                        for _ in 0..current_keys.len() {
+                            if let Some(widget) = old_merged_iter.next() {
+                                new_merged.push(widget);
+                            }
+                        }
                     }
                 }
             }
