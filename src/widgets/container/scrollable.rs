@@ -144,7 +144,7 @@ impl Container {
         if let Some(anim) = scale_anim {
             anim.animate_to(target_scale);
             if anim.is_animating() {
-                anim.advance();
+                let _ = anim.advance(); // Paint-only, ignore result
                 request_animation_frame();
             }
         }
@@ -270,7 +270,7 @@ impl Container {
         if let Some(anim) = scale_anim {
             anim.animate_to(target_scale);
             if anim.is_animating() {
-                anim.advance();
+                let _ = anim.advance(); // Paint-only, ignore result
                 animating = true;
             }
         }

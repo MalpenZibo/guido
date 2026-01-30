@@ -2,6 +2,22 @@ use std::time::Instant;
 
 use crate::animation::{Animatable, SpringState, Transition};
 
+/// Result of advancing an animation, indicating whether the value changed
+#[derive(Debug, Clone, PartialEq)]
+pub enum AdvanceResult<T> {
+    /// Value did not change (animation not running or same value)
+    NoChange,
+    /// Value changed to a new value
+    Changed(T),
+}
+
+impl<T> AdvanceResult<T> {
+    /// Returns true if the value changed
+    pub fn is_changed(&self) -> bool {
+        matches!(self, AdvanceResult::Changed(_))
+    }
+}
+
 /// Animation state for animatable properties
 pub struct AnimationState<T: Animatable> {
     /// Current interpolated value
@@ -20,6 +36,8 @@ pub struct AnimationState<T: Animatable> {
     spring_state: Option<SpringState>,
     /// Whether the animation has been initialized with its first real value
     initialized: bool,
+    /// Previous value for change detection
+    prev_value: Option<T>,
 }
 
 impl<T: Animatable> AnimationState<T> {
@@ -41,6 +59,7 @@ impl<T: Animatable> AnimationState<T> {
             transition,
             spring_state,
             initialized: false, // Not yet initialized with real content-based value
+            prev_value: None,
         }
     }
 
@@ -61,10 +80,10 @@ impl<T: Animatable> AnimationState<T> {
         }
     }
 
-    /// Advance the animation and return the current value
-    pub fn advance(&mut self) -> T {
+    /// Advance the animation and return whether the value changed
+    pub fn advance(&mut self) -> AdvanceResult<T> {
         if self.progress >= 1.0 && self.spring_state.is_none() {
-            return self.current.clone();
+            return AdvanceResult::NoChange;
         }
 
         let elapsed = self.start_time.elapsed().as_secs_f32() * 1000.0; // Convert to ms
@@ -72,7 +91,7 @@ impl<T: Animatable> AnimationState<T> {
 
         if adjusted_elapsed <= 0.0 {
             // Still in delay period
-            return self.current.clone();
+            return AdvanceResult::NoChange;
         }
 
         // Calculate eased value based on timing function type
@@ -93,7 +112,7 @@ impl<T: Animatable> AnimationState<T> {
         };
 
         // Interpolate
-        self.current = T::lerp(&self.start, &self.target, eased_t);
+        let new_value = T::lerp(&self.start, &self.target, eased_t);
 
         // Update progress
         if let Some(ref state) = self.spring_state {
@@ -110,7 +129,16 @@ impl<T: Animatable> AnimationState<T> {
             self.progress = t;
         }
 
-        self.current.clone()
+        // Check if value actually changed
+        let changed = self.prev_value.as_ref() != Some(&new_value);
+        self.current = new_value.clone();
+        self.prev_value = Some(new_value.clone());
+
+        if changed {
+            AdvanceResult::Changed(new_value)
+        } else {
+            AdvanceResult::NoChange
+        }
     }
 
     /// Check if animation is still running
@@ -143,24 +171,52 @@ impl<T: Animatable> AnimationState<T> {
     }
 }
 
-/// Macro to advance an animation field, optionally updating its target first
+/// Macro to advance an animation field, optionally updating its target first.
+/// Uses AdvanceResult to determine when to mark dirty flags.
 #[macro_export]
 macro_rules! advance_anim {
-    // Simple advance (no target update)
-    ($self:expr, $anim:ident, $any_animating:expr) => {
+    // Layout animation: marks needs_layout when value changes
+    ($self:expr, $anim:ident, $any_animating:expr, layout) => {
         if let Some(ref mut anim) = $self.$anim {
             if anim.is_animating() {
-                anim.advance();
+                if anim.advance().is_changed() {
+                    $crate::reactive::mark_needs_layout($self.widget_id);
+                }
                 $any_animating = true;
             }
         }
     };
-    // With target update
-    ($self:expr, $anim:ident, $target_expr:expr, $any_animating:expr) => {
+    // Layout animation with target update
+    ($self:expr, $anim:ident, $target_expr:expr, $any_animating:expr, layout) => {
         if let Some(ref mut anim) = $self.$anim {
             anim.animate_to($target_expr);
             if anim.is_animating() {
-                anim.advance();
+                if anim.advance().is_changed() {
+                    $crate::reactive::mark_needs_layout($self.widget_id);
+                }
+                $any_animating = true;
+            }
+        }
+    };
+    // Paint animation: requests paint when value changes
+    ($self:expr, $anim:ident, $any_animating:expr, paint) => {
+        if let Some(ref mut anim) = $self.$anim {
+            if anim.is_animating() {
+                if anim.advance().is_changed() {
+                    $crate::reactive::request_paint();
+                }
+                $any_animating = true;
+            }
+        }
+    };
+    // Paint animation with target update
+    ($self:expr, $anim:ident, $target_expr:expr, $any_animating:expr, paint) => {
+        if let Some(ref mut anim) = $self.$anim {
+            anim.animate_to($target_expr);
+            if anim.is_animating() {
+                if anim.advance().is_changed() {
+                    $crate::reactive::request_paint();
+                }
                 $any_animating = true;
             }
         }
