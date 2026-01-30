@@ -233,8 +233,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
 
-    // DEBUG: Return solid magenta to verify fragments are being generated
-    // return vec4<f32>(1.0, 0.0, 1.0, 1.0);
+    // DEBUG: Return fill_color directly to check if it's being passed correctly
+    // return in.fill_color;
 
     let pos = in.frag_pos;
     let radius = in.shape_params.x;
@@ -242,14 +242,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Compute SDF for the shape
     let dist = rounded_rect_sdf(pos, in.shape_rect, radius, curvature);
-
-    // DEBUG: Visualize SDF distance - green = inside, red = outside
-    // let debug_dist = clamp(dist / 50.0, -1.0, 1.0);
-    // if (debug_dist < 0.0) {
-    //     return vec4<f32>(0.0, -debug_dist, 0.0, 1.0);  // Green for inside
-    // } else {
-    //     return vec4<f32>(debug_dist, 0.0, 0.0, 1.0);  // Red for outside
-    // }
 
     // Anti-aliasing using fwidth
     let aa = fwidth(dist) * 1.0;
@@ -319,20 +311,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         final_result = shape_result;
     }
 
-    // === Apply clip region ===
-    let clip_width = in.clip_rect.z;
-    let clip_height = in.clip_rect.w;
-    if (clip_width > 0.0 && clip_height > 0.0) {
-        let clip_radius = in.clip_params.x;
-        let clip_curvature = in.clip_params.y;
-
-        // Use screen position for clipping (transformed)
-        let clip_dist = rounded_rect_sdf(in.screen_pos, in.clip_rect, clip_radius, clip_curvature);
-        let clip_aa = fwidth(clip_dist);
-        let clip_alpha = 1.0 - smoothstep(-clip_aa, clip_aa, clip_dist);
-
-        final_result = vec4<f32>(final_result.rgb, final_result.a * clip_alpha);
-    }
+    // === Apply clip region (DISABLED for debugging) ===
+    // let clip_width = in.clip_rect.z;
+    // let clip_height = in.clip_rect.w;
+    // if (clip_width > 0.0 && clip_height > 0.0) {
+    //     let clip_radius = in.clip_params.x;
+    //     let clip_curvature = in.clip_params.y;
+    //
+    //     // Use screen position for clipping (transformed)
+    //     let clip_dist = rounded_rect_sdf(in.screen_pos, in.clip_rect, clip_radius, clip_curvature);
+    //     let clip_aa = fwidth(clip_dist);
+    //     let clip_alpha = 1.0 - smoothstep(-clip_aa, clip_aa, clip_dist);
+    //
+    //     final_result = vec4<f32>(final_result.rgb, final_result.a * clip_alpha);
+    // }
 
     return final_result;
 }
