@@ -154,13 +154,14 @@ impl TextRenderState {
                 let scaled_top = (entry.rect.y + ty) * scale_factor;
 
                 // Use clip rect if provided, otherwise use full screen
-                // Apply translation offset to clip bounds to match text position
+                // Clip bounds stay in screen space - don't apply transform translation
+                // (text position is transformed, but clip region should remain fixed)
                 let bounds = if let Some(clip_rect) = &entry.clip_rect {
                     TextBounds {
-                        left: ((clip_rect.x + tx) * scale_factor) as i32,
-                        top: ((clip_rect.y + ty) * scale_factor) as i32,
-                        right: ((clip_rect.x + clip_rect.width + tx) * scale_factor) as i32,
-                        bottom: ((clip_rect.y + clip_rect.height + ty) * scale_factor) as i32,
+                        left: (clip_rect.x * scale_factor) as i32,
+                        top: (clip_rect.y * scale_factor) as i32,
+                        right: ((clip_rect.x + clip_rect.width) * scale_factor) as i32,
+                        bottom: ((clip_rect.y + clip_rect.height) * scale_factor) as i32,
                     }
                 } else {
                     TextBounds {
