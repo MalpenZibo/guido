@@ -3,6 +3,7 @@ pub mod image_metadata;
 pub mod layout;
 pub mod reactive;
 pub mod surface;
+mod surface_manager;
 pub mod transform;
 pub mod transform_origin;
 pub mod widgets;
@@ -15,21 +16,16 @@ pub mod renderer;
 pub use guido_macros::component;
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 
 use layout::Constraints;
-
-// PaintContext capacity constants to avoid magic numbers
-const PAINT_CTX_SHAPES: usize = 32;
-const PAINT_CTX_TEXTS: usize = 16;
-const PAINT_CTX_OVERLAYS: usize = 8;
-use platform::{WaylandWindowWrapper, create_wayland_app};
+use platform::create_wayland_app;
 use reactive::{
     clear_animation_flag, init_wakeup, set_system_clipboard, take_clipboard_change,
     take_cursor_change, take_frame_request, with_app_state, with_app_state_mut,
 };
-use renderer::{GpuContext, Renderer, SurfaceState};
+use renderer::{GpuContext, Renderer};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, init_surface_commands};
+use surface_manager::{ManagedSurface, SurfaceManager};
 use widgets::Widget;
 use widgets::font::FontFamily;
 
@@ -98,17 +94,6 @@ struct SurfaceDefinition {
     id: SurfaceId,
     config: SurfaceConfig,
     widget_fn: Box<dyn FnOnce() -> Box<dyn Widget>>,
-}
-
-/// Per-surface runtime state during the event loop.
-struct SurfaceEntry {
-    #[allow(dead_code)] // Keep for debugging purposes
-    id: SurfaceId,
-    config: SurfaceConfig,
-    widget: Box<dyn Widget>,
-    paint_ctx: renderer::PaintContext,
-    wgpu_surface: Option<SurfaceState>,
-    previous_scale_factor: f32,
 }
 
 pub struct App {
@@ -234,8 +219,8 @@ impl App {
         // Create shared GPU context
         let gpu_context = GpuContext::new();
 
-        // Create runtime entries for each surface
-        let mut surface_entries: HashMap<SurfaceId, SurfaceEntry> = HashMap::new();
+        // Create surface manager and runtime entries for each surface
+        let mut surface_manager = SurfaceManager::new();
         let mut renderer: Option<Renderer> = None;
 
         // Create entries for surfaces added via add_surface()
@@ -244,26 +229,24 @@ impl App {
                 .get_surface(def.id)
                 .expect("Surface should exist after configure");
 
-            let window_handle = WaylandWindowWrapper::new(&connection, &wayland_surface.wl_surface);
+            // Create the widget and managed surface
+            let widget = (def.widget_fn)();
+            let mut managed = ManagedSurface::new(def.id, def.config, widget);
 
-            let initial_scale = wayland_surface.scale_factor.max(1.0) as u32;
-            let physical_width = wayland_surface.width * initial_scale;
-            let physical_height = wayland_surface.height * initial_scale;
-
-            log::info!(
-                "Creating wgpu surface for {:?}: logical {}x{}, physical {}x{}, scale {}",
-                def.id,
+            // Initialize GPU surface
+            managed.init_gpu(
+                &gpu_context,
+                &connection,
+                &wayland_surface.wl_surface,
                 wayland_surface.width,
                 wayland_surface.height,
-                physical_width,
-                physical_height,
-                initial_scale
+                wayland_surface.scale_factor,
             );
 
-            let wgpu_surface =
-                gpu_context.create_surface(window_handle, physical_width, physical_height);
-
-            if renderer.is_none() {
+            // Create renderer from first surface
+            if renderer.is_none()
+                && let Some(ref wgpu_surface) = managed.wgpu_surface
+            {
                 let r = Renderer::new(
                     wgpu_surface.device.clone(),
                     wgpu_surface.queue.clone(),
@@ -272,32 +255,7 @@ impl App {
                 renderer = Some(r);
             }
 
-            let mut widget = (def.widget_fn)();
-
-            let constraints = Constraints::new(
-                0.0,
-                0.0,
-                wayland_surface.width as f32,
-                wayland_surface.height as f32,
-            );
-            widget.layout(constraints);
-            widget.set_origin(0.0, 0.0);
-
-            surface_entries.insert(
-                def.id,
-                SurfaceEntry {
-                    id: def.id,
-                    config: def.config,
-                    widget,
-                    paint_ctx: renderer::PaintContext::with_capacity(
-                        PAINT_CTX_SHAPES,
-                        PAINT_CTX_TEXTS,
-                        PAINT_CTX_OVERLAYS,
-                    ),
-                    wgpu_surface: Some(wgpu_surface),
-                    previous_scale_factor: wayland_surface.scale_factor,
-                },
-            );
+            surface_manager.add(managed);
         }
 
         let mut renderer = renderer.expect("At least one surface should exist");
@@ -376,32 +334,18 @@ impl App {
                             config.keyboard_interactivity,
                         );
 
-                        // Create the widget
+                        // Create the widget and managed surface (GPU init happens later)
                         let widget = widget_fn();
-
-                        surface_entries.insert(
-                            id,
-                            SurfaceEntry {
-                                id,
-                                config,
-                                widget,
-                                paint_ctx: renderer::PaintContext::with_capacity(
-                                    PAINT_CTX_SHAPES,
-                                    PAINT_CTX_TEXTS,
-                                    PAINT_CTX_OVERLAYS,
-                                ),
-                                wgpu_surface: None, // Will be created after configure
-                                previous_scale_factor: 1.0,
-                            },
-                        );
+                        let managed = ManagedSurface::new(id, config, widget);
+                        surface_manager.add(managed);
                     }
                     SurfaceCommand::Close(id) => {
                         log::info!("Closing dynamic surface {:?}", id);
                         wayland_state.destroy_surface(id);
-                        surface_entries.remove(&id);
+                        surface_manager.remove(id);
 
                         // If no surfaces left, exit
-                        if surface_entries.is_empty() {
+                        if surface_manager.is_empty() {
                             wayland_state.exit = true;
                         }
                     }
@@ -432,8 +376,11 @@ impl App {
                 }
             }
 
+            // Initialize GPU for any pending surfaces (newly created dynamic surfaces)
+            surface_manager.init_pending_gpu(&gpu_context, &connection, &wayland_state);
+
             // Process each surface
-            let surface_ids: Vec<SurfaceId> = surface_entries.keys().copied().collect();
+            let surface_ids: Vec<SurfaceId> = surface_manager.ids().collect();
 
             for id in surface_ids {
                 // Get wayland surface state
@@ -456,32 +403,13 @@ impl App {
                 let wl_surface = wayland_surface.wl_surface.clone();
 
                 // Get surface entry
-                let Some(entry) = surface_entries.get_mut(&id) else {
+                let Some(surface) = surface_manager.get_mut(id) else {
                     continue;
                 };
 
-                // Create wgpu surface if needed (for newly configured dynamic surfaces)
-                if entry.wgpu_surface.is_none() {
-                    let window_handle = WaylandWindowWrapper::new(&connection, &wl_surface);
-                    let initial_scale = scale_factor.max(1.0) as u32;
-                    let physical_width = width * initial_scale;
-                    let physical_height = height * initial_scale;
-
-                    log::info!(
-                        "Creating wgpu surface for dynamic surface {:?}: {}x{}",
-                        id,
-                        physical_width,
-                        physical_height
-                    );
-
-                    let wgpu_surface =
-                        gpu_context.create_surface(window_handle, physical_width, physical_height);
-                    entry.wgpu_surface = Some(wgpu_surface);
-
-                    // Initial layout
-                    let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
-                    entry.widget.layout(constraints);
-                    entry.widget.set_origin(0.0, 0.0);
+                // Skip if GPU not ready (will be initialized next frame)
+                if !surface.is_gpu_ready() {
+                    continue;
                 }
 
                 // Check for paste events
@@ -503,7 +431,7 @@ impl App {
 
                 // Dispatch events to widget
                 for event in events {
-                    entry.widget.event(&event);
+                    surface.widget.event(&event);
                 }
 
                 // Sync clipboard to Wayland if it changed (copy operations)
@@ -521,12 +449,12 @@ impl App {
                 let physical_width = width * scale;
                 let physical_height = height * scale;
 
-                let wgpu_surface = entry.wgpu_surface.as_mut().unwrap();
+                let wgpu_surface = surface.wgpu_surface.as_mut().unwrap();
 
                 // Check for resize or scale change
                 let needs_resize = wgpu_surface.width() != physical_width
                     || wgpu_surface.height() != physical_height;
-                let scale_changed = scale_factor != entry.previous_scale_factor;
+                let scale_changed = scale_factor != surface.previous_scale_factor;
 
                 if needs_resize {
                     log::info!(
@@ -549,10 +477,10 @@ impl App {
                     log::info!(
                         "Surface {:?} scale factor changed: {} -> {}",
                         id,
-                        entry.previous_scale_factor,
+                        surface.previous_scale_factor,
                         scale_factor
                     );
-                    entry.previous_scale_factor = scale_factor;
+                    surface.previous_scale_factor = scale_factor;
 
                     // Mark that we need to re-render with new scale factor
                     with_app_state_mut(|state| {
@@ -583,16 +511,16 @@ impl App {
 
                     // Re-layout (for reactive updates)
                     let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
-                    entry.widget.layout(constraints);
+                    surface.widget.layout(constraints);
 
                     // Paint - clear and reuse existing context to avoid allocations
-                    entry.paint_ctx.clear();
-                    entry.widget.paint(&mut entry.paint_ctx);
+                    surface.paint_ctx.clear();
+                    surface.widget.paint(&mut surface.paint_ctx);
 
                     renderer.render(
                         wgpu_surface,
-                        &entry.paint_ctx,
-                        entry.config.background_color,
+                        &surface.paint_ctx,
+                        surface.config.background_color,
                     );
 
                     // Clear flags after rendering
