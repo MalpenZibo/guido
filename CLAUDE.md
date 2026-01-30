@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Guido is a reactive Rust GUI library using wgpu for rendering Wayland layer shell widgets (status bars, panels, etc.). The library emphasizes composition from minimal primitives, reactive properties, and GPU-accelerated rendering with animations.
 
+**Note: Backward compatibility is NOT a concern for this project.** Feel free to remove legacy code, refactor APIs, and make breaking changes when it improves the codebase. The library is under active development and not yet stable.
+
 ## Documentation
 
 ### Developer Reference (`docs/`)
