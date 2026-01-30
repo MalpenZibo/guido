@@ -186,6 +186,19 @@ pub fn take_layout_roots() -> Vec<WidgetId> {
     WIDGET_TREE.with(|tree| tree.borrow_mut().take_layout_roots())
 }
 
+/// Global version counter - incremented whenever any signal changes
+static GLOBAL_REACTIVE_VERSION: AtomicU64 = AtomicU64::new(0);
+
+/// Increment the global reactive version (called when any signal changes)
+pub fn bump_reactive_version() {
+    GLOBAL_REACTIVE_VERSION.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Get the current global reactive version
+pub fn get_reactive_version() -> u64 {
+    GLOBAL_REACTIVE_VERSION.load(Ordering::Relaxed)
+}
+
 /// Global flag to indicate a frame is requested
 static FRAME_REQUESTED: AtomicBool = AtomicBool::new(false);
 
