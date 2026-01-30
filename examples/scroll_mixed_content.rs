@@ -18,11 +18,7 @@ fn main() {
     fn form_field(label: &'static str, input_signal: Signal<String>) -> Container {
         container()
             .layout(Flex::column().spacing(4.0))
-            .child(
-                text(label)
-                    .color(Color::rgb(0.7, 0.7, 0.8))
-                    .font_size(12.0),
-            )
+            .child(text(label).color(Color::rgb(0.7, 0.7, 0.8)).font_size(12.0))
             .child(
                 container()
                     .padding(8.0)
@@ -56,11 +52,7 @@ fn main() {
                             .content_fit(ContentFit::Cover),
                     ),
             )
-            .child(
-                text(label)
-                    .font_size(11.0)
-                    .color(Color::rgb(0.6, 0.6, 0.7)),
-            )
+            .child(text(label).font_size(11.0).color(Color::rgb(0.6, 0.6, 0.7)))
     }
 
     // Main scrollable content
@@ -157,7 +149,9 @@ fn main() {
                                                     .corner_radius(6.0)
                                                     .hover_state(|s| s.lighter(0.05))
                                                     .pressed_state(|s| s.ripple())
-                                                    .child(text(item).color(Color::rgb(0.8, 0.8, 0.9)))
+                                                    .child(
+                                                        text(item).color(Color::rgb(0.8, 0.8, 0.9)),
+                                                    )
                                             })
                                             .collect::<Vec<_>>(),
                                         ),
@@ -195,13 +189,20 @@ fn main() {
                                                                 .layout(Flex::column().spacing(2.0))
                                                                 .child(
                                                                     text(format!("Activity {}", i))
-                                                                        .color(Color::rgb(0.8, 0.8, 0.9))
+                                                                        .color(Color::rgb(
+                                                                            0.8, 0.8, 0.9,
+                                                                        ))
                                                                         .font_size(13.0),
                                                                 )
                                                                 .child(
-                                                                    text(format!("{} hours ago", i * 2))
-                                                                        .color(Color::rgb(0.5, 0.5, 0.6))
-                                                                        .font_size(11.0),
+                                                                    text(format!(
+                                                                        "{} hours ago",
+                                                                        i * 2
+                                                                    ))
+                                                                    .color(Color::rgb(
+                                                                        0.5, 0.5, 0.6,
+                                                                    ))
+                                                                    .font_size(11.0),
                                                                 ),
                                                         )
                                                 })

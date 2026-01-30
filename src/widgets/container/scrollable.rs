@@ -221,14 +221,20 @@ impl Container {
 
         // Advance vertical scrollbar scale animation
         if self.scroll_axis.allows_vertical() && needs_vertical {
-            any_animating |=
-                self.advance_scrollbar_scale_axis(ScrollbarAxis::Vertical, scale_factor, needs_horizontal);
+            any_animating |= self.advance_scrollbar_scale_axis(
+                ScrollbarAxis::Vertical,
+                scale_factor,
+                needs_horizontal,
+            );
         }
 
         // Advance horizontal scrollbar scale animation
         if self.scroll_axis.allows_horizontal() && needs_horizontal {
-            any_animating |=
-                self.advance_scrollbar_scale_axis(ScrollbarAxis::Horizontal, scale_factor, needs_vertical);
+            any_animating |= self.advance_scrollbar_scale_axis(
+                ScrollbarAxis::Horizontal,
+                scale_factor,
+                needs_vertical,
+            );
         }
 
         any_animating

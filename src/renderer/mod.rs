@@ -974,7 +974,8 @@ impl PaintContext {
         } else {
             rect
         };
-        self.clip_stack.push((adjusted_rect, corner_radius, curvature));
+        self.clip_stack
+            .push((adjusted_rect, corner_radius, curvature));
     }
 
     /// Pop a clip region from the stack
