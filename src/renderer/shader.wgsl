@@ -14,12 +14,12 @@ struct VertexInput {
     @location(7) shadow_offset: vec2<f32>,  // shadow offset in NDC (x, y)
     @location(8) shadow_params: vec2<f32>,  // x = blur, y = spread
     @location(9) shadow_color: vec4<f32>,
-    @location(10) transform_row0: vec4<f32>,
-    @location(11) transform_row1: vec4<f32>,
-    @location(12) transform_row2: vec4<f32>,
-    @location(13) transform_row3: vec4<f32>,
-    @location(14) local_pos: vec2<f32>,  // untransformed position for SDF
-    @location(15) clip_rect: vec4<f32>,  // clip region: min_x, min_y, max_x, max_y in NDC
+    @location(10) transform_row0: vec4<f32>,  // 2D affine row 0: [a, b, 0, tx]
+    @location(11) transform_row1: vec4<f32>,  // 2D affine row 1: [c, d, 0, ty]
+    @location(12) clip_inv_row0: vec4<f32>,   // inverse transform for clip (row 0)
+    @location(13) clip_inv_row1: vec4<f32>,   // inverse transform for clip (row 1)
+    @location(14) local_pos: vec2<f32>,       // untransformed position for SDF
+    @location(15) clip_rect: vec4<f32>,       // clip region: min_x, min_y, max_x, max_y in NDC
 }
 
 struct VertexOutput {
@@ -34,22 +34,25 @@ struct VertexOutput {
     @location(7) shadow_offset: vec2<f32>,
     @location(8) shadow_params: vec2<f32>,  // x = blur, y = spread
     @location(9) shadow_color: vec4<f32>,
-    @location(10) clip_rect: vec4<f32>,  // clip region in NDC (screen space)
+    @location(10) clip_rect: vec4<f32>,  // clip region in NDC (local space)
     @location(11) clip_radius: f32,  // clip corner radius (uniform, height-based NDC)
     @location(12) screen_pos: vec2<f32>,  // transformed position for clipping (screen space)
+    @location(13) clip_inv_row0: vec4<f32>,  // inverse clip transform (row 0)
+    @location(14) clip_inv_row1: vec4<f32>,  // inverse clip transform (row 1)
 }
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
 
-    // Build transform matrix from row vectors
+    // Build transform matrix from 2 row vectors (2D affine transform)
+    // Rows 2 and 3 are identity: [0, 0, 1, 0] and [0, 0, 0, 1]
     // WGSL mat4x4 constructor takes columns, so we transpose by extracting columns from rows
     let transform = mat4x4<f32>(
-        vec4<f32>(in.transform_row0.x, in.transform_row1.x, in.transform_row2.x, in.transform_row3.x),
-        vec4<f32>(in.transform_row0.y, in.transform_row1.y, in.transform_row2.y, in.transform_row3.y),
-        vec4<f32>(in.transform_row0.z, in.transform_row1.z, in.transform_row2.z, in.transform_row3.z),
-        vec4<f32>(in.transform_row0.w, in.transform_row1.w, in.transform_row2.w, in.transform_row3.w)
+        vec4<f32>(in.transform_row0.x, in.transform_row1.x, 0.0, 0.0),
+        vec4<f32>(in.transform_row0.y, in.transform_row1.y, 0.0, 0.0),
+        vec4<f32>(in.transform_row0.z, in.transform_row1.z, 1.0, 0.0),
+        vec4<f32>(in.transform_row0.w, in.transform_row1.w, 0.0, 1.0)
     );
 
     // Transform position for screen placement
@@ -74,6 +77,9 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.clip_radius = in.shape_curvature.y;
     // Pass transformed position for screen-space clipping
     out.screen_pos = transformed.xy;
+    // Pass clip inverse transform for rotated clipping
+    out.clip_inv_row0 = in.clip_inv_row0;
+    out.clip_inv_row1 = in.clip_inv_row1;
 
     return out;
 }
@@ -310,25 +316,43 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // Apply clip region if defined (clip_rect width > 0)
-    // Use screen_pos (transformed) for clipping since clip_rect is in screen space
+    // clip_rect is in local (untransformed) space, so we need to transform
+    // screen_pos back to local space using the inverse clip transform.
     let clip_width = in.clip_rect.z - in.clip_rect.x;
     let clip_height = in.clip_rect.w - in.clip_rect.y;
     if (clip_width > 0.0 && clip_height > 0.0) {
-        // Scale screen position and clip region for aspect ratio
-        let scaled_screen_pos = vec2<f32>(in.screen_pos.x * aspect, in.screen_pos.y);
+        // Transform screen_pos back to clip-local space using inverse transform.
+        // This handles rotated/transformed containers correctly.
+        // The inverse transform is a 2D affine transform stored in two rows:
+        // | a  b  0  tx |  -> row0 = [a, b, 0, tx]
+        // | c  d  0  ty |  -> row1 = [c, d, 0, ty]
+        let inv_a = in.clip_inv_row0.x;
+        let inv_b = in.clip_inv_row0.y;
+        let inv_tx = in.clip_inv_row0.w;
+        let inv_c = in.clip_inv_row1.x;
+        let inv_d = in.clip_inv_row1.y;
+        let inv_ty = in.clip_inv_row1.w;
+
+        // Apply inverse transform to get local position for clip testing
+        let local_clip_x = inv_a * in.screen_pos.x + inv_b * in.screen_pos.y + inv_tx;
+        let local_clip_y = inv_c * in.screen_pos.x + inv_d * in.screen_pos.y + inv_ty;
+        let local_clip_pos = vec2<f32>(local_clip_x, local_clip_y);
+
+        // Scale local position and clip region for aspect ratio
+        let scaled_local_clip_pos = vec2<f32>(local_clip_pos.x * aspect, local_clip_pos.y);
         let scaled_clip_rect = vec4<f32>(
             in.clip_rect.x * aspect,
             in.clip_rect.y,
             in.clip_rect.z * aspect,
             in.clip_rect.w
         );
-        // clip_radius is uniform (height-based NDC), which matches scaled space
-        // In scaled space, x coords are scaled by aspect, so distances match y
-        // Therefore we use clip_radius directly for both dimensions
+        // clip_radius is height-based NDC, which is already in "uniform" units
+        // (the same units that y coordinates use after aspect scaling).
+        // No additional scaling needed - both components should be equal for circular corners.
         let scaled_clip_radius = vec2<f32>(in.clip_radius, in.clip_radius);
 
         // Compute clip SDF (use K=1.0 for circular corners)
-        let clip_dist = rounded_rect_sdf(scaled_screen_pos, scaled_clip_rect, scaled_clip_radius, 1.0);
+        let clip_dist = rounded_rect_sdf(scaled_local_clip_pos, scaled_clip_rect, scaled_clip_radius, 1.0);
         let clip_aa = fwidth(clip_dist);
         let clip_alpha = 1.0 - smoothstep(-clip_aa, clip_aa, clip_dist);
 

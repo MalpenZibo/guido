@@ -220,6 +220,15 @@ impl Transform {
         self.data[7] *= factor;
     }
 
+    /// Returns a copy of this transform with translation removed (tx=0, ty=0).
+    /// Preserves rotation and scale.
+    pub fn without_translation(&self) -> Self {
+        let mut result = *self;
+        result.data[3] = 0.0; // tx
+        result.data[7] = 0.0; // ty
+        result
+    }
+
     /// Extract the X and Y scale components from the transform matrix.
     ///
     /// For transforms that contain rotation and/or scale:
@@ -342,6 +351,29 @@ impl Transform {
                 1.0,
             ],
         }
+    }
+
+    /// Extract the rotation angle in radians from this transform.
+    ///
+    /// This extracts the rotation angle even when the transform also contains
+    /// scale and translation. Returns 0 for degenerate transforms.
+    pub fn extract_rotation_angle(&self) -> f32 {
+        let (sx, sy) = self.extract_scale_components();
+
+        // Avoid division by zero for degenerate transforms
+        if sx < 1e-10 || sy < 1e-10 {
+            return 0.0;
+        }
+
+        let a = self.data[0];
+        let c = self.data[4];
+
+        // For a rotation matrix:
+        // | cos(θ)  -sin(θ) |
+        // | sin(θ)   cos(θ) |
+        // After removing scale: a/sx = cos(θ), c/sy = sin(θ)
+        // So: θ = atan2(sin(θ), cos(θ)) = atan2(c/sy, a/sx)
+        (c / sy).atan2(a / sx)
     }
 }
 
