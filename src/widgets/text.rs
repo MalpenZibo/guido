@@ -17,6 +17,7 @@ pub struct Text {
     font_weight: MaybeDyn<FontWeight>,
     /// If true, text won't wrap and will be clipped by parent container
     nowrap: bool,
+    /// Cached values for painting (avoid re-reading signals)
     cached_text: String,
     cached_font_size: f32,
     cached_font_family: FontFamily,
@@ -111,52 +112,32 @@ impl Text {
         self
     }
 
-    /// Refresh cached values only when they've changed.
-    /// Returns true if any value changed (requiring re-measurement).
-    fn refresh(&mut self) -> bool {
-        let new_text = self.content.get();
-        let new_font_size = self.font_size.get();
-        let new_font_family = self.font_family.get();
-        let new_font_weight = self.font_weight.get();
-
-        let text_changed = new_text != self.cached_text;
-        let font_size_changed = (new_font_size - self.cached_font_size).abs() > f32::EPSILON;
-        let font_family_changed = new_font_family != self.cached_font_family;
-        let font_weight_changed = new_font_weight != self.cached_font_weight;
-
-        if text_changed {
-            self.cached_text = new_text;
-        }
-        if font_size_changed {
-            self.cached_font_size = new_font_size;
-        }
-        if font_family_changed {
-            self.cached_font_family = new_font_family;
-        }
-        if font_weight_changed {
-            self.cached_font_weight = new_font_weight;
-        }
-
-        text_changed || font_size_changed || font_family_changed || font_weight_changed
+    /// Refresh cached values from reactive properties.
+    /// Updates cached values for use in painting.
+    fn refresh(&mut self) {
+        self.cached_text = self.content.get();
+        self.cached_font_size = self.font_size.get();
+        self.cached_font_family = self.font_family.get();
+        self.cached_font_weight = self.font_weight.get();
     }
 }
 
 impl Widget for Text {
     fn layout(&mut self, constraints: Constraints) -> Size {
-        let content_changed = self.refresh();
+        // Refresh cached values from reactive properties
+        self.refresh();
 
-        // Skip re-measurement if nothing changed and we don't need layout
-        if !content_changed && !self.needs_layout() && self.bounds.width > 0.0 {
-            return Size::new(self.bounds.width, self.bounds.height);
-        }
-
-        // Use actual font metrics for accurate measurement
+        // Determine the effective max_width for measurement
         // If nowrap is true, don't pass max_width so text won't wrap
         let max_width = if self.nowrap {
             None
-        } else {
+        } else if constraints.max_width.is_finite() {
             Some(constraints.max_width)
+        } else {
+            None
         };
+
+        // Measure text (TextMeasurer caches results internally)
         let measured = measure_text_styled(
             &self.cached_text,
             self.cached_font_size,
