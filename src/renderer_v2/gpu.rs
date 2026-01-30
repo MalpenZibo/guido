@@ -131,11 +131,12 @@ pub struct ShapeInstance {
     /// Padding for alignment
     pub _pad2: [f32; 2],
 
-    // === Transform (2x3 affine matrix + origin) ===
+    // === Transform (2x3 affine matrix) ===
     /// Transform matrix: [a, b, tx, c, d, ty] (row-major 2x3)
+    /// Note: Transform origin is baked into the matrix via center_at() on CPU
     pub transform: [f32; 6],
-    /// Transform origin in logical pixels (x, y)
-    pub transform_origin: [f32; 2],
+    /// Padding for alignment (origin was baked into transform matrix)
+    pub _pad3: [f32; 2],
 }
 
 impl Default for ShapeInstance {
@@ -158,7 +159,7 @@ impl Default for ShapeInstance {
             clip_curvature: 1.0,
             _pad2: [0.0, 0.0],
             transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0], // identity
-            transform_origin: [0.0, 0.0],
+            _pad3: [0.0, 0.0],
         }
     }
 }
@@ -232,10 +233,10 @@ impl ShapeInstance {
     }
 
     /// Set the transform from a 2x3 affine matrix.
+    /// Note: The origin should be baked into the matrix via center_at() on CPU.
     #[allow(dead_code)]
-    pub fn with_transform(mut self, transform: [f32; 6], origin: [f32; 2]) -> Self {
+    pub fn with_transform(mut self, transform: [f32; 6]) -> Self {
         self.transform = transform;
-        self.transform_origin = origin;
         self
     }
 
@@ -305,7 +306,7 @@ impl ShapeInstance {
                     shader_location: 10,
                     format: VertexFormat::Float32x4,
                 },
-                // transform[4..6], transform_origin (d, ty, origin_x, origin_y)
+                // transform[4..6], _pad3 (d, ty, _pad, _pad)
                 VertexAttribute {
                     offset: 160,
                     shader_location: 11,

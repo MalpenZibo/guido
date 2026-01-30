@@ -390,7 +390,7 @@ impl RendererV2 {
                     clip_curvature: 1.0,
                     _pad2: [0.0, 0.0],
                     transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                    transform_origin: [0.0, 0.0],
+                    _pad3: [0.0, 0.0],
                 };
 
                 // Border
@@ -466,7 +466,7 @@ impl RendererV2 {
                     clip_curvature: 1.0,
                     _pad2: [0.0, 0.0],
                     transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                    transform_origin: [0.0, 0.0],
+                    _pad3: [0.0, 0.0],
                 };
 
                 // Clip
@@ -481,7 +481,7 @@ impl RendererV2 {
                     instance.clip_curvature = clip.curvature;
                 }
 
-                // Transform
+                // Transform (origin already baked into matrix via center_at)
                 if !cmd.world_transform.is_identity() {
                     let t = &cmd.world_transform;
                     instance.transform = [
@@ -492,10 +492,6 @@ impl RendererV2 {
                         t.data[5],
                         t.data[7] * scale,
                     ];
-
-                    if let Some((ox, oy)) = cmd.world_transform_origin {
-                        instance.transform_origin = [ox * scale, oy * scale];
-                    }
                 }
 
                 Some(instance)

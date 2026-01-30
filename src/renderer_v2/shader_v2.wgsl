@@ -43,7 +43,7 @@ struct InstanceInput {
     @location(9) clip_params: vec4<f32>,
     // transform: a, b, tx, c
     @location(10) transform_0: vec4<f32>,
-    // transform: d, ty, origin_x, origin_y
+    // transform: d, ty, _pad, _pad
     @location(11) transform_1: vec4<f32>,
 }
 
@@ -232,9 +232,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (in.shape_rect.z <= 0.0 || in.shape_rect.w <= 0.0) {
         discard;
     }
-
-    // DEBUG: Return fill_color directly to check if it's being passed correctly
-    // return in.fill_color;
 
     let pos = in.frag_pos;
     let radius = in.shape_params.x;
