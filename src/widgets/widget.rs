@@ -416,6 +416,29 @@ pub trait Widget {
     fn has_focus_descendant(&self, _id: WidgetId) -> bool {
         false
     }
+
+    /// Check if this widget is a relayout boundary.
+    /// Relayout boundaries have fixed size - layout changes inside
+    /// don't affect their own size or parent layout.
+    /// Default returns false (most widgets are not boundaries).
+    fn is_relayout_boundary(&self) -> bool {
+        false
+    }
+
+    /// Mark this widget as needing layout.
+    /// Bubbles up to parent until hitting a relayout boundary.
+    /// Default implementation marks dirty and requests frame.
+    fn mark_needs_layout(&mut self) {
+        self.mark_dirty(ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT);
+        crate::reactive::request_frame();
+    }
+
+    /// Mark this widget as needing paint only (doesn't affect layout).
+    /// Default implementation marks paint dirty and requests frame.
+    fn mark_needs_paint(&mut self) {
+        self.mark_dirty(ChangeFlags::NEEDS_PAINT);
+        crate::reactive::request_frame();
+    }
 }
 
 #[cfg(test)]

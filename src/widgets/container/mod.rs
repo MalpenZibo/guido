@@ -14,7 +14,8 @@ use crate::advance_anim;
 use crate::animation::Transition;
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
-    ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId, focused_widget, request_animation_frame,
+    ChangeFlags, IntoMaybeDyn, MaybeDyn, WidgetId, add_layout_root, focused_widget,
+    get_widget_parent, request_animation_frame, request_frame, set_widget_parent,
 };
 use crate::renderer::PaintContext;
 use crate::renderer::primitives::{GradientDir, Shadow};
@@ -1087,6 +1088,11 @@ impl Widget for Container {
         // Reconcile and layout children
         let children = self.children_source.reconcile_and_get_mut();
 
+        // Update parent tracking for all children
+        for child in children.iter() {
+            set_widget_parent(child.id(), self.widget_id);
+        }
+
         if has_size_animations {
             for child in children.iter_mut() {
                 child.mark_dirty_recursive(ChangeFlags::NEEDS_LAYOUT);
@@ -1609,6 +1615,49 @@ impl Widget for Container {
 
     fn has_focus_descendant(&self, id: WidgetId) -> bool {
         self.widget_has_focus(id)
+    }
+
+    fn is_relayout_boundary(&self) -> bool {
+        // Widget is a boundary if it has fixed width AND height
+        let has_fixed_width = self.width.as_ref().is_some_and(|w| w.get().exact.is_some());
+        let has_fixed_height = self
+            .height
+            .as_ref()
+            .is_some_and(|h| h.get().exact.is_some());
+        has_fixed_width && has_fixed_height
+    }
+
+    fn mark_needs_layout(&mut self) {
+        // If already dirty, parent was already notified
+        if self.dirty_flags.contains(ChangeFlags::NEEDS_LAYOUT) {
+            return;
+        }
+
+        self.dirty_flags |= ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT;
+
+        if self.is_relayout_boundary() {
+            // Stop here - add to layout roots
+            add_layout_root(self.widget_id);
+            request_frame();
+        } else if let Some(parent_id) = get_widget_parent(self.widget_id) {
+            // Bubble up to parent by requesting layout on parent widget
+            // Note: We can't directly call parent.mark_needs_layout() since we don't have
+            // a reference to it. Instead, we add ourselves to layout roots and request frame.
+            // The parent tracking is for future use when we can look up widgets by ID.
+            add_layout_root(self.widget_id);
+            request_frame();
+            // Mark the parent as needing layout too (global flag)
+            parent_id.request_layout();
+        } else {
+            // At root - add to layout roots
+            add_layout_root(self.widget_id);
+            request_frame();
+        }
+    }
+
+    fn mark_needs_paint(&mut self) {
+        self.dirty_flags |= ChangeFlags::NEEDS_PAINT;
+        request_frame();
     }
 }
 

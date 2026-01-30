@@ -387,4 +387,16 @@ impl Widget for OwnedWidget {
     fn has_focus_descendant(&self, id: WidgetId) -> bool {
         self.inner.has_focus_descendant(id)
     }
+
+    fn is_relayout_boundary(&self) -> bool {
+        self.inner.is_relayout_boundary()
+    }
+
+    fn mark_needs_layout(&mut self) {
+        self.inner.mark_needs_layout()
+    }
+
+    fn mark_needs_paint(&mut self) {
+        self.inner.mark_needs_paint()
+    }
 }
