@@ -5,16 +5,19 @@ This page explains how Guido renders widgets to the screen.
 ## Pipeline Overview
 
 ```
-1. Layout Pass
-   widget.layout(constraints) → Size
+1. Animation Advancement
+   widget.advance_animations() → Update animation states
 
-2. Paint Pass
+2. Layout Pass
+   widget.layout(constraints) → Size (skipped if cached)
+
+3. Paint Pass
    widget.paint(ctx) → Shapes added to PaintContext
 
-3. GPU Submission
+4. GPU Submission
    PaintContext → Vertex/Index buffers → GPU
 
-4. Render Order
+5. Render Order
    Background shapes → Text → Overlay shapes
 ```
 
@@ -170,6 +173,20 @@ ctx.pop_clip();
 
 Clipping respects corner radius for proper rounded container clipping.
 
+## Animation Advancement
+
+Before layout, the render loop calls `advance_animations()` on the widget tree:
+
+```rust
+// Main loop each frame:
+widget.advance_animations();  // Update animation states
+widget.layout(constraints);   // Calculate sizes (may skip if cached)
+widget.paint(ctx);            // Render to screen
+```
+
+This allows animations to update their internal state (e.g., spring physics,
+time-based easing) before layout reads the animated values.
+
 ## Performance Notes
 
 ### Vertex Buffer Reuse
@@ -185,6 +202,25 @@ self.indices.clear();   // Reuse allocation
 
 Similar shapes batch together to reduce draw calls. Text renders in a single pass using the glyph atlas.
 
-### Dirty Tracking
+### Layout Optimization
 
-Currently, the entire tree re-layouts and re-paints each frame. Future optimization: relayout boundaries to skip unchanged subtrees.
+The layout system includes several optimizations:
+
+**Relayout Boundaries**: Widgets with fixed width and height are relayout boundaries.
+Layout changes inside don't propagate to the parent, limiting recalculation scope.
+
+**Layout Caching**: Layout results are cached. The system uses reactive version tracking
+to detect when signals have changed. Layout only runs when:
+- Constraints change
+- Animations are active
+- Reactive state (signals) update
+
+**Paint-Only Scrolling**: Scroll is implemented as a transform operation during paint,
+not a layout change. When content scrolls:
+1. Scroll offset is stored as a transform
+2. Transform is applied during paint phase
+3. Children render at their original layout positions
+4. The transform shifts content visually
+5. Clip bounds are adjusted for correct clipping
+
+This means scrolling doesn't trigger layout, significantly reducing CPU overhead.
