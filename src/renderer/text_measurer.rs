@@ -2,16 +2,36 @@ use crate::layout::Size;
 use crate::widgets::font::{FontFamily, FontWeight};
 use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping};
 use std::cell::RefCell;
+use std::collections::HashMap;
+
+/// Cache key for measurement results.
+/// Uses f32::to_bits() for hashable floats.
+#[derive(Hash, Eq, PartialEq, Clone)]
+struct MeasureCacheKey {
+    text: String,
+    font_size_bits: u32,
+    font_family: FontFamily,
+    font_weight: FontWeight,
+    max_width_bits: Option<u32>,
+}
 
 pub struct TextMeasurer {
     font_system: FontSystem,
+    measure_cache: HashMap<MeasureCacheKey, Size>,
 }
 
 impl TextMeasurer {
     pub fn new() -> Self {
         Self {
             font_system: FontSystem::new(),
+            measure_cache: HashMap::new(),
         }
+    }
+
+    /// Clear the measurement cache. Useful for memory management.
+    #[allow(dead_code)]
+    pub fn clear_cache(&mut self) {
+        self.measure_cache.clear();
     }
 
     pub fn measure(&mut self, text: &str, font_size: f32, max_width: Option<f32>) -> Size {
@@ -32,6 +52,21 @@ impl TextMeasurer {
         font_family: &FontFamily,
         font_weight: FontWeight,
     ) -> Size {
+        // Build cache key
+        let cache_key = MeasureCacheKey {
+            text: text.to_string(),
+            font_size_bits: font_size.to_bits(),
+            font_family: font_family.clone(),
+            font_weight,
+            max_width_bits: max_width.map(|w| w.to_bits()),
+        };
+
+        // Check cache first
+        if let Some(&cached_size) = self.measure_cache.get(&cache_key) {
+            return cached_size;
+        }
+
+        // Measure text
         let metrics = Metrics::new(font_size, font_size * 1.2);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
 
@@ -59,7 +94,12 @@ impl TextMeasurer {
             height = font_size * 1.2;
         }
 
-        Size::new(width, height)
+        let size = Size::new(width, height);
+
+        // Cache the result
+        self.measure_cache.insert(cache_key, size);
+
+        size
     }
 
     /// Measure text width up to a specific character index.

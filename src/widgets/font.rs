@@ -12,7 +12,7 @@ use cosmic_text::{Family, Weight};
 /// text("Hello").font_family(FontFamily::Monospace)
 /// text("Hello").font_family(FontFamily::Name("Inter".into()))
 /// ```
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum FontFamily {
     /// Sans-serif font (default system sans-serif)
     #[default]
@@ -51,7 +51,7 @@ impl FontFamily {
 /// text("Hello").font_weight(FontWeight::BOLD)
 /// text("Hello").font_weight(FontWeight(600))
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct FontWeight(pub u16);
 
 impl FontWeight {
