@@ -709,9 +709,6 @@ impl Container {
 
     /// Check if any child widget needs layout
     fn any_child_needs_layout(&self) -> bool {
-        if self.children_source.needs_reconcile() {
-            return true;
-        }
         self.children_source
             .get()
             .iter()
