@@ -12,7 +12,11 @@ fn main() {
             .background_color(Color::rgb(0.12, 0.12, 0.16)),
         move || {
             container()
-                .layout(Flex::row().spacing(40.0).main_axis_alignment(MainAxisAlignment::Center))
+                .layout(
+                    Flex::row()
+                        .spacing(40.0)
+                        .main_axis_alignment(MainAxisAlignment::Center),
+                )
                 .padding(20.0)
                 .children([
                     // 1.0 (reference)

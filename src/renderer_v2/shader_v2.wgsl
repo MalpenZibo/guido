@@ -308,20 +308,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         final_result = shape_result;
     }
 
-    // === Apply clip region (DISABLED for debugging) ===
-    // let clip_width = in.clip_rect.z;
-    // let clip_height = in.clip_rect.w;
-    // if (clip_width > 0.0 && clip_height > 0.0) {
-    //     let clip_radius = in.clip_params.x;
-    //     let clip_curvature = in.clip_params.y;
-    //
-    //     // Use screen position for clipping (transformed)
-    //     let clip_dist = rounded_rect_sdf(in.screen_pos, in.clip_rect, clip_radius, clip_curvature);
-    //     let clip_aa = fwidth(clip_dist);
-    //     let clip_alpha = 1.0 - smoothstep(-clip_aa, clip_aa, clip_dist);
-    //
-    //     final_result = vec4<f32>(final_result.rgb, final_result.a * clip_alpha);
-    // }
+    // === Apply clip region ===
+    let clip_width = in.clip_rect.z;
+    let clip_height = in.clip_rect.w;
+    if (clip_width > 0.0 && clip_height > 0.0) {
+        let clip_radius = in.clip_params.x;
+        let clip_curvature = in.clip_params.y;
+
+        // Use frag_pos (local space) since clip_rect is now in local space
+        let clip_dist = rounded_rect_sdf(in.frag_pos, in.clip_rect, clip_radius, clip_curvature);
+        let clip_aa = fwidth(clip_dist);
+        let clip_alpha = 1.0 - smoothstep(-clip_aa, clip_aa, clip_dist);
+
+        final_result = vec4<f32>(final_result.rgb, final_result.a * clip_alpha);
+    }
 
     return final_result;
 }

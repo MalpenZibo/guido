@@ -12,7 +12,11 @@ fn main() {
             .background_color(Color::rgb(0.12, 0.12, 0.16)),
         move || {
             container()
-                .layout(Flex::row().spacing(60.0).main_axis_alignment(MainAxisAlignment::Center))
+                .layout(
+                    Flex::row()
+                        .spacing(60.0)
+                        .main_axis_alignment(MainAxisAlignment::Center),
+                )
                 .padding(30.0)
                 .children([
                     // Reference: no rotation at any level

@@ -245,11 +245,8 @@ impl RendererV2 {
 
         // Update uniform buffer with current screen size
         // Note: screen_width/height are already in physical pixels (set by set_screen_size)
-        let uniforms = ShaderUniforms::new(
-            self.screen_width,
-            self.screen_height,
-            self.scale_factor,
-        );
+        let uniforms =
+            ShaderUniforms::new(self.screen_width, self.screen_height, self.scale_factor);
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
@@ -407,15 +404,33 @@ impl RendererV2 {
                     instance.shadow_color = [s.color.r, s.color.g, s.color.b, s.color.a];
                 }
 
-                // Clip
+                // Clip - transform from world space to shape's local space
                 if let Some(clip) = &cmd.clip {
+                    // Transform clip corners to local space using inverse transform
+                    let inv = cmd.world_transform.inverse();
+                    let (x1, y1) = inv.transform_point(clip.rect.x, clip.rect.y);
+                    let (x2, y2) = inv.transform_point(
+                        clip.rect.x + clip.rect.width,
+                        clip.rect.y + clip.rect.height,
+                    );
+
+                    // Reconstruct axis-aligned bounds (min/max handles rotation)
+                    let local_x = x1.min(x2);
+                    let local_y = y1.min(y2);
+                    let local_w = (x2 - x1).abs();
+                    let local_h = (y2 - y1).abs();
+
                     instance.clip_rect = [
-                        clip.rect.x * scale,
-                        clip.rect.y * scale,
-                        clip.rect.width * scale,
-                        clip.rect.height * scale,
+                        local_x * scale,
+                        local_y * scale,
+                        local_w * scale,
+                        local_h * scale,
                     ];
-                    instance.clip_radius = clip.radius * scale;
+
+                    // Scale radius by inverse transform's scale factor
+                    let (inv_scale_x, inv_scale_y) = inv.extract_scale_components();
+                    let radius_scale = inv_scale_x.min(inv_scale_y);
+                    instance.clip_radius = clip.radius * radius_scale * scale;
                     instance.clip_curvature = clip.curvature;
                 }
 
@@ -469,15 +484,33 @@ impl RendererV2 {
                     _pad3: [0.0, 0.0],
                 };
 
-                // Clip
+                // Clip - transform from world space to shape's local space
                 if let Some(clip) = &cmd.clip {
+                    // Transform clip corners to local space using inverse transform
+                    let inv = cmd.world_transform.inverse();
+                    let (x1, y1) = inv.transform_point(clip.rect.x, clip.rect.y);
+                    let (x2, y2) = inv.transform_point(
+                        clip.rect.x + clip.rect.width,
+                        clip.rect.y + clip.rect.height,
+                    );
+
+                    // Reconstruct axis-aligned bounds (min/max handles rotation)
+                    let local_x = x1.min(x2);
+                    let local_y = y1.min(y2);
+                    let local_w = (x2 - x1).abs();
+                    let local_h = (y2 - y1).abs();
+
                     instance.clip_rect = [
-                        clip.rect.x * scale,
-                        clip.rect.y * scale,
-                        clip.rect.width * scale,
-                        clip.rect.height * scale,
+                        local_x * scale,
+                        local_y * scale,
+                        local_w * scale,
+                        local_h * scale,
                     ];
-                    instance.clip_radius = clip.radius * scale;
+
+                    // Scale radius by inverse transform's scale factor
+                    let (inv_scale_x, inv_scale_y) = inv.extract_scale_components();
+                    let radius_scale = inv_scale_x.min(inv_scale_y);
+                    instance.clip_radius = clip.radius * radius_scale * scale;
                     instance.clip_curvature = clip.curvature;
                 }
 
