@@ -21,10 +21,11 @@ pub use cursor::{CursorIcon, get_current_cursor, set_cursor, take_cursor_change}
 pub use effect::{Effect, create_effect};
 pub use focus::{clear_focus, focused_widget, has_focus, release_focus, request_focus};
 pub use invalidation::{
-    ChangeFlags, WidgetId, add_layout_root, clear_animation_flag, get_reactive_version,
-    get_widget_parent, init_wakeup, remove_widget_from_tree, request_animation_frame,
-    request_frame, request_layout, request_paint, set_widget_parent, take_frame_request,
-    take_layout_roots, with_app_state, with_app_state_mut,
+    ChangeFlags, WidgetId, add_layout_root, clear_animation_flag, finish_layout_tracking,
+    get_needs_layout_flag, get_widget_parent, init_wakeup, register_relayout_boundary,
+    remove_widget_from_tree, request_animation_frame, request_frame, request_layout, request_paint,
+    set_needs_layout_flag, set_widget_parent, start_layout_tracking, take_frame_request,
+    take_layout_roots, unregister_relayout_boundary, with_app_state, with_app_state_mut,
 };
 pub use maybe_dyn::{IntoMaybeDyn, MaybeDyn};
 // Only on_cleanup is public API - with_owner, dispose_owner, and OwnerId are

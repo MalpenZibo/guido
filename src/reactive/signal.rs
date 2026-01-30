@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use super::invalidation::{bump_reactive_version, request_frame};
+use super::invalidation::{notify_layout_subscribers, record_layout_read, request_frame};
 use super::owner::register_signal;
 use super::runtime::{SignalId, try_with_runtime};
 use super::storage::{
@@ -38,6 +38,8 @@ impl<T: Clone + Send + Sync + 'static> Signal<T> {
     pub fn get(&self) -> T {
         // Track reads only on main thread
         try_with_runtime(|rt| rt.track_read(self.id));
+        // Track layout dependencies if layout tracking is active
+        record_layout_read(self.id);
         // Get value from global storage (works from any thread)
         get_signal_value(self.id)
     }
@@ -50,6 +52,7 @@ impl<T: Clone + Send + Sync + 'static> Signal<T> {
     /// Borrow the value for reading
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         try_with_runtime(|rt| rt.track_read(self.id));
+        record_layout_read(self.id);
         with_signal_value(self.id, f)
     }
 
@@ -66,7 +69,8 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Signal<T> {
         let changed = with_signal_value(self.id, |old: &T| *old != value);
         if changed {
             set_signal_value(self.id, value);
-            bump_reactive_version();
+            // Notify layout subscribers (widgets depending on this signal)
+            notify_layout_subscribers(self.id);
             // Notify runtime (only on main thread)
             try_with_runtime(|rt| rt.notify_write(self.id));
             request_frame();
@@ -82,7 +86,8 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Signal<T> {
             old != new
         };
         if changed {
-            bump_reactive_version();
+            // Notify layout subscribers (widgets depending on this signal)
+            notify_layout_subscribers(self.id);
             try_with_runtime(|rt| rt.notify_write(self.id));
             request_frame();
         }
@@ -121,6 +126,7 @@ impl<T> Copy for ReadSignal<T> {}
 impl<T: Clone + Send + Sync + 'static> ReadSignal<T> {
     pub fn get(&self) -> T {
         try_with_runtime(|rt| rt.track_read(self.id));
+        record_layout_read(self.id);
         get_signal_value(self.id)
     }
 
@@ -130,6 +136,7 @@ impl<T: Clone + Send + Sync + 'static> ReadSignal<T> {
 
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         try_with_runtime(|rt| rt.track_read(self.id));
+        record_layout_read(self.id);
         with_signal_value(self.id, f)
     }
 
@@ -159,7 +166,7 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> WriteSignal<T> {
         let changed = with_signal_value(self.id, |old: &T| *old != value);
         if changed {
             set_signal_value(self.id, value);
-            bump_reactive_version();
+            notify_layout_subscribers(self.id);
             try_with_runtime(|rt| rt.notify_write(self.id));
             request_frame();
         }
@@ -177,7 +184,7 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> WriteSignal<T> {
             old != new
         };
         if changed {
-            bump_reactive_version();
+            notify_layout_subscribers(self.id);
             try_with_runtime(|rt| rt.notify_write(self.id));
             request_frame();
         }

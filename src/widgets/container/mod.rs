@@ -14,8 +14,9 @@ use crate::advance_anim;
 use crate::animation::Transition;
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
-    IntoMaybeDyn, MaybeDyn, WidgetId, focused_widget, get_reactive_version,
-    request_animation_frame, set_widget_parent,
+    IntoMaybeDyn, MaybeDyn, WidgetId, finish_layout_tracking, focused_widget,
+    get_needs_layout_flag, register_relayout_boundary, request_animation_frame,
+    set_needs_layout_flag, set_widget_parent, start_layout_tracking,
 };
 use crate::renderer::PaintContext;
 use crate::renderer::primitives::{GradientDir, Shadow};
@@ -187,9 +188,6 @@ pub struct Container {
 
     // Constraint caching for layout skip optimization
     pub(super) last_constraints: Option<Constraints>,
-
-    // Reactive version tracking for detecting signal changes
-    pub(super) last_reactive_version: Option<u64>,
 }
 
 impl Container {
@@ -245,7 +243,6 @@ impl Container {
             h_scrollbar_scale_anim: None,
             ripple: RippleState::new(),
             last_constraints: None,
-            last_reactive_version: None,
         }
     }
 
@@ -900,6 +897,12 @@ impl Widget for Container {
     }
 
     fn layout(&mut self, constraints: Constraints) -> Size {
+        // Start layout tracking for dependency registration
+        start_layout_tracking(self.widget_id);
+
+        // Register this widget's relayout boundary status
+        register_relayout_boundary(self.widget_id, self.is_relayout_boundary());
+
         // Ensure scrollbar containers exist if scrolling is enabled
         self.ensure_scrollbar_containers();
 
@@ -935,12 +938,11 @@ impl Widget for Container {
 
         let constraints_changed = self.last_constraints != Some(constraints);
 
-        // Check if reactive state has changed (signals updated)
-        let reactive_version = get_reactive_version();
-        let reactive_changed = self.last_reactive_version != Some(reactive_version);
+        // Check if this widget was marked dirty by signal changes
+        let reactive_changed = get_needs_layout_flag(self.widget_id);
 
         // Layout is needed if constraints changed, any layout-affecting property animated,
-        // or reactive state changed (e.g., dynamic children list updated)
+        // or this widget was marked dirty by signal changes
         let needs_layout = constraints_changed
             || padding_changed
             || has_size_animations
@@ -954,8 +956,20 @@ impl Widget for Container {
                 self.cached_corner_curvature = corner_curvature;
                 self.cached_elevation = elevation;
             }
+            crate::layout_stats::record_layout_skipped();
+            finish_layout_tracking();
             return Size::new(self.bounds.width, self.bounds.height);
         }
+
+        crate::layout_stats::record_layout_executed_with_reasons(
+            crate::layout_stats::LayoutReasons {
+                constraints_changed,
+                padding_changed,
+                size_animations: has_size_animations,
+                layout_animations: has_layout_animations,
+                reactive_changed,
+            },
+        );
 
         // Update all cached values
         self.cached_padding = padding;
@@ -964,7 +978,9 @@ impl Widget for Container {
         self.cached_corner_curvature = corner_curvature;
         self.cached_elevation = elevation;
         self.last_constraints = Some(constraints);
-        self.last_reactive_version = Some(reactive_version);
+
+        // Clear dirty flag since we're doing layout now
+        set_needs_layout_flag(self.widget_id, false);
 
         // Get width/height Length values
         let width_length = self.width.as_ref().map(|w| w.get()).unwrap_or_default();
@@ -1212,6 +1228,9 @@ impl Widget for Container {
 
         // Layout scrollbar containers after bounds are set
         self.layout_scrollbar_containers();
+
+        // Finish layout tracking
+        finish_layout_tracking();
 
         size
     }
