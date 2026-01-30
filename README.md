@@ -107,6 +107,7 @@ cargo run --example component_example
 - **children_example** - Dynamic lists with keyed reconciliation
 - **image_example** - Raster and SVG images with content fit modes
 - **scroll_example** - Scrollable containers with custom scrollbar styling
+- **scroll_mixed_content** - Scrolling with text, text input, and images combined
 - **text_styling_example** - Font families and weights for text styling
 - **service_example** - Background services with automatic cleanup
 

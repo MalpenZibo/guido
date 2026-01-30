@@ -230,6 +230,70 @@ cargo run --example scroll_example
 - Hidden scrollbars
 - Kinetic/momentum scrolling
 
+---
+
+### scroll_mixed_content
+
+Advanced scrollable container with mixed content types.
+
+```bash
+cargo run --example scroll_mixed_content
+```
+
+**Features demonstrated:**
+- Text widgets inside scrollable containers
+- Text input widgets with form fields
+- Raster and SVG images in scrollable content
+- Interactive elements with hover states and ripples
+- Vertical and horizontal scrolling together
+- Scrollbar customization with different styles
+
+---
+
+### multi_surface
+
+Multiple surfaces with shared reactive state.
+
+```bash
+cargo run --example multi_surface
+```
+
+**Features demonstrated:**
+- Creating multiple layer shell surfaces
+- Shared reactive signals between surfaces
+- Independent surface configuration
+
+---
+
+### surface_properties_example
+
+Dynamic surface property modification at runtime.
+
+```bash
+cargo run --example surface_properties_example
+```
+
+**Features demonstrated:**
+- Changing layer at runtime
+- Modifying keyboard interactivity
+- Adjusting anchor and size dynamically
+
+---
+
+### text_input_example
+
+Text input widgets with editing capabilities.
+
+```bash
+cargo run --example text_input_example
+```
+
+**Features demonstrated:**
+- Single and multiline text input
+- Cursor and selection styling
+- Placeholder text
+- Focus states
+
 ## Exploring the Code
 
 Each example's source code is in the `examples/` directory. Reading through them is a great way to learn Guido patterns:

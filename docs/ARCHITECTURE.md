@@ -91,10 +91,11 @@ Hardware-accelerated rendering using wgpu.
 - Custom WGSL shaders for SDF-based rendering
 
 **Rendering Pipeline:**
-1. `widget.layout(constraints)` - Calculate sizes
-2. `widget.paint(ctx)` - Collect shapes into PaintContext
-3. Renderer converts to GPU vertices with HiDPI scaling
-4. Three-layer render order: shapes → text → overlay (ripples)
+1. `widget.advance_animations()` - Update animation states
+2. `widget.layout(constraints)` - Calculate sizes (skipped if cached)
+3. `widget.paint(ctx)` - Collect shapes into PaintContext
+4. Renderer converts to GPU vertices with HiDPI scaling
+5. Three-layer render order: shapes → text → overlay (ripples)
 
 **Shape Features:**
 - Rounded rectangles with configurable superellipse curvature
@@ -167,11 +168,20 @@ All widgets implement this trait:
 
 ```rust
 pub trait Widget {
+    /// Advance animations for this widget and children.
+    /// Called once per frame before layout.
+    fn advance_animations(&mut self) -> bool { false }
+
     fn layout(&mut self, constraints: Constraints) -> Size;
     fn paint(&self, ctx: &mut PaintContext);
     fn event(&mut self, event: &Event) -> EventResponse;
     fn set_origin(&mut self, x: f32, y: f32);
     fn bounds(&self) -> Rect;
+
+    /// Check if this widget is a relayout boundary.
+    /// Widgets with fixed size are boundaries - layout changes
+    /// inside don't affect their own size or parent layout.
+    fn is_relayout_boundary(&self) -> bool { false }
 }
 ```
 
@@ -225,8 +235,23 @@ Signals only notify dependents when values actually change. The render loop read
 ### GPU Batching
 Shapes are batched into vertex/index buffers for efficient GPU submission. Text is rendered via glyphon's atlas system.
 
-### Future: Relayout Boundaries
-Planned optimization to limit layout recalculation scope. See TODO.md for details.
+### Relayout Boundaries
+Widgets with fixed width and height (e.g., `width(100.0).height(100.0)`) are automatically
+marked as relayout boundaries. Layout changes inside a boundary don't propagate to the
+parent, reducing layout recalculation scope.
+
+### Paint-Only Scrolling
+Scroll is implemented as a paint-only transform operation. When content scrolls, the layout
+doesn't run again - instead, a scroll transform is applied during the paint phase. This
+significantly reduces CPU overhead for scrolling.
+
+### Layout Caching
+The layout system caches results and uses reactive version tracking to detect signal changes.
+Layout only recalculates when constraints change, animations are active, or reactive state updates.
+
+### Text Measurement Caching
+Text measurement results are cached to avoid redundant computation when text content
+hasn't changed.
 
 ## Key Files
 
