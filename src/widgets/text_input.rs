@@ -480,19 +480,15 @@ impl TextInput {
         (byte_start, byte_end)
     }
 
-    /// Refresh cached values and return true if changed
-    fn refresh(&mut self) -> bool {
+    /// Refresh cached values from reactive properties
+    fn refresh(&mut self) {
         let new_value = self.value.get();
         let new_font_size = self.font_size.get();
         let new_font_family = self.font_family.get();
         let new_font_weight = self.font_weight.get();
 
-        let value_changed = new_value != self.cached_value;
-        let font_size_changed = (new_font_size - self.cached_font_size).abs() > f32::EPSILON;
-        let font_family_changed = new_font_family != self.cached_font_family;
-        let font_weight_changed = new_font_weight != self.cached_font_weight;
-
-        if value_changed {
+        // Check if value changed (need to update char count and selection)
+        if new_value != self.cached_value {
             self.cached_value = new_value;
             self.cached_char_count = self.cached_value.chars().count();
             self.display_text_dirty = true;
@@ -501,20 +497,20 @@ impl TextInput {
             self.selection.cursor = self.selection.cursor.min(self.cached_char_count);
             self.selection.anchor = self.selection.anchor.min(self.cached_char_count);
         }
-        if font_size_changed {
+
+        // Check font properties - only set dirty flag if changed
+        if (new_font_size - self.cached_font_size).abs() > f32::EPSILON {
             self.cached_font_size = new_font_size;
             self.measurements_dirty = true;
         }
-        if font_family_changed {
+        if new_font_family != self.cached_font_family {
             self.cached_font_family = new_font_family;
             self.measurements_dirty = true;
         }
-        if font_weight_changed {
+        if new_font_weight != self.cached_font_weight {
             self.cached_font_weight = new_font_weight;
             self.measurements_dirty = true;
         }
-
-        value_changed || font_size_changed || font_family_changed || font_weight_changed
     }
 
     /// Update cursor blink state
@@ -1001,7 +997,8 @@ impl TextInput {
 
 impl Widget for TextInput {
     fn layout(&mut self, constraints: Constraints) -> Size {
-        let content_changed = self.refresh();
+        // Refresh cached values from reactive properties
+        self.refresh();
 
         // Update cursor blink if focused
         self.update_cursor_blink();
@@ -1009,32 +1006,18 @@ impl Widget for TextInput {
         // Handle key repeat for held keys
         self.handle_key_repeat();
 
-        // Skip re-measurement if nothing changed and we don't need layout
-        if !content_changed && !self.needs_layout() && self.bounds.width > 0.0 {
-            // Still update measurements if dirty (e.g., after text edit)
-            self.update_measurements();
-            return Size::new(self.bounds.width, self.bounds.height);
-        }
-
-        // Update measurement cache (also refreshes display text)
+        // Update measurement cache (has internal dirty check)
         self.update_measurements();
-        let measured = measure_text_styled(
-            self.display_text_cached(),
-            self.cached_font_size,
-            None,
-            &self.cached_font_family,
-            self.cached_font_weight,
-        );
 
-        // Ensure minimum height for empty text
-        let height = measured.height.max(self.cached_font_size * 1.2);
+        // Use cached text width for sizing (TextMeasurer caches the actual measurement)
+        let height = (self.cached_font_size * 1.2).max(self.bounds.height);
 
         // Text inputs should fill available width (like HTML input elements)
         // Use max_width if available, otherwise fall back to measured width
         let width = if constraints.max_width.is_finite() && constraints.max_width > 0.0 {
             constraints.max_width
         } else {
-            measured.width.max(100.0) // Minimum 100px if unconstrained
+            self.cached_text_width.max(100.0) // Minimum 100px if unconstrained
         };
 
         let size = Size::new(
