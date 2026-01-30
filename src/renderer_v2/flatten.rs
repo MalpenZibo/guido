@@ -178,48 +178,11 @@ fn intersect_clips(a: &ClipRegion, b: &ClipRegion) -> ClipRegion {
     }
 }
 
-/// Transform a draw command's coordinates.
+/// Clone a draw command (no coordinate transformation).
 ///
-/// Note: The actual GPU transform is applied separately. This function
-/// transforms the local coordinates for commands that need it.
-fn transform_command(cmd: &DrawCommand, transform: &Transform) -> DrawCommand {
-    match cmd {
-        DrawCommand::RoundedRect {
-            rect,
-            color,
-            radius,
-            curvature,
-            border,
-            shadow,
-            gradient,
-        } => {
-            // Transform rect position by translation
-            let tx = transform.tx();
-            let ty = transform.ty();
-
-            DrawCommand::RoundedRect {
-                rect: Rect::new(rect.x + tx, rect.y + ty, rect.width, rect.height),
-                color: *color,
-                radius: *radius,
-                curvature: *curvature,
-                border: *border,
-                shadow: *shadow,
-                gradient: *gradient,
-            }
-        }
-        DrawCommand::Circle {
-            center,
-            radius,
-            color,
-        } => {
-            let tx = transform.tx();
-            let ty = transform.ty();
-
-            DrawCommand::Circle {
-                center: (center.0 + tx, center.1 + ty),
-                radius: *radius,
-                color: *color,
-            }
-        }
-    }
+/// All coordinate transformation is handled by the GPU shader using the
+/// world_transform stored in FlattenedCommand. This avoids double-transformation
+/// issues when rotation/scale is involved.
+fn transform_command(cmd: &DrawCommand, _transform: &Transform) -> DrawCommand {
+    cmd.clone()
 }
