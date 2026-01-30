@@ -192,17 +192,7 @@ impl App {
 
         // Create surfaces from add_surface() calls
         for def in &self.surface_definitions {
-            wayland_state.create_surface_with_id(
-                &qh,
-                def.id,
-                def.config.width,
-                def.config.height,
-                def.config.anchor,
-                def.config.layer,
-                &def.config.namespace,
-                def.config.exclusive_zone,
-                def.config.keyboard_interactivity,
-            );
+            wayland_state.create_surface_with_id(&qh, def.id, &def.config);
         }
 
         // Wait for all surfaces to configure
@@ -322,17 +312,7 @@ impl App {
                         log::info!("Creating dynamic surface {:?}", id);
 
                         // Create Wayland surface
-                        wayland_state.create_surface_with_id(
-                            &qh,
-                            id,
-                            config.width,
-                            config.height,
-                            config.anchor,
-                            config.layer,
-                            &config.namespace,
-                            config.exclusive_zone,
-                            config.keyboard_interactivity,
-                        );
+                        wayland_state.create_surface_with_id(&qh, id, &config);
 
                         // Create the widget and managed surface (GPU init happens later)
                         let widget = widget_fn();

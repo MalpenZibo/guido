@@ -274,48 +274,43 @@ impl WaylandState {
     }
 
     /// Create a layer surface with a specific SurfaceId (multi-surface API).
-    #[allow(clippy::too_many_arguments)]
     pub fn create_surface_with_id(
         &mut self,
         qh: &QueueHandle<Self>,
         id: SurfaceId,
-        width: u32,
-        height: u32,
-        anchor: Anchor,
-        layer: Layer,
-        namespace: &str,
-        exclusive_zone: Option<i32>,
-        keyboard_interactivity: KeyboardInteractivity,
+        config: &crate::surface::SurfaceConfig,
     ) {
         let wl_surface = self.compositor_state.create_surface(qh);
         let layer_surface = self.layer_shell.create_layer_surface(
             qh,
             wl_surface.clone(),
-            layer,
-            Some(namespace.to_string()),
+            config.layer,
+            Some(config.namespace.clone()),
             None,
         );
 
-        layer_surface.set_anchor(anchor);
+        layer_surface.set_anchor(config.anchor);
 
         // When anchored to both edges on an axis, set that dimension to 0
         // to let the compositor stretch the surface to fill
-        let use_width = if anchor.contains(Anchor::LEFT) && anchor.contains(Anchor::RIGHT) {
-            0 // Let compositor decide
-        } else {
-            width
-        };
-        let use_height = if anchor.contains(Anchor::TOP) && anchor.contains(Anchor::BOTTOM) {
-            0 // Let compositor decide
-        } else {
-            height
-        };
+        let use_width =
+            if config.anchor.contains(Anchor::LEFT) && config.anchor.contains(Anchor::RIGHT) {
+                0 // Let compositor decide
+            } else {
+                config.width
+            };
+        let use_height =
+            if config.anchor.contains(Anchor::TOP) && config.anchor.contains(Anchor::BOTTOM) {
+                0 // Let compositor decide
+            } else {
+                config.height
+            };
 
         layer_surface.set_size(use_width, use_height);
-        layer_surface.set_keyboard_interactivity(keyboard_interactivity);
+        layer_surface.set_keyboard_interactivity(config.keyboard_interactivity);
 
         // Set exclusive zone: None means use height, Some(0) means no exclusive zone
-        let zone = exclusive_zone.unwrap_or(height as i32);
+        let zone = config.exclusive_zone.unwrap_or(config.height as i32);
         layer_surface.set_exclusive_zone(zone);
 
         wl_surface.commit();
@@ -325,17 +320,18 @@ impl WaylandState {
         self.surface_lookup.insert(object_id, id);
 
         // Create and store surface state
-        let surface_state = WaylandSurfaceState::new(layer_surface, wl_surface, width, height);
+        let surface_state =
+            WaylandSurfaceState::new(layer_surface, wl_surface, config.width, config.height);
         self.surfaces.insert(id, surface_state);
 
         log::info!(
             "Created surface {:?} with size {}x{}, anchor {:?}, layer {:?}, keyboard {:?}",
             id,
-            width,
-            height,
-            anchor,
-            layer,
-            keyboard_interactivity
+            config.width,
+            config.height,
+            config.anchor,
+            config.layer,
+            config.keyboard_interactivity
         );
     }
 
