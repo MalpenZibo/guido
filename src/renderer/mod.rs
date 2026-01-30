@@ -130,20 +130,27 @@ impl Renderer {
 
     /// Scale a clip region for HiDPI rendering
     fn scale_clip(&self, clip: &Option<ClipRegion>) -> Option<ClipRegion> {
-        clip.as_ref().map(|c| ClipRegion {
-            rect: Rect::new(
-                c.rect.x * self.scale_factor,
-                c.rect.y * self.scale_factor,
-                c.rect.width * self.scale_factor,
-                c.rect.height * self.scale_factor,
-            ),
-            radius: c.radius * self.scale_factor,
-            curvature: c.curvature,
-            // Scale transform origin for HiDPI, keep transform as-is
-            transform: c.transform,
-            transform_origin: c
-                .transform_origin
-                .map(|(x, y)| (x * self.scale_factor, y * self.scale_factor)),
+        clip.as_ref().map(|c| {
+            // Scale transform's translation components for HiDPI
+            let scaled_transform = c.transform.map(|mut t| {
+                t.scale_translation(self.scale_factor);
+                t
+            });
+            ClipRegion {
+                rect: Rect::new(
+                    c.rect.x * self.scale_factor,
+                    c.rect.y * self.scale_factor,
+                    c.rect.width * self.scale_factor,
+                    c.rect.height * self.scale_factor,
+                ),
+                radius: c.radius * self.scale_factor,
+                curvature: c.curvature,
+                // Scale both transform translation and origin for HiDPI
+                transform: scaled_transform,
+                transform_origin: c
+                    .transform_origin
+                    .map(|(x, y)| (x * self.scale_factor, y * self.scale_factor)),
+            }
         })
     }
 
