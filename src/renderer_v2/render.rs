@@ -423,6 +423,8 @@ impl RendererV2 {
                 if !cmd.world_transform.is_identity() {
                     let t = &cmd.world_transform;
                     // Extract 2x3 affine matrix components [a, b, tx, c, d, ty]
+                    // Note: The matrix already includes center_at from CPU, so no origin
+                    // handling needed in the shader.
                     instance.transform = [
                         t.data[0],         // a
                         t.data[1],         // b
@@ -431,11 +433,6 @@ impl RendererV2 {
                         t.data[5],         // d
                         t.data[7] * scale, // ty (scaled)
                     ];
-
-                    // Transform origin
-                    if let Some((ox, oy)) = cmd.world_transform_origin {
-                        instance.transform_origin = [ox * scale, oy * scale];
-                    }
                 }
 
                 Some(instance)

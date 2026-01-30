@@ -75,20 +75,18 @@ struct VertexOutput {
 
 // === Helper Functions ===
 
-// Apply 2x3 affine transform around origin
+// Apply 2x3 affine transform directly
+// Note: The transform matrix already includes center_at from CPU side,
+// so we just apply it directly without additional origin handling.
 fn apply_transform(
     pos: vec2<f32>,
     a: f32, b: f32, tx: f32,
-    c: f32, d: f32, ty: f32,
-    origin: vec2<f32>
+    c: f32, d: f32, ty: f32
 ) -> vec2<f32> {
-    // Translate to origin, apply transform, translate back
-    let p = pos - origin;
-    let transformed = vec2<f32>(
-        a * p.x + b * p.y + tx,
-        c * p.x + d * p.y + ty
+    return vec2<f32>(
+        a * pos.x + b * pos.y + tx,
+        c * pos.x + d * pos.y + ty
     );
-    return transformed + origin;
 }
 
 // Convert logical pixels to NDC
@@ -105,20 +103,13 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     var out: VertexOutput;
 
     // Extract transform components
+    // Note: transform already includes center_at from CPU, so no origin handling needed here
     let a = instance.transform_0.x;
     let b = instance.transform_0.y;
     let tx = instance.transform_0.z;
     let c = instance.transform_0.w;
     let d = instance.transform_1.x;
     let ty = instance.transform_1.y;
-    let origin = instance.transform_1.zw;
-
-    // Calculate shape center for transform origin (if origin is 0,0)
-    let shape_center = vec2<f32>(
-        instance.rect.x + instance.rect.z * 0.5,
-        instance.rect.y + instance.rect.w * 0.5
-    );
-    let effective_origin = select(shape_center, origin, any(origin != vec2<f32>(0.0, 0.0)));
 
     // Expand quad for shadow if needed
     let shadow_blur = instance.shadow_params.z;
@@ -150,8 +141,8 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     // Transform unit quad [0,1] to shape position
     let local_pos = quad_min + vertex.position * quad_size;
 
-    // Apply instance transform
-    let world_pos = apply_transform(local_pos, a, b, tx, c, d, ty, effective_origin);
+    // Apply instance transform (matrix already includes center_at from CPU)
+    let world_pos = apply_transform(local_pos, a, b, tx, c, d, ty);
 
     // Convert to NDC for clip position
     let ndc = to_ndc(world_pos);
@@ -242,12 +233,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
 
+    // DEBUG: Return solid magenta to verify fragments are being generated
+    // return vec4<f32>(1.0, 0.0, 1.0, 1.0);
+
     let pos = in.frag_pos;
     let radius = in.shape_params.x;
     let curvature = in.shape_params.y;
 
     // Compute SDF for the shape
     let dist = rounded_rect_sdf(pos, in.shape_rect, radius, curvature);
+
+    // DEBUG: Visualize SDF distance - green = inside, red = outside
+    // let debug_dist = clamp(dist / 50.0, -1.0, 1.0);
+    // if (debug_dist < 0.0) {
+    //     return vec4<f32>(0.0, -debug_dist, 0.0, 1.0);  // Green for inside
+    // } else {
+    //     return vec4<f32>(debug_dist, 0.0, 0.0, 1.0);  // Red for outside
+    // }
 
     // Anti-aliasing using fwidth
     let aa = fwidth(dist) * 1.0;
