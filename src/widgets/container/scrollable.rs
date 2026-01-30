@@ -204,6 +204,48 @@ impl Container {
         }
     }
 
+    /// Update scrollbar handle positions based on current scroll offset.
+    /// Called from advance_animations to ensure handles are positioned correctly
+    /// even when layout doesn't run (scroll is paint-only).
+    pub(super) fn update_scrollbar_handle_positions(&mut self) {
+        if self.scroll_axis == ScrollAxis::None
+            || self.scrollbar_visibility == ScrollbarVisibility::Hidden
+        {
+            return;
+        }
+
+        let needs_vertical = self.scroll_state.needs_vertical_scrollbar();
+        let needs_horizontal = self.scroll_state.needs_horizontal_scrollbar();
+
+        // Update vertical scrollbar handle position
+        if self.scroll_axis.allows_vertical()
+            && needs_vertical
+            && let Some(ref mut handle) = self.v_scrollbar_handle
+        {
+            let handle_rect = self.scroll_state.scrollbar_handle_rect(
+                ScrollbarAxis::Vertical,
+                self.bounds,
+                &self.scrollbar_config,
+                needs_horizontal,
+            );
+            handle.set_origin(handle_rect.x, handle_rect.y);
+        }
+
+        // Update horizontal scrollbar handle position
+        if self.scroll_axis.allows_horizontal()
+            && needs_horizontal
+            && let Some(ref mut handle) = self.h_scrollbar_handle
+        {
+            let handle_rect = self.scroll_state.scrollbar_handle_rect(
+                ScrollbarAxis::Horizontal,
+                self.bounds,
+                &self.scrollbar_config,
+                needs_vertical,
+            );
+            handle.set_origin(handle_rect.x, handle_rect.y);
+        }
+    }
+
     /// Paint scrollbar container widgets
     pub(super) fn paint_scrollbar_containers(&self, ctx: &mut PaintContext) {
         if self.scrollbar_visibility == ScrollbarVisibility::Hidden {

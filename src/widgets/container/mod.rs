@@ -884,6 +884,12 @@ impl Widget for Container {
             any_animating = true;
         }
 
+        // Update scrollbar handle positions based on current scroll offset
+        // (scroll is paint-only, so layout may not run during scrolling)
+        if self.scroll_axis != ScrollAxis::None {
+            self.update_scrollbar_handle_positions();
+        }
+
         any_animating
     }
 
