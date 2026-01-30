@@ -890,6 +890,12 @@ impl Widget for Container {
             self.update_scrollbar_handle_positions();
         }
 
+        // Advance scrollbar scale animations (for hover expansion effect)
+        // Must be done here since scroll/hover is paint-only and layout may not run
+        if self.advance_scrollbar_scale_animations() {
+            any_animating = true;
+        }
+
         any_animating
     }
 
