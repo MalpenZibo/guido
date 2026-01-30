@@ -96,14 +96,15 @@ pub struct Vertex {
     pub shadow_spread: f32,
     /// Shadow color RGBA
     pub shadow_color: [f32; 4],
-    /// Transform matrix row 0
+    /// Transform matrix row 0 (2D affine: [a, b, 0, tx])
     pub transform_row0: [f32; 4],
-    /// Transform matrix row 1
+    /// Transform matrix row 1 (2D affine: [c, d, 0, ty])
     pub transform_row1: [f32; 4],
-    /// Transform matrix row 2
-    pub transform_row2: [f32; 4],
-    /// Transform matrix row 3
-    pub transform_row3: [f32; 4],
+    /// Inverse transform for clip region (row 0): [a, b, 0, tx]
+    /// Used to transform screen_pos back to clip-local space for proper rotated clipping
+    pub clip_inv_transform_row0: [f32; 4],
+    /// Inverse transform for clip region (row 1): [c, d, 0, ty]
+    pub clip_inv_transform_row1: [f32; 4],
     /// Local position (untransformed) for SDF evaluation in fragment shader
     pub local_pos: [f32; 2],
     /// Clip rectangle in NDC: [min_x, min_y, max_x, max_y] - (0,0,0,0) means no clip
@@ -177,25 +178,25 @@ impl Vertex {
                     shader_location: 9,
                     format: wgpu::VertexFormat::Float32x4,
                 },
-                // transform_row0
+                // transform_row0 (2D affine)
                 wgpu::VertexAttribute {
                     offset: std::mem::size_of::<[f32; 28]>() as wgpu::BufferAddress,
                     shader_location: 10,
                     format: wgpu::VertexFormat::Float32x4,
                 },
-                // transform_row1
+                // transform_row1 (2D affine)
                 wgpu::VertexAttribute {
                     offset: std::mem::size_of::<[f32; 32]>() as wgpu::BufferAddress,
                     shader_location: 11,
                     format: wgpu::VertexFormat::Float32x4,
                 },
-                // transform_row2
+                // clip_inv_transform_row0
                 wgpu::VertexAttribute {
                     offset: std::mem::size_of::<[f32; 36]>() as wgpu::BufferAddress,
                     shader_location: 12,
                     format: wgpu::VertexFormat::Float32x4,
                 },
-                // transform_row3
+                // clip_inv_transform_row1
                 wgpu::VertexAttribute {
                     offset: std::mem::size_of::<[f32; 40]>() as wgpu::BufferAddress,
                     shader_location: 13,
@@ -335,6 +336,7 @@ impl Vertex {
             transform,
             [0.0, 0.0, 0.0, 0.0], // No clip
             0.0,                  // No clip radius
+            None,                 // No clip inverse transform
         )
     }
 
@@ -356,8 +358,17 @@ impl Vertex {
         transform: Transform,
         clip_rect: [f32; 4],
         clip_radius: f32,
+        clip_inv_transform: Option<Transform>,
     ) -> Self {
         let rows = transform.rows();
+        // Extract the 2D affine inverse transform rows (only need first 2 rows for 2D)
+        let (clip_inv_row0, clip_inv_row1) = if let Some(inv) = clip_inv_transform {
+            let inv_rows = inv.rows();
+            (inv_rows[0], inv_rows[1])
+        } else {
+            // Identity: no inverse transform needed
+            ([1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0])
+        };
         Self {
             position,
             color,
@@ -371,22 +382,21 @@ impl Vertex {
             shadow_blur,
             shadow_spread,
             shadow_color,
+            // Only store first 2 rows of transform (2D affine)
             transform_row0: rows[0],
             transform_row1: rows[1],
-            transform_row2: rows[2],
-            transform_row3: rows[3],
+            clip_inv_transform_row0: clip_inv_row0,
+            clip_inv_transform_row1: clip_inv_row1,
             local_pos,
             clip_rect,
         }
     }
 
-    /// Set the transform on an existing vertex
+    /// Set the transform on an existing vertex (only 2D affine components)
     pub fn set_transform(&mut self, transform: Transform) {
         let rows = transform.rows();
         self.transform_row0 = rows[0];
         self.transform_row1 = rows[1];
-        self.transform_row2 = rows[2];
-        self.transform_row3 = rows[3];
     }
 }
 
@@ -482,6 +492,11 @@ pub struct ClipRegion {
     pub radius: f32,
     /// Superellipse curvature K-value (default 1.0 = circle)
     pub curvature: f32,
+    /// Optional transform for the clip region (for rotated/scaled clips)
+    /// This allows clipping to transformed container bounds without transforming the shape itself
+    pub transform: Option<Transform>,
+    /// Transform origin for the clip, if transform is set
+    pub transform_origin: Option<(f32, f32)>,
 }
 
 impl Default for RoundedRect {
@@ -755,21 +770,37 @@ impl RoundedRect {
         };
 
         // Compute clip region in NDC if present
-        // Apply the same scale transform to clip region so it matches the scaled shape
-        let (clip_rect_ndc, clip_radius_ndc) = if let Some(ref clip) = self.clip {
-            // Use transform_origin if set, otherwise clip center
+        let (clip_rect_ndc, clip_radius_ndc, clip_inv_transform) = if let Some(ref clip) = self.clip
+        {
+            // Use clip's transform origin if set, otherwise use shape's origin or clip center
             let clip_center_x = clip.rect.x + clip.rect.width / 2.0;
             let clip_center_y = clip.rect.y + clip.rect.height / 2.0;
-            let (clip_origin_x, clip_origin_y) = self
+            let (clip_origin_x, clip_origin_y) = clip
                 .transform_origin
+                .or(self.transform_origin)
                 .unwrap_or((clip_center_x, clip_center_y));
 
-            // Scale the clip rect around the transform origin (same as shape scaling)
+            // Determine which transform affects the clip region:
+            // - If clip has its own transform, use that (for ripples on transformed containers)
+            // - Otherwise, use the shape's transform (for clipped shapes that are transformed)
+            let clip_transform = clip.transform.unwrap_or(self.transform);
+
+            // Extract scale and translation from clip transform
+            let (clip_scale_x, clip_scale_y) = clip_transform.extract_scale_components();
+            let clip_rotation_only = clip_transform.without_scale();
+
+            // Get translation from the transform
+            let clip_tx = clip_transform.tx();
+            let clip_ty = clip_transform.ty();
+
+            // Scale the clip rect around the transform origin, then apply translation
+            // Translation is applied directly to the clip rect position so the clip
+            // follows the transformed shape without needing shader inverse transform magic.
             let scaled_clip = Rect::new(
-                clip_origin_x + (clip.rect.x - clip_origin_x) * scale_x,
-                clip_origin_y + (clip.rect.y - clip_origin_y) * scale_y,
-                clip.rect.width * scale_x,
-                clip.rect.height * scale_y,
+                clip_origin_x + (clip.rect.x - clip_origin_x) * clip_scale_x + clip_tx,
+                clip_origin_y + (clip.rect.y - clip_origin_y) * clip_scale_y + clip_ty,
+                clip.rect.width * clip_scale_x,
+                clip.rect.height * clip_scale_y,
             );
 
             let clip_x1 = to_ndc_x(scaled_clip.x);
@@ -785,12 +816,33 @@ impl RoundedRect {
             // Use height-based NDC for uniform clip radius (aspect-corrected in shader)
             let clip_r_ndc = (clip_radius / screen_height) * 2.0;
 
+            // Compute inverse transform for clip region if there's rotation.
+            // Translation is already applied to clip rect above, so we only need
+            // inverse for rotation (to map screen positions back to rotated clip space).
+            let clip_inv = if clip_rotation_only.has_rotation() {
+                // Build the NDC transform for the clip's rotation only (no translation)
+                // Translation was already applied to the clip rect geometry above.
+                let rotation_for_clip =
+                    Transform::rotate(clip_rotation_only.extract_rotation_angle());
+                let clip_ndc_transform = transform_to_ndc(
+                    &rotation_for_clip,
+                    Some((clip_origin_x + clip_tx, clip_origin_y + clip_ty)),
+                    ((clip_x1 + clip_x2) / 2.0, (clip_y1 + clip_y2) / 2.0),
+                    screen_width,
+                    screen_height,
+                );
+                Some(clip_ndc_transform.inverse())
+            } else {
+                None
+            };
+
             (
                 [clip_x1, clip_y2, clip_x2, clip_y1], // min_x, min_y, max_x, max_y
                 clip_r_ndc,
+                clip_inv,
             )
         } else {
-            ([0.0, 0.0, 0.0, 0.0], 0.0)
+            ([0.0, 0.0, 0.0, 0.0], 0.0, None)
         };
 
         // Simple quad - SDF rendering handles the shape in fragment shader
@@ -812,6 +864,7 @@ impl RoundedRect {
                 centered_transform,
                 clip_rect_ndc,
                 clip_radius_ndc,
+                clip_inv_transform,
             ),
             Vertex::with_transform_and_clip(
                 [quad_x2, quad_y1],
@@ -829,6 +882,7 @@ impl RoundedRect {
                 centered_transform,
                 clip_rect_ndc,
                 clip_radius_ndc,
+                clip_inv_transform,
             ),
             Vertex::with_transform_and_clip(
                 [quad_x2, quad_y2],
@@ -846,6 +900,7 @@ impl RoundedRect {
                 centered_transform,
                 clip_rect_ndc,
                 clip_radius_ndc,
+                clip_inv_transform,
             ),
             Vertex::with_transform_and_clip(
                 [quad_x1, quad_y2],
@@ -863,6 +918,7 @@ impl RoundedRect {
                 centered_transform,
                 clip_rect_ndc,
                 clip_radius_ndc,
+                clip_inv_transform,
             ),
         ];
 

@@ -139,6 +139,11 @@ impl Renderer {
             ),
             radius: c.radius * self.scale_factor,
             curvature: c.curvature,
+            // Scale transform origin for HiDPI, keep transform as-is
+            transform: c.transform,
+            transform_origin: c
+                .transform_origin
+                .map(|(x, y)| (x * self.scale_factor, y * self.scale_factor)),
         })
     }
 
@@ -393,6 +398,8 @@ impl Renderer {
                             ),
                             radius: 0.0,
                             curvature: 1.0,
+                            transform: None,
+                            transform_origin: None,
                         }
                     } else {
                         // No scaling needed for rotated transforms or scale = 1.0
@@ -400,6 +407,8 @@ impl Renderer {
                             rect: hidpi_rect,
                             radius: 0.0,
                             curvature: 1.0,
+                            transform: None,
+                            transform_origin: None,
                         }
                     }
                 });
@@ -593,6 +602,8 @@ impl Renderer {
                     ),
                     radius: 0.0, // Images typically have square clip regions
                     curvature: 1.0,
+                    transform: None,
+                    transform_origin: None,
                 });
 
                 // Create the textured quad with UV coordinates and clip
@@ -1027,6 +1038,8 @@ impl PaintContext {
                 rect: *rect,
                 radius: *radius,
                 curvature: *curvature,
+                transform: None,
+                transform_origin: None,
             })
     }
 
@@ -1070,7 +1083,7 @@ impl PaintContext {
     }
 
     /// Get the current transform with its custom origin (if any)
-    fn current_transform_with_origin(&self) -> (Transform, Option<(f32, f32)>) {
+    pub fn current_transform_with_origin(&self) -> (Transform, Option<(f32, f32)>) {
         self.transform_stack
             .last()
             .cloned()
@@ -1139,14 +1152,16 @@ impl PaintContext {
             rect: clip_rect,
             radius: clip_radius,
             curvature: clip_curvature,
+            transform: None,
+            transform_origin: None,
         });
         self.apply_current_transform(&mut shape);
         self.overlay_shapes.push(Shape::RoundedRect(shape));
     }
 
     /// Draw a circle as an overlay with a clip region that can have its own transform.
-    /// Used for ripple effects on transformed containers - the ripple uses screen coordinates
-    /// but the clip region needs to match the transformed container bounds.
+    /// Used for ripple effects on transformed containers - the ripple center is in local
+    /// coordinates and both shape and clip need the same transform applied.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_overlay_circle_clipped_with_transform(
         &mut self,
@@ -1162,20 +1177,35 @@ impl PaintContext {
         let rect = Rect::new(cx - radius, cy - radius, radius * 2.0, radius * 2.0);
         let mut shape = RoundedRect::new(rect, color, radius);
 
-        // Set explicit clip for this shape
-        shape.clip = Some(ClipRegion {
-            rect: clip_rect,
-            radius: clip_radius,
-            curvature: clip_curvature,
-        });
-
-        // Apply transform to both shape and clip if provided
-        // This makes the ripple appear at the correct screen position
-        // while clipping to the transformed container bounds
+        // Shape and clip use DIFFERENT transforms:
+        // - Shape: rotation+scale only (ripple center is already in screen space)
+        // - Clip: full transform (inverse-transforms screen positions to local space)
         if let Some((transform, origin)) = clip_transform {
             let (origin_x, origin_y) = origin.resolve(clip_rect);
-            shape.transform = transform;
+
+            // For the SHAPE: Apply only rotation+scale, NOT translation.
+            // The ripple center (cx, cy) is already in screen space where the user clicked.
+            let shape_transform = transform.without_translation();
+            shape.transform = shape_transform;
             shape.transform_origin = Some((origin_x, origin_y));
+
+            // For the CLIP: Use full transform for inverse-transform in shader.
+            // This correctly maps screen positions back to layout space for clipping.
+            shape.clip = Some(ClipRegion {
+                rect: clip_rect,
+                radius: clip_radius,
+                curvature: clip_curvature,
+                transform: Some(transform),
+                transform_origin: Some((origin_x, origin_y)),
+            });
+        } else {
+            shape.clip = Some(ClipRegion {
+                rect: clip_rect,
+                radius: clip_radius,
+                curvature: clip_curvature,
+                transform: None,
+                transform_origin: None,
+            });
         }
 
         self.overlay_shapes.push(Shape::RoundedRect(shape));
