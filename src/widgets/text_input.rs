@@ -15,7 +15,8 @@ use crate::default_font_family;
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
     CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, WidgetId, clipboard_copy, clipboard_paste,
-    has_focus, release_focus, request_animation_frame, request_focus, set_cursor,
+    finish_layout_tracking, has_focus, register_relayout_boundary, release_focus,
+    request_animation_frame, request_focus, set_cursor, start_layout_tracking,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled, measure_text_styled};
 
@@ -994,7 +995,14 @@ impl TextInput {
 
 impl Widget for TextInput {
     fn layout(&mut self, constraints: Constraints) -> Size {
+        // Start layout tracking for dependency registration
+        start_layout_tracking(self.widget_id);
+
+        // Text inputs are never relayout boundaries
+        register_relayout_boundary(self.widget_id, false);
+
         // Refresh cached values from reactive properties
+        // This reads signals and registers layout dependencies
         self.refresh();
 
         // Update cursor blink if focused
@@ -1026,6 +1034,9 @@ impl Widget for TextInput {
 
         self.bounds.width = size.width;
         self.bounds.height = size.height;
+
+        // Finish layout tracking
+        finish_layout_tracking();
 
         size
     }

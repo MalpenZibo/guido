@@ -246,12 +246,30 @@ doesn't run again - instead, a scroll transform is applied during the paint phas
 significantly reduces CPU overhead for scrolling.
 
 ### Layout Caching
-The layout system caches results and uses reactive version tracking to detect signal changes.
-Layout only recalculates when constraints change, animations are active, or reactive state updates.
+The layout system caches results and uses per-widget layout subscribers to track signal dependencies.
+During layout, any signal reads are recorded as dependencies. When those signals change, only the
+affected widgets are marked dirty for re-layout - not the entire tree.
+
+Layout only recalculates when:
+- Constraints change
+- Animations are active
+- A tracked signal dependency changes (widget is marked dirty)
 
 ### Text Measurement Caching
 Text measurement results are cached to avoid redundant computation when text content
 hasn't changed.
+
+### Layout Stats (Debug Feature)
+Enable the `layout-stats` feature to get real-time statistics about layout performance:
+```bash
+cargo run --example your_example --features layout-stats
+```
+
+This prints per-second statistics showing:
+- Total layout calls and skip rate
+- Breakdown of reasons layouts were executed (constraints, animations, reactive changes)
+
+The feature has zero overhead when disabled (code is completely compiled out).
 
 ## Key Files
 

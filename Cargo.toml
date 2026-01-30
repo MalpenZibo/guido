@@ -27,6 +27,10 @@ documentation.workspace = true
 homepage.workspace = true
 license.workspace = true
 
+[features]
+default = []
+layout-stats = []
+
 [dependencies]
 guido-macros = { workspace = true }
 wgpu = { version = "28.0", features = ["fragile-send-sync-non-atomic-wasm"] }
@@ -67,3 +71,7 @@ path = "examples/image_example.rs"
 [[example]]
 name = "text_input_example"
 path = "examples/text_input_example.rs"
+
+[[example]]
+name = "layout_stats_test"
+path = "examples/layout_stats_test.rs"

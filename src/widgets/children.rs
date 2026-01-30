@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::layout::{Constraints, Size};
-use crate::reactive::{OwnerId, WidgetId, dispose_owner, get_reactive_version};
+use crate::reactive::{OwnerId, WidgetId, dispose_owner};
 use crate::renderer::PaintContext;
 
 use super::Widget;
@@ -19,8 +19,6 @@ enum SegmentType {
         cached: HashMap<u64, Box<dyn Widget>>,
         /// Current keys in display order
         current_keys: Vec<u64>,
-        /// Version when last reconciled - skip items_fn if unchanged
-        last_version: u64,
     },
 }
 
@@ -59,8 +57,6 @@ impl ChildrenSource {
             items_fn: Arc::new(items_fn),
             cached: HashMap::new(),
             current_keys: Vec::new(),
-            // Start at max to force initial reconciliation
-            last_version: u64::MAX,
         });
     }
 
@@ -73,28 +69,16 @@ impl ChildrenSource {
 
     /// Reconcile all dynamic segments and rebuild merged list
     fn reconcile(&mut self) {
-        let current_version = get_reactive_version();
-
         // First pass: check if any dynamic segment needs reconciliation
-        // Skip items_fn() entirely if the segment's version matches current version
         let mut segments_with_changes: Vec<(usize, Vec<DynItem>)> = Vec::new();
 
-        for (idx, segment) in self.segments.iter_mut().enumerate() {
+        for (idx, segment) in self.segments.iter().enumerate() {
             if let SegmentType::Dynamic {
                 items_fn,
                 current_keys,
-                last_version,
                 ..
             } = segment
             {
-                // Skip if no signals have changed since last reconcile
-                if *last_version == current_version {
-                    continue;
-                }
-
-                // Update version before calling items_fn
-                *last_version = current_version;
-
                 let new_items = items_fn();
                 let new_keys: Vec<u64> = new_items.iter().map(|i| i.key).collect();
 

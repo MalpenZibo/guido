@@ -1,6 +1,7 @@
 pub mod animation;
 pub mod image_metadata;
 pub mod layout;
+pub mod layout_stats;
 pub mod reactive;
 pub mod surface;
 mod surface_manager;
@@ -319,6 +320,9 @@ fn render_surface(
             state.clear_layout_flag();
             state.clear_paint_flag();
         });
+
+        // Track layout stats (when compiled with --features layout-stats)
+        layout_stats::end_frame();
 
         // Commit surface
         wl_surface.commit();

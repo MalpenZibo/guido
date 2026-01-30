@@ -1,6 +1,9 @@
 use crate::default_font_family;
 use crate::layout::{Constraints, Size};
-use crate::reactive::{IntoMaybeDyn, MaybeDyn, WidgetId};
+use crate::reactive::{
+    IntoMaybeDyn, MaybeDyn, WidgetId, finish_layout_tracking, register_relayout_boundary,
+    start_layout_tracking,
+};
 use crate::renderer::{PaintContext, measure_text_styled};
 
 use super::font::{FontFamily, FontWeight};
@@ -121,7 +124,14 @@ impl Text {
 
 impl Widget for Text {
     fn layout(&mut self, constraints: Constraints) -> Size {
+        // Start layout tracking for dependency registration
+        start_layout_tracking(self.widget_id);
+
+        // Text widgets are never relayout boundaries
+        register_relayout_boundary(self.widget_id, false);
+
         // Refresh cached values from reactive properties
+        // This reads signals and registers layout dependencies
         self.refresh();
 
         // Determine the effective max_width for measurement
@@ -156,6 +166,9 @@ impl Widget for Text {
 
         self.bounds.width = size.width;
         self.bounds.height = size.height;
+
+        // Finish layout tracking
+        finish_layout_tracking();
 
         size
     }

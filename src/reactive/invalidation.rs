@@ -99,6 +99,10 @@ impl AppState {
 thread_local! {
     static APP_STATE: RefCell<AppState> = RefCell::new(AppState::new());
     static WIDGET_TREE: RefCell<WidgetTree> = RefCell::new(WidgetTree::new());
+    /// Per-widget dirty flags for layout
+    static WIDGET_DIRTY_FLAGS: RefCell<HashMap<WidgetId, bool>> = RefCell::new(HashMap::new());
+    /// Registered relayout boundary check functions (widget_id -> is_boundary)
+    static RELAYOUT_BOUNDARIES: RefCell<HashMap<WidgetId, bool>> = RefCell::new(HashMap::new());
 }
 
 /// Global widget tree for parent tracking and dirty propagation
@@ -186,17 +190,161 @@ pub fn take_layout_roots() -> Vec<WidgetId> {
     WIDGET_TREE.with(|tree| tree.borrow_mut().take_layout_roots())
 }
 
-/// Global version counter - incremented whenever any signal changes
-static GLOBAL_REACTIVE_VERSION: AtomicU64 = AtomicU64::new(0);
-
-/// Increment the global reactive version (called when any signal changes)
-pub fn bump_reactive_version() {
-    GLOBAL_REACTIVE_VERSION.fetch_add(1, Ordering::Relaxed);
+/// Set the needs_layout flag for a widget
+pub fn set_needs_layout_flag(widget_id: WidgetId, value: bool) {
+    WIDGET_DIRTY_FLAGS.with(|flags| {
+        if value {
+            flags.borrow_mut().insert(widget_id, true);
+        } else {
+            flags.borrow_mut().remove(&widget_id);
+        }
+    });
 }
 
-/// Get the current global reactive version
-pub fn get_reactive_version() -> u64 {
-    GLOBAL_REACTIVE_VERSION.load(Ordering::Relaxed)
+/// Get the needs_layout flag for a widget
+pub fn get_needs_layout_flag(widget_id: WidgetId) -> bool {
+    WIDGET_DIRTY_FLAGS.with(|flags| flags.borrow().get(&widget_id).copied().unwrap_or(false))
+}
+
+/// Clear all dirty flags (call at start of frame)
+pub fn clear_all_dirty_flags() {
+    WIDGET_DIRTY_FLAGS.with(|flags| flags.borrow_mut().clear());
+}
+
+/// Register whether a widget is a relayout boundary
+pub fn register_relayout_boundary(widget_id: WidgetId, is_boundary: bool) {
+    RELAYOUT_BOUNDARIES.with(|boundaries| {
+        boundaries.borrow_mut().insert(widget_id, is_boundary);
+    });
+}
+
+/// Check if a widget is a relayout boundary
+fn is_relayout_boundary(widget_id: WidgetId) -> bool {
+    RELAYOUT_BOUNDARIES.with(|boundaries| {
+        boundaries
+            .borrow()
+            .get(&widget_id)
+            .copied()
+            .unwrap_or(false)
+    })
+}
+
+/// Unregister a widget's relayout boundary status (on drop)
+pub fn unregister_relayout_boundary(widget_id: WidgetId) {
+    RELAYOUT_BOUNDARIES.with(|boundaries| {
+        boundaries.borrow_mut().remove(&widget_id);
+    });
+    WIDGET_DIRTY_FLAGS.with(|flags| {
+        flags.borrow_mut().remove(&widget_id);
+    });
+}
+
+// Layout tracking context for building widget -> signal dependencies
+thread_local! {
+    /// Current widget being laid out (for dependency tracking)
+    static CURRENT_LAYOUT_WIDGET: RefCell<Option<WidgetId>> = const { RefCell::new(None) };
+    /// Map from signal ID to set of widgets that depend on it for layout
+    static LAYOUT_SUBSCRIBERS: RefCell<HashMap<usize, HashSet<WidgetId>>> = RefCell::new(HashMap::new());
+}
+
+/// Start layout tracking for a widget.
+/// While tracking is active, any signal reads will be recorded as layout dependencies.
+pub fn start_layout_tracking(widget_id: WidgetId) {
+    CURRENT_LAYOUT_WIDGET.with(|current| {
+        *current.borrow_mut() = Some(widget_id);
+    });
+}
+
+/// Finish layout tracking and clear the current widget.
+pub fn finish_layout_tracking() {
+    CURRENT_LAYOUT_WIDGET.with(|current| {
+        *current.borrow_mut() = None;
+    });
+}
+
+/// Record that the current layout widget (if any) depends on the given signal.
+/// Called from Signal::get() when layout tracking is active.
+pub fn record_layout_read(signal_id: usize) {
+    CURRENT_LAYOUT_WIDGET.with(|current| {
+        if let Some(widget_id) = *current.borrow() {
+            LAYOUT_SUBSCRIBERS.with(|subs| {
+                subs.borrow_mut()
+                    .entry(signal_id)
+                    .or_default()
+                    .insert(widget_id);
+            });
+        }
+    });
+}
+
+/// Notify all layout subscribers of a signal that it has changed.
+/// Called from Signal::set() and Signal::update().
+pub fn notify_layout_subscribers(signal_id: usize) {
+    // Collect widget IDs first to avoid holding the borrow during mark_needs_layout
+    let widgets_to_mark: Vec<WidgetId> = LAYOUT_SUBSCRIBERS.with(|subs| {
+        subs.borrow()
+            .get(&signal_id)
+            .map(|widgets| widgets.iter().copied().collect())
+            .unwrap_or_default()
+    });
+
+    // Mark each widget as needing layout and propagate up to ancestors
+    for widget_id in widgets_to_mark {
+        mark_needs_layout(widget_id);
+    }
+}
+
+/// Clear layout subscribers for a specific signal (when signal is disposed)
+pub fn clear_layout_subscribers(signal_id: usize) {
+    LAYOUT_SUBSCRIBERS.with(|subs| {
+        subs.borrow_mut().remove(&signal_id);
+    });
+}
+
+/// Mark a widget as needing layout.
+/// Bubbles up through parents, stopping at relayout boundaries.
+/// Adds the stopping point to layout_roots for partial re-layout.
+pub fn mark_needs_layout(widget_id: WidgetId) {
+    WIDGET_TREE.with(|tree| {
+        let tree = tree.borrow();
+        let mut current = widget_id;
+
+        loop {
+            // Mark this widget as needing layout
+            WIDGET_DIRTY_FLAGS.with(|flags| {
+                flags.borrow_mut().insert(current, true);
+            });
+
+            // If this widget is a relayout boundary, it's a layout root
+            if is_relayout_boundary(current) {
+                drop(tree);
+                WIDGET_TREE.with(|t| {
+                    t.borrow_mut().add_layout_root(current);
+                });
+                break;
+            }
+
+            // Otherwise, bubble up to parent
+            match tree.get_parent(current) {
+                Some(parent) => current = parent,
+                None => {
+                    // Reached root, add it as layout root
+                    drop(tree);
+                    WIDGET_TREE.with(|t| {
+                        t.borrow_mut().add_layout_root(current);
+                    });
+                    break;
+                }
+            }
+        }
+    });
+
+    // Also set global layout flag
+    APP_STATE.with(|state| {
+        state.borrow_mut().change_flags |= ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT;
+    });
+
+    request_frame();
 }
 
 /// Global flag to indicate a frame is requested

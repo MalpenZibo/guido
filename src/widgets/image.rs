@@ -7,7 +7,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::layout::{Constraints, Size};
-use crate::reactive::{IntoMaybeDyn, MaybeDyn, WidgetId};
+use crate::reactive::{
+    IntoMaybeDyn, MaybeDyn, WidgetId, finish_layout_tracking, register_relayout_boundary,
+    start_layout_tracking,
+};
 use crate::renderer::PaintContext;
 
 use super::widget::{EventResponse, Rect, Widget};
@@ -231,6 +234,13 @@ impl Image {
 
 impl Widget for Image {
     fn layout(&mut self, constraints: Constraints) -> Size {
+        // Start layout tracking for dependency registration
+        start_layout_tracking(self.widget_id);
+
+        // Images are never relayout boundaries
+        register_relayout_boundary(self.widget_id, false);
+
+        // Read source (registers layout dependencies if reactive)
         let current_source = self.source.get();
 
         // Load intrinsic size if not cached or source changed
@@ -250,6 +260,10 @@ impl Widget for Image {
         let size = self.calculate_size(&constraints);
         self.bounds.width = size.width;
         self.bounds.height = size.height;
+
+        // Finish layout tracking
+        finish_layout_tracking();
+
         size
     }
 
