@@ -23,6 +23,7 @@ mod commands;
 mod context;
 mod flatten;
 mod gpu;
+mod image_quad;
 mod render;
 mod text_quad;
 mod tree;

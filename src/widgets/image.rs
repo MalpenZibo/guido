@@ -12,6 +12,8 @@ use crate::reactive::{
     start_layout_tracking,
 };
 use crate::renderer::PaintContext;
+#[cfg(feature = "renderer_v2")]
+use crate::renderer_v2::PaintContextV2;
 
 use super::widget::{EventResponse, Rect, Widget};
 
@@ -268,6 +270,13 @@ impl Widget for Image {
     }
 
     fn paint(&self, ctx: &mut PaintContext) {
+        if let Some(ref source) = self.cached_source {
+            ctx.draw_image(source.clone(), self.bounds, self.content_fit);
+        }
+    }
+
+    #[cfg(feature = "renderer_v2")]
+    fn paint_v2(&self, ctx: &mut PaintContextV2) {
         if let Some(ref source) = self.cached_source {
             ctx.draw_image(source.clone(), self.bounds, self.content_fit);
         }

@@ -2,6 +2,7 @@
 
 use crate::renderer::primitives::{Gradient, Shadow};
 use crate::widgets::font::{FontFamily, FontWeight};
+use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::{Color, Rect};
 
 /// Border definition for shapes.
@@ -69,7 +70,16 @@ pub enum DrawCommand {
         /// The font weight
         font_weight: FontWeight,
     },
-    // TODO: Add Image variant in later phases
+
+    /// Draw an image.
+    Image {
+        /// Image source (path or bytes)
+        source: ImageSource,
+        /// Bounding rectangle in local coordinates
+        rect: Rect,
+        /// How the image content fits within the rect
+        content_fit: ContentFit,
+    },
 }
 
 impl DrawCommand {

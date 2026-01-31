@@ -18,6 +18,7 @@ use crate::widgets::Color;
 use super::commands::{Border, DrawCommand};
 use super::flatten::{FlattenedCommand, RenderLayer};
 use super::gpu::{QUAD_INDICES, QUAD_VERTICES, QuadVertex, ShaderUniforms, ShapeInstance};
+use super::image_quad::{ImageQuadRenderer, PreparedImageQuad};
 use super::text_quad::{PreparedTextQuad, TextQuadRenderer};
 
 /// The V2 renderer using instanced rendering.
@@ -48,6 +49,9 @@ pub struct RendererV2 {
 
     // Transformed text rendering (renders text to textures for rotation/scale)
     text_quad_renderer: TextQuadRenderer,
+
+    // Image rendering
+    image_quad_renderer: ImageQuadRenderer,
 
     // Screen dimensions
     screen_width: f32,
@@ -129,6 +133,9 @@ impl RendererV2 {
         // Initialize transformed text renderer
         let text_quad_renderer = TextQuadRenderer::new(&device, &queue, format);
 
+        // Initialize image renderer
+        let image_quad_renderer = ImageQuadRenderer::new(&device, format);
+
         Self {
             device,
             queue,
@@ -142,6 +149,7 @@ impl RendererV2 {
             instance_buffer_capacity: initial_capacity,
             text_state,
             text_quad_renderer,
+            image_quad_renderer,
             screen_width: 800.0,
             screen_height: 600.0,
             scale_factor: 1.0,
@@ -272,6 +280,10 @@ impl RendererV2 {
             .iter()
             .filter(|c| c.layer == RenderLayer::Shapes)
             .collect();
+        let image_commands: Vec<_> = commands
+            .iter()
+            .filter(|c| c.layer == RenderLayer::Images)
+            .collect();
         let text_commands: Vec<_> = commands
             .iter()
             .filter(|c| c.layer == RenderLayer::Text)
@@ -319,6 +331,21 @@ impl RendererV2 {
                 &self.queue,
                 &text_entries,
                 &transformed_indices,
+                self.scale_factor,
+            )
+        } else {
+            Vec::new()
+        };
+
+        // Prepare image quads
+        self.image_quad_renderer.begin_frame();
+        let image_quads: Vec<PreparedImageQuad> = if !image_commands.is_empty() {
+            self.image_quad_renderer
+                .set_screen_size(self.screen_width, self.screen_height);
+            self.image_quad_renderer.prepare(
+                &self.device,
+                &self.queue,
+                &image_commands,
                 self.scale_factor,
             )
         } else {
@@ -374,7 +401,13 @@ impl RendererV2 {
                 render_pass.draw_indexed(0..6, 0, 0..shape_instances.len() as u32);
             }
 
-            // Draw text layer (between shapes and overlay)
+            // Draw images (after shapes, before text)
+            if !image_quads.is_empty() {
+                self.image_quad_renderer
+                    .render(&mut render_pass, &image_quads);
+            }
+
+            // Draw text layer (between images and overlay)
             // Only render non-transformed text via glyphon
             let has_non_transformed_text =
                 !text_entries.is_empty() && transformed_indices.len() < text_entries.len();
@@ -537,6 +570,8 @@ impl RendererV2 {
             }
             // Text commands are handled separately via command_to_text_entry
             DrawCommand::Text { .. } => None,
+            // Image commands are handled separately via ImageQuadRenderer
+            DrawCommand::Image { .. } => None,
         }
     }
 

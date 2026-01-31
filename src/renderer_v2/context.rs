@@ -4,6 +4,7 @@ use crate::renderer::primitives::{Gradient, Shadow};
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
 use crate::widgets::font::{FontFamily, FontWeight};
+use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::{Color, Rect};
 
 use super::commands::{Border, DrawCommand};
@@ -255,6 +256,19 @@ impl<'a> PaintContextV2<'a> {
             font_size,
             font_family,
             font_weight,
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // Image Commands
+    // -------------------------------------------------------------------------
+
+    /// Draw an image in local coordinates.
+    pub fn draw_image(&mut self, source: ImageSource, rect: Rect, content_fit: ContentFit) {
+        self.node.commands.push(DrawCommand::Image {
+            source,
+            rect,
+            content_fit,
         });
     }
 

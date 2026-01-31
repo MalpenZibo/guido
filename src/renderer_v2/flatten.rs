@@ -10,10 +10,12 @@ use super::tree::{RenderNode, RenderTree};
 pub enum RenderLayer {
     /// Background shapes (filled rectangles, borders, etc.)
     Shapes = 0,
+    /// Image content (after shapes, before text)
+    Images = 1,
     /// Text content
-    Text = 1,
+    Text = 2,
     /// Overlay effects (ripples, highlights)
-    Overlay = 2,
+    Overlay = 3,
 }
 
 /// A draw command with computed world transform.
@@ -77,6 +79,7 @@ fn flatten_node(
     for cmd in &node.commands {
         let layer = match cmd {
             DrawCommand::Text { .. } => RenderLayer::Text,
+            DrawCommand::Image { .. } => RenderLayer::Images,
             _ => RenderLayer::Shapes,
         };
         out.push(FlattenedCommand {
