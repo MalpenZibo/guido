@@ -48,6 +48,9 @@ pub struct FlattenedCommand {
     pub layer: RenderLayer,
     /// Clip region in world coordinates (if any).
     pub clip: Option<WorldClip>,
+    /// Whether the clip is in local coordinates (use frag_pos in shader instead of world_pos).
+    /// This is true for overlay clips on transformed containers.
+    pub clip_is_local: bool,
 }
 
 /// Flatten a render tree into a list of commands ready for GPU submission.
@@ -120,6 +123,7 @@ fn flatten_node(
             world_transform_origin: world_origin,
             layer,
             clip: effective_clip.clone(),
+            clip_is_local: false,
         });
     }
 
@@ -135,12 +139,21 @@ fn flatten_node(
     }
 
     // Compute overlay-specific clip (if set)
-    // overlay_clip takes precedence for overlay commands, otherwise fall back to effective_clip
-    let overlay_clip: Option<WorldClip> = node
-        .overlay_clip
-        .as_ref()
-        .map(|clip| transform_clip_to_world(clip, &world_transform))
-        .or_else(|| effective_clip.clone());
+    // For overlay clips (ripples), keep the clip in LOCAL space so it follows the shape's transform.
+    // This ensures ripples are clipped to the rotated/scaled container, not an AABB.
+    let (overlay_clip, overlay_clip_is_local): (Option<WorldClip>, bool) =
+        if let Some(ref clip) = node.overlay_clip {
+            // Keep overlay clip in LOCAL space - don't transform to world AABB
+            let local_clip = WorldClip {
+                rect: clip.rect,
+                corner_radius: clip.corner_radius,
+                curvature: clip.curvature,
+            };
+            (Some(local_clip), true)
+        } else {
+            // Fall back to effective_clip (which is in world space)
+            (effective_clip.clone(), false)
+        };
 
     // Add overlay commands (layer = Overlay) with overlay-specific clip
     for cmd in &node.overlay_commands {
@@ -150,6 +163,7 @@ fn flatten_node(
             world_transform_origin: world_origin,
             layer: RenderLayer::Overlay,
             clip: overlay_clip.clone(),
+            clip_is_local: overlay_clip_is_local,
         });
     }
 }

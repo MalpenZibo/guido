@@ -134,8 +134,11 @@ pub struct ShapeInstance {
     pub clip_corner_radius: f32,
     /// Clip curvature (K-value)
     pub clip_curvature: f32,
+    /// Whether to use local coordinates (frag_pos) for clipping instead of world_pos.
+    /// 1.0 = local clip, 0.0 = world clip
+    pub clip_is_local: f32,
     /// Padding for alignment
-    pub _pad3: [f32; 2],
+    pub _pad3: f32,
 
     // === Gradient ===
     /// Gradient start color [r, g, b, a]
@@ -168,7 +171,8 @@ impl Default for ShapeInstance {
             clip_rect: [0.0, 0.0, 0.0, 0.0], // No clipping (width/height = 0)
             clip_corner_radius: 0.0,
             clip_curvature: 1.0,
-            _pad3: [0.0, 0.0],
+            clip_is_local: 0.0,
+            _pad3: 0.0,
             gradient_start: [0.0, 0.0, 0.0, 0.0],
             gradient_end: [0.0, 0.0, 0.0, 0.0],
             gradient_type: 0, // No gradient
@@ -311,7 +315,7 @@ impl ShapeInstance {
                     shader_location: 10,
                     format: VertexFormat::Float32x4,
                 },
-                // clip_corner_radius, clip_curvature, _pad3[0], _pad3[1]
+                // clip_corner_radius, clip_curvature, clip_is_local, _pad3
                 VertexAttribute {
                     offset: 160,
                     shader_location: 11,

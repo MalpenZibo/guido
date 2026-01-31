@@ -43,7 +43,7 @@ struct InstanceInput {
     @location(9) transform_1: vec4<f32>,
     // clip_rect: [x, y, width, height] in physical pixels
     @location(10) clip_rect: vec4<f32>,
-    // clip_corner_radius, clip_curvature, _pad, _pad
+    // clip_corner_radius, clip_curvature, clip_is_local, _pad
     @location(11) clip_params: vec4<f32>,
     // gradient_start RGBA
     @location(12) gradient_start: vec4<f32>,
@@ -75,8 +75,8 @@ struct VertexOutput {
     @location(8) world_pos: vec2<f32>,
     // Clip rect in physical pixels
     @location(9) clip_rect: vec4<f32>,
-    // Clip corner_radius, curvature
-    @location(10) clip_params: vec2<f32>,
+    // Clip corner_radius, curvature, is_local
+    @location(10) clip_params: vec3<f32>,
     // Gradient start color
     @location(11) gradient_start: vec4<f32>,
     // Gradient end color
@@ -178,7 +178,7 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
 
     // Pass clip data to fragment shader
     out.clip_rect = instance.clip_rect;
-    out.clip_params = instance.clip_params.xy;  // corner_radius, curvature
+    out.clip_params = instance.clip_params.xyz;  // corner_radius, curvature, is_local
 
     // Pass gradient data to fragment shader
     out.gradient_start = instance.gradient_start;
@@ -359,9 +359,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // === Apply clipping ===
     // Check if clipping is enabled (width and height > 0)
     if (in.clip_rect.z > 0.0 && in.clip_rect.w > 0.0) {
-        // Compute clip SDF using world position (in physical pixels)
+        // Use frag_pos for local clips (overlay clips on transformed containers),
+        // world_pos for world clips (regular clipping)
+        let clip_pos = select(in.world_pos, in.frag_pos, in.clip_params.z > 0.5);
+
+        // Compute clip SDF
         let clip_dist = rounded_rect_sdf(
-            in.world_pos,
+            clip_pos,
             in.clip_rect,
             in.clip_params.x,  // corner_radius
             in.clip_params.y   // curvature

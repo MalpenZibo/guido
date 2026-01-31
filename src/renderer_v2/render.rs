@@ -522,7 +522,8 @@ impl RendererV2 {
                     clip_rect: [0.0, 0.0, 0.0, 0.0],
                     clip_corner_radius: 0.0,
                     clip_curvature: 1.0,
-                    _pad3: [0.0, 0.0],
+                    clip_is_local: 0.0,
+                    _pad3: 0.0,
                     gradient_start,
                     gradient_end,
                     gradient_type,
@@ -569,6 +570,7 @@ impl RendererV2 {
                     ];
                     instance.clip_corner_radius = clip.corner_radius * scale;
                     instance.clip_curvature = clip.curvature;
+                    instance.clip_is_local = if cmd.clip_is_local { 1.0 } else { 0.0 };
                 }
 
                 Some(instance)
@@ -602,7 +604,8 @@ impl RendererV2 {
                     clip_rect: [0.0, 0.0, 0.0, 0.0],
                     clip_corner_radius: 0.0,
                     clip_curvature: 1.0,
-                    _pad3: [0.0, 0.0],
+                    clip_is_local: 0.0,
+                    _pad3: 0.0,
                     gradient_start: [0.0; 4],
                     gradient_end: [0.0; 4],
                     gradient_type: 0, // Circles don't support gradients
@@ -632,6 +635,7 @@ impl RendererV2 {
                     ];
                     instance.clip_corner_radius = clip.corner_radius * scale;
                     instance.clip_curvature = clip.curvature;
+                    instance.clip_is_local = if cmd.clip_is_local { 1.0 } else { 0.0 };
                 }
 
                 Some(instance)

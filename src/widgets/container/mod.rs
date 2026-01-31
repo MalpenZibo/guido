@@ -1322,13 +1322,13 @@ impl Widget for Container {
         }
 
         // Draw ripple effect as overlay
-        if let Some((screen_cx, screen_cy)) = self.ripple.center
+        // Note: ripple.center stores LOCAL coordinates (relative to container origin)
+        if let Some((local_cx, local_cy)) = self.ripple.center
             && let Some(ref pressed_state) = self.pressed_state
             && let Some(ref ripple_config) = pressed_state.ripple
             && self.ripple.opacity > 0.0
         {
-            let local_cx = screen_cx - self.bounds.x;
-            let local_cy = screen_cy - self.bounds.y;
+            // Calculate max radius from local coordinates
             let max_dist_x = local_cx.max(self.bounds.width - local_cx);
             let max_dist_y = local_cy.max(self.bounds.height - local_cy);
             let max_radius = (max_dist_x * max_dist_x + max_dist_y * max_dist_y).sqrt();
@@ -1346,6 +1346,10 @@ impl Widget for Container {
             } else {
                 (self.bounds, None)
             };
+
+            // Convert local coords to screen coords for drawing
+            let screen_cx = self.bounds.x + local_cx;
+            let screen_cy = self.bounds.y + local_cy;
 
             ctx.draw_overlay_circle_clipped_with_transform(
                 screen_cx,
