@@ -1,9 +1,10 @@
 //! Tree flattening with world transform computation.
 
 use crate::transform::Transform;
+use crate::widgets::Rect;
 
 use super::commands::DrawCommand;
-use super::tree::{RenderNode, RenderTree};
+use super::tree::{ClipRegion, RenderNode, RenderTree};
 
 /// Render layer for draw command ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -16,6 +17,20 @@ pub enum RenderLayer {
     Text = 2,
     /// Overlay effects (ripples, highlights)
     Overlay = 3,
+}
+
+/// Clip region transformed to world space (axis-aligned bounding box).
+///
+/// When a node has a clip region and its parent has rotation, the clip
+/// becomes an axis-aligned bounding box in world space.
+#[derive(Debug, Clone)]
+pub struct WorldClip {
+    /// Axis-aligned clip rect in world coordinates (logical pixels).
+    pub rect: Rect,
+    /// Corner radius for rounded clipping (in logical pixels).
+    pub corner_radius: f32,
+    /// Superellipse curvature (K-value).
+    pub curvature: f32,
 }
 
 /// A draw command with computed world transform.
@@ -31,6 +46,8 @@ pub struct FlattenedCommand {
     pub world_transform_origin: Option<(f32, f32)>,
     /// Render layer for ordering
     pub layer: RenderLayer,
+    /// Clip region in world coordinates (if any).
+    pub clip: Option<WorldClip>,
 }
 
 /// Flatten a render tree into a list of commands ready for GPU submission.
@@ -41,7 +58,7 @@ pub fn flatten_tree(tree: &RenderTree) -> Vec<FlattenedCommand> {
     let mut commands = Vec::new();
 
     for root in &tree.roots {
-        flatten_node(root, Transform::IDENTITY, None, &mut commands);
+        flatten_node(root, Transform::IDENTITY, None, None, &mut commands);
     }
 
     // Sort by layer for correct render order
@@ -54,6 +71,7 @@ fn flatten_node(
     node: &RenderNode,
     parent_world_transform: Transform,
     parent_world_origin: Option<(f32, f32)>,
+    parent_clip: Option<&WorldClip>,
     out: &mut Vec<FlattenedCommand>,
 ) {
     // Compute this node's world transform
@@ -75,7 +93,21 @@ fn flatten_node(
         parent_world_origin
     };
 
-    // Add main commands with appropriate layers
+    // Compute this node's world clip (if any)
+    let node_world_clip = node
+        .clip
+        .as_ref()
+        .map(|clip| transform_clip_to_world(clip, &world_transform));
+
+    // Effective clip = intersection of parent clip and node clip
+    let effective_clip: Option<WorldClip> = match (parent_clip, &node_world_clip) {
+        (Some(parent), Some(node_clip)) => Some(intersect_clips(parent, node_clip)),
+        (Some(parent), None) => Some(parent.clone()),
+        (None, Some(node_clip)) => Some(node_clip.clone()),
+        (None, None) => None,
+    };
+
+    // Add main commands with appropriate layers and clip
     for cmd in &node.commands {
         let layer = match cmd {
             DrawCommand::Text { .. } => RenderLayer::Text,
@@ -87,22 +119,106 @@ fn flatten_node(
             world_transform,
             world_transform_origin: world_origin,
             layer,
+            clip: effective_clip.clone(),
         });
     }
 
-    // Recurse to children
+    // Recurse to children with effective clip
     for child in &node.children {
-        flatten_node(child, world_transform, world_origin, out);
+        flatten_node(
+            child,
+            world_transform,
+            world_origin,
+            effective_clip.as_ref(),
+            out,
+        );
     }
 
-    // Add overlay commands (layer = Overlay)
+    // Add overlay commands (layer = Overlay) with clip
     for cmd in &node.overlay_commands {
         out.push(FlattenedCommand {
             command: transform_command(cmd, &world_transform),
             world_transform,
             world_transform_origin: world_origin,
             layer: RenderLayer::Overlay,
+            clip: effective_clip.clone(),
         });
+    }
+}
+
+/// Transform a local clip region to world space (axis-aligned bounding box).
+///
+/// When the transform includes rotation, the clip becomes the AABB of
+/// the rotated rectangle. This is a conservative approximation that
+/// ensures no clipped content is visible outside the clip region.
+fn transform_clip_to_world(clip: &ClipRegion, transform: &Transform) -> WorldClip {
+    // Transform all 4 corners and compute AABB
+    let corners = [
+        transform.transform_point(clip.rect.x, clip.rect.y),
+        transform.transform_point(clip.rect.x + clip.rect.width, clip.rect.y),
+        transform.transform_point(clip.rect.x, clip.rect.y + clip.rect.height),
+        transform.transform_point(
+            clip.rect.x + clip.rect.width,
+            clip.rect.y + clip.rect.height,
+        ),
+    ];
+
+    let min_x = corners
+        .iter()
+        .map(|(x, _)| *x)
+        .fold(f32::INFINITY, f32::min);
+    let max_x = corners
+        .iter()
+        .map(|(x, _)| *x)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_y = corners
+        .iter()
+        .map(|(_, y)| *y)
+        .fold(f32::INFINITY, f32::min);
+    let max_y = corners
+        .iter()
+        .map(|(_, y)| *y)
+        .fold(f32::NEG_INFINITY, f32::max);
+
+    // Scale corner radius by transform scale
+    let scale = transform.extract_scale();
+    let scaled_radius = clip.corner_radius * scale;
+
+    WorldClip {
+        rect: Rect::new(min_x, min_y, max_x - min_x, max_y - min_y),
+        corner_radius: scaled_radius,
+        curvature: clip.curvature,
+    }
+}
+
+/// Compute the intersection of two clip regions.
+///
+/// Returns the tighter of the two clips. For simplicity, we use the
+/// intersection of the AABBs and take the smaller corner radius.
+fn intersect_clips(a: &WorldClip, b: &WorldClip) -> WorldClip {
+    // Compute AABB intersection
+    let min_x = a.rect.x.max(b.rect.x);
+    let min_y = a.rect.y.max(b.rect.y);
+    let max_x = (a.rect.x + a.rect.width).min(b.rect.x + b.rect.width);
+    let max_y = (a.rect.y + a.rect.height).min(b.rect.y + b.rect.height);
+
+    // Clamp to non-negative dimensions
+    let width = (max_x - min_x).max(0.0);
+    let height = (max_y - min_y).max(0.0);
+
+    // Use the smaller corner radius (more conservative)
+    let corner_radius = a.corner_radius.min(b.corner_radius);
+    // Use the curvature from the clip with the smaller radius
+    let curvature = if a.corner_radius <= b.corner_radius {
+        a.curvature
+    } else {
+        b.curvature
+    };
+
+    WorldClip {
+        rect: Rect::new(min_x, min_y, width, height),
+        corner_radius,
+        curvature,
     }
 }
 

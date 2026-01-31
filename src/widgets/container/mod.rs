@@ -1649,7 +1649,12 @@ impl Widget for Container {
         // Determine if we need to clip children
         let is_scrollable = self.scroll_axis != ScrollAxis::None;
 
-        // TODO: Clipping temporarily disabled in V2 renderer - will be re-implemented in a future PR
+        // Set clip region for scrollable containers
+        // This clips all children to the container bounds
+        if is_scrollable {
+            // Clip to container bounds (local coordinates)
+            ctx.set_clip(local_bounds, corner_radius, corner_curvature);
+        }
 
         // Draw children - each gets its own node with position transform
         for child in self.children_source.get() {

@@ -6,6 +6,20 @@ use crate::widgets::Rect;
 
 use super::commands::DrawCommand;
 
+/// Clip region for a render node (in local coordinates).
+///
+/// When set on a node, this clips the node and all its children
+/// to the specified rectangle with optional rounded corners.
+#[derive(Debug, Clone)]
+pub struct ClipRegion {
+    /// The clip rectangle in local coordinates (0,0 = node origin).
+    pub rect: Rect,
+    /// Corner radius for rounded clipping.
+    pub corner_radius: f32,
+    /// Superellipse curvature (K-value: 1.0=circle, 2.0=squircle).
+    pub curvature: f32,
+}
+
 /// Unique identifier for a render node (typically matches widget ID).
 pub type NodeId = u64;
 
@@ -40,6 +54,10 @@ pub struct RenderNode {
     /// Overlay commands - drawn AFTER all children (for ripples, effects).
     /// These are also in local coordinates.
     pub overlay_commands: Vec<DrawCommand>,
+
+    /// Optional clip region that applies to this node and children.
+    /// The clip rect is in local coordinates (0,0 = node origin).
+    pub clip: Option<ClipRegion>,
 }
 
 impl RenderNode {
@@ -53,6 +71,7 @@ impl RenderNode {
             commands: Vec::new(),
             children: Vec::new(),
             overlay_commands: Vec::new(),
+            clip: None,
         }
     }
 
@@ -72,6 +91,7 @@ impl RenderNode {
         self.commands.clear();
         self.children.clear();
         self.overlay_commands.clear();
+        self.clip = None;
     }
 }
 

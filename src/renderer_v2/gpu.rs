@@ -125,6 +125,17 @@ pub struct ShapeInstance {
     pub transform: [f32; 6],
     /// Padding for alignment
     pub _pad2: [f32; 2],
+
+    // === Clip Region ===
+    /// Clip rect in physical pixels: [x, y, width, height]
+    /// If width or height <= 0, no clipping is applied
+    pub clip_rect: [f32; 4],
+    /// Clip corner radius in physical pixels
+    pub clip_corner_radius: f32,
+    /// Clip curvature (K-value)
+    pub clip_curvature: f32,
+    /// Padding for alignment
+    pub _pad3: [f32; 2],
 }
 
 impl Default for ShapeInstance {
@@ -144,6 +155,10 @@ impl Default for ShapeInstance {
             shadow_color: [0.0, 0.0, 0.0, 0.0],
             transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0], // identity
             _pad2: [0.0, 0.0],
+            clip_rect: [0.0, 0.0, 0.0, 0.0], // No clipping (width/height = 0)
+            clip_corner_radius: 0.0,
+            clip_curvature: 1.0,
+            _pad3: [0.0, 0.0],
         }
     }
 }
@@ -276,6 +291,18 @@ impl ShapeInstance {
                     shader_location: 9,
                     format: VertexFormat::Float32x4,
                 },
+                // clip_rect: [x, y, width, height]
+                VertexAttribute {
+                    offset: 144,
+                    shader_location: 10,
+                    format: VertexFormat::Float32x4,
+                },
+                // clip_corner_radius, clip_curvature, _pad3[0], _pad3[1]
+                VertexAttribute {
+                    offset: 160,
+                    shader_location: 11,
+                    format: VertexFormat::Float32x4,
+                },
             ],
         }
     }
@@ -287,10 +314,12 @@ mod tests {
 
     #[test]
     fn test_shape_instance_size() {
-        // Verify the size is reasonable (should be around 144 bytes without clip)
+        // Verify the size is reasonable (should be around 176 bytes with clip)
         let size = std::mem::size_of::<ShapeInstance>();
         println!("ShapeInstance size: {} bytes", size);
         assert!(size <= 256, "ShapeInstance is too large: {} bytes", size);
+        // Verify expected size: 144 (base) + 32 (clip) = 176
+        assert_eq!(size, 176, "ShapeInstance size changed unexpectedly");
     }
 
     #[test]

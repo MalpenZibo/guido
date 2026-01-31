@@ -8,7 +8,7 @@ use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::{Color, Rect};
 
 use super::commands::{Border, DrawCommand};
-use super::tree::{NodeId, RenderNode};
+use super::tree::{ClipRegion, NodeId, RenderNode};
 
 /// Painting context for the V2 renderer.
 ///
@@ -109,6 +109,34 @@ impl<'a> PaintContextV2<'a> {
     pub fn set_transform_with_origin(&mut self, transform: Transform, origin: TransformOrigin) {
         self.node.local_transform = transform;
         self.node.transform_origin = origin;
+    }
+
+    // -------------------------------------------------------------------------
+    // Clipping
+    // -------------------------------------------------------------------------
+
+    /// Set a clip region for this node and its children.
+    ///
+    /// The clip rect is in local coordinates (0,0 = node origin).
+    /// All children of this node will be clipped to this region.
+    ///
+    /// # Arguments
+    /// * `rect` - The clip rectangle in local coordinates
+    /// * `corner_radius` - Corner radius for rounded clipping
+    /// * `curvature` - Superellipse curvature (K-value: 1.0=circle, 2.0=squircle)
+    pub fn set_clip(&mut self, rect: Rect, corner_radius: f32, curvature: f32) {
+        self.node.clip = Some(ClipRegion {
+            rect,
+            corner_radius,
+            curvature,
+        });
+    }
+
+    /// Set a rectangular clip (no rounded corners).
+    ///
+    /// This is a convenience method for `set_clip(rect, 0.0, 1.0)`.
+    pub fn set_clip_rect(&mut self, rect: Rect) {
+        self.set_clip(rect, 0.0, 1.0);
     }
 
     // -------------------------------------------------------------------------

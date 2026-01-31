@@ -491,6 +491,10 @@ impl RendererV2 {
                     shadow_color: [0.0, 0.0, 0.0, 0.0],
                     transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
                     _pad2: [0.0, 0.0],
+                    clip_rect: [0.0, 0.0, 0.0, 0.0],
+                    clip_corner_radius: 0.0,
+                    clip_curvature: 1.0,
+                    _pad3: [0.0, 0.0],
                 };
 
                 // Border
@@ -523,6 +527,18 @@ impl RendererV2 {
                     ];
                 }
 
+                // Clip region
+                if let Some(ref clip) = cmd.clip {
+                    instance.clip_rect = [
+                        clip.rect.x * scale,
+                        clip.rect.y * scale,
+                        clip.rect.width * scale,
+                        clip.rect.height * scale,
+                    ];
+                    instance.clip_corner_radius = clip.corner_radius * scale;
+                    instance.clip_curvature = clip.curvature;
+                }
+
                 Some(instance)
             }
             DrawCommand::Circle {
@@ -551,6 +567,10 @@ impl RendererV2 {
                     shadow_color: [0.0, 0.0, 0.0, 0.0],
                     transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
                     _pad2: [0.0, 0.0],
+                    clip_rect: [0.0, 0.0, 0.0, 0.0],
+                    clip_corner_radius: 0.0,
+                    clip_curvature: 1.0,
+                    _pad3: [0.0, 0.0],
                 };
 
                 // Transform (origin already baked into matrix via center_at)
@@ -564,6 +584,18 @@ impl RendererV2 {
                         t.data[5],
                         t.data[7] * scale,
                     ];
+                }
+
+                // Clip region
+                if let Some(ref clip) = cmd.clip {
+                    instance.clip_rect = [
+                        clip.rect.x * scale,
+                        clip.rect.y * scale,
+                        clip.rect.width * scale,
+                        clip.rect.height * scale,
+                    ];
+                    instance.clip_corner_radius = clip.corner_radius * scale;
+                    instance.clip_curvature = clip.curvature;
                 }
 
                 Some(instance)
