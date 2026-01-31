@@ -29,6 +29,11 @@ impl WidgetId {
         WidgetId(NEXT_WIDGET_ID.fetch_add(1, Ordering::Relaxed))
     }
 
+    /// Get the raw u64 value of this widget ID
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
+
     /// Request that this widget be re-laid out (and repainted)
     pub fn request_layout(&self) {
         APP_STATE.with(|state| {

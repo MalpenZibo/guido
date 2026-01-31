@@ -277,8 +277,11 @@ impl Widget for Image {
 
     #[cfg(feature = "renderer_v2")]
     fn paint_v2(&self, ctx: &mut PaintContextV2) {
+        // Draw in LOCAL coordinates (0,0 is widget origin)
+        // Parent Container sets position transform
         if let Some(ref source) = self.cached_source {
-            ctx.draw_image(source.clone(), self.bounds, self.content_fit);
+            let local_bounds = Rect::new(0.0, 0.0, self.bounds.width, self.bounds.height);
+            ctx.draw_image(source.clone(), local_bounds, self.content_fit);
         }
     }
 

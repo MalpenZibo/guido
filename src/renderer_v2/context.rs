@@ -16,24 +16,41 @@ use super::tree::{NodeId, RenderNode};
 /// there's no push/pop for transforms - they're set once per node
 /// and inherited automatically by children.
 ///
+/// All drawing is done in LOCAL coordinates (0,0 is the widget's top-left).
+/// Positioning is handled via transforms:
+/// - Parent sets child's position via `set_transform` before calling `paint_v2`
+/// - Child applies its own user transform (rotation, scale) via `apply_transform`
+///
 /// # Example
 ///
 /// ```ignore
 /// fn paint_v2(&self, ctx: &mut PaintContextV2) {
-///     // Set node properties
-///     ctx.set_bounds(self.bounds);
-///     ctx.set_transform(self.transform, TransformOrigin::CENTER);
+///     // Local bounds (0,0 origin with widget's own width/height)
+///     let local_bounds = Rect::new(0.0, 0.0, self.bounds.width, self.bounds.height);
+///     ctx.set_bounds(local_bounds);
 ///
-///     // Draw background
-///     ctx.draw_rounded_rect(self.bounds, Color::BLUE, 8.0);
-///
-///     // Paint children - each gets its own node
-///     for child in &self.children {
-///         let mut child_ctx = ctx.add_child(child.id(), child.bounds());
-///         child.paint_v2(&mut child_ctx);
+///     // Apply user transform (rotation, scale) - composes with parent's position transform
+///     // Parent already set our position via set_transform before calling paint_v2
+///     if !self.user_transform.is_identity() {
+///         ctx.apply_transform_with_origin(self.user_transform, self.transform_origin);
 ///     }
 ///
-///     // Draw overlay effects (after children)
+///     // Draw background in LOCAL coordinates
+///     ctx.draw_rounded_rect(local_bounds, Color::BLUE, 8.0);
+///
+///     // Paint children - set their position, then let them apply their own transforms
+///     for child in &self.children {
+///         let child_global = child.bounds();
+///         let child_local = Rect::new(0.0, 0.0, child_global.width, child_global.height);
+///         let child_offset_x = child_global.x - self.bounds.x;
+///         let child_offset_y = child_global.y - self.bounds.y;
+///
+///         let mut child_ctx = ctx.add_child(child.id(), child_local);
+///         child_ctx.set_transform(Transform::translate(child_offset_x, child_offset_y));
+///         child.paint_v2(&mut child_ctx);  // Child will apply its own user transform
+///     }
+///
+///     // Draw overlay effects (after children) in LOCAL coords
 ///     ctx.draw_overlay_circle(cx, cy, radius, color);
 /// }
 /// ```
@@ -57,9 +74,30 @@ impl<'a> PaintContextV2<'a> {
         self.node.bounds = bounds;
     }
 
-    /// Set this node's local transform.
+    /// Set this node's local transform (replaces any existing transform).
     pub fn set_transform(&mut self, transform: Transform) {
         self.node.local_transform = transform;
+    }
+
+    /// Apply a transform by composing it with the existing transform.
+    ///
+    /// The new transform is applied AFTER the existing transform:
+    /// `result = existing.then(transform)`
+    ///
+    /// Use this when a child widget needs to add its own transform (rotation, scale)
+    /// on top of the position transform set by its parent.
+    pub fn apply_transform(&mut self, transform: Transform) {
+        if !transform.is_identity() {
+            self.node.local_transform = self.node.local_transform.then(&transform);
+        }
+    }
+
+    /// Apply a transform with origin by composing it with the existing transform.
+    pub fn apply_transform_with_origin(&mut self, transform: Transform, origin: TransformOrigin) {
+        if !transform.is_identity() {
+            self.node.local_transform = self.node.local_transform.then(&transform);
+            self.node.transform_origin = origin;
+        }
     }
 
     /// Set this node's transform origin.

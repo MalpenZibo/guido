@@ -189,10 +189,13 @@ impl Widget for Text {
 
     #[cfg(feature = "renderer_v2")]
     fn paint_v2(&self, ctx: &mut PaintContextV2) {
+        // Draw in LOCAL coordinates (0,0 is widget origin)
+        // Parent Container sets position transform
+        let local_bounds = Rect::new(0.0, 0.0, self.bounds.width, self.bounds.height);
         let color = self.color.get();
         ctx.draw_text_styled(
             &self.cached_text,
-            self.bounds,
+            local_bounds,
             color,
             self.cached_font_size,
             self.cached_font_family.clone(),

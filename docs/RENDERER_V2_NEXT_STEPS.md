@@ -12,6 +12,28 @@
 
 ## Recent Completions
 
+### Local Coordinate System Fix (Jan 2026)
+
+Fixed V2 renderer to use **local coordinates** as per the original design:
+
+- **Problem**: Widgets were using global screen coordinates for draw commands
+- **Solution**: Each widget now draws in its own local coordinate space (0,0 origin)
+- **Key design**:
+  - All widgets draw at `Rect::new(0, 0, width, height)` (local bounds)
+  - Parent sets child's position via `child_ctx.set_transform(translate(offset))`
+  - Child applies its own user transform via `ctx.apply_transform(user_transform)`
+  - Transforms are COMPOSED: parent position + child user transform
+  - Added `apply_transform()` and `apply_transform_with_origin()` to PaintContextV2
+
+**Files modified**:
+- `src/renderer_v2/context.rs` - Added apply_transform methods for composing transforms
+- `src/widgets/container/mod.rs` - Main coordinate system fix
+- `src/widgets/text.rs` - Use local bounds for text rendering
+- `src/widgets/image.rs` - Use local bounds for image rendering
+- `src/widgets/text_input.rs` - Use local coords for selection/cursor
+- `src/widgets/container/scrollable.rs` - Use local coords for scrollbars
+- `src/reactive/invalidation.rs` - Added `WidgetId::as_u64()` helper
+
 ### Text Rendering with Transforms (Jan 2026)
 
 Added `text_quad.rs` module for rendering text with rotation/scale transforms:

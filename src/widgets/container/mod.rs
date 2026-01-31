@@ -1177,12 +1177,23 @@ impl Widget for Container {
             height = height.max(content_height);
         }
 
-        let size = Size::new(
-            width.max(constraints.min_width).min(constraints.max_width),
+        // When explicit dimensions are set, respect them over min constraints
+        // This allows children with .width(60) to stay 60px even when parent uses Stretch
+        let final_width = if width_length.exact.is_some() {
+            // Explicit width: only apply max constraint, not min
+            width.min(constraints.max_width)
+        } else {
+            width.max(constraints.min_width).min(constraints.max_width)
+        };
+        let final_height = if height_length.exact.is_some() {
+            // Explicit height: only apply max constraint, not min
+            height.min(constraints.max_height)
+        } else {
             height
                 .max(constraints.min_height)
-                .min(constraints.max_height),
-        );
+                .min(constraints.max_height)
+        };
+        let size = Size::new(final_width, final_height);
 
         self.bounds.width = size.width;
         self.bounds.height = size.height;
@@ -1576,19 +1587,24 @@ impl Widget for Container {
         let corner_curvature = self.corner_curvature.get();
         let elevation_level = self.effective_elevation();
         let shadow = elevation_to_shadow(elevation_level);
-        let transform = self.animated_transform();
+        let user_transform = self.animated_transform();
         let transform_origin = self.transform_origin.get();
 
-        // Set node properties
-        ctx.set_bounds(self.bounds);
-        if !transform.is_identity() {
-            ctx.set_transform_with_origin(transform, transform_origin);
+        // LOCAL bounds (0,0 is widget origin) - all drawing uses these
+        let local_bounds = Rect::new(0.0, 0.0, self.bounds.width, self.bounds.height);
+        ctx.set_bounds(local_bounds);
+
+        // Apply user transform (rotation, scale, user-specified translate)
+        // Position is handled by the parent via set_transform before calling paint_v2
+        // We COMPOSE our user transform with the existing position transform
+        if !user_transform.is_identity() {
+            ctx.apply_transform_with_origin(user_transform, transform_origin);
         }
 
-        // Draw background
+        // Draw background using LOCAL coordinates
         if let Some(ref gradient) = self.gradient {
             ctx.draw_gradient_rect(
-                self.bounds,
+                local_bounds,
                 crate::renderer::primitives::Gradient {
                     start_color: gradient.start_color,
                     end_color: gradient.end_color,
@@ -1600,7 +1616,7 @@ impl Widget for Container {
         } else if background.a > 0.0 {
             if elevation_level > 0.0 {
                 ctx.draw_rounded_rect_with_shadow(
-                    self.bounds,
+                    local_bounds,
                     background,
                     corner_radius,
                     corner_curvature,
@@ -1608,7 +1624,7 @@ impl Widget for Container {
                 );
             } else {
                 ctx.draw_rounded_rect_with_curvature(
-                    self.bounds,
+                    local_bounds,
                     background,
                     corner_radius,
                     corner_curvature,
@@ -1616,13 +1632,13 @@ impl Widget for Container {
             }
         }
 
-        // Draw border
+        // Draw border using LOCAL coordinates
         let border_width = self.animated_border_width();
         let border_color = self.animated_border_color();
 
         if border_width > 0.0 {
             ctx.draw_border_frame_with_curvature(
-                self.bounds,
+                local_bounds,
                 border_color,
                 corner_radius,
                 border_width,
@@ -1635,18 +1651,27 @@ impl Widget for Container {
 
         // TODO: Clipping temporarily disabled in V2 renderer - will be re-implemented in a future PR
 
-        // Draw children - each gets its own node
-        // TODO: Handle scroll offset in children's transforms
+        // Draw children - each gets its own node with position transform
         for child in self.children_source.get() {
-            let child_bounds = child.bounds();
-            let mut child_ctx = ctx.add_child(0, child_bounds); // Use 0 as placeholder ID
+            let child_global = child.bounds();
+            // Child's LOCAL bounds (0,0 origin with its own width/height)
+            let child_local = Rect::new(0.0, 0.0, child_global.width, child_global.height);
+            // Child offset relative to THIS container's origin
+            let child_offset_x = child_global.x - self.bounds.x;
+            let child_offset_y = child_global.y - self.bounds.y;
 
-            // Apply scroll offset as child transform if scrollable
-            if is_scrollable {
-                let scroll_transform =
-                    Transform::translate(-self.scroll_state.offset_x, -self.scroll_state.offset_y);
-                child_ctx.set_transform(scroll_transform);
-            }
+            let mut child_ctx = ctx.add_child(child.id().as_u64(), child_local);
+
+            // Child's position transform (may include scroll offset)
+            let child_position = if is_scrollable {
+                Transform::translate(
+                    child_offset_x - self.scroll_state.offset_x,
+                    child_offset_y - self.scroll_state.offset_y,
+                )
+            } else {
+                Transform::translate(child_offset_x, child_offset_y)
+            };
+            child_ctx.set_transform(child_position);
 
             child.paint_v2(&mut child_ctx);
         }
@@ -1656,7 +1681,7 @@ impl Widget for Container {
             self.paint_scrollbar_containers_v2(ctx);
         }
 
-        // Draw ripple effect as overlay
+        // Draw ripple effect as overlay (already in local coordinates)
         if let Some((screen_cx, screen_cy)) = self.ripple.center
             && let Some(ref pressed_state) = self.pressed_state
             && let Some(ref ripple_config) = pressed_state.ripple
