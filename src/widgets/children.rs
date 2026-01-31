@@ -335,6 +335,11 @@ impl Widget for OwnedWidget {
         self.inner.paint(ctx)
     }
 
+    #[cfg(feature = "renderer_v2")]
+    fn paint_v2(&self, ctx: &mut crate::renderer_v2::PaintContextV2) {
+        self.inner.paint_v2(ctx)
+    }
+
     fn event(&mut self, event: &Event) -> EventResponse {
         self.inner.event(event)
     }

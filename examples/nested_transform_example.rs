@@ -21,6 +21,20 @@ fn main() {
                 )
                 .padding(20.0)
                 .children([
+                    // Case 0: Parent, child
+                    // Expected: Inner box centered
+                    container()
+                        .width(100.0)
+                        .height(100.0)
+                        .background(Color::rgba(0.8, 0.3, 0.3, 0.5))
+                        .corner_radius(8.0)
+                        .child(
+                            container()
+                                .width(60.0)
+                                .height(60.0)
+                                .background(Color::rgb(0.3, 0.8, 0.3))
+                                .corner_radius(4.0),
+                        ),
                     // Case 1: Parent rotated 30, child scaled 0.7
                     // Expected: Inner box rotated 30deg AND smaller
                     container()

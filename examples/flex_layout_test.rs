@@ -88,6 +88,26 @@ fn test_box_varied(width: f32, height: f32, color: Color) -> Container {
         .corner_radius(2.0)
 }
 
+/// Test box with minimum height (for row cross-axis tests)
+/// Height can stretch beyond min_height when CrossAxisAlignment::Stretch is used
+fn test_box_min_height(width: f32, min_height: f32, color: Color) -> Container {
+    container()
+        .width(width)
+        .height(at_least(min_height))
+        .background(color)
+        .corner_radius(2.0)
+}
+
+/// Test box with minimum width (for column cross-axis tests)
+/// Width can stretch beyond min_width when CrossAxisAlignment::Stretch is used
+fn test_box_min_width(min_width: f32, height: f32, color: Color) -> Container {
+    container()
+        .width(at_least(min_width))
+        .height(height)
+        .background(color)
+        .corner_radius(2.0)
+}
+
 // =============================================================================
 // Row MainAxisAlignment Tests
 // =============================================================================
@@ -147,9 +167,10 @@ fn row_cross_axis_row(name: &'static str, alignment: CrossAxisAlignment) -> impl
                 .background(Color::rgb(0.15, 0.15, 0.2))
                 .corner_radius(3.0)
                 .layout(Flex::row().spacing(3.0).cross_axis_alignment(alignment))
-                .child(test_box_varied(24.0, 12.0, Color::rgb(0.8, 0.3, 0.3)))
-                .child(test_box_varied(24.0, 26.0, Color::rgb(0.3, 0.8, 0.3)))
-                .child(test_box_varied(24.0, 18.0, Color::rgb(0.3, 0.3, 0.8))),
+                // Use at_least() for height (cross-axis in row) so Stretch can expand them
+                .child(test_box_min_height(24.0, 12.0, Color::rgb(0.8, 0.3, 0.3)))
+                .child(test_box_min_height(24.0, 26.0, Color::rgb(0.3, 0.8, 0.3)))
+                .child(test_box_min_height(24.0, 18.0, Color::rgb(0.3, 0.3, 0.8))),
         )
 }
 
@@ -221,9 +242,10 @@ fn column_cross_axis_col(name: &'static str, alignment: CrossAxisAlignment) -> i
                 .background(Color::rgb(0.15, 0.15, 0.2))
                 .corner_radius(3.0)
                 .layout(Flex::column().spacing(2.0).cross_axis_alignment(alignment))
-                .child(test_box_varied(16.0, 12.0, Color::rgb(0.8, 0.5, 0.3)))
-                .child(test_box_varied(38.0, 12.0, Color::rgb(0.5, 0.8, 0.3)))
-                .child(test_box_varied(26.0, 12.0, Color::rgb(0.3, 0.5, 0.8))),
+                // Use at_least() for width (cross-axis in column) so Stretch can expand them
+                .child(test_box_min_width(16.0, 12.0, Color::rgb(0.8, 0.5, 0.3)))
+                .child(test_box_min_width(38.0, 12.0, Color::rgb(0.5, 0.8, 0.3)))
+                .child(test_box_min_width(26.0, 12.0, Color::rgb(0.3, 0.5, 0.8))),
         )
 }
 

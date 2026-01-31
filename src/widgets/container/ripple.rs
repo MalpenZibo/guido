@@ -28,16 +28,20 @@ impl RippleState {
         Self::default()
     }
 
-    /// Start a ripple animation at the given screen coordinates
-    pub fn start(&mut self, screen_x: f32, screen_y: f32) {
-        self.center = Some((screen_x, screen_y));
+    /// Start a ripple animation at the given local coordinates.
+    ///
+    /// The coordinates should be relative to the container's origin (0,0 = top-left).
+    pub fn start(&mut self, local_x: f32, local_y: f32) {
+        self.center = Some((local_x, local_y));
         self.progress = 0.0;
         self.opacity = 1.0;
         self.fading = false;
         self.start_time = Some(Instant::now());
     }
 
-    /// Start fading the ripple, contracting toward the given exit point
+    /// Start fading the ripple, contracting toward the given local exit point.
+    ///
+    /// The coordinates should be relative to the container's origin (0,0 = top-left).
     pub fn start_fade(&mut self, exit_x: f32, exit_y: f32) {
         if self.center.is_some() && self.opacity > 0.0 {
             self.exit_center = Some((exit_x, exit_y));

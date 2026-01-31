@@ -4,6 +4,8 @@ use crate::animation::{SpringConfig, Transition};
 use crate::layout::Constraints;
 use crate::reactive::request_animation_frame;
 use crate::renderer::PaintContext;
+#[cfg(feature = "renderer_v2")]
+use crate::renderer_v2::PaintContextV2;
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
 use crate::widgets::scroll::{ScrollAxis, ScrollbarAxis, ScrollbarVisibility};
@@ -391,6 +393,66 @@ impl Container {
             }
             if let Some(ref handle) = self.h_scrollbar_handle {
                 handle.paint(ctx);
+            }
+        }
+    }
+
+    /// Paint scrollbar container widgets (V2 renderer)
+    #[cfg(feature = "renderer_v2")]
+    pub(super) fn paint_scrollbar_containers_v2(&self, ctx: &mut PaintContextV2) {
+        use crate::transform::Transform;
+        use crate::widgets::Rect;
+
+        if self.scrollbar_visibility == ScrollbarVisibility::Hidden {
+            return;
+        }
+
+        // Vertical scrollbar
+        if self.scroll_axis.allows_vertical() && self.scroll_state.needs_vertical_scrollbar() {
+            if let Some(ref track) = self.v_scrollbar_track {
+                let track_global = track.bounds();
+                // Scrollbar position relative to parent container's origin
+                let track_offset_x = track_global.x - self.bounds.x;
+                let track_offset_y = track_global.y - self.bounds.y;
+                let track_local = Rect::new(0.0, 0.0, track_global.width, track_global.height);
+
+                let mut track_ctx = ctx.add_child(0, track_local);
+                track_ctx.set_transform(Transform::translate(track_offset_x, track_offset_y));
+                track.paint_v2(&mut track_ctx);
+            }
+            if let Some(ref handle) = self.v_scrollbar_handle {
+                let handle_global = handle.bounds();
+                let handle_offset_x = handle_global.x - self.bounds.x;
+                let handle_offset_y = handle_global.y - self.bounds.y;
+                let handle_local = Rect::new(0.0, 0.0, handle_global.width, handle_global.height);
+
+                let mut handle_ctx = ctx.add_child(0, handle_local);
+                handle_ctx.set_transform(Transform::translate(handle_offset_x, handle_offset_y));
+                handle.paint_v2(&mut handle_ctx);
+            }
+        }
+
+        // Horizontal scrollbar
+        if self.scroll_axis.allows_horizontal() && self.scroll_state.needs_horizontal_scrollbar() {
+            if let Some(ref track) = self.h_scrollbar_track {
+                let track_global = track.bounds();
+                let track_offset_x = track_global.x - self.bounds.x;
+                let track_offset_y = track_global.y - self.bounds.y;
+                let track_local = Rect::new(0.0, 0.0, track_global.width, track_global.height);
+
+                let mut track_ctx = ctx.add_child(0, track_local);
+                track_ctx.set_transform(Transform::translate(track_offset_x, track_offset_y));
+                track.paint_v2(&mut track_ctx);
+            }
+            if let Some(ref handle) = self.h_scrollbar_handle {
+                let handle_global = handle.bounds();
+                let handle_offset_x = handle_global.x - self.bounds.x;
+                let handle_offset_y = handle_global.y - self.bounds.y;
+                let handle_local = Rect::new(0.0, 0.0, handle_global.width, handle_global.height);
+
+                let mut handle_ctx = ctx.add_child(0, handle_local);
+                handle_ctx.set_transform(Transform::translate(handle_offset_x, handle_offset_y));
+                handle.paint_v2(&mut handle_ctx);
             }
         }
     }

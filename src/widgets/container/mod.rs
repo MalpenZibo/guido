@@ -20,6 +20,8 @@ use crate::reactive::{
 };
 use crate::renderer::PaintContext;
 use crate::renderer::primitives::{GradientDir, Shadow};
+#[cfg(feature = "renderer_v2")]
+use crate::renderer_v2::PaintContextV2;
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
 
@@ -1175,12 +1177,23 @@ impl Widget for Container {
             height = height.max(content_height);
         }
 
-        let size = Size::new(
-            width.max(constraints.min_width).min(constraints.max_width),
+        // When explicit dimensions are set, respect them over min constraints
+        // This allows children with .width(60) to stay 60px even when parent uses Stretch
+        let final_width = if width_length.exact.is_some() {
+            // Explicit width: only apply max constraint, not min
+            width.min(constraints.max_width)
+        } else {
+            width.max(constraints.min_width).min(constraints.max_width)
+        };
+        let final_height = if height_length.exact.is_some() {
+            // Explicit height: only apply max constraint, not min
+            height.min(constraints.max_height)
+        } else {
             height
                 .max(constraints.min_height)
-                .min(constraints.max_height),
-        );
+                .min(constraints.max_height)
+        };
+        let size = Size::new(final_width, final_height);
 
         self.bounds.width = size.width;
         self.bounds.height = size.height;
@@ -1309,13 +1322,13 @@ impl Widget for Container {
         }
 
         // Draw ripple effect as overlay
-        if let Some((screen_cx, screen_cy)) = self.ripple.center
+        // Note: ripple.center stores LOCAL coordinates (relative to container origin)
+        if let Some((local_cx, local_cy)) = self.ripple.center
             && let Some(ref pressed_state) = self.pressed_state
             && let Some(ref ripple_config) = pressed_state.ripple
             && self.ripple.opacity > 0.0
         {
-            let local_cx = screen_cx - self.bounds.x;
-            let local_cy = screen_cy - self.bounds.y;
+            // Calculate max radius from local coordinates
             let max_dist_x = local_cx.max(self.bounds.width - local_cx);
             let max_dist_y = local_cy.max(self.bounds.height - local_cy);
             let max_radius = (max_dist_x * max_dist_x + max_dist_y * max_dist_y).sqrt();
@@ -1333,6 +1346,10 @@ impl Widget for Container {
             } else {
                 (self.bounds, None)
             };
+
+            // Convert local coords to screen coords for drawing
+            let screen_cx = self.bounds.x + local_cx;
+            let screen_cy = self.bounds.y + local_cy;
 
             ctx.draw_overlay_circle_clipped_with_transform(
                 screen_cx,
@@ -1356,14 +1373,8 @@ impl Widget for Container {
         let local_event: Cow<'_, Event> = if !transform.is_identity() {
             if let Some((x, y)) = event.coords() {
                 let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
-                let screen_space_transform = if transform.has_rotation() {
-                    let mut screen_transform = transform;
-                    screen_transform.data[1] = -screen_transform.data[1];
-                    screen_transform.data[4] = -screen_transform.data[4];
-                    screen_transform.center_at(origin_x, origin_y)
-                } else {
-                    transform.center_at(origin_x, origin_y)
-                };
+                // Transform is in screen space, simply center and invert
+                let screen_space_transform = transform.center_at(origin_x, origin_y);
                 let (local_x, local_y) = screen_space_transform.inverse().transform_point(x, y);
                 Cow::Owned(event.with_coords(local_x, local_y))
             } else {
@@ -1440,8 +1451,19 @@ impl Widget for Container {
                         .as_ref()
                         .is_some_and(|s| s.ripple.is_some());
                     if has_ripple {
+                        // Convert screen coords to local coords accounting for transform
                         let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
-                        self.ripple.start(screen_x, screen_y);
+                        let (local_x, local_y) = if !transform.is_identity() {
+                            let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
+                            let screen_transform = transform.center_at(origin_x, origin_y);
+                            let (inv_x, inv_y) = screen_transform
+                                .inverse()
+                                .transform_point(screen_x, screen_y);
+                            (inv_x - self.bounds.x, inv_y - self.bounds.y)
+                        } else {
+                            (screen_x - self.bounds.x, screen_y - self.bounds.y)
+                        };
+                        self.ripple.start(local_x, local_y);
                         request_animation_frame();
                     }
 
@@ -1460,8 +1482,19 @@ impl Widget for Container {
 
                     // Start ripple fade animation
                     if self.ripple.is_active() {
+                        // Convert screen coords to local coords accounting for transform
                         let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
-                        self.ripple.start_fade(screen_x, screen_y);
+                        let (local_x, local_y) = if !transform.is_identity() {
+                            let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
+                            let screen_transform = transform.center_at(origin_x, origin_y);
+                            let (inv_x, inv_y) = screen_transform
+                                .inverse()
+                                .transform_point(screen_x, screen_y);
+                            (inv_x - self.bounds.x, inv_y - self.bounds.y)
+                        } else {
+                            (screen_x - self.bounds.x, screen_y - self.bounds.y)
+                        };
+                        self.ripple.start_fade(local_x, local_y);
                         request_animation_frame();
                     }
 
@@ -1571,6 +1604,138 @@ impl Widget for Container {
             .as_ref()
             .is_some_and(|h| h.get().exact.is_some());
         has_fixed_width && has_fixed_height
+    }
+
+    #[cfg(feature = "renderer_v2")]
+    fn paint_v2(&self, ctx: &mut PaintContextV2) {
+        let background = self.animated_background();
+        let corner_radius = self.animated_corner_radius();
+        let corner_curvature = self.corner_curvature.get();
+        let elevation_level = self.effective_elevation();
+        let shadow = elevation_to_shadow(elevation_level);
+        let user_transform = self.animated_transform();
+        let transform_origin = self.transform_origin.get();
+
+        // LOCAL bounds (0,0 is widget origin) - all drawing uses these
+        let local_bounds = Rect::new(0.0, 0.0, self.bounds.width, self.bounds.height);
+        ctx.set_bounds(local_bounds);
+
+        // Apply user transform (rotation, scale, user-specified translate)
+        // Position is handled by the parent via set_transform before calling paint_v2
+        // We COMPOSE our user transform with the existing position transform
+        if !user_transform.is_identity() {
+            ctx.apply_transform_with_origin(user_transform, transform_origin);
+        }
+
+        // Draw background using LOCAL coordinates
+        if let Some(ref gradient) = self.gradient {
+            ctx.draw_gradient_rect(
+                local_bounds,
+                crate::renderer::primitives::Gradient {
+                    start_color: gradient.start_color,
+                    end_color: gradient.end_color,
+                    direction: gradient.direction.into(),
+                },
+                corner_radius,
+                corner_curvature,
+            );
+        } else if background.a > 0.0 {
+            if elevation_level > 0.0 {
+                ctx.draw_rounded_rect_with_shadow(
+                    local_bounds,
+                    background,
+                    corner_radius,
+                    corner_curvature,
+                    shadow,
+                );
+            } else {
+                ctx.draw_rounded_rect_with_curvature(
+                    local_bounds,
+                    background,
+                    corner_radius,
+                    corner_curvature,
+                );
+            }
+        }
+
+        // Draw border using LOCAL coordinates
+        let border_width = self.animated_border_width();
+        let border_color = self.animated_border_color();
+
+        if border_width > 0.0 {
+            ctx.draw_border_frame_with_curvature(
+                local_bounds,
+                border_color,
+                corner_radius,
+                border_width,
+                corner_curvature,
+            );
+        }
+
+        // Determine if we need to clip children
+        let is_scrollable = self.scroll_axis != ScrollAxis::None;
+
+        // Set clip region for scrollable containers
+        // This clips all children to the container bounds
+        if is_scrollable {
+            // Clip to container bounds (local coordinates)
+            ctx.set_clip(local_bounds, corner_radius, corner_curvature);
+        }
+
+        // Draw children - each gets its own node with position transform
+        for child in self.children_source.get() {
+            let child_global = child.bounds();
+            // Child's LOCAL bounds (0,0 origin with its own width/height)
+            let child_local = Rect::new(0.0, 0.0, child_global.width, child_global.height);
+            // Child offset relative to THIS container's origin
+            let child_offset_x = child_global.x - self.bounds.x;
+            let child_offset_y = child_global.y - self.bounds.y;
+
+            let mut child_ctx = ctx.add_child(child.id().as_u64(), child_local);
+
+            // Child's position transform (may include scroll offset)
+            let child_position = if is_scrollable {
+                Transform::translate(
+                    child_offset_x - self.scroll_state.offset_x,
+                    child_offset_y - self.scroll_state.offset_y,
+                )
+            } else {
+                Transform::translate(child_offset_x, child_offset_y)
+            };
+            child_ctx.set_transform(child_position);
+
+            child.paint_v2(&mut child_ctx);
+        }
+
+        // Draw scrollbar containers
+        if is_scrollable {
+            self.paint_scrollbar_containers_v2(ctx);
+        }
+
+        // Draw ripple effect as overlay (ripple.center is already in local coordinates)
+        if let Some((local_cx, local_cy)) = self.ripple.center
+            && let Some(ref pressed_state) = self.pressed_state
+            && let Some(ref ripple_config) = pressed_state.ripple
+            && self.ripple.opacity > 0.0
+        {
+            // Set overlay clip to container bounds with rounded corners
+            // This clips the ripple without affecting children
+            ctx.set_overlay_clip(local_bounds, corner_radius, corner_curvature);
+
+            let max_dist_x = local_cx.max(self.bounds.width - local_cx);
+            let max_dist_y = local_cy.max(self.bounds.height - local_cy);
+            let max_radius = (max_dist_x * max_dist_x + max_dist_y * max_dist_y).sqrt();
+            let current_radius = max_radius * self.ripple.progress;
+
+            let ripple_color = Color::rgba(
+                ripple_config.color.r,
+                ripple_config.color.g,
+                ripple_config.color.b,
+                ripple_config.color.a * self.ripple.opacity,
+            );
+
+            ctx.draw_overlay_circle(local_cx, local_cy, current_radius, ripple_color);
+        }
     }
 }
 
