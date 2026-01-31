@@ -1,4 +1,4 @@
-# Renderer V2 - Next Steps
+# Renderer V2 - Status
 
 ## Current Status Summary (Updated Jan 2026)
 
@@ -8,98 +8,50 @@
 | Phase 2 | GPU Rendering with Instancing | ✅ Complete |
 | Phase 3 | Widget Integration (Container.paint_v2) | ✅ Complete |
 | Phase 4 | Text Rendering | ✅ Complete |
-| Phase 5 | Verification | 🔄 In Progress |
+| Phase 5 | Clipping & Effects | ✅ Complete |
 
-## Recent Completions
+## Features
 
-### Local Coordinate System Fix (Jan 2026)
+### Core Rendering
+- **Instanced rendering**: All shapes rendered with a single draw call per layer
+- **Local coordinate system**: Widgets draw in local space, transforms handled by GPU
+- **SDF-based shapes**: Rounded rectangles with superellipse corners
 
-Fixed V2 renderer to use **local coordinates** as per the original design:
+### Clipping
+- **GPU-based SDF clipping**: Supports rounded corners and curvature
+- **Local clip mode**: For overlay effects on transformed containers (ripples)
+- **Clip regions**: Set via `set_clip()` and `set_overlay_clip()` in PaintContextV2
 
-- **Problem**: Widgets were using global screen coordinates for draw commands
-- **Solution**: Each widget now draws in its own local coordinate space (0,0 origin)
-- **Key design**:
-  - All widgets draw at `Rect::new(0, 0, width, height)` (local bounds)
-  - Parent sets child's position via `child_ctx.set_transform(translate(offset))`
-  - Child applies its own user transform via `ctx.apply_transform(user_transform)`
-  - Transforms are COMPOSED: parent position + child user transform
-  - Added `apply_transform()` and `apply_transform_with_origin()` to PaintContextV2
+### Effects
+- **Ripple effects**: Circle-based overlays clipped to container bounds
+- **Shadows**: Elevation-based drop shadows
+- **Gradients**: Horizontal, vertical, and diagonal linear gradients
 
-**Files modified**:
-- `src/renderer_v2/context.rs` - Added apply_transform methods for composing transforms
-- `src/widgets/container/mod.rs` - Main coordinate system fix
-- `src/widgets/text.rs` - Use local bounds for text rendering
-- `src/widgets/image.rs` - Use local bounds for image rendering
-- `src/widgets/text_input.rs` - Use local coords for selection/cursor
-- `src/widgets/container/scrollable.rs` - Use local coords for scrollbars
-- `src/reactive/invalidation.rs` - Added `WidgetId::as_u64()` helper
+### Transforms
+- **Full transform support**: Rotation, scale, translation
+- **Transform composition**: Parent position + child user transform
+- **Text with transforms**: Rendered via texture quads for rotation/scale
 
-### Text Rendering with Transforms (Jan 2026)
+### Images
+- **Image support**: Raster and SVG images with proper clipping
+- **Content fit modes**: Cover, contain, fill, etc.
 
-Added `text_quad.rs` module for rendering text with rotation/scale transforms:
+## Architecture
 
-- **Problem**: Glyphon can only handle translation transforms
-- **Solution**: Render transformed text to offscreen textures, display as textured quads
-- **Key features**:
-  - 2x quality multiplier for crisp text at any scale
-  - Per-quad vertex buffers (avoids render pass buffer timing issues)
-  - Proper coordinate transformation from local to screen space
-  - 10% buffer margin to prevent text clipping at scaled sizes
+### Local Coordinate System
 
-**Files added/modified**:
-- `src/renderer_v2/text_quad.rs` - New textured quad renderer
-- `src/renderer_v2/render.rs` - Integrated TextQuadRenderer
-- `examples/simple_text_transform.rs` - Test example
+Widgets draw in their own local coordinate space:
+- All widgets draw at `Rect::new(0, 0, width, height)` (local bounds)
+- Parent sets child's position via `child_ctx.set_transform(translate(offset))`
+- Child applies its own user transform via `ctx.apply_transform(user_transform)`
+- Transforms are COMPOSED: parent position + child user transform
 
-### Clipping Removed (Jan 2026)
+### Overlay Clipping for Transforms
 
-Clip region code was removed from the V2 renderer as it was causing issues with transformed shapes. Clipping may be re-implemented later with a different approach.
-
-## Immediate Next Steps
-
-### 1. Add Circle Rendering for Ripples (Priority: High)
-
-**What's needed**:
-- Add `DrawCommand::Circle` support in shader
-- Circle SDF is simple: `length(pos - center) - radius`
-- Used for ripple effects in overlay layer
-
-**Files to modify**:
-- `src/renderer_v2/gpu.rs` - May need CircleInstance or extend ShapeInstance
-- `src/renderer_v2/shader_v2.wgsl` - Add circle SDF path
-- `src/renderer_v2/render.rs` - Handle circle rendering
-
-### 2. Re-implement Clipping (Priority: Medium)
-
-**What's needed**:
-- Design a clipping approach that works with transformed shapes
-- Options:
-  - Scissor rect (hardware, but axis-aligned only)
-  - SDF-based clipping in shader (flexible but more complex)
-  - Stencil buffer approach
-
-### 3. Complete Verification Checklist (Priority: High)
-
-- [x] Simple colored boxes render
-- [x] Boxes with borders render
-- [x] Rotated boxes (15°) render
-- [x] Scaled boxes (0.8) render
-- [x] Squircle corners render
-- [x] Scoop corners render
-- [x] Boxes with shadows/elevation render
-- [x] Text with no transform renders (via glyphon)
-- [x] Text with rotation renders (via text_quad)
-- [x] Text with scale renders (via text_quad)
-- [ ] Clickable boxes with ripple effect work
-- [x] Nested containers render
-- [x] HiDPI scaling works correctly
-- [ ] Clipping works correctly
-- [ ] Compare visual output with V1 renderer
-
-## Known Issues
-
-1. **No clipping support** - Clipping was removed due to issues with transformed shapes
-2. **No ripple/circle support** - Circles not yet implemented in V2
+For ripple effects on transformed containers:
+- Overlay clips stay in LOCAL space (not transformed to world AABB)
+- Shader uses `frag_pos` instead of `world_pos` for local clips
+- Clip boundary follows container's rotation/scale
 
 ## Files Reference
 
@@ -111,17 +63,11 @@ src/renderer_v2/
 ├── commands.rs     # DrawCommand enum
 ├── context.rs      # PaintContextV2 API
 ├── flatten.rs      # Tree → flat commands
-├── render.rs       # GPU rendering + TextQuadRenderer integration
+├── render.rs       # GPU rendering
 ├── gpu.rs          # ShapeInstance, uniforms
 ├── shader_v2.wgsl  # Instanced shape shader
-└── text_quad.rs    # Textured quad renderer for transformed text
-```
-
-### Test Examples
-```
-examples/renderer_v2_test.rs       # Basic V2 renderer test
-examples/text_transform_example.rs # Text transform showcase
-examples/simple_text_transform.rs  # Simple text transform test
+├── text_quad.rs    # Textured quad renderer for transformed text
+└── image_quad.rs   # Image rendering
 ```
 
 ## Command Reference
@@ -130,15 +76,13 @@ examples/simple_text_transform.rs  # Simple text transform test
 # Build with V2 feature
 cargo build --features renderer_v2
 
-# Run test examples
+# Run examples with V2 renderer
+cargo run --example state_layer_example --features renderer_v2
 cargo run --example renderer_v2_test --features renderer_v2
-cargo run --example text_transform_example --features renderer_v2
-cargo run --example simple_text_transform --features renderer_v2
 
 # Check and lint
-cargo check --features renderer_v2
-cargo clippy --features renderer_v2
+cargo clippy --all-features
 
 # Run tests
-cargo test --features renderer_v2
+cargo test --all-features
 ```
