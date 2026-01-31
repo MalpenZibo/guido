@@ -1,50 +1,41 @@
 # Renderer V2 - Next Steps
 
-Based on the implementation plan at `~/.claude/plans/sunny-munching-moler.md`
-
-## Current Status Summary
+## Current Status Summary (Updated Jan 2026)
 
 | Phase | Description | Status |
 |-------|-------------|--------|
 | Phase 1 | Core Infrastructure (tree, commands, context, flatten) | ✅ Complete |
 | Phase 2 | GPU Rendering with Instancing | ✅ Complete |
 | Phase 3 | Widget Integration (Container.paint_v2) | ✅ Complete |
-| Phase 4 | Verification | 🔄 In Progress |
+| Phase 4 | Text Rendering | ✅ Complete |
+| Phase 5 | Verification | 🔄 In Progress |
+
+## Recent Completions
+
+### Text Rendering with Transforms (Jan 2026)
+
+Added `text_quad.rs` module for rendering text with rotation/scale transforms:
+
+- **Problem**: Glyphon can only handle translation transforms
+- **Solution**: Render transformed text to offscreen textures, display as textured quads
+- **Key features**:
+  - 2x quality multiplier for crisp text at any scale
+  - Per-quad vertex buffers (avoids render pass buffer timing issues)
+  - Proper coordinate transformation from local to screen space
+  - 10% buffer margin to prevent text clipping at scaled sizes
+
+**Files added/modified**:
+- `src/renderer_v2/text_quad.rs` - New textured quad renderer
+- `src/renderer_v2/render.rs` - Integrated TextQuadRenderer
+- `examples/simple_text_transform.rs` - Test example
+
+### Clipping Removed (Jan 2026)
+
+Clip region code was removed from the V2 renderer as it was causing issues with transformed shapes. Clipping may be re-implemented later with a different approach.
 
 ## Immediate Next Steps
 
-### 1. Fix Clip Region in Shader (Priority: High)
-
-**Issue**: The clip region code in `shader_v2.wgsl` was causing transformed (rotated/scaled) shapes to not render. It was disabled as a workaround.
-
-**Location**: `src/renderer_v2/shader_v2.wgsl` lines 314-327 (commented out)
-
-**Current workaround**:
-```wgsl
-// === Apply clip region (DISABLED for debugging) ===
-// let clip_width = in.clip_rect.z;
-// let clip_height = in.clip_rect.w;
-// ...
-```
-
-**Investigation needed**:
-- Why does clip code affect shapes even when `clip_width == 0` check should prevent it?
-- May be related to how `screen_pos` is computed vs `frag_pos`
-- Test with explicit no-clip sentinel value (e.g., negative width)
-
-### 2. Add Text Rendering Support (Priority: Medium)
-
-**What's needed**:
-- Add `DrawCommand::Text` variant handling in `render.rs`
-- Integrate glyphon text renderer (already used in V1)
-- Pass text commands through the flattening pipeline
-
-**Files to modify**:
-- `src/renderer_v2/commands.rs` - Text variant exists but may need updates
-- `src/renderer_v2/render.rs` - Add text rendering pass
-- `src/widgets/text.rs` - Implement `paint_v2()` for Text widget
-
-### 3. Add Circle Rendering for Ripples (Priority: Medium)
+### 1. Add Circle Rendering for Ripples (Priority: High)
 
 **What's needed**:
 - Add `DrawCommand::Circle` support in shader
@@ -54,10 +45,18 @@ Based on the implementation plan at `~/.claude/plans/sunny-munching-moler.md`
 **Files to modify**:
 - `src/renderer_v2/gpu.rs` - May need CircleInstance or extend ShapeInstance
 - `src/renderer_v2/shader_v2.wgsl` - Add circle SDF path
+- `src/renderer_v2/render.rs` - Handle circle rendering
 
-### 4. Complete Verification Checklist (Priority: High)
+### 2. Re-implement Clipping (Priority: Medium)
 
-Run through all verification items:
+**What's needed**:
+- Design a clipping approach that works with transformed shapes
+- Options:
+  - Scissor rect (hardware, but axis-aligned only)
+  - SDF-based clipping in shader (flexible but more complex)
+  - Stencil buffer approach
+
+### 3. Complete Verification Checklist (Priority: High)
 
 - [x] Simple colored boxes render
 - [x] Boxes with borders render
@@ -66,23 +65,19 @@ Run through all verification items:
 - [x] Squircle corners render
 - [x] Scoop corners render
 - [x] Boxes with shadows/elevation render
+- [x] Text with no transform renders (via glyphon)
+- [x] Text with rotation renders (via text_quad)
+- [x] Text with scale renders (via text_quad)
 - [ ] Clickable boxes with ripple effect work
 - [x] Nested containers render
 - [x] HiDPI scaling works correctly
-- [ ] Clipping works correctly (blocked by #1)
-- [ ] Compare visual output with V1 renderer (take screenshots)
+- [ ] Clipping works correctly
+- [ ] Compare visual output with V1 renderer
 
-## Future Improvements
+## Known Issues
 
-### Performance Optimization
-- Batch shapes by layer to minimize state changes
-- Consider texture atlas for text glyphs
-- Profile memory usage vs V1 (target: ~128 bytes/instance vs ~768 bytes)
-
-### Additional Features
-- Gradient support in shapes
-- Multiple clip regions (scissor stack)
-- Anti-aliased transformed clips (requires SDF in screen space)
+1. **No clipping support** - Clipping was removed due to issues with transformed shapes
+2. **No ripple/circle support** - Circles not yet implemented in V2
 
 ## Files Reference
 
@@ -94,19 +89,17 @@ src/renderer_v2/
 ├── commands.rs     # DrawCommand enum
 ├── context.rs      # PaintContextV2 API
 ├── flatten.rs      # Tree → flat commands
-├── render.rs       # GPU rendering
+├── render.rs       # GPU rendering + TextQuadRenderer integration
 ├── gpu.rs          # ShapeInstance, uniforms
-└── shader_v2.wgsl  # Instanced shader
+├── shader_v2.wgsl  # Instanced shape shader
+└── text_quad.rs    # Textured quad renderer for transformed text
 ```
 
-### Test Example
+### Test Examples
 ```
-examples/renderer_v2_test.rs
-```
-
-Run with:
-```bash
-cargo run --example renderer_v2_test --features renderer_v2
+examples/renderer_v2_test.rs       # Basic V2 renderer test
+examples/text_transform_example.rs # Text transform showcase
+examples/simple_text_transform.rs  # Simple text transform test
 ```
 
 ## Command Reference
@@ -115,12 +108,15 @@ cargo run --example renderer_v2_test --features renderer_v2
 # Build with V2 feature
 cargo build --features renderer_v2
 
-# Run test example
+# Run test examples
 cargo run --example renderer_v2_test --features renderer_v2
+cargo run --example text_transform_example --features renderer_v2
+cargo run --example simple_text_transform --features renderer_v2
 
-# Check without running
+# Check and lint
 cargo check --features renderer_v2
-
-# Run clippy
 cargo clippy --features renderer_v2
+
+# Run tests
+cargo test --features renderer_v2
 ```
