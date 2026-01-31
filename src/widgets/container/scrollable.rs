@@ -4,6 +4,8 @@ use crate::animation::{SpringConfig, Transition};
 use crate::layout::Constraints;
 use crate::reactive::request_animation_frame;
 use crate::renderer::PaintContext;
+#[cfg(feature = "renderer_v2")]
+use crate::renderer_v2::PaintContextV2;
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
 use crate::widgets::scroll::{ScrollAxis, ScrollbarAxis, ScrollbarVisibility};
@@ -391,6 +393,38 @@ impl Container {
             }
             if let Some(ref handle) = self.h_scrollbar_handle {
                 handle.paint(ctx);
+            }
+        }
+    }
+
+    /// Paint scrollbar container widgets (V2 renderer)
+    #[cfg(feature = "renderer_v2")]
+    pub(super) fn paint_scrollbar_containers_v2(&self, ctx: &mut PaintContextV2) {
+        if self.scrollbar_visibility == ScrollbarVisibility::Hidden {
+            return;
+        }
+
+        // Vertical scrollbar
+        if self.scroll_axis.allows_vertical() && self.scroll_state.needs_vertical_scrollbar() {
+            if let Some(ref track) = self.v_scrollbar_track {
+                let mut track_ctx = ctx.add_child(0, track.bounds());
+                track.paint_v2(&mut track_ctx);
+            }
+            if let Some(ref handle) = self.v_scrollbar_handle {
+                let mut handle_ctx = ctx.add_child(0, handle.bounds());
+                handle.paint_v2(&mut handle_ctx);
+            }
+        }
+
+        // Horizontal scrollbar
+        if self.scroll_axis.allows_horizontal() && self.scroll_state.needs_horizontal_scrollbar() {
+            if let Some(ref track) = self.h_scrollbar_track {
+                let mut track_ctx = ctx.add_child(0, track.bounds());
+                track.paint_v2(&mut track_ctx);
+            }
+            if let Some(ref handle) = self.h_scrollbar_handle {
+                let mut handle_ctx = ctx.add_child(0, handle.bounds());
+                handle.paint_v2(&mut handle_ctx);
             }
         }
     }

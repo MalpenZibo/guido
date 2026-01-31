@@ -1651,7 +1651,10 @@ impl Widget for Container {
             child.paint_v2(&mut child_ctx);
         }
 
-        // TODO: Draw scrollbar containers when V2 is ready
+        // Draw scrollbar containers
+        if is_scrollable {
+            self.paint_scrollbar_containers_v2(ctx);
+        }
 
         // Draw ripple effect as overlay
         if let Some((screen_cx, screen_cy)) = self.ripple.center
