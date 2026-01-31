@@ -18,6 +18,7 @@ use crate::widgets::Color;
 use super::commands::{Border, DrawCommand};
 use super::flatten::{FlattenedCommand, RenderLayer};
 use super::gpu::{QUAD_INDICES, QUAD_VERTICES, QuadVertex, ShaderUniforms, ShapeInstance};
+use super::text_quad::{PreparedTextQuad, TextQuadRenderer};
 
 /// The V2 renderer using instanced rendering.
 ///
@@ -44,6 +45,9 @@ pub struct RendererV2 {
 
     // Text rendering (reuses V1's glyphon-based renderer)
     text_state: TextRenderState,
+
+    // Transformed text rendering (renders text to textures for rotation/scale)
+    text_quad_renderer: TextQuadRenderer,
 
     // Screen dimensions
     screen_width: f32,
@@ -122,6 +126,9 @@ impl RendererV2 {
         // Initialize text renderer (reuses V1's glyphon-based renderer)
         let text_state = TextRenderState::new(&device, &queue, format);
 
+        // Initialize transformed text renderer
+        let text_quad_renderer = TextQuadRenderer::new(&device, &queue, format);
+
         Self {
             device,
             queue,
@@ -134,6 +141,7 @@ impl RendererV2 {
             instance_buffer,
             instance_buffer_capacity: initial_capacity,
             text_state,
+            text_quad_renderer,
             screen_width: 800.0,
             screen_height: 600.0,
             scale_factor: 1.0,
@@ -283,18 +291,39 @@ impl RendererV2 {
             .filter_map(|cmd| self.command_to_text_entry(cmd))
             .collect();
 
-        // Prepare text for rendering (this returns indices of transformed texts,
-        // but for simplicity we render all text directly for now)
-        if !text_entries.is_empty() {
-            let _transformed_indices = self.text_state.prepare_text(
+        // Prepare regular text and get indices of texts that need texture-based rendering
+        let transformed_indices = if !text_entries.is_empty() {
+            self.text_state.prepare_text(
                 &self.device,
                 &self.queue,
                 &text_entries,
                 self.screen_width as u32,
                 self.screen_height as u32,
                 self.scale_factor,
+            )
+        } else {
+            Vec::new()
+        };
+
+        // Prepare transformed text as textured quads
+        let text_quads: Vec<PreparedTextQuad> = if !transformed_indices.is_empty() {
+            log::debug!(
+                "V2 Renderer: {} transformed texts to render as quads",
+                transformed_indices.len()
             );
-        }
+            // Update text quad renderer screen size
+            self.text_quad_renderer
+                .set_screen_size(self.screen_width, self.screen_height);
+            self.text_quad_renderer.prepare(
+                &self.device,
+                &self.queue,
+                &text_entries,
+                &transformed_indices,
+                self.scale_factor,
+            )
+        } else {
+            Vec::new()
+        };
 
         // Ensure we have enough capacity
         let total_instances = shape_instances.len() + overlay_instances.len();
@@ -346,8 +375,18 @@ impl RendererV2 {
             }
 
             // Draw text layer (between shapes and overlay)
-            if !text_entries.is_empty() {
+            // Only render non-transformed text via glyphon
+            let has_non_transformed_text =
+                !text_entries.is_empty() && transformed_indices.len() < text_entries.len();
+            if has_non_transformed_text {
                 self.text_state.render(&mut render_pass, &self.device);
+            }
+
+            // Draw transformed text as textured quads
+            if !text_quads.is_empty() {
+                log::debug!("V2 Renderer: Rendering {} text quads", text_quads.len());
+                self.text_quad_renderer
+                    .render(&mut render_pass, &text_quads);
             }
 
             // Draw overlay shapes (after text, for effects like ripples)

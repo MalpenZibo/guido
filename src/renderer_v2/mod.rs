@@ -24,6 +24,7 @@ mod context;
 mod flatten;
 mod gpu;
 mod render;
+mod text_quad;
 mod tree;
 
 pub use commands::{Border, DrawCommand};
