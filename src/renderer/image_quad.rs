@@ -14,7 +14,7 @@ use wgpu::{
     VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode,
 };
 
-use crate::renderer::image_texture::SVG_QUALITY_MULTIPLIER;
+use super::image_texture::SVG_QUALITY_MULTIPLIER;
 use crate::widgets::Rect;
 use crate::widgets::image::{ContentFit, ImageSource};
 

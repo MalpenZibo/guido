@@ -21,7 +21,7 @@ use wgpu::{
     VertexStepMode,
 };
 
-use crate::renderer::TextEntry;
+use super::types::TextEntry;
 use crate::widgets::font::FontWeight;
 
 /// Quality multiplier for supersampling text textures.
