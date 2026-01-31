@@ -1358,14 +1358,8 @@ impl Widget for Container {
         let local_event: Cow<'_, Event> = if !transform.is_identity() {
             if let Some((x, y)) = event.coords() {
                 let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
-                let screen_space_transform = if transform.has_rotation() {
-                    let mut screen_transform = transform;
-                    screen_transform.data[1] = -screen_transform.data[1];
-                    screen_transform.data[4] = -screen_transform.data[4];
-                    screen_transform.center_at(origin_x, origin_y)
-                } else {
-                    transform.center_at(origin_x, origin_y)
-                };
+                // Transform is in screen space, simply center and invert
+                let screen_space_transform = transform.center_at(origin_x, origin_y);
                 let (local_x, local_y) = screen_space_transform.inverse().transform_point(x, y);
                 Cow::Owned(event.with_coords(local_x, local_y))
             } else {
