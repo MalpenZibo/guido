@@ -86,7 +86,7 @@ impl TexturedVertex {
 
 /// A prepared text quad ready for rendering.
 pub struct PreparedTextQuad {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Kept alive for GPU usage
     texture: Texture,
     bind_group: BindGroup,
     /// Vertex buffer with pre-computed vertices in NDC
@@ -98,7 +98,7 @@ pub struct TextQuadRenderer {
     // Text rendering (glyphon-based)
     font_system: FontSystem,
     swash_cache: SwashCache,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Kept alive for text rendering
     cache: Cache,
     atlas: TextAtlas,
     text_renderer: TextRenderer,

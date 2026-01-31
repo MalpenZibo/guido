@@ -41,7 +41,7 @@ struct InstanceInput {
     @location(8) transform_0: vec4<f32>,
     // transform: d, ty, _pad, _pad
     @location(9) transform_1: vec4<f32>,
-    // clip_rect: [x, y, width, height] in logical pixels (scaled to physical in render.rs)
+    // clip_rect: [x, y, width, height] in physical pixels (scaled from logical in render.rs)
     @location(10) clip_rect: vec4<f32>,
     // clip_corner_radius, clip_curvature, clip_is_local, _pad
     @location(11) clip_params: vec4<f32>,
@@ -59,7 +59,7 @@ struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) fill_color: vec4<f32>,
     @location(1) border_color: vec4<f32>,
-    // Fragment position in logical pixels (for SDF computation)
+    // Fragment position in physical pixels (for SDF computation)
     @location(2) frag_pos: vec2<f32>,
     // Shape rect in logical pixels [x, y, width, height]
     @location(3) shape_rect: vec4<f32>,
@@ -71,9 +71,9 @@ struct VertexOutput {
     @location(6) shadow_params: vec4<f32>,
     // shadow_color
     @location(7) shadow_color: vec4<f32>,
-    // World position in logical pixels (for clip computation)
+    // World position in physical pixels (for clip computation)
     @location(8) world_pos: vec2<f32>,
-    // Clip rect in logical pixels (scaled to physical in render.rs)
+    // Clip rect in physical pixels
     @location(9) clip_rect: vec4<f32>,
     // Clip corner_radius, curvature, is_local
     @location(10) clip_params: vec3<f32>,

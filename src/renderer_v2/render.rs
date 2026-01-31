@@ -30,7 +30,7 @@ pub struct RendererV2 {
     device: Arc<Device>,
     queue: Arc<Queue>,
     pipeline: RenderPipeline,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Kept alive - bind groups hold reference to layout
     bind_group_layout: BindGroupLayout,
 
     // Shared vertex buffer (unit quad)

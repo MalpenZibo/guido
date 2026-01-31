@@ -80,7 +80,7 @@ impl TexturedVertex {
 
 /// A prepared image quad ready for rendering.
 pub struct PreparedImageQuad {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Kept alive for GPU usage
     texture: Arc<CachedTexture>,
     bind_group: BindGroup,
     /// Vertex buffer with pre-computed vertices in NDC

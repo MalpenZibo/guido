@@ -86,7 +86,7 @@ pub const QUAD_INDICES: &[u16] = &[
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ShapeInstance {
-    // === Shape geometry (logical pixels) ===
+    // === Shape geometry (physical pixels, scaled in render.rs) ===
     /// Rectangle bounds: [x, y, width, height]
     pub rect: [f32; 4],
 
@@ -127,10 +127,10 @@ pub struct ShapeInstance {
     pub _pad2: [f32; 2],
 
     // === Clip Region ===
-    /// Clip rect: [x, y, width, height] (scaled to physical pixels in render.rs)
+    /// Clip rect in physical pixels [x, y, width, height]
     /// If width or height <= 0, no clipping is applied
     pub clip_rect: [f32; 4],
-    /// Clip corner radius (scaled to physical pixels in render.rs)
+    /// Clip corner radius in physical pixels
     pub clip_corner_radius: f32,
     /// Clip curvature (K-value)
     pub clip_curvature: f32,
