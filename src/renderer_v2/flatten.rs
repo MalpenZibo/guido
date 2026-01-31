@@ -134,14 +134,22 @@ fn flatten_node(
         );
     }
 
-    // Add overlay commands (layer = Overlay) with clip
+    // Compute overlay-specific clip (if set)
+    // overlay_clip takes precedence for overlay commands, otherwise fall back to effective_clip
+    let overlay_clip: Option<WorldClip> = node
+        .overlay_clip
+        .as_ref()
+        .map(|clip| transform_clip_to_world(clip, &world_transform))
+        .or_else(|| effective_clip.clone());
+
+    // Add overlay commands (layer = Overlay) with overlay-specific clip
     for cmd in &node.overlay_commands {
         out.push(FlattenedCommand {
             command: transform_command(cmd, &world_transform),
             world_transform,
             world_transform_origin: world_origin,
             layer: RenderLayer::Overlay,
-            clip: effective_clip.clone(),
+            clip: overlay_clip.clone(),
         });
     }
 }

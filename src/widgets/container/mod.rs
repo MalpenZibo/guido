@@ -1447,8 +1447,19 @@ impl Widget for Container {
                         .as_ref()
                         .is_some_and(|s| s.ripple.is_some());
                     if has_ripple {
+                        // Convert screen coords to local coords accounting for transform
                         let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
-                        self.ripple.start(screen_x, screen_y);
+                        let (local_x, local_y) = if !transform.is_identity() {
+                            let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
+                            let screen_transform = transform.center_at(origin_x, origin_y);
+                            let (inv_x, inv_y) = screen_transform
+                                .inverse()
+                                .transform_point(screen_x, screen_y);
+                            (inv_x - self.bounds.x, inv_y - self.bounds.y)
+                        } else {
+                            (screen_x - self.bounds.x, screen_y - self.bounds.y)
+                        };
+                        self.ripple.start(local_x, local_y);
                         request_animation_frame();
                     }
 
@@ -1467,8 +1478,19 @@ impl Widget for Container {
 
                     // Start ripple fade animation
                     if self.ripple.is_active() {
+                        // Convert screen coords to local coords accounting for transform
                         let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
-                        self.ripple.start_fade(screen_x, screen_y);
+                        let (local_x, local_y) = if !transform.is_identity() {
+                            let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
+                            let screen_transform = transform.center_at(origin_x, origin_y);
+                            let (inv_x, inv_y) = screen_transform
+                                .inverse()
+                                .transform_point(screen_x, screen_y);
+                            (inv_x - self.bounds.x, inv_y - self.bounds.y)
+                        } else {
+                            (screen_x - self.bounds.x, screen_y - self.bounds.y)
+                        };
+                        self.ripple.start_fade(local_x, local_y);
                         request_animation_frame();
                     }
 
@@ -1686,14 +1708,16 @@ impl Widget for Container {
             self.paint_scrollbar_containers_v2(ctx);
         }
 
-        // Draw ripple effect as overlay (already in local coordinates)
-        if let Some((screen_cx, screen_cy)) = self.ripple.center
+        // Draw ripple effect as overlay (ripple.center is already in local coordinates)
+        if let Some((local_cx, local_cy)) = self.ripple.center
             && let Some(ref pressed_state) = self.pressed_state
             && let Some(ref ripple_config) = pressed_state.ripple
             && self.ripple.opacity > 0.0
         {
-            let local_cx = screen_cx - self.bounds.x;
-            let local_cy = screen_cy - self.bounds.y;
+            // Set overlay clip to container bounds with rounded corners
+            // This clips the ripple without affecting children
+            ctx.set_overlay_clip(local_bounds, corner_radius, corner_curvature);
+
             let max_dist_x = local_cx.max(self.bounds.width - local_cx);
             let max_dist_y = local_cy.max(self.bounds.height - local_cy);
             let max_radius = (max_dist_x * max_dist_x + max_dist_y * max_dist_y).sqrt();

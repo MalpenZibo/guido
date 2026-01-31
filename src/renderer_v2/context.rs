@@ -139,6 +139,23 @@ impl<'a> PaintContextV2<'a> {
         self.set_clip(rect, 0.0, 1.0);
     }
 
+    /// Set a clip region only for overlay commands (doesn't clip children).
+    ///
+    /// Use this for effects like ripples that need to be clipped to the
+    /// container's rounded corners without affecting child content.
+    ///
+    /// # Arguments
+    /// * `rect` - The clip rectangle in local coordinates
+    /// * `corner_radius` - Corner radius for rounded clipping
+    /// * `curvature` - Superellipse curvature (K-value: 1.0=circle, 2.0=squircle)
+    pub fn set_overlay_clip(&mut self, rect: Rect, corner_radius: f32, curvature: f32) {
+        self.node.overlay_clip = Some(ClipRegion {
+            rect,
+            corner_radius,
+            curvature,
+        });
+    }
+
     // -------------------------------------------------------------------------
     // Draw Commands (Main Layer)
     // -------------------------------------------------------------------------

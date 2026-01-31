@@ -58,6 +58,11 @@ pub struct RenderNode {
     /// Optional clip region that applies to this node and children.
     /// The clip rect is in local coordinates (0,0 = node origin).
     pub clip: Option<ClipRegion>,
+
+    /// Optional clip region that applies only to overlay commands (not children).
+    /// Used for effects like ripples that need clipping to rounded corners
+    /// without affecting child content.
+    pub overlay_clip: Option<ClipRegion>,
 }
 
 impl RenderNode {
@@ -72,6 +77,7 @@ impl RenderNode {
             children: Vec::new(),
             overlay_commands: Vec::new(),
             clip: None,
+            overlay_clip: None,
         }
     }
 
@@ -92,6 +98,7 @@ impl RenderNode {
         self.children.clear();
         self.overlay_commands.clear();
         self.clip = None;
+        self.overlay_clip = None;
     }
 }
 

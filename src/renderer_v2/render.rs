@@ -425,6 +425,13 @@ impl RendererV2 {
 
             // Draw overlay shapes (after text, for effects like ripples)
             if !overlay_instances.is_empty() {
+                // Re-set the shape pipeline (text/image renderers may have changed it)
+                render_pass.set_pipeline(&self.pipeline);
+                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                render_pass
+                    .set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+
                 // Write overlay instances after shape instances
                 let offset = (shape_instances.len() * std::mem::size_of::<ShapeInstance>()) as u64;
                 self.queue.write_buffer(
