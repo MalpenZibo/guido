@@ -21,7 +21,7 @@ use crate::widgets::image::{ContentFit, ImageSource};
 use super::commands::DrawCommand;
 use super::flatten::FlattenedCommand;
 
-/// Vertex with pre-computed NDC position and UV coordinates.
+/// Vertex with pre-computed NDC position, UV coordinates, and clip data.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct TexturedVertex {
@@ -29,6 +29,12 @@ struct TexturedVertex {
     position: [f32; 2],
     /// Texture coordinates
     uv: [f32; 2],
+    /// Screen position in physical pixels (for clip calculation)
+    screen_pos: [f32; 2],
+    /// Clip rect in physical pixels [x, y, width, height]
+    clip_rect: [f32; 4],
+    /// Clip parameters [corner_radius, curvature, 0, 0]
+    clip_params: [f32; 4],
 }
 
 impl TexturedVertex {
@@ -37,15 +43,35 @@ impl TexturedVertex {
             array_stride: std::mem::size_of::<TexturedVertex>() as u64,
             step_mode: VertexStepMode::Vertex,
             attributes: &[
+                // position (NDC)
                 VertexAttribute {
                     offset: 0,
                     shader_location: 0,
                     format: VertexFormat::Float32x2,
                 },
+                // uv
                 VertexAttribute {
                     offset: 8,
                     shader_location: 1,
                     format: VertexFormat::Float32x2,
+                },
+                // screen_pos
+                VertexAttribute {
+                    offset: 16,
+                    shader_location: 2,
+                    format: VertexFormat::Float32x2,
+                },
+                // clip_rect
+                VertexAttribute {
+                    offset: 24,
+                    shader_location: 3,
+                    format: VertexFormat::Float32x4,
+                },
+                // clip_params
+                VertexAttribute {
+                    offset: 40,
+                    shader_location: 4,
+                    format: VertexFormat::Float32x4,
                 },
             ],
         }
@@ -119,7 +145,7 @@ pub struct ImageQuadRenderer {
 
 impl ImageQuadRenderer {
     pub fn new(device: &Device, format: TextureFormat) -> Self {
-        // Simple shader that just samples texture at pre-computed positions
+        // Shader with clipping support
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ImageQuad Shader"),
             source: wgpu::ShaderSource::Wgsl(
@@ -127,11 +153,17 @@ impl ImageQuadRenderer {
                 struct VertexInput {
                     @location(0) position: vec2<f32>,
                     @location(1) uv: vec2<f32>,
+                    @location(2) screen_pos: vec2<f32>,
+                    @location(3) clip_rect: vec4<f32>,
+                    @location(4) clip_params: vec4<f32>,
                 }
 
                 struct VertexOutput {
                     @builtin(position) clip_position: vec4<f32>,
                     @location(0) uv: vec2<f32>,
+                    @location(1) screen_pos: vec2<f32>,
+                    @location(2) clip_rect: vec4<f32>,
+                    @location(3) clip_params: vec2<f32>,
                 }
 
                 @vertex
@@ -139,15 +171,53 @@ impl ImageQuadRenderer {
                     var out: VertexOutput;
                     out.clip_position = vec4<f32>(in.position, 0.0, 1.0);
                     out.uv = in.uv;
+                    out.screen_pos = in.screen_pos;
+                    out.clip_rect = in.clip_rect;
+                    out.clip_params = in.clip_params.xy;
                     return out;
                 }
 
                 @group(0) @binding(0) var t_texture: texture_2d<f32>;
                 @group(0) @binding(1) var s_sampler: sampler;
 
+                // SDF for rounded rectangle clipping
+                fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radius: f32) -> f32 {
+                    let center = vec2<f32>(rect.x + rect.z * 0.5, rect.y + rect.w * 0.5);
+                    let half_size = vec2<f32>(rect.z * 0.5, rect.w * 0.5);
+                    let r = min(radius, min(half_size.x, half_size.y));
+
+                    if (r <= 0.0) {
+                        let d = abs(pos - center) - half_size;
+                        return max(d.x, d.y);
+                    }
+
+                    let p = abs(pos - center);
+                    let q = p - half_size + r;
+                    let qm = max(q, vec2<f32>(0.0, 0.0));
+                    let inside = min(max(q.x, q.y), 0.0);
+                    return inside + length(qm) - r;
+                }
+
                 @fragment
                 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-                    return textureSample(t_texture, s_sampler, in.uv);
+                    var color = textureSample(t_texture, s_sampler, in.uv);
+
+                    // Apply clipping if enabled (width and height > 0)
+                    if (in.clip_rect.z > 0.0 && in.clip_rect.w > 0.0) {
+                        let clip_dist = rounded_rect_sdf(
+                            in.screen_pos,
+                            in.clip_rect,
+                            in.clip_params.x  // corner_radius
+                        );
+
+                        // Anti-aliased clip edge
+                        let clip_aa = fwidth(clip_dist);
+                        let clip_alpha = 1.0 - smoothstep(-clip_aa, clip_aa, clip_dist);
+
+                        color = vec4<f32>(color.rgb, color.a * clip_alpha);
+                    }
+
+                    return color;
                 }
                 "#
                 .into(),
@@ -621,8 +691,31 @@ impl ImageQuadRenderer {
             *content_fit,
         );
 
+        // Extract clip data (scale to physical pixels)
+        let (clip_rect, clip_params) = if let Some(ref clip) = cmd.clip {
+            (
+                [
+                    clip.rect.x * scale_factor,
+                    clip.rect.y * scale_factor,
+                    clip.rect.width * scale_factor,
+                    clip.rect.height * scale_factor,
+                ],
+                [clip.corner_radius * scale_factor, clip.curvature, 0.0, 0.0],
+            )
+        } else {
+            // No clipping (width/height = 0 disables clipping in shader)
+            ([0.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0])
+        };
+
         // Transform corners from local to screen coordinates
-        let vertices = self.compute_vertices(&display_rect, &cmd.world_transform, uv, scale_factor);
+        let vertices = self.compute_vertices(
+            &display_rect,
+            &cmd.world_transform,
+            uv,
+            scale_factor,
+            clip_rect,
+            clip_params,
+        );
 
         // Create vertex buffer
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -706,6 +799,8 @@ impl ImageQuadRenderer {
         world_transform: &crate::transform::Transform,
         uv: (f32, f32, f32, f32),
         scale_factor: f32,
+        clip_rect: [f32; 4],
+        clip_params: [f32; 4],
     ) -> [TexturedVertex; 4] {
         // Get local rect corners
         let local_corners = [
@@ -742,23 +837,35 @@ impl ImageQuadRenderer {
 
         let (u_min, v_min, u_max, v_max) = uv;
 
-        // Convert to NDC and create vertices
+        // Convert to NDC and create vertices with clip data
         [
             TexturedVertex {
                 position: self.to_ndc(screen_corners[0].0, screen_corners[0].1),
                 uv: [u_min, v_min],
+                screen_pos: [screen_corners[0].0, screen_corners[0].1],
+                clip_rect,
+                clip_params,
             },
             TexturedVertex {
                 position: self.to_ndc(screen_corners[1].0, screen_corners[1].1),
                 uv: [u_max, v_min],
+                screen_pos: [screen_corners[1].0, screen_corners[1].1],
+                clip_rect,
+                clip_params,
             },
             TexturedVertex {
                 position: self.to_ndc(screen_corners[2].0, screen_corners[2].1),
                 uv: [u_min, v_max],
+                screen_pos: [screen_corners[2].0, screen_corners[2].1],
+                clip_rect,
+                clip_params,
             },
             TexturedVertex {
                 position: self.to_ndc(screen_corners[3].0, screen_corners[3].1),
                 uv: [u_max, v_max],
+                screen_pos: [screen_corners[3].0, screen_corners[3].1],
+                clip_rect,
+                clip_params,
             },
         ]
     }
