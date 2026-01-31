@@ -1,6 +1,6 @@
 //! Test: Nested transforms (parent rotation affects child)
 //!
-//! Run with: cargo run --example transform_test_nested --features renderer_v2
+//! Run with: cargo run --example transform_test_nested
 
 use guido::prelude::*;
 

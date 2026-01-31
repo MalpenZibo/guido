@@ -1,4 +1,4 @@
-// Guido V2 Instanced Shader - SDF-based shape rendering
+// Guido Instanced Shader - SDF-based shape rendering
 //
 // This shader uses instanced rendering with a shared unit quad.
 // All shape parameters are passed per-instance instead of per-vertex,

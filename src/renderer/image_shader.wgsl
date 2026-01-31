@@ -1,4 +1,4 @@
-// Guido V2 Image Quad Shader
+// Guido Image Quad Shader
 //
 // This shader renders textured quads for images with clipping support.
 // Vertices include pre-computed NDC positions and clip data.

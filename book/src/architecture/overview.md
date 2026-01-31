@@ -140,8 +140,8 @@ Children choose a size within constraints.
 | `src/widgets/container.rs` | Container implementation |
 | `src/widgets/state_layer.rs` | State layer types |
 | `src/renderer/mod.rs` | Renderer, GPU setup |
-| `src/renderer/primitives.rs` | Shape types |
-| `src/renderer/shader.wgsl` | GPU shaders |
+| `src/renderer/types.rs` | Shape types (Gradient, Shadow) |
+| `src/renderer/shader_v2.wgsl` | GPU shaders |
 | `src/reactive/signal.rs` | Signal implementation |
 | `src/transform.rs` | Transform matrices |
 | `src/platform/mod.rs` | Wayland integration |

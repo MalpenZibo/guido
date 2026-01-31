@@ -302,7 +302,7 @@ fn render_surface(
         let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
         surface.widget.layout(constraints);
 
-        // Build render tree using V2 paint
+        // Build render tree
         let mut tree = RenderTree::new();
         let mut root = RenderNode::with_bounds(
             0, // Root node ID

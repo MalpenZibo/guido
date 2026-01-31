@@ -43,7 +43,7 @@ pub struct Renderer {
     instance_buffer: Buffer,
     instance_buffer_capacity: usize,
 
-    // Text rendering (reuses V1's glyphon-based renderer)
+    // Text rendering via glyphon
     text_state: TextRenderState,
 
     // Transformed text rendering (renders text to textures for rotation/scale)
@@ -59,7 +59,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// Create a new V2 renderer with instanced rendering.
+    /// Create a new renderer with instanced rendering.
     pub fn new(device: Arc<Device>, queue: Arc<Queue>, format: wgpu::TextureFormat) -> Self {
         // Load shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -126,7 +126,7 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
-        // Initialize text renderer (reuses V1's glyphon-based renderer)
+        // Initialize text renderer
         let text_state = TextRenderState::new(&device, &queue, format);
 
         // Initialize transformed text renderer
@@ -295,7 +295,7 @@ impl Renderer {
         let shape_instances = self.commands_to_instances(&shape_commands);
         let overlay_instances = self.commands_to_instances(&overlay_commands);
 
-        // Convert text commands to TextEntry for the V1 text renderer
+        // Convert text commands to TextEntry for text rendering
         let text_entries: Vec<TextEntry> = text_commands
             .iter()
             .filter_map(|cmd| self.command_to_text_entry(cmd))
@@ -318,7 +318,7 @@ impl Renderer {
         // Prepare transformed text as textured quads
         let text_quads: Vec<PreparedTextQuad> = if !transformed_indices.is_empty() {
             log::debug!(
-                "V2 Renderer: {} transformed texts to render as quads",
+                "Renderer: {} transformed texts to render as quads",
                 transformed_indices.len()
             );
             // Update text quad renderer screen size
@@ -415,7 +415,7 @@ impl Renderer {
 
             // Draw transformed text as textured quads
             if !text_quads.is_empty() {
-                log::debug!("V2 Renderer: Rendering {} text quads", text_quads.len());
+                log::debug!("Renderer: Rendering {} text quads", text_quads.len());
                 self.text_quad_renderer
                     .render(&mut render_pass, &text_quads);
             }
@@ -644,7 +644,7 @@ impl Renderer {
         }
     }
 
-    /// Convert a text command to a TextEntry for the V1 text renderer.
+    /// Convert a text command to a TextEntry for text rendering.
     fn command_to_text_entry(&self, cmd: &FlattenedCommand) -> Option<TextEntry> {
         match &cmd.command {
             DrawCommand::Text {

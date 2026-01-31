@@ -1036,7 +1036,7 @@ impl Widget for TextInput {
         let text_color = self.text_color.get();
         let is_focused = has_focus(self.widget_id);
 
-        // TODO: Clipping temporarily disabled in V2 renderer - will be re-implemented in a future PR
+        // TODO: Clipping temporarily disabled - will be re-implemented in a future PR
 
         // Draw selection highlight if focused and has selection (LOCAL coords)
         if is_focused && self.selection.has_selection() {
