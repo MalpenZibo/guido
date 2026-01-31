@@ -618,6 +618,9 @@ impl RendererV2 {
                 font_family,
                 font_weight,
             } => {
+                // Convert WorldClip to Rect for text clipping
+                let clip_rect = cmd.clip.as_ref().map(|clip| clip.rect);
+
                 Some(TextEntry {
                     text: text.clone(),
                     rect: *rect,
@@ -625,7 +628,7 @@ impl RendererV2 {
                     font_size: *font_size,
                     font_family: font_family.clone(),
                     font_weight: *font_weight,
-                    clip_rect: None, // No clipping in V2 for now
+                    clip_rect,
                     transform: cmd.world_transform,
                     transform_origin: cmd.world_transform_origin,
                 })
