@@ -269,8 +269,7 @@ impl RendererV2 {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Update uniform buffer with current screen size
-        // Note: screen_width/height are already in physical pixels (set by set_screen_size)
+        // Update uniform buffer with current screen size (in logical pixels)
         let uniforms =
             ShaderUniforms::new(self.screen_width, self.screen_height, self.scale_factor);
         self.queue

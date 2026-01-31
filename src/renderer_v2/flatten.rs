@@ -118,7 +118,7 @@ fn flatten_node(
             _ => RenderLayer::Shapes,
         };
         out.push(FlattenedCommand {
-            command: transform_command(cmd, &world_transform),
+            command: clone_command(cmd),
             world_transform,
             world_transform_origin: world_origin,
             layer,
@@ -158,7 +158,7 @@ fn flatten_node(
     // Add overlay commands (layer = Overlay) with overlay-specific clip
     for cmd in &node.overlay_commands {
         out.push(FlattenedCommand {
-            command: transform_command(cmd, &world_transform),
+            command: clone_command(cmd),
             world_transform,
             world_transform_origin: world_origin,
             layer: RenderLayer::Overlay,
@@ -244,11 +244,11 @@ fn intersect_clips(a: &WorldClip, b: &WorldClip) -> WorldClip {
     }
 }
 
-/// Clone a draw command (no coordinate transformation).
+/// Clone a draw command without applying any coordinate transformation.
 ///
 /// All coordinate transformation is handled by the GPU shader using the
 /// world_transform stored in FlattenedCommand. This avoids double-transformation
 /// issues when rotation/scale is involved.
-fn transform_command(cmd: &DrawCommand, _transform: &Transform) -> DrawCommand {
+fn clone_command(cmd: &DrawCommand) -> DrawCommand {
     cmd.clone()
 }

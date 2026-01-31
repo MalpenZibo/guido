@@ -41,7 +41,7 @@ struct InstanceInput {
     @location(8) transform_0: vec4<f32>,
     // transform: d, ty, _pad, _pad
     @location(9) transform_1: vec4<f32>,
-    // clip_rect: [x, y, width, height] in physical pixels
+    // clip_rect: [x, y, width, height] in logical pixels (scaled to physical in render.rs)
     @location(10) clip_rect: vec4<f32>,
     // clip_corner_radius, clip_curvature, clip_is_local, _pad
     @location(11) clip_params: vec4<f32>,
@@ -71,9 +71,9 @@ struct VertexOutput {
     @location(6) shadow_params: vec4<f32>,
     // shadow_color
     @location(7) shadow_color: vec4<f32>,
-    // World position in physical pixels (for clip computation)
+    // World position in logical pixels (for clip computation)
     @location(8) world_pos: vec2<f32>,
-    // Clip rect in physical pixels
+    // Clip rect in logical pixels (scaled to physical in render.rs)
     @location(9) clip_rect: vec4<f32>,
     // Clip corner_radius, curvature, is_local
     @location(10) clip_params: vec3<f32>,
@@ -164,7 +164,7 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     // We interpolate the LOCAL position, not world position
     out.frag_pos = local_pos;
 
-    // Pass world position (in physical pixels) for clip computation
+    // Pass world position (in logical pixels) for clip computation
     out.world_pos = world_pos;
 
     // Pass instance data to fragment shader

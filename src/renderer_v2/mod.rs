@@ -10,8 +10,6 @@
 //! - World transforms are computed automatically by walking the tree during flatten
 //! - Overlays (like ripples) naturally render after children
 //!
-//! Note: Clipping is temporarily disabled and will be re-implemented in a future PR.
-//!
 //! # Usage
 //!
 //! Enable with the `renderer_v2` feature:

@@ -94,7 +94,7 @@ pub struct ShapeInstance {
     pub corner_radius: f32,
     /// Superellipse curvature (K-value: 1.0=circle, 2.0=squircle)
     pub shape_curvature: f32,
-    /// Padding for alignment
+    /// Padding for 16-byte alignment (wgpu uniform buffer requirement)
     pub _pad0: [f32; 2],
 
     // === Colors ===
@@ -106,7 +106,7 @@ pub struct ShapeInstance {
     // === Border ===
     /// Border width in logical pixels
     pub border_width: f32,
-    /// Padding for alignment
+    /// Padding for 16-byte alignment
     pub _pad1: [f32; 3],
 
     // === Shadow ===
@@ -123,21 +123,21 @@ pub struct ShapeInstance {
     /// Transform matrix: [a, b, tx, c, d, ty] (row-major 2x3)
     /// Note: Transform origin is baked into the matrix via center_at() on CPU
     pub transform: [f32; 6],
-    /// Padding for alignment
+    /// Padding for 16-byte alignment
     pub _pad2: [f32; 2],
 
     // === Clip Region ===
-    /// Clip rect in physical pixels: [x, y, width, height]
+    /// Clip rect: [x, y, width, height] (scaled to physical pixels in render.rs)
     /// If width or height <= 0, no clipping is applied
     pub clip_rect: [f32; 4],
-    /// Clip corner radius in physical pixels
+    /// Clip corner radius (scaled to physical pixels in render.rs)
     pub clip_corner_radius: f32,
     /// Clip curvature (K-value)
     pub clip_curvature: f32,
     /// Whether to use local coordinates (frag_pos) for clipping instead of world_pos.
     /// 1.0 = local clip, 0.0 = world clip
     pub clip_is_local: f32,
-    /// Padding for alignment
+    /// Padding for 16-byte alignment
     pub _pad3: f32,
 
     // === Gradient ===
@@ -147,7 +147,7 @@ pub struct ShapeInstance {
     pub gradient_end: [f32; 4],
     /// Gradient type: 0=none, 1=horizontal, 2=vertical, 3=diagonal, 4=diagonal_reverse
     pub gradient_type: u32,
-    /// Padding for alignment
+    /// Padding for 16-byte alignment
     pub _pad4: [u32; 3],
 }
 
@@ -182,73 +182,6 @@ impl Default for ShapeInstance {
 }
 
 impl ShapeInstance {
-    /// Create a simple colored rectangle.
-    #[allow(dead_code)]
-    pub fn rect(x: f32, y: f32, width: f32, height: f32, color: [f32; 4]) -> Self {
-        Self {
-            rect: [x, y, width, height],
-            fill_color: color,
-            ..Default::default()
-        }
-    }
-
-    /// Create a rounded rectangle.
-    #[allow(dead_code)]
-    pub fn rounded_rect(
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-        color: [f32; 4],
-        radius: f32,
-    ) -> Self {
-        Self {
-            rect: [x, y, width, height],
-            fill_color: color,
-            corner_radius: radius,
-            ..Default::default()
-        }
-    }
-
-    /// Set the border.
-    #[allow(dead_code)]
-    pub fn with_border(mut self, width: f32, color: [f32; 4]) -> Self {
-        self.border_width = width;
-        self.border_color = color;
-        self
-    }
-
-    /// Set the curvature (superellipse K-value).
-    #[allow(dead_code)]
-    pub fn with_curvature(mut self, curvature: f32) -> Self {
-        self.shape_curvature = curvature;
-        self
-    }
-
-    /// Set the shadow.
-    #[allow(dead_code)]
-    pub fn with_shadow(
-        mut self,
-        offset: [f32; 2],
-        blur: f32,
-        spread: f32,
-        color: [f32; 4],
-    ) -> Self {
-        self.shadow_offset = offset;
-        self.shadow_blur = blur;
-        self.shadow_spread = spread;
-        self.shadow_color = color;
-        self
-    }
-
-    /// Set the transform from a 2x3 affine matrix.
-    /// Note: The origin should be baked into the matrix via center_at() on CPU.
-    #[allow(dead_code)]
-    pub fn with_transform(mut self, transform: [f32; 6]) -> Self {
-        self.transform = transform;
-        self
-    }
-
     /// Vertex buffer layout for instance data.
     pub fn desc() -> VertexBufferLayout<'static> {
         VertexBufferLayout {
