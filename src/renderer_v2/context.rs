@@ -365,7 +365,11 @@ impl<'a> PaintContextV2<'a> {
     /// during tree flattening.
     pub fn add_child(&mut self, id: NodeId, bounds: Rect) -> PaintContextV2<'_> {
         self.node.children.push(RenderNode::with_bounds(id, bounds));
-        let child = self.node.children.last_mut().expect("child was just pushed");
+        let child = self
+            .node
+            .children
+            .last_mut()
+            .expect("child was just pushed");
         PaintContextV2::new(child)
     }
 
