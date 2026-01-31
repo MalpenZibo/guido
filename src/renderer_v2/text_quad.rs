@@ -485,44 +485,22 @@ impl TextQuadRenderer {
             })
             .collect();
 
-        log::debug!(
-            "TextQuad: text='{}' entry.rect=({}, {}, {}x{}) transform=[{:.2}, {:.2}, {:.2}, {:.2}, tx={:.2}, ty={:.2}] local_corners={:?} screen_corners={:?} screen_size=({}, {})",
-            entry.text,
-            entry.rect.x,
-            entry.rect.y,
-            entry.rect.width,
-            entry.rect.height,
-            entry.transform.data[0],
-            entry.transform.data[1],
-            entry.transform.data[4],
-            entry.transform.data[5],
-            entry.transform.tx(),
-            entry.transform.ty(),
-            local_corners,
-            screen_corners,
-            self.screen_width,
-            self.screen_height
-        );
-
-        // Use screen corners directly - the transform already handles rotation/scale
-        let transformed_corners = screen_corners;
-
         // Convert to NDC and create vertices
         let vertices = [
             TexturedVertex {
-                position: self.to_ndc(transformed_corners[0].0, transformed_corners[0].1),
+                position: self.to_ndc(screen_corners[0].0, screen_corners[0].1),
                 uv: [0.0, 0.0],
             },
             TexturedVertex {
-                position: self.to_ndc(transformed_corners[1].0, transformed_corners[1].1),
+                position: self.to_ndc(screen_corners[1].0, screen_corners[1].1),
                 uv: [1.0, 0.0],
             },
             TexturedVertex {
-                position: self.to_ndc(transformed_corners[2].0, transformed_corners[2].1),
+                position: self.to_ndc(screen_corners[2].0, screen_corners[2].1),
                 uv: [0.0, 1.0],
             },
             TexturedVertex {
-                position: self.to_ndc(transformed_corners[3].0, transformed_corners[3].1),
+                position: self.to_ndc(screen_corners[3].0, screen_corners[3].1),
                 uv: [1.0, 1.0],
             },
         ];
