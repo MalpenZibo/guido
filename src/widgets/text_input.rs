@@ -1094,8 +1094,7 @@ impl Widget for TextInput {
         let text_color = self.text_color.get();
         let is_focused = has_focus(self.widget_id);
 
-        // Set clip for text overflow
-        ctx.set_clip(self.bounds, 0.0, 1.0);
+        // TODO: Clipping temporarily disabled in V2 renderer - will be re-implemented in a future PR
 
         // Draw selection highlight if focused and has selection
         if is_focused && self.selection.has_selection() {

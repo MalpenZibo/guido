@@ -37,14 +37,10 @@ struct InstanceInput {
     @location(6) shadow_params: vec4<f32>,
     // shadow_color RGBA
     @location(7) shadow_color: vec4<f32>,
-    // clip_rect: [x, y, width, height] in logical pixels
-    @location(8) clip_rect: vec4<f32>,
-    // clip_radius, clip_curvature, _pad, _pad
-    @location(9) clip_params: vec4<f32>,
     // transform: a, b, tx, c
-    @location(10) transform_0: vec4<f32>,
+    @location(8) transform_0: vec4<f32>,
     // transform: d, ty, _pad, _pad
-    @location(11) transform_1: vec4<f32>,
+    @location(9) transform_1: vec4<f32>,
 }
 
 // === Vertex Output ===
@@ -65,12 +61,6 @@ struct VertexOutput {
     @location(6) shadow_params: vec4<f32>,
     // shadow_color
     @location(7) shadow_color: vec4<f32>,
-    // clip_rect in logical pixels
-    @location(8) clip_rect: vec4<f32>,
-    // clip_radius, clip_curvature
-    @location(9) clip_params: vec2<f32>,
-    // screen position for clipping (transformed)
-    @location(10) screen_pos: vec2<f32>,
 }
 
 // === Helper Functions ===
@@ -152,9 +142,6 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     // We interpolate the LOCAL position, not world position
     out.frag_pos = local_pos;
 
-    // Pass transformed position for clipping
-    out.screen_pos = world_pos;
-
     // Pass instance data to fragment shader
     out.fill_color = instance.fill_color;
     out.border_color = instance.border_color;
@@ -163,8 +150,6 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     out.border_width = instance.border_params.x;
     out.shadow_params = instance.shadow_params;
     out.shadow_color = instance.shadow_color;
-    out.clip_rect = instance.clip_rect;
-    out.clip_params = instance.clip_params.xy;  // clip_radius, clip_curvature
 
     return out;
 }
@@ -306,21 +291,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         final_result = vec4<f32>(final_rgb, final_a);
     } else {
         final_result = shape_result;
-    }
-
-    // === Apply clip region ===
-    let clip_width = in.clip_rect.z;
-    let clip_height = in.clip_rect.w;
-    if (clip_width > 0.0 && clip_height > 0.0) {
-        let clip_radius = in.clip_params.x;
-        let clip_curvature = in.clip_params.y;
-
-        // Use frag_pos (local space) since clip_rect is now in local space
-        let clip_dist = rounded_rect_sdf(in.frag_pos, in.clip_rect, clip_radius, clip_curvature);
-        let clip_aa = fwidth(clip_dist);
-        let clip_alpha = 1.0 - smoothstep(-clip_aa, clip_aa, clip_dist);
-
-        final_result = vec4<f32>(final_result.rgb, final_result.a * clip_alpha);
     }
 
     return final_result;

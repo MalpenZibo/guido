@@ -1637,23 +1637,9 @@ impl Widget for Container {
         }
 
         // Determine if we need to clip children
-        let width_animating = self.width_anim.as_ref().is_some_and(|a| a.is_animating());
-        let height_animating = self.height_anim.as_ref().is_some_and(|a| a.is_animating());
-        let has_exact_size = self.width.as_ref().is_some_and(|w| w.get().exact.is_some())
-            || self
-                .height
-                .as_ref()
-                .is_some_and(|h| h.get().exact.is_some());
         let is_scrollable = self.scroll_axis != ScrollAxis::None;
-        let should_clip = self.overflow == Overflow::Hidden
-            || width_animating
-            || height_animating
-            || has_exact_size
-            || is_scrollable;
 
-        if should_clip {
-            ctx.set_clip(self.bounds, corner_radius, corner_curvature);
-        }
+        // TODO: Clipping temporarily disabled in V2 renderer - will be re-implemented in a future PR
 
         // Draw children - each gets its own node
         // TODO: Handle scroll offset in children's transforms

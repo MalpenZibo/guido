@@ -82,9 +82,7 @@ pub const QUAD_INDICES: &[u16] = &[
 /// Per-instance data for a single shape.
 ///
 /// Contains all the information needed to render one rounded rectangle:
-/// position, size, colors, border, clip region, and transform.
-///
-/// Total size: ~160 bytes per instance (much better than ~768 bytes in V1)
+/// position, size, colors, border, and transform.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ShapeInstance {
@@ -121,22 +119,12 @@ pub struct ShapeInstance {
     /// Shadow color RGBA
     pub shadow_color: [f32; 4],
 
-    // === Clipping (logical pixels) ===
-    /// Clip rectangle: [x, y, width, height] (0,0,0,0 = no clip)
-    pub clip_rect: [f32; 4],
-    /// Clip corner radius
-    pub clip_radius: f32,
-    /// Clip curvature
-    pub clip_curvature: f32,
-    /// Padding for alignment
-    pub _pad2: [f32; 2],
-
     // === Transform (2x3 affine matrix) ===
     /// Transform matrix: [a, b, tx, c, d, ty] (row-major 2x3)
     /// Note: Transform origin is baked into the matrix via center_at() on CPU
     pub transform: [f32; 6],
-    /// Padding for alignment (origin was baked into transform matrix)
-    pub _pad3: [f32; 2],
+    /// Padding for alignment
+    pub _pad2: [f32; 2],
 }
 
 impl Default for ShapeInstance {
@@ -154,12 +142,8 @@ impl Default for ShapeInstance {
             shadow_blur: 0.0,
             shadow_spread: 0.0,
             shadow_color: [0.0, 0.0, 0.0, 0.0],
-            clip_rect: [0.0, 0.0, 0.0, 0.0],
-            clip_radius: 0.0,
-            clip_curvature: 1.0,
-            _pad2: [0.0, 0.0],
             transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0], // identity
-            _pad3: [0.0, 0.0],
+            _pad2: [0.0, 0.0],
         }
     }
 }
@@ -224,14 +208,6 @@ impl ShapeInstance {
         self
     }
 
-    /// Set the clip region.
-    #[allow(dead_code)]
-    pub fn with_clip(mut self, x: f32, y: f32, width: f32, height: f32, radius: f32) -> Self {
-        self.clip_rect = [x, y, width, height];
-        self.clip_radius = radius;
-        self
-    }
-
     /// Set the transform from a 2x3 affine matrix.
     /// Note: The origin should be baked into the matrix via center_at() on CPU.
     #[allow(dead_code)]
@@ -288,28 +264,16 @@ impl ShapeInstance {
                     shader_location: 7,
                     format: VertexFormat::Float32x4,
                 },
-                // clip_rect
+                // transform[0..4] (a, b, tx, c)
                 VertexAttribute {
                     offset: 112,
                     shader_location: 8,
                     format: VertexFormat::Float32x4,
                 },
-                // clip_radius, clip_curvature, _pad2[0], _pad2[1]
+                // transform[4..6], _pad2 (d, ty, _pad, _pad)
                 VertexAttribute {
                     offset: 128,
                     shader_location: 9,
-                    format: VertexFormat::Float32x4,
-                },
-                // transform[0..4] (a, b, tx, c)
-                VertexAttribute {
-                    offset: 144,
-                    shader_location: 10,
-                    format: VertexFormat::Float32x4,
-                },
-                // transform[4..6], _pad3 (d, ty, _pad, _pad)
-                VertexAttribute {
-                    offset: 160,
-                    shader_location: 11,
                     format: VertexFormat::Float32x4,
                 },
             ],
@@ -323,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_shape_instance_size() {
-        // Verify the size is reasonable (should be around 176 bytes)
+        // Verify the size is reasonable (should be around 144 bytes without clip)
         let size = std::mem::size_of::<ShapeInstance>();
         println!("ShapeInstance size: {} bytes", size);
         assert!(size <= 256, "ShapeInstance is too large: {} bytes", size);

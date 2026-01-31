@@ -1,6 +1,6 @@
 //! Paint context for the hierarchical render tree.
 
-use crate::renderer::primitives::{ClipRegion, Gradient, Shadow};
+use crate::renderer::primitives::{Gradient, Shadow};
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
 use crate::widgets::font::{FontFamily, FontWeight};
@@ -12,7 +12,7 @@ use super::tree::{NodeId, RenderNode};
 /// Painting context for the V2 renderer.
 ///
 /// Widgets use this to build their render node. Unlike the V1 PaintContext,
-/// there's no push/pop for transforms and clips - they're set once per node
+/// there's no push/pop for transforms - they're set once per node
 /// and inherited automatically by children.
 ///
 /// # Example
@@ -70,20 +70,6 @@ impl<'a> PaintContextV2<'a> {
     pub fn set_transform_with_origin(&mut self, transform: Transform, origin: TransformOrigin) {
         self.node.local_transform = transform;
         self.node.transform_origin = origin;
-    }
-
-    /// Set a clip region for this node and all children.
-    pub fn set_clip(&mut self, rect: Rect, radius: f32, curvature: f32) {
-        self.node.clip = Some(ClipRegion {
-            rect,
-            radius,
-            curvature,
-        });
-    }
-
-    /// Clear the clip region.
-    pub fn clear_clip(&mut self) {
-        self.node.clip = None;
     }
 
     // -------------------------------------------------------------------------
@@ -278,7 +264,7 @@ impl<'a> PaintContextV2<'a> {
 
     /// Add a child node and get a context to paint into it.
     ///
-    /// The child will inherit transforms and clips from this node automatically
+    /// The child will inherit transforms from this node automatically
     /// during tree flattening.
     pub fn add_child(&mut self, id: NodeId, bounds: Rect) -> PaintContextV2<'_> {
         self.node.children.push(RenderNode::with_bounds(id, bounds));

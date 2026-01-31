@@ -1,6 +1,5 @@
 //! Render tree data structures.
 
-use crate::renderer::primitives::ClipRegion;
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
 use crate::widgets::Rect;
@@ -14,7 +13,6 @@ pub type NodeId = u64;
 ///
 /// Each node contains:
 /// - Local transform relative to parent
-/// - Optional clip region
 /// - Draw commands for this node
 /// - Child nodes (nested widgets)
 /// - Overlay commands rendered after children
@@ -31,10 +29,6 @@ pub struct RenderNode {
 
     /// Bounds in local coordinates (for transform origin resolution)
     pub bounds: Rect,
-
-    /// Optional clip region in local coordinates.
-    /// If set, clips this node and all children.
-    pub clip: Option<ClipRegion>,
 
     /// Draw commands for this node (shapes, text, etc.).
     /// These are in LOCAL coordinates - world transform applied during flatten.
@@ -56,7 +50,6 @@ impl RenderNode {
             local_transform: Transform::IDENTITY,
             transform_origin: TransformOrigin::CENTER,
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
-            clip: None,
             commands: Vec::new(),
             children: Vec::new(),
             overlay_commands: Vec::new(),
@@ -76,7 +69,6 @@ impl RenderNode {
     pub fn clear(&mut self) {
         self.local_transform = Transform::IDENTITY;
         self.transform_origin = TransformOrigin::CENTER;
-        self.clip = None;
         self.commands.clear();
         self.children.clear();
         self.overlay_commands.clear();

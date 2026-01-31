@@ -417,12 +417,8 @@ impl RendererV2 {
                     shadow_blur: 0.0,
                     shadow_spread: 0.0,
                     shadow_color: [0.0, 0.0, 0.0, 0.0],
-                    clip_rect: [0.0, 0.0, 0.0, 0.0],
-                    clip_radius: 0.0,
-                    clip_curvature: 1.0,
-                    _pad2: [0.0, 0.0],
                     transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                    _pad3: [0.0, 0.0],
+                    _pad2: [0.0, 0.0],
                 };
 
                 // Border
@@ -437,36 +433,6 @@ impl RendererV2 {
                     instance.shadow_blur = s.blur * scale;
                     instance.shadow_spread = s.spread * scale;
                     instance.shadow_color = [s.color.r, s.color.g, s.color.b, s.color.a];
-                }
-
-                // Clip - transform from world space to shape's local space
-                if let Some(clip) = &cmd.clip {
-                    // Transform clip corners to local space using inverse transform
-                    let inv = cmd.world_transform.inverse();
-                    let (x1, y1) = inv.transform_point(clip.rect.x, clip.rect.y);
-                    let (x2, y2) = inv.transform_point(
-                        clip.rect.x + clip.rect.width,
-                        clip.rect.y + clip.rect.height,
-                    );
-
-                    // Reconstruct axis-aligned bounds (min/max handles rotation)
-                    let local_x = x1.min(x2);
-                    let local_y = y1.min(y2);
-                    let local_w = (x2 - x1).abs();
-                    let local_h = (y2 - y1).abs();
-
-                    instance.clip_rect = [
-                        local_x * scale,
-                        local_y * scale,
-                        local_w * scale,
-                        local_h * scale,
-                    ];
-
-                    // Scale radius by inverse transform's scale factor
-                    let (inv_scale_x, inv_scale_y) = inv.extract_scale_components();
-                    let radius_scale = inv_scale_x.min(inv_scale_y);
-                    instance.clip_radius = clip.radius * radius_scale * scale;
-                    instance.clip_curvature = clip.curvature;
                 }
 
                 // Transform
@@ -511,43 +477,9 @@ impl RendererV2 {
                     shadow_blur: 0.0,
                     shadow_spread: 0.0,
                     shadow_color: [0.0, 0.0, 0.0, 0.0],
-                    clip_rect: [0.0, 0.0, 0.0, 0.0],
-                    clip_radius: 0.0,
-                    clip_curvature: 1.0,
-                    _pad2: [0.0, 0.0],
                     transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                    _pad3: [0.0, 0.0],
+                    _pad2: [0.0, 0.0],
                 };
-
-                // Clip - transform from world space to shape's local space
-                if let Some(clip) = &cmd.clip {
-                    // Transform clip corners to local space using inverse transform
-                    let inv = cmd.world_transform.inverse();
-                    let (x1, y1) = inv.transform_point(clip.rect.x, clip.rect.y);
-                    let (x2, y2) = inv.transform_point(
-                        clip.rect.x + clip.rect.width,
-                        clip.rect.y + clip.rect.height,
-                    );
-
-                    // Reconstruct axis-aligned bounds (min/max handles rotation)
-                    let local_x = x1.min(x2);
-                    let local_y = y1.min(y2);
-                    let local_w = (x2 - x1).abs();
-                    let local_h = (y2 - y1).abs();
-
-                    instance.clip_rect = [
-                        local_x * scale,
-                        local_y * scale,
-                        local_w * scale,
-                        local_h * scale,
-                    ];
-
-                    // Scale radius by inverse transform's scale factor
-                    let (inv_scale_x, inv_scale_y) = inv.extract_scale_components();
-                    let radius_scale = inv_scale_x.min(inv_scale_y);
-                    instance.clip_radius = clip.radius * radius_scale * scale;
-                    instance.clip_curvature = clip.curvature;
-                }
 
                 // Transform (origin already baked into matrix via center_at)
                 if !cmd.world_transform.is_identity() {
@@ -580,9 +512,6 @@ impl RendererV2 {
                 font_family,
                 font_weight,
             } => {
-                // Convert clip region to a simple Rect for the text renderer
-                let clip_rect = cmd.clip.as_ref().map(|c| c.rect);
-
                 Some(TextEntry {
                     text: text.clone(),
                     rect: *rect,
@@ -590,7 +519,7 @@ impl RendererV2 {
                     font_size: *font_size,
                     font_family: font_family.clone(),
                     font_weight: *font_weight,
-                    clip_rect,
+                    clip_rect: None, // No clipping in V2 for now
                     transform: cmd.world_transform,
                     transform_origin: cmd.world_transform_origin,
                 })

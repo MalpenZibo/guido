@@ -8,8 +8,9 @@
 //!
 //! - Each widget creates a [`RenderNode`] with its local transform and draw commands
 //! - World transforms are computed automatically by walking the tree during flatten
-//! - Clips inherit and intersect with parent clips automatically
 //! - Overlays (like ripples) naturally render after children
+//!
+//! Note: Clipping is temporarily disabled and will be re-implemented in a future PR.
 //!
 //! # Usage
 //!
