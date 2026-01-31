@@ -18,10 +18,7 @@ use crate::reactive::{
     get_needs_layout_flag, register_relayout_boundary, request_animation_frame,
     set_needs_layout_flag, set_widget_parent, start_layout_tracking,
 };
-use crate::renderer::PaintContext;
-use crate::renderer::primitives::{GradientDir, Shadow};
-#[cfg(feature = "renderer_v2")]
-use crate::renderer_v2::PaintContextV2;
+use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
 
@@ -1207,163 +1204,6 @@ impl Widget for Container {
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext) {
-        let background = self.animated_background();
-        let corner_radius = self.animated_corner_radius();
-        let corner_curvature = self.corner_curvature.get();
-        let elevation_level = self.effective_elevation();
-        let shadow = elevation_to_shadow(elevation_level);
-        let transform = self.animated_transform();
-        let transform_origin = self.transform_origin.get();
-
-        // Push transform if not identity
-        // Always resolve the transform origin so child elements (like text) know where to center
-        let has_transform = !transform.is_identity();
-        if has_transform {
-            let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
-            ctx.push_transform_with_origin(transform, origin_x, origin_y);
-        }
-
-        // Draw background
-        if let Some(ref gradient) = self.gradient {
-            ctx.draw_gradient_rect_with_curvature(
-                self.bounds,
-                gradient.start_color,
-                gradient.end_color,
-                gradient.direction.into(),
-                corner_radius,
-                corner_curvature,
-            );
-        } else if background.a > 0.0 {
-            if elevation_level > 0.0 {
-                ctx.draw_rounded_rect_with_shadow_and_curvature(
-                    self.bounds,
-                    background,
-                    corner_radius,
-                    corner_curvature,
-                    shadow,
-                );
-            } else {
-                ctx.draw_rounded_rect_with_curvature(
-                    self.bounds,
-                    background,
-                    corner_radius,
-                    corner_curvature,
-                );
-            }
-        }
-
-        // Draw border
-        let border_width = self.animated_border_width();
-        let border_color = self.animated_border_color();
-
-        if border_width > 0.0 {
-            ctx.draw_border_frame_with_curvature(
-                self.bounds,
-                border_color,
-                corner_radius,
-                border_width,
-                corner_curvature,
-            );
-        }
-
-        // Determine if we need to clip children
-        let width_animating = self.width_anim.as_ref().is_some_and(|a| a.is_animating());
-        let height_animating = self.height_anim.as_ref().is_some_and(|a| a.is_animating());
-        let has_exact_size = self.width.as_ref().is_some_and(|w| w.get().exact.is_some())
-            || self
-                .height
-                .as_ref()
-                .is_some_and(|h| h.get().exact.is_some());
-        let is_scrollable = self.scroll_axis != ScrollAxis::None;
-        let should_clip = self.overflow == Overflow::Hidden
-            || width_animating
-            || height_animating
-            || has_exact_size
-            || is_scrollable;
-
-        // Push clip first (in screen space), then scroll transform
-        // The text renderer adjusts both text position and clip bounds by the transform,
-        // so they stay in the same coordinate space for culling checks
-        if should_clip {
-            ctx.push_clip(self.bounds, corner_radius, corner_curvature);
-        }
-
-        // Apply scroll offset as a transform (paint-only, doesn't affect layout)
-        if is_scrollable {
-            let scroll_transform =
-                Transform::translate(-self.scroll_state.offset_x, -self.scroll_state.offset_y);
-            ctx.push_transform(scroll_transform);
-        }
-
-        // Draw children
-        for child in self.children_source.get() {
-            child.paint(ctx);
-        }
-
-        // Pop scroll transform first (reverse order of push)
-        if is_scrollable {
-            ctx.pop_transform();
-        }
-
-        // Pop clip
-        if should_clip {
-            ctx.pop_clip();
-        }
-
-        // Draw scrollbar containers
-        if is_scrollable {
-            self.paint_scrollbar_containers(ctx);
-        }
-
-        // Pop transform BEFORE drawing ripple
-        if has_transform {
-            ctx.pop_transform();
-        }
-
-        // Draw ripple effect as overlay
-        // Note: ripple.center stores LOCAL coordinates (relative to container origin)
-        if let Some((local_cx, local_cy)) = self.ripple.center
-            && let Some(ref pressed_state) = self.pressed_state
-            && let Some(ref ripple_config) = pressed_state.ripple
-            && self.ripple.opacity > 0.0
-        {
-            // Calculate max radius from local coordinates
-            let max_dist_x = local_cx.max(self.bounds.width - local_cx);
-            let max_dist_y = local_cy.max(self.bounds.height - local_cy);
-            let max_radius = (max_dist_x * max_dist_x + max_dist_y * max_dist_y).sqrt();
-            let current_radius = max_radius * self.ripple.progress;
-
-            let ripple_color = Color::rgba(
-                ripple_config.color.r,
-                ripple_config.color.g,
-                ripple_config.color.b,
-                ripple_config.color.a * self.ripple.opacity,
-            );
-
-            let (clip_bounds, clip_transform) = if has_transform {
-                (self.bounds, Some((transform, transform_origin)))
-            } else {
-                (self.bounds, None)
-            };
-
-            // Convert local coords to screen coords for drawing
-            let screen_cx = self.bounds.x + local_cx;
-            let screen_cy = self.bounds.y + local_cy;
-
-            ctx.draw_overlay_circle_clipped_with_transform(
-                screen_cx,
-                screen_cy,
-                current_radius,
-                ripple_color,
-                clip_bounds,
-                corner_radius,
-                corner_curvature,
-                clip_transform,
-            );
-        }
-    }
-
     fn event(&mut self, event: &Event) -> EventResponse {
         let transform = self.animated_transform();
         let transform_origin = self.transform_origin.get();
@@ -1606,8 +1446,7 @@ impl Widget for Container {
         has_fixed_width && has_fixed_height
     }
 
-    #[cfg(feature = "renderer_v2")]
-    fn paint_v2(&self, ctx: &mut PaintContextV2) {
+    fn paint(&self, ctx: &mut PaintContext) {
         let background = self.animated_background();
         let corner_radius = self.animated_corner_radius();
         let corner_curvature = self.corner_curvature.get();
@@ -1621,7 +1460,7 @@ impl Widget for Container {
         ctx.set_bounds(local_bounds);
 
         // Apply user transform (rotation, scale, user-specified translate)
-        // Position is handled by the parent via set_transform before calling paint_v2
+        // Position is handled by the parent via set_transform before calling paint
         // We COMPOSE our user transform with the existing position transform
         if !user_transform.is_identity() {
             ctx.apply_transform_with_origin(user_transform, transform_origin);
@@ -1631,7 +1470,7 @@ impl Widget for Container {
         if let Some(ref gradient) = self.gradient {
             ctx.draw_gradient_rect(
                 local_bounds,
-                crate::renderer::primitives::Gradient {
+                crate::renderer::Gradient {
                     start_color: gradient.start_color,
                     end_color: gradient.end_color,
                     direction: gradient.direction.into(),
@@ -1704,12 +1543,12 @@ impl Widget for Container {
             };
             child_ctx.set_transform(child_position);
 
-            child.paint_v2(&mut child_ctx);
+            child.paint(&mut child_ctx);
         }
 
         // Draw scrollbar containers
         if is_scrollable {
-            self.paint_scrollbar_containers_v2(ctx);
+            self.paint_scrollbar_containers(ctx);
         }
 
         // Draw ripple effect as overlay (ripple.center is already in local coordinates)

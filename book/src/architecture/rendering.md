@@ -140,17 +140,31 @@ struct Border {
 
 ## Transform Handling
 
-Transforms affect the paint context:
+The render tree handles transforms hierarchically:
 
 ```rust
 fn paint(&self, ctx: &mut PaintContext) {
-    ctx.push_transform(self.transform);
-    // Paint content...
-    ctx.pop_transform();
+    // Apply user transform (rotation, scale) if set
+    if !self.user_transform.is_identity() {
+        ctx.apply_transform_with_origin(self.user_transform, self.transform_origin);
+    }
+
+    // Paint content in LOCAL coordinates (0,0 is widget origin)
+    let local_bounds = Rect::new(0.0, 0.0, self.bounds.width, self.bounds.height);
+    ctx.draw_rounded_rect(local_bounds, Color::BLUE, 8.0);
+
+    // Paint children - parent sets their position transform
+    for child in &self.children {
+        let mut child_ctx = ctx.add_child(child.id(), local_bounds);
+        let offset_x = child.bounds().x - self.bounds.x;
+        let offset_y = child.bounds().y - self.bounds.y;
+        child_ctx.set_transform(Transform::translate(offset_x, offset_y));
+        child.paint(&mut child_ctx);
+    }
 }
 ```
 
-Transforms accumulate through the hierarchy for nested widgets.
+Transforms are inherited through the render tree hierarchy. Each node has a local transform that is composed with its parent's world transform during tree flattening.
 
 ## Text Rendering
 
@@ -163,15 +177,17 @@ Text uses the glyphon library:
 
 ## Clipping
 
-Containers can clip children to their bounds:
+Containers set a clip region for their content:
 
 ```rust
-ctx.push_clip(self.bounds, self.corner_radius);
-// Paint children...
-ctx.pop_clip();
+// Set clip for this node and all children (in local coordinates)
+ctx.set_clip(local_bounds, self.corner_radius, self.corner_curvature);
+
+// For overlay-only clipping (e.g., ripple effects)
+ctx.set_overlay_clip(local_bounds, self.corner_radius, self.corner_curvature);
 ```
 
-Clipping respects corner radius for proper rounded container clipping.
+Clipping respects corner radius and curvature for proper rounded container clipping. Clip regions are inherited through the render tree and transformed along with their parent nodes.
 
 ## Animation Advancement
 

@@ -13,9 +13,6 @@ pub mod widgets;
 pub mod platform;
 pub mod renderer;
 
-#[cfg(feature = "renderer_v2")]
-pub mod renderer_v2;
-
 // Re-export macros
 pub use guido_macros::component;
 
@@ -27,12 +24,7 @@ use reactive::{
     clear_animation_flag, init_wakeup, set_system_clipboard, take_clipboard_change,
     take_cursor_change, take_frame_request, with_app_state, with_app_state_mut,
 };
-#[cfg(feature = "renderer_v2")]
-use renderer::GpuContext;
-#[cfg(not(feature = "renderer_v2"))]
-use renderer::{GpuContext, Renderer};
-#[cfg(feature = "renderer_v2")]
-use renderer_v2::{PaintContextV2, RenderNode, RenderTree, RendererV2, flatten_tree};
+use renderer::{GpuContext, PaintContext, RenderNode, RenderTree, Renderer, flatten_tree};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, init_surface_commands};
 use surface_manager::{ManagedSurface, SurfaceManager};
 use widgets::Widget;
@@ -81,8 +73,7 @@ pub mod prelude {
         Signal, WriteSignal, batch, create_computed, create_effect, create_service, create_signal,
         on_cleanup, set_cursor,
     };
-    pub use crate::renderer::primitives::Shadow;
-    pub use crate::renderer::{PaintContext, measure_text};
+    pub use crate::renderer::{PaintContext, Shadow, measure_text};
     pub use crate::surface::{
         SurfaceConfig, SurfaceHandle, SurfaceId, spawn_surface, surface_handle,
     };
@@ -174,8 +165,7 @@ fn process_surface_commands(
     true
 }
 
-/// Render a single surface if it needs updating.
-#[cfg(not(feature = "renderer_v2"))]
+/// Render a single surface using the hierarchical renderer.
 #[allow(clippy::too_many_arguments)]
 fn render_surface(
     id: SurfaceId,
@@ -261,7 +251,6 @@ fn render_surface(
         );
         wgpu_surface.resize(physical_width, physical_height);
 
-        // Mark that we need layout and paint due to resize
         with_app_state_mut(|state| {
             state.change_flags |=
                 reactive::ChangeFlags::NEEDS_LAYOUT | reactive::ChangeFlags::NEEDS_PAINT;
@@ -277,7 +266,6 @@ fn render_surface(
         );
         surface.previous_scale_factor = scale_factor;
 
-        // Mark that we need to re-render with new scale factor
         with_app_state_mut(|state| {
             state.change_flags |= reactive::ChangeFlags::NEEDS_PAINT;
         });
@@ -314,182 +302,15 @@ fn render_surface(
         let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
         surface.widget.layout(constraints);
 
-        // Paint - clear and reuse existing context to avoid allocations
-        surface.paint_ctx.clear();
-        surface.widget.paint(&mut surface.paint_ctx);
-
-        renderer.render(
-            wgpu_surface,
-            &surface.paint_ctx,
-            surface.config.background_color,
-        );
-
-        // Clear flags after rendering
-        with_app_state_mut(|state| {
-            state.clear_layout_flag();
-            state.clear_paint_flag();
-        });
-
-        // Track layout stats (when compiled with --features layout-stats)
-        layout_stats::end_frame();
-
-        // Commit surface
-        wl_surface.commit();
-
-        // Request frame callback if not yet initialized
-        if !first_frame_presented {
-            wl_surface.frame(qh, wl_surface.clone());
-        }
-    }
-}
-
-/// Render a single surface using the V2 hierarchical renderer.
-#[cfg(feature = "renderer_v2")]
-#[allow(clippy::too_many_arguments)]
-fn render_surface_v2(
-    id: SurfaceId,
-    surface: &mut surface_manager::ManagedSurface,
-    wayland_state: &mut platform::WaylandState,
-    renderer: &mut RendererV2,
-    connection: &Connection,
-    qh: &QueueHandle<platform::WaylandState>,
-) {
-    // Get wayland surface state
-    let Some(wayland_surface) = wayland_state.get_surface_mut(id) else {
-        return;
-    };
-
-    // Skip if not configured yet
-    if !wayland_surface.configured {
-        return;
-    }
-
-    // Get pending events for this surface
-    let events = wayland_surface.take_events();
-    let scale_factor = wayland_surface.scale_factor;
-    let width = wayland_surface.width;
-    let height = wayland_surface.height;
-    let first_frame_presented = wayland_surface.first_frame_presented;
-    let scale_factor_received = wayland_surface.scale_factor_received;
-    let wl_surface = wayland_surface.wl_surface.clone();
-
-    // Skip if GPU not ready (will be initialized next frame)
-    if !surface.is_gpu_ready() {
-        return;
-    }
-
-    // Check for paste events
-    let has_paste_event = events.iter().any(|e| {
-        matches!(
-            e,
-            widgets::Event::KeyDown {
-                key: widgets::Key::Char('v'),
-                modifiers: widgets::Modifiers { ctrl: true, .. },
-                ..
-            }
-        )
-    });
-    if has_paste_event && let Some(text) = wayland_state.read_external_clipboard(connection) {
-        set_system_clipboard(text);
-    }
-
-    // Dispatch events to widget
-    for event in events {
-        surface.widget.event(&event);
-    }
-
-    // Sync clipboard to Wayland if it changed (copy operations)
-    if let Some(text) = take_clipboard_change() {
-        wayland_state.set_clipboard(text, qh);
-    }
-
-    // Sync cursor to Wayland if it changed
-    if let Some(cursor) = take_cursor_change() {
-        wayland_state.set_cursor(cursor, qh);
-    }
-
-    // Calculate physical pixel dimensions (for HiDPI)
-    let scale = scale_factor as u32;
-    let physical_width = width * scale;
-    let physical_height = height * scale;
-
-    let wgpu_surface = surface.wgpu_surface.as_mut().unwrap();
-
-    // Check for resize or scale change
-    let needs_resize =
-        wgpu_surface.width() != physical_width || wgpu_surface.height() != physical_height;
-    let scale_changed = scale_factor != surface.previous_scale_factor;
-
-    if needs_resize {
-        log::info!(
-            "V2: Resizing surface {:?} to {}x{} (physical), scale {}",
-            id,
-            physical_width,
-            physical_height,
-            scale
-        );
-        wgpu_surface.resize(physical_width, physical_height);
-
-        with_app_state_mut(|state| {
-            state.change_flags |=
-                reactive::ChangeFlags::NEEDS_LAYOUT | reactive::ChangeFlags::NEEDS_PAINT;
-        });
-    }
-
-    if scale_changed {
-        log::info!(
-            "V2: Surface {:?} scale factor changed: {} -> {}",
-            id,
-            surface.previous_scale_factor,
-            scale_factor
-        );
-        surface.previous_scale_factor = scale_factor;
-
-        with_app_state_mut(|state| {
-            state.change_flags |= reactive::ChangeFlags::NEEDS_PAINT;
-        });
-    }
-
-    // Check render conditions
-    let fully_initialized = first_frame_presented && scale_factor_received;
-    let force_render_surface = !fully_initialized;
-    let frame_requested = take_frame_request();
-    let needs_layout = with_app_state(|state| state.needs_layout());
-    let needs_paint = with_app_state(|state| state.needs_paint());
-    let has_animations_now = with_app_state(|state| state.has_animations);
-
-    // Only render if something changed (or during initialization)
-    if force_render_surface
-        || frame_requested
-        || needs_layout
-        || needs_paint
-        || needs_resize
-        || scale_changed
-        || has_animations_now
-    {
-        // Update renderer for this surface
-        renderer.set_screen_size(physical_width as f32, physical_height as f32);
-        renderer.set_scale_factor(scale_factor);
-
-        // Advance animations first (separate from layout)
-        let animations_active = surface.widget.advance_animations();
-        if animations_active {
-            reactive::request_animation_frame();
-        }
-
-        // Re-layout (for reactive updates)
-        let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
-        surface.widget.layout(constraints);
-
-        // Build render tree using V2 paint
+        // Build render tree
         let mut tree = RenderTree::new();
         let mut root = RenderNode::with_bounds(
             0, // Root node ID
             widgets::Rect::new(0.0, 0.0, width as f32, height as f32),
         );
         {
-            let mut ctx = PaintContextV2::new(&mut root);
-            surface.widget.paint_v2(&mut ctx);
+            let mut ctx = PaintContext::new(&mut root);
+            surface.widget.paint(&mut ctx);
         }
         tree.add_root(root);
 
@@ -631,10 +452,7 @@ impl App {
 
         // Create surface manager and runtime entries for each surface
         let mut surface_manager = SurfaceManager::new();
-        #[cfg(not(feature = "renderer_v2"))]
         let mut renderer: Option<Renderer> = None;
-        #[cfg(feature = "renderer_v2")]
-        let mut renderer_v2: Option<RendererV2> = None;
 
         // Create entries for surfaces added via add_surface()
         for def in self.surface_definitions.drain(..) {
@@ -657,7 +475,6 @@ impl App {
             );
 
             // Create renderer from first surface
-            #[cfg(not(feature = "renderer_v2"))]
             if renderer.is_none()
                 && let Some(ref wgpu_surface) = managed.wgpu_surface
             {
@@ -669,25 +486,10 @@ impl App {
                 renderer = Some(r);
             }
 
-            #[cfg(feature = "renderer_v2")]
-            if renderer_v2.is_none()
-                && let Some(ref wgpu_surface) = managed.wgpu_surface
-            {
-                let r = RendererV2::new(
-                    wgpu_surface.device.clone(),
-                    wgpu_surface.queue.clone(),
-                    wgpu_surface.config.format,
-                );
-                renderer_v2 = Some(r);
-            }
-
             surface_manager.add(managed);
         }
 
-        #[cfg(not(feature = "renderer_v2"))]
         let mut renderer = renderer.expect("At least one surface should exist");
-        #[cfg(feature = "renderer_v2")]
-        let mut renderer = renderer_v2.expect("At least one surface should exist");
 
         // Create calloop event loop for event-driven execution
         let mut event_loop: EventLoop<platform::WaylandState> =
@@ -755,17 +557,7 @@ impl App {
                 let Some(surface) = surface_manager.get_mut(id) else {
                     continue;
                 };
-                #[cfg(not(feature = "renderer_v2"))]
                 render_surface(
-                    id,
-                    surface,
-                    &mut wayland_state,
-                    &mut renderer,
-                    &connection,
-                    &qh,
-                );
-                #[cfg(feature = "renderer_v2")]
-                render_surface_v2(
                     id,
                     surface,
                     &mut wayland_state,

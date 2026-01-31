@@ -1,7 +1,7 @@
 //! Test: Clip region handling with transforms
 //!
 //! This test verifies that clipping works correctly with transformed shapes.
-//! Run with: cargo run --example clip_test --features renderer_v2
+//! Run with: cargo run --example clip_test
 //!
 //! Row 1: Simple clip (no transforms) - parent clips child
 //! Row 2: Clip on rotated shape - rotated container with clipping children

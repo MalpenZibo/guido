@@ -1,4 +1,4 @@
-// Guido V2 Text Quad Shader
+// Guido Text Quad Shader
 //
 // This shader renders textured quads for transformed text with clipping support.
 // Text is first rendered to a texture, then displayed as a quad with transforms.

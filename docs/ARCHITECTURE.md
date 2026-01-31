@@ -86,16 +86,16 @@ Hardware-accelerated rendering using wgpu.
 
 **Components:**
 - `Renderer` - Main renderer managing GPU resources and render passes
-- `PaintContext` - Accumulates shapes and text during widget painting
-- `Vertex` / `RoundedRect` - Primitive types for GPU submission
-- Custom WGSL shaders for SDF-based rendering
+- `PaintContext` - Build render tree nodes during widget painting
+- `RenderTree` / `RenderNode` - Hierarchical render tree with local coordinates
+- Custom WGSL shaders for SDF-based instanced rendering
 
 **Rendering Pipeline:**
 1. `widget.advance_animations()` - Update animation states
 2. `widget.layout(constraints)` - Calculate sizes (skipped if cached)
-3. `widget.paint(ctx)` - Collect shapes into PaintContext
-4. Renderer converts to GPU vertices with HiDPI scaling
-5. Three-layer render order: shapes → text → overlay (ripples)
+3. `widget.paint(ctx)` - Build render tree via PaintContext (local coordinates)
+4. `flatten_tree()` - Flatten render tree to draw commands with inherited transforms
+5. Instanced GPU rendering with HiDPI scaling
 
 **Shape Features:**
 - Rounded rectangles with configurable superellipse curvature
@@ -279,9 +279,12 @@ The feature has zero overhead when disabled (code is completely compiled out).
 | `src/surface.rs` | Surface config, handles, dynamic properties |
 | `src/widgets/container.rs` | Container widget implementation |
 | `src/widgets/state_layer.rs` | State layer types and logic |
-| `src/renderer/mod.rs` | Main renderer, GPU setup |
-| `src/renderer/primitives.rs` | Shape types, vertex generation |
-| `src/renderer/shader.wgsl` | GPU shaders for SDF rendering |
+| `src/renderer/mod.rs` | Module exports |
+| `src/renderer/render.rs` | Main renderer, GPU setup |
+| `src/renderer/paint_context.rs` | PaintContext API for building render tree |
+| `src/renderer/tree.rs` | RenderNode, RenderTree structures |
+| `src/renderer/flatten.rs` | Tree flattening with transform inheritance |
+| `src/renderer/shader_v2.wgsl` | GPU shaders for instanced SDF rendering |
 | `src/reactive/signal.rs` | Signal implementation |
 | `src/transform.rs` | Transform matrix operations |
 | `src/platform/mod.rs` | Wayland layer shell integration |
@@ -300,7 +303,7 @@ The feature has zero overhead when disabled (code is completely compiled out).
 3. Handle override resolution in container's paint logic
 
 ### New Shape Type
-1. Add struct in `primitives.rs`
-2. Implement vertex generation
+1. Add variant to `DrawCommand` in `commands.rs`
+2. Implement rendering in `render.rs`
 3. Add shader support if needed
 4. Add `draw_*` method to `PaintContext`

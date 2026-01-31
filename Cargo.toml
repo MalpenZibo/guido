@@ -30,7 +30,6 @@ license.workspace = true
 [features]
 default = []
 layout-stats = []
-renderer_v2 = []
 
 [dependencies]
 guido-macros = { workspace = true }
@@ -80,4 +79,3 @@ path = "examples/layout_stats_test.rs"
 [[example]]
 name = "renderer_v2_test"
 path = "examples/renderer_v2_test.rs"
-required-features = ["renderer_v2"]

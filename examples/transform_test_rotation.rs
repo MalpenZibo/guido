@@ -1,6 +1,6 @@
 //! Test: Basic rotation transforms
 //!
-//! Run with: cargo run --example transform_test_rotation --features renderer_v2
+//! Run with: cargo run --example transform_test_rotation
 
 use guido::prelude::*;
 

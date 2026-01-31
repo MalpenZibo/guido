@@ -1,36 +1,34 @@
 //! Paint context for the hierarchical render tree.
 
-use crate::renderer::primitives::{Gradient, Shadow};
+use super::commands::{Border, DrawCommand};
+use super::tree::{ClipRegion, NodeId, RenderNode};
+use super::types::{Gradient, Shadow};
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
 use crate::widgets::font::{FontFamily, FontWeight};
 use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::{Color, Rect};
 
-use super::commands::{Border, DrawCommand};
-use super::tree::{ClipRegion, NodeId, RenderNode};
-
-/// Painting context for the V2 renderer.
+/// Painting context for the renderer.
 ///
-/// Widgets use this to build their render node. Unlike the V1 PaintContext,
-/// there's no push/pop for transforms - they're set once per node
-/// and inherited automatically by children.
+/// Widgets use this to build their render node. There's no push/pop for
+/// transforms - they're set once per node and inherited automatically by children.
 ///
 /// All drawing is done in LOCAL coordinates (0,0 is the widget's top-left).
 /// Positioning is handled via transforms:
-/// - Parent sets child's position via `set_transform` before calling `paint_v2`
+/// - Parent sets child's position via `set_transform` before calling `paint`
 /// - Child applies its own user transform (rotation, scale) via `apply_transform`
 ///
 /// # Example
 ///
 /// ```ignore
-/// fn paint_v2(&self, ctx: &mut PaintContextV2) {
+/// fn paint(&self, ctx: &mut PaintContext) {
 ///     // Local bounds (0,0 origin with widget's own width/height)
 ///     let local_bounds = Rect::new(0.0, 0.0, self.bounds.width, self.bounds.height);
 ///     ctx.set_bounds(local_bounds);
 ///
 ///     // Apply user transform (rotation, scale) - composes with parent's position transform
-///     // Parent already set our position via set_transform before calling paint_v2
+///     // Parent already set our position via set_transform before calling paint
 ///     if !self.user_transform.is_identity() {
 ///         ctx.apply_transform_with_origin(self.user_transform, self.transform_origin);
 ///     }
@@ -47,19 +45,19 @@ use super::tree::{ClipRegion, NodeId, RenderNode};
 ///
 ///         let mut child_ctx = ctx.add_child(child.id(), child_local);
 ///         child_ctx.set_transform(Transform::translate(child_offset_x, child_offset_y));
-///         child.paint_v2(&mut child_ctx);  // Child will apply its own user transform
+///         child.paint(&mut child_ctx);  // Child will apply its own user transform
 ///     }
 ///
 ///     // Draw overlay effects (after children) in LOCAL coords
 ///     ctx.draw_overlay_circle(cx, cy, radius, color);
 /// }
 /// ```
-pub struct PaintContextV2<'a> {
+pub struct PaintContext<'a> {
     /// The node being built
     node: &'a mut RenderNode,
 }
 
-impl<'a> PaintContextV2<'a> {
+impl<'a> PaintContext<'a> {
     /// Create a context for painting to a node.
     pub fn new(node: &'a mut RenderNode) -> Self {
         Self { node }
@@ -363,14 +361,14 @@ impl<'a> PaintContextV2<'a> {
     ///
     /// The child will inherit transforms from this node automatically
     /// during tree flattening.
-    pub fn add_child(&mut self, id: NodeId, bounds: Rect) -> PaintContextV2<'_> {
+    pub fn add_child(&mut self, id: NodeId, bounds: Rect) -> PaintContext<'_> {
         self.node.children.push(RenderNode::with_bounds(id, bounds));
         let child = self
             .node
             .children
             .last_mut()
             .expect("child was just pushed");
-        PaintContextV2::new(child)
+        PaintContext::new(child)
     }
 
     /// Add a child node with a pre-built node.

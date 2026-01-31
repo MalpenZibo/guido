@@ -1,6 +1,6 @@
 //! Test: 3-level nested transforms
 //!
-//! Run with: cargo run --example transform_test_3level --features renderer_v2
+//! Run with: cargo run --example transform_test_3level
 
 use guido::prelude::*;
 

@@ -5,8 +5,6 @@ use crate::reactive::{
     start_layout_tracking,
 };
 use crate::renderer::{PaintContext, measure_text_styled};
-#[cfg(feature = "renderer_v2")]
-use crate::renderer_v2::PaintContextV2;
 
 use super::font::{FontFamily, FontWeight};
 use super::widget::{Color, EventResponse, Rect, Widget};
@@ -176,19 +174,6 @@ impl Widget for Text {
     }
 
     fn paint(&self, ctx: &mut PaintContext) {
-        let color = self.color.get();
-        ctx.draw_text_styled(
-            &self.cached_text,
-            self.bounds,
-            color,
-            self.cached_font_size,
-            self.cached_font_family.clone(),
-            self.cached_font_weight,
-        );
-    }
-
-    #[cfg(feature = "renderer_v2")]
-    fn paint_v2(&self, ctx: &mut PaintContextV2) {
         // Draw in LOCAL coordinates (0,0 is widget origin)
         // Parent Container sets position transform
         let local_bounds = Rect::new(0.0, 0.0, self.bounds.width, self.bounds.height);

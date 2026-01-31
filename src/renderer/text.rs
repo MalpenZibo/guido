@@ -6,8 +6,9 @@ use glyphon::{
 };
 use wgpu::{Device, MultisampleState, Queue};
 
-use super::TextEntry;
 use crate::widgets::font::FontWeight;
+
+use super::types::TextEntry;
 
 pub struct TextRenderState {
     font_system: FontSystem,

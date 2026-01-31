@@ -1,10 +1,7 @@
-//! Test example for the renderer_v2 hierarchical render tree system.
+//! Test example for the hierarchical render tree system.
 //!
-//! This example tests the V2 renderer with basic shapes and transforms.
-//! Run with: cargo run --example renderer_v2_test --features renderer_v2
-//!
-//! Note: Text is not yet supported in renderer_v2, so this example only uses
-//! colored containers to verify the rendering pipeline works correctly.
+//! This example tests the renderer with basic shapes and transforms.
+//! Run with: cargo run --example renderer_v2_test
 
 use guido::prelude::*;
 
