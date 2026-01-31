@@ -3,6 +3,7 @@
 use crate::renderer::primitives::{ClipRegion, Gradient, Shadow};
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
+use crate::widgets::font::{FontFamily, FontWeight};
 use crate::widgets::{Color, Rect};
 
 use super::commands::{Border, DrawCommand};
@@ -228,6 +229,46 @@ impl<'a> PaintContextV2<'a> {
             center: (cx, cy),
             radius,
             color,
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // Text Commands
+    // -------------------------------------------------------------------------
+
+    /// Draw text with default font settings.
+    pub fn draw_text(&mut self, text: &str, rect: Rect, color: Color, font_size: f32) {
+        self.draw_text_styled(
+            text,
+            rect,
+            color,
+            font_size,
+            FontFamily::default(),
+            FontWeight::NORMAL,
+        );
+    }
+
+    /// Draw text with custom font family and weight.
+    pub fn draw_text_styled(
+        &mut self,
+        text: &str,
+        rect: Rect,
+        color: Color,
+        font_size: f32,
+        font_family: FontFamily,
+        font_weight: FontWeight,
+    ) {
+        // Skip empty text
+        if text.is_empty() {
+            return;
+        }
+        self.node.commands.push(DrawCommand::Text {
+            text: text.to_string(),
+            rect,
+            color,
+            font_size,
+            font_family,
+            font_weight,
         });
     }
 

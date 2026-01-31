@@ -10,7 +10,9 @@ use wgpu::{
     BindGroup, BindGroupLayout, Buffer, BufferUsages, Device, Queue, RenderPipeline, ShaderModule,
 };
 
+use crate::renderer::TextEntry;
 use crate::renderer::context::SurfaceState;
+use crate::renderer::text::TextRenderState;
 use crate::widgets::Color;
 
 use super::commands::{Border, DrawCommand};
@@ -39,6 +41,9 @@ pub struct RendererV2 {
     // Instance buffer (resized as needed)
     instance_buffer: Buffer,
     instance_buffer_capacity: usize,
+
+    // Text rendering (reuses V1's glyphon-based renderer)
+    text_state: TextRenderState,
 
     // Screen dimensions
     screen_width: f32,
@@ -114,6 +119,9 @@ impl RendererV2 {
             mapped_at_creation: false,
         });
 
+        // Initialize text renderer (reuses V1's glyphon-based renderer)
+        let text_state = TextRenderState::new(&device, &queue, format);
+
         Self {
             device,
             queue,
@@ -125,6 +133,7 @@ impl RendererV2 {
             uniform_bind_group,
             instance_buffer,
             instance_buffer_capacity: initial_capacity,
+            text_state,
             screen_width: 800.0,
             screen_height: 600.0,
             scale_factor: 1.0,
@@ -255,14 +264,37 @@ impl RendererV2 {
             .iter()
             .filter(|c| c.layer == RenderLayer::Shapes)
             .collect();
+        let text_commands: Vec<_> = commands
+            .iter()
+            .filter(|c| c.layer == RenderLayer::Text)
+            .collect();
         let overlay_commands: Vec<_> = commands
             .iter()
             .filter(|c| c.layer == RenderLayer::Overlay)
             .collect();
 
-        // Convert to instances
+        // Convert shape commands to instances
         let shape_instances = self.commands_to_instances(&shape_commands);
         let overlay_instances = self.commands_to_instances(&overlay_commands);
+
+        // Convert text commands to TextEntry for the V1 text renderer
+        let text_entries: Vec<TextEntry> = text_commands
+            .iter()
+            .filter_map(|cmd| self.command_to_text_entry(cmd))
+            .collect();
+
+        // Prepare text for rendering (this returns indices of transformed texts,
+        // but for simplicity we render all text directly for now)
+        if !text_entries.is_empty() {
+            let _transformed_indices = self.text_state.prepare_text(
+                &self.device,
+                &self.queue,
+                &text_entries,
+                self.screen_width as u32,
+                self.screen_height as u32,
+                self.scale_factor,
+            );
+        }
 
         // Ensure we have enough capacity
         let total_instances = shape_instances.len() + overlay_instances.len();
@@ -313,7 +345,10 @@ impl RendererV2 {
                 render_pass.draw_indexed(0..6, 0, 0..shape_instances.len() as u32);
             }
 
-            // TODO: Draw text layer when text support is added
+            // Draw text layer (between shapes and overlay)
+            if !text_entries.is_empty() {
+                self.text_state.render(&mut render_pass, &self.device);
+            }
 
             // Draw overlay shapes (after text, for effects like ripples)
             if !overlay_instances.is_empty() {
@@ -529,6 +564,38 @@ impl RendererV2 {
 
                 Some(instance)
             }
+            // Text commands are handled separately via command_to_text_entry
+            DrawCommand::Text { .. } => None,
+        }
+    }
+
+    /// Convert a text command to a TextEntry for the V1 text renderer.
+    fn command_to_text_entry(&self, cmd: &FlattenedCommand) -> Option<TextEntry> {
+        match &cmd.command {
+            DrawCommand::Text {
+                text,
+                rect,
+                color,
+                font_size,
+                font_family,
+                font_weight,
+            } => {
+                // Convert clip region to a simple Rect for the text renderer
+                let clip_rect = cmd.clip.as_ref().map(|c| c.rect);
+
+                Some(TextEntry {
+                    text: text.clone(),
+                    rect: *rect,
+                    color: *color,
+                    font_size: *font_size,
+                    font_family: font_family.clone(),
+                    font_weight: *font_weight,
+                    clip_rect,
+                    transform: cmd.world_transform,
+                    transform_origin: cmd.world_transform_origin,
+                })
+            }
+            _ => None,
         }
     }
 }

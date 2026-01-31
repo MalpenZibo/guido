@@ -1,6 +1,7 @@
 //! Draw command definitions for the render tree.
 
 use crate::renderer::primitives::{Gradient, Shadow};
+use crate::widgets::font::{FontFamily, FontWeight};
 use crate::widgets::{Color, Rect};
 
 /// Border definition for shapes.
@@ -52,7 +53,23 @@ pub enum DrawCommand {
         /// Fill color
         color: Color,
     },
-    // TODO: Add Text and Image variants in later phases
+
+    /// Draw text.
+    Text {
+        /// The text string to render
+        text: String,
+        /// The bounding rectangle for the text in local coordinates
+        rect: Rect,
+        /// The text color
+        color: Color,
+        /// The font size in logical pixels
+        font_size: f32,
+        /// The font family
+        font_family: FontFamily,
+        /// The font weight
+        font_weight: FontWeight,
+    },
+    // TODO: Add Image variant in later phases
 }
 
 impl DrawCommand {

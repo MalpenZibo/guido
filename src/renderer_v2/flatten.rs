@@ -81,15 +81,18 @@ fn flatten_node(
     // Compute effective clip (intersection with parent)
     let effective_clip = compute_effective_clip(node, &world_transform, parent_clip);
 
-    // Add main commands (layer = Shapes for now)
-    // TODO: Add Text variant detection when text is implemented
+    // Add main commands with appropriate layers
     for cmd in &node.commands {
+        let layer = match cmd {
+            DrawCommand::Text { .. } => RenderLayer::Text,
+            _ => RenderLayer::Shapes,
+        };
         out.push(FlattenedCommand {
             command: transform_command(cmd, &world_transform),
             world_transform,
             world_transform_origin: world_origin,
             clip: effective_clip.clone(),
-            layer: RenderLayer::Shapes,
+            layer,
         });
     }
 

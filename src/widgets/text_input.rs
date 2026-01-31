@@ -19,6 +19,8 @@ use crate::reactive::{
     request_animation_frame, request_focus, set_cursor, start_layout_tracking,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled, measure_text_styled};
+#[cfg(feature = "renderer_v2")]
+use crate::renderer_v2::PaintContextV2;
 
 use super::font::{FontFamily, FontWeight};
 use super::widget::{Color, Event, EventResponse, Key, Modifiers, MouseButton, Rect, Widget};
@@ -1084,6 +1086,59 @@ impl Widget for TextInput {
         }
 
         ctx.pop_clip();
+    }
+
+    #[cfg(feature = "renderer_v2")]
+    fn paint_v2(&self, ctx: &mut PaintContextV2) {
+        let display = self.display_text_cached();
+        let text_color = self.text_color.get();
+        let is_focused = has_focus(self.widget_id);
+
+        // Set clip for text overflow
+        ctx.set_clip(self.bounds, 0.0, 1.0);
+
+        // Draw selection highlight if focused and has selection
+        if is_focused && self.selection.has_selection() {
+            let (start, end) = self.selection.range();
+            let start_x = self.cached_width_at_char(start) - self.scroll_offset;
+            let end_x = self.cached_width_at_char(end) - self.scroll_offset;
+
+            let selection_rect = Rect::new(
+                self.bounds.x + start_x,
+                self.bounds.y,
+                end_x - start_x,
+                self.bounds.height,
+            );
+            ctx.draw_rounded_rect(selection_rect, self.selection_color.get(), 0.0);
+        }
+
+        // Draw text with scroll offset
+        let text_bounds = Rect::new(
+            self.bounds.x - self.scroll_offset,
+            self.bounds.y,
+            self.cached_text_width.max(self.bounds.width),
+            self.bounds.height,
+        );
+        ctx.draw_text_styled(
+            display,
+            text_bounds,
+            text_color,
+            self.cached_font_size,
+            self.cached_font_family.clone(),
+            self.cached_font_weight,
+        );
+
+        // Draw cursor if focused and visible
+        if is_focused && self.cursor_visible {
+            let cursor_x = self.cached_width_at_char(self.selection.cursor) - self.scroll_offset;
+            let cursor_rect = Rect::new(
+                self.bounds.x + cursor_x,
+                self.bounds.y,
+                1.5, // cursor width
+                self.bounds.height,
+            );
+            ctx.draw_rounded_rect(cursor_rect, self.cursor_color.get(), 0.0);
+        }
     }
 
     fn event(&mut self, event: &Event) -> EventResponse {
