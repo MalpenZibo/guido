@@ -12,6 +12,7 @@ use wgpu::{
 
 use crate::renderer::TextEntry;
 use crate::renderer::context::SurfaceState;
+use crate::renderer::primitives::GradientDir;
 use crate::renderer::text::TextRenderState;
 use crate::widgets::Color;
 
@@ -466,10 +467,30 @@ impl RendererV2 {
                 curvature,
                 border,
                 shadow,
-                gradient: _, // TODO: gradients not yet supported in V2
+                gradient,
             } => {
                 // Scale coordinates for HiDPI
                 let scale = self.scale_factor;
+
+                // Convert gradient to GPU format
+                let (gradient_start, gradient_end, gradient_type) = match gradient {
+                    Some(g) => (
+                        [
+                            g.start_color.r,
+                            g.start_color.g,
+                            g.start_color.b,
+                            g.start_color.a,
+                        ],
+                        [g.end_color.r, g.end_color.g, g.end_color.b, g.end_color.a],
+                        match g.direction {
+                            GradientDir::Horizontal => 1u32,
+                            GradientDir::Vertical => 2u32,
+                            GradientDir::Diagonal => 3u32,
+                            GradientDir::DiagonalReverse => 4u32,
+                        },
+                    ),
+                    None => ([0.0; 4], [0.0; 4], 0u32),
+                };
 
                 let mut instance = ShapeInstance {
                     rect: [
@@ -495,6 +516,10 @@ impl RendererV2 {
                     clip_corner_radius: 0.0,
                     clip_curvature: 1.0,
                     _pad3: [0.0, 0.0],
+                    gradient_start,
+                    gradient_end,
+                    gradient_type,
+                    _pad4: [0, 0, 0],
                 };
 
                 // Border
@@ -571,6 +596,10 @@ impl RendererV2 {
                     clip_corner_radius: 0.0,
                     clip_curvature: 1.0,
                     _pad3: [0.0, 0.0],
+                    gradient_start: [0.0; 4],
+                    gradient_end: [0.0; 4],
+                    gradient_type: 0, // Circles don't support gradients
+                    _pad4: [0, 0, 0],
                 };
 
                 // Transform (origin already baked into matrix via center_at)

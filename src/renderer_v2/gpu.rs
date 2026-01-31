@@ -136,6 +136,16 @@ pub struct ShapeInstance {
     pub clip_curvature: f32,
     /// Padding for alignment
     pub _pad3: [f32; 2],
+
+    // === Gradient ===
+    /// Gradient start color [r, g, b, a]
+    pub gradient_start: [f32; 4],
+    /// Gradient end color [r, g, b, a]
+    pub gradient_end: [f32; 4],
+    /// Gradient type: 0=none, 1=horizontal, 2=vertical, 3=diagonal, 4=diagonal_reverse
+    pub gradient_type: u32,
+    /// Padding for alignment
+    pub _pad4: [u32; 3],
 }
 
 impl Default for ShapeInstance {
@@ -159,6 +169,10 @@ impl Default for ShapeInstance {
             clip_corner_radius: 0.0,
             clip_curvature: 1.0,
             _pad3: [0.0, 0.0],
+            gradient_start: [0.0, 0.0, 0.0, 0.0],
+            gradient_end: [0.0, 0.0, 0.0, 0.0],
+            gradient_type: 0, // No gradient
+            _pad4: [0, 0, 0],
         }
     }
 }
@@ -303,6 +317,24 @@ impl ShapeInstance {
                     shader_location: 11,
                     format: VertexFormat::Float32x4,
                 },
+                // gradient_start
+                VertexAttribute {
+                    offset: 176,
+                    shader_location: 12,
+                    format: VertexFormat::Float32x4,
+                },
+                // gradient_end
+                VertexAttribute {
+                    offset: 192,
+                    shader_location: 13,
+                    format: VertexFormat::Float32x4,
+                },
+                // gradient_type, _pad4[0], _pad4[1], _pad4[2]
+                VertexAttribute {
+                    offset: 208,
+                    shader_location: 14,
+                    format: VertexFormat::Uint32x4,
+                },
             ],
         }
     }
@@ -314,12 +346,12 @@ mod tests {
 
     #[test]
     fn test_shape_instance_size() {
-        // Verify the size is reasonable (should be around 176 bytes with clip)
+        // Verify the size is reasonable (should be around 224 bytes with clip + gradient)
         let size = std::mem::size_of::<ShapeInstance>();
         println!("ShapeInstance size: {} bytes", size);
         assert!(size <= 256, "ShapeInstance is too large: {} bytes", size);
-        // Verify expected size: 144 (base) + 32 (clip) = 176
-        assert_eq!(size, 176, "ShapeInstance size changed unexpectedly");
+        // Verify expected size: 176 (base + clip) + 48 (gradient) = 224
+        assert_eq!(size, 224, "ShapeInstance size changed unexpectedly");
     }
 
     #[test]

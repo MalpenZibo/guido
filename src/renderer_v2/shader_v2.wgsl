@@ -45,6 +45,12 @@ struct InstanceInput {
     @location(10) clip_rect: vec4<f32>,
     // clip_corner_radius, clip_curvature, _pad, _pad
     @location(11) clip_params: vec4<f32>,
+    // gradient_start RGBA
+    @location(12) gradient_start: vec4<f32>,
+    // gradient_end RGBA
+    @location(13) gradient_end: vec4<f32>,
+    // gradient_type (0=none, 1=horizontal, 2=vertical, 3=diagonal, 4=diagonal_reverse), _pad, _pad, _pad
+    @location(14) gradient_params: vec4<u32>,
 }
 
 // === Vertex Output ===
@@ -71,6 +77,12 @@ struct VertexOutput {
     @location(9) clip_rect: vec4<f32>,
     // Clip corner_radius, curvature
     @location(10) clip_params: vec2<f32>,
+    // Gradient start color
+    @location(11) gradient_start: vec4<f32>,
+    // Gradient end color
+    @location(12) gradient_end: vec4<f32>,
+    // Gradient type (0=none, 1=horizontal, 2=vertical, 3=diagonal, 4=diagonal_reverse)
+    @location(13) @interpolate(flat) gradient_type: u32,
 }
 
 // === Helper Functions ===
@@ -168,6 +180,11 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     out.clip_rect = instance.clip_rect;
     out.clip_params = instance.clip_params.xy;  // corner_radius, curvature
 
+    // Pass gradient data to fragment shader
+    out.gradient_start = instance.gradient_start;
+    out.gradient_end = instance.gradient_end;
+    out.gradient_type = instance.gradient_params.x;
+
     return out;
 }
 
@@ -226,6 +243,24 @@ fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radius: f32, k: f32) -> f32
     return inside + corner_dist - r;
 }
 
+// Compute gradient color based on local UV coordinates
+fn compute_gradient_color(
+    local_uv: vec2<f32>,
+    start_color: vec4<f32>,
+    end_color: vec4<f32>,
+    gradient_type: u32,
+) -> vec4<f32> {
+    var t: f32;
+    switch gradient_type {
+        case 1u: { t = local_uv.x; }                              // Horizontal (left to right)
+        case 2u: { t = local_uv.y; }                              // Vertical (top to bottom)
+        case 3u: { t = (local_uv.x + local_uv.y) / 2.0; }        // Diagonal (top-left to bottom-right)
+        case 4u: { t = (local_uv.x + (1.0 - local_uv.y)) / 2.0; } // DiagonalReverse (top-right to bottom-left)
+        default: { return start_color; }                          // No gradient (0 or invalid)
+    }
+    return mix(start_color, end_color, clamp(t, 0.0, 1.0));
+}
+
 // === Fragment Shader ===
 
 @fragment
@@ -244,6 +279,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Anti-aliasing using fwidth
     let aa = fwidth(dist) * 1.0;
+
+    // Compute local UV coordinates (0..1 within the shape rect)
+    let local_uv = (pos - in.shape_rect.xy) / in.shape_rect.zw;
+
+    // Determine fill color (gradient or solid)
+    var fill_color: vec4<f32>;
+    if (in.gradient_type > 0u) {
+        fill_color = compute_gradient_color(local_uv, in.gradient_start, in.gradient_end, in.gradient_type);
+    } else {
+        fill_color = in.fill_color;
+    }
 
     // === Shadow ===
     var shadow_contribution = vec4<f32>(0.0, 0.0, 0.0, 0.0);
@@ -269,7 +315,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (in.border_width <= 0.0) {
         // No border - simple filled shape
         let alpha = 1.0 - smoothstep(-aa, aa, dist);
-        shape_result = vec4<f32>(in.fill_color.rgb, in.fill_color.a * alpha);
+        shape_result = vec4<f32>(fill_color.rgb, fill_color.a * alpha);
     } else {
         // With border
         let outer_edge = dist;
@@ -279,12 +325,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let fill_alpha = 1.0 - smoothstep(-aa, aa, inner_edge);
         let border_alpha = max(shape_alpha - fill_alpha, 0.0);
 
-        if (in.fill_color.a <= 0.0) {
+        if (fill_color.a <= 0.0) {
             // Border only (transparent fill)
             shape_result = vec4<f32>(in.border_color.rgb, in.border_color.a * border_alpha);
         } else {
             // Fill + border composite
-            let fill_contribution = vec4<f32>(in.fill_color.rgb, in.fill_color.a * fill_alpha);
+            let fill_contribution = vec4<f32>(fill_color.rgb, fill_color.a * fill_alpha);
             let border_contribution = vec4<f32>(in.border_color.rgb, in.border_color.a * border_alpha);
 
             let result_rgb = border_contribution.rgb * border_contribution.a +
