@@ -79,3 +79,7 @@ path = "examples/layout_stats_test.rs"
 [[example]]
 name = "renderer_v2_test"
 path = "examples/renderer_v2_test.rs"
+
+[[example]]
+name = "perf_stress_test"
+path = "examples/perf_stress_test.rs"
