@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
-    IntoMaybeDyn, MaybeDyn, WidgetId, arena_set_relayout_boundary, finish_layout_tracking,
-    start_layout_tracking,
+    IntoMaybeDyn, MaybeDyn, WidgetId, arena_cache_layout, arena_clear_dirty,
+    arena_set_relayout_boundary, finish_layout_tracking, start_layout_tracking,
 };
 use crate::renderer::PaintContext;
 
@@ -260,6 +260,12 @@ impl Widget for Image {
         let size = self.calculate_size(&constraints);
         self.bounds.width = size.width;
         self.bounds.height = size.height;
+
+        // Cache constraints and size for partial layout
+        arena_cache_layout(self.widget_id, constraints, size);
+
+        // Clear dirty flag since layout is complete
+        arena_clear_dirty(self.widget_id);
 
         // Finish layout tracking
         finish_layout_tracking();

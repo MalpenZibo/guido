@@ -196,6 +196,10 @@ impl LayoutArena {
     ///
     /// The dirty flag bubbles up to the nearest relayout boundary,
     /// which is added to the layout queue.
+    ///
+    /// Optimization: If a widget is already dirty, we stop early since its
+    /// boundary must already be in the queue. This requires all widgets to
+    /// call `clear_dirty` after completing layout.
     pub fn mark_needs_layout(&self, widget_id: WidgetId) {
         let mut current = widget_id;
 
@@ -203,7 +207,7 @@ impl LayoutArena {
             let mut nodes = self.nodes.borrow_mut();
             let node = nodes.entry(current).or_default();
 
-            // Optimization: Stop if already dirty
+            // Optimization: Stop if already dirty - boundary is already in queue
             if node.is_dirty {
                 return;
             }
@@ -535,18 +539,30 @@ mod tests {
         arena.register(child_id, Box::new(MockWidget { id: child_id }));
         arena.set_parent(child_id, root_id);
 
-        // Mark child dirty
+        // Mark child dirty - root should be added to layout_roots
         arena.mark_needs_layout(child_id);
         assert!(arena.is_dirty(child_id));
         assert!(arena.is_dirty(root_id));
+        assert!(arena.has_layout_roots());
 
-        // Clear layout_roots to test optimization
+        // Simulate layout running: take roots and clear ALL dirty flags
+        // (this is what widgets should do after layout)
         arena.take_layout_roots();
+        arena.clear_dirty(root_id);
+        arena.clear_dirty(child_id);
 
-        // Mark child dirty again - should stop early because already dirty
+        // Mark child dirty again - should add root to layout_roots
+        arena.mark_needs_layout(child_id);
+        assert!(arena.has_layout_roots());
+
+        // Now test the optimization: if child is still dirty, stop early
+        arena.take_layout_roots();
+        // Don't clear dirty flags this time
+
+        // Mark child dirty again - should stop early (already dirty)
         arena.mark_needs_layout(child_id);
 
-        // layout_roots should be empty because the path was already dirty
+        // layout_roots should be empty because we stopped at the dirty child
         assert!(!arena.has_layout_roots());
     }
 

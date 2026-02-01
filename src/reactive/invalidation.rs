@@ -193,32 +193,34 @@ pub fn take_layout_roots() -> Vec<WidgetId> {
 
 // Layout tracking context for building widget -> signal dependencies
 thread_local! {
-    /// Current widget being laid out (for dependency tracking)
-    static CURRENT_LAYOUT_WIDGET: RefCell<Option<WidgetId>> = const { RefCell::new(None) };
+    /// Stack of widgets being laid out (for dependency tracking during nested layouts)
+    static LAYOUT_WIDGET_STACK: RefCell<Vec<WidgetId>> = const { RefCell::new(Vec::new()) };
     /// Map from signal ID to set of widgets that depend on it for layout
     static LAYOUT_SUBSCRIBERS: RefCell<HashMap<usize, HashSet<WidgetId>>> = RefCell::new(HashMap::new());
 }
 
 /// Start layout tracking for a widget.
-/// While tracking is active, any signal reads will be recorded as layout dependencies.
+/// Pushes the widget onto the tracking stack. Signal reads during layout will be
+/// recorded as dependencies of the topmost widget on the stack.
 pub fn start_layout_tracking(widget_id: WidgetId) {
-    CURRENT_LAYOUT_WIDGET.with(|current| {
-        *current.borrow_mut() = Some(widget_id);
+    LAYOUT_WIDGET_STACK.with(|stack| {
+        stack.borrow_mut().push(widget_id);
     });
 }
 
-/// Finish layout tracking and clear the current widget.
+/// Finish layout tracking for the current widget.
+/// Pops the widget from the tracking stack, restoring the parent's tracking context.
 pub fn finish_layout_tracking() {
-    CURRENT_LAYOUT_WIDGET.with(|current| {
-        *current.borrow_mut() = None;
+    LAYOUT_WIDGET_STACK.with(|stack| {
+        stack.borrow_mut().pop();
     });
 }
 
 /// Record that the current layout widget (if any) depends on the given signal.
 /// Called from Signal::get() when layout tracking is active.
 pub fn record_layout_read(signal_id: usize) {
-    CURRENT_LAYOUT_WIDGET.with(|current| {
-        if let Some(widget_id) = *current.borrow() {
+    LAYOUT_WIDGET_STACK.with(|stack| {
+        if let Some(&widget_id) = stack.borrow().last() {
             LAYOUT_SUBSCRIBERS.with(|subs| {
                 subs.borrow_mut()
                     .entry(signal_id)
@@ -263,9 +265,10 @@ pub fn mark_needs_layout(widget_id: WidgetId) {
     // Use the arena's mark_needs_layout which stops at boundaries
     super::layout_arena::arena_mark_needs_layout(widget_id);
 
-    // Also set global layout flag (for compatibility)
+    // Set NEEDS_PAINT so we repaint after layout changes
+    // Note: We don't set NEEDS_LAYOUT because partial layout uses layout_roots
     APP_STATE.with(|state| {
-        state.borrow_mut().change_flags |= ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT;
+        state.borrow_mut().change_flags |= ChangeFlags::NEEDS_PAINT;
     });
 
     request_frame();

@@ -14,9 +14,9 @@ use crate::advance_anim;
 use crate::animation::Transition;
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
-    IntoMaybeDyn, MaybeDyn, WidgetId, arena_clear_dirty, arena_is_dirty, arena_set_parent,
-    arena_set_relayout_boundary, finish_layout_tracking, focused_widget, request_animation_frame,
-    start_layout_tracking, with_arena_widget, with_arena_widget_mut,
+    IntoMaybeDyn, MaybeDyn, WidgetId, arena_cache_layout, arena_clear_dirty, arena_is_dirty,
+    arena_set_parent, arena_set_relayout_boundary, finish_layout_tracking, focused_widget,
+    request_animation_frame, start_layout_tracking, with_arena_widget, with_arena_widget_mut,
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
@@ -1220,6 +1220,9 @@ impl Widget for Container {
 
         // Layout scrollbar containers after bounds are set
         self.layout_scrollbar_containers();
+
+        // Cache constraints and size for partial layout
+        arena_cache_layout(self.widget_id, constraints, size);
 
         // Finish layout tracking
         finish_layout_tracking();

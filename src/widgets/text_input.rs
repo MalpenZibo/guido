@@ -14,9 +14,10 @@ use std::time::{Duration, Instant};
 use crate::default_font_family;
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
-    CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, WidgetId, arena_set_relayout_boundary,
-    clipboard_copy, clipboard_paste, finish_layout_tracking, has_focus, release_focus,
-    request_animation_frame, request_focus, set_cursor, start_layout_tracking,
+    CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, WidgetId, arena_cache_layout, arena_clear_dirty,
+    arena_set_relayout_boundary, clipboard_copy, clipboard_paste, finish_layout_tracking,
+    has_focus, release_focus, request_animation_frame, request_focus, set_cursor,
+    start_layout_tracking,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled, measure_text_styled};
 
@@ -258,7 +259,9 @@ impl TextInput {
     /// Create a TextInput with a Signal for two-way binding.
     /// Changes made in the TextInput will be written back to the signal.
     pub fn new(signal: Signal<String>) -> Self {
-        let cached_value = signal.get();
+        // Use get_untracked() to avoid registering layout dependencies during widget creation.
+        // Layout dependencies should only be registered during the widget's own layout phase.
+        let cached_value = signal.get_untracked();
         let cached_char_count = cached_value.chars().count();
         let default_family = default_font_family();
         Self {
@@ -1022,6 +1025,12 @@ impl Widget for TextInput {
 
         self.bounds.width = size.width;
         self.bounds.height = size.height;
+
+        // Cache constraints and size for partial layout
+        arena_cache_layout(self.widget_id, constraints, size);
+
+        // Clear dirty flag since layout is complete
+        arena_clear_dirty(self.widget_id);
 
         // Finish layout tracking
         finish_layout_tracking();

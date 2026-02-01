@@ -1,8 +1,8 @@
 use crate::default_font_family;
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
-    IntoMaybeDyn, MaybeDyn, WidgetId, arena_set_relayout_boundary, finish_layout_tracking,
-    start_layout_tracking,
+    IntoMaybeDyn, MaybeDyn, WidgetId, arena_cache_layout, arena_clear_dirty,
+    arena_set_relayout_boundary, finish_layout_tracking, start_layout_tracking,
 };
 use crate::renderer::{PaintContext, measure_text_styled};
 
@@ -29,7 +29,9 @@ pub struct Text {
 impl Text {
     pub fn new(content: impl IntoMaybeDyn<String>) -> Self {
         let content = content.into_maybe_dyn();
-        let cached_text = content.get();
+        // Don't read content during widget creation - this would register layout dependencies
+        // with the wrong widget (the parent container that's currently being laid out).
+        // The cached_text will be populated during the first layout via refresh().
         let default_family = default_font_family();
         Self {
             widget_id: WidgetId::next(),
@@ -39,7 +41,7 @@ impl Text {
             font_family: MaybeDyn::Static(default_family.clone()),
             font_weight: MaybeDyn::Static(FontWeight::NORMAL),
             nowrap: false,
-            cached_text,
+            cached_text: String::new(), // Will be set during first layout
             cached_font_size: 14.0,
             cached_font_family: default_family,
             cached_font_weight: FontWeight::NORMAL,
@@ -166,6 +168,12 @@ impl Widget for Text {
 
         self.bounds.width = size.width;
         self.bounds.height = size.height;
+
+        // Cache constraints and size for partial layout
+        arena_cache_layout(self.widget_id, constraints, size);
+
+        // Clear dirty flag since layout is complete
+        arena_clear_dirty(self.widget_id);
 
         // Finish layout tracking
         finish_layout_tracking();

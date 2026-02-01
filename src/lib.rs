@@ -305,26 +305,20 @@ fn render_surface(
         if arena_has_layout_roots() {
             // Partial layout: only update dirty subtrees starting from boundaries
             let roots = arena_take_layout_roots();
-            let mut needs_full_layout = false;
             for root_id in roots {
-                let laid_out = with_arena_widget_mut(root_id, |widget| {
+                with_arena_widget_mut(root_id, |widget| {
                     // Use cached constraints for boundaries, or fall back to parent constraints
                     let cached = arena_cached_constraints(root_id).unwrap_or(constraints);
                     widget.layout(cached);
                 });
-                // If widget not in arena (e.g., surface root), need full layout
-                if laid_out.is_none() {
-                    needs_full_layout = true;
-                }
+                // Skip roots not in arena - they're either removed widgets or
+                // the surface root which is handled separately on first frame
             }
-            // Fall back to full layout if any root wasn't in the arena
-            if needs_full_layout {
-                surface.widget.layout(constraints);
-            }
-        } else {
-            // Full layout from root (first frame or no boundaries set up yet)
+        } else if needs_layout || needs_resize {
+            // Full layout from root only when explicitly needed (first frame, resize, etc.)
             surface.widget.layout(constraints);
         }
+        // If neither condition is true, skip layout entirely - nothing is dirty
 
         // Build render tree
         let mut tree = RenderTree::new();
