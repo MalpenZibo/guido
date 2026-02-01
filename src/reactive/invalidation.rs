@@ -37,9 +37,7 @@ impl WidgetId {
     /// Request that this widget be re-laid out (and repainted)
     pub fn request_layout(&self) {
         APP_STATE.with(|state| {
-            let mut state = state.borrow_mut();
-            state.change_flags |= ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT;
-            state.dirty_widgets.insert(*self);
+            state.borrow_mut().change_flags |= ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT;
         });
         request_frame();
     }
@@ -47,9 +45,7 @@ impl WidgetId {
     /// Request that this widget be repainted (without layout)
     pub fn request_paint(&self) {
         APP_STATE.with(|state| {
-            let mut state = state.borrow_mut();
-            state.change_flags |= ChangeFlags::NEEDS_PAINT;
-            state.dirty_widgets.insert(*self);
+            state.borrow_mut().change_flags |= ChangeFlags::NEEDS_PAINT;
         });
         request_frame();
     }
@@ -59,8 +55,6 @@ impl WidgetId {
 pub struct AppState {
     /// Global change flags
     pub change_flags: ChangeFlags,
-    /// Set of widgets that have changed
-    pub dirty_widgets: HashSet<WidgetId>,
     /// Whether animations are currently active
     pub has_animations: bool,
 }
@@ -75,7 +69,6 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             change_flags: ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT,
-            dirty_widgets: HashSet::new(),
             has_animations: false,
         }
     }
@@ -94,10 +87,6 @@ impl AppState {
 
     pub fn clear_paint_flag(&mut self) {
         self.change_flags.remove(ChangeFlags::NEEDS_PAINT);
-    }
-
-    pub fn clear_dirty_widgets(&mut self) {
-        self.dirty_widgets.clear();
     }
 }
 
