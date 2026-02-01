@@ -18,8 +18,8 @@ fn main() {
         (0..INITIAL_ITEM_COUNT)
             .map(|i| ItemData {
                 id: i as u64,
-                enabled: false,
-                input_value: String::new(),
+                enabled: create_signal(false),
+                input_value: create_signal(String::new()),
             })
             .collect(),
     );
@@ -32,33 +32,13 @@ fn main() {
                 .iter()
                 .map(|item| {
                     let id = item.id;
-                    let idx = id as usize;
-                    let initial_enabled = item.enabled;
-                    let initial_input = item.input_value.clone();
+                    let enabled = item.enabled;
+                    let input_value = item.input_value;
 
+                    // Signals are stored in ItemData, so no effects needed.
+                    // Changing item.enabled doesn't mark the Vec as changed.
                     (id, move || {
-                        let enabled = create_signal(initial_enabled);
-                        let input_value = create_signal(initial_input);
-
-                        create_effect(move || {
-                            let new_val = enabled.get();
-                            items.update(|list: &mut Vec<ItemData>| {
-                                if let Some(item) = list.get_mut(idx) {
-                                    item.enabled = new_val;
-                                }
-                            });
-                        });
-
-                        create_effect(move || {
-                            let new_val = input_value.get();
-                            items.update(|list: &mut Vec<ItemData>| {
-                                if let Some(item) = list.get_mut(idx) {
-                                    item.input_value = new_val;
-                                }
-                            });
-                        });
-
-                        create_item_row(enabled, input_value, idx)
+                        create_item_row(enabled, input_value, id as usize)
                     })
                 })
                 .collect::<Vec<_>>()
@@ -94,11 +74,11 @@ fn main() {
     app.run();
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 struct ItemData {
     id: u64,
-    enabled: bool,
-    input_value: String,
+    enabled: Signal<bool>,
+    input_value: Signal<String>,
 }
 
 fn get_item_name(id: usize) -> String {
@@ -121,8 +101,8 @@ fn create_add_button(items: Signal<Vec<ItemData>>) -> Container {
                 let id = list.len() as u64;
                 list.push(ItemData {
                     id,
-                    enabled: false,
-                    input_value: String::new(),
+                    enabled: create_signal(false),
+                    input_value: create_signal(String::new()),
                 });
             });
         })
@@ -145,12 +125,13 @@ fn create_item_row(enabled: Signal<bool>, input_value: Signal<String>, index: us
         .child(create_toggle_button(enabled))
         .child(create_info_section(name, description, input_value))
         .child(create_text_input_field(input_value))
-        .child(create_status_indicator(enabled))
+    // .child(create_status_indicator(enabled))
 }
 
 fn create_toggle_button(enabled: Signal<bool>) -> Container {
     container()
         .width(100.0)
+        .height(30.0) // Fixed dimensions make this a relayout boundary
         .padding_xy(12.0, 6.0)
         .background(move || {
             if enabled.get() {
@@ -216,20 +197,3 @@ fn create_text_input_field(input_value: Signal<String>) -> Container {
         )
 }
 
-fn create_status_indicator(enabled: Signal<bool>) -> Text {
-    text(move || {
-        if enabled.get() {
-            "● Active".to_string()
-        } else {
-            "○ Inactive".to_string()
-        }
-    })
-    .color(move || {
-        if enabled.get() {
-            Color::rgb(0.4, 0.8, 0.4)
-        } else {
-            Color::rgb(0.5, 0.5, 0.6)
-        }
-    })
-    .font_size(14.0)
-}

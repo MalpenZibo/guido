@@ -33,6 +33,17 @@ impl<T> Clone for Signal<T> {
 
 impl<T> Copy for Signal<T> {}
 
+// Implement PartialEq by comparing SignalId.
+// This allows Signal<T> to be stored in data structures that require PartialEq
+// (e.g., Vec<ItemData> where ItemData contains Signal fields).
+impl<T> PartialEq for Signal<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl<T> Eq for Signal<T> {}
+
 impl<T: Clone + Send + Sync + 'static> Signal<T> {
     /// Get the current value (tracks as dependency on main thread)
     pub fn get(&self) -> T {

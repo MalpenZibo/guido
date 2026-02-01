@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::layout::{Constraints, Size};
-use crate::reactive::{OwnerId, WidgetId, dispose_owner};
+use crate::reactive::{OwnerId, WidgetId, dispose_owner, register_widget, unregister_widget};
 use crate::renderer::PaintContext;
 
 use super::Widget;
@@ -10,13 +10,13 @@ use super::widget::{Event, EventResponse, Rect};
 
 /// Segment metadata - tracks what kind of source each segment is
 enum SegmentType {
-    /// Static widgets - just a count (widgets stored in merged)
+    /// Static widgets - just a count (widget IDs stored in merged)
     Static(usize),
     /// Dynamic source with keyed reconciliation
     Dynamic {
         items_fn: Arc<dyn Fn() -> Vec<DynItem> + Send + Sync>,
-        /// Cached widgets by key (for reuse during reconciliation)
-        cached: HashMap<u64, Box<dyn Widget>>,
+        /// Cached widget IDs by key (for reuse during reconciliation)
+        cached: HashMap<u64, WidgetId>,
         /// Current keys in display order
         current_keys: Vec<u64>,
     },
@@ -25,15 +25,15 @@ enum SegmentType {
 /// Represents the source of children for a container
 ///
 /// Uses a segment-based architecture:
-/// - Static segments: widgets added directly, stored in `merged`
+/// - Static segments: widgets added directly, IDs stored in `merged`
 /// - Dynamic segments: widgets from reactive closures with keyed reconciliation
 ///
-/// All widgets live in the `merged` vec for Layout compatibility.
-/// Segment metadata tracks boundaries and reconciliation state.
+/// Widget IDs are stored in the `merged` vec, actual widgets are stored in the
+/// global LayoutArena. Segment metadata tracks boundaries and reconciliation state.
 #[derive(Default)]
 pub struct ChildrenSource {
-    /// All widgets in order (static and dynamic interleaved)
-    merged: Vec<Box<dyn Widget>>,
+    /// All widget IDs in order (static and dynamic interleaved)
+    merged: Vec<WidgetId>,
     /// Segment metadata (boundaries and reconciliation info)
     segments: Vec<SegmentType>,
 }
@@ -41,7 +41,10 @@ pub struct ChildrenSource {
 impl ChildrenSource {
     /// Add a static child widget
     pub fn add_static(&mut self, widget: Box<dyn Widget>) {
-        self.merged.push(widget);
+        let widget_id = widget.id();
+        // Register widget in the global arena
+        register_widget(widget_id, widget);
+        self.merged.push(widget_id);
 
         // Track in segment metadata
         if let Some(SegmentType::Static(count)) = self.segments.last_mut() {
@@ -104,10 +107,10 @@ impl ChildrenSource {
         for (idx, segment) in self.segments.iter_mut().enumerate() {
             match segment {
                 SegmentType::Static(count) => {
-                    // Static widgets: take from old merged
+                    // Static widgets: take IDs from old merged
                     for _ in 0..*count {
-                        if let Some(widget) = old_merged_iter.next() {
-                            new_merged.push(widget);
+                        if let Some(widget_id) = old_merged_iter.next() {
+                            new_merged.push(widget_id);
                         }
                     }
                 }
@@ -127,34 +130,40 @@ impl ChildrenSource {
 
                         let new_keys: Vec<u64> = new_items.iter().map(|i| i.key).collect();
 
-                        // Move current widgets to cache
+                        // Move current widget IDs to cache
                         for key in current_keys.drain(..) {
-                            if let Some(widget) = old_merged_iter.next() {
-                                cached.insert(key, widget);
+                            if let Some(widget_id) = old_merged_iter.next() {
+                                cached.insert(key, widget_id);
                             }
                         }
 
                         // Build new widgets list by reusing or creating
                         for item in new_items {
-                            if let Some(widget) = cached.remove(&item.key) {
+                            if let Some(widget_id) = cached.remove(&item.key) {
                                 // Reuse existing widget (preserves state!)
-                                new_merged.push(widget);
+                                new_merged.push(widget_id);
                             } else {
-                                // Create new widget
-                                new_merged.push((item.widget_fn)());
+                                // Create new widget and register in arena
+                                let widget = (item.widget_fn)();
+                                let widget_id = widget.id();
+                                register_widget(widget_id, widget);
+                                new_merged.push(widget_id);
                             }
                         }
 
                         // Update current keys
                         *current_keys = new_keys;
 
-                        // Clear remaining cache (drops removed widgets, triggering cleanup)
+                        // Unregister removed widgets from arena (triggers Drop/cleanup)
+                        for old_id in cached.values() {
+                            unregister_widget(*old_id);
+                        }
                         cached.clear();
                     } else {
-                        // Keys unchanged - just move widgets from old merged to new merged
+                        // Keys unchanged - just move widget IDs from old merged to new merged
                         for _ in 0..current_keys.len() {
-                            if let Some(widget) = old_merged_iter.next() {
-                                new_merged.push(widget);
+                            if let Some(widget_id) = old_merged_iter.next() {
+                                new_merged.push(widget_id);
                             }
                         }
                     }
@@ -165,21 +174,21 @@ impl ChildrenSource {
         self.merged = new_merged;
     }
 
-    /// Reconcile and get mutable access (for layout)
-    pub fn reconcile_and_get_mut(&mut self) -> &mut Vec<Box<dyn Widget>> {
+    /// Reconcile and get widget IDs (for layout)
+    pub fn reconcile_and_get(&mut self) -> &Vec<WidgetId> {
         if self.has_dynamic() {
             self.reconcile();
         }
-        &mut self.merged
-    }
-
-    /// Get immutable access (for paint)
-    pub fn get(&self) -> &Vec<Box<dyn Widget>> {
         &self.merged
     }
 
-    /// Get mutable access without reconciliation (for advance_animations)
-    pub fn get_mut(&mut self) -> &mut Vec<Box<dyn Widget>> {
+    /// Get widget IDs (for paint)
+    pub fn get(&self) -> &Vec<WidgetId> {
+        &self.merged
+    }
+
+    /// Get mutable reference to widget IDs
+    pub fn get_mut(&mut self) -> &mut Vec<WidgetId> {
         &mut self.merged
     }
 
@@ -191,6 +200,24 @@ impl ChildrenSource {
     /// Get the number of children
     pub fn len(&self) -> usize {
         self.merged.len()
+    }
+}
+
+impl Drop for ChildrenSource {
+    fn drop(&mut self) {
+        // Unregister all widgets from the arena
+        for widget_id in self.merged.drain(..) {
+            unregister_widget(widget_id);
+        }
+        // Also unregister any widgets still in dynamic caches
+        for segment in &mut self.segments {
+            if let SegmentType::Dynamic { cached, .. } = segment {
+                for widget_id in cached.values() {
+                    unregister_widget(*widget_id);
+                }
+                cached.clear();
+            }
+        }
     }
 }
 

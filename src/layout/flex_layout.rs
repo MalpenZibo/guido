@@ -1,8 +1,7 @@
 use smallvec::SmallVec;
 
 use super::{Axis, Constraints, CrossAxisAlignment, Layout, MainAxisAlignment, Size};
-use crate::reactive::{IntoMaybeDyn, MaybeDyn};
-use crate::widgets::Widget;
+use crate::reactive::{IntoMaybeDyn, MaybeDyn, WidgetId, with_arena_widget_mut};
 
 /// Flex layout for rows and columns
 pub struct Flex {
@@ -95,7 +94,7 @@ impl Flex {
     /// Layout children along the given axis
     fn layout_axis(
         &mut self,
-        children: &mut [Box<dyn Widget>],
+        children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),
         axis: Axis,
@@ -147,8 +146,9 @@ impl Flex {
         let mut max_cross = 0.0f32;
         let mut children_main = 0.0f32;
 
-        for child in children.iter_mut() {
-            let size = child.layout(child_constraints);
+        for &child_id in children.iter() {
+            let size = with_arena_widget_mut(child_id, |child| child.layout(child_constraints))
+                .unwrap_or(Size::zero());
             let main_size = size.main_axis(axis);
             let cross_size = size.cross_axis(axis);
             total_main += main_size;
@@ -199,10 +199,12 @@ impl Flex {
                     max_height: main_max,
                 },
             };
-            for child in children.iter_mut() {
+            for &child_id in children.iter() {
                 // Don't mark dirty - just call layout with new constraints.
                 // Child will decide if it needs to re-layout based on constraint changes.
-                let size = child.layout(stretch_constraints);
+                let size =
+                    with_arena_widget_mut(child_id, |child| child.layout(stretch_constraints))
+                        .unwrap_or(Size::zero());
                 children_main += size.main_axis(axis);
                 self.child_sizes.push(size);
             }
@@ -230,7 +232,7 @@ impl Flex {
             Axis::Vertical => origin.1,
         } + initial_offset;
 
-        for (i, child) in children.iter_mut().enumerate() {
+        for (i, &child_id) in children.iter().enumerate() {
             let child_size = self.child_sizes[i];
             let child_main = child_size.main_axis(axis);
             let child_cross = child_size.cross_axis(axis);
@@ -259,7 +261,7 @@ impl Flex {
                 Axis::Vertical => (cross_pos, main_pos),
             };
 
-            child.set_origin(x, y);
+            with_arena_widget_mut(child_id, |child| child.set_origin(x, y));
             main_pos += child_main + between_spacing;
         }
 
@@ -270,7 +272,7 @@ impl Flex {
 impl Layout for Flex {
     fn layout(
         &mut self,
-        children: &mut [Box<dyn Widget>],
+        children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),
     ) -> Size {

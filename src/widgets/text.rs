@@ -1,7 +1,7 @@
 use crate::default_font_family;
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
-    IntoMaybeDyn, MaybeDyn, WidgetId, finish_layout_tracking, register_relayout_boundary,
+    IntoMaybeDyn, MaybeDyn, WidgetId, arena_set_relayout_boundary, finish_layout_tracking,
     start_layout_tracking,
 };
 use crate::renderer::{PaintContext, measure_text_styled};
@@ -128,7 +128,7 @@ impl Widget for Text {
         start_layout_tracking(self.widget_id);
 
         // Text widgets are never relayout boundaries
-        register_relayout_boundary(self.widget_id, false);
+        arena_set_relayout_boundary(self.widget_id, false);
 
         // Refresh cached values from reactive properties
         // This reads signals and registers layout dependencies

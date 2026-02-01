@@ -4,6 +4,7 @@ pub mod cursor;
 pub mod effect;
 pub mod focus;
 pub mod invalidation;
+pub mod layout_arena;
 pub mod maybe_dyn;
 pub mod owner;
 pub mod runtime;
@@ -22,11 +23,17 @@ pub use effect::{Effect, create_effect};
 pub use focus::{clear_focus, focused_widget, has_focus, release_focus, request_focus};
 pub use invalidation::{
     ChangeFlags, WidgetId, add_layout_root, clear_animation_flag, finish_layout_tracking,
-    get_needs_layout_flag, get_widget_parent, init_wakeup, mark_needs_layout,
-    register_relayout_boundary, remove_widget_from_tree, request_animation_frame, request_frame,
-    request_layout, request_paint, set_needs_layout_flag, set_widget_parent, start_layout_tracking,
-    take_frame_request, take_layout_roots, unregister_relayout_boundary, with_app_state,
+    get_widget_parent, init_wakeup, mark_needs_layout, remove_widget_from_tree,
+    request_animation_frame, request_frame, request_layout, request_paint, set_widget_parent,
+    start_layout_tracking, take_frame_request, take_layout_roots, with_app_state,
     with_app_state_mut,
+};
+pub use layout_arena::{
+    LayoutArena, LayoutNode, arena_add_layout_root, arena_cache_layout, arena_cached_constraints,
+    arena_cached_size, arena_clear_dirty, arena_get_parent, arena_has_layout_roots, arena_is_dirty,
+    arena_mark_needs_layout, arena_set_parent, arena_set_relayout_boundary,
+    arena_take_layout_roots, register_widget, unregister_widget, with_arena_widget,
+    with_arena_widget_mut, with_layout_arena,
 };
 pub use maybe_dyn::{IntoMaybeDyn, MaybeDyn};
 // Only on_cleanup is public API - with_owner, dispose_owner, and OwnerId are

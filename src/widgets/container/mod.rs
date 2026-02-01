@@ -14,9 +14,9 @@ use crate::advance_anim;
 use crate::animation::Transition;
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
-    IntoMaybeDyn, MaybeDyn, WidgetId, finish_layout_tracking, focused_widget,
-    get_needs_layout_flag, register_relayout_boundary, request_animation_frame,
-    set_needs_layout_flag, set_widget_parent, start_layout_tracking,
+    IntoMaybeDyn, MaybeDyn, WidgetId, arena_clear_dirty, arena_is_dirty, arena_set_parent,
+    arena_set_relayout_boundary, finish_layout_tracking, focused_widget, request_animation_frame,
+    start_layout_tracking, with_arena_widget, with_arena_widget_mut,
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
@@ -610,16 +610,36 @@ impl Container {
 
     /// Recursively check if this widget or any child matches the focused widget ID
     fn widget_has_focus(&self, focused_id: WidgetId) -> bool {
-        for child in self.children_source.get() {
-            if child.id() == focused_id {
+        for &child_id in self.children_source.get() {
+            if child_id == focused_id {
                 return true;
             }
             // Recursively check nested containers/widgets
-            if child.has_focus_descendant(focused_id) {
+            if let Some(has_focus) =
+                with_arena_widget(child_id, |child| child.has_focus_descendant(focused_id))
+                && has_focus
+            {
                 return true;
             }
         }
         false
+    }
+
+    /// Check if this widget is a relayout boundary given constraints.
+    /// A widget is a boundary if its size doesn't depend on children.
+    fn is_relayout_boundary_for(&self, constraints: Constraints) -> bool {
+        // Widget is a boundary if its size doesn't depend on children.
+        // This happens when:
+        // 1. It has explicit fixed width AND height
+        // 2. OR the parent passes tight constraints (min == max)
+        let has_fixed_width = self.width.as_ref().is_some_and(|w| w.get().exact.is_some());
+        let has_fixed_height = self
+            .height
+            .as_ref()
+            .is_some_and(|h| h.get().exact.is_some());
+        let tight_width = constraints.min_width == constraints.max_width;
+        let tight_height = constraints.min_height == constraints.max_height;
+        (has_fixed_width || tight_width) && (has_fixed_height || tight_height)
     }
 
     // State layer resolution helper
@@ -858,8 +878,11 @@ impl Widget for Container {
         }
 
         // Recurse to children
-        for child in self.children_source.get_mut() {
-            if child.advance_animations() {
+        for &child_id in self.children_source.get() {
+            if let Some(animating) =
+                with_arena_widget_mut(child_id, |child| child.advance_animations())
+                && animating
+            {
                 any_animating = true;
             }
         }
@@ -905,8 +928,8 @@ impl Widget for Container {
         // Start layout tracking for dependency registration
         start_layout_tracking(self.widget_id);
 
-        // Register this widget's relayout boundary status
-        register_relayout_boundary(self.widget_id, self.is_relayout_boundary());
+        // Register this widget's relayout boundary status with the arena
+        arena_set_relayout_boundary(self.widget_id, self.is_relayout_boundary_for(constraints));
 
         // Ensure scrollbar containers exist if scrolling is enabled
         self.ensure_scrollbar_containers();
@@ -915,7 +938,7 @@ impl Widget for Container {
 
         // Check if this widget was marked dirty by signal changes or animations
         // (animations call mark_needs_layout directly when their value changes)
-        let reactive_changed = get_needs_layout_flag(self.widget_id);
+        let reactive_changed = arena_is_dirty(self.widget_id);
 
         let needs_layout = constraints_changed || reactive_changed;
 
@@ -935,7 +958,7 @@ impl Widget for Container {
         self.last_constraints = Some(constraints);
 
         // Clear dirty flag since we're doing layout now
-        set_needs_layout_flag(self.widget_id, false);
+        arena_clear_dirty(self.widget_id);
 
         // Get current animated padding for layout calculations
         let padding = self.animated_padding();
@@ -1047,12 +1070,12 @@ impl Widget for Container {
         let (child_origin_x, child_origin_y) =
             (self.bounds.x + padding.left, self.bounds.y + padding.top);
 
-        // Reconcile and layout children
-        let children = self.children_source.reconcile_and_get_mut();
+        // Reconcile and get children IDs
+        let children = self.children_source.reconcile_and_get();
 
-        // Update parent tracking for all children
-        for child in children.iter() {
-            set_widget_parent(child.id(), self.widget_id);
+        // Update parent tracking for all children in the arena
+        for &child_id in children.iter() {
+            arena_set_parent(child_id, self.widget_id);
         }
 
         let content_size = if !children.is_empty() {
@@ -1243,8 +1266,11 @@ impl Widget for Container {
         };
 
         // Let children handle first (layout already reconciled)
-        for child in self.children_source.get_mut() {
-            if child.event(&child_event) == EventResponse::Handled {
+        for &child_id in self.children_source.get() {
+            if let Some(response) =
+                with_arena_widget_mut(child_id, |child| child.event(&child_event))
+                && response == EventResponse::Handled
+            {
                 return EventResponse::Handled;
             }
         }
@@ -1413,8 +1439,8 @@ impl Widget for Container {
         // Scroll offset is applied as a transform in paint().
         let (child_origin_x, child_origin_y) = (x + padding.left, y + padding.top);
 
-        // Layout already reconciled children, just get them
-        let children = self.children_source.get_mut();
+        // Layout already reconciled children, just get their IDs
+        let children = self.children_source.get();
         if !children.is_empty() {
             self.layout.layout(
                 children,
@@ -1434,16 +1460,6 @@ impl Widget for Container {
 
     fn has_focus_descendant(&self, id: WidgetId) -> bool {
         self.widget_has_focus(id)
-    }
-
-    fn is_relayout_boundary(&self) -> bool {
-        // Widget is a boundary if it has fixed width AND height
-        let has_fixed_width = self.width.as_ref().is_some_and(|w| w.get().exact.is_some());
-        let has_fixed_height = self
-            .height
-            .as_ref()
-            .is_some_and(|h| h.get().exact.is_some());
-        has_fixed_width && has_fixed_height
     }
 
     fn paint(&self, ctx: &mut PaintContext) {
@@ -1522,15 +1538,17 @@ impl Widget for Container {
         }
 
         // Draw children - each gets its own node with position transform
-        for child in self.children_source.get() {
-            let child_global = child.bounds();
+        for &child_id in self.children_source.get() {
+            // Get child bounds from arena
+            let child_global = with_arena_widget(child_id, |child| child.bounds())
+                .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
             // Child's LOCAL bounds (0,0 origin with its own width/height)
             let child_local = Rect::new(0.0, 0.0, child_global.width, child_global.height);
             // Child offset relative to THIS container's origin
             let child_offset_x = child_global.x - self.bounds.x;
             let child_offset_y = child_global.y - self.bounds.y;
 
-            let mut child_ctx = ctx.add_child(child.id().as_u64(), child_local);
+            let mut child_ctx = ctx.add_child(child_id.as_u64(), child_local);
 
             // Child's position transform (may include scroll offset)
             let child_position = if is_scrollable {
@@ -1543,7 +1561,8 @@ impl Widget for Container {
             };
             child_ctx.set_transform(child_position);
 
-            child.paint(&mut child_ctx);
+            // Paint child via arena
+            with_arena_widget(child_id, |child| child.paint(&mut child_ctx));
         }
 
         // Draw scrollbar containers

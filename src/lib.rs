@@ -21,8 +21,10 @@ use std::cell::RefCell;
 use layout::Constraints;
 use platform::create_wayland_app;
 use reactive::{
+    arena_cached_constraints, arena_has_layout_roots, arena_take_layout_roots,
     clear_animation_flag, init_wakeup, set_system_clipboard, take_clipboard_change,
     take_cursor_change, take_frame_request, with_app_state, with_app_state_mut,
+    with_arena_widget_mut,
 };
 use renderer::{GpuContext, PaintContext, RenderNode, RenderTree, Renderer, flatten_tree};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, init_surface_commands};
@@ -298,9 +300,31 @@ fn render_surface(
             reactive::request_animation_frame();
         }
 
-        // Re-layout (for reactive updates)
+        // Re-layout using partial layout from boundaries when available
         let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
-        surface.widget.layout(constraints);
+        if arena_has_layout_roots() {
+            // Partial layout: only update dirty subtrees starting from boundaries
+            let roots = arena_take_layout_roots();
+            let mut needs_full_layout = false;
+            for root_id in roots {
+                let laid_out = with_arena_widget_mut(root_id, |widget| {
+                    // Use cached constraints for boundaries, or fall back to parent constraints
+                    let cached = arena_cached_constraints(root_id).unwrap_or(constraints);
+                    widget.layout(cached);
+                });
+                // If widget not in arena (e.g., surface root), need full layout
+                if laid_out.is_none() {
+                    needs_full_layout = true;
+                }
+            }
+            // Fall back to full layout if any root wasn't in the arena
+            if needs_full_layout {
+                surface.widget.layout(constraints);
+            }
+        } else {
+            // Full layout from root (first frame or no boundaries set up yet)
+            surface.widget.layout(constraints);
+        }
 
         // Build render tree
         let mut tree = RenderTree::new();

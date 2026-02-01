@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
-    IntoMaybeDyn, MaybeDyn, WidgetId, finish_layout_tracking, register_relayout_boundary,
+    IntoMaybeDyn, MaybeDyn, WidgetId, arena_set_relayout_boundary, finish_layout_tracking,
     start_layout_tracking,
 };
 use crate::renderer::PaintContext;
@@ -238,7 +238,7 @@ impl Widget for Image {
         start_layout_tracking(self.widget_id);
 
         // Images are never relayout boundaries
-        register_relayout_boundary(self.widget_id, false);
+        arena_set_relayout_boundary(self.widget_id, false);
 
         // Read source (registers layout dependencies if reactive)
         let current_source = self.source.get();

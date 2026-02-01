@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use crate::default_font_family;
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
-    CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, WidgetId, clipboard_copy, clipboard_paste,
-    finish_layout_tracking, has_focus, register_relayout_boundary, release_focus,
+    CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, WidgetId, arena_set_relayout_boundary,
+    clipboard_copy, clipboard_paste, finish_layout_tracking, has_focus, release_focus,
     request_animation_frame, request_focus, set_cursor, start_layout_tracking,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled, measure_text_styled};
@@ -987,7 +987,7 @@ impl Widget for TextInput {
         start_layout_tracking(self.widget_id);
 
         // Text inputs are never relayout boundaries
-        register_relayout_boundary(self.widget_id, false);
+        arena_set_relayout_boundary(self.widget_id, false);
 
         // Refresh cached values from reactive properties
         // This reads signals and registers layout dependencies
