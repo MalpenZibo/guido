@@ -284,7 +284,7 @@ The feature has zero overhead when disabled (code is completely compiled out).
 | `src/renderer/paint_context.rs` | PaintContext API for building render tree |
 | `src/renderer/tree.rs` | RenderNode, RenderTree structures |
 | `src/renderer/flatten.rs` | Tree flattening with transform inheritance |
-| `src/renderer/shader_v2.wgsl` | GPU shaders for instanced SDF rendering |
+| `src/renderer/shader.wgsl` | GPU shaders for instanced SDF rendering |
 | `src/reactive/signal.rs` | Signal implementation |
 | `src/transform.rs` | Transform matrix operations |
 | `src/platform/mod.rs` | Wayland layer shell integration |
