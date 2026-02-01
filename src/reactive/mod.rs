@@ -22,11 +22,9 @@ pub use cursor::{CursorIcon, get_current_cursor, set_cursor, take_cursor_change}
 pub use effect::{Effect, create_effect};
 pub use focus::{clear_focus, focused_widget, has_focus, release_focus, request_focus};
 pub use invalidation::{
-    ChangeFlags, WidgetId, add_layout_root, clear_animation_flag, finish_layout_tracking,
-    get_widget_parent, init_wakeup, mark_needs_layout, remove_widget_from_tree,
-    request_animation_frame, request_frame, request_layout, request_paint, set_widget_parent,
-    start_layout_tracking, take_frame_request, take_layout_roots, with_app_state,
-    with_app_state_mut,
+    ChangeFlags, WidgetId, clear_animation_flag, finish_layout_tracking, init_wakeup,
+    mark_needs_layout, request_animation_frame, request_frame, request_layout, request_paint,
+    start_layout_tracking, take_frame_request, with_app_state, with_app_state_mut,
 };
 pub use layout_arena::{
     LayoutArena, LayoutNode, arena_add_layout_root, arena_cache_layout, arena_cached_constraints,
