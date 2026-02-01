@@ -196,4 +196,3 @@ fn create_text_input_field(input_value: Signal<String>) -> Container {
                 .font_size(14.0),
         )
 }
-
