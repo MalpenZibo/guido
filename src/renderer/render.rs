@@ -1,4 +1,4 @@
-//! GPU rendering for the V2 render tree using instanced rendering.
+//! GPU rendering for the render tree using instanced rendering.
 //!
 //! This module uses a single draw call per layer to render all shapes,
 //! significantly reducing CPU-GPU communication overhead.
@@ -10,23 +10,21 @@ use wgpu::{
     BindGroup, BindGroupLayout, Buffer, BufferUsages, Device, Queue, RenderPipeline, ShaderModule,
 };
 
-use crate::renderer::TextEntry;
-use crate::renderer::context::SurfaceState;
-use crate::renderer::primitives::GradientDir;
-use crate::renderer::text::TextRenderState;
-use crate::widgets::Color;
-
 use super::commands::{Border, DrawCommand};
 use super::flatten::{FlattenedCommand, RenderLayer};
 use super::gpu::{QUAD_INDICES, QUAD_VERTICES, QuadVertex, ShaderUniforms, ShapeInstance};
+use super::gpu_context::SurfaceState;
 use super::image_quad::{ImageQuadRenderer, PreparedImageQuad};
+use super::text::TextRenderState;
 use super::text_quad::{PreparedTextQuad, TextQuadRenderer};
+use super::types::{GradientDir, TextEntry};
+use crate::widgets::Color;
 
-/// The V2 renderer using instanced rendering.
+/// The renderer using instanced rendering.
 ///
 /// This renderer converts [`FlattenedCommand`]s into GPU instance data
 /// and renders all shapes with a single draw call per layer.
-pub struct RendererV2 {
+pub struct Renderer {
     device: Arc<Device>,
     queue: Arc<Queue>,
     pipeline: RenderPipeline,
@@ -45,7 +43,7 @@ pub struct RendererV2 {
     instance_buffer: Buffer,
     instance_buffer_capacity: usize,
 
-    // Text rendering (reuses V1's glyphon-based renderer)
+    // Text rendering via glyphon
     text_state: TextRenderState,
 
     // Transformed text rendering (renders text to textures for rotation/scale)
@@ -60,18 +58,18 @@ pub struct RendererV2 {
     scale_factor: f32,
 }
 
-impl RendererV2 {
-    /// Create a new V2 renderer with instanced rendering.
+impl Renderer {
+    /// Create a new renderer with instanced rendering.
     pub fn new(device: Arc<Device>, queue: Arc<Queue>, format: wgpu::TextureFormat) -> Self {
         // Load shader
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("RendererV2 Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader_v2.wgsl").into()),
+            label: Some("Renderer Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
         // Create bind group layout for uniforms
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("RendererV2 Bind Group Layout"),
+            label: Some("Renderer Bind Group Layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
@@ -89,14 +87,14 @@ impl RendererV2 {
 
         // Create vertex buffer (unit quad)
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("RendererV2 Vertex Buffer"),
+            label: Some("Renderer Vertex Buffer"),
             contents: bytemuck::cast_slice(QUAD_VERTICES),
             usage: BufferUsages::VERTEX,
         });
 
         // Create index buffer
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("RendererV2 Index Buffer"),
+            label: Some("Renderer Index Buffer"),
             contents: bytemuck::cast_slice(QUAD_INDICES),
             usage: BufferUsages::INDEX,
         });
@@ -104,14 +102,14 @@ impl RendererV2 {
         // Create uniform buffer
         let uniforms = ShaderUniforms::new(800.0, 600.0, 1.0);
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("RendererV2 Uniform Buffer"),
+            label: Some("Renderer Uniform Buffer"),
             contents: bytemuck::cast_slice(&[uniforms]),
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
 
         // Create uniform bind group
         let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("RendererV2 Uniform Bind Group"),
+            label: Some("Renderer Uniform Bind Group"),
             layout: &bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
@@ -122,13 +120,13 @@ impl RendererV2 {
         // Create initial instance buffer (will be resized as needed)
         let initial_capacity = 256;
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("RendererV2 Instance Buffer"),
+            label: Some("Renderer Instance Buffer"),
             size: (initial_capacity * std::mem::size_of::<ShapeInstance>()) as u64,
             usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
-        // Initialize text renderer (reuses V1's glyphon-based renderer)
+        // Initialize text renderer
         let text_state = TextRenderState::new(&device, &queue, format);
 
         // Initialize transformed text renderer
@@ -165,13 +163,13 @@ impl RendererV2 {
         format: wgpu::TextureFormat,
     ) -> RenderPipeline {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("RendererV2 Pipeline Layout"),
+            label: Some("Renderer Pipeline Layout"),
             bind_group_layouts: &[bind_group_layout],
             immediate_size: 0,
         });
 
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("RendererV2 Pipeline"),
+            label: Some("Renderer Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: shader,
@@ -233,7 +231,7 @@ impl RendererV2 {
             // Double capacity or use count, whichever is larger
             let new_capacity = (self.instance_buffer_capacity * 2).max(count);
             self.instance_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("RendererV2 Instance Buffer"),
+                label: Some("Renderer Instance Buffer"),
                 size: (new_capacity * std::mem::size_of::<ShapeInstance>()) as u64,
                 usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
@@ -297,7 +295,7 @@ impl RendererV2 {
         let shape_instances = self.commands_to_instances(&shape_commands);
         let overlay_instances = self.commands_to_instances(&overlay_commands);
 
-        // Convert text commands to TextEntry for the V1 text renderer
+        // Convert text commands to TextEntry for text rendering
         let text_entries: Vec<TextEntry> = text_commands
             .iter()
             .filter_map(|cmd| self.command_to_text_entry(cmd))
@@ -320,7 +318,7 @@ impl RendererV2 {
         // Prepare transformed text as textured quads
         let text_quads: Vec<PreparedTextQuad> = if !transformed_indices.is_empty() {
             log::debug!(
-                "V2 Renderer: {} transformed texts to render as quads",
+                "Renderer: {} transformed texts to render as quads",
                 transformed_indices.len()
             );
             // Update text quad renderer screen size
@@ -359,12 +357,12 @@ impl RendererV2 {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("RendererV2 Encoder"),
+                label: Some("Renderer Encoder"),
             });
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("RendererV2 Render Pass"),
+                label: Some("Renderer Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
@@ -417,7 +415,7 @@ impl RendererV2 {
 
             // Draw transformed text as textured quads
             if !text_quads.is_empty() {
-                log::debug!("V2 Renderer: Rendering {} text quads", text_quads.len());
+                log::debug!("Renderer: Rendering {} text quads", text_quads.len());
                 self.text_quad_renderer
                     .render(&mut render_pass, &text_quads);
             }
@@ -646,7 +644,7 @@ impl RendererV2 {
         }
     }
 
-    /// Convert a text command to a TextEntry for the V1 text renderer.
+    /// Convert a text command to a TextEntry for text rendering.
     fn command_to_text_entry(&self, cmd: &FlattenedCommand) -> Option<TextEntry> {
         match &cmd.command {
             DrawCommand::Text {

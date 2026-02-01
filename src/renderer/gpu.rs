@@ -1,7 +1,7 @@
 //! GPU data structures for instanced rendering.
 //!
 //! This module contains the vertex and instance data structures used by the
-//! V2 renderer's instanced rendering pipeline. Instead of duplicating vertex
+//! Instanced rendering pipeline data structures. Instead of duplicating vertex
 //! data for each shape, we use a single unit quad and per-instance data.
 
 use wgpu::{VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode};

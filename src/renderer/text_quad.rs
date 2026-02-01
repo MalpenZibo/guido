@@ -4,8 +4,8 @@
 //! transformed quads. This is used when text has rotation or scale transforms
 //! that glyphon cannot handle directly.
 //!
-//! The approach matches V1: compute vertex positions on the CPU and pass
-//! pre-computed NDC coordinates to the shader.
+//! Vertex positions are computed on the CPU and passed as pre-computed
+//! NDC coordinates to the shader.
 
 use std::sync::Arc;
 
@@ -21,7 +21,7 @@ use wgpu::{
     VertexStepMode,
 };
 
-use crate::renderer::TextEntry;
+use super::types::TextEntry;
 use crate::widgets::font::FontWeight;
 
 /// Quality multiplier for supersampling text textures.

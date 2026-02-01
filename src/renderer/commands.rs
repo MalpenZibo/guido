@@ -1,6 +1,6 @@
 //! Draw command definitions for the render tree.
 
-use crate::renderer::primitives::{Gradient, Shadow};
+use super::types::{Gradient, Shadow};
 use crate::widgets::font::{FontFamily, FontWeight};
 use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::{Color, Rect};

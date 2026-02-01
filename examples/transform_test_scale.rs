@@ -1,6 +1,6 @@
 //! Test: Basic scale transforms
 //!
-//! Run with: cargo run --example transform_test_scale --features renderer_v2
+//! Run with: cargo run --example transform_test_scale
 
 use guido::prelude::*;
 

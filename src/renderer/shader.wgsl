@@ -1,104 +1,206 @@
-// Guido GPU Shader - SDF-based shape rendering with transforms
+// Guido Instanced Shader - SDF-based shape rendering
 //
-// This shader renders rounded rectangles, circles, and other shapes using
-// signed distance fields (SDF) for crisp anti-aliased edges at any resolution.
+// This shader uses instanced rendering with a shared unit quad.
+// All shape parameters are passed per-instance instead of per-vertex,
+// significantly reducing memory usage and draw calls.
+
+// === Uniforms ===
+
+struct Uniforms {
+    screen_size: vec2<f32>,  // Logical pixels
+    scale_factor: f32,       // HiDPI scale
+    _pad: f32,
+}
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+// === Vertex Input (unit quad) ===
 
 struct VertexInput {
-    @location(0) position: vec2<f32>,
-    @location(1) color: vec4<f32>,
-    @location(2) shape_rect: vec4<f32>,  // min_x, min_y, max_x, max_y in NDC
-    @location(3) shape_radius: vec2<f32>, // corner radius in NDC (x, y)
-    @location(4) shape_curvature: vec2<f32>, // x = curvature, y = clip_radius (uniform)
-    @location(5) border_width: vec2<f32>,  // border width in NDC (x, y)
-    @location(6) border_color: vec4<f32>,
-    @location(7) shadow_offset: vec2<f32>,  // shadow offset in NDC (x, y)
-    @location(8) shadow_params: vec2<f32>,  // x = blur, y = spread
-    @location(9) shadow_color: vec4<f32>,
-    @location(10) transform_row0: vec4<f32>,
-    @location(11) transform_row1: vec4<f32>,
-    @location(12) transform_row2: vec4<f32>,
-    @location(13) transform_row3: vec4<f32>,
-    @location(14) local_pos: vec2<f32>,  // untransformed position for SDF
-    @location(15) clip_rect: vec4<f32>,  // clip region: min_x, min_y, max_x, max_y in NDC
+    @location(0) position: vec2<f32>,  // 0..1 range
 }
+
+// === Instance Input ===
+
+struct InstanceInput {
+    // rect: [x, y, width, height] in logical pixels
+    @location(1) rect: vec4<f32>,
+    // corner_radius, shape_curvature, _pad, _pad
+    @location(2) shape_params: vec4<f32>,
+    // fill_color RGBA
+    @location(3) fill_color: vec4<f32>,
+    // border_color RGBA
+    @location(4) border_color: vec4<f32>,
+    // border_width, _pad, _pad, _pad
+    @location(5) border_params: vec4<f32>,
+    // shadow_offset.xy, shadow_blur, shadow_spread
+    @location(6) shadow_params: vec4<f32>,
+    // shadow_color RGBA
+    @location(7) shadow_color: vec4<f32>,
+    // transform: a, b, tx, c
+    @location(8) transform_0: vec4<f32>,
+    // transform: d, ty, _pad, _pad
+    @location(9) transform_1: vec4<f32>,
+    // clip_rect: [x, y, width, height] in physical pixels (scaled from logical in render.rs)
+    @location(10) clip_rect: vec4<f32>,
+    // clip_corner_radius, clip_curvature, clip_is_local, _pad
+    @location(11) clip_params: vec4<f32>,
+    // gradient_start RGBA
+    @location(12) gradient_start: vec4<f32>,
+    // gradient_end RGBA
+    @location(13) gradient_end: vec4<f32>,
+    // gradient_type (0=none, 1=horizontal, 2=vertical, 3=diagonal, 4=diagonal_reverse), _pad, _pad, _pad
+    @location(14) gradient_params: vec4<u32>,
+}
+
+// === Vertex Output ===
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) color: vec4<f32>,
-    @location(1) shape_rect: vec4<f32>,
-    @location(2) shape_radius: vec2<f32>,
-    @location(3) frag_pos: vec2<f32>,  // local position (untransformed) for SDF
-    @location(4) shape_curvature: f32,  // superellipse K-value
-    @location(5) border_width: vec2<f32>,  // border width (x, y) in NDC
-    @location(6) border_color: vec4<f32>,
-    @location(7) shadow_offset: vec2<f32>,
-    @location(8) shadow_params: vec2<f32>,  // x = blur, y = spread
-    @location(9) shadow_color: vec4<f32>,
-    @location(10) clip_rect: vec4<f32>,  // clip region in NDC (screen space)
-    @location(11) clip_radius: f32,  // clip corner radius (uniform, height-based NDC)
-    @location(12) screen_pos: vec2<f32>,  // transformed position for clipping (screen space)
+    @location(0) fill_color: vec4<f32>,
+    @location(1) border_color: vec4<f32>,
+    // Fragment position in physical pixels (for SDF computation)
+    @location(2) frag_pos: vec2<f32>,
+    // Shape rect in logical pixels [x, y, width, height]
+    @location(3) shape_rect: vec4<f32>,
+    // corner_radius, shape_curvature
+    @location(4) shape_params: vec2<f32>,
+    // border_width
+    @location(5) border_width: f32,
+    // shadow_offset.xy, shadow_blur, shadow_spread
+    @location(6) shadow_params: vec4<f32>,
+    // shadow_color
+    @location(7) shadow_color: vec4<f32>,
+    // World position in physical pixels (for clip computation)
+    @location(8) world_pos: vec2<f32>,
+    // Clip rect in physical pixels
+    @location(9) clip_rect: vec4<f32>,
+    // Clip corner_radius, curvature, is_local
+    @location(10) clip_params: vec3<f32>,
+    // Gradient start color
+    @location(11) gradient_start: vec4<f32>,
+    // Gradient end color
+    @location(12) gradient_end: vec4<f32>,
+    // Gradient type (0=none, 1=horizontal, 2=vertical, 3=diagonal, 4=diagonal_reverse)
+    @location(13) @interpolate(flat) gradient_type: u32,
 }
 
+// === Helper Functions ===
+
+// Apply 2x3 affine transform directly
+// Note: The transform matrix already includes center_at from CPU side,
+// so we just apply it directly without additional origin handling.
+fn apply_transform(
+    pos: vec2<f32>,
+    a: f32, b: f32, tx: f32,
+    c: f32, d: f32, ty: f32
+) -> vec2<f32> {
+    return vec2<f32>(
+        a * pos.x + b * pos.y + tx,
+        c * pos.x + d * pos.y + ty
+    );
+}
+
+// Convert logical pixels to NDC
+fn to_ndc(pos: vec2<f32>) -> vec2<f32> {
+    let ndc_x = (pos.x / uniforms.screen_size.x) * 2.0 - 1.0;
+    let ndc_y = 1.0 - (pos.y / uniforms.screen_size.y) * 2.0;  // Y flipped
+    return vec2<f32>(ndc_x, ndc_y);
+}
+
+// === Vertex Shader ===
+
 @vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
+fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     var out: VertexOutput;
 
-    // Build transform matrix from row vectors
-    // WGSL mat4x4 constructor takes columns, so we transpose by extracting columns from rows
-    let transform = mat4x4<f32>(
-        vec4<f32>(in.transform_row0.x, in.transform_row1.x, in.transform_row2.x, in.transform_row3.x),
-        vec4<f32>(in.transform_row0.y, in.transform_row1.y, in.transform_row2.y, in.transform_row3.y),
-        vec4<f32>(in.transform_row0.z, in.transform_row1.z, in.transform_row2.z, in.transform_row3.z),
-        vec4<f32>(in.transform_row0.w, in.transform_row1.w, in.transform_row2.w, in.transform_row3.w)
+    // Extract transform components
+    // Note: transform already includes center_at from CPU, so no origin handling needed here
+    let a = instance.transform_0.x;
+    let b = instance.transform_0.y;
+    let tx = instance.transform_0.z;
+    let c = instance.transform_0.w;
+    let d = instance.transform_1.x;
+    let ty = instance.transform_1.y;
+
+    // Expand quad for shadow if needed
+    let shadow_blur = instance.shadow_params.z;
+    let shadow_spread = instance.shadow_params.w;
+    let shadow_offset = instance.shadow_params.xy;
+    let has_shadow = instance.shadow_color.a > 0.0;
+
+    // Calculate shadow expansion (3x blur for smooth fadeout)
+    let fadeout = 3.0;
+    var expand = vec4<f32>(0.0, 0.0, 0.0, 0.0);  // left, top, right, bottom
+    if (has_shadow) {
+        expand.x = max(shadow_blur * fadeout - shadow_offset.x, 0.0) + shadow_spread;
+        expand.y = max(shadow_blur * fadeout - shadow_offset.y, 0.0) + shadow_spread;
+        expand.z = max(shadow_blur * fadeout + shadow_offset.x, 0.0) + shadow_spread;
+        expand.w = max(shadow_blur * fadeout + shadow_offset.y, 0.0) + shadow_spread;
+    }
+
+    // Compute expanded quad bounds
+    let quad_min = vec2<f32>(
+        instance.rect.x - expand.x,
+        instance.rect.y - expand.y
     );
+    let quad_max = vec2<f32>(
+        instance.rect.x + instance.rect.z + expand.z,
+        instance.rect.y + instance.rect.w + expand.w
+    );
+    let quad_size = quad_max - quad_min;
 
-    // Transform position for screen placement
-    let transformed = transform * vec4<f32>(in.position, 0.0, 1.0);
-    out.clip_position = vec4<f32>(transformed.xy, 0.0, 1.0);
+    // Transform unit quad [0,1] to shape position
+    let local_pos = quad_min + vertex.position * quad_size;
 
-    // Pass LOCAL position directly (untransformed) for SDF evaluation
-    // Hardware interpolation gives us the correct local coordinate per-pixel
-    out.frag_pos = in.local_pos;
+    // Apply instance transform (matrix already includes center_at from CPU)
+    let world_pos = apply_transform(local_pos, a, b, tx, c, d, ty);
 
-    out.color = in.color;
-    out.shape_rect = in.shape_rect;
-    out.shape_radius = in.shape_radius;
-    out.shape_curvature = in.shape_curvature.x;
-    out.border_width = in.border_width;
-    out.border_color = in.border_color;
-    out.shadow_offset = in.shadow_offset;
-    out.shadow_params = in.shadow_params;
-    out.shadow_color = in.shadow_color;
-    out.clip_rect = in.clip_rect;
-    // clip_radius comes from shape_curvature.y (packed to save vertex attributes)
-    out.clip_radius = in.shape_curvature.y;
-    // Pass transformed position for screen-space clipping
-    out.screen_pos = transformed.xy;
+    // Convert to NDC for clip position
+    let ndc = to_ndc(world_pos);
+    out.clip_position = vec4<f32>(ndc, 0.0, 1.0);
+
+    // Pass fragment position (local, untransformed) for SDF
+    // We interpolate the LOCAL position, not world position
+    out.frag_pos = local_pos;
+
+    // Pass world position (in logical pixels) for clip computation
+    out.world_pos = world_pos;
+
+    // Pass instance data to fragment shader
+    out.fill_color = instance.fill_color;
+    out.border_color = instance.border_color;
+    out.shape_rect = instance.rect;
+    out.shape_params = instance.shape_params.xy;  // corner_radius, curvature
+    out.border_width = instance.border_params.x;
+    out.shadow_params = instance.shadow_params;
+    out.shadow_color = instance.shadow_color;
+
+    // Pass clip data to fragment shader
+    out.clip_rect = instance.clip_rect;
+    out.clip_params = instance.clip_params.xyz;  // corner_radius, curvature, is_local
+
+    // Pass gradient data to fragment shader
+    out.gradient_start = instance.gradient_start;
+    out.gradient_end = instance.gradient_end;
+    out.gradient_type = instance.gradient_params.x;
 
     return out;
 }
 
+// === SDF Functions ===
+
 // Convert CSS-style K value to superellipse exponent n
-// K: -1=scoop, 0=bevel, 1=round, 2=squircle
-// Returns n = 2^K
 fn k_to_n(k: f32) -> f32 {
     return pow(2.0, k);
 }
 
-// Standard rounded box SDF (for K=1, circular corners)
-// This is the reference implementation that's known to work correctly
-fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
-    let q = abs(p) - b + r;
-    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0, 0.0))) - r;
-}
-
 // Superellipse "length" function - generalizes L2 norm
-// n=1: L1 (diamond/bevel), n=2: L2 (circle), n>2: squircle
 fn superellipse_length(p: vec2<f32>, n: f32) -> f32 {
     if (abs(n - 1.0) < 0.01) {
-        return abs(p.x) + abs(p.y);  // L1
+        return abs(p.x) + abs(p.y);  // L1 (diamond)
     } else if (abs(n - 2.0) < 0.01) {
-        return length(p);  // L2
+        return length(p);  // L2 (circle)
     } else {
         let ap = abs(p);
         return pow(pow(ap.x, n) + pow(ap.y, n), 1.0 / n);
@@ -106,47 +208,33 @@ fn superellipse_length(p: vec2<f32>, n: f32) -> f32 {
 }
 
 // Unified SDF for rounded rectangle with superellipse corners
-fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radius: vec2<f32>, k: f32) -> f32 {
-    let min_corner = vec2<f32>(rect.x, rect.y);
-    let max_corner = vec2<f32>(rect.z, rect.w);
-    let center = (min_corner + max_corner) * 0.5;
-    let half_size = (max_corner - min_corner) * 0.5;
+// rect: [x, y, width, height], radius: corner radius, k: curvature
+fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radius: f32, k: f32) -> f32 {
+    let center = vec2<f32>(rect.x + rect.z * 0.5, rect.y + rect.w * 0.5);
+    let half_size = vec2<f32>(rect.z * 0.5, rect.w * 0.5);
 
-    // Use average radius for simplicity
-    let r = min((radius.x + radius.y) * 0.5, min(half_size.x, half_size.y));
+    // Clamp radius to half the smaller dimension
+    let r = min(radius, min(half_size.x, half_size.y));
 
-    // For rectangles with no corners, use simple box SDF
+    // For rectangles with no corners
     if (r <= 0.0) {
         let d = abs(pos - center) - half_size;
         return max(d.x, d.y);
     }
 
-    // Position relative to center (work in first quadrant using abs)
+    // Position relative to center (work in first quadrant)
     let p = abs(pos - center);
 
     // Handle scoop (concave corners) - K < 0
     if (k < 0.0) {
-        // Scoop = rectangle MINUS corner circles
-        // The shape is inside if: inside rectangle AND outside all corner circles
-
-        // Box SDF (negative inside, positive outside)
         let d_box = p - half_size;
         let box_sdf = max(d_box.x, d_box.y);
-
-        // Circle SDF for circle centered at corner with radius r
-        // Circle is at position `half_size` in abs(p) space
         let circle_sdf = length(p - half_size) - r;
-
-        // Boolean subtraction: max(box, -circle)
-        // Inside shape when: box_sdf < 0 AND circle_sdf > 0
-        // Which means: max(box_sdf, -circle_sdf) < 0
         return max(box_sdf, -circle_sdf);
     }
 
-    // Convex corners (bevel, round, squircle) - K >= 0
+    // Convex corners (bevel, round, squircle)
     let n = k_to_n(k);
-
-    // Use generalized rounded box formula with superellipse length
     let q = p - half_size + r;
     let qm = max(q, vec2<f32>(0.0, 0.0));
     let inside = min(max(q.x, q.y), 0.0);
@@ -155,135 +243,94 @@ fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radius: vec2<f32>, k: f32) 
     return inside + corner_dist - r;
 }
 
+// Compute gradient color based on local UV coordinates
+fn compute_gradient_color(
+    local_uv: vec2<f32>,
+    start_color: vec4<f32>,
+    end_color: vec4<f32>,
+    gradient_type: u32,
+) -> vec4<f32> {
+    var t: f32;
+    switch gradient_type {
+        case 1u: { t = local_uv.x; }                              // Horizontal (left to right)
+        case 2u: { t = local_uv.y; }                              // Vertical (top to bottom)
+        case 3u: { t = (local_uv.x + local_uv.y) / 2.0; }        // Diagonal (top-left to bottom-right)
+        case 4u: { t = (local_uv.x + (1.0 - local_uv.y)) / 2.0; } // DiagonalReverse (top-right to bottom-left)
+        default: { return start_color; }                          // No gradient (0 or invalid)
+    }
+    return mix(start_color, end_color, clamp(t, 0.0, 1.0));
+}
+
+// === Fragment Shader ===
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Check if this is an explicitly tessellated shape (no SDF needed for shape)
-    // Shapes like Circle may pass a clip region as shape_rect for clipping only
-    let rect_width = in.shape_rect.z - in.shape_rect.x;
-    let rect_height = in.shape_rect.w - in.shape_rect.y;
-
-    // If no valid shape_rect, pass through color directly (no clipping needed)
-    if (rect_width <= 0.0 || rect_height <= 0.0) {
-        return in.color;
+    // Early discard for zero-area shapes
+    if (in.shape_rect.z <= 0.0 || in.shape_rect.w <= 0.0) {
+        discard;
     }
 
-    // Check if this is a clipped explicit shape (like circles)
-    // Marker: border_color.r == -1.0 indicates clip-only mode
-    let is_clip_only = in.border_color.r < 0.0;
+    let pos = in.frag_pos;
+    let radius = in.shape_params.x;
+    let curvature = in.shape_params.y;
 
-    // Use local position directly (passed from vertex shader via hardware interpolation)
-    // No inverse transform needed - this is the browser-standard approach
-    let local_pos = in.frag_pos;
+    // Compute SDF for the shape
+    let dist = rounded_rect_sdf(pos, in.shape_rect, radius, curvature);
 
-    // Compute aspect ratio from shape_rect to make coordinate space isotropic
-    // This is independent of rotation - uses the shape's own proportions
-    // shape_rect: [min_x, min_y, max_x, max_y] in NDC
-    let rect_width_ndc = in.shape_rect.z - in.shape_rect.x;
-    let rect_height_ndc = in.shape_rect.w - in.shape_rect.y;
+    // Anti-aliasing using fwidth
+    let aa = fwidth(dist) * 1.0;
 
-    // The aspect ratio is derived from how the shape was converted to NDC
-    // In NDC: width_ndc = (pixel_width / screen_width) * 2
-    //         height_ndc = (pixel_height / screen_height) * 2
-    // So: aspect = height_ndc/width_ndc * (pixel_width/pixel_height) for a square shape
-    // But we can use radius ratio which directly encodes the screen aspect ratio
-    var aspect: f32;
-    if (in.shape_radius.x > 0.0001) {
-        // Use radius ratio - this directly encodes screen aspect ratio
-        // radius_x = (r / screen_width) * 2, radius_y = (r / screen_height) * 2
-        // So radius_y / radius_x = screen_width / screen_height = aspect
-        aspect = in.shape_radius.y / in.shape_radius.x;
-    } else if (in.border_width.x > 0.0001) {
-        // Use border_width ratio as fallback
-        aspect = in.border_width.y / in.border_width.x;
+    // Compute local UV coordinates (0..1 within the shape rect)
+    let local_uv = (pos - in.shape_rect.xy) / in.shape_rect.zw;
+
+    // Determine fill color (gradient or solid)
+    var fill_color: vec4<f32>;
+    if (in.gradient_type > 0u) {
+        fill_color = compute_gradient_color(local_uv, in.gradient_start, in.gradient_end, in.gradient_type);
     } else {
-        // Last resort: compute from screen-space derivatives
-        // NOTE: This breaks under rotation, but we rarely hit this case
-        let dx = abs(dpdx(local_pos.x));
-        let dy = abs(dpdy(local_pos.y));
-        aspect = dy / max(dx, 0.0001);
+        fill_color = in.fill_color;
     }
 
-    // Scale x coordinates to create uniform pixel density space
-    let scaled_pos = vec2<f32>(local_pos.x * aspect, local_pos.y);
-    let scaled_rect = vec4<f32>(
-        in.shape_rect.x * aspect,
-        in.shape_rect.y,
-        in.shape_rect.z * aspect,
-        in.shape_rect.w
-    );
-    let scaled_radius = vec2<f32>(in.shape_radius.x * aspect, in.shape_radius.y);
-
-    // Compute signed distance in scaled (isotropic) space
-    let dist = rounded_rect_sdf(scaled_pos, scaled_rect, scaled_radius, in.shape_curvature);
-
-    // Anti-aliasing: use fwidth on the DISTANCE value (browser-standard approach)
-    // This measures how fast the distance changes per screen pixel
-    // and automatically handles rotation and aspect ratio
-    let aa = fwidth(dist);
-
-    // Use border_width.y since we scaled to match y's pixel density
-    let border_w = in.border_width.y;
-
-    // Clip-only case: explicitly tessellated shapes (like circles) using shape_rect for clipping
-    if (is_clip_only) {
-        // Use SDF to compute clip alpha - inside clip region = visible
-        let clip_alpha = 1.0 - smoothstep(-aa, aa, dist);
-        return vec4<f32>(in.color.rgb, in.color.a * clip_alpha);
-    }
-
-    // Compute shadow if enabled (shadow_color.a > 0)
+    // === Shadow ===
     var shadow_contribution = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     if (in.shadow_color.a > 0.0) {
-        let shadow_blur = in.shadow_params.x;
-        let shadow_spread = in.shadow_params.y;
-
-        // Scale shadow offset to match aspect ratio
-        let scaled_shadow_offset = vec2<f32>(in.shadow_offset.x * aspect, in.shadow_offset.y);
+        let shadow_offset = in.shadow_params.xy;
+        let shadow_blur = in.shadow_params.z;
+        let shadow_spread = in.shadow_params.w;
 
         // Compute shadow position (offset from shape)
-        let shadow_pos = scaled_pos - scaled_shadow_offset;
-
-        // Scale shadow spread
-        let scaled_spread = shadow_spread * aspect;
+        let shadow_pos = pos - shadow_offset;
 
         // Compute shadow SDF (expanded by spread)
-        let shadow_dist = rounded_rect_sdf(shadow_pos, scaled_rect, scaled_radius, in.shape_curvature) - scaled_spread;
+        let shadow_dist = rounded_rect_sdf(shadow_pos, in.shape_rect, radius, curvature) - shadow_spread;
 
         // Convert to alpha with blur falloff
-        // Use wider range for smoother fadeout: from -blur to 2*blur
-        // This creates a more gradual, CSS-like shadow that fades naturally
         let shadow_alpha = in.shadow_color.a * (1.0 - smoothstep(-shadow_blur, shadow_blur * 2.0, shadow_dist));
         shadow_contribution = vec4<f32>(in.shadow_color.rgb, shadow_alpha);
     }
 
-    // Compute main shape color
+    // === Main Shape ===
     var shape_result: vec4<f32>;
 
-    // No border case - simple filled shape (SDF defines the shape)
-    if (in.border_width.x <= 0.0 && in.border_width.y <= 0.0) {
+    if (in.border_width <= 0.0) {
+        // No border - simple filled shape
         let alpha = 1.0 - smoothstep(-aa, aa, dist);
-        shape_result = vec4<f32>(in.color.rgb, in.color.a * alpha);
+        shape_result = vec4<f32>(fill_color.rgb, fill_color.a * alpha);
     } else {
-        // Outer edge: shape boundary (dist = 0)
-        // Inner edge: dist = -border_w (inside by border width)
+        // With border
         let outer_edge = dist;
-        let inner_edge = dist + border_w;
+        let inner_edge = dist + in.border_width;
 
-        // Shape alpha (inside the outer boundary)
         let shape_alpha = 1.0 - smoothstep(-aa, aa, outer_edge);
-
-        // Fill alpha (inside the inner boundary)
         let fill_alpha = 1.0 - smoothstep(-aa, aa, inner_edge);
-
-        // Border alpha = shape minus fill
         let border_alpha = max(shape_alpha - fill_alpha, 0.0);
 
-        // Handle border-only case (transparent fill)
-        if (in.color.a <= 0.0) {
+        if (fill_color.a <= 0.0) {
+            // Border only (transparent fill)
             shape_result = vec4<f32>(in.border_color.rgb, in.border_color.a * border_alpha);
         } else {
-            // Composite fill and border
-            let fill_contribution = vec4<f32>(in.color.rgb, in.color.a * fill_alpha);
+            // Fill + border composite
+            let fill_contribution = vec4<f32>(fill_color.rgb, fill_color.a * fill_alpha);
             let border_contribution = vec4<f32>(in.border_color.rgb, in.border_color.a * border_alpha);
 
             let result_rgb = border_contribution.rgb * border_contribution.a +
@@ -298,7 +345,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    // Composite shadow behind shape
+    // === Composite shadow behind shape ===
     var final_result: vec4<f32>;
     if (shadow_contribution.a > 0.0) {
         let final_rgb = shape_result.rgb * shape_result.a +
@@ -309,29 +356,26 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         final_result = shape_result;
     }
 
-    // Apply clip region if defined (clip_rect width > 0)
-    // Use screen_pos (transformed) for clipping since clip_rect is in screen space
-    let clip_width = in.clip_rect.z - in.clip_rect.x;
-    let clip_height = in.clip_rect.w - in.clip_rect.y;
-    if (clip_width > 0.0 && clip_height > 0.0) {
-        // Scale screen position and clip region for aspect ratio
-        let scaled_screen_pos = vec2<f32>(in.screen_pos.x * aspect, in.screen_pos.y);
-        let scaled_clip_rect = vec4<f32>(
-            in.clip_rect.x * aspect,
-            in.clip_rect.y,
-            in.clip_rect.z * aspect,
-            in.clip_rect.w
-        );
-        // clip_radius is uniform (height-based NDC), which matches scaled space
-        // In scaled space, x coords are scaled by aspect, so distances match y
-        // Therefore we use clip_radius directly for both dimensions
-        let scaled_clip_radius = vec2<f32>(in.clip_radius, in.clip_radius);
+    // === Apply clipping ===
+    // Check if clipping is enabled (width and height > 0)
+    if (in.clip_rect.z > 0.0 && in.clip_rect.w > 0.0) {
+        // Use frag_pos for local clips (overlay clips on transformed containers),
+        // world_pos for world clips (regular clipping)
+        let clip_pos = select(in.world_pos, in.frag_pos, in.clip_params.z > 0.5);
 
-        // Compute clip SDF (use K=1.0 for circular corners)
-        let clip_dist = rounded_rect_sdf(scaled_screen_pos, scaled_clip_rect, scaled_clip_radius, 1.0);
+        // Compute clip SDF
+        let clip_dist = rounded_rect_sdf(
+            clip_pos,
+            in.clip_rect,
+            in.clip_params.x,  // corner_radius
+            in.clip_params.y   // curvature
+        );
+
+        // Smooth clip edge (anti-aliased)
         let clip_aa = fwidth(clip_dist);
         let clip_alpha = 1.0 - smoothstep(-clip_aa, clip_aa, clip_dist);
 
+        // Apply clip to final result
         final_result = vec4<f32>(final_result.rgb, final_result.a * clip_alpha);
     }
 
