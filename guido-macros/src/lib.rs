@@ -241,17 +241,27 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         impl ::guido::widgets::Widget for #struct_name {
-            fn layout(&mut self, tree: &::guido::Tree, constraints: ::guido::layout::Constraints) -> ::guido::layout::Size {
+            fn register_children(&mut self, tree: &mut ::guido::tree::Tree) {
+                self.ensure_built();
+                self.__inner.write().unwrap().as_mut().unwrap().register_children(tree)
+            }
+
+            fn reconcile_children(&mut self, tree: &mut ::guido::tree::Tree) -> bool {
+                self.ensure_built();
+                self.__inner.write().unwrap().as_mut().unwrap().reconcile_children(tree)
+            }
+
+            fn layout(&mut self, tree: &mut ::guido::tree::Tree, constraints: ::guido::layout::Constraints) -> ::guido::layout::Size {
                 self.ensure_built();
                 self.__inner.write().unwrap().as_mut().unwrap().layout(tree, constraints)
             }
 
-            fn paint(&self, tree: &::guido::Tree, ctx: &mut ::guido::renderer::PaintContext) {
+            fn paint(&self, tree: &::guido::tree::Tree, ctx: &mut ::guido::renderer::PaintContext) {
                 self.ensure_built();
                 self.__inner.read().unwrap().as_ref().unwrap().paint(tree, ctx)
             }
 
-            fn event(&mut self, tree: &::guido::reactive::Tree, event: &::guido::widgets::Event) -> ::guido::widgets::EventResponse {
+            fn event(&mut self, tree: &::guido::tree::Tree, event: &::guido::widgets::Event) -> ::guido::widgets::EventResponse {
                 self.ensure_built();
                 self.__inner.write().unwrap().as_mut().unwrap().event(tree, event)
             }
@@ -266,9 +276,19 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 self.__inner.read().unwrap().as_ref().unwrap().bounds()
             }
 
-            fn id(&self) -> ::guido::reactive::WidgetId {
+            fn id(&self) -> ::guido::tree::WidgetId {
                 self.ensure_built();
                 self.__inner.read().unwrap().as_ref().unwrap().id()
+            }
+
+            fn has_focus_descendant(&self, tree: &::guido::tree::Tree, id: ::guido::tree::WidgetId) -> bool {
+                self.ensure_built();
+                self.__inner.read().unwrap().as_ref().unwrap().has_focus_descendant(tree, id)
+            }
+
+            fn is_relayout_boundary(&self) -> bool {
+                self.ensure_built();
+                self.__inner.read().unwrap().as_ref().unwrap().is_relayout_boundary()
             }
         }
 
