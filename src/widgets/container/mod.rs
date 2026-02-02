@@ -15,8 +15,8 @@ use crate::animation::Transition;
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
     IntoMaybeDyn, MaybeDyn, WidgetId, arena_cache_layout, arena_clear_dirty, arena_is_dirty,
-    arena_set_parent, arena_set_relayout_boundary, finish_layout_tracking, focused_widget,
-    request_animation_frame, start_layout_tracking, with_arena_widget, with_arena_widget_mut,
+    arena_set_parent, arena_set_relayout_boundary, focused_widget, register_layout_signal,
+    request_animation_frame, with_arena_widget, with_arena_widget_mut,
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
@@ -184,10 +184,13 @@ pub struct Container {
 
 impl Container {
     pub fn new() -> Self {
+        let widget_id = WidgetId::next();
+        let mut children_source = ChildrenSource::default();
+        children_source.set_container_id(widget_id);
         Self {
-            widget_id: WidgetId::next(),
+            widget_id,
             layout: Box::new(Flex::column()),
-            children_source: ChildrenSource::default(),
+            children_source,
             padding: MaybeDyn::Static(Padding::default()),
             background: MaybeDyn::Static(Color::TRANSPARENT),
             gradient: None,
@@ -267,7 +270,14 @@ impl Container {
 
     pub fn padding(mut self, value: impl IntoMaybeDyn<f32>) -> Self {
         let value = value.into_maybe_dyn();
-        self.padding = MaybeDyn::Dynamic(Arc::new(move || Padding::all(value.get())));
+        // Register layout dependency if value is from a signal
+        if let Some(signal_id) = value.signal_id() {
+            register_layout_signal(self.widget_id, signal_id);
+        }
+        self.padding = MaybeDyn::Dynamic {
+            getter: Arc::new(move || Padding::all(value.get())),
+            signal_id: None, // Compound MaybeDyn, original signal already registered
+        };
         self
     }
 
@@ -278,12 +288,22 @@ impl Container {
     ) -> Self {
         let h = horizontal.into_maybe_dyn();
         let v = vertical.into_maybe_dyn();
-        self.padding = MaybeDyn::Dynamic(Arc::new(move || Padding {
-            left: h.get(),
-            right: h.get(),
-            top: v.get(),
-            bottom: v.get(),
-        }));
+        // Register layout dependencies if values are from signals
+        if let Some(signal_id) = h.signal_id() {
+            register_layout_signal(self.widget_id, signal_id);
+        }
+        if let Some(signal_id) = v.signal_id() {
+            register_layout_signal(self.widget_id, signal_id);
+        }
+        self.padding = MaybeDyn::Dynamic {
+            getter: Arc::new(move || Padding {
+                left: h.get(),
+                right: h.get(),
+                top: v.get(),
+                bottom: v.get(),
+            }),
+            signal_id: None, // Compound MaybeDyn, original signals already registered
+        };
         self
     }
 
@@ -352,13 +372,23 @@ impl Container {
 
     /// Set the width of the container.
     pub fn width(mut self, width: impl IntoMaybeDyn<Length>) -> Self {
-        self.width = Some(width.into_maybe_dyn());
+        let maybe_dyn = width.into_maybe_dyn();
+        // Register layout dependency if value is from a signal
+        if let Some(signal_id) = maybe_dyn.signal_id() {
+            register_layout_signal(self.widget_id, signal_id);
+        }
+        self.width = Some(maybe_dyn);
         self
     }
 
     /// Set the height of the container.
     pub fn height(mut self, height: impl IntoMaybeDyn<Length>) -> Self {
-        self.height = Some(height.into_maybe_dyn());
+        let maybe_dyn = height.into_maybe_dyn();
+        // Register layout dependency if value is from a signal
+        if let Some(signal_id) = maybe_dyn.signal_id() {
+            register_layout_signal(self.widget_id, signal_id);
+        }
+        self.height = Some(maybe_dyn);
         self
     }
 
@@ -430,11 +460,14 @@ impl Container {
         let degrees = degrees.into_maybe_dyn();
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic(Arc::new(move || {
-            prev_transform
-                .get()
-                .then(&Transform::rotate_degrees(degrees.get()))
-        }));
+        self.transform = MaybeDyn::Dynamic {
+            getter: Arc::new(move || {
+                prev_transform
+                    .get()
+                    .then(&Transform::rotate_degrees(degrees.get()))
+            }),
+            signal_id: None,
+        };
         self
     }
 
@@ -443,9 +476,10 @@ impl Container {
         let s = s.into_maybe_dyn();
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic(Arc::new(move || {
-            prev_transform.get().then(&Transform::scale(s.get()))
-        }));
+        self.transform = MaybeDyn::Dynamic {
+            getter: Arc::new(move || prev_transform.get().then(&Transform::scale(s.get()))),
+            signal_id: None,
+        };
         self
     }
 
@@ -455,11 +489,14 @@ impl Container {
         let sy = sy.into_maybe_dyn();
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic(Arc::new(move || {
-            prev_transform
-                .get()
-                .then(&Transform::scale_xy(sx.get(), sy.get()))
-        }));
+        self.transform = MaybeDyn::Dynamic {
+            getter: Arc::new(move || {
+                prev_transform
+                    .get()
+                    .then(&Transform::scale_xy(sx.get(), sy.get()))
+            }),
+            signal_id: None,
+        };
         self
     }
 
@@ -469,11 +506,14 @@ impl Container {
         let y = y.into_maybe_dyn();
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic(Arc::new(move || {
-            prev_transform
-                .get()
-                .then(&Transform::translate(x.get(), y.get()))
-        }));
+        self.transform = MaybeDyn::Dynamic {
+            getter: Arc::new(move || {
+                prev_transform
+                    .get()
+                    .then(&Transform::translate(x.get(), y.get()))
+            }),
+            signal_id: None,
+        };
         self
     }
 
@@ -924,10 +964,11 @@ impl Widget for Container {
         any_animating
     }
 
-    fn layout(&mut self, constraints: Constraints) -> Size {
-        // Start layout tracking for dependency registration
-        start_layout_tracking(self.widget_id);
+    fn reconcile_children(&mut self) -> bool {
+        self.children_source.reconcile_with_tracking()
+    }
 
+    fn layout(&mut self, constraints: Constraints) -> Size {
         // Register this widget's relayout boundary status with the arena
         arena_set_relayout_boundary(self.widget_id, self.is_relayout_boundary_for(constraints));
 
@@ -944,7 +985,6 @@ impl Widget for Container {
 
         if !needs_layout {
             crate::layout_stats::record_layout_skipped();
-            finish_layout_tracking();
             return Size::new(self.bounds.width, self.bounds.height);
         }
 
@@ -1223,9 +1263,6 @@ impl Widget for Container {
 
         // Cache constraints and size for partial layout
         arena_cache_layout(self.widget_id, constraints, size);
-
-        // Finish layout tracking
-        finish_layout_tracking();
 
         size
     }

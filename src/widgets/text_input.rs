@@ -15,9 +15,8 @@ use crate::default_font_family;
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
     CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, WidgetId, arena_cache_layout, arena_clear_dirty,
-    arena_set_relayout_boundary, clipboard_copy, clipboard_paste, finish_layout_tracking,
-    has_focus, release_focus, request_animation_frame, request_focus, set_cursor,
-    start_layout_tracking,
+    arena_set_relayout_boundary, clipboard_copy, clipboard_paste, has_focus, release_focus,
+    request_animation_frame, request_focus, set_cursor,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled, measure_text_styled};
 
@@ -986,9 +985,6 @@ impl TextInput {
 
 impl Widget for TextInput {
     fn layout(&mut self, constraints: Constraints) -> Size {
-        // Start layout tracking for dependency registration
-        start_layout_tracking(self.widget_id);
-
         // Text inputs are never relayout boundaries
         arena_set_relayout_boundary(self.widget_id, false);
 
@@ -1031,9 +1027,6 @@ impl Widget for TextInput {
 
         // Clear dirty flag since layout is complete
         arena_clear_dirty(self.widget_id);
-
-        // Finish layout tracking
-        finish_layout_tracking();
 
         size
     }

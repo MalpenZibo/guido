@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
     IntoMaybeDyn, MaybeDyn, WidgetId, arena_cache_layout, arena_clear_dirty,
-    arena_set_relayout_boundary, finish_layout_tracking, start_layout_tracking,
+    arena_set_relayout_boundary,
 };
 use crate::renderer::PaintContext;
 
@@ -234,9 +234,6 @@ impl Image {
 
 impl Widget for Image {
     fn layout(&mut self, constraints: Constraints) -> Size {
-        // Start layout tracking for dependency registration
-        start_layout_tracking(self.widget_id);
-
         // Images are never relayout boundaries
         arena_set_relayout_boundary(self.widget_id, false);
 
@@ -266,9 +263,6 @@ impl Widget for Image {
 
         // Clear dirty flag since layout is complete
         arena_clear_dirty(self.widget_id);
-
-        // Finish layout tracking
-        finish_layout_tracking();
 
         size
     }

@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::layout::{Constraints, Size};
-use crate::reactive::{OwnerId, WidgetId, dispose_owner, register_widget, unregister_widget};
+use crate::reactive::{
+    JobType, OwnerId, WidgetId, dispose_owner, register_widget, unregister_widget,
+    with_signal_tracking,
+};
 use crate::renderer::PaintContext;
 
 use super::Widget;
@@ -36,9 +39,18 @@ pub struct ChildrenSource {
     merged: Vec<WidgetId>,
     /// Segment metadata (boundaries and reconciliation info)
     segments: Vec<SegmentType>,
+    /// Parent container ID for subscriber registration
+    container_id: Option<WidgetId>,
+    /// Whether initial reconciliation has been done
+    initial_reconcile_done: bool,
 }
 
 impl ChildrenSource {
+    /// Set the container ID for subscriber registration
+    pub fn set_container_id(&mut self, id: WidgetId) {
+        self.container_id = Some(id);
+    }
+
     /// Add a static child widget
     pub fn add_static(&mut self, widget: Box<dyn Widget>) {
         let widget_id = widget.id();
@@ -64,7 +76,7 @@ impl ChildrenSource {
     }
 
     /// Check if any dynamic segments exist
-    fn has_dynamic(&self) -> bool {
+    pub fn has_dynamic(&self) -> bool {
         self.segments
             .iter()
             .any(|s| matches!(s, SegmentType::Dynamic { .. }))
@@ -174,15 +186,53 @@ impl ChildrenSource {
         self.merged = new_merged;
     }
 
-    /// Reconcile and get widget IDs (for layout)
-    pub fn reconcile_and_get(&mut self) -> &Vec<WidgetId> {
-        if self.has_dynamic() {
+    /// Reconcile with signal tracking. Called from main loop job processing.
+    /// Returns true if children changed.
+    pub fn reconcile_with_tracking(&mut self) -> bool {
+        if !self.has_dynamic() {
+            return false;
+        }
+
+        let container_id = self
+            .container_id
+            .expect("container_id must be set before reconcile_with_tracking");
+
+        let prev_count = self.merged.len();
+
+        // Track signal reads during reconciliation
+        // This registers container as subscriber for any signals read
+        with_signal_tracking(container_id, JobType::Reconcile, || {
             self.reconcile();
+        });
+        self.initial_reconcile_done = true;
+
+        // Return true if children count changed
+        prev_count != self.merged.len()
+    }
+
+    /// Reconcile and get widget IDs (for layout)
+    /// Does lazy initial reconciliation with tracking if needed.
+    pub fn reconcile_and_get(&mut self) -> &Vec<WidgetId> {
+        // Lazy initial reconciliation (for first frame before any jobs exist)
+        if self.has_dynamic() && !self.initial_reconcile_done {
+            if let Some(container_id) = self.container_id {
+                with_signal_tracking(container_id, JobType::Reconcile, || {
+                    self.reconcile();
+                });
+                self.initial_reconcile_done = true;
+            } else {
+                // Fallback: reconcile without tracking (shouldn't happen in practice)
+                self.reconcile();
+            }
+        } else if self.has_dynamic() {
+            // Subsequent reconciliations (triggered by jobs) already done by process_pending_jobs
+            // Just return the already-reconciled list
         }
         &self.merged
     }
 
-    /// Get widget IDs (for paint)
+    /// Get widget IDs (for paint and events)
+    /// After first frame, this just returns the already-reconciled children.
     pub fn get(&self) -> &Vec<WidgetId> {
         &self.merged
     }
@@ -352,6 +402,10 @@ impl Drop for OwnedWidget {
 impl Widget for OwnedWidget {
     fn advance_animations(&mut self) -> bool {
         self.inner.advance_animations()
+    }
+
+    fn reconcile_children(&mut self) -> bool {
+        self.inner.reconcile_children()
     }
 
     fn layout(&mut self, constraints: Constraints) -> Size {

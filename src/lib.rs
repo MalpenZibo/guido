@@ -22,9 +22,9 @@ use layout::Constraints;
 use platform::create_wayland_app;
 use reactive::{
     arena_cached_constraints, arena_has_layout_roots, arena_take_layout_roots,
-    clear_animation_flag, init_wakeup, set_system_clipboard, take_clipboard_change,
-    take_cursor_change, take_frame_request, with_app_state, with_app_state_mut,
-    with_arena_widget_mut,
+    clear_animation_flag, init_wakeup, process_pending_jobs, set_system_clipboard,
+    take_clipboard_change, take_cursor_change, take_frame_request, with_app_state,
+    with_app_state_mut, with_arena_widget_mut,
 };
 use renderer::{GpuContext, PaintContext, RenderNode, RenderTree, Renderer, flatten_tree};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, init_surface_commands};
@@ -300,19 +300,26 @@ fn render_surface(
             reactive::request_animation_frame();
         }
 
+        // Process pending jobs from signal updates (reconciliation + layout marking)
+        process_pending_jobs();
+
         // Re-layout using partial layout from boundaries when available
         let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
+        let surface_root_id = surface.widget.id();
         if arena_has_layout_roots() {
             // Partial layout: only update dirty subtrees starting from boundaries
             let roots = arena_take_layout_roots();
             for root_id in roots {
-                with_arena_widget_mut(root_id, |widget| {
-                    // Use cached constraints for boundaries, or fall back to parent constraints
-                    let cached = arena_cached_constraints(root_id).unwrap_or(constraints);
-                    widget.layout(cached);
-                });
-                // Skip roots not in arena - they're either removed widgets or
-                // the surface root which is handled separately on first frame
+                if root_id == surface_root_id {
+                    // Surface root is not in arena - handle directly
+                    surface.widget.layout(constraints);
+                } else {
+                    with_arena_widget_mut(root_id, |widget| {
+                        // Use cached constraints for boundaries, or fall back to parent constraints
+                        let cached = arena_cached_constraints(root_id).unwrap_or(constraints);
+                        widget.layout(cached);
+                    });
+                }
             }
         } else if needs_layout || needs_resize {
             // Full layout from root only when explicitly needed (first frame, resize, etc.)

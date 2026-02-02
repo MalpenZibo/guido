@@ -377,6 +377,13 @@ pub trait Widget {
         false
     }
 
+    /// Reconcile dynamic children. Called from main loop before layout.
+    /// Returns true if children changed (requires layout).
+    /// Default implementation returns false (no dynamic children).
+    fn reconcile_children(&mut self) -> bool {
+        false
+    }
+
     fn layout(&mut self, constraints: Constraints) -> Size;
     fn paint(&self, ctx: &mut PaintContext);
     fn event(&mut self, event: &Event) -> EventResponse {

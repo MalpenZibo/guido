@@ -6,15 +6,28 @@ use super::signal::{ReadSignal, Signal};
 /// This allows widget properties to accept both plain values and signals.
 pub enum MaybeDyn<T: 'static> {
     Static(T),
-    Dynamic(Arc<dyn Fn() -> T + Send + Sync>),
+    Dynamic {
+        getter: Arc<dyn Fn() -> T + Send + Sync>,
+        /// Signal ID if this was created from a Signal, None if from a closure
+        signal_id: Option<usize>,
+    },
 }
 
 impl<T: Clone + 'static> MaybeDyn<T> {
-    /// Get the current value. If dynamic, this will track the signal read.
+    /// Get the current value. If dynamic, this calls the getter.
     pub fn get(&self) -> T {
         match self {
             MaybeDyn::Static(v) => v.clone(),
-            MaybeDyn::Dynamic(f) => f(),
+            MaybeDyn::Dynamic { getter, .. } => getter(),
+        }
+    }
+
+    /// Get the signal ID if this MaybeDyn was created from a Signal.
+    /// Returns None for static values or closures.
+    pub fn signal_id(&self) -> Option<usize> {
+        match self {
+            MaybeDyn::Static(_) => None,
+            MaybeDyn::Dynamic { signal_id, .. } => *signal_id,
         }
     }
 
@@ -25,7 +38,10 @@ impl<T: Clone + 'static> MaybeDyn<T> {
 
     /// Create a dynamic MaybeDyn from a closure
     pub fn dynamic<F: Fn() -> T + Send + Sync + 'static>(f: F) -> Self {
-        MaybeDyn::Dynamic(Arc::new(f))
+        MaybeDyn::Dynamic {
+            getter: Arc::new(f),
+            signal_id: None,
+        }
     }
 }
 
@@ -33,7 +49,10 @@ impl<T: Clone + 'static> Clone for MaybeDyn<T> {
     fn clone(&self) -> Self {
         match self {
             MaybeDyn::Static(v) => MaybeDyn::Static(v.clone()),
-            MaybeDyn::Dynamic(f) => MaybeDyn::Dynamic(f.clone()),
+            MaybeDyn::Dynamic { getter, signal_id } => MaybeDyn::Dynamic {
+                getter: getter.clone(),
+                signal_id: *signal_id,
+            },
         }
     }
 }
@@ -104,7 +123,10 @@ where
     F: Fn() -> T + Send + Sync + 'static,
 {
     fn into_maybe_dyn(self) -> MaybeDyn<T> {
-        MaybeDyn::Dynamic(Arc::new(self))
+        MaybeDyn::Dynamic {
+            getter: Arc::new(self),
+            signal_id: None,
+        }
     }
 }
 
@@ -114,13 +136,21 @@ where
 
 impl<T: Clone + Send + Sync + 'static> IntoMaybeDyn<T> for Signal<T> {
     fn into_maybe_dyn(self) -> MaybeDyn<T> {
-        MaybeDyn::Dynamic(Arc::new(move || self.get()))
+        let id = self.id();
+        MaybeDyn::Dynamic {
+            getter: Arc::new(move || self.get()),
+            signal_id: Some(id),
+        }
     }
 }
 
 impl<T: Clone + Send + Sync + 'static> IntoMaybeDyn<T> for ReadSignal<T> {
     fn into_maybe_dyn(self) -> MaybeDyn<T> {
-        MaybeDyn::Dynamic(Arc::new(move || self.get()))
+        let id = self.id();
+        MaybeDyn::Dynamic {
+            getter: Arc::new(move || self.get()),
+            signal_id: Some(id),
+        }
     }
 }
 

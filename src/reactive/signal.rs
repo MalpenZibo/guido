@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use super::invalidation::{notify_layout_subscribers, record_layout_read, request_frame};
+use super::invalidation::{notify_signal_change, record_signal_read, request_frame};
 use super::owner::register_signal;
 use super::runtime::{SignalId, try_with_runtime};
 use super::storage::{
@@ -44,13 +44,20 @@ impl<T> PartialEq for Signal<T> {
 
 impl<T> Eq for Signal<T> {}
 
+impl<T> Signal<T> {
+    /// Get the internal signal ID
+    pub fn id(&self) -> usize {
+        self.id
+    }
+}
+
 impl<T: Clone + Send + Sync + 'static> Signal<T> {
-    /// Get the current value (tracks as dependency on main thread)
+    /// Get the current value (tracks as dependency on main thread for effects)
     pub fn get(&self) -> T {
-        // Track reads only on main thread
+        // Track reads only on main thread (for effects)
         try_with_runtime(|rt| rt.track_read(self.id));
         // Track layout dependencies if layout tracking is active
-        record_layout_read(self.id);
+        record_signal_read(self.id);
         // Get value from global storage (works from any thread)
         get_signal_value(self.id)
     }
@@ -63,7 +70,7 @@ impl<T: Clone + Send + Sync + 'static> Signal<T> {
     /// Borrow the value for reading
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         try_with_runtime(|rt| rt.track_read(self.id));
-        record_layout_read(self.id);
+        record_signal_read(self.id);
         with_signal_value(self.id, f)
     }
 
@@ -81,7 +88,7 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Signal<T> {
         if changed {
             set_signal_value(self.id, value);
             // Notify layout subscribers (widgets depending on this signal)
-            notify_layout_subscribers(self.id);
+            notify_signal_change(self.id);
             // Notify runtime (only on main thread)
             try_with_runtime(|rt| rt.notify_write(self.id));
             request_frame();
@@ -98,7 +105,7 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Signal<T> {
         };
         if changed {
             // Notify layout subscribers (widgets depending on this signal)
-            notify_layout_subscribers(self.id);
+            notify_signal_change(self.id);
             try_with_runtime(|rt| rt.notify_write(self.id));
             request_frame();
         }
@@ -134,10 +141,17 @@ impl<T> Clone for ReadSignal<T> {
 
 impl<T> Copy for ReadSignal<T> {}
 
+impl<T> ReadSignal<T> {
+    /// Get the internal signal ID
+    pub fn id(&self) -> usize {
+        self.id
+    }
+}
+
 impl<T: Clone + Send + Sync + 'static> ReadSignal<T> {
     pub fn get(&self) -> T {
         try_with_runtime(|rt| rt.track_read(self.id));
-        record_layout_read(self.id);
+        record_signal_read(self.id);
         get_signal_value(self.id)
     }
 
@@ -147,7 +161,7 @@ impl<T: Clone + Send + Sync + 'static> ReadSignal<T> {
 
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         try_with_runtime(|rt| rt.track_read(self.id));
-        record_layout_read(self.id);
+        record_signal_read(self.id);
         with_signal_value(self.id, f)
     }
 
@@ -177,7 +191,7 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> WriteSignal<T> {
         let changed = with_signal_value(self.id, |old: &T| *old != value);
         if changed {
             set_signal_value(self.id, value);
-            notify_layout_subscribers(self.id);
+            notify_signal_change(self.id);
             try_with_runtime(|rt| rt.notify_write(self.id));
             request_frame();
         }
@@ -195,7 +209,7 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> WriteSignal<T> {
             old != new
         };
         if changed {
-            notify_layout_subscribers(self.id);
+            notify_signal_change(self.id);
             try_with_runtime(|rt| rt.notify_write(self.id));
             request_frame();
         }
