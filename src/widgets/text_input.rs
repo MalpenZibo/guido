@@ -12,10 +12,11 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::default_font_family;
+use crate::jobs::{JobType, push_job};
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
-    CursorIcon, IntoMaybeDyn, JobType, MaybeDyn, Signal, clipboard_copy, clipboard_paste,
-    has_focus, push_job, release_focus, request_focus, set_cursor,
+    CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, clipboard_copy, clipboard_paste, has_focus,
+    release_focus, request_focus, set_cursor,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled, measure_text_styled};
 use crate::tree::{Tree, WidgetId};

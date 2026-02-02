@@ -1,8 +1,8 @@
 //! Scrollable container functionality.
 
 use crate::animation::{SpringConfig, Transition};
+use crate::jobs::{JobType, push_job};
 use crate::layout::Constraints;
-use crate::reactive::{JobType, push_job};
 use crate::renderer::PaintContext;
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;

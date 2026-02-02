@@ -32,7 +32,6 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::layout::{Constraints, Size};
-use crate::reactive::invalidation::{JobType, push_job};
 use crate::widgets::Widget;
 
 /// Metadata for a widget in the layout tree.
@@ -73,16 +72,6 @@ impl WidgetId {
     /// Get the raw u64 value of this widget ID
     pub fn as_u64(self) -> u64 {
         self.0
-    }
-
-    /// Request that this widget be re-laid out (and repainted)
-    pub fn request_layout(&self) {
-        push_job(*self, JobType::Layout);
-    }
-
-    /// Request that this widget be repainted (without layout)
-    pub fn request_paint(&self) {
-        push_job(*self, JobType::Paint);
     }
 }
 

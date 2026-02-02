@@ -1,5 +1,6 @@
 pub mod animation;
 pub mod image_metadata;
+mod jobs;
 pub mod layout;
 pub mod layout_stats;
 pub mod reactive;
@@ -21,10 +22,7 @@ use std::cell::RefCell;
 
 use layout::Constraints;
 use platform::create_wayland_app;
-use reactive::{
-    has_pending_jobs, init_wakeup, set_system_clipboard, take_clipboard_change, take_cursor_change,
-    take_frame_request,
-};
+use reactive::{set_system_clipboard, take_clipboard_change, take_cursor_change};
 use renderer::{GpuContext, PaintContext, Renderer, flatten_tree_into};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, init_surface_commands};
 use surface_manager::{ManagedSurface, SurfaceManager};
@@ -94,9 +92,10 @@ use std::sync::mpsc::Receiver;
 
 use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 
-use crate::reactive::JobType;
-use crate::reactive::invalidation::get_pending_jobs;
-use crate::tree::Tree;
+use crate::{
+    jobs::{JobType, drain_pending_jobs, has_pending_jobs, init_wakeup, take_frame_request},
+    tree::Tree,
+};
 
 /// A surface definition that stores configuration and widget factory.
 #[allow(clippy::type_complexity)]
@@ -286,7 +285,7 @@ fn render_surface(
         renderer.set_scale_factor(scale_factor);
 
         // Process pending jobs from signal updates (reconciliation + layout marking)
-        let jobs = get_pending_jobs();
+        let jobs = drain_pending_jobs();
 
         for job in jobs.iter().filter(|j| j.job_type == JobType::Unregister) {
             tree.unregister(job.widget_id);

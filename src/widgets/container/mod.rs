@@ -12,10 +12,9 @@ use std::sync::Arc;
 
 use crate::advance_anim;
 use crate::animation::Transition;
+use crate::jobs::{JobType, push_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
-use crate::reactive::{
-    IntoMaybeDyn, JobType, MaybeDyn, focused_widget, push_job, register_layout_signal,
-};
+use crate::reactive::{IntoMaybeDyn, MaybeDyn, focused_widget, register_layout_signal};
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;

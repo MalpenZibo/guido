@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::jobs::{JobType, push_job};
 use crate::layout::{Constraints, Size};
-use crate::reactive::{JobType, OwnerId, dispose_owner, push_job, with_signal_tracking};
+use crate::reactive::{OwnerId, dispose_owner, with_signal_tracking};
 use crate::renderer::PaintContext;
 use crate::tree::{Tree, WidgetId};
 

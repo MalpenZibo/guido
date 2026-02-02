@@ -180,10 +180,7 @@ macro_rules! advance_anim {
         if let Some(ref mut anim) = $self.$anim {
             if anim.is_animating() {
                 if anim.advance().is_changed() {
-                    $crate::reactive::invalidation::push_job(
-                        $self.widget_id,
-                        $crate::reactive::invalidation::JobType::Layout,
-                    );
+                    $crate::jobs::push_job($self.widget_id, $crate::jobs::JobType::Layout);
                 }
                 $any_animating = true;
             }
@@ -195,10 +192,7 @@ macro_rules! advance_anim {
             anim.animate_to($target_expr);
             if anim.is_animating() {
                 if anim.advance().is_changed() {
-                    $crate::reactive::invalidation::push_job(
-                        $self.widget_id,
-                        $crate::reactive::invalidation::JobType::Layout,
-                    );
+                    $crate::jobs::push_job($self.widget_id, $crate::jobs::JobType::Layout);
                 }
                 $any_animating = true;
             }
@@ -225,10 +219,7 @@ macro_rules! advance_anim {
             anim.animate_to($target_expr);
             if anim.is_animating() {
                 if anim.advance().is_changed() {
-                    $crate::reactive::invalidation::push_job(
-                        $self.widget_id,
-                        $crate::reactive::invalidation::JobType::Paint,
-                    );
+                    $crate::jobs::push_job($self.widget_id, $crate::jobs::JobType::Paint);
                 }
                 $any_animating = true;
             }

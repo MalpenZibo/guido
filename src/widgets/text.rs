@@ -1,6 +1,7 @@
 use crate::default_font_family;
+use crate::jobs::JobType;
 use crate::layout::{Constraints, Size};
-use crate::reactive::{IntoMaybeDyn, MaybeDyn};
+use crate::reactive::{IntoMaybeDyn, MaybeDyn, with_signal_tracking};
 use crate::renderer::{PaintContext, measure_text_styled};
 use crate::tree::{Tree, WidgetId};
 
@@ -116,7 +117,6 @@ impl Text {
     /// Uses signal tracking to register layout dependencies so the widget
     /// is re-laid out when any of these signals change.
     fn refresh(&mut self) {
-        use crate::reactive::{JobType, with_signal_tracking};
         with_signal_tracking(self.widget_id, JobType::Layout, || {
             self.cached_text = self.content.get();
             self.cached_font_size = self.font_size.get();
