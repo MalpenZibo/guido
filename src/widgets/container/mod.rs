@@ -14,7 +14,8 @@ use crate::advance_anim;
 use crate::animation::Transition;
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
-    IntoMaybeDyn, MaybeDyn, focused_widget, register_layout_signal, request_animation_frame,
+    IntoMaybeDyn, JobType, MaybeDyn, focused_widget, push_job, register_layout_signal,
+    request_frame,
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
@@ -1135,7 +1136,8 @@ impl Widget for Container {
                     anim.set_immediate(effective_target);
                 } else {
                     anim.animate_to(effective_target);
-                    request_animation_frame();
+                    push_job(self.widget_id, JobType::Paint);
+                    request_frame();
                 }
             }
         }
@@ -1152,7 +1154,8 @@ impl Widget for Container {
                     anim.set_immediate(effective_target);
                 } else {
                     anim.animate_to(effective_target);
-                    request_animation_frame();
+                    push_job(self.widget_id, JobType::Paint);
+                    request_frame();
                 }
             }
         }
@@ -1312,7 +1315,8 @@ impl Widget for Container {
                     let was_hovered = self.is_hovered;
                     self.is_hovered = true;
                     if !was_hovered && self.hover_state.is_some() {
-                        request_animation_frame();
+                        push_job(self.widget_id, JobType::Paint);
+                        request_frame();
                     }
                     if let Some(ref callback) = self.on_hover {
                         callback(true);
@@ -1326,7 +1330,8 @@ impl Widget for Container {
 
                 if was_hovered != self.is_hovered {
                     if self.hover_state.is_some() {
-                        request_animation_frame();
+                        push_job(self.widget_id, JobType::Paint);
+                        request_frame();
                     }
                     if let Some(ref callback) = self.on_hover {
                         callback(self.is_hovered);
@@ -1360,11 +1365,13 @@ impl Widget for Container {
                             (screen_x - self.bounds.x, screen_y - self.bounds.y)
                         };
                         self.ripple.start(local_x, local_y);
-                        request_animation_frame();
+                        push_job(self.widget_id, JobType::Paint);
+                        request_frame();
                     }
 
                     if !was_pressed && self.pressed_state.is_some() {
-                        request_animation_frame();
+                        push_job(self.widget_id, JobType::Paint);
+                        request_frame();
                     }
                     if self.on_click.is_some() {
                         return EventResponse::Handled;
@@ -1391,11 +1398,13 @@ impl Widget for Container {
                             (screen_x - self.bounds.x, screen_y - self.bounds.y)
                         };
                         self.ripple.start_fade(local_x, local_y);
-                        request_animation_frame();
+                        push_job(self.widget_id, JobType::Paint);
+                        request_frame();
                     }
 
                     if was_pressed && self.pressed_state.is_some() {
-                        request_animation_frame();
+                        push_job(self.widget_id, JobType::Paint);
+                        request_frame();
                     }
                     if self.bounds.contains_rounded(*x, *y, corner_radius)
                         && let Some(ref callback) = self.on_click
@@ -1420,13 +1429,15 @@ impl Widget for Container {
                 if self.ripple.is_active() {
                     self.ripple
                         .start_fade_to_center(self.bounds.width, self.bounds.height);
-                    request_animation_frame();
+                    push_job(self.widget_id, JobType::Paint);
+                    request_frame();
                 }
 
                 if (was_hovered && self.hover_state.is_some())
                     || (was_pressed && self.pressed_state.is_some())
                 {
-                    request_animation_frame();
+                    push_job(self.widget_id, JobType::Paint);
+                    request_frame();
                 }
             }
             Event::Scroll {
@@ -1440,7 +1451,8 @@ impl Widget for Container {
                     if self.scroll_axis != ScrollAxis::None {
                         let consumed = self.apply_scroll(*delta_x, *delta_y, *source);
                         if consumed {
-                            request_animation_frame();
+                            push_job(self.widget_id, JobType::Paint);
+                            request_frame();
                             return EventResponse::Handled;
                         }
                     }

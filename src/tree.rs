@@ -32,8 +32,8 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::layout::{Constraints, Size};
-use crate::reactive::invalidation::APP_STATE;
-use crate::reactive::{ChangeFlags, request_frame};
+use crate::reactive::invalidation::{JobType, push_job};
+use crate::reactive::request_frame;
 use crate::widgets::Widget;
 
 /// Metadata for a widget in the layout tree.
@@ -78,17 +78,13 @@ impl WidgetId {
 
     /// Request that this widget be re-laid out (and repainted)
     pub fn request_layout(&self) {
-        APP_STATE.with(|state| {
-            state.borrow_mut().change_flags |= ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT;
-        });
+        push_job(*self, JobType::Layout);
         request_frame();
     }
 
     /// Request that this widget be repainted (without layout)
     pub fn request_paint(&self) {
-        APP_STATE.with(|state| {
-            state.borrow_mut().change_flags |= ChangeFlags::NEEDS_PAINT;
-        });
+        push_job(*self, JobType::Paint);
         request_frame();
     }
 }

@@ -9,7 +9,7 @@ use smithay_client_toolkit::reexports::client::Connection;
 
 use crate::layout::Constraints;
 use crate::platform::{WaylandState, WaylandWindowWrapper};
-use crate::renderer::{GpuContext, SurfaceState};
+use crate::renderer::{FlattenedCommand, GpuContext, RenderNode, RenderTree, SurfaceState};
 use crate::surface::{SurfaceConfig, SurfaceId};
 use crate::tree::{Tree, WidgetId};
 use crate::widgets::Widget;
@@ -29,6 +29,12 @@ pub struct ManagedSurface {
     pub wgpu_surface: Option<SurfaceState>,
     /// Previous scale factor for detecting changes
     pub previous_scale_factor: f32,
+    /// Render tree (reused across frames to avoid allocation)
+    pub render_tree: RenderTree,
+    /// Root render node (reused across frames to avoid allocation)
+    pub root_node: RenderNode,
+    /// Flattened commands buffer (reused across frames to avoid allocation)
+    pub flattened_commands: Vec<FlattenedCommand>,
 }
 
 impl ManagedSurface {
@@ -50,6 +56,9 @@ impl ManagedSurface {
             widget_id,
             wgpu_surface: None,
             previous_scale_factor: 1.0,
+            render_tree: RenderTree::new(),
+            root_node: RenderNode::new(0),
+            flattened_commands: Vec::new(),
         }
     }
 

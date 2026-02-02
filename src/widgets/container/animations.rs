@@ -198,12 +198,16 @@ macro_rules! advance_anim {
             }
         }
     };
-    // Paint animation: requests paint when value changes
+    // Paint animation: push paint job when value changes
     ($self:expr, $anim:ident, $any_animating:expr, paint) => {
         if let Some(ref mut anim) = $self.$anim {
             if anim.is_animating() {
                 if anim.advance().is_changed() {
-                    $crate::reactive::request_paint();
+                    $crate::reactive::invalidation::push_job(
+                        $self.widget_id,
+                        $crate::reactive::invalidation::JobType::Paint,
+                    );
+                    $crate::reactive::request_frame();
                 }
                 $any_animating = true;
             }
@@ -215,7 +219,11 @@ macro_rules! advance_anim {
             anim.animate_to($target_expr);
             if anim.is_animating() {
                 if anim.advance().is_changed() {
-                    $crate::reactive::request_paint();
+                    $crate::reactive::invalidation::push_job(
+                        $self.widget_id,
+                        $crate::reactive::invalidation::JobType::Paint,
+                    );
+                    $crate::reactive::request_frame();
                 }
                 $any_animating = true;
             }

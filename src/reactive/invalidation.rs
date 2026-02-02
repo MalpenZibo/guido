@@ -3,8 +3,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use bitflags::bitflags;
-
 // ============================================================================
 // Job-Based Reactive Invalidation System
 // ============================================================================
@@ -49,63 +47,14 @@ fn drain_pending_jobs() -> Vec<Job> {
     std::mem::take(&mut *pending_jobs_queue().lock().unwrap())
 }
 
+/// Check if there are pending jobs (thread-safe)
+pub fn has_pending_jobs() -> bool {
+    !pending_jobs_queue().lock().unwrap().is_empty()
+}
+
 use smithay_client_toolkit::reexports::calloop::ping::Ping;
 
 use crate::tree::{Tree, WidgetId};
-
-bitflags! {
-    /// Flags indicating what aspects of rendering need to be updated
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub struct ChangeFlags: u8 {
-        /// Widget needs layout recalculation (size/position may change)
-        const NEEDS_LAYOUT = 0b01;
-        /// Widget needs repainting (visual appearance changed)
-        const NEEDS_PAINT  = 0b10;
-    }
-}
-
-/// Application state for tracking what needs updating
-pub struct AppState {
-    /// Global change flags
-    pub change_flags: ChangeFlags,
-    /// Whether animations are currently active
-    pub has_animations: bool,
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl AppState {
-    pub fn new() -> Self {
-        Self {
-            change_flags: ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT,
-            has_animations: false,
-        }
-    }
-
-    pub fn needs_layout(&self) -> bool {
-        self.change_flags.contains(ChangeFlags::NEEDS_LAYOUT)
-    }
-
-    pub fn needs_paint(&self) -> bool {
-        self.change_flags.contains(ChangeFlags::NEEDS_PAINT)
-    }
-
-    pub fn clear_layout_flag(&mut self) {
-        self.change_flags.remove(ChangeFlags::NEEDS_LAYOUT);
-    }
-
-    pub fn clear_paint_flag(&mut self) {
-        self.change_flags.remove(ChangeFlags::NEEDS_PAINT);
-    }
-}
-
-thread_local! {
-    pub static APP_STATE: RefCell<AppState> = RefCell::new(AppState::new());
-}
 
 // ============================================================================
 // Signal Tracking Context System
@@ -199,10 +148,6 @@ pub fn notify_signal_change(signal_id: usize) {
     }
 
     if has_subscribers {
-        // Set paint flag and request frame
-        APP_STATE.with(|state| {
-            state.borrow_mut().change_flags |= ChangeFlags::NEEDS_PAINT;
-        });
         request_frame();
     }
 }
@@ -272,8 +217,6 @@ pub fn process_pending_jobs_with_tree(tree: &mut Tree) {
             .or_insert(job.job_type);
     }
 
-    let mut has_paint_only = false;
-
     for (widget_id, job_type) in widget_jobs {
         match job_type {
             JobType::Unregister => {
@@ -294,16 +237,10 @@ pub fn process_pending_jobs_with_tree(tree: &mut Tree) {
                 tree.mark_needs_layout(widget_id);
             }
             JobType::Paint => {
-                // Paint-only jobs just need repaint
-                has_paint_only = true;
+                // Paint-only jobs: frame already requested, no further action needed
+                // The main loop will render when it processes the frame request
             }
         }
-    }
-
-    if has_paint_only {
-        APP_STATE.with(|state| {
-            state.borrow_mut().change_flags |= ChangeFlags::NEEDS_PAINT;
-        });
     }
 }
 
@@ -311,12 +248,6 @@ pub fn process_pending_jobs_with_tree(tree: &mut Tree) {
 /// Pushes a Layout job that will be processed by `process_pending_jobs_with_tree`.
 pub fn mark_needs_layout(widget_id: WidgetId) {
     push_job(widget_id, JobType::Layout);
-
-    // Set NEEDS_PAINT so we repaint after layout changes
-    APP_STATE.with(|state| {
-        state.borrow_mut().change_flags |= ChangeFlags::NEEDS_PAINT;
-    });
-
     request_frame();
 }
 
@@ -348,54 +279,7 @@ pub fn take_frame_request() -> bool {
     FRAME_REQUESTED.swap(false, Ordering::Relaxed)
 }
 
-/// Request a frame for animation purposes
-pub fn request_animation_frame() {
-    APP_STATE.with(|state| {
-        state.borrow_mut().has_animations = true;
-    });
-    request_frame();
-}
-
-/// Clear the animation flag (call after animation completes)
-pub fn clear_animation_flag() {
-    APP_STATE.with(|state| {
-        state.borrow_mut().has_animations = false;
-    });
-}
-
-/// Check if animations are active
-pub fn has_animations() -> bool {
-    APP_STATE.with(|state| state.borrow().has_animations)
-}
-
-/// Access the app state for rendering decisions
-pub fn with_app_state<F, R>(f: F) -> R
-where
-    F: FnOnce(&AppState) -> R,
-{
-    APP_STATE.with(|state| f(&state.borrow()))
-}
-
-/// Mutably access the app state
-pub fn with_app_state_mut<F, R>(f: F) -> R
-where
-    F: FnOnce(&mut AppState) -> R,
-{
-    APP_STATE.with(|state| f(&mut state.borrow_mut()))
-}
-
-/// Mark that layout is needed (global)
+/// Mark that layout is needed (global helper, typically for structural changes)
 pub fn request_layout() {
-    APP_STATE.with(|state| {
-        state.borrow_mut().change_flags |= ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT;
-    });
-    request_frame();
-}
-
-/// Mark that paint is needed (global)
-pub fn request_paint() {
-    APP_STATE.with(|state| {
-        state.borrow_mut().change_flags |= ChangeFlags::NEEDS_PAINT;
-    });
     request_frame();
 }
