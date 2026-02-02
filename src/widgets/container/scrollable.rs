@@ -2,7 +2,7 @@
 
 use crate::animation::{SpringConfig, Transition};
 use crate::layout::Constraints;
-use crate::reactive::{JobType, push_job, request_frame};
+use crate::reactive::{JobType, push_job};
 use crate::renderer::PaintContext;
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
@@ -157,8 +157,8 @@ impl Container {
             anim.animate_to(target_scale);
             if anim.is_animating() {
                 let _ = anim.advance(); // Paint-only, ignore result
+                push_job(self.widget_id, JobType::Animation);
                 push_job(self.widget_id, JobType::Paint);
-                request_frame();
             }
         }
 
@@ -501,7 +501,6 @@ impl Container {
 
                 if needs_repaint {
                     push_job(self.widget_id, JobType::Paint);
-                    request_frame();
                 }
             }
 
@@ -512,7 +511,6 @@ impl Container {
                         handle.event(tree, event);
                     }
                     push_job(self.widget_id, JobType::Paint);
-                    request_frame();
                     return Some(EventResponse::Handled);
                 }
                 if self.scroll_state.h_scrollbar_dragging {
@@ -521,7 +519,6 @@ impl Container {
                         handle.event(tree, event);
                     }
                     push_job(self.widget_id, JobType::Paint);
-                    request_frame();
                     return Some(EventResponse::Handled);
                 }
             }
@@ -538,14 +535,12 @@ impl Container {
                         handle.event(tree, event);
                     }
                     push_job(self.widget_id, JobType::Paint);
-                    request_frame();
                 }
                 // Stop dragging
                 if self.scroll_state.scrollbar_dragging || self.scroll_state.h_scrollbar_dragging {
                     self.scroll_state.scrollbar_dragging = false;
                     self.scroll_state.h_scrollbar_dragging = false;
                     push_job(self.widget_id, JobType::Paint);
-                    request_frame();
                 }
             }
 
@@ -599,7 +594,6 @@ impl Container {
             }
 
             push_job(self.widget_id, JobType::Paint);
-            request_frame();
             return Some(EventResponse::Handled);
         } else if hit_area.contains(x, y) {
             // Click on track - jump to position
@@ -641,7 +635,6 @@ impl Container {
                 let offset = ratio * self.scroll_state.max_scroll(axis);
                 self.scroll_state.set_offset(axis, offset);
                 push_job(self.widget_id, JobType::Paint);
-                request_frame();
             }
             return Some(EventResponse::Handled);
         }
@@ -677,7 +670,6 @@ impl Container {
                 (start_offset + scroll_delta).clamp(0.0, self.scroll_state.max_scroll(axis));
             self.scroll_state.set_offset(axis, new_offset);
             push_job(self.widget_id, JobType::Paint);
-            request_frame();
         }
 
         EventResponse::Handled

@@ -229,7 +229,6 @@ macro_rules! advance_anim {
                         $self.widget_id,
                         $crate::reactive::invalidation::JobType::Paint,
                     );
-                    $crate::reactive::request_frame();
                 }
                 $any_animating = true;
             }

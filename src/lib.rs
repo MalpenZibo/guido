@@ -21,10 +21,9 @@ use std::cell::RefCell;
 
 use layout::Constraints;
 use platform::create_wayland_app;
-use reactive::invalidation::process_pending_jobs_with_tree;
 use reactive::{
-    JobType, has_pending_jobs, init_wakeup, push_job, request_frame, set_system_clipboard,
-    take_clipboard_change, take_cursor_change, take_frame_request,
+    has_pending_jobs, init_wakeup, set_system_clipboard, take_clipboard_change, take_cursor_change,
+    take_frame_request,
 };
 use renderer::{GpuContext, PaintContext, Renderer, flatten_tree_into};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, init_surface_commands};
@@ -95,6 +94,8 @@ use std::sync::mpsc::Receiver;
 
 use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 
+use crate::reactive::JobType;
+use crate::reactive::invalidation::get_pending_jobs;
 use crate::tree::Tree;
 
 /// A surface definition that stores configuration and widget factory.
@@ -284,18 +285,23 @@ fn render_surface(
         renderer.set_screen_size(physical_width as f32, physical_height as f32);
         renderer.set_scale_factor(scale_factor);
 
-        // Advance animations first (separate from layout)
-        let animations_active = tree
-            .with_widget_mut(surface.widget_id, |widget| widget.advance_animations(tree))
-            .unwrap_or(false);
-        if animations_active {
-            // Queue paint job for next frame to continue animation
-            push_job(surface.widget_id, JobType::Paint);
-            request_frame();
-        }
-
         // Process pending jobs from signal updates (reconciliation + layout marking)
-        process_pending_jobs_with_tree(tree);
+        let jobs = get_pending_jobs();
+
+        for job in jobs.iter().filter(|j| j.job_type == JobType::Unregister) {
+            tree.unregister(job.widget_id);
+        }
+        for job in jobs.iter().filter(|j| j.job_type == JobType::Reconcile) {
+            let widget_cell = tree.get_widget_mut(job.widget_id);
+            if let Some(widget_cell) = widget_cell {
+                let mut widget = widget_cell.borrow_mut();
+                widget.reconcile_children(tree);
+                tree.mark_needs_layout(job.widget_id);
+            }
+        }
+        for job in jobs.iter().filter(|j| j.job_type == JobType::Layout) {
+            tree.mark_needs_layout(job.widget_id);
+        }
 
         // Re-layout using partial layout from boundaries when available
         let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
@@ -347,6 +353,14 @@ fn render_surface(
         // Restore root_node for next frame (take it back from render_tree)
         if let Some(root) = surface.render_tree.roots.pop() {
             surface.root_node = root;
+        }
+
+        // Process Animation jobs AFTER paint (advance for next frame)
+        // This only processes widgets with Animation jobs, not the entire tree
+        for job in jobs.iter().filter(|j| j.job_type == JobType::Animation) {
+            tree.with_widget_mut(job.widget_id, |widget| {
+                widget.advance_animations(tree);
+            });
         }
 
         // Track layout stats (when compiled with --features layout-stats)

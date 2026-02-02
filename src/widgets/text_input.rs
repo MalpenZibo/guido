@@ -15,7 +15,7 @@ use crate::default_font_family;
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
     CursorIcon, IntoMaybeDyn, JobType, MaybeDyn, Signal, clipboard_copy, clipboard_paste,
-    has_focus, push_job, release_focus, request_focus, request_frame, set_cursor,
+    has_focus, push_job, release_focus, request_focus, set_cursor,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled, measure_text_styled};
 use crate::tree::{Tree, WidgetId};
@@ -512,7 +512,6 @@ impl TextInput {
             }
             // Keep requesting frames for blinking
             push_job(self.widget_id, JobType::Paint);
-            request_frame();
         }
     }
 
@@ -545,7 +544,6 @@ impl TextInput {
 
             // Keep requesting frames while a key is held
             push_job(self.widget_id, JobType::Paint);
-            request_frame();
         }
     }
 
@@ -1088,7 +1086,6 @@ impl Widget for TextInput {
                     // Request focus
                     request_focus(self.widget_id);
                     push_job(self.widget_id, JobType::Paint);
-                    request_frame();
 
                     // Set cursor position
                     let char_index = self.char_index_at_x(*x);
@@ -1118,7 +1115,6 @@ impl Widget for TextInput {
                     self.selection.cursor = char_index;
                     self.ensure_cursor_visible();
                     push_job(self.widget_id, JobType::Paint);
-                    request_frame();
                     return EventResponse::Handled;
                 }
             }
@@ -1139,7 +1135,6 @@ impl Widget for TextInput {
                     let response = self.handle_key(key, modifiers.ctrl, modifiers.shift);
                     if response == EventResponse::Handled {
                         push_job(self.widget_id, JobType::Paint);
-                        request_frame();
                     }
                     return response;
                 }
@@ -1158,7 +1153,6 @@ impl Widget for TextInput {
                     self.cursor_visible = false;
                     self.is_dragging = false;
                     push_job(self.widget_id, JobType::Paint);
-                    request_frame();
                 }
             }
             Event::MouseLeave => {

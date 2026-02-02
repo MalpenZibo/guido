@@ -18,6 +18,8 @@ pub enum JobType {
     Reconcile,
     /// Widget needs to be unregistered from the tree (deferred cleanup for Drop)
     Unregister,
+    /// Widget has active animations that need advancement
+    Animation,
 }
 
 /// A reactive update job
@@ -35,11 +37,13 @@ fn pending_jobs_queue() -> &'static Mutex<Vec<Job>> {
 }
 
 /// Push a job to the queue (thread-safe)
+/// Animation jobs are routed to a separate queue for processing after paint.
 pub fn push_job(widget_id: WidgetId, job_type: JobType) {
     pending_jobs_queue().lock().unwrap().push(Job {
         widget_id,
         job_type,
     });
+    request_frame();
 }
 
 /// Drain all pending jobs
@@ -48,13 +52,14 @@ fn drain_pending_jobs() -> Vec<Job> {
 }
 
 /// Check if there are pending jobs (thread-safe)
+/// This includes both regular jobs and animation jobs.
 pub fn has_pending_jobs() -> bool {
     !pending_jobs_queue().lock().unwrap().is_empty()
 }
 
 use smithay_client_toolkit::reexports::calloop::ping::Ping;
 
-use crate::tree::{Tree, WidgetId};
+use crate::tree::WidgetId;
 
 // ============================================================================
 // Signal Tracking Context System
@@ -141,14 +146,8 @@ pub fn notify_signal_change(signal_id: usize) {
         .map(|s| s.iter().copied().collect())
         .unwrap_or_default();
 
-    let has_subscribers = !subscribers.is_empty();
-
     for sub in &subscribers {
         push_job(sub.widget_id, sub.job_type);
-    }
-
-    if has_subscribers {
-        request_frame();
     }
 }
 
@@ -190,58 +189,8 @@ pub fn clear_layout_subscribers(signal_id: usize) {
 /// - Paint jobs: set the NEEDS_PAINT flag
 ///
 /// Must be called from the main loop which has tree access.
-pub fn process_pending_jobs_with_tree(tree: &mut Tree) {
-    let jobs = drain_pending_jobs();
-
-    // Deduplicate jobs by widget - keep highest priority job type per widget
-    // Priority: Reconcile > Layout > Paint
-    let mut widget_jobs: HashMap<WidgetId, JobType> = HashMap::new();
-
-    for job in jobs {
-        widget_jobs
-            .entry(job.widget_id)
-            .and_modify(|existing| {
-                // Keep the higher priority job type
-                // Priority: Unregister > Reconcile > Layout > Paint
-                // Unregister is highest because it means the widget is being removed
-                *existing = match (*existing, job.job_type) {
-                    (JobType::Unregister, _) => JobType::Unregister,
-                    (_, JobType::Unregister) => JobType::Unregister,
-                    (JobType::Reconcile, _) => JobType::Reconcile,
-                    (_, JobType::Reconcile) => JobType::Reconcile,
-                    (JobType::Layout, _) => JobType::Layout,
-                    (_, JobType::Layout) => JobType::Layout,
-                    _ => JobType::Paint,
-                };
-            })
-            .or_insert(job.job_type);
-    }
-
-    for (widget_id, job_type) in widget_jobs {
-        match job_type {
-            JobType::Unregister => {
-                // Deferred unregistration from Drop handlers
-                tree.unregister(widget_id);
-            }
-            JobType::Reconcile => {
-                // Run reconciliation, then mark for layout
-                let widget_cell = tree.get_widget_mut(widget_id);
-                if let Some(widget_cell) = widget_cell {
-                    let mut widget = widget_cell.borrow_mut();
-                    widget.reconcile_children(tree);
-                    tree.mark_needs_layout(widget_id);
-                }
-            }
-            JobType::Layout => {
-                // Mark widget as needing layout in the tree
-                tree.mark_needs_layout(widget_id);
-            }
-            JobType::Paint => {
-                // Paint-only jobs: frame already requested, no further action needed
-                // The main loop will render when it processes the frame request
-            }
-        }
-    }
+pub fn get_pending_jobs() -> Vec<Job> {
+    drain_pending_jobs()
 }
 
 /// Global flag to indicate a frame is requested
@@ -256,7 +205,7 @@ pub fn init_wakeup(ping: Ping) {
 }
 
 /// Request that the main event loop process a frame
-pub fn request_frame() {
+fn request_frame() {
     // Only ping on first request - avoids redundant syscalls when multiple signals update
     let was_requested = FRAME_REQUESTED.swap(true, Ordering::Relaxed);
     if !was_requested {
@@ -270,9 +219,4 @@ pub fn request_frame() {
 /// Check if a frame has been requested and clear the flag
 pub fn take_frame_request() -> bool {
     FRAME_REQUESTED.swap(false, Ordering::Relaxed)
-}
-
-/// Mark that layout is needed (global helper, typically for structural changes)
-pub fn request_layout() {
-    request_frame();
 }

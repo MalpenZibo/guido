@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use super::invalidation::{notify_signal_change, record_signal_read, request_frame};
+use super::invalidation::{notify_signal_change, record_signal_read};
 use super::owner::register_signal;
 use super::runtime::{SignalId, try_with_runtime};
 use super::storage::{
@@ -91,7 +91,6 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Signal<T> {
             notify_signal_change(self.id);
             // Notify runtime (only on main thread)
             try_with_runtime(|rt| rt.notify_write(self.id));
-            request_frame();
         }
     }
 
@@ -107,7 +106,6 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Signal<T> {
             // Notify layout subscribers (widgets depending on this signal)
             notify_signal_change(self.id);
             try_with_runtime(|rt| rt.notify_write(self.id));
-            request_frame();
         }
     }
 
@@ -193,7 +191,6 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> WriteSignal<T> {
             set_signal_value(self.id, value);
             notify_signal_change(self.id);
             try_with_runtime(|rt| rt.notify_write(self.id));
-            request_frame();
         }
     }
 
@@ -211,7 +208,6 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> WriteSignal<T> {
         if changed {
             notify_signal_change(self.id);
             try_with_runtime(|rt| rt.notify_write(self.id));
-            request_frame();
         }
     }
 
