@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex};
 
 use crate::jobs::{JobType, push_job};
 use crate::tree::WidgetId;
@@ -62,15 +62,12 @@ struct Subscriber {
 
 /// Thread-safe map from signal ID to subscribers
 /// Must be thread-safe because signals can be updated from background threads
-static SIGNAL_SUBSCRIBERS: OnceLock<Mutex<HashMap<usize, HashSet<Subscriber>>>> = OnceLock::new();
-
-fn signal_subscribers() -> &'static Mutex<HashMap<usize, HashSet<Subscriber>>> {
-    SIGNAL_SUBSCRIBERS.get_or_init(|| Mutex::new(HashMap::new()))
-}
+static SIGNAL_SUBSCRIBERS: LazyLock<Mutex<HashMap<usize, HashSet<Subscriber>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Register a widget as a subscriber for a signal with a specific job type
 pub fn register_subscriber(widget_id: WidgetId, signal_id: usize, job_type: JobType) {
-    signal_subscribers()
+    SIGNAL_SUBSCRIBERS
         .lock()
         .unwrap()
         .entry(signal_id)
@@ -83,7 +80,7 @@ pub fn register_subscriber(widget_id: WidgetId, signal_id: usize, job_type: JobT
 
 /// Notify all subscribers of a signal change by creating jobs
 pub fn notify_signal_change(signal_id: usize) {
-    let subscribers: Vec<Subscriber> = signal_subscribers()
+    let subscribers: Vec<Subscriber> = SIGNAL_SUBSCRIBERS
         .lock()
         .unwrap()
         .get(&signal_id)
@@ -97,7 +94,7 @@ pub fn notify_signal_change(signal_id: usize) {
 
 /// Clear signal subscribers for a specific signal (when signal is disposed)
 pub fn clear_signal_subscribers(signal_id: usize) {
-    signal_subscribers().lock().unwrap().remove(&signal_id);
+    SIGNAL_SUBSCRIBERS.lock().unwrap().remove(&signal_id);
 }
 
 /// Register a layout dependency: when the signal changes, the widget needs re-layout.

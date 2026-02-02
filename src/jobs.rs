@@ -12,11 +12,7 @@ use smithay_client_toolkit::reexports::calloop::ping::Ping;
 use crate::tree::WidgetId;
 
 /// Thread-safe job queue for pending reactive updates
-static PENDING_JOBS: OnceLock<Mutex<Vec<Job>>> = OnceLock::new();
-
-fn pending_jobs_queue() -> &'static Mutex<Vec<Job>> {
-    PENDING_JOBS.get_or_init(|| Mutex::new(Vec::new()))
-}
+static PENDING_JOBS: Mutex<Vec<Job>> = Mutex::new(Vec::new());
 
 /// Job types for reactive invalidation
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -43,7 +39,7 @@ pub struct Job {
 /// Push a job to the queue (thread-safe)
 /// Animation jobs are routed to a separate queue for processing after paint.
 pub fn push_job(widget_id: WidgetId, job_type: JobType) {
-    pending_jobs_queue().lock().unwrap().push(Job {
+    PENDING_JOBS.lock().unwrap().push(Job {
         widget_id,
         job_type,
     });
@@ -52,13 +48,13 @@ pub fn push_job(widget_id: WidgetId, job_type: JobType) {
 
 /// Drain all pending jobs
 pub fn drain_pending_jobs() -> Vec<Job> {
-    std::mem::take(&mut *pending_jobs_queue().lock().unwrap())
+    std::mem::take(&mut *PENDING_JOBS.lock().unwrap())
 }
 
 /// Check if there are pending jobs (thread-safe)
 /// This includes both regular jobs and animation jobs.
 pub fn has_pending_jobs() -> bool {
-    !pending_jobs_queue().lock().unwrap().is_empty()
+    !PENDING_JOBS.lock().unwrap().is_empty()
 }
 
 /// Global flag to indicate a frame is requested
