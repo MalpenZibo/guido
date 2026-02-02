@@ -51,8 +51,8 @@ impl<T: Animatable> AnimationState<T> {
             None
         };
         Self {
-            current: initial_value.clone(),
-            target: initial_value.clone(),
+            current: initial_value,
+            target: initial_value,
             start: initial_value,
             progress: 1.0, // Start completed
             start_time: Instant::now(),
@@ -70,8 +70,8 @@ impl<T: Animatable> AnimationState<T> {
             return;
         }
 
-        self.start = self.current.clone();
-        self.target = new_target.clone();
+        self.start = self.current;
+        self.target = new_target;
         self.progress = 0.0;
         self.start_time = Instant::now();
         // Reset spring state for new animation
@@ -131,8 +131,8 @@ impl<T: Animatable> AnimationState<T> {
 
         // Check if value actually changed
         let changed = self.prev_value.as_ref() != Some(&new_value);
-        self.current = new_value.clone();
-        self.prev_value = Some(new_value.clone());
+        self.current = new_value;
+        self.prev_value = Some(new_value);
 
         if changed {
             AdvanceResult::Changed(new_value)
@@ -158,8 +158,8 @@ impl<T: Animatable> AnimationState<T> {
 
     /// Set value immediately without animation (for initialization)
     pub fn set_immediate(&mut self, value: T) {
-        self.current = value.clone();
-        self.target = value.clone();
+        self.current = value;
+        self.target = value;
         self.start = value;
         self.progress = 1.0;
         self.initialized = true;
@@ -229,13 +229,11 @@ macro_rules! advance_anim {
 
 /// Helper to get an animated value or a fallback
 #[inline]
-pub fn get_animated_value<T: Animatable + Clone>(
+pub fn get_animated_value<T: Animatable + Copy>(
     anim: &Option<AnimationState<T>>,
     fallback: impl FnOnce() -> T,
 ) -> T {
-    anim.as_ref()
-        .map(|a| a.current().clone())
-        .unwrap_or_else(fallback)
+    anim.as_ref().map(|a| *a.current()).unwrap_or_else(fallback)
 }
 
 #[cfg(test)]
