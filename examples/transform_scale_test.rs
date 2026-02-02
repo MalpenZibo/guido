@@ -8,7 +8,7 @@ fn main() {
             .height(150)
             .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
             .background_color(Color::rgb(0.15, 0.15, 0.2)),
-        || {
+        |_| {
             container()
                 .layout(
                     Flex::row()

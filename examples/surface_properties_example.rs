@@ -26,7 +26,7 @@ fn main() {
             .keyboard_interactivity(KeyboardInteractivity::OnDemand)
             .namespace("surface-properties-example")
             .background_color(Color::rgb(0.1, 0.1, 0.15)),
-        move || {
+        move |_| {
             container()
                 .padding(24.0)
                 .layout(Flex::column().spacing(16.0))

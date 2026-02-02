@@ -61,7 +61,7 @@ fn main() {
             .height(40)
             .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
             .background_color(Color::rgb(0.1, 0.1, 0.15)),
-        move || {
+        move |_| {
             let svc = service.clone();
 
             container()

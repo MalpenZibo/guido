@@ -323,99 +323,6 @@ impl Default for LayoutArena {
     }
 }
 
-// Thread-local arena instance
-thread_local! {
-    static LAYOUT_ARENA: LayoutArena = LayoutArena::new();
-}
-
-/// Access the layout arena.
-pub fn with_layout_arena<F, R>(f: F) -> R
-where
-    F: FnOnce(&LayoutArena) -> R,
-{
-    LAYOUT_ARENA.with(|arena| f(arena))
-}
-
-/// Register a widget in the global arena.
-pub fn register_widget(id: WidgetId, widget: Box<dyn Widget>) {
-    with_layout_arena(|arena| arena.register(id, widget));
-}
-
-/// Unregister a widget from the global arena.
-pub fn unregister_widget(id: WidgetId) {
-    with_layout_arena(|arena| arena.unregister(id));
-}
-
-/// Set the parent of a widget in the global arena.
-pub fn arena_set_parent(child_id: WidgetId, parent_id: WidgetId) {
-    with_layout_arena(|arena| arena.set_parent(child_id, parent_id));
-}
-
-/// Get the parent of a widget from the global arena.
-pub fn arena_get_parent(id: WidgetId) -> Option<WidgetId> {
-    with_layout_arena(|arena| arena.get_parent(id))
-}
-
-/// Mark a widget as needing layout in the global arena.
-pub fn arena_mark_needs_layout(widget_id: WidgetId) {
-    with_layout_arena(|arena| arena.mark_needs_layout(widget_id));
-}
-
-/// Set whether a widget is a relayout boundary in the global arena.
-pub fn arena_set_relayout_boundary(id: WidgetId, is_boundary: bool) {
-    with_layout_arena(|arena| arena.set_relayout_boundary(id, is_boundary));
-}
-
-/// Check if a widget is dirty in the global arena.
-pub fn arena_is_dirty(id: WidgetId) -> bool {
-    with_layout_arena(|arena| arena.is_dirty(id))
-}
-
-/// Clear dirty flag for a widget in the global arena.
-pub fn arena_clear_dirty(id: WidgetId) {
-    with_layout_arena(|arena| arena.clear_dirty(id));
-}
-
-/// Cache layout results in the global arena.
-pub fn arena_cache_layout(id: WidgetId, constraints: Constraints, size: Size) {
-    with_layout_arena(|arena| arena.cache_layout(id, constraints, size));
-}
-
-/// Get cached constraints from the global arena.
-pub fn arena_cached_constraints(id: WidgetId) -> Option<Constraints> {
-    with_layout_arena(|arena| arena.cached_constraints(id))
-}
-
-/// Get cached size from the global arena.
-pub fn arena_cached_size(id: WidgetId) -> Option<Size> {
-    with_layout_arena(|arena| arena.cached_size(id))
-}
-
-/// Take all layout roots from the global arena.
-pub fn arena_take_layout_roots() -> Vec<WidgetId> {
-    with_layout_arena(|arena| arena.take_layout_roots())
-}
-
-/// Check if any layout roots are pending in the global arena.
-pub fn arena_has_layout_roots() -> bool {
-    with_layout_arena(|arena| arena.has_layout_roots())
-}
-
-/// Add a layout root to the global arena.
-pub fn arena_add_layout_root(id: WidgetId) {
-    with_layout_arena(|arena| arena.add_layout_root(id));
-}
-
-/// Access a widget in the global arena via a closure.
-pub fn with_arena_widget<R>(id: WidgetId, f: impl FnOnce(&dyn Widget) -> R) -> Option<R> {
-    with_layout_arena(|arena| arena.with_widget(id, f))
-}
-
-/// Access a widget mutably in the global arena via a closure.
-pub fn with_arena_widget_mut<R>(id: WidgetId, f: impl FnOnce(&mut dyn Widget) -> R) -> Option<R> {
-    with_layout_arena(|arena| arena.with_widget_mut(id, f))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,11 +333,11 @@ mod tests {
     }
 
     impl Widget for MockWidget {
-        fn layout(&mut self, constraints: Constraints) -> Size {
+        fn layout(&mut self, _arena: &LayoutArena, constraints: Constraints) -> Size {
             Size::new(constraints.max_width, constraints.max_height)
         }
 
-        fn paint(&self, _ctx: &mut crate::renderer::PaintContext) {}
+        fn paint(&self, _arena: &LayoutArena, _ctx: &mut crate::renderer::PaintContext) {}
 
         fn set_origin(&mut self, _x: f32, _y: f32) {}
 
@@ -577,8 +484,9 @@ mod tests {
         assert_eq!(widget_id, Some(id));
 
         // Mutate widget (layout)
-        let size =
-            arena.with_widget_mut(id, |w| w.layout(Constraints::new(0.0, 0.0, 100.0, 100.0)));
+        let size = arena.with_widget_mut(id, |w| {
+            w.layout(&arena, Constraints::new(0.0, 0.0, 100.0, 100.0))
+        });
         assert_eq!(size, Some(Size::new(100.0, 100.0)));
     }
 }

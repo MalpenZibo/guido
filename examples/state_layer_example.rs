@@ -13,7 +13,7 @@ fn main() {
             .height(400)
             .anchor(Anchor::TOP | Anchor::LEFT)
             .background_color(Color::rgb(0.08, 0.08, 0.12)),
-        || {
+        |_| {
             container()
                 .background(Color::rgb(0.08, 0.08, 0.12))
                 .padding(24.0)

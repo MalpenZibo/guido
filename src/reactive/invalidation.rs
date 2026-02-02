@@ -18,6 +18,8 @@ pub enum JobType {
     Paint,
     /// Widget needs children reconciliation (implies layout)
     Reconcile,
+    /// Widget needs to be unregistered from the arena (deferred cleanup for Drop)
+    Unregister,
 }
 
 /// A reactive update job
@@ -266,15 +268,16 @@ pub fn clear_layout_subscribers(signal_id: usize) {
     clear_signal_subscribers(signal_id);
 }
 
-/// Process pending jobs from signal updates.
+/// Process pending jobs with an explicit arena reference.
 ///
 /// This drains the pending job queue and processes each job:
+/// - Unregister jobs: remove widget from arena (deferred cleanup from Drop)
 /// - Reconcile jobs: run reconcile_children() on the widget, then mark for layout
 /// - Layout jobs: mark the widget as needing layout in the arena
 /// - Paint jobs: set the NEEDS_PAINT flag
 ///
 /// Must be called from the main loop which has arena access.
-pub fn process_pending_jobs() {
+pub fn process_pending_jobs_with_arena(arena: &super::layout_arena::LayoutArena) {
     let jobs = drain_pending_jobs();
 
     // Deduplicate jobs by widget - keep highest priority job type per widget
@@ -286,7 +289,11 @@ pub fn process_pending_jobs() {
             .entry(job.widget_id)
             .and_modify(|existing| {
                 // Keep the higher priority job type
+                // Priority: Unregister > Reconcile > Layout > Paint
+                // Unregister is highest because it means the widget is being removed
                 *existing = match (*existing, job.job_type) {
+                    (JobType::Unregister, _) => JobType::Unregister,
+                    (_, JobType::Unregister) => JobType::Unregister,
                     (JobType::Reconcile, _) => JobType::Reconcile,
                     (_, JobType::Reconcile) => JobType::Reconcile,
                     (JobType::Layout, _) => JobType::Layout,
@@ -301,16 +308,20 @@ pub fn process_pending_jobs() {
 
     for (widget_id, job_type) in widget_jobs {
         match job_type {
+            JobType::Unregister => {
+                // Deferred unregistration from Drop handlers
+                arena.unregister(widget_id);
+            }
             JobType::Reconcile => {
                 // Run reconciliation, then mark for layout
-                super::layout_arena::with_arena_widget_mut(widget_id, |widget| {
-                    widget.reconcile_children();
+                arena.with_widget_mut(widget_id, |widget| {
+                    widget.reconcile_children(arena);
                 });
-                super::layout_arena::arena_mark_needs_layout(widget_id);
+                arena.mark_needs_layout(widget_id);
             }
             JobType::Layout => {
                 // Mark widget as needing layout in the arena
-                super::layout_arena::arena_mark_needs_layout(widget_id);
+                arena.mark_needs_layout(widget_id);
             }
             JobType::Paint => {
                 // Paint-only jobs just need repaint
@@ -326,24 +337,12 @@ pub fn process_pending_jobs() {
     }
 }
 
-/// Process pending layout invalidations from signal updates.
-/// This is an alias for process_pending_jobs for backward compatibility.
-pub fn process_pending_layout() {
-    process_pending_jobs();
-}
-
 /// Mark a widget as needing layout.
-/// Bubbles up through parents until reaching a relayout boundary, which is
-/// added to the layout queue. If no boundary is found, bubbles to root.
-///
-/// OPTIMIZATION: Stops early if a widget in the path is already dirty,
-/// since the path to the boundary would already be marked.
+/// Pushes a Layout job that will be processed by `process_pending_jobs_with_arena`.
 pub fn mark_needs_layout(widget_id: WidgetId) {
-    // Use the arena's mark_needs_layout which stops at boundaries
-    super::layout_arena::arena_mark_needs_layout(widget_id);
+    push_job(widget_id, JobType::Layout);
 
     // Set NEEDS_PAINT so we repaint after layout changes
-    // Note: We don't set NEEDS_LAYOUT because partial layout uses layout_roots
     APP_STATE.with(|state| {
         state.borrow_mut().change_flags |= ChangeFlags::NEEDS_PAINT;
     });

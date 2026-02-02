@@ -16,7 +16,7 @@ fn main() {
             .height(480)
             .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
             .background_color(Color::rgb(0.12, 0.12, 0.16)),
-        move || {
+        move |_| {
             container()
                 .layout(Flex::column().spacing(20.0))
                 .padding(20.0)

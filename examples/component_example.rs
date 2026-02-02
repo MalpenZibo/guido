@@ -64,7 +64,7 @@ fn main() {
             .layer(Layer::Overlay)
             .namespace("component-example")
             .background_color(Color::rgb(0.1, 0.1, 0.15)),
-        move || {
+        move |_| {
             container()
                 .padding(16.0)
                 .background(Color::rgb(0.1, 0.1, 0.15))

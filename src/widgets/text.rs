@@ -1,9 +1,6 @@
 use crate::default_font_family;
 use crate::layout::{Constraints, Size};
-use crate::reactive::{
-    IntoMaybeDyn, MaybeDyn, WidgetId, arena_cache_layout, arena_clear_dirty,
-    arena_set_relayout_boundary,
-};
+use crate::reactive::{IntoMaybeDyn, LayoutArena, MaybeDyn, WidgetId};
 use crate::renderer::{PaintContext, measure_text_styled};
 
 use super::font::{FontFamily, FontWeight};
@@ -115,19 +112,23 @@ impl Text {
     }
 
     /// Refresh cached values from reactive properties.
-    /// Updates cached values for use in painting.
+    /// Uses signal tracking to register layout dependencies so the widget
+    /// is re-laid out when any of these signals change.
     fn refresh(&mut self) {
-        self.cached_text = self.content.get();
-        self.cached_font_size = self.font_size.get();
-        self.cached_font_family = self.font_family.get();
-        self.cached_font_weight = self.font_weight.get();
+        use crate::reactive::{JobType, with_signal_tracking};
+        with_signal_tracking(self.widget_id, JobType::Layout, || {
+            self.cached_text = self.content.get();
+            self.cached_font_size = self.font_size.get();
+            self.cached_font_family = self.font_family.get();
+            self.cached_font_weight = self.font_weight.get();
+        });
     }
 }
 
 impl Widget for Text {
-    fn layout(&mut self, constraints: Constraints) -> Size {
+    fn layout(&mut self, arena: &LayoutArena, constraints: Constraints) -> Size {
         // Text widgets are never relayout boundaries
-        arena_set_relayout_boundary(self.widget_id, false);
+        arena.set_relayout_boundary(self.widget_id, false);
 
         // Refresh cached values from reactive properties
         // This reads signals and registers layout dependencies
@@ -167,15 +168,15 @@ impl Widget for Text {
         self.bounds.height = size.height;
 
         // Cache constraints and size for partial layout
-        arena_cache_layout(self.widget_id, constraints, size);
+        arena.cache_layout(self.widget_id, constraints, size);
 
         // Clear dirty flag since layout is complete
-        arena_clear_dirty(self.widget_id);
+        arena.clear_dirty(self.widget_id);
 
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext) {
+    fn paint(&self, _arena: &LayoutArena, ctx: &mut PaintContext) {
         // Draw in LOCAL coordinates (0,0 is widget origin)
         // Parent Container sets position transform
         let local_bounds = Rect::new(0.0, 0.0, self.bounds.width, self.bounds.height);
@@ -190,7 +191,7 @@ impl Widget for Text {
         );
     }
 
-    fn event(&mut self, _event: &super::widget::Event) -> EventResponse {
+    fn event(&mut self, _arena: &LayoutArena, _event: &super::widget::Event) -> EventResponse {
         EventResponse::Ignored
     }
 

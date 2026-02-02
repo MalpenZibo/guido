@@ -23,18 +23,12 @@ pub use effect::{Effect, create_effect};
 pub use focus::{clear_focus, focused_widget, has_focus, release_focus, request_focus};
 pub use invalidation::{
     ChangeFlags, JobType, WidgetId, clear_animation_flag, init_wakeup, mark_needs_layout,
-    notify_signal_change, process_pending_jobs, process_pending_layout, push_job,
-    record_signal_read, register_layout_signal, register_subscriber, request_animation_frame,
-    request_frame, request_layout, request_paint, take_frame_request, with_app_state,
-    with_app_state_mut, with_signal_tracking,
+    notify_signal_change, process_pending_jobs_with_arena, push_job, record_signal_read,
+    register_layout_signal, register_subscriber, request_animation_frame, request_frame,
+    request_layout, request_paint, take_frame_request, with_app_state, with_app_state_mut,
+    with_signal_tracking,
 };
-pub use layout_arena::{
-    LayoutArena, LayoutNode, arena_add_layout_root, arena_cache_layout, arena_cached_constraints,
-    arena_cached_size, arena_clear_dirty, arena_get_parent, arena_has_layout_roots, arena_is_dirty,
-    arena_mark_needs_layout, arena_set_parent, arena_set_relayout_boundary,
-    arena_take_layout_roots, register_widget, unregister_widget, with_arena_widget,
-    with_arena_widget_mut, with_layout_arena,
-};
+pub use layout_arena::{LayoutArena, LayoutNode};
 pub use maybe_dyn::{IntoMaybeDyn, MaybeDyn};
 // Only on_cleanup is public API - with_owner, dispose_owner, and OwnerId are
 // internal and automatically used by the dynamic children system

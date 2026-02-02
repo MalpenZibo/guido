@@ -1,5 +1,5 @@
 use crate::layout::{Constraints, Size};
-use crate::reactive::WidgetId;
+use crate::reactive::{LayoutArena, WidgetId};
 use crate::renderer::PaintContext;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -369,25 +369,27 @@ impl Event {
     }
 }
 
-pub trait Widget {
+pub trait Widget: Send + Sync {
     /// Advance animations for this widget and children.
     /// Returns true if any animations are still active and need another frame.
     /// Called once per frame before layout.
-    fn advance_animations(&mut self) -> bool {
+    fn advance_animations(&mut self, arena: &LayoutArena) -> bool {
+        let _ = arena;
         false
     }
 
     /// Reconcile dynamic children. Called from main loop before layout.
     /// Returns true if children changed (requires layout).
     /// Default implementation returns false (no dynamic children).
-    fn reconcile_children(&mut self) -> bool {
+    fn reconcile_children(&mut self, arena: &LayoutArena) -> bool {
+        let _ = arena;
         false
     }
 
-    fn layout(&mut self, constraints: Constraints) -> Size;
-    fn paint(&self, ctx: &mut PaintContext);
-    fn event(&mut self, event: &Event) -> EventResponse {
-        let _ = event;
+    fn layout(&mut self, arena: &LayoutArena, constraints: Constraints) -> Size;
+    fn paint(&self, arena: &LayoutArena, ctx: &mut PaintContext);
+    fn event(&mut self, arena: &LayoutArena, event: &Event) -> EventResponse {
+        let _ = (arena, event);
         EventResponse::Ignored
     }
     fn set_origin(&mut self, x: f32, y: f32);
@@ -401,7 +403,7 @@ pub trait Widget {
     /// Check if this widget has a descendant with the given ID.
     /// Used by containers to check if a child has focus.
     /// Default implementation returns false (leaf widgets have no children).
-    fn has_focus_descendant(&self, _id: WidgetId) -> bool {
+    fn has_focus_descendant(&self, _arena: &LayoutArena, _id: WidgetId) -> bool {
         false
     }
 
@@ -412,6 +414,15 @@ pub trait Widget {
     fn is_relayout_boundary(&self) -> bool {
         false
     }
+
+    /// Register this widget's pending children with the arena.
+    ///
+    /// Called during widget tree registration to recursively register all
+    /// children before the tree is used for layout. Containers should override
+    /// this to register their pending children.
+    ///
+    /// Default implementation does nothing (leaf widgets have no children).
+    fn register_children(&mut self, _arena: &LayoutArena) {}
 }
 
 #[cfg(test)]

@@ -15,7 +15,7 @@ fn main() {
             .height(250)
             .anchor(Anchor::TOP | Anchor::LEFT)
             .background_color(Color::rgb(0.1, 0.1, 0.15)),
-        || {
+        |_| {
             container()
                 .layout(Flex::column().spacing(12.0))
                 .child(

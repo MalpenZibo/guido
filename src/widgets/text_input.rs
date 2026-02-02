@@ -14,9 +14,8 @@ use std::time::{Duration, Instant};
 use crate::default_font_family;
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
-    CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, WidgetId, arena_cache_layout, arena_clear_dirty,
-    arena_set_relayout_boundary, clipboard_copy, clipboard_paste, has_focus, release_focus,
-    request_animation_frame, request_focus, set_cursor,
+    CursorIcon, IntoMaybeDyn, LayoutArena, MaybeDyn, Signal, WidgetId, clipboard_copy,
+    clipboard_paste, has_focus, release_focus, request_animation_frame, request_focus, set_cursor,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled, measure_text_styled};
 
@@ -42,7 +41,7 @@ const SCROLL_PADDING: f32 = 2.0;
 const HISTORY_COALESCE_MS: u64 = 500;
 
 /// Type alias for text input callbacks
-type TextCallback = Box<dyn Fn(&str)>;
+type TextCallback = Box<dyn Fn(&str) + Send + Sync>;
 
 /// A snapshot of text input state for undo/redo
 #[derive(Clone, Debug)]
@@ -371,13 +370,13 @@ impl TextInput {
     }
 
     /// Set callback for text changes
-    pub fn on_change<F: Fn(&str) + 'static>(mut self, callback: F) -> Self {
+    pub fn on_change<F: Fn(&str) + Send + Sync + 'static>(mut self, callback: F) -> Self {
         self.on_change = Some(Box::new(callback));
         self
     }
 
     /// Set callback for submit (Enter key)
-    pub fn on_submit<F: Fn(&str) + 'static>(mut self, callback: F) -> Self {
+    pub fn on_submit<F: Fn(&str) + Send + Sync + 'static>(mut self, callback: F) -> Self {
         self.on_submit = Some(Box::new(callback));
         self
     }
@@ -984,9 +983,9 @@ impl TextInput {
 }
 
 impl Widget for TextInput {
-    fn layout(&mut self, constraints: Constraints) -> Size {
+    fn layout(&mut self, arena: &LayoutArena, constraints: Constraints) -> Size {
         // Text inputs are never relayout boundaries
-        arena_set_relayout_boundary(self.widget_id, false);
+        arena.set_relayout_boundary(self.widget_id, false);
 
         // Refresh cached values from reactive properties
         // This reads signals and registers layout dependencies
@@ -1023,15 +1022,15 @@ impl Widget for TextInput {
         self.bounds.height = size.height;
 
         // Cache constraints and size for partial layout
-        arena_cache_layout(self.widget_id, constraints, size);
+        arena.cache_layout(self.widget_id, constraints, size);
 
         // Clear dirty flag since layout is complete
-        arena_clear_dirty(self.widget_id);
+        arena.clear_dirty(self.widget_id);
 
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext) {
+    fn paint(&self, _arena: &LayoutArena, ctx: &mut PaintContext) {
         // Draw in LOCAL coordinates (0,0 is widget origin)
         // Parent Container sets position transform
         let display = self.display_text_cached();
@@ -1079,7 +1078,7 @@ impl Widget for TextInput {
         }
     }
 
-    fn event(&mut self, event: &Event) -> EventResponse {
+    fn event(&mut self, _arena: &LayoutArena, event: &Event) -> EventResponse {
         match event {
             Event::MouseDown { x, y, button } => {
                 if self.bounds.contains(*x, *y) && *button == MouseButton::Left {

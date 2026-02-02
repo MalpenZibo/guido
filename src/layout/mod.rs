@@ -6,7 +6,7 @@ pub use flex::{Constraints, Size};
 pub use flex_layout::Flex;
 pub use overlay::Overlay;
 
-use crate::reactive::{IntoMaybeDyn, MaybeDyn, WidgetId};
+use crate::reactive::{IntoMaybeDyn, LayoutArena, MaybeDyn, WidgetId};
 
 /// A unified sizing type that can specify exact, min, max, or range constraints.
 ///
@@ -135,9 +135,10 @@ impl IntoMaybeDyn<Length> for f32 {
 pub trait Layout: Send + Sync {
     /// Perform layout on children and return the total size.
     ///
-    /// Children are identified by WidgetId and accessed via the global LayoutArena.
+    /// Children are identified by WidgetId and accessed via the passed LayoutArena.
     fn layout(
         &mut self,
+        arena: &LayoutArena,
         children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),

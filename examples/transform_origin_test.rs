@@ -25,7 +25,7 @@ fn main() {
             .height(550)
             .anchor(Anchor::TOP | Anchor::LEFT)
             .background_color(Color::rgb(0.1, 0.1, 0.15)),
-        move || {
+        move |_| {
             container()
                 .layout(
                     Flex::column()

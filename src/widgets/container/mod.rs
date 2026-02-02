@@ -14,9 +14,8 @@ use crate::advance_anim;
 use crate::animation::Transition;
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
-    IntoMaybeDyn, MaybeDyn, WidgetId, arena_cache_layout, arena_clear_dirty, arena_is_dirty,
-    arena_set_parent, arena_set_relayout_boundary, focused_widget, register_layout_signal,
-    request_animation_frame, with_arena_widget, with_arena_widget_mut,
+    IntoMaybeDyn, LayoutArena, MaybeDyn, WidgetId, focused_widget, register_layout_signal,
+    request_animation_frame,
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
@@ -641,23 +640,23 @@ impl Container {
     }
 
     /// Check if any child widget has focus
-    fn has_child_focus(&self) -> bool {
+    fn has_child_focus(&self, arena: &LayoutArena) -> bool {
         if let Some(focused_id) = focused_widget() {
-            return self.widget_has_focus(focused_id);
+            return self.widget_has_focus(arena, focused_id);
         }
         false
     }
 
     /// Recursively check if this widget or any child matches the focused widget ID
-    fn widget_has_focus(&self, focused_id: WidgetId) -> bool {
+    fn widget_has_focus(&self, arena: &LayoutArena, focused_id: WidgetId) -> bool {
         for &child_id in self.children_source.get() {
             if child_id == focused_id {
                 return true;
             }
             // Recursively check nested containers/widgets
-            if let Some(has_focus) =
-                with_arena_widget(child_id, |child| child.has_focus_descendant(focused_id))
-                && has_focus
+            if arena.with_widget(child_id, |child| {
+                child.has_focus_descendant(arena, focused_id)
+            }) == Some(true)
             {
                 return true;
             }
@@ -686,6 +685,7 @@ impl Container {
     // Priority: pressed > focused > hovered
     fn resolve_state_value<T: Clone>(
         &self,
+        arena: &LayoutArena,
         base: T,
         extractor: impl Fn(&StateStyle) -> Option<T>,
     ) -> T {
@@ -697,7 +697,7 @@ impl Container {
         }
         // Check focused state
         if self.focused_state.is_some()
-            && self.has_child_focus()
+            && self.has_child_focus(arena)
             && let Some(ref state) = self.focused_state
             && let Some(value) = extractor(state)
         {
@@ -713,9 +713,9 @@ impl Container {
     }
 
     /// Get the effective background color target considering state layers.
-    fn effective_background_target(&self) -> Color {
+    fn effective_background_target(&self, arena: &LayoutArena) -> Color {
         let base = self.background.get();
-        self.resolve_state_value(base, |state| {
+        self.resolve_state_value(arena, base, |state| {
             state
                 .background
                 .as_ref()
@@ -724,33 +724,33 @@ impl Container {
     }
 
     /// Get the effective border width target considering state layers.
-    fn effective_border_width_target(&self) -> f32 {
+    fn effective_border_width_target(&self, arena: &LayoutArena) -> f32 {
         let base = self.border_width.get();
-        self.resolve_state_value(base, |state| state.border_width)
+        self.resolve_state_value(arena, base, |state| state.border_width)
     }
 
     /// Get the effective border color target considering state layers.
-    fn effective_border_color_target(&self) -> Color {
+    fn effective_border_color_target(&self, arena: &LayoutArena) -> Color {
         let base = self.border_color.get();
-        self.resolve_state_value(base, |state| state.border_color)
+        self.resolve_state_value(arena, base, |state| state.border_color)
     }
 
     /// Get the effective corner radius target considering state layers.
-    fn effective_corner_radius_target(&self) -> f32 {
+    fn effective_corner_radius_target(&self, arena: &LayoutArena) -> f32 {
         let base = self.corner_radius.get();
-        self.resolve_state_value(base, |state| state.corner_radius)
+        self.resolve_state_value(arena, base, |state| state.corner_radius)
     }
 
     /// Get the effective transform target considering state layers.
-    fn effective_transform_target(&self) -> Transform {
+    fn effective_transform_target(&self, arena: &LayoutArena) -> Transform {
         let base = self.transform.get();
-        self.resolve_state_value(base, |state| state.transform)
+        self.resolve_state_value(arena, base, |state| state.transform)
     }
 
     /// Get the effective elevation considering state layers (not animated).
-    fn effective_elevation(&self) -> f32 {
+    fn effective_elevation(&self, arena: &LayoutArena) -> f32 {
         let base = self.elevation.get();
-        self.resolve_state_value(base, |state| state.elevation)
+        self.resolve_state_value(arena, base, |state| state.elevation)
     }
 
     /// Get current padding (animated or static)
@@ -759,61 +759,38 @@ impl Container {
     }
 
     /// Get current background color (animated or effective target)
-    fn animated_background(&self) -> Color {
-        get_animated_value(&self.background_anim, || self.effective_background_target())
+    fn animated_background(&self, arena: &LayoutArena) -> Color {
+        get_animated_value(&self.background_anim, || {
+            self.effective_background_target(arena)
+        })
     }
 
     /// Get current corner radius (animated or effective target)
-    fn animated_corner_radius(&self) -> f32 {
+    fn animated_corner_radius(&self, arena: &LayoutArena) -> f32 {
         get_animated_value(&self.corner_radius_anim, || {
-            self.effective_corner_radius_target()
+            self.effective_corner_radius_target(arena)
         })
     }
 
     /// Get current border width (animated or effective target)
-    fn animated_border_width(&self) -> f32 {
+    fn animated_border_width(&self, arena: &LayoutArena) -> f32 {
         get_animated_value(&self.border_width_anim, || {
-            self.effective_border_width_target()
+            self.effective_border_width_target(arena)
         })
     }
 
     /// Get current border color (animated or effective target)
-    fn animated_border_color(&self) -> Color {
+    fn animated_border_color(&self, arena: &LayoutArena) -> Color {
         get_animated_value(&self.border_color_anim, || {
-            self.effective_border_color_target()
+            self.effective_border_color_target(arena)
         })
     }
 
     /// Get current transform (animated or effective target)
-    fn animated_transform(&self) -> Transform {
-        get_animated_value(&self.transform_anim, || self.effective_transform_target())
-    }
-
-    /// Calculate constraints for children based on container dimensions and padding
-    fn calc_child_constraints(&self) -> Constraints {
-        let padding = self.padding.get();
-        let child_max_width = (self.bounds.width - padding.horizontal()).max(0.0);
-        let child_max_height = (self.bounds.height - padding.vertical()).max(0.0);
-
-        let width_length = self.width.as_ref().map(|w| w.get()).unwrap_or_default();
-        let height_length = self.height.as_ref().map(|h| h.get()).unwrap_or_default();
-        let child_min_width = if width_length.exact.is_some() {
-            child_max_width
-        } else {
-            0.0
-        };
-        let child_min_height = if height_length.exact.is_some() {
-            child_max_height
-        } else {
-            0.0
-        };
-
-        Constraints {
-            min_width: child_min_width,
-            min_height: child_min_height,
-            max_width: child_max_width,
-            max_height: child_max_height,
-        }
+    fn animated_transform(&self, arena: &LayoutArena) -> Transform {
+        get_animated_value(&self.transform_anim, || {
+            self.effective_transform_target(arena)
+        })
     }
 }
 
@@ -852,7 +829,7 @@ impl Default for Container {
 }
 
 impl Widget for Container {
-    fn advance_animations(&mut self) -> bool {
+    fn advance_animations(&mut self, arena: &LayoutArena) -> bool {
         let mut any_animating = false;
 
         // Layout-affecting animations: width, height, padding, border_width
@@ -866,7 +843,7 @@ impl Widget for Container {
             layout
         );
 
-        let border_width_target = self.effective_border_width_target();
+        let border_width_target = self.effective_border_width_target(arena);
         advance_anim!(
             self,
             border_width_anim,
@@ -876,10 +853,10 @@ impl Widget for Container {
         );
 
         // Paint-only animations: background, corner_radius, border_color, transform
-        let bg_target = self.effective_background_target();
+        let bg_target = self.effective_background_target(arena);
         advance_anim!(self, background_anim, bg_target, any_animating, paint);
 
-        let corner_radius_target = self.effective_corner_radius_target();
+        let corner_radius_target = self.effective_corner_radius_target(arena);
         advance_anim!(
             self,
             corner_radius_anim,
@@ -888,7 +865,7 @@ impl Widget for Container {
             paint
         );
 
-        let border_color_target = self.effective_border_color_target();
+        let border_color_target = self.effective_border_color_target(arena);
         advance_anim!(
             self,
             border_color_anim,
@@ -897,7 +874,7 @@ impl Widget for Container {
             paint
         );
 
-        let transform_target = self.effective_transform_target();
+        let transform_target = self.effective_transform_target(arena);
         advance_anim!(self, transform_anim, transform_target, any_animating, paint);
 
         // Advance ripple animation
@@ -920,7 +897,7 @@ impl Widget for Container {
         // Recurse to children
         for &child_id in self.children_source.get() {
             if let Some(animating) =
-                with_arena_widget_mut(child_id, |child| child.advance_animations())
+                arena.with_widget_mut(child_id, |child| child.advance_animations(arena))
                 && animating
             {
                 any_animating = true;
@@ -929,22 +906,22 @@ impl Widget for Container {
 
         // Advance scrollbar animations
         if let Some(ref mut track) = self.v_scrollbar_track
-            && track.advance_animations()
+            && track.advance_animations(arena)
         {
             any_animating = true;
         }
         if let Some(ref mut handle) = self.v_scrollbar_handle
-            && handle.advance_animations()
+            && handle.advance_animations(arena)
         {
             any_animating = true;
         }
         if let Some(ref mut track) = self.h_scrollbar_track
-            && track.advance_animations()
+            && track.advance_animations(arena)
         {
             any_animating = true;
         }
         if let Some(ref mut handle) = self.h_scrollbar_handle
-            && handle.advance_animations()
+            && handle.advance_animations(arena)
         {
             any_animating = true;
         }
@@ -964,13 +941,17 @@ impl Widget for Container {
         any_animating
     }
 
-    fn reconcile_children(&mut self) -> bool {
-        self.children_source.reconcile_with_tracking()
+    fn reconcile_children(&mut self, arena: &LayoutArena) -> bool {
+        self.children_source.reconcile_with_tracking(arena)
     }
 
-    fn layout(&mut self, constraints: Constraints) -> Size {
+    fn register_children(&mut self, arena: &LayoutArena) {
+        self.children_source.register_pending(arena, self.widget_id);
+    }
+
+    fn layout(&mut self, arena: &LayoutArena, constraints: Constraints) -> Size {
         // Register this widget's relayout boundary status with the arena
-        arena_set_relayout_boundary(self.widget_id, self.is_relayout_boundary_for(constraints));
+        arena.set_relayout_boundary(self.widget_id, self.is_relayout_boundary_for(constraints));
 
         // Ensure scrollbar containers exist if scrolling is enabled
         self.ensure_scrollbar_containers();
@@ -979,7 +960,7 @@ impl Widget for Container {
 
         // Check if this widget was marked dirty by signal changes or animations
         // (animations call mark_needs_layout directly when their value changes)
-        let reactive_changed = arena_is_dirty(self.widget_id);
+        let reactive_changed = arena.is_dirty(self.widget_id);
 
         let needs_layout = constraints_changed || reactive_changed;
 
@@ -998,7 +979,7 @@ impl Widget for Container {
         self.last_constraints = Some(constraints);
 
         // Clear dirty flag since we're doing layout now
-        arena_clear_dirty(self.widget_id);
+        arena.clear_dirty(self.widget_id);
 
         // Get current animated padding for layout calculations
         let padding = self.animated_padding();
@@ -1105,21 +1086,22 @@ impl Widget for Container {
             },
         };
 
-        // Children are positioned at their "unscrolled" positions.
+        // Children are positioned in LOCAL coordinates (relative to container's 0,0).
+        // The container's absolute position is handled by the parent via transforms.
         // Scroll offset is applied as a transform in paint().
-        let (child_origin_x, child_origin_y) =
-            (self.bounds.x + padding.left, self.bounds.y + padding.top);
+        let (child_origin_x, child_origin_y) = (padding.left, padding.top);
 
         // Reconcile and get children IDs
-        let children = self.children_source.reconcile_and_get();
+        let children = self.children_source.reconcile_and_get(arena);
 
         // Update parent tracking for all children in the arena
         for &child_id in children.iter() {
-            arena_set_parent(child_id, self.widget_id);
+            arena.set_parent(child_id, self.widget_id);
         }
 
         let content_size = if !children.is_empty() {
             self.layout.layout(
+                arena,
                 children,
                 child_constraints,
                 (child_origin_x, child_origin_y),
@@ -1259,18 +1241,18 @@ impl Widget for Container {
         self.bounds.height = size.height;
 
         // Layout scrollbar containers after bounds are set
-        self.layout_scrollbar_containers();
+        self.layout_scrollbar_containers(arena);
 
         // Cache constraints and size for partial layout
-        arena_cache_layout(self.widget_id, constraints, size);
+        arena.cache_layout(self.widget_id, constraints, size);
 
         size
     }
 
-    fn event(&mut self, event: &Event) -> EventResponse {
-        let transform = self.animated_transform();
+    fn event(&mut self, arena: &LayoutArena, event: &Event) -> EventResponse {
+        let transform = self.animated_transform(arena);
         let transform_origin = self.transform_origin.get();
-        let corner_radius = self.animated_corner_radius();
+        let corner_radius = self.animated_corner_radius(arena);
 
         // Transform event coordinates to local space
         let local_event: Cow<'_, Event> = if !transform.is_identity() {
@@ -1288,19 +1270,27 @@ impl Widget for Container {
         };
 
         // Handle scrollbar events first
-        if let Some(response) = self.handle_scrollbar_event(&local_event) {
+        if let Some(response) = self.handle_scrollbar_event(arena, &local_event) {
             return response;
         }
 
-        // For scrollable containers, offset event coordinates for children
-        let child_event: Cow<'_, Event> = if self.scroll_axis != ScrollAxis::None {
-            if let Some((x, y)) = local_event.coords() {
-                let scrolled_x = x + self.scroll_state.offset_x;
-                let scrolled_y = y + self.scroll_state.offset_y;
-                Cow::Owned(local_event.with_coords(scrolled_x, scrolled_y))
+        // Transform event coordinates to local space (relative to container origin)
+        // Children are positioned in local coordinates, so events must be too
+        let child_event: Cow<'_, Event> = if let Some((x, y)) = local_event.coords() {
+            // Convert from global/window coordinates to local (relative to container)
+            let local_x = x - self.bounds.x;
+            let local_y = y - self.bounds.y;
+
+            // For scrollable containers, also add scroll offset
+            let (child_x, child_y) = if self.scroll_axis != ScrollAxis::None {
+                (
+                    local_x + self.scroll_state.offset_x,
+                    local_y + self.scroll_state.offset_y,
+                )
             } else {
-                local_event.clone()
-            }
+                (local_x, local_y)
+            };
+            Cow::Owned(local_event.with_coords(child_x, child_y))
         } else {
             local_event.clone()
         };
@@ -1308,7 +1298,7 @@ impl Widget for Container {
         // Let children handle first (layout already reconciled)
         for &child_id in self.children_source.get() {
             if let Some(response) =
-                with_arena_widget_mut(child_id, |child| child.event(&child_event))
+                arena.with_widget_mut(child_id, |child| child.event(arena, &child_event))
                 && response == EventResponse::Handled
             {
                 return EventResponse::Handled;
@@ -1469,24 +1459,21 @@ impl Widget for Container {
     }
 
     fn set_origin(&mut self, x: f32, y: f32) {
+        // Calculate delta from previous position
+        let dx = x - self.bounds.x;
+        let dy = y - self.bounds.y;
         self.bounds.x = x;
         self.bounds.y = y;
 
-        let child_constraints = self.calc_child_constraints();
-        let padding = self.padding.get();
-
-        // Children are positioned at their "unscrolled" positions.
-        // Scroll offset is applied as a transform in paint().
-        let (child_origin_x, child_origin_y) = (x + padding.left, y + padding.top);
-
-        // Layout already reconciled children, just get their IDs
-        let children = self.children_source.get();
-        if !children.is_empty() {
-            self.layout.layout(
-                children,
-                child_constraints,
-                (child_origin_x, child_origin_y),
-            );
+        // If position changed, offset all children by the delta
+        // This avoids needing arena access - children already have their relative
+        // positions set during layout, we just need to translate them
+        if (dx.abs() > f32::EPSILON || dy.abs() > f32::EPSILON) && !self.children_source.is_empty()
+        {
+            // Children positions need to be updated but we don't have arena access.
+            // The layout engine already positioned children relative to the container
+            // during the layout pass. Paint handles the final positioning via transforms.
+            // No action needed here - paint() uses self.bounds to compute child offsets.
         }
     }
 
@@ -1498,17 +1485,17 @@ impl Widget for Container {
         self.widget_id
     }
 
-    fn has_focus_descendant(&self, id: WidgetId) -> bool {
-        self.widget_has_focus(id)
+    fn has_focus_descendant(&self, arena: &LayoutArena, id: WidgetId) -> bool {
+        self.widget_has_focus(arena, id)
     }
 
-    fn paint(&self, ctx: &mut PaintContext) {
-        let background = self.animated_background();
-        let corner_radius = self.animated_corner_radius();
+    fn paint(&self, arena: &LayoutArena, ctx: &mut PaintContext) {
+        let background = self.animated_background(arena);
+        let corner_radius = self.animated_corner_radius(arena);
         let corner_curvature = self.corner_curvature.get();
-        let elevation_level = self.effective_elevation();
+        let elevation_level = self.effective_elevation(arena);
         let shadow = elevation_to_shadow(elevation_level);
-        let user_transform = self.animated_transform();
+        let user_transform = self.animated_transform(arena);
         let transform_origin = self.transform_origin.get();
 
         // LOCAL bounds (0,0 is widget origin) - all drawing uses these
@@ -1554,8 +1541,8 @@ impl Widget for Container {
         }
 
         // Draw border using LOCAL coordinates
-        let border_width = self.animated_border_width();
-        let border_color = self.animated_border_color();
+        let border_width = self.animated_border_width(arena);
+        let border_color = self.animated_border_color(arena);
 
         if border_width > 0.0 {
             ctx.draw_border_frame_with_curvature(
@@ -1579,14 +1566,15 @@ impl Widget for Container {
 
         // Draw children - each gets its own node with position transform
         for &child_id in self.children_source.get() {
-            // Get child bounds from arena
-            let child_global = with_arena_widget(child_id, |child| child.bounds())
+            // Get child bounds from arena - these are in LOCAL coordinates (relative to parent)
+            let child_bounds = arena
+                .with_widget(child_id, |child| child.bounds())
                 .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
             // Child's LOCAL bounds (0,0 origin with its own width/height)
-            let child_local = Rect::new(0.0, 0.0, child_global.width, child_global.height);
-            // Child offset relative to THIS container's origin
-            let child_offset_x = child_global.x - self.bounds.x;
-            let child_offset_y = child_global.y - self.bounds.y;
+            let child_local = Rect::new(0.0, 0.0, child_bounds.width, child_bounds.height);
+            // Child offset is directly from child bounds (already in local coordinates)
+            let child_offset_x = child_bounds.x;
+            let child_offset_y = child_bounds.y;
 
             let mut child_ctx = ctx.add_child(child_id.as_u64(), child_local);
 
@@ -1602,12 +1590,12 @@ impl Widget for Container {
             child_ctx.set_transform(child_position);
 
             // Paint child via arena
-            with_arena_widget(child_id, |child| child.paint(&mut child_ctx));
+            arena.with_widget(child_id, |child| child.paint(arena, &mut child_ctx));
         }
 
         // Draw scrollbar containers
         if is_scrollable {
-            self.paint_scrollbar_containers(ctx);
+            self.paint_scrollbar_containers(arena, ctx);
         }
 
         // Draw ripple effect as overlay (ripple.center is already in local coordinates)

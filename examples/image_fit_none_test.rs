@@ -158,7 +158,7 @@ fn main() {
             .layer(Layer::Top)
             .namespace("image-fit-none-test")
             .background_color(Color::rgb(0.1, 0.1, 0.15)),
-        || view,
+        |_| view,
     );
     app.run();
 }

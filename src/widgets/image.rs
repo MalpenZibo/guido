@@ -7,10 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::layout::{Constraints, Size};
-use crate::reactive::{
-    IntoMaybeDyn, MaybeDyn, WidgetId, arena_cache_layout, arena_clear_dirty,
-    arena_set_relayout_boundary,
-};
+use crate::reactive::{IntoMaybeDyn, LayoutArena, MaybeDyn, WidgetId};
 use crate::renderer::PaintContext;
 
 use super::widget::{EventResponse, Rect, Widget};
@@ -233,9 +230,9 @@ impl Image {
 }
 
 impl Widget for Image {
-    fn layout(&mut self, constraints: Constraints) -> Size {
+    fn layout(&mut self, arena: &LayoutArena, constraints: Constraints) -> Size {
         // Images are never relayout boundaries
-        arena_set_relayout_boundary(self.widget_id, false);
+        arena.set_relayout_boundary(self.widget_id, false);
 
         // Read source (registers layout dependencies if reactive)
         let current_source = self.source.get();
@@ -259,15 +256,15 @@ impl Widget for Image {
         self.bounds.height = size.height;
 
         // Cache constraints and size for partial layout
-        arena_cache_layout(self.widget_id, constraints, size);
+        arena.cache_layout(self.widget_id, constraints, size);
 
         // Clear dirty flag since layout is complete
-        arena_clear_dirty(self.widget_id);
+        arena.clear_dirty(self.widget_id);
 
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext) {
+    fn paint(&self, _arena: &LayoutArena, ctx: &mut PaintContext) {
         // Draw in LOCAL coordinates (0,0 is widget origin)
         // Parent Container sets position transform
         if let Some(ref source) = self.cached_source {
@@ -276,7 +273,7 @@ impl Widget for Image {
         }
     }
 
-    fn event(&mut self, _event: &super::widget::Event) -> EventResponse {
+    fn event(&mut self, _arena: &LayoutArena, _event: &super::widget::Event) -> EventResponse {
         EventResponse::Ignored
     }
 

@@ -215,7 +215,7 @@ fn main() {
             .height(400)
             .anchor(Anchor::TOP | Anchor::LEFT)
             .background_color(Color::rgb(0.1, 0.1, 0.15)),
-        move || view,
+        move |_| view,
     );
     app.run();
 }
