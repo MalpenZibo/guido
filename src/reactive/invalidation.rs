@@ -244,13 +244,6 @@ pub fn process_pending_jobs_with_tree(tree: &mut Tree) {
     }
 }
 
-/// Mark a widget as needing layout.
-/// Pushes a Layout job that will be processed by `process_pending_jobs_with_tree`.
-pub fn mark_needs_layout(widget_id: WidgetId) {
-    push_job(widget_id, JobType::Layout);
-    request_frame();
-}
-
 /// Global flag to indicate a frame is requested
 static FRAME_REQUESTED: AtomicBool = AtomicBool::new(false);
 
