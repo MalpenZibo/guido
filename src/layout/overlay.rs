@@ -1,7 +1,8 @@
 //! Overlay layout that stacks children on top of each other.
 
+use crate::tree::{Tree, WidgetId};
+
 use super::{Constraints, Layout, Size};
-use crate::reactive::{LayoutArena, WidgetId};
 
 /// Overlay layout that places all children at the same position,
 /// stacking them on top of each other. Later children appear on top.
@@ -25,7 +26,7 @@ impl Default for Overlay {
 impl Layout for Overlay {
     fn layout(
         &mut self,
-        arena: &mut LayoutArena,
+        tree: &mut Tree,
         children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),
@@ -35,9 +36,9 @@ impl Layout for Overlay {
 
         // Layout all children at the same origin, giving them the full constraints
         for &child_id in children.iter() {
-            let child_size = if let Some(widget_cell) = arena.get_widget_mut(child_id) {
+            let child_size = if let Some(widget_cell) = tree.get_widget_mut(child_id) {
                 let mut widget = widget_cell.borrow_mut();
-                let size = widget.layout(arena, constraints);
+                let size = widget.layout(tree, constraints);
 
                 widget.set_origin(origin.0, origin.1);
                 Some(size)

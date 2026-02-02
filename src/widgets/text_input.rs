@@ -14,10 +14,11 @@ use std::time::{Duration, Instant};
 use crate::default_font_family;
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
-    CursorIcon, IntoMaybeDyn, LayoutArena, MaybeDyn, Signal, WidgetId, clipboard_copy,
-    clipboard_paste, has_focus, release_focus, request_animation_frame, request_focus, set_cursor,
+    CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, clipboard_copy, clipboard_paste, has_focus,
+    release_focus, request_animation_frame, request_focus, set_cursor,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled, measure_text_styled};
+use crate::tree::{Tree, WidgetId};
 
 use super::font::{FontFamily, FontWeight};
 use super::widget::{Color, Event, EventResponse, Key, Modifiers, MouseButton, Rect, Widget};
@@ -983,9 +984,9 @@ impl TextInput {
 }
 
 impl Widget for TextInput {
-    fn layout(&mut self, arena: &mut LayoutArena, constraints: Constraints) -> Size {
+    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size {
         // Text inputs are never relayout boundaries
-        arena.set_relayout_boundary(self.widget_id, false);
+        tree.set_relayout_boundary(self.widget_id, false);
 
         // Refresh cached values from reactive properties
         // This reads signals and registers layout dependencies
@@ -1022,15 +1023,15 @@ impl Widget for TextInput {
         self.bounds.height = size.height;
 
         // Cache constraints and size for partial layout
-        arena.cache_layout(self.widget_id, constraints, size);
+        tree.cache_layout(self.widget_id, constraints, size);
 
         // Clear dirty flag since layout is complete
-        arena.clear_dirty(self.widget_id);
+        tree.clear_dirty(self.widget_id);
 
         size
     }
 
-    fn paint(&self, _arena: &LayoutArena, ctx: &mut PaintContext) {
+    fn paint(&self, _tree: &Tree, ctx: &mut PaintContext) {
         // Draw in LOCAL coordinates (0,0 is widget origin)
         // Parent Container sets position transform
         let display = self.display_text_cached();
@@ -1078,7 +1079,7 @@ impl Widget for TextInput {
         }
     }
 
-    fn event(&mut self, _arena: &LayoutArena, event: &Event) -> EventResponse {
+    fn event(&mut self, _tree: &Tree, event: &Event) -> EventResponse {
         match event {
             Event::MouseDown { x, y, button } => {
                 if self.bounds.contains(*x, *y) && *button == MouseButton::Left {

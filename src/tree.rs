@@ -1,11 +1,11 @@
-//! Arena-based widget storage for efficient partial layout.
+//! tree-based widget storage for efficient partial layout.
 //!
-//! The LayoutArena provides centralized widget storage and layout metadata,
+//! The Tree provides centralized widget storage and layout metadata,
 //! enabling efficient partial layout by only re-laying out dirty subtrees.
 //!
 //! ## Key Features
 //!
-//! - **Central Widget Storage**: All widgets are stored in a single arena,
+//! - **Central Widget Storage**: All widgets are stored in a single tree,
 //!   with containers holding child IDs rather than owned widgets.
 //!
 //! - **Layout Metadata**: Each widget has associated metadata tracking
@@ -17,27 +17,28 @@
 //!
 //! ## Interior Mutability
 //!
-//! The arena uses `RefCell` for interior mutability of:
+//! The tree uses `RefCell` for interior mutability of:
 //! - Widget storage (`widgets`)
 //! - Layout nodes (`nodes`)
 //! - Layout roots queue (`layout_roots`)
 //!
-//! This allows the arena to be borrowed immutably while individual
+//! This allows the tree to be borrowed immutably while individual
 //! widgets are borrowed mutably for layout, and metadata can be updated
 //! during the layout pass.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::layout::{Constraints, Size};
+use crate::reactive::invalidation::APP_STATE;
+use crate::reactive::{ChangeFlags, request_frame};
 use crate::widgets::Widget;
-
-use super::WidgetId;
 
 /// Metadata for a widget in the layout tree.
 #[derive(Default)]
-pub struct LayoutNode {
+pub struct Node {
     /// Parent widget ID (None for root)
     pub parent: Option<WidgetId>,
     /// Child widget IDs
@@ -52,9 +53,43 @@ pub struct LayoutNode {
     pub cached_size: Option<Size>,
 }
 
-impl LayoutNode {
+impl Node {
     pub fn new() -> Self {
         Self::default()
+    }
+}
+///
+/// Unique identifier for a widget in the tree
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct WidgetId(u64);
+
+static NEXT_WIDGET_ID: AtomicU64 = AtomicU64::new(1);
+
+impl WidgetId {
+    /// Generate a new unique widget ID
+    pub fn next() -> Self {
+        WidgetId(NEXT_WIDGET_ID.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Get the raw u64 value of this widget ID
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
+
+    /// Request that this widget be re-laid out (and repainted)
+    pub fn request_layout(&self) {
+        APP_STATE.with(|state| {
+            state.borrow_mut().change_flags |= ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT;
+        });
+        request_frame();
+    }
+
+    /// Request that this widget be repainted (without layout)
+    pub fn request_paint(&self) {
+        APP_STATE.with(|state| {
+            state.borrow_mut().change_flags |= ChangeFlags::NEEDS_PAINT;
+        });
+        request_frame();
     }
 }
 
@@ -65,25 +100,25 @@ impl LayoutNode {
 /// callbacks need to register/unregister widgets.
 type WidgetCell = Rc<RefCell<Box<dyn Widget>>>;
 
-/// Central arena for widget storage and layout metadata.
+/// Central tree for widget storage and layout metadata.
 ///
-/// The arena stores all widgets in a HashMap with interior mutability,
+/// The tree stores all widgets in a HashMap with interior mutability,
 /// allowing widgets to be accessed and modified during layout and event
-/// handling without requiring mutable access to the entire arena.
-pub struct LayoutArena {
+/// handling without requiring mutable access to the entire tree.
+pub struct Tree {
     /// Central widget storage - uses Rc to allow cloning references
     /// before releasing the HashMap borrow
     widgets: HashMap<WidgetId, WidgetCell>,
 
     /// Tree metadata for each widget (interior mutability)
-    nodes: HashMap<WidgetId, LayoutNode>,
+    nodes: HashMap<WidgetId, Node>,
 
     /// Set of relayout boundaries that need layout (the layout queue)
     layout_roots: HashSet<WidgetId>,
 }
 
-impl LayoutArena {
-    /// Create a new empty arena.
+impl Tree {
+    /// Create a new empty tree.
     pub fn new() -> Self {
         Self {
             widgets: HashMap::new(),
@@ -92,7 +127,7 @@ impl LayoutArena {
         }
     }
 
-    /// Register a widget in the arena.
+    /// Register a widget in the tree.
     ///
     /// This stores the widget and creates an empty node for it.
     /// Parent-child relationships are set separately via `set_parent`.
@@ -101,7 +136,7 @@ impl LayoutArena {
         self.nodes.entry(id).or_default();
     }
 
-    /// Remove a widget from the arena.
+    /// Remove a widget from the tree.
     ///
     /// Also removes the widget from its parent's children list.
     pub fn unregister(&mut self, id: WidgetId) {
@@ -302,7 +337,7 @@ impl LayoutArena {
     }
 }
 
-impl Default for LayoutArena {
+impl Default for Tree {
     fn default() -> Self {
         Self::new()
     }
@@ -318,11 +353,11 @@ mod tests {
     }
 
     impl Widget for MockWidget {
-        fn layout(&mut self, _arena: &mut LayoutArena, constraints: Constraints) -> Size {
+        fn layout(&mut self, _tree: &mut Tree, constraints: Constraints) -> Size {
             Size::new(constraints.max_width, constraints.max_height)
         }
 
-        fn paint(&self, _arena: &LayoutArena, _ctx: &mut crate::renderer::PaintContext) {}
+        fn paint(&self, _tree: &Tree, _ctx: &mut crate::renderer::PaintContext) {}
 
         fn set_origin(&mut self, _x: f32, _y: f32) {}
 
@@ -336,143 +371,143 @@ mod tests {
     }
 
     #[test]
-    fn test_arena_register_unregister() {
-        let mut arena = LayoutArena::new();
+    fn test_tree_register_unregister() {
+        let mut tree = Tree::new();
         let id = WidgetId::next();
         let widget = Box::new(MockWidget { id });
 
-        arena.register(id, widget);
-        assert!(arena.contains(id));
+        tree.register(id, widget);
+        assert!(tree.contains(id));
 
-        arena.unregister(id);
-        assert!(!arena.contains(id));
+        tree.unregister(id);
+        assert!(!tree.contains(id));
     }
 
     #[test]
-    fn test_arena_parent_child() {
-        let mut arena = LayoutArena::new();
+    fn test_tree_parent_child() {
+        let mut tree = Tree::new();
         let parent_id = WidgetId::next();
         let child_id = WidgetId::next();
 
-        arena.register(parent_id, Box::new(MockWidget { id: parent_id }));
-        arena.register(child_id, Box::new(MockWidget { id: child_id }));
+        tree.register(parent_id, Box::new(MockWidget { id: parent_id }));
+        tree.register(child_id, Box::new(MockWidget { id: child_id }));
 
-        arena.set_parent(child_id, parent_id);
+        tree.set_parent(child_id, parent_id);
 
-        assert_eq!(arena.get_parent(child_id), Some(parent_id));
-        assert_eq!(arena.get_children(parent_id), vec![child_id]);
+        assert_eq!(tree.get_parent(child_id), Some(parent_id));
+        assert_eq!(tree.get_children(parent_id), vec![child_id]);
     }
 
     #[test]
-    fn test_arena_dirty_propagation() {
-        let mut arena = LayoutArena::new();
+    fn test_tree_dirty_propagation() {
+        let mut tree = Tree::new();
         let root_id = WidgetId::next();
         let child_id = WidgetId::next();
         let grandchild_id = WidgetId::next();
 
         // Build tree: root -> child -> grandchild
-        arena.register(root_id, Box::new(MockWidget { id: root_id }));
-        arena.register(child_id, Box::new(MockWidget { id: child_id }));
-        arena.register(grandchild_id, Box::new(MockWidget { id: grandchild_id }));
+        tree.register(root_id, Box::new(MockWidget { id: root_id }));
+        tree.register(child_id, Box::new(MockWidget { id: child_id }));
+        tree.register(grandchild_id, Box::new(MockWidget { id: grandchild_id }));
 
-        arena.set_parent(child_id, root_id);
-        arena.set_parent(grandchild_id, child_id);
+        tree.set_parent(child_id, root_id);
+        tree.set_parent(grandchild_id, child_id);
 
         // Mark grandchild dirty - should bubble to root
-        arena.mark_needs_layout(grandchild_id);
+        tree.mark_needs_layout(grandchild_id);
 
-        assert!(arena.is_dirty(grandchild_id));
-        assert!(arena.is_dirty(child_id));
-        assert!(arena.is_dirty(root_id));
+        assert!(tree.is_dirty(grandchild_id));
+        assert!(tree.is_dirty(child_id));
+        assert!(tree.is_dirty(root_id));
 
         // Root should be in layout_roots
-        let roots = arena.take_layout_roots();
+        let roots = tree.take_layout_roots();
         assert!(roots.contains(&root_id));
     }
 
     #[test]
-    fn test_arena_relayout_boundary_stops_propagation() {
-        let mut arena = LayoutArena::new();
+    fn test_tree_relayout_boundary_stops_propagation() {
+        let mut tree = Tree::new();
         let root_id = WidgetId::next();
         let boundary_id = WidgetId::next();
         let leaf_id = WidgetId::next();
 
         // Build tree: root -> boundary (relayout) -> leaf
-        arena.register(root_id, Box::new(MockWidget { id: root_id }));
-        arena.register(boundary_id, Box::new(MockWidget { id: boundary_id }));
-        arena.register(leaf_id, Box::new(MockWidget { id: leaf_id }));
+        tree.register(root_id, Box::new(MockWidget { id: root_id }));
+        tree.register(boundary_id, Box::new(MockWidget { id: boundary_id }));
+        tree.register(leaf_id, Box::new(MockWidget { id: leaf_id }));
 
-        arena.set_parent(boundary_id, root_id);
-        arena.set_parent(leaf_id, boundary_id);
+        tree.set_parent(boundary_id, root_id);
+        tree.set_parent(leaf_id, boundary_id);
 
         // Mark boundary as relayout boundary
-        arena.set_relayout_boundary(boundary_id, true);
+        tree.set_relayout_boundary(boundary_id, true);
 
         // Mark leaf dirty - should stop at boundary
-        arena.mark_needs_layout(leaf_id);
+        tree.mark_needs_layout(leaf_id);
 
-        assert!(arena.is_dirty(leaf_id));
-        assert!(arena.is_dirty(boundary_id));
-        assert!(!arena.is_dirty(root_id)); // Root should NOT be dirty
+        assert!(tree.is_dirty(leaf_id));
+        assert!(tree.is_dirty(boundary_id));
+        assert!(!tree.is_dirty(root_id)); // Root should NOT be dirty
 
         // Boundary should be in layout_roots, not root
-        let roots = arena.take_layout_roots();
+        let roots = tree.take_layout_roots();
         assert!(roots.contains(&boundary_id));
         assert!(!roots.contains(&root_id));
     }
 
     #[test]
-    fn test_arena_dirty_optimization() {
-        let mut arena = LayoutArena::new();
+    fn test_tree_dirty_optimization() {
+        let mut tree = Tree::new();
         let root_id = WidgetId::next();
         let child_id = WidgetId::next();
 
-        arena.register(root_id, Box::new(MockWidget { id: root_id }));
-        arena.register(child_id, Box::new(MockWidget { id: child_id }));
-        arena.set_parent(child_id, root_id);
+        tree.register(root_id, Box::new(MockWidget { id: root_id }));
+        tree.register(child_id, Box::new(MockWidget { id: child_id }));
+        tree.set_parent(child_id, root_id);
 
         // Mark child dirty - root should be added to layout_roots
-        arena.mark_needs_layout(child_id);
-        assert!(arena.is_dirty(child_id));
-        assert!(arena.is_dirty(root_id));
-        assert!(arena.has_layout_roots());
+        tree.mark_needs_layout(child_id);
+        assert!(tree.is_dirty(child_id));
+        assert!(tree.is_dirty(root_id));
+        assert!(tree.has_layout_roots());
 
         // Simulate layout running: take roots and clear ALL dirty flags
         // (this is what widgets should do after layout)
-        arena.take_layout_roots();
-        arena.clear_dirty(root_id);
-        arena.clear_dirty(child_id);
+        tree.take_layout_roots();
+        tree.clear_dirty(root_id);
+        tree.clear_dirty(child_id);
 
         // Mark child dirty again - should add root to layout_roots
-        arena.mark_needs_layout(child_id);
-        assert!(arena.has_layout_roots());
+        tree.mark_needs_layout(child_id);
+        assert!(tree.has_layout_roots());
 
         // Now test the optimization: if child is still dirty, stop early
-        arena.take_layout_roots();
+        tree.take_layout_roots();
         // Don't clear dirty flags this time
 
         // Mark child dirty again - should stop early (already dirty)
-        arena.mark_needs_layout(child_id);
+        tree.mark_needs_layout(child_id);
 
         // layout_roots should be empty because we stopped at the dirty child
-        assert!(!arena.has_layout_roots());
+        assert!(!tree.has_layout_roots());
     }
 
     #[test]
-    fn test_arena_with_widget() {
-        let mut arena = LayoutArena::new();
+    fn test_tree_with_widget() {
+        let mut tree = Tree::new();
         let id = WidgetId::next();
-        arena.register(id, Box::new(MockWidget { id }));
+        tree.register(id, Box::new(MockWidget { id }));
 
         // Read widget
-        let widget_id = arena.with_widget(id, |w| w.id());
+        let widget_id = tree.with_widget(id, |w| w.id());
         assert_eq!(widget_id, Some(id));
 
         // Mutate widget (layout)
-        let widget_cell = arena.get_widget_mut(id);
+        let widget_cell = tree.get_widget_mut(id);
         let size = widget_cell.map(|cell| {
             let mut widget = cell.borrow_mut();
-            widget.layout(&mut arena, Constraints::new(0.0, 0.0, 100.0, 100.0))
+            widget.layout(&mut tree, Constraints::new(0.0, 0.0, 100.0, 100.0))
         });
 
         assert_eq!(size, Some(Size::new(100.0, 100.0)));

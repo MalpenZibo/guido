@@ -1,7 +1,8 @@
 use crate::default_font_family;
 use crate::layout::{Constraints, Size};
-use crate::reactive::{IntoMaybeDyn, LayoutArena, MaybeDyn, WidgetId};
+use crate::reactive::{IntoMaybeDyn, MaybeDyn};
 use crate::renderer::{PaintContext, measure_text_styled};
+use crate::tree::{Tree, WidgetId};
 
 use super::font::{FontFamily, FontWeight};
 use super::widget::{Color, EventResponse, Rect, Widget};
@@ -126,9 +127,9 @@ impl Text {
 }
 
 impl Widget for Text {
-    fn layout(&mut self, arena: &mut LayoutArena, constraints: Constraints) -> Size {
+    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size {
         // Text widgets are never relayout boundaries
-        arena.set_relayout_boundary(self.widget_id, false);
+        tree.set_relayout_boundary(self.widget_id, false);
 
         // Refresh cached values from reactive properties
         // This reads signals and registers layout dependencies
@@ -168,15 +169,15 @@ impl Widget for Text {
         self.bounds.height = size.height;
 
         // Cache constraints and size for partial layout
-        arena.cache_layout(self.widget_id, constraints, size);
+        tree.cache_layout(self.widget_id, constraints, size);
 
         // Clear dirty flag since layout is complete
-        arena.clear_dirty(self.widget_id);
+        tree.clear_dirty(self.widget_id);
 
         size
     }
 
-    fn paint(&self, _arena: &LayoutArena, ctx: &mut PaintContext) {
+    fn paint(&self, _tree: &Tree, ctx: &mut PaintContext) {
         // Draw in LOCAL coordinates (0,0 is widget origin)
         // Parent Container sets position transform
         let local_bounds = Rect::new(0.0, 0.0, self.bounds.width, self.bounds.height);
@@ -191,7 +192,7 @@ impl Widget for Text {
         );
     }
 
-    fn event(&mut self, _arena: &LayoutArena, _event: &super::widget::Event) -> EventResponse {
+    fn event(&mut self, _tree: &Tree, _event: &super::widget::Event) -> EventResponse {
         EventResponse::Ignored
     }
 

@@ -9,9 +9,9 @@ use smithay_client_toolkit::reexports::client::Connection;
 
 use crate::layout::Constraints;
 use crate::platform::{WaylandState, WaylandWindowWrapper};
-use crate::reactive::{LayoutArena, WidgetId};
 use crate::renderer::{GpuContext, SurfaceState};
 use crate::surface::{SurfaceConfig, SurfaceId};
+use crate::tree::{Tree, WidgetId};
 use crate::widgets::Widget;
 
 /// A surface with unified GPU lifecycle management.
@@ -23,7 +23,7 @@ pub struct ManagedSurface {
     pub id: SurfaceId,
     /// Configuration for the surface
     pub config: SurfaceConfig,
-    /// The root widget ID (widget is stored in the arena)
+    /// The root widget ID (widget is stored in the tree)
     pub widget_id: WidgetId,
     /// The wgpu surface state (None until GPU init)
     pub wgpu_surface: Option<SurfaceState>,
@@ -33,17 +33,17 @@ pub struct ManagedSurface {
 
 impl ManagedSurface {
     /// Create a new managed surface (wgpu_surface is None until GPU init).
-    /// The root widget and its children are registered in the arena.
+    /// The root widget and its children are registered in the tree.
     pub fn new(
         id: SurfaceId,
         config: SurfaceConfig,
         mut widget: Box<dyn Widget>,
-        arena: &mut LayoutArena,
+        tree: &mut Tree,
     ) -> Self {
         let widget_id = widget.id();
         // Register children first (recursively), then the root widget
-        widget.register_children(arena);
-        arena.register(widget_id, widget);
+        widget.register_children(tree);
+        tree.register(widget_id, widget);
         Self {
             id,
             config,
@@ -63,7 +63,7 @@ impl ManagedSurface {
         width: u32,
         height: u32,
         scale_factor: f32,
-        arena: &mut LayoutArena,
+        tree: &mut Tree,
     ) -> bool {
         if self.wgpu_surface.is_some() {
             return true; // Already initialized
@@ -90,7 +90,7 @@ impl ManagedSurface {
         self.previous_scale_factor = scale_factor;
 
         // Perform initial layout
-        self.layout_widget(arena, width as f32, height as f32);
+        self.layout_widget(tree, width as f32, height as f32);
 
         true
     }
@@ -101,13 +101,13 @@ impl ManagedSurface {
     }
 
     /// Perform widget layout with the given dimensions.
-    pub fn layout_widget(&self, arena: &mut LayoutArena, width: f32, height: f32) {
+    pub fn layout_widget(&self, tree: &mut Tree, width: f32, height: f32) {
         let constraints = Constraints::new(0.0, 0.0, width, height);
 
-        if let Some(widget_cell) = arena.get_widget_mut(self.widget_id) {
+        if let Some(widget_cell) = tree.get_widget_mut(self.widget_id) {
             let mut widget = widget_cell.borrow_mut();
 
-            widget.layout(arena, constraints);
+            widget.layout(tree, constraints);
             widget.set_origin(0.0, 0.0);
         }
     }
@@ -160,7 +160,7 @@ impl SurfaceManager {
         gpu_context: &GpuContext,
         connection: &Connection,
         wayland_state: &WaylandState,
-        arena: &mut LayoutArena,
+        tree: &mut Tree,
     ) {
         for (id, surface) in self.surfaces.iter_mut() {
             if surface.is_gpu_ready() {
@@ -184,7 +184,7 @@ impl SurfaceManager {
                 wayland_surface.width,
                 wayland_surface.height,
                 wayland_surface.scale_factor,
-                arena,
+                tree,
             );
         }
     }

@@ -1,7 +1,10 @@
 use smallvec::SmallVec;
 
 use super::{Axis, Constraints, CrossAxisAlignment, Layout, MainAxisAlignment, Size};
-use crate::reactive::{IntoMaybeDyn, LayoutArena, MaybeDyn, WidgetId};
+use crate::{
+    reactive::{IntoMaybeDyn, MaybeDyn},
+    tree::{Tree, WidgetId},
+};
 
 /// Flex layout for rows and columns
 pub struct Flex {
@@ -94,7 +97,7 @@ impl Flex {
     /// Layout children along the given axis
     fn layout_axis(
         &mut self,
-        arena: &mut LayoutArena,
+        tree: &mut Tree,
         children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),
@@ -148,9 +151,9 @@ impl Flex {
         let mut children_main = 0.0f32;
 
         for &child_id in children.iter() {
-            if let Some(widget_cell) = arena.get_widget_mut(child_id) {
+            if let Some(widget_cell) = tree.get_widget_mut(child_id) {
                 let mut widget = widget_cell.borrow_mut();
-                let size = widget.layout(arena, child_constraints);
+                let size = widget.layout(tree, child_constraints);
 
                 let main_size = size.main_axis(axis);
                 let cross_size = size.cross_axis(axis);
@@ -204,11 +207,11 @@ impl Flex {
                 },
             };
             for &child_id in children.iter() {
-                let widget_cell = arena.get_widget_mut(child_id);
+                let widget_cell = tree.get_widget_mut(child_id);
                 if let Some(widget_cell) = widget_cell {
                     let mut widget = widget_cell.borrow_mut();
 
-                    let size = widget.layout(arena, stretch_constraints);
+                    let size = widget.layout(tree, stretch_constraints);
                     children_main += size.main_axis(axis);
                     self.child_sizes.push(size);
                 }
@@ -266,7 +269,7 @@ impl Flex {
                 Axis::Vertical => (cross_pos, main_pos),
             };
 
-            arena.with_widget_mut(child_id, |child| child.set_origin(x, y));
+            tree.with_widget_mut(child_id, |child| child.set_origin(x, y));
             main_pos += child_main + between_spacing;
         }
 
@@ -277,12 +280,12 @@ impl Flex {
 impl Layout for Flex {
     fn layout(
         &mut self,
-        arena: &mut LayoutArena,
+        tree: &mut Tree,
         children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),
     ) -> Size {
         let direction = self.direction.get();
-        self.layout_axis(arena, children, constraints, origin, direction)
+        self.layout_axis(tree, children, constraints, origin, direction)
     }
 }

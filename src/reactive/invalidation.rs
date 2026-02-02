@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use bitflags::bitflags;
@@ -18,7 +18,7 @@ pub enum JobType {
     Paint,
     /// Widget needs children reconciliation (implies layout)
     Reconcile,
-    /// Widget needs to be unregistered from the arena (deferred cleanup for Drop)
+    /// Widget needs to be unregistered from the tree (deferred cleanup for Drop)
     Unregister,
 }
 
@@ -51,6 +51,8 @@ fn drain_pending_jobs() -> Vec<Job> {
 
 use smithay_client_toolkit::reexports::calloop::ping::Ping;
 
+use crate::tree::{Tree, WidgetId};
+
 bitflags! {
     /// Flags indicating what aspects of rendering need to be updated
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,40 +61,6 @@ bitflags! {
         const NEEDS_LAYOUT = 0b01;
         /// Widget needs repainting (visual appearance changed)
         const NEEDS_PAINT  = 0b10;
-    }
-}
-
-/// Unique identifier for a widget in the tree
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct WidgetId(u64);
-
-static NEXT_WIDGET_ID: AtomicU64 = AtomicU64::new(1);
-
-impl WidgetId {
-    /// Generate a new unique widget ID
-    pub fn next() -> Self {
-        WidgetId(NEXT_WIDGET_ID.fetch_add(1, Ordering::Relaxed))
-    }
-
-    /// Get the raw u64 value of this widget ID
-    pub fn as_u64(self) -> u64 {
-        self.0
-    }
-
-    /// Request that this widget be re-laid out (and repainted)
-    pub fn request_layout(&self) {
-        APP_STATE.with(|state| {
-            state.borrow_mut().change_flags |= ChangeFlags::NEEDS_LAYOUT | ChangeFlags::NEEDS_PAINT;
-        });
-        request_frame();
-    }
-
-    /// Request that this widget be repainted (without layout)
-    pub fn request_paint(&self) {
-        APP_STATE.with(|state| {
-            state.borrow_mut().change_flags |= ChangeFlags::NEEDS_PAINT;
-        });
-        request_frame();
     }
 }
 
@@ -136,7 +104,7 @@ impl AppState {
 }
 
 thread_local! {
-    static APP_STATE: RefCell<AppState> = RefCell::new(AppState::new());
+    pub static APP_STATE: RefCell<AppState> = RefCell::new(AppState::new());
 }
 
 // ============================================================================
@@ -268,16 +236,16 @@ pub fn clear_layout_subscribers(signal_id: usize) {
     clear_signal_subscribers(signal_id);
 }
 
-/// Process pending jobs with an explicit arena reference.
+/// Process pending jobs with an explicit tree reference.
 ///
 /// This drains the pending job queue and processes each job:
-/// - Unregister jobs: remove widget from arena (deferred cleanup from Drop)
+/// - Unregister jobs: remove widget from tree (deferred cleanup from Drop)
 /// - Reconcile jobs: run reconcile_children() on the widget, then mark for layout
-/// - Layout jobs: mark the widget as needing layout in the arena
+/// - Layout jobs: mark the widget as needing layout in the tree
 /// - Paint jobs: set the NEEDS_PAINT flag
 ///
-/// Must be called from the main loop which has arena access.
-pub fn process_pending_jobs_with_arena(arena: &mut super::layout_arena::LayoutArena) {
+/// Must be called from the main loop which has tree access.
+pub fn process_pending_jobs_with_tree(tree: &mut Tree) {
     let jobs = drain_pending_jobs();
 
     // Deduplicate jobs by widget - keep highest priority job type per widget
@@ -310,20 +278,20 @@ pub fn process_pending_jobs_with_arena(arena: &mut super::layout_arena::LayoutAr
         match job_type {
             JobType::Unregister => {
                 // Deferred unregistration from Drop handlers
-                arena.unregister(widget_id);
+                tree.unregister(widget_id);
             }
             JobType::Reconcile => {
                 // Run reconciliation, then mark for layout
-                let widget_cell = arena.get_widget_mut(widget_id);
+                let widget_cell = tree.get_widget_mut(widget_id);
                 if let Some(widget_cell) = widget_cell {
                     let mut widget = widget_cell.borrow_mut();
-                    widget.reconcile_children(arena);
-                    arena.mark_needs_layout(widget_id);
+                    widget.reconcile_children(tree);
+                    tree.mark_needs_layout(widget_id);
                 }
             }
             JobType::Layout => {
-                // Mark widget as needing layout in the arena
-                arena.mark_needs_layout(widget_id);
+                // Mark widget as needing layout in the tree
+                tree.mark_needs_layout(widget_id);
             }
             JobType::Paint => {
                 // Paint-only jobs just need repaint
@@ -340,7 +308,7 @@ pub fn process_pending_jobs_with_arena(arena: &mut super::layout_arena::LayoutAr
 }
 
 /// Mark a widget as needing layout.
-/// Pushes a Layout job that will be processed by `process_pending_jobs_with_arena`.
+/// Pushes a Layout job that will be processed by `process_pending_jobs_with_tree`.
 pub fn mark_needs_layout(widget_id: WidgetId) {
     push_job(widget_id, JobType::Layout);
 

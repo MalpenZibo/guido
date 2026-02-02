@@ -2,10 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::layout::{Constraints, Size};
-use crate::reactive::{
-    JobType, LayoutArena, OwnerId, WidgetId, dispose_owner, push_job, with_signal_tracking,
-};
+use crate::reactive::{JobType, OwnerId, dispose_owner, push_job, with_signal_tracking};
 use crate::renderer::PaintContext;
+use crate::tree::{Tree, WidgetId};
 
 use super::Widget;
 use super::widget::{Event, EventResponse, Rect};
@@ -31,13 +30,13 @@ enum SegmentType {
 /// - Dynamic segments: widgets from reactive closures with keyed reconciliation
 ///
 /// During construction, static widgets are stored in `pending_static`. When the widget
-/// tree is registered with an arena (via `register_pending`), widgets are moved to the
-/// arena and their IDs are stored in `merged`.
+/// tree is registered with an tree (via `register_pending`), widgets are moved to the
+/// tree and their IDs are stored in `merged`.
 #[derive(Default)]
 pub struct ChildrenSource {
     /// All widget IDs in order (static and dynamic interleaved) - populated after registration
     merged: Vec<WidgetId>,
-    /// Pending static widgets not yet registered with the arena
+    /// Pending static widgets not yet registered with the tree
     pending_static: Vec<Box<dyn Widget>>,
     /// Segment metadata (boundaries and reconciliation info)
     segments: Vec<SegmentType>,
@@ -56,7 +55,7 @@ impl ChildrenSource {
     /// Add a static child widget
     ///
     /// The widget is stored in `pending_static` until `register_pending` is called
-    /// with an arena reference.
+    /// with an tree reference.
     pub fn add_static(&mut self, widget: Box<dyn Widget>) {
         self.pending_static.push(widget);
 
@@ -68,17 +67,17 @@ impl ChildrenSource {
         }
     }
 
-    /// Register all pending static widgets with the arena.
+    /// Register all pending static widgets with the tree.
     ///
     /// This should be called before layout. It recursively registers the widget tree.
-    pub fn register_pending(&mut self, arena: &mut LayoutArena, parent_id: WidgetId) {
+    pub fn register_pending(&mut self, tree: &mut Tree, parent_id: WidgetId) {
         for mut widget in self.pending_static.drain(..) {
             let widget_id = widget.id();
             // Recursively register children first
-            widget.register_children(arena);
+            widget.register_children(tree);
             // Register this widget
-            arena.register(widget_id, widget);
-            arena.set_parent(widget_id, parent_id);
+            tree.register(widget_id, widget);
+            tree.set_parent(widget_id, parent_id);
             self.merged.push(widget_id);
         }
     }
@@ -100,7 +99,7 @@ impl ChildrenSource {
     }
 
     /// Reconcile all dynamic segments and rebuild merged list
-    fn reconcile(&mut self, arena: &mut LayoutArena, parent_id: WidgetId) {
+    fn reconcile(&mut self, tree: &mut Tree, parent_id: WidgetId) {
         // First pass: check if any dynamic segment needs reconciliation
         let mut segments_with_changes: Vec<(usize, Vec<DynItem>)> = Vec::new();
 
@@ -172,13 +171,13 @@ impl ChildrenSource {
                                 // Reuse existing widget (preserves state!)
                                 new_merged.push(widget_id);
                             } else {
-                                // Create new widget and register in arena
+                                // Create new widget and register in tree
                                 let mut widget = (item.widget_fn)();
                                 let widget_id = widget.id();
                                 // Recursively register children first
-                                widget.register_children(arena);
-                                arena.register(widget_id, widget);
-                                arena.set_parent(widget_id, parent_id);
+                                widget.register_children(tree);
+                                tree.register(widget_id, widget);
+                                tree.set_parent(widget_id, parent_id);
                                 new_merged.push(widget_id);
                             }
                         }
@@ -186,9 +185,9 @@ impl ChildrenSource {
                         // Update current keys
                         *current_keys = new_keys;
 
-                        // Unregister removed widgets from arena (triggers Drop/cleanup)
+                        // Unregister removed widgets from tree (triggers Drop/cleanup)
                         for old_id in cached.values() {
-                            arena.unregister(*old_id);
+                            tree.unregister(*old_id);
                         }
                         cached.clear();
                     } else {
@@ -208,7 +207,7 @@ impl ChildrenSource {
 
     /// Reconcile with signal tracking. Called from main loop job processing.
     /// Returns true if children changed.
-    pub fn reconcile_with_tracking(&mut self, arena: &mut LayoutArena) -> bool {
+    pub fn reconcile_with_tracking(&mut self, tree: &mut Tree) -> bool {
         if !self.has_dynamic() {
             return false;
         }
@@ -222,7 +221,7 @@ impl ChildrenSource {
         // Track signal reads during reconciliation
         // This registers container as subscriber for any signals read
         with_signal_tracking(container_id, JobType::Reconcile, || {
-            self.reconcile(arena, container_id);
+            self.reconcile(tree, container_id);
         });
         self.initial_reconcile_done = true;
 
@@ -232,12 +231,12 @@ impl ChildrenSource {
 
     /// Reconcile and get widget IDs (for layout)
     /// Does lazy initial reconciliation with tracking if needed.
-    pub fn reconcile_and_get(&mut self, arena: &mut LayoutArena) -> &Vec<WidgetId> {
+    pub fn reconcile_and_get(&mut self, tree: &mut Tree) -> &Vec<WidgetId> {
         // Lazy initial reconciliation (for first frame before any jobs exist)
         if self.has_dynamic() && !self.initial_reconcile_done {
             if let Some(container_id) = self.container_id {
                 with_signal_tracking(container_id, JobType::Reconcile, || {
-                    self.reconcile(arena, container_id);
+                    self.reconcile(tree, container_id);
                 });
                 self.initial_reconcile_done = true;
             } else {
@@ -275,7 +274,7 @@ impl ChildrenSource {
 impl Drop for ChildrenSource {
     fn drop(&mut self) {
         // Push unregister jobs - will be processed in main loop
-        // This defers the actual unregistration so Drop doesn't need arena access
+        // This defers the actual unregistration so Drop doesn't need tree access
         for widget_id in self.merged.drain(..) {
             push_job(widget_id, JobType::Unregister);
         }
@@ -420,28 +419,28 @@ impl Drop for OwnedWidget {
 }
 
 impl Widget for OwnedWidget {
-    fn advance_animations(&mut self, arena: &LayoutArena) -> bool {
-        self.inner.advance_animations(arena)
+    fn advance_animations(&mut self, tree: &Tree) -> bool {
+        self.inner.advance_animations(tree)
     }
 
-    fn reconcile_children(&mut self, arena: &mut LayoutArena) -> bool {
-        self.inner.reconcile_children(arena)
+    fn reconcile_children(&mut self, tree: &mut Tree) -> bool {
+        self.inner.reconcile_children(tree)
     }
 
-    fn register_children(&mut self, arena: &mut LayoutArena) {
-        self.inner.register_children(arena)
+    fn register_children(&mut self, tree: &mut Tree) {
+        self.inner.register_children(tree)
     }
 
-    fn layout(&mut self, arena: &mut LayoutArena, constraints: Constraints) -> Size {
-        self.inner.layout(arena, constraints)
+    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size {
+        self.inner.layout(tree, constraints)
     }
 
-    fn paint(&self, arena: &LayoutArena, ctx: &mut PaintContext) {
-        self.inner.paint(arena, ctx)
+    fn paint(&self, tree: &Tree, ctx: &mut PaintContext) {
+        self.inner.paint(tree, ctx)
     }
 
-    fn event(&mut self, arena: &LayoutArena, event: &Event) -> EventResponse {
-        self.inner.event(arena, event)
+    fn event(&mut self, tree: &Tree, event: &Event) -> EventResponse {
+        self.inner.event(tree, event)
     }
 
     fn set_origin(&mut self, x: f32, y: f32) {
@@ -456,8 +455,8 @@ impl Widget for OwnedWidget {
         self.inner.id()
     }
 
-    fn has_focus_descendant(&self, arena: &LayoutArena, id: WidgetId) -> bool {
-        self.inner.has_focus_descendant(arena, id)
+    fn has_focus_descendant(&self, tree: &Tree, id: WidgetId) -> bool {
+        self.inner.has_focus_descendant(tree, id)
     }
 
     fn is_relayout_boundary(&self) -> bool {

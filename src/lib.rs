@@ -7,6 +7,7 @@ pub mod surface;
 mod surface_manager;
 pub mod transform;
 pub mod transform_origin;
+pub mod tree;
 pub mod widgets;
 
 // These modules are public for advanced use cases
@@ -21,7 +22,7 @@ use std::cell::RefCell;
 use layout::Constraints;
 use platform::create_wayland_app;
 use reactive::{
-    LayoutArena, clear_animation_flag, init_wakeup, set_system_clipboard, take_clipboard_change,
+    clear_animation_flag, init_wakeup, set_system_clipboard, take_clipboard_change,
     take_cursor_change, take_frame_request, with_app_state, with_app_state_mut,
 };
 use renderer::{GpuContext, PaintContext, RenderNode, RenderTree, Renderer, flatten_tree};
@@ -93,12 +94,14 @@ use std::sync::mpsc::Receiver;
 
 use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 
+use crate::{reactive::invalidation::process_pending_jobs_with_tree, tree::Tree};
+
 /// A surface definition that stores configuration and widget factory.
 #[allow(clippy::type_complexity)]
 struct SurfaceDefinition {
     id: SurfaceId,
     config: SurfaceConfig,
-    widget_fn: Box<dyn FnOnce(&LayoutArena) -> Box<dyn Widget>>,
+    widget_fn: Box<dyn FnOnce(&Tree) -> Box<dyn Widget>>,
 }
 
 /// Process dynamic surface commands (create, close, property changes).
@@ -108,7 +111,7 @@ fn process_surface_commands(
     surface_manager: &mut SurfaceManager,
     wayland_state: &mut platform::WaylandState,
     qh: &QueueHandle<platform::WaylandState>,
-    arena: &mut LayoutArena,
+    tree: &mut Tree,
 ) -> bool {
     while let Ok(cmd) = surface_rx.try_recv() {
         match cmd {
@@ -123,8 +126,8 @@ fn process_surface_commands(
                 wayland_state.create_surface_with_id(qh, id, &config);
 
                 // Create the widget and managed surface (GPU init happens later)
-                let widget = widget_fn(arena);
-                let managed = ManagedSurface::new(id, config, widget, arena);
+                let widget = widget_fn(tree);
+                let managed = ManagedSurface::new(id, config, widget, tree);
                 surface_manager.add(managed);
             }
             SurfaceCommand::Close(id) => {
@@ -176,7 +179,7 @@ fn render_surface(
     renderer: &mut Renderer,
     connection: &Connection,
     qh: &QueueHandle<platform::WaylandState>,
-    arena: &mut LayoutArena,
+    tree: &mut Tree,
 ) {
     // Get wayland surface state
     let Some(wayland_surface) = wayland_state.get_surface_mut(id) else {
@@ -219,8 +222,8 @@ fn render_surface(
 
     // Dispatch events to widget
     for event in &events {
-        arena.with_widget_mut(surface.widget_id, |widget| {
-            widget.event(arena, event);
+        tree.with_widget_mut(surface.widget_id, |widget| {
+            widget.event(tree, event);
         });
     }
 
@@ -298,55 +301,55 @@ fn render_surface(
         renderer.set_scale_factor(scale_factor);
 
         // Advance animations first (separate from layout)
-        let animations_active = arena
-            .with_widget_mut(surface.widget_id, |widget| widget.advance_animations(arena))
+        let animations_active = tree
+            .with_widget_mut(surface.widget_id, |widget| widget.advance_animations(tree))
             .unwrap_or(false);
         if animations_active {
             reactive::request_animation_frame();
         }
 
         // Process pending jobs from signal updates (reconciliation + layout marking)
-        reactive::process_pending_jobs_with_arena(arena);
+        process_pending_jobs_with_tree(tree);
 
         // Re-layout using partial layout from boundaries when available
         let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
-        if arena.has_layout_roots() {
+        if tree.has_layout_roots() {
             // Partial layout: only update dirty subtrees starting from boundaries
-            let roots = arena.take_layout_roots();
+            let roots = tree.take_layout_roots();
             for root_id in roots {
-                if let Some(widget_cell) = arena.get_widget_mut(root_id) {
+                if let Some(widget_cell) = tree.get_widget_mut(root_id) {
                     // Use cached constraints for boundaries, or fall back to parent constraints
-                    let cached = arena.cached_constraints(root_id).unwrap_or(constraints);
+                    let cached = tree.cached_constraints(root_id).unwrap_or(constraints);
 
                     let mut widget = widget_cell.borrow_mut();
 
-                    widget.layout(arena, cached);
+                    widget.layout(tree, cached);
                 }
             }
         } else if needs_layout || needs_resize {
             // Full layout from root only when explicitly needed (first frame, resize, etc.)
-            if let Some(widget_cell) = arena.get_widget_mut(surface.widget_id) {
+            if let Some(widget_cell) = tree.get_widget_mut(surface.widget_id) {
                 let mut widget = widget_cell.borrow_mut();
 
-                widget.layout(arena, constraints);
+                widget.layout(tree, constraints);
             }
         }
         // If neither condition is true, skip layout entirely - nothing is dirty
 
         // Build render tree
-        let mut tree = RenderTree::new();
+        let mut render_tree = RenderTree::new();
         let mut root = RenderNode::with_bounds(
             0, // Root node ID
             widgets::Rect::new(0.0, 0.0, width as f32, height as f32),
         );
-        arena.with_widget_mut(surface.widget_id, |widget| {
+        tree.with_widget_mut(surface.widget_id, |widget| {
             let mut ctx = PaintContext::new(&mut root);
-            widget.paint(arena, &mut ctx);
+            widget.paint(tree, &mut ctx);
         });
-        tree.add_root(root);
+        render_tree.add_root(root);
 
         // Flatten tree and render
-        let commands = flatten_tree(&tree);
+        let commands = flatten_tree(&render_tree);
         renderer.render(wgpu_surface, &commands, surface.config.background_color);
 
         // Clear flags after rendering
@@ -371,15 +374,15 @@ fn render_surface(
 pub struct App {
     /// Surface definitions added via add_surface()
     surface_definitions: Vec<SurfaceDefinition>,
-    /// The layout arena for widget storage (owned by App)
-    arena: LayoutArena,
+    /// The layout tree for widget storage (owned by App)
+    tree: Tree,
 }
 
 impl App {
     pub fn new() -> Self {
         Self {
             surface_definitions: Vec::new(),
-            arena: LayoutArena::new(),
+            tree: Tree::new(),
         }
     }
 
@@ -407,7 +410,7 @@ impl App {
     /// Each surface has its own widget tree but all surfaces share the same reactive
     /// signals and app state.
     ///
-    /// The widget factory closure receives a reference to the layout arena, which
+    /// The widget factory closure receives a reference to the layout tree, which
     /// is used for widget registration. Widgets should be created inside this closure.
     ///
     /// Returns a tuple of `(Self, SurfaceId)` where `SurfaceId` can be used to get
@@ -423,20 +426,20 @@ impl App {
     ///             .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
     ///             .layer(Layer::Top)
     ///             .namespace("status-bar"),
-    ///         |_arena| status_bar_widget()
+    ///         |_tree| status_bar_widget()
     ///     );
     /// app.run();
     /// ```
     pub fn add_surface<W, F>(mut self, config: SurfaceConfig, widget_fn: F) -> (Self, SurfaceId)
     where
         W: Widget + 'static,
-        F: FnOnce(&LayoutArena) -> W + 'static,
+        F: FnOnce(&Tree) -> W + 'static,
     {
         let id = SurfaceId::next();
         self.surface_definitions.push(SurfaceDefinition {
             id,
             config,
-            widget_fn: Box::new(move |arena| Box::new(widget_fn(arena))),
+            widget_fn: Box::new(move |tree| Box::new(widget_fn(tree))),
         });
         (self, id)
     }
@@ -489,9 +492,9 @@ impl App {
                 .get_surface(def.id)
                 .expect("Surface should exist after configure");
 
-            // Create the widget and managed surface (widget_fn receives arena reference)
-            let widget = (def.widget_fn)(&self.arena);
-            let mut managed = ManagedSurface::new(def.id, def.config, widget, &mut self.arena);
+            // Create the widget and managed surface (widget_fn receives tree reference)
+            let widget = (def.widget_fn)(&self.tree);
+            let mut managed = ManagedSurface::new(def.id, def.config, widget, &mut self.tree);
 
             // Initialize GPU surface
             managed.init_gpu(
@@ -501,7 +504,7 @@ impl App {
                 wayland_surface.width,
                 wayland_surface.height,
                 wayland_surface.scale_factor,
-                &mut self.arena,
+                &mut self.tree,
             );
 
             // Create renderer from first surface
@@ -578,7 +581,7 @@ impl App {
                 &mut surface_manager,
                 &mut wayland_state,
                 &qh,
-                &mut self.arena,
+                &mut self.tree,
             ) {
                 break;
             }
@@ -588,7 +591,7 @@ impl App {
                 &gpu_context,
                 &connection,
                 &wayland_state,
-                &mut self.arena,
+                &mut self.tree,
             );
 
             // Render each surface
@@ -604,7 +607,7 @@ impl App {
                     &mut renderer,
                     &connection,
                     &qh,
-                    &mut self.arena,
+                    &mut self.tree,
                 );
             }
 

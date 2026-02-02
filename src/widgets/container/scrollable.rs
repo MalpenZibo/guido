@@ -2,10 +2,11 @@
 
 use crate::animation::{SpringConfig, Transition};
 use crate::layout::Constraints;
-use crate::reactive::{LayoutArena, request_animation_frame};
+use crate::reactive::request_animation_frame;
 use crate::renderer::PaintContext;
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
+use crate::tree::Tree;
 use crate::widgets::scroll::{ScrollAxis, ScrollbarAxis, ScrollbarVisibility};
 use crate::widgets::widget::{Event, EventResponse, MouseButton, ScrollSource, Widget};
 
@@ -81,7 +82,7 @@ impl Container {
     }
 
     /// Layout and position scrollbar container widgets
-    pub(super) fn layout_scrollbar_containers(&mut self, arena: &mut LayoutArena) {
+    pub(super) fn layout_scrollbar_containers(&mut self, tree: &mut Tree) {
         if self.scroll_axis == ScrollAxis::None
             || self.scrollbar_visibility == ScrollbarVisibility::Hidden
         {
@@ -95,7 +96,7 @@ impl Container {
         // Layout vertical scrollbar
         if self.scroll_axis.allows_vertical() && needs_vertical {
             self.layout_scrollbar_axis(
-                arena,
+                tree,
                 ScrollbarAxis::Vertical,
                 scale_factor,
                 needs_horizontal,
@@ -105,7 +106,7 @@ impl Container {
         // Layout horizontal scrollbar
         if self.scroll_axis.allows_horizontal() && needs_horizontal {
             self.layout_scrollbar_axis(
-                arena,
+                tree,
                 ScrollbarAxis::Horizontal,
                 scale_factor,
                 needs_vertical,
@@ -115,7 +116,7 @@ impl Container {
 
     fn layout_scrollbar_axis(
         &mut self,
-        arena: &mut LayoutArena,
+        tree: &mut Tree,
         axis: ScrollbarAxis,
         scale_factor: f32,
         needs_other_scrollbar: bool,
@@ -170,7 +171,7 @@ impl Container {
                 max_width: track_rect.width,
                 max_height: track_rect.height,
             };
-            Widget::layout(track.as_mut(), arena, track_constraints);
+            Widget::layout(track.as_mut(), tree, track_constraints);
             track.set_origin(track_rect.x, track_rect.y);
 
             // Set scale transform
@@ -196,7 +197,7 @@ impl Container {
                 max_width: handle_rect.width,
                 max_height: handle_rect.height,
             };
-            Widget::layout(handle.as_mut(), arena, handle_constraints);
+            Widget::layout(handle.as_mut(), tree, handle_constraints);
             handle.set_origin(handle_rect.x, handle_rect.y);
 
             // Set scale transform
@@ -380,7 +381,7 @@ impl Container {
     }
 
     /// Paint scrollbar container widgets
-    pub(super) fn paint_scrollbar_containers(&self, arena: &LayoutArena, ctx: &mut PaintContext) {
+    pub(super) fn paint_scrollbar_containers(&self, tree: &Tree, ctx: &mut PaintContext) {
         use crate::transform::Transform;
         use crate::widgets::Rect;
 
@@ -399,7 +400,7 @@ impl Container {
 
                 let mut track_ctx = ctx.add_child(0, track_local);
                 track_ctx.set_transform(Transform::translate(track_offset_x, track_offset_y));
-                track.paint(arena, &mut track_ctx);
+                track.paint(tree, &mut track_ctx);
             }
             if let Some(ref handle) = self.v_scrollbar_handle {
                 let handle_global = handle.bounds();
@@ -409,7 +410,7 @@ impl Container {
 
                 let mut handle_ctx = ctx.add_child(0, handle_local);
                 handle_ctx.set_transform(Transform::translate(handle_offset_x, handle_offset_y));
-                handle.paint(arena, &mut handle_ctx);
+                handle.paint(tree, &mut handle_ctx);
             }
         }
 
@@ -423,7 +424,7 @@ impl Container {
 
                 let mut track_ctx = ctx.add_child(0, track_local);
                 track_ctx.set_transform(Transform::translate(track_offset_x, track_offset_y));
-                track.paint(arena, &mut track_ctx);
+                track.paint(tree, &mut track_ctx);
             }
             if let Some(ref handle) = self.h_scrollbar_handle {
                 let handle_global = handle.bounds();
@@ -433,7 +434,7 @@ impl Container {
 
                 let mut handle_ctx = ctx.add_child(0, handle_local);
                 handle_ctx.set_transform(Transform::translate(handle_offset_x, handle_offset_y));
-                handle.paint(arena, &mut handle_ctx);
+                handle.paint(tree, &mut handle_ctx);
             }
         }
     }
@@ -441,7 +442,7 @@ impl Container {
     /// Handle scrollbar-related events, returns EventResponse if handled
     pub(super) fn handle_scrollbar_event(
         &mut self,
-        arena: &LayoutArena,
+        tree: &Tree,
         event: &Event,
     ) -> Option<EventResponse> {
         if self.scroll_axis == ScrollAxis::None
@@ -456,7 +457,7 @@ impl Container {
                 if self.scroll_axis.allows_vertical()
                     && self.scroll_state.needs_vertical_scrollbar()
                     && let Some(response) =
-                        self.handle_scrollbar_click(arena, ScrollbarAxis::Vertical, *x, *y, event)
+                        self.handle_scrollbar_click(tree, ScrollbarAxis::Vertical, *x, *y, event)
                 {
                     return Some(response);
                 }
@@ -465,7 +466,7 @@ impl Container {
                 if self.scroll_axis.allows_horizontal()
                     && self.scroll_state.needs_horizontal_scrollbar()
                     && let Some(response) =
-                        self.handle_scrollbar_click(arena, ScrollbarAxis::Horizontal, *x, *y, event)
+                        self.handle_scrollbar_click(tree, ScrollbarAxis::Horizontal, *x, *y, event)
                 {
                     return Some(response);
                 }
@@ -487,19 +488,14 @@ impl Container {
                     && self.scroll_state.needs_vertical_scrollbar()
                 {
                     needs_repaint |=
-                        self.update_scrollbar_hover(arena, ScrollbarAxis::Vertical, *x, *y, event);
+                        self.update_scrollbar_hover(tree, ScrollbarAxis::Vertical, *x, *y, event);
                 }
 
                 if self.scroll_axis.allows_horizontal()
                     && self.scroll_state.needs_horizontal_scrollbar()
                 {
-                    needs_repaint |= self.update_scrollbar_hover(
-                        arena,
-                        ScrollbarAxis::Horizontal,
-                        *x,
-                        *y,
-                        event,
-                    );
+                    needs_repaint |=
+                        self.update_scrollbar_hover(tree, ScrollbarAxis::Horizontal, *x, *y, event);
                 }
 
                 if needs_repaint {
@@ -511,7 +507,7 @@ impl Container {
                 if self.scroll_state.scrollbar_dragging {
                     self.scroll_state.scrollbar_dragging = false;
                     if let Some(ref mut handle) = self.v_scrollbar_handle {
-                        handle.event(arena, event);
+                        handle.event(tree, event);
                     }
                     request_animation_frame();
                     return Some(EventResponse::Handled);
@@ -519,7 +515,7 @@ impl Container {
                 if self.scroll_state.h_scrollbar_dragging {
                     self.scroll_state.h_scrollbar_dragging = false;
                     if let Some(ref mut handle) = self.h_scrollbar_handle {
-                        handle.event(arena, event);
+                        handle.event(tree, event);
                     }
                     request_animation_frame();
                     return Some(EventResponse::Handled);
@@ -532,10 +528,10 @@ impl Container {
                     self.scroll_state.scrollbar_hovered = false;
                     self.scroll_state.h_scrollbar_hovered = false;
                     if let Some(ref mut handle) = self.v_scrollbar_handle {
-                        handle.event(arena, event);
+                        handle.event(tree, event);
                     }
                     if let Some(ref mut handle) = self.h_scrollbar_handle {
-                        handle.event(arena, event);
+                        handle.event(tree, event);
                     }
                     request_animation_frame();
                 }
@@ -555,7 +551,7 @@ impl Container {
 
     fn handle_scrollbar_click(
         &mut self,
-        arena: &LayoutArena,
+        tree: &Tree,
         axis: ScrollbarAxis,
         x: f32,
         y: f32,
@@ -593,7 +589,7 @@ impl Container {
                 ScrollbarAxis::Horizontal => &mut self.h_scrollbar_handle,
             };
             if let Some(handle) = handle_container {
-                handle.event(arena, event);
+                handle.event(tree, event);
             }
 
             request_animation_frame();
@@ -680,7 +676,7 @@ impl Container {
 
     fn update_scrollbar_hover(
         &mut self,
-        arena: &LayoutArena,
+        tree: &Tree,
         axis: ScrollbarAxis,
         x: f32,
         y: f32,
@@ -727,7 +723,7 @@ impl Container {
             ScrollbarAxis::Horizontal => &mut self.h_scrollbar_handle,
         };
         if let Some(handle) = handle_container {
-            handle.event(arena, event);
+            handle.event(tree, event);
         }
 
         needs_repaint

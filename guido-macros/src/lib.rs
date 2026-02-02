@@ -241,19 +241,19 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         impl ::guido::widgets::Widget for #struct_name {
-            fn layout(&mut self, arena: &::guido::reactive::LayoutArena, constraints: ::guido::layout::Constraints) -> ::guido::layout::Size {
+            fn layout(&mut self, tree: &::guido::Tree, constraints: ::guido::layout::Constraints) -> ::guido::layout::Size {
                 self.ensure_built();
-                self.__inner.write().unwrap().as_mut().unwrap().layout(arena, constraints)
+                self.__inner.write().unwrap().as_mut().unwrap().layout(tree, constraints)
             }
 
-            fn paint(&self, arena: &::guido::reactive::LayoutArena, ctx: &mut ::guido::renderer::PaintContext) {
+            fn paint(&self, tree: &::guido::Tree, ctx: &mut ::guido::renderer::PaintContext) {
                 self.ensure_built();
-                self.__inner.read().unwrap().as_ref().unwrap().paint(arena, ctx)
+                self.__inner.read().unwrap().as_ref().unwrap().paint(tree, ctx)
             }
 
-            fn event(&mut self, arena: &::guido::reactive::LayoutArena, event: &::guido::widgets::Event) -> ::guido::widgets::EventResponse {
+            fn event(&mut self, tree: &::guido::reactive::Tree, event: &::guido::widgets::Event) -> ::guido::widgets::EventResponse {
                 self.ensure_built();
-                self.__inner.write().unwrap().as_mut().unwrap().event(arena, event)
+                self.__inner.write().unwrap().as_mut().unwrap().event(tree, event)
             }
 
             fn set_origin(&mut self, x: f32, y: f32) {

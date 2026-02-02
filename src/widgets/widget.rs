@@ -1,6 +1,6 @@
 use crate::layout::{Constraints, Size};
-use crate::reactive::{LayoutArena, WidgetId};
 use crate::renderer::PaintContext;
+use crate::tree::{Tree, WidgetId};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Color {
@@ -373,23 +373,23 @@ pub trait Widget: Send + Sync {
     /// Advance animations for this widget and children.
     /// Returns true if any animations are still active and need another frame.
     /// Called once per frame before layout.
-    fn advance_animations(&mut self, arena: &LayoutArena) -> bool {
-        let _ = arena;
+    fn advance_animations(&mut self, tree: &Tree) -> bool {
+        let _ = tree;
         false
     }
 
     /// Reconcile dynamic children. Called from main loop before layout.
     /// Returns true if children changed (requires layout).
     /// Default implementation returns false (no dynamic children).
-    fn reconcile_children(&mut self, arena: &mut LayoutArena) -> bool {
-        let _ = arena;
+    fn reconcile_children(&mut self, tree: &mut Tree) -> bool {
+        let _ = tree;
         false
     }
 
-    fn layout(&mut self, arena: &mut LayoutArena, constraints: Constraints) -> Size;
-    fn paint(&self, arena: &LayoutArena, ctx: &mut PaintContext);
-    fn event(&mut self, arena: &LayoutArena, event: &Event) -> EventResponse {
-        let _ = (arena, event);
+    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size;
+    fn paint(&self, tree: &Tree, ctx: &mut PaintContext);
+    fn event(&mut self, tree: &Tree, event: &Event) -> EventResponse {
+        let _ = (tree, event);
         EventResponse::Ignored
     }
     fn set_origin(&mut self, x: f32, y: f32);
@@ -403,7 +403,7 @@ pub trait Widget: Send + Sync {
     /// Check if this widget has a descendant with the given ID.
     /// Used by containers to check if a child has focus.
     /// Default implementation returns false (leaf widgets have no children).
-    fn has_focus_descendant(&self, _arena: &LayoutArena, _id: WidgetId) -> bool {
+    fn has_focus_descendant(&self, _tree: &Tree, _id: WidgetId) -> bool {
         false
     }
 
@@ -422,7 +422,7 @@ pub trait Widget: Send + Sync {
     /// this to register their pending children.
     ///
     /// Default implementation does nothing (leaf widgets have no children).
-    fn register_children(&mut self, _arena: &mut LayoutArena) {}
+    fn register_children(&mut self, _tree: &mut Tree) {}
 }
 
 #[cfg(test)]
