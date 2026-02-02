@@ -9,6 +9,7 @@ use smithay_client_toolkit::reexports::client::Connection;
 
 use crate::layout::Constraints;
 use crate::platform::{WaylandState, WaylandWindowWrapper};
+use crate::reactive::{WidgetId, register_widget, with_arena_widget_mut};
 use crate::renderer::{GpuContext, SurfaceState};
 use crate::surface::{SurfaceConfig, SurfaceId};
 use crate::widgets::Widget;
@@ -22,8 +23,8 @@ pub struct ManagedSurface {
     pub id: SurfaceId,
     /// Configuration for the surface
     pub config: SurfaceConfig,
-    /// The root widget for this surface
-    pub widget: Box<dyn Widget>,
+    /// The root widget ID (widget is stored in the arena)
+    pub widget_id: WidgetId,
     /// The wgpu surface state (None until GPU init)
     pub wgpu_surface: Option<SurfaceState>,
     /// Previous scale factor for detecting changes
@@ -32,11 +33,14 @@ pub struct ManagedSurface {
 
 impl ManagedSurface {
     /// Create a new managed surface (wgpu_surface is None until GPU init).
+    /// The root widget is registered in the global arena.
     pub fn new(id: SurfaceId, config: SurfaceConfig, widget: Box<dyn Widget>) -> Self {
+        let widget_id = widget.id();
+        register_widget(widget_id, widget);
         Self {
             id,
             config,
-            widget,
+            widget_id,
             wgpu_surface: None,
             previous_scale_factor: 1.0,
         }
@@ -90,8 +94,10 @@ impl ManagedSurface {
     /// Perform widget layout with the given dimensions.
     pub fn layout_widget(&mut self, width: f32, height: f32) {
         let constraints = Constraints::new(0.0, 0.0, width, height);
-        self.widget.layout(constraints);
-        self.widget.set_origin(0.0, 0.0);
+        with_arena_widget_mut(self.widget_id, |widget| {
+            widget.layout(constraints);
+            widget.set_origin(0.0, 0.0);
+        });
     }
 }
 

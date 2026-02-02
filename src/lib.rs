@@ -218,7 +218,9 @@ fn render_surface(
 
     // Dispatch events to widget
     for event in events {
-        surface.widget.event(&event);
+        with_arena_widget_mut(surface.widget_id, |widget| {
+            widget.event(&event);
+        });
     }
 
     // Sync clipboard to Wayland if it changed (copy operations)
@@ -295,7 +297,9 @@ fn render_surface(
         renderer.set_scale_factor(scale_factor);
 
         // Advance animations first (separate from layout)
-        let animations_active = surface.widget.advance_animations();
+        let animations_active =
+            with_arena_widget_mut(surface.widget_id, |widget| widget.advance_animations())
+                .unwrap_or(false);
         if animations_active {
             reactive::request_animation_frame();
         }
@@ -305,25 +309,21 @@ fn render_surface(
 
         // Re-layout using partial layout from boundaries when available
         let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
-        let surface_root_id = surface.widget.id();
         if arena_has_layout_roots() {
             // Partial layout: only update dirty subtrees starting from boundaries
             let roots = arena_take_layout_roots();
             for root_id in roots {
-                if root_id == surface_root_id {
-                    // Surface root is not in arena - handle directly
-                    surface.widget.layout(constraints);
-                } else {
-                    with_arena_widget_mut(root_id, |widget| {
-                        // Use cached constraints for boundaries, or fall back to parent constraints
-                        let cached = arena_cached_constraints(root_id).unwrap_or(constraints);
-                        widget.layout(cached);
-                    });
-                }
+                with_arena_widget_mut(root_id, |widget| {
+                    // Use cached constraints for boundaries, or fall back to parent constraints
+                    let cached = arena_cached_constraints(root_id).unwrap_or(constraints);
+                    widget.layout(cached);
+                });
             }
         } else if needs_layout || needs_resize {
             // Full layout from root only when explicitly needed (first frame, resize, etc.)
-            surface.widget.layout(constraints);
+            with_arena_widget_mut(surface.widget_id, |widget| {
+                widget.layout(constraints);
+            });
         }
         // If neither condition is true, skip layout entirely - nothing is dirty
 
@@ -333,10 +333,10 @@ fn render_surface(
             0, // Root node ID
             widgets::Rect::new(0.0, 0.0, width as f32, height as f32),
         );
-        {
+        with_arena_widget_mut(surface.widget_id, |widget| {
             let mut ctx = PaintContext::new(&mut root);
-            surface.widget.paint(&mut ctx);
-        }
+            widget.paint(&mut ctx);
+        });
         tree.add_root(root);
 
         // Flatten tree and render
