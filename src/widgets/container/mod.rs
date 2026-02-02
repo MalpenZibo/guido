@@ -941,15 +941,15 @@ impl Widget for Container {
         any_animating
     }
 
-    fn reconcile_children(&mut self, arena: &LayoutArena) -> bool {
+    fn reconcile_children(&mut self, arena: &mut LayoutArena) -> bool {
         self.children_source.reconcile_with_tracking(arena)
     }
 
-    fn register_children(&mut self, arena: &LayoutArena) {
+    fn register_children(&mut self, arena: &mut LayoutArena) {
         self.children_source.register_pending(arena, self.widget_id);
     }
 
-    fn layout(&mut self, arena: &LayoutArena, constraints: Constraints) -> Size {
+    fn layout(&mut self, arena: &mut LayoutArena, constraints: Constraints) -> Size {
         // Register this widget's relayout boundary status with the arena
         arena.set_relayout_boundary(self.widget_id, self.is_relayout_boundary_for(constraints));
 

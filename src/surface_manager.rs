@@ -38,7 +38,7 @@ impl ManagedSurface {
         id: SurfaceId,
         config: SurfaceConfig,
         mut widget: Box<dyn Widget>,
-        arena: &LayoutArena,
+        arena: &mut LayoutArena,
     ) -> Self {
         let widget_id = widget.id();
         // Register children first (recursively), then the root widget
@@ -63,7 +63,7 @@ impl ManagedSurface {
         width: u32,
         height: u32,
         scale_factor: f32,
-        arena: &LayoutArena,
+        arena: &mut LayoutArena,
     ) -> bool {
         if self.wgpu_surface.is_some() {
             return true; // Already initialized
@@ -101,12 +101,15 @@ impl ManagedSurface {
     }
 
     /// Perform widget layout with the given dimensions.
-    pub fn layout_widget(&self, arena: &LayoutArena, width: f32, height: f32) {
+    pub fn layout_widget(&self, arena: &mut LayoutArena, width: f32, height: f32) {
         let constraints = Constraints::new(0.0, 0.0, width, height);
-        arena.with_widget_mut(self.widget_id, |widget| {
+
+        if let Some(widget_cell) = arena.get_widget_mut(self.widget_id) {
+            let mut widget = widget_cell.borrow_mut();
+
             widget.layout(arena, constraints);
             widget.set_origin(0.0, 0.0);
-        });
+        }
     }
 }
 
@@ -157,7 +160,7 @@ impl SurfaceManager {
         gpu_context: &GpuContext,
         connection: &Connection,
         wayland_state: &WaylandState,
-        arena: &LayoutArena,
+        arena: &mut LayoutArena,
     ) {
         for (id, surface) in self.surfaces.iter_mut() {
             if surface.is_gpu_ready() {

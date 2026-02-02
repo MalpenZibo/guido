@@ -81,7 +81,7 @@ impl Container {
     }
 
     /// Layout and position scrollbar container widgets
-    pub(super) fn layout_scrollbar_containers(&mut self, arena: &LayoutArena) {
+    pub(super) fn layout_scrollbar_containers(&mut self, arena: &mut LayoutArena) {
         if self.scroll_axis == ScrollAxis::None
             || self.scrollbar_visibility == ScrollbarVisibility::Hidden
         {
@@ -115,7 +115,7 @@ impl Container {
 
     fn layout_scrollbar_axis(
         &mut self,
-        arena: &LayoutArena,
+        arena: &mut LayoutArena,
         axis: ScrollbarAxis,
         scale_factor: f32,
         needs_other_scrollbar: bool,

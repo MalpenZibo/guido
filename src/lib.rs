@@ -108,7 +108,7 @@ fn process_surface_commands(
     surface_manager: &mut SurfaceManager,
     wayland_state: &mut platform::WaylandState,
     qh: &QueueHandle<platform::WaylandState>,
-    arena: &LayoutArena,
+    arena: &mut LayoutArena,
 ) -> bool {
     while let Ok(cmd) = surface_rx.try_recv() {
         match cmd {
@@ -176,7 +176,7 @@ fn render_surface(
     renderer: &mut Renderer,
     connection: &Connection,
     qh: &QueueHandle<platform::WaylandState>,
-    arena: &LayoutArena,
+    arena: &mut LayoutArena,
 ) {
     // Get wayland surface state
     let Some(wayland_surface) = wayland_state.get_surface_mut(id) else {
@@ -314,17 +314,22 @@ fn render_surface(
             // Partial layout: only update dirty subtrees starting from boundaries
             let roots = arena.take_layout_roots();
             for root_id in roots {
-                arena.with_widget_mut(root_id, |widget| {
+                if let Some(widget_cell) = arena.get_widget_mut(root_id) {
                     // Use cached constraints for boundaries, or fall back to parent constraints
                     let cached = arena.cached_constraints(root_id).unwrap_or(constraints);
+
+                    let mut widget = widget_cell.borrow_mut();
+
                     widget.layout(arena, cached);
-                });
+                }
             }
         } else if needs_layout || needs_resize {
             // Full layout from root only when explicitly needed (first frame, resize, etc.)
-            arena.with_widget_mut(surface.widget_id, |widget| {
+            if let Some(widget_cell) = arena.get_widget_mut(surface.widget_id) {
+                let mut widget = widget_cell.borrow_mut();
+
                 widget.layout(arena, constraints);
-            });
+            }
         }
         // If neither condition is true, skip layout entirely - nothing is dirty
 
@@ -486,7 +491,7 @@ impl App {
 
             // Create the widget and managed surface (widget_fn receives arena reference)
             let widget = (def.widget_fn)(&self.arena);
-            let mut managed = ManagedSurface::new(def.id, def.config, widget, &self.arena);
+            let mut managed = ManagedSurface::new(def.id, def.config, widget, &mut self.arena);
 
             // Initialize GPU surface
             managed.init_gpu(
@@ -496,7 +501,7 @@ impl App {
                 wayland_surface.width,
                 wayland_surface.height,
                 wayland_surface.scale_factor,
-                &self.arena,
+                &mut self.arena,
             );
 
             // Create renderer from first surface
@@ -573,7 +578,7 @@ impl App {
                 &mut surface_manager,
                 &mut wayland_state,
                 &qh,
-                &self.arena,
+                &mut self.arena,
             ) {
                 break;
             }
@@ -583,7 +588,7 @@ impl App {
                 &gpu_context,
                 &connection,
                 &wayland_state,
-                &self.arena,
+                &mut self.arena,
             );
 
             // Render each surface
@@ -599,7 +604,7 @@ impl App {
                     &mut renderer,
                     &connection,
                     &qh,
-                    &self.arena,
+                    &mut self.arena,
                 );
             }
 

@@ -73,22 +73,22 @@ type WidgetCell = Rc<RefCell<Box<dyn Widget>>>;
 pub struct LayoutArena {
     /// Central widget storage - uses Rc to allow cloning references
     /// before releasing the HashMap borrow
-    widgets: RefCell<HashMap<WidgetId, WidgetCell>>,
+    widgets: HashMap<WidgetId, WidgetCell>,
 
     /// Tree metadata for each widget (interior mutability)
-    nodes: RefCell<HashMap<WidgetId, LayoutNode>>,
+    nodes: HashMap<WidgetId, LayoutNode>,
 
     /// Set of relayout boundaries that need layout (the layout queue)
-    layout_roots: RefCell<HashSet<WidgetId>>,
+    layout_roots: HashSet<WidgetId>,
 }
 
 impl LayoutArena {
     /// Create a new empty arena.
     pub fn new() -> Self {
         Self {
-            widgets: RefCell::new(HashMap::new()),
-            nodes: RefCell::new(HashMap::new()),
-            layout_roots: RefCell::new(HashSet::new()),
+            widgets: HashMap::new(),
+            nodes: HashMap::new(),
+            layout_roots: HashSet::new(),
         }
     }
 
@@ -96,21 +96,19 @@ impl LayoutArena {
     ///
     /// This stores the widget and creates an empty node for it.
     /// Parent-child relationships are set separately via `set_parent`.
-    pub fn register(&self, id: WidgetId, widget: Box<dyn Widget>) {
-        self.widgets
-            .borrow_mut()
-            .insert(id, Rc::new(RefCell::new(widget)));
-        self.nodes.borrow_mut().entry(id).or_default();
+    pub fn register(&mut self, id: WidgetId, widget: Box<dyn Widget>) {
+        self.widgets.insert(id, Rc::new(RefCell::new(widget)));
+        self.nodes.entry(id).or_default();
     }
 
     /// Remove a widget from the arena.
     ///
     /// Also removes the widget from its parent's children list.
-    pub fn unregister(&self, id: WidgetId) {
+    pub fn unregister(&mut self, id: WidgetId) {
         // Remove from parent's children list
-        let parent_id = self.nodes.borrow().get(&id).and_then(|n| n.parent);
+        let parent_id = self.nodes.get(&id).and_then(|n| n.parent);
         if let Some(parent_id) = parent_id
-            && let Some(parent_node) = self.nodes.borrow_mut().get_mut(&parent_id)
+            && let Some(parent_node) = self.nodes.get_mut(&parent_id)
         {
             parent_node.children.retain(|&child_id| child_id != id);
         }
@@ -118,9 +116,9 @@ impl LayoutArena {
         // Remove widget from HashMap, but drop it AFTER releasing the borrow.
         // This is critical because dropping a Container triggers ChildrenSource::drop,
         // which recursively calls unregister_widget for all children.
-        let removed_widget = self.widgets.borrow_mut().remove(&id);
-        self.nodes.borrow_mut().remove(&id);
-        self.layout_roots.borrow_mut().remove(&id);
+        let removed_widget = self.widgets.remove(&id);
+        self.nodes.remove(&id);
+        self.layout_roots.remove(&id);
 
         // Now the borrow is released, we can safely drop the widget
         // (which may trigger recursive unregisters)
@@ -133,7 +131,7 @@ impl LayoutArena {
     /// the callback to safely register/unregister other widgets.
     pub fn with_widget<R>(&self, id: WidgetId, f: impl FnOnce(&dyn Widget) -> R) -> Option<R> {
         // Clone the Rc so we can release the HashMap borrow
-        let widget_cell = self.widgets.borrow().get(&id).cloned();
+        let widget_cell = self.widgets.get(&id).cloned();
         widget_cell.map(|cell| {
             let widget = cell.borrow();
             f(&**widget)
@@ -150,29 +148,31 @@ impl LayoutArena {
         f: impl FnOnce(&mut dyn Widget) -> R,
     ) -> Option<R> {
         // Clone the Rc so we can release the HashMap borrow
-        let widget_cell = self.widgets.borrow().get(&id).cloned();
+        let widget_cell = self.widgets.get(&id).cloned();
         widget_cell.map(|cell| {
             let mut widget = cell.borrow_mut();
             f(&mut **widget)
         })
     }
 
+    pub fn get_widget_mut(&self, id: WidgetId) -> Option<WidgetCell> {
+        self.widgets.get(&id).cloned()
+    }
+
     /// Check if a widget is registered.
     pub fn contains(&self, id: WidgetId) -> bool {
-        self.widgets.borrow().contains_key(&id)
+        self.widgets.contains_key(&id)
     }
 
     /// Set the parent of a widget.
     ///
     /// Also adds the widget to the parent's children list.
-    pub fn set_parent(&self, child_id: WidgetId, parent_id: WidgetId) {
-        let mut nodes = self.nodes.borrow_mut();
-
+    pub fn set_parent(&mut self, child_id: WidgetId, parent_id: WidgetId) {
         // Update child's parent reference
-        nodes.entry(child_id).or_default().parent = Some(parent_id);
+        self.nodes.entry(child_id).or_default().parent = Some(parent_id);
 
         // Add to parent's children list (if not already present)
-        let parent_node = nodes.entry(parent_id).or_default();
+        let parent_node = self.nodes.entry(parent_id).or_default();
         if !parent_node.children.contains(&child_id) {
             parent_node.children.push(child_id);
         }
@@ -180,13 +180,12 @@ impl LayoutArena {
 
     /// Get the parent of a widget.
     pub fn get_parent(&self, id: WidgetId) -> Option<WidgetId> {
-        self.nodes.borrow().get(&id).and_then(|n| n.parent)
+        self.nodes.get(&id).and_then(|n| n.parent)
     }
 
     /// Get the children of a widget.
     pub fn get_children(&self, id: WidgetId) -> Vec<WidgetId> {
         self.nodes
-            .borrow()
             .get(&id)
             .map(|n| n.children.clone())
             .unwrap_or_default()
@@ -200,12 +199,11 @@ impl LayoutArena {
     /// Optimization: If a widget is already dirty, we stop early since its
     /// boundary must already be in the queue. This requires all widgets to
     /// call `clear_dirty` after completing layout.
-    pub fn mark_needs_layout(&self, widget_id: WidgetId) {
+    pub fn mark_needs_layout(&mut self, widget_id: WidgetId) {
         let mut current = widget_id;
 
         loop {
-            let mut nodes = self.nodes.borrow_mut();
-            let node = nodes.entry(current).or_default();
+            let node = self.nodes.entry(current).or_default();
 
             // Optimization: Stop if already dirty - boundary is already in queue
             if node.is_dirty {
@@ -218,21 +216,18 @@ impl LayoutArena {
             // Check if this is a relayout boundary
             if node.is_relayout_boundary {
                 // Stop! Add to layout queue
-                drop(nodes); // Release borrow before borrowing layout_roots
-                self.layout_roots.borrow_mut().insert(current);
+                self.layout_roots.insert(current);
                 return;
             }
 
             // Move up to parent
             match node.parent {
                 Some(parent) => {
-                    drop(nodes); // Release borrow before next iteration
                     current = parent;
                 }
                 None => {
                     // Reached root, add to queue
-                    drop(nodes);
-                    self.layout_roots.borrow_mut().insert(current);
+                    self.layout_roots.insert(current);
                     return;
                 }
             }
@@ -240,37 +235,30 @@ impl LayoutArena {
     }
 
     /// Clear dirty flag for a widget.
-    pub fn clear_dirty(&self, id: WidgetId) {
-        if let Some(node) = self.nodes.borrow_mut().get_mut(&id) {
+    pub fn clear_dirty(&mut self, id: WidgetId) {
+        if let Some(node) = self.nodes.get_mut(&id) {
             node.is_dirty = false;
         }
     }
 
     /// Check if a widget is dirty.
     pub fn is_dirty(&self, id: WidgetId) -> bool {
-        self.nodes.borrow().get(&id).is_some_and(|n| n.is_dirty)
+        self.nodes.get(&id).is_some_and(|n| n.is_dirty)
     }
 
     /// Set whether a widget is a relayout boundary.
-    pub fn set_relayout_boundary(&self, id: WidgetId, is_boundary: bool) {
-        self.nodes
-            .borrow_mut()
-            .entry(id)
-            .or_default()
-            .is_relayout_boundary = is_boundary;
+    pub fn set_relayout_boundary(&mut self, id: WidgetId, is_boundary: bool) {
+        self.nodes.entry(id).or_default().is_relayout_boundary = is_boundary;
     }
 
     /// Check if a widget is a relayout boundary.
     pub fn is_relayout_boundary(&self, id: WidgetId) -> bool {
-        self.nodes
-            .borrow()
-            .get(&id)
-            .is_some_and(|n| n.is_relayout_boundary)
+        self.nodes.get(&id).is_some_and(|n| n.is_relayout_boundary)
     }
 
     /// Cache the constraints and size for a widget.
-    pub fn cache_layout(&self, id: WidgetId, constraints: Constraints, size: Size) {
-        if let Some(node) = self.nodes.borrow_mut().get_mut(&id) {
+    pub fn cache_layout(&mut self, id: WidgetId, constraints: Constraints, size: Size) {
+        if let Some(node) = self.nodes.get_mut(&id) {
             node.cached_constraints = Some(constraints);
             node.cached_size = Some(size);
         }
@@ -278,42 +266,39 @@ impl LayoutArena {
 
     /// Get cached constraints for a widget.
     pub fn cached_constraints(&self, id: WidgetId) -> Option<Constraints> {
-        self.nodes
-            .borrow()
-            .get(&id)
-            .and_then(|n| n.cached_constraints)
+        self.nodes.get(&id).and_then(|n| n.cached_constraints)
     }
 
     /// Get cached size for a widget.
     pub fn cached_size(&self, id: WidgetId) -> Option<Size> {
-        self.nodes.borrow().get(&id).and_then(|n| n.cached_size)
+        self.nodes.get(&id).and_then(|n| n.cached_size)
     }
 
     /// Take all layout roots (clears the set).
-    pub fn take_layout_roots(&self) -> Vec<WidgetId> {
-        self.layout_roots.borrow_mut().drain().collect()
+    pub fn take_layout_roots(&mut self) -> Vec<WidgetId> {
+        self.layout_roots.drain().collect()
     }
 
     /// Check if any layout roots are pending.
     pub fn has_layout_roots(&self) -> bool {
-        !self.layout_roots.borrow().is_empty()
+        !self.layout_roots.is_empty()
     }
 
     /// Add a layout root directly.
-    pub fn add_layout_root(&self, id: WidgetId) {
-        self.layout_roots.borrow_mut().insert(id);
+    pub fn add_layout_root(&mut self, id: WidgetId) {
+        self.layout_roots.insert(id);
     }
 
     /// Clear all widgets and metadata.
-    pub fn clear(&self) {
-        self.widgets.borrow_mut().clear();
-        self.nodes.borrow_mut().clear();
-        self.layout_roots.borrow_mut().clear();
+    pub fn clear(&mut self) {
+        self.widgets.clear();
+        self.nodes.clear();
+        self.layout_roots.clear();
     }
 
     /// Get the number of registered widgets.
     pub fn widget_count(&self) -> usize {
-        self.widgets.borrow().len()
+        self.widgets.len()
     }
 }
 
@@ -333,7 +318,7 @@ mod tests {
     }
 
     impl Widget for MockWidget {
-        fn layout(&mut self, _arena: &LayoutArena, constraints: Constraints) -> Size {
+        fn layout(&mut self, _arena: &mut LayoutArena, constraints: Constraints) -> Size {
             Size::new(constraints.max_width, constraints.max_height)
         }
 
@@ -352,7 +337,7 @@ mod tests {
 
     #[test]
     fn test_arena_register_unregister() {
-        let arena = LayoutArena::new();
+        let mut arena = LayoutArena::new();
         let id = WidgetId::next();
         let widget = Box::new(MockWidget { id });
 
@@ -365,7 +350,7 @@ mod tests {
 
     #[test]
     fn test_arena_parent_child() {
-        let arena = LayoutArena::new();
+        let mut arena = LayoutArena::new();
         let parent_id = WidgetId::next();
         let child_id = WidgetId::next();
 
@@ -380,7 +365,7 @@ mod tests {
 
     #[test]
     fn test_arena_dirty_propagation() {
-        let arena = LayoutArena::new();
+        let mut arena = LayoutArena::new();
         let root_id = WidgetId::next();
         let child_id = WidgetId::next();
         let grandchild_id = WidgetId::next();
@@ -407,7 +392,7 @@ mod tests {
 
     #[test]
     fn test_arena_relayout_boundary_stops_propagation() {
-        let arena = LayoutArena::new();
+        let mut arena = LayoutArena::new();
         let root_id = WidgetId::next();
         let boundary_id = WidgetId::next();
         let leaf_id = WidgetId::next();
@@ -438,7 +423,7 @@ mod tests {
 
     #[test]
     fn test_arena_dirty_optimization() {
-        let arena = LayoutArena::new();
+        let mut arena = LayoutArena::new();
         let root_id = WidgetId::next();
         let child_id = WidgetId::next();
 
@@ -475,7 +460,7 @@ mod tests {
 
     #[test]
     fn test_arena_with_widget() {
-        let arena = LayoutArena::new();
+        let mut arena = LayoutArena::new();
         let id = WidgetId::next();
         arena.register(id, Box::new(MockWidget { id }));
 
@@ -484,9 +469,12 @@ mod tests {
         assert_eq!(widget_id, Some(id));
 
         // Mutate widget (layout)
-        let size = arena.with_widget_mut(id, |w| {
-            w.layout(&arena, Constraints::new(0.0, 0.0, 100.0, 100.0))
+        let widget_cell = arena.get_widget_mut(id);
+        let size = widget_cell.map(|cell| {
+            let mut widget = cell.borrow_mut();
+            widget.layout(&mut arena, Constraints::new(0.0, 0.0, 100.0, 100.0))
         });
+
         assert_eq!(size, Some(Size::new(100.0, 100.0)));
     }
 }

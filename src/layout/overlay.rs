@@ -25,7 +25,7 @@ impl Default for Overlay {
 impl Layout for Overlay {
     fn layout(
         &mut self,
-        arena: &LayoutArena,
+        arena: &mut LayoutArena,
         children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),
@@ -35,11 +35,17 @@ impl Layout for Overlay {
 
         // Layout all children at the same origin, giving them the full constraints
         for &child_id in children.iter() {
-            if let Some(child_size) = arena.with_widget_mut(child_id, |child| {
-                let size = child.layout(arena, constraints);
-                child.set_origin(origin.0, origin.1);
-                size
-            }) {
+            let child_size = if let Some(widget_cell) = arena.get_widget_mut(child_id) {
+                let mut widget = widget_cell.borrow_mut();
+                let size = widget.layout(arena, constraints);
+
+                widget.set_origin(origin.0, origin.1);
+                Some(size)
+            } else {
+                None
+            };
+
+            if let Some(child_size) = child_size {
                 max_width = max_width.max(child_size.width);
                 max_height = max_height.max(child_size.height);
             }

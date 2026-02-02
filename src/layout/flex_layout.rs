@@ -94,7 +94,7 @@ impl Flex {
     /// Layout children along the given axis
     fn layout_axis(
         &mut self,
-        arena: &LayoutArena,
+        arena: &mut LayoutArena,
         children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),
@@ -148,15 +148,17 @@ impl Flex {
         let mut children_main = 0.0f32;
 
         for &child_id in children.iter() {
-            let size = arena
-                .with_widget_mut(child_id, |child| child.layout(arena, child_constraints))
-                .unwrap_or_default();
-            let main_size = size.main_axis(axis);
-            let cross_size = size.cross_axis(axis);
-            total_main += main_size;
-            children_main += main_size;
-            max_cross = max_cross.max(cross_size);
-            self.child_sizes.push(size);
+            if let Some(widget_cell) = arena.get_widget_mut(child_id) {
+                let mut widget = widget_cell.borrow_mut();
+                let size = widget.layout(arena, child_constraints);
+
+                let main_size = size.main_axis(axis);
+                let cross_size = size.cross_axis(axis);
+                total_main += main_size;
+                children_main += main_size;
+                max_cross = max_cross.max(cross_size);
+                self.child_sizes.push(size);
+            }
         }
 
         // Add spacing
@@ -202,13 +204,14 @@ impl Flex {
                 },
             };
             for &child_id in children.iter() {
-                // Don't mark dirty - just call layout with new constraints.
-                // Child will decide if it needs to re-layout based on constraint changes.
-                let size = arena
-                    .with_widget_mut(child_id, |child| child.layout(arena, stretch_constraints))
-                    .unwrap_or_default();
-                children_main += size.main_axis(axis);
-                self.child_sizes.push(size);
+                let widget_cell = arena.get_widget_mut(child_id);
+                if let Some(widget_cell) = widget_cell {
+                    let mut widget = widget_cell.borrow_mut();
+
+                    let size = widget.layout(arena, stretch_constraints);
+                    children_main += size.main_axis(axis);
+                    self.child_sizes.push(size);
+                }
             }
         }
 
@@ -274,7 +277,7 @@ impl Flex {
 impl Layout for Flex {
     fn layout(
         &mut self,
-        arena: &LayoutArena,
+        arena: &mut LayoutArena,
         children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),

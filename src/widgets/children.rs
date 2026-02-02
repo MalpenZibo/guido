@@ -71,7 +71,7 @@ impl ChildrenSource {
     /// Register all pending static widgets with the arena.
     ///
     /// This should be called before layout. It recursively registers the widget tree.
-    pub fn register_pending(&mut self, arena: &LayoutArena, parent_id: WidgetId) {
+    pub fn register_pending(&mut self, arena: &mut LayoutArena, parent_id: WidgetId) {
         for mut widget in self.pending_static.drain(..) {
             let widget_id = widget.id();
             // Recursively register children first
@@ -100,7 +100,7 @@ impl ChildrenSource {
     }
 
     /// Reconcile all dynamic segments and rebuild merged list
-    fn reconcile(&mut self, arena: &LayoutArena, parent_id: WidgetId) {
+    fn reconcile(&mut self, arena: &mut LayoutArena, parent_id: WidgetId) {
         // First pass: check if any dynamic segment needs reconciliation
         let mut segments_with_changes: Vec<(usize, Vec<DynItem>)> = Vec::new();
 
@@ -208,7 +208,7 @@ impl ChildrenSource {
 
     /// Reconcile with signal tracking. Called from main loop job processing.
     /// Returns true if children changed.
-    pub fn reconcile_with_tracking(&mut self, arena: &LayoutArena) -> bool {
+    pub fn reconcile_with_tracking(&mut self, arena: &mut LayoutArena) -> bool {
         if !self.has_dynamic() {
             return false;
         }
@@ -232,7 +232,7 @@ impl ChildrenSource {
 
     /// Reconcile and get widget IDs (for layout)
     /// Does lazy initial reconciliation with tracking if needed.
-    pub fn reconcile_and_get(&mut self, arena: &LayoutArena) -> &Vec<WidgetId> {
+    pub fn reconcile_and_get(&mut self, arena: &mut LayoutArena) -> &Vec<WidgetId> {
         // Lazy initial reconciliation (for first frame before any jobs exist)
         if self.has_dynamic() && !self.initial_reconcile_done {
             if let Some(container_id) = self.container_id {
@@ -424,15 +424,15 @@ impl Widget for OwnedWidget {
         self.inner.advance_animations(arena)
     }
 
-    fn reconcile_children(&mut self, arena: &LayoutArena) -> bool {
+    fn reconcile_children(&mut self, arena: &mut LayoutArena) -> bool {
         self.inner.reconcile_children(arena)
     }
 
-    fn register_children(&mut self, arena: &LayoutArena) {
+    fn register_children(&mut self, arena: &mut LayoutArena) {
         self.inner.register_children(arena)
     }
 
-    fn layout(&mut self, arena: &LayoutArena, constraints: Constraints) -> Size {
+    fn layout(&mut self, arena: &mut LayoutArena, constraints: Constraints) -> Size {
         self.inner.layout(arena, constraints)
     }
 

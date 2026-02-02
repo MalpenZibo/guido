@@ -138,7 +138,7 @@ pub trait Layout: Send + Sync {
     /// Children are identified by WidgetId and accessed via the passed LayoutArena.
     fn layout(
         &mut self,
-        arena: &LayoutArena,
+        arena: &mut LayoutArena,
         children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),

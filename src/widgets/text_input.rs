@@ -983,7 +983,7 @@ impl TextInput {
 }
 
 impl Widget for TextInput {
-    fn layout(&mut self, arena: &LayoutArena, constraints: Constraints) -> Size {
+    fn layout(&mut self, arena: &mut LayoutArena, constraints: Constraints) -> Size {
         // Text inputs are never relayout boundaries
         arena.set_relayout_boundary(self.widget_id, false);
 

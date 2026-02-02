@@ -126,7 +126,7 @@ impl Text {
 }
 
 impl Widget for Text {
-    fn layout(&mut self, arena: &LayoutArena, constraints: Constraints) -> Size {
+    fn layout(&mut self, arena: &mut LayoutArena, constraints: Constraints) -> Size {
         // Text widgets are never relayout boundaries
         arena.set_relayout_boundary(self.widget_id, false);
 

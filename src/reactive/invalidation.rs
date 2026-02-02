@@ -277,7 +277,7 @@ pub fn clear_layout_subscribers(signal_id: usize) {
 /// - Paint jobs: set the NEEDS_PAINT flag
 ///
 /// Must be called from the main loop which has arena access.
-pub fn process_pending_jobs_with_arena(arena: &super::layout_arena::LayoutArena) {
+pub fn process_pending_jobs_with_arena(arena: &mut super::layout_arena::LayoutArena) {
     let jobs = drain_pending_jobs();
 
     // Deduplicate jobs by widget - keep highest priority job type per widget
@@ -314,10 +314,12 @@ pub fn process_pending_jobs_with_arena(arena: &super::layout_arena::LayoutArena)
             }
             JobType::Reconcile => {
                 // Run reconciliation, then mark for layout
-                arena.with_widget_mut(widget_id, |widget| {
+                let widget_cell = arena.get_widget_mut(widget_id);
+                if let Some(widget_cell) = widget_cell {
+                    let mut widget = widget_cell.borrow_mut();
                     widget.reconcile_children(arena);
-                });
-                arena.mark_needs_layout(widget_id);
+                    arena.mark_needs_layout(widget_id);
+                }
             }
             JobType::Layout => {
                 // Mark widget as needing layout in the arena

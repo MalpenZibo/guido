@@ -381,12 +381,12 @@ pub trait Widget: Send + Sync {
     /// Reconcile dynamic children. Called from main loop before layout.
     /// Returns true if children changed (requires layout).
     /// Default implementation returns false (no dynamic children).
-    fn reconcile_children(&mut self, arena: &LayoutArena) -> bool {
+    fn reconcile_children(&mut self, arena: &mut LayoutArena) -> bool {
         let _ = arena;
         false
     }
 
-    fn layout(&mut self, arena: &LayoutArena, constraints: Constraints) -> Size;
+    fn layout(&mut self, arena: &mut LayoutArena, constraints: Constraints) -> Size;
     fn paint(&self, arena: &LayoutArena, ctx: &mut PaintContext);
     fn event(&mut self, arena: &LayoutArena, event: &Event) -> EventResponse {
         let _ = (arena, event);
@@ -422,7 +422,7 @@ pub trait Widget: Send + Sync {
     /// this to register their pending children.
     ///
     /// Default implementation does nothing (leaf widgets have no children).
-    fn register_children(&mut self, _arena: &LayoutArena) {}
+    fn register_children(&mut self, _arena: &mut LayoutArena) {}
 }
 
 #[cfg(test)]
