@@ -9,7 +9,7 @@ use std::sync::{
 
 use smithay_client_toolkit::reexports::calloop::ping::Ping;
 
-use crate::tree::WidgetId;
+use crate::tree::{Tree, WidgetId};
 
 /// Thread-safe job queue for pending reactive updates
 static PENDING_JOBS: Mutex<Vec<Job>> = Mutex::new(Vec::new());
@@ -49,6 +49,37 @@ pub fn push_job(widget_id: WidgetId, job_type: JobType) {
 /// Drain all pending jobs
 pub fn drain_pending_jobs() -> Vec<Job> {
     std::mem::take(&mut *PENDING_JOBS.lock().unwrap())
+}
+
+pub fn handle_unregister_jobs(jobs: &[Job], tree: &mut Tree) {
+    for job in jobs.iter().filter(|j| j.job_type == JobType::Unregister) {
+        tree.unregister(job.widget_id);
+    }
+}
+
+pub fn handle_reconcile_jobs(jobs: &[Job], tree: &mut Tree) {
+    for job in jobs.iter().filter(|j| j.job_type == JobType::Reconcile) {
+        let widget_cell = tree.get_widget_mut(job.widget_id);
+        if let Some(widget_cell) = widget_cell {
+            let mut widget = widget_cell.borrow_mut();
+            widget.reconcile_children(tree);
+            tree.mark_needs_layout(job.widget_id);
+        }
+    }
+}
+
+pub fn handle_layout_jobs(jobs: &[Job], tree: &mut Tree) {
+    for job in jobs.iter().filter(|j| j.job_type == JobType::Layout) {
+        tree.mark_needs_layout(job.widget_id);
+    }
+}
+
+pub fn handle_animation_jobs(jobs: &[Job], tree: &Tree) {
+    for job in jobs.iter().filter(|j| j.job_type == JobType::Animation) {
+        tree.with_widget_mut(job.widget_id, |widget| {
+            widget.advance_animations(tree);
+        });
+    }
 }
 
 /// Check if there are pending jobs (thread-safe)

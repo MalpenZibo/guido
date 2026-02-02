@@ -93,7 +93,10 @@ use std::sync::mpsc::Receiver;
 use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 
 use crate::{
-    jobs::{JobType, drain_pending_jobs, has_pending_jobs, init_wakeup, take_frame_request},
+    jobs::{
+        drain_pending_jobs, handle_animation_jobs, handle_layout_jobs, handle_reconcile_jobs,
+        handle_unregister_jobs, has_pending_jobs, init_wakeup, take_frame_request,
+    },
     tree::Tree,
 };
 
@@ -287,20 +290,9 @@ fn render_surface(
         // Process pending jobs from signal updates (reconciliation + layout marking)
         let jobs = drain_pending_jobs();
 
-        for job in jobs.iter().filter(|j| j.job_type == JobType::Unregister) {
-            tree.unregister(job.widget_id);
-        }
-        for job in jobs.iter().filter(|j| j.job_type == JobType::Reconcile) {
-            let widget_cell = tree.get_widget_mut(job.widget_id);
-            if let Some(widget_cell) = widget_cell {
-                let mut widget = widget_cell.borrow_mut();
-                widget.reconcile_children(tree);
-                tree.mark_needs_layout(job.widget_id);
-            }
-        }
-        for job in jobs.iter().filter(|j| j.job_type == JobType::Layout) {
-            tree.mark_needs_layout(job.widget_id);
-        }
+        handle_unregister_jobs(&jobs, tree);
+        handle_reconcile_jobs(&jobs, tree);
+        handle_layout_jobs(&jobs, tree);
 
         // Re-layout using partial layout from boundaries when available
         let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
@@ -356,11 +348,7 @@ fn render_surface(
 
         // Process Animation jobs AFTER paint (advance for next frame)
         // This only processes widgets with Animation jobs, not the entire tree
-        for job in jobs.iter().filter(|j| j.job_type == JobType::Animation) {
-            tree.with_widget_mut(job.widget_id, |widget| {
-                widget.advance_animations(tree);
-            });
-        }
+        handle_animation_jobs(&jobs, tree);
 
         // Track layout stats (when compiled with --features layout-stats)
         layout_stats::end_frame();
