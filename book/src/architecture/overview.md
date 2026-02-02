@@ -51,8 +51,14 @@ Text rendering with:
 Pluggable layouts via the `Layout` trait:
 
 ```rust
-pub trait Layout {
-    fn layout(&self, children: &mut [ChildEntry], constraints: Constraints) -> Size;
+pub trait Layout: Send + Sync {
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        children: &[WidgetId],
+        constraints: Constraints,
+        origin: (f32, f32),
+    ) -> Size;
 }
 ```
 
@@ -108,14 +114,17 @@ TransformOrigin::custom(0.25, 0.75)
 All widgets implement:
 
 ```rust
-pub trait Widget {
-    fn layout(&mut self, constraints: Constraints) -> Size;
-    fn paint(&self, ctx: &mut PaintContext);
-    fn event(&mut self, event: &Event) -> EventResponse;
+pub trait Widget: Send + Sync {
+    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size;
+    fn paint(&self, tree: &Tree, ctx: &mut PaintContext);
+    fn event(&mut self, tree: &Tree, event: &Event) -> EventResponse;
     fn set_origin(&mut self, x: f32, y: f32);
     fn bounds(&self) -> Rect;
+    fn id(&self) -> WidgetId;
 }
 ```
+
+Widgets access children through the `Tree` parameter, which provides centralized widget storage and layout metadata.
 
 ## Constraints System
 

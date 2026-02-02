@@ -72,8 +72,14 @@ Text rendering with:
 **Layout System** (`widgets/layout.rs`)
 Pluggable layouts via the `Layout` trait:
 ```rust
-pub trait Layout {
-    fn layout(&self, children: &mut [ChildEntry], constraints: Constraints) -> Size;
+pub trait Layout: Send + Sync {
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        children: &[WidgetId],
+        constraints: Constraints,
+        origin: (f32, f32),
+    ) -> Size;
 }
 ```
 
@@ -91,11 +97,15 @@ Hardware-accelerated rendering using wgpu.
 - Custom WGSL shaders for SDF-based instanced rendering
 
 **Rendering Pipeline:**
-1. `widget.advance_animations()` - Update animation states
-2. `widget.layout(constraints)` - Calculate sizes (skipped if cached)
-3. `widget.paint(ctx)` - Build render tree via PaintContext (local coordinates)
-4. `flatten_tree()` - Flatten render tree to draw commands with inherited transforms
-5. Instanced GPU rendering with HiDPI scaling
+1. `drain_pending_jobs()` - Collect pending reactive jobs
+2. `handle_unregister_jobs()` - Cleanup dropped widgets
+3. `handle_reconcile_jobs()` - Reconcile dynamic children
+4. `handle_layout_jobs()` - Mark widgets needing layout
+5. Partial layout from `layout_roots` - Only dirty subtrees re-layout
+6. `widget.paint(tree, ctx)` - Build render tree via PaintContext
+7. `flatten_tree()` - Flatten render tree to draw commands with inherited transforms
+8. `handle_animation_jobs()` - Advance animations
+9. Instanced GPU rendering with HiDPI scaling
 
 **Shape Features:**
 - Rounded rectangles with configurable superellipse curvature
@@ -162,26 +172,70 @@ TransformOrigin::BOTTOM_RIGHT
 TransformOrigin::custom(0.25, 0.75)  // 25% from left, 75% from top
 ```
 
+## Tree System
+
+Guido uses an arena-based widget storage system where all widgets are stored centrally in a `Tree`.
+
+**Key Types:**
+- `Tree` - Central widget storage with layout metadata
+- `WidgetId` - Unique identifier for each widget
+- `Node` - Hierarchy info (parent/children) and dirty tracking
+
+**How It Works:**
+- Containers hold child `WidgetId`s rather than owned widgets
+- The `Tree` provides widget access via `with_widget()` and `with_widget_mut()`
+- Dirty flags bubble up to relayout boundaries for efficient partial layout
+- `layout_roots` tracks which boundaries need layout
+
+## Jobs System
+
+The jobs system connects reactive signals to widget invalidation.
+
+**Job Types:**
+- `Layout` - Widget needs layout recalculation
+- `Paint` - Widget needs repaint (future: partial repaint)
+- `Reconcile` - Dynamic children need reconciliation (implies layout)
+- `Unregister` - Widget needs cleanup (deferred Drop)
+- `Animation` - Widget has active animations
+
+**How It Works:**
+- Signals push jobs to a global queue when values change
+- `push_job()` is thread-safe and wakes the event loop
+- Main loop drains jobs and processes by type in order
+- Animation jobs run after paint to advance state for next frame
+
 ## Widget Trait
 
 All widgets implement this trait:
 
 ```rust
-pub trait Widget {
+pub trait Widget: Send + Sync {
     /// Advance animations for this widget and children.
-    /// Called once per frame before layout.
-    fn advance_animations(&mut self) -> bool { false }
+    /// Returns true if any animations are still active.
+    fn advance_animations(&mut self, tree: &Tree) -> bool { false }
 
-    fn layout(&mut self, constraints: Constraints) -> Size;
-    fn paint(&self, ctx: &mut PaintContext);
-    fn event(&mut self, event: &Event) -> EventResponse;
+    /// Reconcile dynamic children. Returns true if children changed.
+    fn reconcile_children(&mut self, tree: &mut Tree) -> bool { false }
+
+    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size;
+    fn paint(&self, tree: &Tree, ctx: &mut PaintContext);
+    fn event(&mut self, tree: &Tree, event: &Event) -> EventResponse;
     fn set_origin(&mut self, x: f32, y: f32);
     fn bounds(&self) -> Rect;
+
+    /// Get the widget's unique identifier
+    fn id(&self) -> WidgetId;
+
+    /// Check if a descendant has the given ID (for focus tracking)
+    fn has_focus_descendant(&self, tree: &Tree, id: WidgetId) -> bool { false }
 
     /// Check if this widget is a relayout boundary.
     /// Widgets with fixed size are boundaries - layout changes
     /// inside don't affect their own size or parent layout.
     fn is_relayout_boundary(&self) -> bool { false }
+
+    /// Register this widget's pending children with the tree.
+    fn register_children(&mut self, tree: &mut Tree) {}
 }
 ```
 
@@ -276,8 +330,11 @@ The feature has zero overhead when disabled (code is completely compiled out).
 | File | Purpose |
 |------|---------|
 | `src/lib.rs` | App entry, main event loop |
+| `src/tree.rs` | Widget tree storage and layout metadata |
+| `src/jobs.rs` | Job-based reactive invalidation system |
 | `src/surface.rs` | Surface config, handles, dynamic properties |
 | `src/widgets/container.rs` | Container widget implementation |
+| `src/widgets/children.rs` | Dynamic children with keyed reconciliation |
 | `src/widgets/state_layer.rs` | State layer types and logic |
 | `src/renderer/mod.rs` | Module exports |
 | `src/renderer/render.rs` | Main renderer, GPU setup |

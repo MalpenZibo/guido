@@ -7,22 +7,24 @@ Widgets are the building blocks of Guido UIs. Every visual element is a widget, 
 All widgets implement the `Widget` trait:
 
 ```rust
-pub trait Widget {
-    fn layout(&mut self, constraints: Constraints) -> Size;
-    fn paint(&self, ctx: &mut PaintContext);
-    fn event(&mut self, event: &Event) -> EventResponse;
+pub trait Widget: Send + Sync {
+    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size;
+    fn paint(&self, tree: &Tree, ctx: &mut PaintContext);
+    fn event(&mut self, tree: &Tree, event: &Event) -> EventResponse;
     fn set_origin(&mut self, x: f32, y: f32);
     fn bounds(&self) -> Rect;
+    fn id(&self) -> WidgetId;
 }
 ```
 
 ### Methods
 
-- **layout** - Calculate the widget's size given constraints
-- **paint** - Draw the widget to the paint context
-- **event** - Handle input events
+- **layout** - Calculate the widget's size given tree access and constraints
+- **paint** - Draw the widget using tree for child access
+- **event** - Handle input events with tree access
 - **set_origin** - Position the widget (called by parent during layout)
 - **bounds** - Get the bounding rectangle for hit testing
+- **id** - Get the widget's unique identifier
 
 ## Built-in Widgets
 
