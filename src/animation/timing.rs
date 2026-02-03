@@ -1,3 +1,31 @@
+//! Timing functions (easing curves) for animations.
+//!
+//! Timing functions control the rate of change during an animation, allowing
+//! for natural-feeling motion rather than linear interpolation.
+//!
+//! ## Built-in Easing Functions
+//!
+//! - [`TimingFunction::Linear`] - Constant speed (no easing)
+//! - [`TimingFunction::EaseIn`] - Starts slow, ends fast (acceleration)
+//! - [`TimingFunction::EaseOut`] - Starts fast, ends slow (deceleration)
+//! - [`TimingFunction::EaseInOut`] - Slow start and end, fast middle
+//!
+//! ## Advanced Options
+//!
+//! - [`TimingFunction::CubicBezier`] - CSS-style cubic bezier curve
+//! - [`TimingFunction::Spring`] - Physics-based spring (can overshoot)
+//! - [`TimingFunction::Custom`] - User-defined function
+//!
+//! ## Example
+//!
+//! ```ignore
+//! container()
+//!     .hover_state(|s| s
+//!         .lighter(0.1)
+//!         .timing(TimingFunction::EaseOut)
+//!         .duration(Duration::from_millis(150)))
+//! ```
+
 use super::spring::SpringConfig;
 use std::sync::Arc;
 

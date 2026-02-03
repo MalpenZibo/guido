@@ -1,3 +1,33 @@
+//! Spring physics animation system.
+//!
+//! Provides physically-based spring animations that can overshoot and oscillate
+//! before settling, creating natural-feeling motion.
+//!
+//! ## Spring Parameters
+//!
+//! - **Mass**: Higher mass = slower response, more momentum
+//! - **Stiffness**: Higher stiffness = faster, snappier motion
+//! - **Damping**: Higher damping = less oscillation, faster settling
+//!
+//! ## Presets
+//!
+//! - [`SpringConfig::DEFAULT`] - Fluid motion with moderate overshoot
+//! - [`SpringConfig::BOUNCY`] - Noticeable overshoot and oscillation
+//! - [`SpringConfig::SNAPPY`] - Quick response with subtle overshoot
+//! - [`SpringConfig::GENTLE`] - Slow, smooth motion with minimal overshoot
+//!
+//! ## Usage
+//!
+//! ```ignore
+//! use guido::animation::{TimingFunction, SpringConfig};
+//!
+//! container()
+//!     .transform(Transform::scale(1.0))
+//!     .hover_state(|s| s
+//!         .transform(Transform::scale(1.1))
+//!         .timing(TimingFunction::Spring(SpringConfig::BOUNCY)))
+//! ```
+
 /// Configuration for spring physics animation
 #[derive(Clone, Copy, Debug)]
 pub struct SpringConfig {

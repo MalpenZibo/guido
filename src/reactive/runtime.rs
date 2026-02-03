@@ -1,3 +1,31 @@
+//! Thread-local reactive runtime for effect execution and dependency tracking.
+//!
+//! The runtime manages the relationship between signals and effects, tracking which
+//! effects depend on which signals and re-running effects when their dependencies change.
+//!
+//! ## Thread Safety
+//!
+//! The runtime is thread-local, meaning each thread has its own isolated runtime.
+//! Signals can be updated from any thread (via the global storage), but effects
+//! only execute on the main thread where they were created.
+//!
+//! ## Dependency Tracking
+//!
+//! When an effect runs, the runtime tracks which signals it reads. These become
+//! the effect's dependencies. When any dependency changes, the effect is scheduled
+//! to re-run.
+//!
+//! ## Batching
+//!
+//! The [`batch()`] function allows multiple signal updates to be grouped together,
+//! deferring effect execution until the batch completes. This prevents unnecessary
+//! intermediate re-renders.
+//!
+//! ## Usage
+//!
+//! Most code should use the higher-level APIs in the `reactive` module rather than
+//! interacting with the runtime directly.
+
 use std::cell::RefCell;
 use std::collections::HashSet;
 

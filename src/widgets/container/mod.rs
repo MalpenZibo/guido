@@ -266,6 +266,20 @@ impl Container {
         self
     }
 
+    /// Set uniform padding on all sides in logical pixels.
+    ///
+    /// Accepts static values or reactive signals/closures.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Static padding
+    /// container().padding(8.0)
+    ///
+    /// // Reactive padding
+    /// let padding = create_signal(8.0);
+    /// container().padding(padding)
+    /// ```
     pub fn padding(mut self, value: impl IntoMaybeDyn<f32>) -> Self {
         let value = value.into_maybe_dyn();
         // Register layout dependency if value is from a signal
@@ -279,6 +293,16 @@ impl Container {
         self
     }
 
+    /// Set separate horizontal and vertical padding in logical pixels.
+    ///
+    /// Horizontal padding applies to left and right, vertical to top and bottom.
+    /// Accepts static values or reactive signals/closures.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// container().padding_xy(16.0, 8.0)  // 16px horizontal, 8px vertical
+    /// ```
     pub fn padding_xy(
         mut self,
         horizontal: impl IntoMaybeDyn<f32>,
@@ -305,11 +329,34 @@ impl Container {
         self
     }
 
+    /// Set the background fill color.
+    ///
+    /// Supports RGBA transparency. Use [`Color::TRANSPARENT`] for no background.
+    /// Accepts static values or reactive signals/closures.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// container().background(Color::rgb(0.2, 0.2, 0.3))
+    /// container().background(Color::rgba(0.0, 0.0, 0.0, 0.5))  // 50% transparent black
+    /// ```
     pub fn background(mut self, color: impl IntoMaybeDyn<Color>) -> Self {
         self.background = color.into_maybe_dyn();
         self
     }
 
+    /// Set the corner radius in logical pixels.
+    ///
+    /// Combined with [`corner_curvature()`](Self::corner_curvature) to control corner shape.
+    /// Default curvature is 1.0 (circular). Use [`squircle()`](Self::squircle),
+    /// [`bevel()`](Self::bevel), or [`scoop()`](Self::scoop) for preset shapes.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// container().corner_radius(8.0)                    // Standard rounded corners
+    /// container().corner_radius(12.0).squircle()        // iOS-style smooth corners
+    /// ```
     pub fn corner_radius(mut self, radius: impl IntoMaybeDyn<f32>) -> Self {
         self.corner_radius = radius.into_maybe_dyn();
         self

@@ -1,3 +1,33 @@
+//! Flexbox-style layout algorithm for rows and columns.
+//!
+//! This module implements a flexbox-inspired layout system that arranges
+//! children along a main axis with configurable alignment and spacing.
+//!
+//! ## Main Axis vs Cross Axis
+//!
+//! - **Row**: Main axis is horizontal, cross axis is vertical
+//! - **Column**: Main axis is vertical, cross axis is horizontal
+//!
+//! ## Alignment Options
+//!
+//! **Main axis** ([`MainAxisAlignment`]):
+//! - `Start`, `Center`, `End` - Position children at start/center/end
+//! - `SpaceBetween` - Equal space between children, none at edges
+//! - `SpaceAround` - Equal space around children (half at edges)
+//! - `SpaceEvenly` - Equal space including edges
+//!
+//! **Cross axis** ([`CrossAxisAlignment`]):
+//! - `Start`, `Center`, `End` - Align children along cross axis
+//! - `Stretch` - Stretch children to fill cross axis (default)
+//!
+//! ## Usage
+//!
+//! ```ignore
+//! container()
+//!     .layout(Flex::row().spacing(8.0).main_axis_alignment(MainAxisAlignment::Center))
+//!     .children([button_a, button_b, button_c])
+//! ```
+
 use super::{Axis, Constraints, CrossAxisAlignment, Layout, MainAxisAlignment, Size};
 use crate::{
     reactive::{IntoMaybeDyn, MaybeDyn},

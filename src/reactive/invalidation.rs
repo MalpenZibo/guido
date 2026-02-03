@@ -1,13 +1,29 @@
+//! Signal tracking and widget invalidation system.
+//!
+//! This module connects the reactive signal system to the widget tree, enabling
+//! automatic UI updates when signals change.
+//!
+//! ## Signal Tracking Context
+//!
+//! During widget paint/layout, [`with_signal_tracking()`] establishes a context
+//! that records which signals are read. These become the widget's dependencies.
+//!
+//! ## Subscriber Registry
+//!
+//! A global registry maps signal IDs to their subscribers (widget + job type pairs).
+//! When a signal changes, all subscribers receive jobs via the jobs system.
+//!
+//! ## Integration with Jobs System
+//!
+//! When a signal is written, [`notify_signal_change()`] creates jobs for all
+//! subscribers. The jobs system deduplicates these and wakes the event loop.
+
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
 use crate::jobs::{JobType, push_job};
 use crate::tree::WidgetId;
-
-// ============================================================================
-// Signal Tracking Context System
-// ============================================================================
 
 /// Context for tracking signal reads and associating them with a widget
 struct SignalTrackingContext {

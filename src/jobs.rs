@@ -1,6 +1,25 @@
-// ============================================================================
-// Job-Based Reactive Invalidation System
-// ============================================================================
+//! Job-based reactive invalidation system.
+//!
+//! This module provides the mechanism for connecting signal changes to widget updates.
+//! When a signal changes, the system creates jobs that are processed by the main event loop.
+//!
+//! ## Job Types
+//!
+//! - **Layout**: Widget needs layout recalculation (size/position changed)
+//! - **Paint**: Widget needs repaint only (visual properties changed)
+//! - **Reconcile**: Widget needs children reconciliation (dynamic children changed)
+//! - **Unregister**: Widget needs cleanup (deferred from Drop)
+//! - **Animation**: Widget has active animations that need advancement
+//!
+//! ## Deduplication
+//!
+//! Jobs are stored in a `HashSet`, so each `(widget_id, job_type)` pair is unique.
+//! Multiple signals updating the same widget in one frame result in a single job.
+//!
+//! ## Frame Request
+//!
+//! When a job is pushed, the system automatically wakes the event loop via a ping
+//! mechanism, ensuring the frame is processed promptly.
 
 use std::collections::HashSet;
 use std::sync::{
@@ -14,8 +33,7 @@ use crate::tree::{Tree, WidgetId};
 
 /// Thread-safe job queue for pending reactive updates.
 /// Uses HashSet to deduplicate jobs - each (widget_id, job_type) pair is unique.
-static PENDING_JOBS: LazyLock<Mutex<HashSet<Job>>> =
-    LazyLock::new(|| Mutex::new(HashSet::new()));
+static PENDING_JOBS: LazyLock<Mutex<HashSet<Job>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
 /// Job types for reactive invalidation
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
