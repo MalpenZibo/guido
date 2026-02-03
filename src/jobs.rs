@@ -2,8 +2,9 @@
 // Job-Based Reactive Invalidation System
 // ============================================================================
 
+use std::collections::HashSet;
 use std::sync::{
-    Mutex, OnceLock,
+    LazyLock, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
 
@@ -11,8 +12,10 @@ use smithay_client_toolkit::reexports::calloop::ping::Ping;
 
 use crate::tree::{Tree, WidgetId};
 
-/// Thread-safe job queue for pending reactive updates
-static PENDING_JOBS: Mutex<Vec<Job>> = Mutex::new(Vec::new());
+/// Thread-safe job queue for pending reactive updates.
+/// Uses HashSet to deduplicate jobs - each (widget_id, job_type) pair is unique.
+static PENDING_JOBS: LazyLock<Mutex<HashSet<Job>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 /// Job types for reactive invalidation
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -30,16 +33,16 @@ pub enum JobType {
 }
 
 /// A reactive update job
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Job {
     pub widget_id: WidgetId,
     pub job_type: JobType,
 }
 
-/// Push a job to the queue (thread-safe)
-/// Animation jobs are routed to a separate queue for processing after paint.
+/// Push a job to the queue (thread-safe).
+/// Duplicate jobs (same widget_id + job_type) are automatically ignored.
 pub fn push_job(widget_id: WidgetId, job_type: JobType) {
-    PENDING_JOBS.lock().unwrap().push(Job {
+    PENDING_JOBS.lock().unwrap().insert(Job {
         widget_id,
         job_type,
     });
@@ -49,6 +52,8 @@ pub fn push_job(widget_id: WidgetId, job_type: JobType) {
 /// Drain all pending jobs
 pub fn drain_pending_jobs() -> Vec<Job> {
     std::mem::take(&mut *PENDING_JOBS.lock().unwrap())
+        .into_iter()
+        .collect()
 }
 
 pub fn handle_unregister_jobs(jobs: &[Job], tree: &mut Tree) {
