@@ -559,6 +559,7 @@ impl Container {
                 }
 
                 if needs_repaint {
+                    push_job(self.widget_id, JobType::Animation);
                     push_job(self.widget_id, JobType::Paint);
                 }
             }

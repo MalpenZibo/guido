@@ -203,11 +203,7 @@ macro_rules! advance_anim {
         if let Some(ref mut anim) = $self.$anim {
             if anim.is_animating() {
                 if anim.advance().is_changed() {
-                    $crate::reactive::invalidation::push_job(
-                        $self.widget_id,
-                        $crate::reactive::invalidation::JobType::Paint,
-                    );
-                    $crate::reactive::request_frame();
+                    $crate::jobs::push_job($self.widget_id, $crate::jobs::JobType::Paint);
                 }
                 $any_animating = true;
             }
