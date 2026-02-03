@@ -71,7 +71,7 @@ impl TextMeasurer {
             &Attrs::new()
                 .family(font_family.to_cosmic())
                 .weight(font_weight.to_cosmic()),
-            Shaping::Advanced,
+            Shaping::Basic,
             None,
         );
         buffer.shape_until_scroll(&mut self.font_system, true);

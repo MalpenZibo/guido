@@ -729,6 +729,7 @@ impl Container {
             let new_offset =
                 (start_offset + scroll_delta).clamp(0.0, self.scroll_state.max_scroll(axis));
             self.scroll_state.set_offset(axis, new_offset);
+            push_job(self.widget_id, JobType::Animation);
             push_job(self.widget_id, JobType::Paint);
         }
 
