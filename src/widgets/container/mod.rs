@@ -1524,6 +1524,13 @@ impl Widget for Container {
             // during the layout pass. Paint handles the final positioning via transforms.
             // No action needed here - paint() uses self.bounds to compute child offsets.
         }
+
+        // Update scrollbar container positions now that we have the correct origin.
+        // Scrollbar layout calculates positions using self.bounds, but bounds.x/y are
+        // only set correctly after set_origin is called by the parent.
+        if self.scroll_axis != ScrollAxis::None {
+            self.update_scrollbar_origins();
+        }
     }
 
     fn bounds(&self) -> Rect {

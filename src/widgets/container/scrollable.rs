@@ -381,6 +381,65 @@ impl Container {
         }
     }
 
+    /// Update scrollbar container origins after the container's position changes.
+    /// Called from set_origin to ensure scrollbar track and handle are positioned correctly.
+    pub(super) fn update_scrollbar_origins(&mut self) {
+        if self.scroll_axis == ScrollAxis::None
+            || self.scrollbar_visibility == ScrollbarVisibility::Hidden
+        {
+            return;
+        }
+
+        let needs_vertical = self.scroll_state.needs_vertical_scrollbar();
+        let needs_horizontal = self.scroll_state.needs_horizontal_scrollbar();
+
+        // Update vertical scrollbar track and handle positions
+        if self.scroll_axis.allows_vertical() && needs_vertical {
+            let track_rect = self.scroll_state.scrollbar_track_rect(
+                ScrollbarAxis::Vertical,
+                self.bounds,
+                &self.scrollbar_config,
+                needs_horizontal,
+            );
+            let handle_rect = self.scroll_state.scrollbar_handle_rect(
+                ScrollbarAxis::Vertical,
+                self.bounds,
+                &self.scrollbar_config,
+                needs_horizontal,
+            );
+
+            if let Some(ref mut track) = self.v_scrollbar_track {
+                track.set_origin(track_rect.x, track_rect.y);
+            }
+            if let Some(ref mut handle) = self.v_scrollbar_handle {
+                handle.set_origin(handle_rect.x, handle_rect.y);
+            }
+        }
+
+        // Update horizontal scrollbar track and handle positions
+        if self.scroll_axis.allows_horizontal() && needs_horizontal {
+            let track_rect = self.scroll_state.scrollbar_track_rect(
+                ScrollbarAxis::Horizontal,
+                self.bounds,
+                &self.scrollbar_config,
+                needs_vertical,
+            );
+            let handle_rect = self.scroll_state.scrollbar_handle_rect(
+                ScrollbarAxis::Horizontal,
+                self.bounds,
+                &self.scrollbar_config,
+                needs_vertical,
+            );
+
+            if let Some(ref mut track) = self.h_scrollbar_track {
+                track.set_origin(track_rect.x, track_rect.y);
+            }
+            if let Some(ref mut handle) = self.h_scrollbar_handle {
+                handle.set_origin(handle_rect.x, handle_rect.y);
+            }
+        }
+    }
+
     /// Paint scrollbar container widgets
     pub(super) fn paint_scrollbar_containers(&self, tree: &Tree, ctx: &mut PaintContext) {
         use crate::transform::Transform;
