@@ -1,5 +1,3 @@
-use smallvec::SmallVec;
-
 use super::{Axis, Constraints, CrossAxisAlignment, Layout, MainAxisAlignment, Size};
 use crate::{
     reactive::{IntoMaybeDyn, MaybeDyn},
@@ -13,8 +11,7 @@ pub struct Flex {
     main_axis_alignment: MaybeDyn<MainAxisAlignment>,
     cross_axis_alignment: MaybeDyn<CrossAxisAlignment>,
 
-    // Cached child sizes - SmallVec avoids heap allocation for <=8 children
-    child_sizes: SmallVec<[Size; 8]>,
+    child_sizes: Vec<Size>,
 }
 
 impl Flex {
@@ -29,7 +26,7 @@ impl Flex {
             spacing: MaybeDyn::Static(0.0),
             main_axis_alignment: MaybeDyn::Static(MainAxisAlignment::Start),
             cross_axis_alignment: MaybeDyn::Static(CrossAxisAlignment::Stretch),
-            child_sizes: SmallVec::new(),
+            child_sizes: Vec::with_capacity(8),
         }
     }
 
