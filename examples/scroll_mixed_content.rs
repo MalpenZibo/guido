@@ -352,7 +352,7 @@ fn main() {
             .layer(Layer::Top)
             .namespace("scroll-mixed-content")
             .background_color(Color::rgb(0.08, 0.08, 0.12)),
-        move |_| view,
+        move || view,
     );
     app.run();
 }

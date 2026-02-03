@@ -69,7 +69,7 @@ fn main() {
             .layer(Layer::Top)
             .namespace("perf-stress-test")
             .background_color(Color::rgb(0.12, 0.12, 0.18)),
-        move |_| view,
+        move || view,
     );
     app.run();
 }

@@ -40,7 +40,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use crate::platform::{Anchor, KeyboardInteractivity, Layer};
-use crate::tree::Tree;
 use crate::widgets::{Color, Widget};
 
 /// Unique identifier for each surface in the application.
@@ -273,7 +272,7 @@ pub(crate) enum SurfaceCommand {
     Create {
         id: SurfaceId,
         config: SurfaceConfig,
-        widget_fn: Box<dyn FnOnce(&Tree) -> Box<dyn Widget> + Send>,
+        widget_fn: Box<dyn FnOnce() -> Box<dyn Widget> + Send>,
     },
     /// Close and destroy a surface by ID.
     Close(SurfaceId),
@@ -324,8 +323,7 @@ pub(crate) fn init_surface_commands() -> Receiver<SurfaceCommand> {
 /// This function can be called from anywhere in widget code (e.g., event handlers)
 /// to create a new layer shell surface dynamically.
 ///
-/// The widget factory closure receives a reference to the layout tree, which
-/// is used for widget registration. Widgets should be created inside this closure.
+/// The widget factory closure creates the root widget for the surface.
 ///
 /// # Arguments
 ///
@@ -348,7 +346,7 @@ pub(crate) fn init_surface_commands() -> Receiver<SurfaceCommand> {
 ///         .width(300)
 ///         .height(200)
 ///         .layer(Layer::Overlay),
-///     |_tree| {
+///     || {
 ///         container()
 ///             .background(Color::rgb(0.2, 0.2, 0.3))
 ///             .child(text("Popup content"))
@@ -361,7 +359,7 @@ pub(crate) fn init_surface_commands() -> Receiver<SurfaceCommand> {
 pub fn spawn_surface<W, F>(config: SurfaceConfig, widget_fn: F) -> SurfaceHandle
 where
     W: Widget + 'static,
-    F: FnOnce(&Tree) -> W + Send + 'static,
+    F: FnOnce() -> W + Send + 'static,
 {
     let id = SurfaceId::next();
     let tx = SURFACE_COMMAND_TX.with(|cell| {
@@ -373,7 +371,7 @@ where
     let cmd = SurfaceCommand::Create {
         id,
         config,
-        widget_fn: Box::new(move |tree| Box::new(widget_fn(tree))),
+        widget_fn: Box::new(move || Box::new(widget_fn())),
     };
     tx.send(cmd).expect("Event loop closed");
 

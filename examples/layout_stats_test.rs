@@ -59,7 +59,7 @@ fn main() {
             .layer(Layer::Top)
             .namespace("layout-stats-test")
             .background_color(Color::rgb(0.08, 0.08, 0.12)),
-        move |_| view,
+        move || view,
     );
     app.run();
 }

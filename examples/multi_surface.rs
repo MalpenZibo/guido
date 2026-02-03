@@ -20,7 +20,7 @@ fn main() {
             .layer(Layer::Top)
             .namespace("status-bar")
             .background_color(Color::rgb(0.1, 0.1, 0.15)),
-        move |_| {
+        move || {
             container()
                 .height(fill())
                 .layout(
@@ -50,7 +50,7 @@ fn main() {
             .layer(Layer::Top)
             .namespace("dock")
             .background_color(Color::rgb(0.15, 0.15, 0.2)),
-        move |_| {
+        move || {
             container()
                 .height(fill())
                 .layout(

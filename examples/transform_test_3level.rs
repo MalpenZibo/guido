@@ -10,7 +10,7 @@ fn main() {
             .height(180)
             .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
             .background_color(Color::rgb(0.12, 0.12, 0.16)),
-        move |_| {
+        move || {
             container()
                 .layout(
                     Flex::row()

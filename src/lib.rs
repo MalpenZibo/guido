@@ -105,7 +105,7 @@ use crate::{
 struct SurfaceDefinition {
     id: SurfaceId,
     config: SurfaceConfig,
-    widget_fn: Box<dyn FnOnce(&Tree) -> Box<dyn Widget>>,
+    widget_fn: Box<dyn FnOnce() -> Box<dyn Widget>>,
 }
 
 /// Process dynamic surface commands (create, close, property changes).
@@ -130,7 +130,7 @@ fn process_surface_commands(
                 wayland_state.create_surface_with_id(qh, id, &config);
 
                 // Create the widget and managed surface (GPU init happens later)
-                let widget = widget_fn(tree);
+                let widget = widget_fn();
                 let managed = ManagedSurface::new(id, config, widget, tree);
                 surface_manager.add(managed);
             }
@@ -402,8 +402,7 @@ impl App {
     /// Each surface has its own widget tree but all surfaces share the same reactive
     /// signals and app state.
     ///
-    /// The widget factory closure receives a reference to the layout tree, which
-    /// is used for widget registration. Widgets should be created inside this closure.
+    /// The widget factory closure creates the root widget for the surface.
     ///
     /// Returns a tuple of `(Self, SurfaceId)` where `SurfaceId` can be used to get
     /// a `SurfaceHandle` later via `surface_handle()` to modify surface properties.
@@ -418,20 +417,20 @@ impl App {
     ///             .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
     ///             .layer(Layer::Top)
     ///             .namespace("status-bar"),
-    ///         |_tree| status_bar_widget()
+    ///         || status_bar_widget()
     ///     );
     /// app.run();
     /// ```
     pub fn add_surface<W, F>(mut self, config: SurfaceConfig, widget_fn: F) -> (Self, SurfaceId)
     where
         W: Widget + 'static,
-        F: FnOnce(&Tree) -> W + 'static,
+        F: FnOnce() -> W + 'static,
     {
         let id = SurfaceId::next();
         self.surface_definitions.push(SurfaceDefinition {
             id,
             config,
-            widget_fn: Box::new(move |tree| Box::new(widget_fn(tree))),
+            widget_fn: Box::new(move || Box::new(widget_fn())),
         });
         (self, id)
     }
@@ -484,8 +483,8 @@ impl App {
                 .get_surface(def.id)
                 .expect("Surface should exist after configure");
 
-            // Create the widget and managed surface (widget_fn receives tree reference)
-            let widget = (def.widget_fn)(&self.tree);
+            // Create the widget and managed surface
+            let widget = (def.widget_fn)();
             let mut managed = ManagedSurface::new(def.id, def.config, widget, &mut self.tree);
 
             // Initialize GPU surface
