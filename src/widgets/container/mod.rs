@@ -891,6 +891,9 @@ impl Widget for Container {
             self.scroll_state.velocity_x.abs() > 0.5 || self.scroll_state.velocity_y.abs() > 0.5;
         if has_scroll_velocity {
             let scroll_animating = self.scroll_state.advance_momentum();
+            if scroll_animating {
+                push_job(self.widget_id, JobType::Paint);
+            }
             any_animating = any_animating || scroll_animating;
         }
 
