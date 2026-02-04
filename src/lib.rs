@@ -1,5 +1,6 @@
 pub mod animation;
 pub mod image_metadata;
+mod jobs;
 pub mod layout;
 pub mod layout_stats;
 pub mod reactive;
@@ -7,6 +8,7 @@ pub mod surface;
 mod surface_manager;
 pub mod transform;
 pub mod transform_origin;
+pub mod tree;
 pub mod widgets;
 
 // These modules are public for advanced use cases
@@ -20,11 +22,8 @@ use std::cell::RefCell;
 
 use layout::Constraints;
 use platform::create_wayland_app;
-use reactive::{
-    clear_animation_flag, init_wakeup, set_system_clipboard, take_clipboard_change,
-    take_cursor_change, take_frame_request, with_app_state, with_app_state_mut,
-};
-use renderer::{GpuContext, PaintContext, RenderNode, RenderTree, Renderer, flatten_tree};
+use reactive::{set_system_clipboard, take_clipboard_change, take_cursor_change};
+use renderer::{GpuContext, PaintContext, Renderer, flatten_tree_into};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, init_surface_commands};
 use surface_manager::{ManagedSurface, SurfaceManager};
 use widgets::Widget;
@@ -93,7 +92,16 @@ use std::sync::mpsc::Receiver;
 
 use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 
+use crate::{
+    jobs::{
+        drain_pending_jobs, handle_animation_jobs, handle_layout_jobs, handle_reconcile_jobs,
+        handle_unregister_jobs, has_pending_jobs, init_wakeup, take_frame_request,
+    },
+    tree::Tree,
+};
+
 /// A surface definition that stores configuration and widget factory.
+#[allow(clippy::type_complexity)]
 struct SurfaceDefinition {
     id: SurfaceId,
     config: SurfaceConfig,
@@ -107,6 +115,7 @@ fn process_surface_commands(
     surface_manager: &mut SurfaceManager,
     wayland_state: &mut platform::WaylandState,
     qh: &QueueHandle<platform::WaylandState>,
+    tree: &mut Tree,
 ) -> bool {
     while let Ok(cmd) = surface_rx.try_recv() {
         match cmd {
@@ -122,7 +131,7 @@ fn process_surface_commands(
 
                 // Create the widget and managed surface (GPU init happens later)
                 let widget = widget_fn();
-                let managed = ManagedSurface::new(id, config, widget);
+                let managed = ManagedSurface::new(id, config, widget, tree);
                 surface_manager.add(managed);
             }
             SurfaceCommand::Close(id) => {
@@ -174,6 +183,7 @@ fn render_surface(
     renderer: &mut Renderer,
     connection: &Connection,
     qh: &QueueHandle<platform::WaylandState>,
+    tree: &mut Tree,
 ) {
     // Get wayland surface state
     let Some(wayland_surface) = wayland_state.get_surface_mut(id) else {
@@ -215,8 +225,10 @@ fn render_surface(
     }
 
     // Dispatch events to widget
-    for event in events {
-        surface.widget.event(&event);
+    for event in &events {
+        tree.with_widget_mut(surface.widget_id, |widget| {
+            widget.event(tree, event);
+        });
     }
 
     // Sync clipboard to Wayland if it changed (copy operations)
@@ -250,11 +262,6 @@ fn render_surface(
             scale
         );
         wgpu_surface.resize(physical_width, physical_height);
-
-        with_app_state_mut(|state| {
-            state.change_flags |=
-                reactive::ChangeFlags::NEEDS_LAYOUT | reactive::ChangeFlags::NEEDS_PAINT;
-        });
     }
 
     if scale_changed {
@@ -265,64 +272,83 @@ fn render_surface(
             scale_factor
         );
         surface.previous_scale_factor = scale_factor;
-
-        with_app_state_mut(|state| {
-            state.change_flags |= reactive::ChangeFlags::NEEDS_PAINT;
-        });
     }
 
     // Check render conditions
     let fully_initialized = first_frame_presented && scale_factor_received;
     let force_render_surface = !fully_initialized;
     let frame_requested = take_frame_request();
-    let needs_layout = with_app_state(|state| state.needs_layout());
-    let needs_paint = with_app_state(|state| state.needs_paint());
-    let has_animations_now = with_app_state(|state| state.has_animations);
+    let has_layout_roots = tree.has_layout_roots();
 
     // Only render if something changed (or during initialization)
-    if force_render_surface
-        || frame_requested
-        || needs_layout
-        || needs_paint
-        || needs_resize
-        || scale_changed
-        || has_animations_now
+    if force_render_surface || frame_requested || has_layout_roots || needs_resize || scale_changed
     {
         // Update renderer for this surface
         renderer.set_screen_size(physical_width as f32, physical_height as f32);
         renderer.set_scale_factor(scale_factor);
 
-        // Advance animations first (separate from layout)
-        let animations_active = surface.widget.advance_animations();
-        if animations_active {
-            reactive::request_animation_frame();
-        }
+        // Process pending jobs from signal updates (reconciliation + layout marking)
+        let jobs = drain_pending_jobs();
 
-        // Re-layout (for reactive updates)
+        handle_unregister_jobs(&jobs, tree);
+        handle_reconcile_jobs(&jobs, tree);
+        handle_layout_jobs(&jobs, tree);
+
+        // Re-layout using partial layout from boundaries when available
         let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
-        surface.widget.layout(constraints);
+        if tree.has_layout_roots() {
+            // Partial layout: only update dirty subtrees starting from boundaries
+            let roots = tree.take_layout_roots();
+            for root_id in roots {
+                if let Some(widget_cell) = tree.get_widget_mut(root_id) {
+                    // Use cached constraints for boundaries, or fall back to parent constraints
+                    let cached = tree.cached_constraints(root_id).unwrap_or(constraints);
 
-        // Build render tree
-        let mut tree = RenderTree::new();
-        let mut root = RenderNode::with_bounds(
-            0, // Root node ID
-            widgets::Rect::new(0.0, 0.0, width as f32, height as f32),
-        );
-        {
-            let mut ctx = PaintContext::new(&mut root);
-            surface.widget.paint(&mut ctx);
+                    let mut widget = widget_cell.borrow_mut();
+
+                    widget.layout(tree, cached);
+                }
+            }
+        } else if needs_resize {
+            // Full layout from root only when explicitly needed (first frame, resize, etc.)
+            if let Some(widget_cell) = tree.get_widget_mut(surface.widget_id) {
+                let mut widget = widget_cell.borrow_mut();
+
+                widget.layout(tree, constraints);
+            }
         }
-        tree.add_root(root);
+        // If neither condition is true, skip layout entirely - nothing is dirty
 
-        // Flatten tree and render
-        let commands = flatten_tree(&tree);
-        renderer.render(wgpu_surface, &commands, surface.config.background_color);
+        // Clear and reuse render tree (preserves capacity)
+        surface.render_tree.clear();
+        surface.root_node.clear();
+        surface.root_node.bounds = widgets::Rect::new(0.0, 0.0, width as f32, height as f32);
 
-        // Clear flags after rendering
-        with_app_state_mut(|state| {
-            state.clear_layout_flag();
-            state.clear_paint_flag();
+        tree.with_widget_mut(surface.widget_id, |widget| {
+            let mut ctx = PaintContext::new(&mut surface.root_node);
+            widget.paint(tree, &mut ctx);
         });
+
+        // Take ownership of root node temporarily, add to tree, then restore
+        let root = std::mem::replace(&mut surface.root_node, renderer::RenderNode::new(0));
+        surface.render_tree.add_root(root);
+
+        // Flatten tree into reused buffer
+        flatten_tree_into(&surface.render_tree, &mut surface.flattened_commands);
+        renderer.render(
+            wgpu_surface,
+            &surface.flattened_commands,
+            surface.config.background_color,
+        );
+
+        // Restore root_node for next frame (take it back from render_tree)
+        if let Some(root) = surface.render_tree.roots.pop() {
+            surface.root_node = root;
+        }
+
+        // Process Animation jobs AFTER paint (advance for next frame)
+        // This only processes widgets with Animation jobs, not the entire tree
+        handle_animation_jobs(&jobs, tree);
 
         // Track layout stats (when compiled with --features layout-stats)
         layout_stats::end_frame();
@@ -340,12 +366,15 @@ fn render_surface(
 pub struct App {
     /// Surface definitions added via add_surface()
     surface_definitions: Vec<SurfaceDefinition>,
+    /// The layout tree for widget storage (owned by App)
+    tree: Tree,
 }
 
 impl App {
     pub fn new() -> Self {
         Self {
             surface_definitions: Vec::new(),
+            tree: Tree::new(),
         }
     }
 
@@ -373,6 +402,8 @@ impl App {
     /// Each surface has its own widget tree but all surfaces share the same reactive
     /// signals and app state.
     ///
+    /// The widget factory closure creates the root widget for the surface.
+    ///
     /// Returns a tuple of `(Self, SurfaceId)` where `SurfaceId` can be used to get
     /// a `SurfaceHandle` later via `surface_handle()` to modify surface properties.
     ///
@@ -386,16 +417,8 @@ impl App {
     ///             .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
     ///             .layer(Layer::Top)
     ///             .namespace("status-bar"),
-    ///         move || status_bar_widget()
+    ///         || status_bar_widget()
     ///     );
-    /// let (app, dock_id) = app.add_surface(
-    ///     SurfaceConfig::new()
-    ///         .height(48)
-    ///         .anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT)
-    ///         .layer(Layer::Top)
-    ///         .namespace("dock"),
-    ///     move || dock_widget()
-    /// );
     /// app.run();
     /// ```
     pub fn add_surface<W, F>(mut self, config: SurfaceConfig, widget_fn: F) -> (Self, SurfaceId)
@@ -462,7 +485,7 @@ impl App {
 
             // Create the widget and managed surface
             let widget = (def.widget_fn)();
-            let mut managed = ManagedSurface::new(def.id, def.config, widget);
+            let mut managed = ManagedSurface::new(def.id, def.config, widget, &mut self.tree);
 
             // Initialize GPU surface
             managed.init_gpu(
@@ -472,6 +495,7 @@ impl App {
                 wayland_surface.width,
                 wayland_surface.height,
                 wayland_surface.scale_factor,
+                &mut self.tree,
             );
 
             // Create renderer from first surface
@@ -518,12 +542,9 @@ impl App {
             let any_surface_needs_init = wayland_state.any_surface_needs_render();
             let force_render = any_surface_needs_init;
 
-            // Check if we need to actively poll (from previous frame's animations)
-            let has_animations = with_app_state(|state| state.has_animations);
-            let needs_polling = has_animations || force_render;
-
-            // Clear animation flag - widgets will set it during layout if they need another frame
-            clear_animation_flag();
+            // Check if we need to actively poll (jobs pushed during previous frame)
+            let has_pending = has_pending_jobs();
+            let needs_polling = has_pending || force_render;
 
             // Dispatch events from calloop:
             // - If polling needed (animations/callbacks/init), use timeout
@@ -543,13 +564,23 @@ impl App {
             }
 
             // Process dynamic surface commands
-            if !process_surface_commands(&surface_rx, &mut surface_manager, &mut wayland_state, &qh)
-            {
+            if !process_surface_commands(
+                &surface_rx,
+                &mut surface_manager,
+                &mut wayland_state,
+                &qh,
+                &mut self.tree,
+            ) {
                 break;
             }
 
             // Initialize GPU for any pending surfaces (newly created dynamic surfaces)
-            surface_manager.init_pending_gpu(&gpu_context, &connection, &wayland_state);
+            surface_manager.init_pending_gpu(
+                &gpu_context,
+                &connection,
+                &wayland_state,
+                &mut self.tree,
+            );
 
             // Render each surface
             let surface_ids: Vec<SurfaceId> = surface_manager.ids().collect();
@@ -564,6 +595,7 @@ impl App {
                     &mut renderer,
                     &connection,
                     &qh,
+                    &mut self.tree,
                 );
             }
 

@@ -36,7 +36,7 @@ guido-macros = { workspace = true }
 wgpu = { version = "28.0", features = ["fragile-send-sync-non-atomic-wasm"] }
 bytemuck = { version = "1.24", features = ["derive"] }
 glyphon = "0.10"
-cosmic-text = "0.16"
+cosmic-text = "0.17"
 smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop", "xkbcommon"] }
 wayland-backend = { version = "0.3", features = ["client_system"] }
 raw-window-handle = "0.6"
@@ -46,7 +46,6 @@ pollster = "0.4"
 log = "0.4"
 env_logger = "0.11"
 bitflags = "2.4"
-smallvec = "1.13"
 libc = "0.2"
 
 [dev-dependencies]
@@ -79,3 +78,7 @@ path = "examples/layout_stats_test.rs"
 [[example]]
 name = "renderer_v2_test"
 path = "examples/renderer_v2_test.rs"
+
+[[example]]
+name = "perf_stress_test"
+path = "examples/perf_stress_test.rs"

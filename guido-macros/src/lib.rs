@@ -103,7 +103,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             }
         } else if field.is_children {
             quote! {
-                __children: std::cell::RefCell<::guido::widgets::ChildrenSource>
+                __children: std::sync::RwLock<::guido::widgets::ChildrenSource>
             }
         } else {
             quote! {
@@ -122,7 +122,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             }
         } else if field.is_children {
             quote! {
-                __children: std::cell::RefCell::new(::guido::widgets::ChildrenSource::default())
+                __children: std::sync::RwLock::new(::guido::widgets::ChildrenSource::default())
             }
         } else if let Some(default) = &field.default_value {
             let default_tokens: proc_macro2::TokenStream = default.parse().unwrap();
@@ -165,7 +165,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     let children_methods = if has_children {
         quote! {
             #vis fn child(self, child: impl ::guido::widgets::IntoChild) -> Self {
-                child.add_to_container(&mut *self.__children.borrow_mut());
+                child.add_to_container(&mut *self.__children.write().unwrap());
                 self
             }
 
@@ -173,13 +173,13 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             where
                 I: ::guido::widgets::IntoChildren,
             {
-                children.add_to_container(&mut *self.__children.borrow_mut());
+                children.add_to_container(&mut *self.__children.write().unwrap());
                 self
             }
 
             /// Take the children source (consumes the children)
             fn take_children(&self) -> ::guido::widgets::ChildrenSource {
-                std::mem::take(&mut *self.__children.borrow_mut())
+                std::mem::take(&mut *self.__children.write().unwrap())
             }
         }
     } else {
@@ -193,16 +193,16 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     let expanded = quote! {
         #vis struct #struct_name {
             #(#field_defs,)*
-            __inner: std::cell::RefCell<Option<Box<dyn ::guido::widgets::Widget>>>,
-            __owner_id: std::cell::Cell<Option<::guido::reactive::__internal::OwnerId>>,
+            __inner: std::sync::RwLock<Option<Box<dyn ::guido::widgets::Widget>>>,
+            __owner_id: std::sync::atomic::AtomicUsize,
         }
 
         impl #struct_name {
             #vis fn new() -> Self {
                 Self {
                     #(#field_inits,)*
-                    __inner: std::cell::RefCell::new(None),
-                    __owner_id: std::cell::Cell::new(None),
+                    __inner: std::sync::RwLock::new(None),
+                    __owner_id: std::sync::atomic::AtomicUsize::new(0),
                 }
             }
 
@@ -211,55 +211,84 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             #children_methods
 
             fn ensure_built(&self) {
-                if self.__inner.borrow().is_none() {
-                    // Wrap render() in an owner scope for automatic cleanup
-                    let (widget, owner_id) = ::guido::reactive::__internal::with_owner(|| {
-                        self.render()
-                    });
-                    self.__owner_id.set(Some(owner_id));
-                    *self.__inner.borrow_mut() = Some(Box::new(widget));
+                // Check if already built using a read lock first
+                if self.__inner.read().unwrap().is_some() {
+                    return;
                 }
+                // Acquire write lock and check again (double-checked locking)
+                let mut inner = self.__inner.write().unwrap();
+                if inner.is_some() {
+                    return;
+                }
+                // Wrap render() in an owner scope for automatic cleanup
+                let (widget, owner_id) = ::guido::reactive::__internal::with_owner(|| {
+                    self.render()
+                });
+                // Store owner_id as usize + 1 (0 means no owner)
+                self.__owner_id.store(owner_id + 1, std::sync::atomic::Ordering::Relaxed);
+                *inner = Some(Box::new(widget));
             }
         }
 
         impl Drop for #struct_name {
             fn drop(&mut self) {
                 // Dispose the owner and all its signals/effects/cleanups
-                if let Some(owner_id) = self.__owner_id.get() {
-                    ::guido::reactive::__internal::dispose_owner(owner_id);
+                let stored = self.__owner_id.load(std::sync::atomic::Ordering::Relaxed);
+                if stored > 0 {
+                    ::guido::reactive::__internal::dispose_owner(stored - 1);
                 }
             }
         }
 
         impl ::guido::widgets::Widget for #struct_name {
-            fn layout(&mut self, constraints: ::guido::layout::Constraints) -> ::guido::layout::Size {
+            fn register_children(&mut self, tree: &mut ::guido::tree::Tree) {
                 self.ensure_built();
-                self.__inner.borrow_mut().as_mut().unwrap().layout(constraints)
+                self.__inner.write().unwrap().as_mut().unwrap().register_children(tree)
             }
 
-            fn paint(&self, ctx: &mut ::guido::renderer::PaintContext) {
+            fn reconcile_children(&mut self, tree: &mut ::guido::tree::Tree) -> bool {
                 self.ensure_built();
-                self.__inner.borrow().as_ref().unwrap().paint(ctx)
+                self.__inner.write().unwrap().as_mut().unwrap().reconcile_children(tree)
             }
 
-            fn event(&mut self, event: &::guido::widgets::Event) -> ::guido::widgets::EventResponse {
+            fn layout(&mut self, tree: &mut ::guido::tree::Tree, constraints: ::guido::layout::Constraints) -> ::guido::layout::Size {
                 self.ensure_built();
-                self.__inner.borrow_mut().as_mut().unwrap().event(event)
+                self.__inner.write().unwrap().as_mut().unwrap().layout(tree, constraints)
+            }
+
+            fn paint(&self, tree: &::guido::tree::Tree, ctx: &mut ::guido::renderer::PaintContext) {
+                self.ensure_built();
+                self.__inner.read().unwrap().as_ref().unwrap().paint(tree, ctx)
+            }
+
+            fn event(&mut self, tree: &::guido::tree::Tree, event: &::guido::widgets::Event) -> ::guido::widgets::EventResponse {
+                self.ensure_built();
+                self.__inner.write().unwrap().as_mut().unwrap().event(tree, event)
             }
 
             fn set_origin(&mut self, x: f32, y: f32) {
                 self.ensure_built();
-                self.__inner.borrow_mut().as_mut().unwrap().set_origin(x, y)
+                self.__inner.write().unwrap().as_mut().unwrap().set_origin(x, y)
             }
 
             fn bounds(&self) -> ::guido::widgets::Rect {
                 self.ensure_built();
-                self.__inner.borrow().as_ref().unwrap().bounds()
+                self.__inner.read().unwrap().as_ref().unwrap().bounds()
             }
 
-            fn id(&self) -> ::guido::reactive::WidgetId {
+            fn id(&self) -> ::guido::tree::WidgetId {
                 self.ensure_built();
-                self.__inner.borrow().as_ref().unwrap().id()
+                self.__inner.read().unwrap().as_ref().unwrap().id()
+            }
+
+            fn has_focus_descendant(&self, tree: &::guido::tree::Tree, id: ::guido::tree::WidgetId) -> bool {
+                self.ensure_built();
+                self.__inner.read().unwrap().as_ref().unwrap().has_focus_descendant(tree, id)
+            }
+
+            fn is_relayout_boundary(&self) -> bool {
+                self.ensure_built();
+                self.__inner.read().unwrap().as_ref().unwrap().is_relayout_boundary()
             }
         }
 

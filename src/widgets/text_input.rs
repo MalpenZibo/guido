@@ -12,13 +12,14 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::default_font_family;
+use crate::jobs::{JobType, push_job};
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
-    CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, WidgetId, clipboard_copy, clipboard_paste,
-    finish_layout_tracking, has_focus, register_relayout_boundary, release_focus,
-    request_animation_frame, request_focus, set_cursor, start_layout_tracking,
+    CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, clipboard_copy, clipboard_paste, has_focus,
+    release_focus, request_focus, set_cursor,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled, measure_text_styled};
+use crate::tree::{Tree, WidgetId};
 
 use super::font::{FontFamily, FontWeight};
 use super::widget::{Color, Event, EventResponse, Key, Modifiers, MouseButton, Rect, Widget};
@@ -42,7 +43,7 @@ const SCROLL_PADDING: f32 = 2.0;
 const HISTORY_COALESCE_MS: u64 = 500;
 
 /// Type alias for text input callbacks
-type TextCallback = Box<dyn Fn(&str)>;
+type TextCallback = Box<dyn Fn(&str) + Send + Sync>;
 
 /// A snapshot of text input state for undo/redo
 #[derive(Clone, Debug)]
@@ -258,7 +259,9 @@ impl TextInput {
     /// Create a TextInput with a Signal for two-way binding.
     /// Changes made in the TextInput will be written back to the signal.
     pub fn new(signal: Signal<String>) -> Self {
-        let cached_value = signal.get();
+        // Use get_untracked() to avoid registering layout dependencies during widget creation.
+        // Layout dependencies should only be registered during the widget's own layout phase.
+        let cached_value = signal.get_untracked();
         let cached_char_count = cached_value.chars().count();
         let default_family = default_font_family();
         Self {
@@ -369,13 +372,13 @@ impl TextInput {
     }
 
     /// Set callback for text changes
-    pub fn on_change<F: Fn(&str) + 'static>(mut self, callback: F) -> Self {
+    pub fn on_change<F: Fn(&str) + Send + Sync + 'static>(mut self, callback: F) -> Self {
         self.on_change = Some(Box::new(callback));
         self
     }
 
     /// Set callback for submit (Enter key)
-    pub fn on_submit<F: Fn(&str) + 'static>(mut self, callback: F) -> Self {
+    pub fn on_submit<F: Fn(&str) + Send + Sync + 'static>(mut self, callback: F) -> Self {
         self.on_submit = Some(Box::new(callback));
         self
     }
@@ -509,7 +512,7 @@ impl TextInput {
                 self.last_cursor_toggle = now;
             }
             // Keep requesting frames for blinking
-            request_animation_frame();
+            push_job(self.widget_id, JobType::Paint);
         }
     }
 
@@ -541,7 +544,7 @@ impl TextInput {
             }
 
             // Keep requesting frames while a key is held
-            request_animation_frame();
+            push_job(self.widget_id, JobType::Paint);
         }
     }
 
@@ -982,12 +985,9 @@ impl TextInput {
 }
 
 impl Widget for TextInput {
-    fn layout(&mut self, constraints: Constraints) -> Size {
-        // Start layout tracking for dependency registration
-        start_layout_tracking(self.widget_id);
-
+    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size {
         // Text inputs are never relayout boundaries
-        register_relayout_boundary(self.widget_id, false);
+        tree.set_relayout_boundary(self.widget_id, false);
 
         // Refresh cached values from reactive properties
         // This reads signals and registers layout dependencies
@@ -1023,13 +1023,16 @@ impl Widget for TextInput {
         self.bounds.width = size.width;
         self.bounds.height = size.height;
 
-        // Finish layout tracking
-        finish_layout_tracking();
+        // Cache constraints and size for partial layout
+        tree.cache_layout(self.widget_id, constraints, size);
+
+        // Clear dirty flag since layout is complete
+        tree.clear_dirty(self.widget_id);
 
         size
     }
 
-    fn paint(&self, ctx: &mut PaintContext) {
+    fn paint(&self, _tree: &Tree, ctx: &mut PaintContext) {
         // Draw in LOCAL coordinates (0,0 is widget origin)
         // Parent Container sets position transform
         let display = self.display_text_cached();
@@ -1077,13 +1080,13 @@ impl Widget for TextInput {
         }
     }
 
-    fn event(&mut self, event: &Event) -> EventResponse {
+    fn event(&mut self, _tree: &Tree, event: &Event) -> EventResponse {
         match event {
             Event::MouseDown { x, y, button } => {
                 if self.bounds.contains(*x, *y) && *button == MouseButton::Left {
                     // Request focus
                     request_focus(self.widget_id);
-                    request_animation_frame();
+                    push_job(self.widget_id, JobType::Paint);
 
                     // Set cursor position
                     let char_index = self.char_index_at_x(*x);
@@ -1112,7 +1115,7 @@ impl Widget for TextInput {
                     let char_index = self.char_index_at_x(*x);
                     self.selection.cursor = char_index;
                     self.ensure_cursor_visible();
-                    request_animation_frame();
+                    push_job(self.widget_id, JobType::Paint);
                     return EventResponse::Handled;
                 }
             }
@@ -1132,7 +1135,7 @@ impl Widget for TextInput {
 
                     let response = self.handle_key(key, modifiers.ctrl, modifiers.shift);
                     if response == EventResponse::Handled {
-                        request_animation_frame();
+                        push_job(self.widget_id, JobType::Paint);
                     }
                     return response;
                 }
@@ -1150,7 +1153,7 @@ impl Widget for TextInput {
                     release_focus(self.widget_id);
                     self.cursor_visible = false;
                     self.is_dragging = false;
-                    request_animation_frame();
+                    push_job(self.widget_id, JobType::Paint);
                 }
             }
             Event::MouseLeave => {

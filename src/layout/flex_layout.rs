@@ -1,8 +1,38 @@
-use smallvec::SmallVec;
+//! Flexbox-style layout algorithm for rows and columns.
+//!
+//! This module implements a flexbox-inspired layout system that arranges
+//! children along a main axis with configurable alignment and spacing.
+//!
+//! ## Main Axis vs Cross Axis
+//!
+//! - **Row**: Main axis is horizontal, cross axis is vertical
+//! - **Column**: Main axis is vertical, cross axis is horizontal
+//!
+//! ## Alignment Options
+//!
+//! **Main axis** ([`MainAxisAlignment`]):
+//! - `Start`, `Center`, `End` - Position children at start/center/end
+//! - `SpaceBetween` - Equal space between children, none at edges
+//! - `SpaceAround` - Equal space around children (half at edges)
+//! - `SpaceEvenly` - Equal space including edges
+//!
+//! **Cross axis** ([`CrossAxisAlignment`]):
+//! - `Start`, `Center`, `End` - Align children along cross axis
+//! - `Stretch` - Stretch children to fill cross axis (default)
+//!
+//! ## Usage
+//!
+//! ```ignore
+//! container()
+//!     .layout(Flex::row().spacing(8.0).main_axis_alignment(MainAxisAlignment::Center))
+//!     .children([button_a, button_b, button_c])
+//! ```
 
 use super::{Axis, Constraints, CrossAxisAlignment, Layout, MainAxisAlignment, Size};
-use crate::reactive::{IntoMaybeDyn, MaybeDyn};
-use crate::widgets::Widget;
+use crate::{
+    reactive::{IntoMaybeDyn, MaybeDyn},
+    tree::{Tree, WidgetId},
+};
 
 /// Flex layout for rows and columns
 pub struct Flex {
@@ -11,8 +41,7 @@ pub struct Flex {
     main_axis_alignment: MaybeDyn<MainAxisAlignment>,
     cross_axis_alignment: MaybeDyn<CrossAxisAlignment>,
 
-    // Cached child sizes - SmallVec avoids heap allocation for <=8 children
-    child_sizes: SmallVec<[Size; 8]>,
+    child_sizes: Vec<Size>,
 }
 
 impl Flex {
@@ -27,7 +56,7 @@ impl Flex {
             spacing: MaybeDyn::Static(0.0),
             main_axis_alignment: MaybeDyn::Static(MainAxisAlignment::Start),
             cross_axis_alignment: MaybeDyn::Static(CrossAxisAlignment::Stretch),
-            child_sizes: SmallVec::new(),
+            child_sizes: Vec::with_capacity(8),
         }
     }
 
@@ -95,7 +124,8 @@ impl Flex {
     /// Layout children along the given axis
     fn layout_axis(
         &mut self,
-        children: &mut [Box<dyn Widget>],
+        tree: &mut Tree,
+        children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),
         axis: Axis,
@@ -147,14 +177,18 @@ impl Flex {
         let mut max_cross = 0.0f32;
         let mut children_main = 0.0f32;
 
-        for child in children.iter_mut() {
-            let size = child.layout(child_constraints);
-            let main_size = size.main_axis(axis);
-            let cross_size = size.cross_axis(axis);
-            total_main += main_size;
-            children_main += main_size;
-            max_cross = max_cross.max(cross_size);
-            self.child_sizes.push(size);
+        for &child_id in children.iter() {
+            if let Some(widget_cell) = tree.get_widget_mut(child_id) {
+                let mut widget = widget_cell.borrow_mut();
+                let size = widget.layout(tree, child_constraints);
+
+                let main_size = size.main_axis(axis);
+                let cross_size = size.cross_axis(axis);
+                total_main += main_size;
+                children_main += main_size;
+                max_cross = max_cross.max(cross_size);
+                self.child_sizes.push(size);
+            }
         }
 
         // Add spacing
@@ -199,12 +233,15 @@ impl Flex {
                     max_height: main_max,
                 },
             };
-            for child in children.iter_mut() {
-                // Don't mark dirty - just call layout with new constraints.
-                // Child will decide if it needs to re-layout based on constraint changes.
-                let size = child.layout(stretch_constraints);
-                children_main += size.main_axis(axis);
-                self.child_sizes.push(size);
+            for &child_id in children.iter() {
+                let widget_cell = tree.get_widget_mut(child_id);
+                if let Some(widget_cell) = widget_cell {
+                    let mut widget = widget_cell.borrow_mut();
+
+                    let size = widget.layout(tree, stretch_constraints);
+                    children_main += size.main_axis(axis);
+                    self.child_sizes.push(size);
+                }
             }
         }
 
@@ -230,7 +267,7 @@ impl Flex {
             Axis::Vertical => origin.1,
         } + initial_offset;
 
-        for (i, child) in children.iter_mut().enumerate() {
+        for (i, &child_id) in children.iter().enumerate() {
             let child_size = self.child_sizes[i];
             let child_main = child_size.main_axis(axis);
             let child_cross = child_size.cross_axis(axis);
@@ -259,7 +296,7 @@ impl Flex {
                 Axis::Vertical => (cross_pos, main_pos),
             };
 
-            child.set_origin(x, y);
+            tree.with_widget_mut(child_id, |child| child.set_origin(x, y));
             main_pos += child_main + between_spacing;
         }
 
@@ -270,11 +307,12 @@ impl Flex {
 impl Layout for Flex {
     fn layout(
         &mut self,
-        children: &mut [Box<dyn Widget>],
+        tree: &mut Tree,
+        children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),
     ) -> Size {
         let direction = self.direction.get();
-        self.layout_axis(children, constraints, origin, direction)
+        self.layout_axis(tree, children, constraints, origin, direction)
     }
 }

@@ -1,3 +1,21 @@
+//! Global thread-safe storage for signal values.
+//!
+//! Signal values are stored globally in a static `RwLock`-protected vector,
+//! allowing signals to be read and written from any thread. Each signal value
+//! is type-erased using `Any` and wrapped in `Arc<RwLock<_>>` for safe concurrent
+//! access.
+//!
+//! ## Thread Safety
+//!
+//! - **Reading**: Multiple threads can read signal values concurrently.
+//! - **Writing**: Writes acquire a write lock and update the value in place.
+//! - **Disposal**: Disposed signals are marked as `None` and will panic if accessed.
+//!
+//! ## Type Safety
+//!
+//! Type information is erased at storage but recovered at access time via `downcast_ref`.
+//! Accessing a signal with the wrong type will panic with a clear error message.
+
 use std::any::Any;
 use std::sync::{Arc, OnceLock, RwLock};
 

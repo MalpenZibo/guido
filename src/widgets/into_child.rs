@@ -86,27 +86,29 @@ where
     }
 }
 
-// Implementation for dynamic children with closures
-// Fn() -> Iterator<Item = (key, FnOnce() -> Widget)>
-//
-// Each child's closure runs inside an owner scope, so signals and effects
-// created during widget construction are automatically owned and cleaned up
-// when the child is removed.
-//
-// IMPORTANT: The widget closure is only called for NEW keys. Existing keys
-// reuse their cached widgets, so signals/effects persist across frames.
-//
-// Example:
-// ```
-// .children(move || {
-//     items.get().iter().map(|item| {
-//         (item.id, move || {
-//             let signal = create_signal(0);  // Owned by this child!
-//             create_child(item, signal)
-//         })
-//     })
-// })
-// ```
+/// Implementation for dynamic children with closures.
+///
+/// Accepts `Fn() -> Iterator<Item = (key, FnOnce() -> Widget)>`.
+///
+/// Each child's closure runs inside an owner scope, so signals and effects
+/// created during widget construction are automatically owned and cleaned up
+/// when the child is removed.
+///
+/// **IMPORTANT:** The widget closure is only called for NEW keys. Existing keys
+/// reuse their cached widgets, so signals/effects persist across frames.
+///
+/// # Example
+///
+/// ```ignore
+/// let items = create_signal(vec![1, 2, 3]);
+/// container().children(move || {
+///     items.get().iter().map(|&id| {
+///         (id as u64, move || {
+///             text(format!("Item {}", id))
+///         })
+///     })
+/// })
+/// ```
 impl<F, I, G, W> IntoChildren<DynamicChildren> for F
 where
     F: Fn() -> I + Send + Sync + 'static,

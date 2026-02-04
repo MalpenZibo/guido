@@ -2,7 +2,7 @@ use crate::transform::Transform;
 use crate::widgets::{Color, Padding};
 
 /// Trait for types that can be animated by interpolating between values
-pub trait Animatable: Clone + PartialEq + Send + Sync + 'static {
+pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
     /// Linear interpolation between two values
     /// t = 0.0 returns `from`, t = 1.0 returns `to`
     /// t can exceed [0, 1] range for overshoot effects

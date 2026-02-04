@@ -5,7 +5,7 @@
 
 use std::cell::RefCell;
 
-use super::WidgetId;
+use crate::tree::WidgetId;
 
 thread_local! {
     /// The currently focused widget ID, if any

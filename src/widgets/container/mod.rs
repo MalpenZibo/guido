@@ -12,15 +12,13 @@ use std::sync::Arc;
 
 use crate::advance_anim;
 use crate::animation::Transition;
+use crate::jobs::{JobType, push_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
-use crate::reactive::{
-    IntoMaybeDyn, MaybeDyn, WidgetId, finish_layout_tracking, focused_widget,
-    get_needs_layout_flag, register_relayout_boundary, request_animation_frame,
-    set_needs_layout_flag, set_widget_parent, start_layout_tracking,
-};
+use crate::reactive::{IntoMaybeDyn, MaybeDyn, focused_widget, register_layout_signal};
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
+use crate::tree::{Tree, WidgetId};
 
 use super::children::ChildrenSource;
 use super::into_child::{IntoChild, IntoChildren};
@@ -184,10 +182,13 @@ pub struct Container {
 
 impl Container {
     pub fn new() -> Self {
+        let widget_id = WidgetId::next();
+        let mut children_source = ChildrenSource::default();
+        children_source.set_container_id(widget_id);
         Self {
-            widget_id: WidgetId::next(),
+            widget_id,
             layout: Box::new(Flex::column()),
-            children_source: ChildrenSource::default(),
+            children_source,
             padding: MaybeDyn::Static(Padding::default()),
             background: MaybeDyn::Static(Color::TRANSPARENT),
             gradient: None,
@@ -265,12 +266,43 @@ impl Container {
         self
     }
 
+    /// Set uniform padding on all sides in logical pixels.
+    ///
+    /// Accepts static values or reactive signals/closures.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Static padding
+    /// container().padding(8.0)
+    ///
+    /// // Reactive padding
+    /// let padding = create_signal(8.0);
+    /// container().padding(padding)
+    /// ```
     pub fn padding(mut self, value: impl IntoMaybeDyn<f32>) -> Self {
         let value = value.into_maybe_dyn();
-        self.padding = MaybeDyn::Dynamic(Arc::new(move || Padding::all(value.get())));
+        // Register layout dependency if value is from a signal
+        if let Some(signal_id) = value.signal_id() {
+            register_layout_signal(self.widget_id, signal_id);
+        }
+        self.padding = MaybeDyn::Dynamic {
+            getter: Arc::new(move || Padding::all(value.get())),
+            signal_id: None, // Compound MaybeDyn, original signal already registered
+        };
         self
     }
 
+    /// Set separate horizontal and vertical padding in logical pixels.
+    ///
+    /// Horizontal padding applies to left and right, vertical to top and bottom.
+    /// Accepts static values or reactive signals/closures.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// container().padding_xy(16.0, 8.0)  // 16px horizontal, 8px vertical
+    /// ```
     pub fn padding_xy(
         mut self,
         horizontal: impl IntoMaybeDyn<f32>,
@@ -278,20 +310,53 @@ impl Container {
     ) -> Self {
         let h = horizontal.into_maybe_dyn();
         let v = vertical.into_maybe_dyn();
-        self.padding = MaybeDyn::Dynamic(Arc::new(move || Padding {
-            left: h.get(),
-            right: h.get(),
-            top: v.get(),
-            bottom: v.get(),
-        }));
+        // Register layout dependencies if values are from signals
+        if let Some(signal_id) = h.signal_id() {
+            register_layout_signal(self.widget_id, signal_id);
+        }
+        if let Some(signal_id) = v.signal_id() {
+            register_layout_signal(self.widget_id, signal_id);
+        }
+        self.padding = MaybeDyn::Dynamic {
+            getter: Arc::new(move || Padding {
+                left: h.get(),
+                right: h.get(),
+                top: v.get(),
+                bottom: v.get(),
+            }),
+            signal_id: None, // Compound MaybeDyn, original signals already registered
+        };
         self
     }
 
+    /// Set the background fill color.
+    ///
+    /// Supports RGBA transparency. Use [`Color::TRANSPARENT`] for no background.
+    /// Accepts static values or reactive signals/closures.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// container().background(Color::rgb(0.2, 0.2, 0.3))
+    /// container().background(Color::rgba(0.0, 0.0, 0.0, 0.5))  // 50% transparent black
+    /// ```
     pub fn background(mut self, color: impl IntoMaybeDyn<Color>) -> Self {
         self.background = color.into_maybe_dyn();
         self
     }
 
+    /// Set the corner radius in logical pixels.
+    ///
+    /// Combined with [`corner_curvature()`](Self::corner_curvature) to control corner shape.
+    /// Default curvature is 1.0 (circular). Use [`squircle()`](Self::squircle),
+    /// [`bevel()`](Self::bevel), or [`scoop()`](Self::scoop) for preset shapes.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// container().corner_radius(8.0)                    // Standard rounded corners
+    /// container().corner_radius(12.0).squircle()        // iOS-style smooth corners
+    /// ```
     pub fn corner_radius(mut self, radius: impl IntoMaybeDyn<f32>) -> Self {
         self.corner_radius = radius.into_maybe_dyn();
         self
@@ -352,13 +417,23 @@ impl Container {
 
     /// Set the width of the container.
     pub fn width(mut self, width: impl IntoMaybeDyn<Length>) -> Self {
-        self.width = Some(width.into_maybe_dyn());
+        let maybe_dyn = width.into_maybe_dyn();
+        // Register layout dependency if value is from a signal
+        if let Some(signal_id) = maybe_dyn.signal_id() {
+            register_layout_signal(self.widget_id, signal_id);
+        }
+        self.width = Some(maybe_dyn);
         self
     }
 
     /// Set the height of the container.
     pub fn height(mut self, height: impl IntoMaybeDyn<Length>) -> Self {
-        self.height = Some(height.into_maybe_dyn());
+        let maybe_dyn = height.into_maybe_dyn();
+        // Register layout dependency if value is from a signal
+        if let Some(signal_id) = maybe_dyn.signal_id() {
+            register_layout_signal(self.widget_id, signal_id);
+        }
+        self.height = Some(maybe_dyn);
         self
     }
 
@@ -430,11 +505,14 @@ impl Container {
         let degrees = degrees.into_maybe_dyn();
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic(Arc::new(move || {
-            prev_transform
-                .get()
-                .then(&Transform::rotate_degrees(degrees.get()))
-        }));
+        self.transform = MaybeDyn::Dynamic {
+            getter: Arc::new(move || {
+                prev_transform
+                    .get()
+                    .then(&Transform::rotate_degrees(degrees.get()))
+            }),
+            signal_id: None,
+        };
         self
     }
 
@@ -443,9 +521,10 @@ impl Container {
         let s = s.into_maybe_dyn();
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic(Arc::new(move || {
-            prev_transform.get().then(&Transform::scale(s.get()))
-        }));
+        self.transform = MaybeDyn::Dynamic {
+            getter: Arc::new(move || prev_transform.get().then(&Transform::scale(s.get()))),
+            signal_id: None,
+        };
         self
     }
 
@@ -455,11 +534,14 @@ impl Container {
         let sy = sy.into_maybe_dyn();
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic(Arc::new(move || {
-            prev_transform
-                .get()
-                .then(&Transform::scale_xy(sx.get(), sy.get()))
-        }));
+        self.transform = MaybeDyn::Dynamic {
+            getter: Arc::new(move || {
+                prev_transform
+                    .get()
+                    .then(&Transform::scale_xy(sx.get(), sy.get()))
+            }),
+            signal_id: None,
+        };
         self
     }
 
@@ -469,11 +551,14 @@ impl Container {
         let y = y.into_maybe_dyn();
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic(Arc::new(move || {
-            prev_transform
-                .get()
-                .then(&Transform::translate(x.get(), y.get()))
-        }));
+        self.transform = MaybeDyn::Dynamic {
+            getter: Arc::new(move || {
+                prev_transform
+                    .get()
+                    .then(&Transform::translate(x.get(), y.get()))
+            }),
+            signal_id: None,
+        };
         self
     }
 
@@ -601,31 +686,52 @@ impl Container {
     }
 
     /// Check if any child widget has focus
-    fn has_child_focus(&self) -> bool {
+    fn has_child_focus(&self, tree: &Tree) -> bool {
         if let Some(focused_id) = focused_widget() {
-            return self.widget_has_focus(focused_id);
+            return self.widget_has_focus(tree, focused_id);
         }
         false
     }
 
     /// Recursively check if this widget or any child matches the focused widget ID
-    fn widget_has_focus(&self, focused_id: WidgetId) -> bool {
-        for child in self.children_source.get() {
-            if child.id() == focused_id {
+    fn widget_has_focus(&self, tree: &Tree, focused_id: WidgetId) -> bool {
+        for &child_id in self.children_source.get() {
+            if child_id == focused_id {
                 return true;
             }
             // Recursively check nested containers/widgets
-            if child.has_focus_descendant(focused_id) {
+            if tree.with_widget(child_id, |child| {
+                child.has_focus_descendant(tree, focused_id)
+            }) == Some(true)
+            {
                 return true;
             }
         }
         false
+    }
+
+    /// Check if this widget is a relayout boundary given constraints.
+    /// A widget is a boundary if its size doesn't depend on children.
+    fn is_relayout_boundary_for(&self, constraints: Constraints) -> bool {
+        // Widget is a boundary if its size doesn't depend on children.
+        // This happens when:
+        // 1. It has explicit fixed width AND height
+        // 2. OR the parent passes tight constraints (min == max)
+        let has_fixed_width = self.width.as_ref().is_some_and(|w| w.get().exact.is_some());
+        let has_fixed_height = self
+            .height
+            .as_ref()
+            .is_some_and(|h| h.get().exact.is_some());
+        let tight_width = constraints.min_width == constraints.max_width;
+        let tight_height = constraints.min_height == constraints.max_height;
+        (has_fixed_width || tight_width) && (has_fixed_height || tight_height)
     }
 
     // State layer resolution helper
     // Priority: pressed > focused > hovered
     fn resolve_state_value<T: Clone>(
         &self,
+        tree: &Tree,
         base: T,
         extractor: impl Fn(&StateStyle) -> Option<T>,
     ) -> T {
@@ -637,7 +743,7 @@ impl Container {
         }
         // Check focused state
         if self.focused_state.is_some()
-            && self.has_child_focus()
+            && self.has_child_focus(tree)
             && let Some(ref state) = self.focused_state
             && let Some(value) = extractor(state)
         {
@@ -653,9 +759,9 @@ impl Container {
     }
 
     /// Get the effective background color target considering state layers.
-    fn effective_background_target(&self) -> Color {
+    fn effective_background_target(&self, tree: &Tree) -> Color {
         let base = self.background.get();
-        self.resolve_state_value(base, |state| {
+        self.resolve_state_value(tree, base, |state| {
             state
                 .background
                 .as_ref()
@@ -664,33 +770,33 @@ impl Container {
     }
 
     /// Get the effective border width target considering state layers.
-    fn effective_border_width_target(&self) -> f32 {
+    fn effective_border_width_target(&self, tree: &Tree) -> f32 {
         let base = self.border_width.get();
-        self.resolve_state_value(base, |state| state.border_width)
+        self.resolve_state_value(tree, base, |state| state.border_width)
     }
 
     /// Get the effective border color target considering state layers.
-    fn effective_border_color_target(&self) -> Color {
+    fn effective_border_color_target(&self, tree: &Tree) -> Color {
         let base = self.border_color.get();
-        self.resolve_state_value(base, |state| state.border_color)
+        self.resolve_state_value(tree, base, |state| state.border_color)
     }
 
     /// Get the effective corner radius target considering state layers.
-    fn effective_corner_radius_target(&self) -> f32 {
+    fn effective_corner_radius_target(&self, tree: &Tree) -> f32 {
         let base = self.corner_radius.get();
-        self.resolve_state_value(base, |state| state.corner_radius)
+        self.resolve_state_value(tree, base, |state| state.corner_radius)
     }
 
     /// Get the effective transform target considering state layers.
-    fn effective_transform_target(&self) -> Transform {
+    fn effective_transform_target(&self, tree: &Tree) -> Transform {
         let base = self.transform.get();
-        self.resolve_state_value(base, |state| state.transform)
+        self.resolve_state_value(tree, base, |state| state.transform)
     }
 
     /// Get the effective elevation considering state layers (not animated).
-    fn effective_elevation(&self) -> f32 {
+    fn effective_elevation(&self, tree: &Tree) -> f32 {
         let base = self.elevation.get();
-        self.resolve_state_value(base, |state| state.elevation)
+        self.resolve_state_value(tree, base, |state| state.elevation)
     }
 
     /// Get current padding (animated or static)
@@ -699,61 +805,38 @@ impl Container {
     }
 
     /// Get current background color (animated or effective target)
-    fn animated_background(&self) -> Color {
-        get_animated_value(&self.background_anim, || self.effective_background_target())
+    fn animated_background(&self, tree: &Tree) -> Color {
+        get_animated_value(&self.background_anim, || {
+            self.effective_background_target(tree)
+        })
     }
 
     /// Get current corner radius (animated or effective target)
-    fn animated_corner_radius(&self) -> f32 {
+    fn animated_corner_radius(&self, tree: &Tree) -> f32 {
         get_animated_value(&self.corner_radius_anim, || {
-            self.effective_corner_radius_target()
+            self.effective_corner_radius_target(tree)
         })
     }
 
     /// Get current border width (animated or effective target)
-    fn animated_border_width(&self) -> f32 {
+    fn animated_border_width(&self, tree: &Tree) -> f32 {
         get_animated_value(&self.border_width_anim, || {
-            self.effective_border_width_target()
+            self.effective_border_width_target(tree)
         })
     }
 
     /// Get current border color (animated or effective target)
-    fn animated_border_color(&self) -> Color {
+    fn animated_border_color(&self, tree: &Tree) -> Color {
         get_animated_value(&self.border_color_anim, || {
-            self.effective_border_color_target()
+            self.effective_border_color_target(tree)
         })
     }
 
     /// Get current transform (animated or effective target)
-    fn animated_transform(&self) -> Transform {
-        get_animated_value(&self.transform_anim, || self.effective_transform_target())
-    }
-
-    /// Calculate constraints for children based on container dimensions and padding
-    fn calc_child_constraints(&self) -> Constraints {
-        let padding = self.padding.get();
-        let child_max_width = (self.bounds.width - padding.horizontal()).max(0.0);
-        let child_max_height = (self.bounds.height - padding.vertical()).max(0.0);
-
-        let width_length = self.width.as_ref().map(|w| w.get()).unwrap_or_default();
-        let height_length = self.height.as_ref().map(|h| h.get()).unwrap_or_default();
-        let child_min_width = if width_length.exact.is_some() {
-            child_max_width
-        } else {
-            0.0
-        };
-        let child_min_height = if height_length.exact.is_some() {
-            child_max_height
-        } else {
-            0.0
-        };
-
-        Constraints {
-            min_width: child_min_width,
-            min_height: child_min_height,
-            max_width: child_max_width,
-            max_height: child_max_height,
-        }
+    fn animated_transform(&self, tree: &Tree) -> Transform {
+        get_animated_value(&self.transform_anim, || {
+            self.effective_transform_target(tree)
+        })
     }
 }
 
@@ -792,7 +875,8 @@ impl Default for Container {
 }
 
 impl Widget for Container {
-    fn advance_animations(&mut self) -> bool {
+    fn advance_animations(&mut self, tree: &Tree) -> bool {
+        // Use advance_animations_self for this widget's animations
         let mut any_animating = false;
 
         // Layout-affecting animations: width, height, padding, border_width
@@ -806,7 +890,7 @@ impl Widget for Container {
             layout
         );
 
-        let border_width_target = self.effective_border_width_target();
+        let border_width_target = self.effective_border_width_target(tree);
         advance_anim!(
             self,
             border_width_anim,
@@ -816,10 +900,10 @@ impl Widget for Container {
         );
 
         // Paint-only animations: background, corner_radius, border_color, transform
-        let bg_target = self.effective_background_target();
+        let bg_target = self.effective_background_target(tree);
         advance_anim!(self, background_anim, bg_target, any_animating, paint);
 
-        let corner_radius_target = self.effective_corner_radius_target();
+        let corner_radius_target = self.effective_corner_radius_target(tree);
         advance_anim!(
             self,
             corner_radius_anim,
@@ -828,7 +912,7 @@ impl Widget for Container {
             paint
         );
 
-        let border_color_target = self.effective_border_color_target();
+        let border_color_target = self.effective_border_color_target(tree);
         advance_anim!(
             self,
             border_color_anim,
@@ -837,7 +921,7 @@ impl Widget for Container {
             paint
         );
 
-        let transform_target = self.effective_transform_target();
+        let transform_target = self.effective_transform_target(tree);
         advance_anim!(self, transform_anim, transform_target, any_animating, paint);
 
         // Advance ripple animation
@@ -854,34 +938,30 @@ impl Widget for Container {
             self.scroll_state.velocity_x.abs() > 0.5 || self.scroll_state.velocity_y.abs() > 0.5;
         if has_scroll_velocity {
             let scroll_animating = self.scroll_state.advance_momentum();
+            if scroll_animating {
+                push_job(self.widget_id, JobType::Paint);
+            }
             any_animating = any_animating || scroll_animating;
         }
 
-        // Recurse to children
-        for child in self.children_source.get_mut() {
-            if child.advance_animations() {
-                any_animating = true;
-            }
-        }
-
-        // Advance scrollbar animations
+        // Advance scrollbar animations (these are owned by this container, not tree children)
         if let Some(ref mut track) = self.v_scrollbar_track
-            && track.advance_animations()
+            && track.advance_animations(tree)
         {
             any_animating = true;
         }
         if let Some(ref mut handle) = self.v_scrollbar_handle
-            && handle.advance_animations()
+            && handle.advance_animations(tree)
         {
             any_animating = true;
         }
         if let Some(ref mut track) = self.h_scrollbar_track
-            && track.advance_animations()
+            && track.advance_animations(tree)
         {
             any_animating = true;
         }
         if let Some(ref mut handle) = self.h_scrollbar_handle
-            && handle.advance_animations()
+            && handle.advance_animations(tree)
         {
             any_animating = true;
         }
@@ -898,15 +978,25 @@ impl Widget for Container {
             any_animating = true;
         }
 
+        // If still animating, push Animation job for next frame
+        if any_animating {
+            push_job(self.widget_id, JobType::Animation);
+        }
+
         any_animating
     }
 
-    fn layout(&mut self, constraints: Constraints) -> Size {
-        // Start layout tracking for dependency registration
-        start_layout_tracking(self.widget_id);
+    fn reconcile_children(&mut self, tree: &mut Tree) -> bool {
+        self.children_source.reconcile_with_tracking(tree)
+    }
 
-        // Register this widget's relayout boundary status
-        register_relayout_boundary(self.widget_id, self.is_relayout_boundary());
+    fn register_children(&mut self, tree: &mut Tree) {
+        self.children_source.register_pending(tree, self.widget_id);
+    }
+
+    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size {
+        // Register this widget's relayout boundary status with the tree
+        tree.set_relayout_boundary(self.widget_id, self.is_relayout_boundary_for(constraints));
 
         // Ensure scrollbar containers exist if scrolling is enabled
         self.ensure_scrollbar_containers();
@@ -915,13 +1005,12 @@ impl Widget for Container {
 
         // Check if this widget was marked dirty by signal changes or animations
         // (animations call mark_needs_layout directly when their value changes)
-        let reactive_changed = get_needs_layout_flag(self.widget_id);
+        let reactive_changed = tree.is_dirty(self.widget_id);
 
         let needs_layout = constraints_changed || reactive_changed;
 
         if !needs_layout {
             crate::layout_stats::record_layout_skipped();
-            finish_layout_tracking();
             return Size::new(self.bounds.width, self.bounds.height);
         }
 
@@ -935,7 +1024,7 @@ impl Widget for Container {
         self.last_constraints = Some(constraints);
 
         // Clear dirty flag since we're doing layout now
-        set_needs_layout_flag(self.widget_id, false);
+        tree.clear_dirty(self.widget_id);
 
         // Get current animated padding for layout calculations
         let padding = self.animated_padding();
@@ -1042,21 +1131,22 @@ impl Widget for Container {
             },
         };
 
-        // Children are positioned at their "unscrolled" positions.
+        // Children are positioned in LOCAL coordinates (relative to container's 0,0).
+        // The container's absolute position is handled by the parent via transforms.
         // Scroll offset is applied as a transform in paint().
-        let (child_origin_x, child_origin_y) =
-            (self.bounds.x + padding.left, self.bounds.y + padding.top);
+        let (child_origin_x, child_origin_y) = (padding.left, padding.top);
 
-        // Reconcile and layout children
-        let children = self.children_source.reconcile_and_get_mut();
+        // Reconcile and get children IDs
+        let children = self.children_source.reconcile_and_get(tree);
 
-        // Update parent tracking for all children
-        for child in children.iter() {
-            set_widget_parent(child.id(), self.widget_id);
+        // Update parent tracking for all children in the tree
+        for &child_id in children.iter() {
+            tree.set_parent(child_id, self.widget_id);
         }
 
         let content_size = if !children.is_empty() {
             self.layout.layout(
+                tree,
                 children,
                 child_constraints,
                 (child_origin_x, child_origin_y),
@@ -1090,7 +1180,8 @@ impl Widget for Container {
                     anim.set_immediate(effective_target);
                 } else {
                     anim.animate_to(effective_target);
-                    request_animation_frame();
+                    push_job(self.widget_id, JobType::Animation);
+                    push_job(self.widget_id, JobType::Paint);
                 }
             }
         }
@@ -1107,7 +1198,8 @@ impl Widget for Container {
                     anim.set_immediate(effective_target);
                 } else {
                     anim.animate_to(effective_target);
-                    request_animation_frame();
+                    push_job(self.widget_id, JobType::Animation);
+                    push_job(self.widget_id, JobType::Paint);
                 }
             }
         }
@@ -1196,18 +1288,18 @@ impl Widget for Container {
         self.bounds.height = size.height;
 
         // Layout scrollbar containers after bounds are set
-        self.layout_scrollbar_containers();
+        self.layout_scrollbar_containers(tree);
 
-        // Finish layout tracking
-        finish_layout_tracking();
+        // Cache constraints and size for partial layout
+        tree.cache_layout(self.widget_id, constraints, size);
 
         size
     }
 
-    fn event(&mut self, event: &Event) -> EventResponse {
-        let transform = self.animated_transform();
+    fn event(&mut self, tree: &Tree, event: &Event) -> EventResponse {
+        let transform = self.animated_transform(tree);
         let transform_origin = self.transform_origin.get();
-        let corner_radius = self.animated_corner_radius();
+        let corner_radius = self.animated_corner_radius(tree);
 
         // Transform event coordinates to local space
         let local_event: Cow<'_, Event> = if !transform.is_identity() {
@@ -1225,26 +1317,37 @@ impl Widget for Container {
         };
 
         // Handle scrollbar events first
-        if let Some(response) = self.handle_scrollbar_event(&local_event) {
+        if let Some(response) = self.handle_scrollbar_event(tree, &local_event) {
             return response;
         }
 
-        // For scrollable containers, offset event coordinates for children
-        let child_event: Cow<'_, Event> = if self.scroll_axis != ScrollAxis::None {
-            if let Some((x, y)) = local_event.coords() {
-                let scrolled_x = x + self.scroll_state.offset_x;
-                let scrolled_y = y + self.scroll_state.offset_y;
-                Cow::Owned(local_event.with_coords(scrolled_x, scrolled_y))
+        // Transform event coordinates to local space (relative to container origin)
+        // Children are positioned in local coordinates, so events must be too
+        let child_event: Cow<'_, Event> = if let Some((x, y)) = local_event.coords() {
+            // Convert from global/window coordinates to local (relative to container)
+            let local_x = x - self.bounds.x;
+            let local_y = y - self.bounds.y;
+
+            // For scrollable containers, also add scroll offset
+            let (child_x, child_y) = if self.scroll_axis != ScrollAxis::None {
+                (
+                    local_x + self.scroll_state.offset_x,
+                    local_y + self.scroll_state.offset_y,
+                )
             } else {
-                local_event.clone()
-            }
+                (local_x, local_y)
+            };
+            Cow::Owned(local_event.with_coords(child_x, child_y))
         } else {
             local_event.clone()
         };
 
         // Let children handle first (layout already reconciled)
-        for child in self.children_source.get_mut() {
-            if child.event(&child_event) == EventResponse::Handled {
+        for &child_id in self.children_source.get() {
+            if let Some(response) =
+                tree.with_widget_mut(child_id, |child| child.event(tree, &child_event))
+                && response == EventResponse::Handled
+            {
                 return EventResponse::Handled;
             }
         }
@@ -1256,7 +1359,15 @@ impl Widget for Container {
                     let was_hovered = self.is_hovered;
                     self.is_hovered = true;
                     if !was_hovered && self.hover_state.is_some() {
-                        request_animation_frame();
+                        // Push Animation job if there are animated properties
+                        if self.background_anim.is_some()
+                            || self.corner_radius_anim.is_some()
+                            || self.border_color_anim.is_some()
+                            || self.transform_anim.is_some()
+                        {
+                            push_job(self.widget_id, JobType::Animation);
+                        }
+                        push_job(self.widget_id, JobType::Paint);
                     }
                     if let Some(ref callback) = self.on_hover {
                         callback(true);
@@ -1270,7 +1381,15 @@ impl Widget for Container {
 
                 if was_hovered != self.is_hovered {
                     if self.hover_state.is_some() {
-                        request_animation_frame();
+                        // Push Animation job if there are animated properties
+                        if self.background_anim.is_some()
+                            || self.corner_radius_anim.is_some()
+                            || self.border_color_anim.is_some()
+                            || self.transform_anim.is_some()
+                        {
+                            push_job(self.widget_id, JobType::Animation);
+                        }
+                        push_job(self.widget_id, JobType::Paint);
                     }
                     if let Some(ref callback) = self.on_hover {
                         callback(self.is_hovered);
@@ -1304,11 +1423,21 @@ impl Widget for Container {
                             (screen_x - self.bounds.x, screen_y - self.bounds.y)
                         };
                         self.ripple.start(local_x, local_y);
-                        request_animation_frame();
+                        // Push Animation job for ripple
+                        push_job(self.widget_id, JobType::Animation);
+                        push_job(self.widget_id, JobType::Paint);
                     }
 
                     if !was_pressed && self.pressed_state.is_some() {
-                        request_animation_frame();
+                        // Push Animation job if there are animated properties
+                        if self.background_anim.is_some()
+                            || self.corner_radius_anim.is_some()
+                            || self.border_color_anim.is_some()
+                            || self.transform_anim.is_some()
+                        {
+                            push_job(self.widget_id, JobType::Animation);
+                        }
+                        push_job(self.widget_id, JobType::Paint);
                     }
                     if self.on_click.is_some() {
                         return EventResponse::Handled;
@@ -1335,11 +1464,21 @@ impl Widget for Container {
                             (screen_x - self.bounds.x, screen_y - self.bounds.y)
                         };
                         self.ripple.start_fade(local_x, local_y);
-                        request_animation_frame();
+                        // Push Animation job for ripple fade
+                        push_job(self.widget_id, JobType::Animation);
+                        push_job(self.widget_id, JobType::Paint);
                     }
 
                     if was_pressed && self.pressed_state.is_some() {
-                        request_animation_frame();
+                        // Push Animation job if there are animated properties
+                        if self.background_anim.is_some()
+                            || self.corner_radius_anim.is_some()
+                            || self.border_color_anim.is_some()
+                            || self.transform_anim.is_some()
+                        {
+                            push_job(self.widget_id, JobType::Animation);
+                        }
+                        push_job(self.widget_id, JobType::Paint);
                     }
                     if self.bounds.contains_rounded(*x, *y, corner_radius)
                         && let Some(ref callback) = self.on_click
@@ -1364,13 +1503,23 @@ impl Widget for Container {
                 if self.ripple.is_active() {
                     self.ripple
                         .start_fade_to_center(self.bounds.width, self.bounds.height);
-                    request_animation_frame();
+                    // Push Animation job for ripple fade
+                    push_job(self.widget_id, JobType::Animation);
+                    push_job(self.widget_id, JobType::Paint);
                 }
 
                 if (was_hovered && self.hover_state.is_some())
                     || (was_pressed && self.pressed_state.is_some())
                 {
-                    request_animation_frame();
+                    // Push Animation job if there are animated properties
+                    if self.background_anim.is_some()
+                        || self.corner_radius_anim.is_some()
+                        || self.border_color_anim.is_some()
+                        || self.transform_anim.is_some()
+                    {
+                        push_job(self.widget_id, JobType::Animation);
+                    }
+                    push_job(self.widget_id, JobType::Paint);
                 }
             }
             Event::Scroll {
@@ -1384,7 +1533,13 @@ impl Widget for Container {
                     if self.scroll_axis != ScrollAxis::None {
                         let consumed = self.apply_scroll(*delta_x, *delta_y, *source);
                         if consumed {
-                            request_animation_frame();
+                            // Push Animation job for kinetic scrolling if has velocity
+                            let has_velocity = self.scroll_state.velocity_x.abs() > 0.5
+                                || self.scroll_state.velocity_y.abs() > 0.5;
+                            if has_velocity {
+                                push_job(self.widget_id, JobType::Animation);
+                            }
+                            push_job(self.widget_id, JobType::Paint);
                             return EventResponse::Handled;
                         }
                     }
@@ -1403,24 +1558,28 @@ impl Widget for Container {
     }
 
     fn set_origin(&mut self, x: f32, y: f32) {
+        // Calculate delta from previous position
+        let dx = x - self.bounds.x;
+        let dy = y - self.bounds.y;
         self.bounds.x = x;
         self.bounds.y = y;
 
-        let child_constraints = self.calc_child_constraints();
-        let padding = self.padding.get();
+        // If position changed, offset all children by the delta
+        // This avoids needing tree access - children already have their relative
+        // positions set during layout, we just need to translate them
+        if (dx.abs() > f32::EPSILON || dy.abs() > f32::EPSILON) && !self.children_source.is_empty()
+        {
+            // Children positions need to be updated but we don't have tree access.
+            // The layout engine already positioned children relative to the container
+            // during the layout pass. Paint handles the final positioning via transforms.
+            // No action needed here - paint() uses self.bounds to compute child offsets.
+        }
 
-        // Children are positioned at their "unscrolled" positions.
-        // Scroll offset is applied as a transform in paint().
-        let (child_origin_x, child_origin_y) = (x + padding.left, y + padding.top);
-
-        // Layout already reconciled children, just get them
-        let children = self.children_source.get_mut();
-        if !children.is_empty() {
-            self.layout.layout(
-                children,
-                child_constraints,
-                (child_origin_x, child_origin_y),
-            );
+        // Update scrollbar container positions now that we have the correct origin.
+        // Scrollbar layout calculates positions using self.bounds, but bounds.x/y are
+        // only set correctly after set_origin is called by the parent.
+        if self.scroll_axis != ScrollAxis::None {
+            self.update_scrollbar_origins();
         }
     }
 
@@ -1432,27 +1591,17 @@ impl Widget for Container {
         self.widget_id
     }
 
-    fn has_focus_descendant(&self, id: WidgetId) -> bool {
-        self.widget_has_focus(id)
+    fn has_focus_descendant(&self, tree: &Tree, id: WidgetId) -> bool {
+        self.widget_has_focus(tree, id)
     }
 
-    fn is_relayout_boundary(&self) -> bool {
-        // Widget is a boundary if it has fixed width AND height
-        let has_fixed_width = self.width.as_ref().is_some_and(|w| w.get().exact.is_some());
-        let has_fixed_height = self
-            .height
-            .as_ref()
-            .is_some_and(|h| h.get().exact.is_some());
-        has_fixed_width && has_fixed_height
-    }
-
-    fn paint(&self, ctx: &mut PaintContext) {
-        let background = self.animated_background();
-        let corner_radius = self.animated_corner_radius();
+    fn paint(&self, tree: &Tree, ctx: &mut PaintContext) {
+        let background = self.animated_background(tree);
+        let corner_radius = self.animated_corner_radius(tree);
         let corner_curvature = self.corner_curvature.get();
-        let elevation_level = self.effective_elevation();
+        let elevation_level = self.effective_elevation(tree);
         let shadow = elevation_to_shadow(elevation_level);
-        let user_transform = self.animated_transform();
+        let user_transform = self.animated_transform(tree);
         let transform_origin = self.transform_origin.get();
 
         // LOCAL bounds (0,0 is widget origin) - all drawing uses these
@@ -1498,8 +1647,8 @@ impl Widget for Container {
         }
 
         // Draw border using LOCAL coordinates
-        let border_width = self.animated_border_width();
-        let border_color = self.animated_border_color();
+        let border_width = self.animated_border_width(tree);
+        let border_color = self.animated_border_color(tree);
 
         if border_width > 0.0 {
             ctx.draw_border_frame_with_curvature(
@@ -1522,15 +1671,18 @@ impl Widget for Container {
         }
 
         // Draw children - each gets its own node with position transform
-        for child in self.children_source.get() {
-            let child_global = child.bounds();
+        for &child_id in self.children_source.get() {
+            // Get child bounds from tree - these are in LOCAL coordinates (relative to parent)
+            let child_bounds = tree
+                .with_widget(child_id, |child| child.bounds())
+                .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
             // Child's LOCAL bounds (0,0 origin with its own width/height)
-            let child_local = Rect::new(0.0, 0.0, child_global.width, child_global.height);
-            // Child offset relative to THIS container's origin
-            let child_offset_x = child_global.x - self.bounds.x;
-            let child_offset_y = child_global.y - self.bounds.y;
+            let child_local = Rect::new(0.0, 0.0, child_bounds.width, child_bounds.height);
+            // Child offset is directly from child bounds (already in local coordinates)
+            let child_offset_x = child_bounds.x;
+            let child_offset_y = child_bounds.y;
 
-            let mut child_ctx = ctx.add_child(child.id().as_u64(), child_local);
+            let mut child_ctx = ctx.add_child(child_id.as_u64(), child_local);
 
             // Child's position transform (may include scroll offset)
             let child_position = if is_scrollable {
@@ -1543,12 +1695,13 @@ impl Widget for Container {
             };
             child_ctx.set_transform(child_position);
 
-            child.paint(&mut child_ctx);
+            // Paint child via tree
+            tree.with_widget(child_id, |child| child.paint(tree, &mut child_ctx));
         }
 
         // Draw scrollbar containers
         if is_scrollable {
-            self.paint_scrollbar_containers(ctx);
+            self.paint_scrollbar_containers(tree, ctx);
         }
 
         // Draw ripple effect as overlay (ripple.center is already in local coordinates)

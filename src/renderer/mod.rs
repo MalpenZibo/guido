@@ -25,7 +25,7 @@ mod tree;
 mod types;
 
 pub use commands::{Border, DrawCommand};
-pub use flatten::{FlattenedCommand, flatten_tree};
+pub use flatten::{FlattenedCommand, flatten_tree, flatten_tree_into};
 pub use gpu_context::{GpuContext, SurfaceState};
 pub use paint_context::PaintContext;
 pub use render::Renderer;

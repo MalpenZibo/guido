@@ -266,6 +266,7 @@ impl SurfaceHandle {
 }
 
 /// Commands for dynamic surface creation/destruction and property modification.
+#[allow(clippy::type_complexity)]
 pub(crate) enum SurfaceCommand {
     /// Create a new surface with the given configuration and widget factory.
     Create {
@@ -322,6 +323,8 @@ pub(crate) fn init_surface_commands() -> Receiver<SurfaceCommand> {
 /// This function can be called from anywhere in widget code (e.g., event handlers)
 /// to create a new layer shell surface dynamically.
 ///
+/// The widget factory closure creates the root widget for the surface.
+///
 /// # Arguments
 ///
 /// * `config` - Configuration for the new surface
@@ -343,7 +346,7 @@ pub(crate) fn init_surface_commands() -> Receiver<SurfaceCommand> {
 ///         .width(300)
 ///         .height(200)
 ///         .layer(Layer::Overlay),
-///     move || {
+///     || {
 ///         container()
 ///             .background(Color::rgb(0.2, 0.2, 0.3))
 ///             .child(text("Popup content"))

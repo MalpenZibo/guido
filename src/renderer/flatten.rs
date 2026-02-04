@@ -59,14 +59,23 @@ pub struct FlattenedCommand {
 /// Commands are sorted by layer for correct render order.
 pub fn flatten_tree(tree: &RenderTree) -> Vec<FlattenedCommand> {
     let mut commands = Vec::new();
+    flatten_tree_into(tree, &mut commands);
+    commands
+}
+
+/// Flatten a render tree into an existing buffer (clears and reuses capacity).
+///
+/// This is more efficient than `flatten_tree` when called repeatedly,
+/// as it avoids reallocating the output vector each frame.
+pub fn flatten_tree_into(tree: &RenderTree, commands: &mut Vec<FlattenedCommand>) {
+    commands.clear();
 
     for root in &tree.roots {
-        flatten_node(root, Transform::IDENTITY, None, None, &mut commands);
+        flatten_node(root, Transform::IDENTITY, None, None, commands);
     }
 
     // Sort by layer for correct render order
     commands.sort_by_key(|c| c.layer);
-    commands
 }
 
 /// Recursively flatten a node and its children.

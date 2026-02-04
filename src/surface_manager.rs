@@ -9,8 +9,9 @@ use smithay_client_toolkit::reexports::client::Connection;
 
 use crate::layout::Constraints;
 use crate::platform::{WaylandState, WaylandWindowWrapper};
-use crate::renderer::{GpuContext, SurfaceState};
+use crate::renderer::{FlattenedCommand, GpuContext, RenderNode, RenderTree, SurfaceState};
 use crate::surface::{SurfaceConfig, SurfaceId};
+use crate::tree::{Tree, WidgetId};
 use crate::widgets::Widget;
 
 /// A surface with unified GPU lifecycle management.
@@ -22,27 +23,47 @@ pub struct ManagedSurface {
     pub id: SurfaceId,
     /// Configuration for the surface
     pub config: SurfaceConfig,
-    /// The root widget for this surface
-    pub widget: Box<dyn Widget>,
+    /// The root widget ID (widget is stored in the tree)
+    pub widget_id: WidgetId,
     /// The wgpu surface state (None until GPU init)
     pub wgpu_surface: Option<SurfaceState>,
     /// Previous scale factor for detecting changes
     pub previous_scale_factor: f32,
+    /// Render tree (reused across frames to avoid allocation)
+    pub render_tree: RenderTree,
+    /// Root render node (reused across frames to avoid allocation)
+    pub root_node: RenderNode,
+    /// Flattened commands buffer (reused across frames to avoid allocation)
+    pub flattened_commands: Vec<FlattenedCommand>,
 }
 
 impl ManagedSurface {
     /// Create a new managed surface (wgpu_surface is None until GPU init).
-    pub fn new(id: SurfaceId, config: SurfaceConfig, widget: Box<dyn Widget>) -> Self {
+    /// The root widget and its children are registered in the tree.
+    pub fn new(
+        id: SurfaceId,
+        config: SurfaceConfig,
+        mut widget: Box<dyn Widget>,
+        tree: &mut Tree,
+    ) -> Self {
+        let widget_id = widget.id();
+        // Register children first (recursively), then the root widget
+        widget.register_children(tree);
+        tree.register(widget_id, widget);
         Self {
             id,
             config,
-            widget,
+            widget_id,
             wgpu_surface: None,
             previous_scale_factor: 1.0,
+            render_tree: RenderTree::new(),
+            root_node: RenderNode::new(0),
+            flattened_commands: Vec::new(),
         }
     }
 
     /// Initialize GPU surface. Returns true if successful.
+    #[allow(clippy::too_many_arguments)]
     pub fn init_gpu(
         &mut self,
         gpu_context: &GpuContext,
@@ -51,6 +72,7 @@ impl ManagedSurface {
         width: u32,
         height: u32,
         scale_factor: f32,
+        tree: &mut Tree,
     ) -> bool {
         if self.wgpu_surface.is_some() {
             return true; // Already initialized
@@ -77,7 +99,7 @@ impl ManagedSurface {
         self.previous_scale_factor = scale_factor;
 
         // Perform initial layout
-        self.layout_widget(width as f32, height as f32);
+        self.layout_widget(tree, width as f32, height as f32);
 
         true
     }
@@ -88,10 +110,15 @@ impl ManagedSurface {
     }
 
     /// Perform widget layout with the given dimensions.
-    pub fn layout_widget(&mut self, width: f32, height: f32) {
+    pub fn layout_widget(&self, tree: &mut Tree, width: f32, height: f32) {
         let constraints = Constraints::new(0.0, 0.0, width, height);
-        self.widget.layout(constraints);
-        self.widget.set_origin(0.0, 0.0);
+
+        if let Some(widget_cell) = tree.get_widget_mut(self.widget_id) {
+            let mut widget = widget_cell.borrow_mut();
+
+            widget.layout(tree, constraints);
+            widget.set_origin(0.0, 0.0);
+        }
     }
 }
 
@@ -142,6 +169,7 @@ impl SurfaceManager {
         gpu_context: &GpuContext,
         connection: &Connection,
         wayland_state: &WaylandState,
+        tree: &mut Tree,
     ) {
         for (id, surface) in self.surfaces.iter_mut() {
             if surface.is_gpu_ready() {
@@ -165,6 +193,7 @@ impl SurfaceManager {
                 wayland_surface.width,
                 wayland_surface.height,
                 wayland_surface.scale_factor,
+                tree,
             );
         }
     }

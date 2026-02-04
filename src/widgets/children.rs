@@ -1,22 +1,24 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::jobs::{JobType, push_job};
 use crate::layout::{Constraints, Size};
-use crate::reactive::{OwnerId, WidgetId, dispose_owner};
+use crate::reactive::{OwnerId, dispose_owner, with_signal_tracking};
 use crate::renderer::PaintContext;
+use crate::tree::{Tree, WidgetId};
 
 use super::Widget;
 use super::widget::{Event, EventResponse, Rect};
 
 /// Segment metadata - tracks what kind of source each segment is
 enum SegmentType {
-    /// Static widgets - just a count (widgets stored in merged)
+    /// Static widgets - just a count (widget IDs stored in merged)
     Static(usize),
     /// Dynamic source with keyed reconciliation
     Dynamic {
         items_fn: Arc<dyn Fn() -> Vec<DynItem> + Send + Sync>,
-        /// Cached widgets by key (for reuse during reconciliation)
-        cached: HashMap<u64, Box<dyn Widget>>,
+        /// Cached widget IDs by key (for reuse during reconciliation)
+        cached: HashMap<u64, WidgetId>,
         /// Current keys in display order
         current_keys: Vec<u64>,
     },
@@ -25,29 +27,59 @@ enum SegmentType {
 /// Represents the source of children for a container
 ///
 /// Uses a segment-based architecture:
-/// - Static segments: widgets added directly, stored in `merged`
+/// - Static segments: widgets added directly, stored in `pending_static` during construction
 /// - Dynamic segments: widgets from reactive closures with keyed reconciliation
 ///
-/// All widgets live in the `merged` vec for Layout compatibility.
-/// Segment metadata tracks boundaries and reconciliation state.
+/// During construction, static widgets are stored in `pending_static`. When the widget
+/// tree is registered with an tree (via `register_pending`), widgets are moved to the
+/// tree and their IDs are stored in `merged`.
 #[derive(Default)]
 pub struct ChildrenSource {
-    /// All widgets in order (static and dynamic interleaved)
-    merged: Vec<Box<dyn Widget>>,
+    /// All widget IDs in order (static and dynamic interleaved) - populated after registration
+    merged: Vec<WidgetId>,
+    /// Pending static widgets not yet registered with the tree
+    pending_static: Vec<Box<dyn Widget>>,
     /// Segment metadata (boundaries and reconciliation info)
     segments: Vec<SegmentType>,
+    /// Parent container ID for subscriber registration
+    container_id: Option<WidgetId>,
+    /// Whether initial reconciliation has been done
+    initial_reconcile_done: bool,
 }
 
 impl ChildrenSource {
+    /// Set the container ID for subscriber registration
+    pub fn set_container_id(&mut self, id: WidgetId) {
+        self.container_id = Some(id);
+    }
+
     /// Add a static child widget
+    ///
+    /// The widget is stored in `pending_static` until `register_pending` is called
+    /// with an tree reference.
     pub fn add_static(&mut self, widget: Box<dyn Widget>) {
-        self.merged.push(widget);
+        self.pending_static.push(widget);
 
         // Track in segment metadata
         if let Some(SegmentType::Static(count)) = self.segments.last_mut() {
             *count += 1;
         } else {
             self.segments.push(SegmentType::Static(1));
+        }
+    }
+
+    /// Register all pending static widgets with the tree.
+    ///
+    /// This should be called before layout. It recursively registers the widget tree.
+    pub fn register_pending(&mut self, tree: &mut Tree, parent_id: WidgetId) {
+        for mut widget in self.pending_static.drain(..) {
+            let widget_id = widget.id();
+            // Recursively register children first
+            widget.register_children(tree);
+            // Register this widget
+            tree.register(widget_id, widget);
+            tree.set_parent(widget_id, parent_id);
+            self.merged.push(widget_id);
         }
     }
 
@@ -61,14 +93,14 @@ impl ChildrenSource {
     }
 
     /// Check if any dynamic segments exist
-    fn has_dynamic(&self) -> bool {
+    pub fn has_dynamic(&self) -> bool {
         self.segments
             .iter()
             .any(|s| matches!(s, SegmentType::Dynamic { .. }))
     }
 
     /// Reconcile all dynamic segments and rebuild merged list
-    fn reconcile(&mut self) {
+    fn reconcile(&mut self, tree: &mut Tree, parent_id: WidgetId) {
         // First pass: check if any dynamic segment needs reconciliation
         let mut segments_with_changes: Vec<(usize, Vec<DynItem>)> = Vec::new();
 
@@ -104,10 +136,10 @@ impl ChildrenSource {
         for (idx, segment) in self.segments.iter_mut().enumerate() {
             match segment {
                 SegmentType::Static(count) => {
-                    // Static widgets: take from old merged
+                    // Static widgets: take IDs from old merged
                     for _ in 0..*count {
-                        if let Some(widget) = old_merged_iter.next() {
-                            new_merged.push(widget);
+                        if let Some(widget_id) = old_merged_iter.next() {
+                            new_merged.push(widget_id);
                         }
                     }
                 }
@@ -127,34 +159,43 @@ impl ChildrenSource {
 
                         let new_keys: Vec<u64> = new_items.iter().map(|i| i.key).collect();
 
-                        // Move current widgets to cache
+                        // Move current widget IDs to cache
                         for key in current_keys.drain(..) {
-                            if let Some(widget) = old_merged_iter.next() {
-                                cached.insert(key, widget);
+                            if let Some(widget_id) = old_merged_iter.next() {
+                                cached.insert(key, widget_id);
                             }
                         }
 
                         // Build new widgets list by reusing or creating
                         for item in new_items {
-                            if let Some(widget) = cached.remove(&item.key) {
+                            if let Some(widget_id) = cached.remove(&item.key) {
                                 // Reuse existing widget (preserves state!)
-                                new_merged.push(widget);
+                                new_merged.push(widget_id);
                             } else {
-                                // Create new widget
-                                new_merged.push((item.widget_fn)());
+                                // Create new widget and register in tree
+                                let mut widget = (item.widget_fn)();
+                                let widget_id = widget.id();
+                                // Recursively register children first
+                                widget.register_children(tree);
+                                tree.register(widget_id, widget);
+                                tree.set_parent(widget_id, parent_id);
+                                new_merged.push(widget_id);
                             }
                         }
 
                         // Update current keys
                         *current_keys = new_keys;
 
-                        // Clear remaining cache (drops removed widgets, triggering cleanup)
+                        // Unregister removed widgets from tree (triggers Drop/cleanup)
+                        for old_id in cached.values() {
+                            tree.unregister(*old_id);
+                        }
                         cached.clear();
                     } else {
-                        // Keys unchanged - just move widgets from old merged to new merged
+                        // Keys unchanged - just move widget IDs from old merged to new merged
                         for _ in 0..current_keys.len() {
-                            if let Some(widget) = old_merged_iter.next() {
-                                new_merged.push(widget);
+                            if let Some(widget_id) = old_merged_iter.next() {
+                                new_merged.push(widget_id);
                             }
                         }
                     }
@@ -165,21 +206,58 @@ impl ChildrenSource {
         self.merged = new_merged;
     }
 
-    /// Reconcile and get mutable access (for layout)
-    pub fn reconcile_and_get_mut(&mut self) -> &mut Vec<Box<dyn Widget>> {
-        if self.has_dynamic() {
-            self.reconcile();
+    /// Reconcile with signal tracking. Called from main loop job processing.
+    /// Returns true if children changed.
+    pub fn reconcile_with_tracking(&mut self, tree: &mut Tree) -> bool {
+        if !self.has_dynamic() {
+            return false;
         }
-        &mut self.merged
+
+        let container_id = self
+            .container_id
+            .expect("container_id must be set before reconcile_with_tracking");
+
+        let prev_count = self.merged.len();
+
+        // Track signal reads during reconciliation
+        // This registers container as subscriber for any signals read
+        with_signal_tracking(container_id, JobType::Reconcile, || {
+            self.reconcile(tree, container_id);
+        });
+        self.initial_reconcile_done = true;
+
+        // Return true if children count changed
+        prev_count != self.merged.len()
     }
 
-    /// Get immutable access (for paint)
-    pub fn get(&self) -> &Vec<Box<dyn Widget>> {
+    /// Reconcile and get widget IDs (for layout)
+    /// Does lazy initial reconciliation with tracking if needed.
+    pub fn reconcile_and_get(&mut self, tree: &mut Tree) -> &Vec<WidgetId> {
+        // Lazy initial reconciliation (for first frame before any jobs exist)
+        if self.has_dynamic() && !self.initial_reconcile_done {
+            if let Some(container_id) = self.container_id {
+                with_signal_tracking(container_id, JobType::Reconcile, || {
+                    self.reconcile(tree, container_id);
+                });
+                self.initial_reconcile_done = true;
+            } else {
+                // Fallback: reconcile without tracking (shouldn't happen in practice)
+                // This case shouldn't occur as container_id should always be set
+            }
+        }
+        // Subsequent reconciliations (triggered by jobs) already done by process_pending_jobs
+        // Just return the already-reconciled list
         &self.merged
     }
 
-    /// Get mutable access without reconciliation (for advance_animations)
-    pub fn get_mut(&mut self) -> &mut Vec<Box<dyn Widget>> {
+    /// Get widget IDs (for paint and events)
+    /// After first frame, this just returns the already-reconciled children.
+    pub fn get(&self) -> &Vec<WidgetId> {
+        &self.merged
+    }
+
+    /// Get mutable reference to widget IDs
+    pub fn get_mut(&mut self) -> &mut Vec<WidgetId> {
         &mut self.merged
     }
 
@@ -191,6 +269,25 @@ impl ChildrenSource {
     /// Get the number of children
     pub fn len(&self) -> usize {
         self.merged.len()
+    }
+}
+
+impl Drop for ChildrenSource {
+    fn drop(&mut self) {
+        // Push unregister jobs - will be processed in main loop
+        // This defers the actual unregistration so Drop doesn't need tree access
+        for widget_id in self.merged.drain(..) {
+            push_job(widget_id, JobType::Unregister);
+        }
+        // Also push jobs for any widgets still in dynamic caches
+        for segment in &mut self.segments {
+            if let SegmentType::Dynamic { cached, .. } = segment {
+                for widget_id in cached.values() {
+                    push_job(*widget_id, JobType::Unregister);
+                }
+                cached.clear();
+            }
+        }
     }
 }
 
@@ -323,20 +420,28 @@ impl Drop for OwnedWidget {
 }
 
 impl Widget for OwnedWidget {
-    fn advance_animations(&mut self) -> bool {
-        self.inner.advance_animations()
+    fn advance_animations(&mut self, tree: &Tree) -> bool {
+        self.inner.advance_animations(tree)
     }
 
-    fn layout(&mut self, constraints: Constraints) -> Size {
-        self.inner.layout(constraints)
+    fn reconcile_children(&mut self, tree: &mut Tree) -> bool {
+        self.inner.reconcile_children(tree)
     }
 
-    fn paint(&self, ctx: &mut PaintContext) {
-        self.inner.paint(ctx)
+    fn register_children(&mut self, tree: &mut Tree) {
+        self.inner.register_children(tree)
     }
 
-    fn event(&mut self, event: &Event) -> EventResponse {
-        self.inner.event(event)
+    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size {
+        self.inner.layout(tree, constraints)
+    }
+
+    fn paint(&self, tree: &Tree, ctx: &mut PaintContext) {
+        self.inner.paint(tree, ctx)
+    }
+
+    fn event(&mut self, tree: &Tree, event: &Event) -> EventResponse {
+        self.inner.event(tree, event)
     }
 
     fn set_origin(&mut self, x: f32, y: f32) {
@@ -351,8 +456,8 @@ impl Widget for OwnedWidget {
         self.inner.id()
     }
 
-    fn has_focus_descendant(&self, id: WidgetId) -> bool {
-        self.inner.has_focus_descendant(id)
+    fn has_focus_descendant(&self, tree: &Tree, id: WidgetId) -> bool {
+        self.inner.has_focus_descendant(tree, id)
     }
 
     fn is_relayout_boundary(&self) -> bool {

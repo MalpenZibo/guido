@@ -1,7 +1,8 @@
 //! Overlay layout that stacks children on top of each other.
 
+use crate::tree::{Tree, WidgetId};
+
 use super::{Constraints, Layout, Size};
-use crate::widgets::Widget;
 
 /// Overlay layout that places all children at the same position,
 /// stacking them on top of each other. Later children appear on top.
@@ -25,7 +26,8 @@ impl Default for Overlay {
 impl Layout for Overlay {
     fn layout(
         &mut self,
-        children: &mut [Box<dyn Widget>],
+        tree: &mut Tree,
+        children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),
     ) -> Size {
@@ -33,12 +35,21 @@ impl Layout for Overlay {
         let mut max_height: f32 = 0.0;
 
         // Layout all children at the same origin, giving them the full constraints
-        for child in children.iter_mut() {
-            let child_size = child.layout(constraints);
-            child.set_origin(origin.0, origin.1);
+        for &child_id in children.iter() {
+            let child_size = if let Some(widget_cell) = tree.get_widget_mut(child_id) {
+                let mut widget = widget_cell.borrow_mut();
+                let size = widget.layout(tree, constraints);
 
-            max_width = max_width.max(child_size.width);
-            max_height = max_height.max(child_size.height);
+                widget.set_origin(origin.0, origin.1);
+                Some(size)
+            } else {
+                None
+            };
+
+            if let Some(child_size) = child_size {
+                max_width = max_width.max(child_size.width);
+                max_height = max_height.max(child_size.height);
+            }
         }
 
         // Return the size of the largest child, constrained

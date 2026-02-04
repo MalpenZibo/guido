@@ -21,6 +21,8 @@ pub struct RippleState {
     pub fade_start_time: Option<Instant>,
     /// Progress at which fading started (for smooth contraction)
     pub fade_start_progress: f32,
+    /// Deferred reset flag to ensure final frame is painted before clearing state
+    pending_reset: bool,
 }
 
 impl RippleState {
@@ -81,10 +83,17 @@ impl RippleState {
         self.start_time = None;
         self.fade_start_time = None;
         self.fade_start_progress = 0.0;
+        self.pending_reset = false;
     }
 
     /// Advance ripple animation, returns true if still animating
     pub fn advance(&mut self, ripple_config: &RippleConfig) -> bool {
+        // Handle deferred reset: the previous frame requested reset, now we can safely clear
+        if self.pending_reset {
+            self.reset();
+            return false;
+        }
+
         let Some(start_time) = self.start_time else {
             return false;
         };
@@ -123,10 +132,10 @@ impl RippleState {
             // Fade opacity as well for smooth disappearance
             self.opacity = (1.0 - eased_t).max(0.0);
 
-            // Clear ripple when fully contracted
+            // Schedule reset for next frame to ensure final frame is painted
             if contraction_t >= 1.0 {
-                self.reset();
-                return false;
+                self.pending_reset = true;
+                return true;
             }
         } else {
             // Expansion animation
@@ -214,6 +223,7 @@ mod tests {
         state.start(100.0, 200.0);
         state.progress = 0.5;
         state.start_fade(150.0, 250.0);
+        state.pending_reset = true;
 
         state.reset();
 
@@ -225,6 +235,7 @@ mod tests {
         assert!(state.start_time.is_none());
         assert!(state.fade_start_time.is_none());
         assert_eq!(state.fade_start_progress, 0.0);
+        assert!(!state.pending_reset);
     }
 
     #[test]
