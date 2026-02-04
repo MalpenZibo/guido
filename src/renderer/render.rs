@@ -10,14 +10,14 @@ use wgpu::{
     BindGroup, BindGroupLayout, Buffer, BufferUsages, Device, Queue, RenderPipeline, ShaderModule,
 };
 
-use super::commands::{Border, DrawCommand};
+use super::commands::DrawCommand;
 use super::flatten::{FlattenedCommand, RenderLayer};
 use super::gpu::{QUAD_INDICES, QUAD_VERTICES, QuadVertex, ShaderUniforms, ShapeInstance};
 use super::gpu_context::SurfaceState;
 use super::image_quad::{ImageQuadRenderer, PreparedImageQuad};
 use super::text::TextRenderState;
 use super::text_quad::{PreparedTextQuad, TextQuadRenderer};
-use super::types::{GradientDir, TextEntry};
+use super::types::TextEntry;
 use crate::widgets::Color;
 
 /// The renderer using instanced rendering.
@@ -473,101 +473,32 @@ impl Renderer {
                 shadow,
                 gradient,
             } => {
-                // Scale coordinates for HiDPI
                 let scale = self.scale_factor;
 
-                // Convert gradient to GPU format
-                let (gradient_start, gradient_end, gradient_type) = match gradient {
-                    Some(g) => (
-                        [
-                            g.start_color.r,
-                            g.start_color.g,
-                            g.start_color.b,
-                            g.start_color.a,
-                        ],
-                        [g.end_color.r, g.end_color.g, g.end_color.b, g.end_color.a],
-                        match g.direction {
-                            GradientDir::Horizontal => 1u32,
-                            GradientDir::Vertical => 2u32,
-                            GradientDir::Diagonal => 3u32,
-                            GradientDir::DiagonalReverse => 4u32,
-                        },
-                    ),
-                    None => ([0.0; 4], [0.0; 4], 0u32),
-                };
-
-                let mut instance = ShapeInstance {
-                    rect: [
+                let mut instance = ShapeInstance::from_rect(
+                    [
                         rect.x * scale,
                         rect.y * scale,
                         rect.width * scale,
                         rect.height * scale,
                     ],
-                    corner_radius: radius * scale,
-                    shape_curvature: *curvature,
-                    _pad0: [0.0, 0.0],
-                    fill_color: [color.r, color.g, color.b, color.a],
-                    border_color: [0.0, 0.0, 0.0, 0.0],
-                    border_width: 0.0,
-                    _pad1: [0.0, 0.0, 0.0],
-                    shadow_offset: [0.0, 0.0],
-                    shadow_blur: 0.0,
-                    shadow_spread: 0.0,
-                    shadow_color: [0.0, 0.0, 0.0, 0.0],
-                    transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                    _pad2: [0.0, 0.0],
-                    clip_rect: [0.0, 0.0, 0.0, 0.0],
-                    clip_corner_radius: 0.0,
-                    clip_curvature: 1.0,
-                    clip_is_local: 0.0,
-                    _pad3: 0.0,
-                    gradient_start,
-                    gradient_end,
-                    gradient_type,
-                    _pad4: [0, 0, 0],
-                };
+                    [color.r, color.g, color.b, color.a],
+                    radius * scale,
+                    *curvature,
+                )
+                .with_transform(&cmd.world_transform, scale);
 
-                // Border
-                if let Some(Border { width, color }) = border {
-                    instance.border_width = width * scale;
-                    instance.border_color = [color.r, color.g, color.b, color.a];
+                if let Some(b) = border {
+                    instance = instance.with_border(b, scale);
                 }
-
-                // Shadow
                 if let Some(s) = shadow {
-                    instance.shadow_offset = [s.offset.0 * scale, s.offset.1 * scale];
-                    instance.shadow_blur = s.blur * scale;
-                    instance.shadow_spread = s.spread * scale;
-                    instance.shadow_color = [s.color.r, s.color.g, s.color.b, s.color.a];
+                    instance = instance.with_shadow(s, scale);
                 }
-
-                // Transform
-                if !cmd.world_transform.is_identity() {
-                    let t = &cmd.world_transform;
-                    // Extract 2x3 affine matrix components [a, b, tx, c, d, ty]
-                    // Note: The matrix already includes center_at from CPU, so no origin
-                    // handling needed in the shader.
-                    instance.transform = [
-                        t.data[0],         // a
-                        t.data[1],         // b
-                        t.data[3] * scale, // tx (scaled)
-                        t.data[4],         // c
-                        t.data[5],         // d
-                        t.data[7] * scale, // ty (scaled)
-                    ];
+                if let Some(g) = gradient {
+                    instance = instance.with_gradient(g);
                 }
-
-                // Clip region
                 if let Some(ref clip) = cmd.clip {
-                    instance.clip_rect = [
-                        clip.rect.x * scale,
-                        clip.rect.y * scale,
-                        clip.rect.width * scale,
-                        clip.rect.height * scale,
-                    ];
-                    instance.clip_corner_radius = clip.corner_radius * scale;
-                    instance.clip_curvature = clip.curvature;
-                    instance.clip_is_local = if cmd.clip_is_local { 1.0 } else { 0.0 };
+                    instance = instance.with_clip(clip, scale, cmd.clip_is_local);
                 }
 
                 Some(instance)
@@ -583,56 +514,16 @@ impl Renderer {
                 let rect_y = (center.1 - radius) * scale;
                 let size = radius * 2.0 * scale;
 
-                let mut instance = ShapeInstance {
-                    rect: [rect_x, rect_y, size, size],
-                    corner_radius: radius * scale, // Full radius = circle
-                    shape_curvature: 1.0,          // Circular corners
-                    _pad0: [0.0, 0.0],
-                    fill_color: [color.r, color.g, color.b, color.a],
-                    border_color: [0.0, 0.0, 0.0, 0.0],
-                    border_width: 0.0,
-                    _pad1: [0.0, 0.0, 0.0],
-                    shadow_offset: [0.0, 0.0],
-                    shadow_blur: 0.0,
-                    shadow_spread: 0.0,
-                    shadow_color: [0.0, 0.0, 0.0, 0.0],
-                    transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                    _pad2: [0.0, 0.0],
-                    clip_rect: [0.0, 0.0, 0.0, 0.0],
-                    clip_corner_radius: 0.0,
-                    clip_curvature: 1.0,
-                    clip_is_local: 0.0,
-                    _pad3: 0.0,
-                    gradient_start: [0.0; 4],
-                    gradient_end: [0.0; 4],
-                    gradient_type: 0, // Circles don't support gradients
-                    _pad4: [0, 0, 0],
-                };
+                let mut instance = ShapeInstance::from_rect(
+                    [rect_x, rect_y, size, size],
+                    [color.r, color.g, color.b, color.a],
+                    radius * scale, // Full radius = circle
+                    1.0,            // Circular corners
+                )
+                .with_transform(&cmd.world_transform, scale);
 
-                // Transform (origin already baked into matrix via center_at)
-                if !cmd.world_transform.is_identity() {
-                    let t = &cmd.world_transform;
-                    instance.transform = [
-                        t.data[0],
-                        t.data[1],
-                        t.data[3] * scale,
-                        t.data[4],
-                        t.data[5],
-                        t.data[7] * scale,
-                    ];
-                }
-
-                // Clip region
                 if let Some(ref clip) = cmd.clip {
-                    instance.clip_rect = [
-                        clip.rect.x * scale,
-                        clip.rect.y * scale,
-                        clip.rect.width * scale,
-                        clip.rect.height * scale,
-                    ];
-                    instance.clip_corner_radius = clip.corner_radius * scale;
-                    instance.clip_curvature = clip.curvature;
-                    instance.clip_is_local = if cmd.clip_is_local { 1.0 } else { 0.0 };
+                    instance = instance.with_clip(clip, scale, cmd.clip_is_local);
                 }
 
                 Some(instance)

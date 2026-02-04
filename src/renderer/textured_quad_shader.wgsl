@@ -1,6 +1,6 @@
-// Guido Image Quad Shader
+// Guido Textured Quad Shader
 //
-// This shader renders textured quads for images with clipping support.
+// This shader renders textured quads for images and transformed text with clipping support.
 // Vertices include pre-computed NDC positions and clip data.
 
 // === Vertex Input ===

@@ -182,6 +182,105 @@ impl Default for ShapeInstance {
 }
 
 impl ShapeInstance {
+    /// Create a shape instance from a rectangle with basic properties.
+    pub fn from_rect(
+        rect: [f32; 4],
+        fill_color: [f32; 4],
+        corner_radius: f32,
+        curvature: f32,
+    ) -> Self {
+        Self {
+            rect,
+            corner_radius,
+            shape_curvature: curvature,
+            fill_color,
+            ..Default::default()
+        }
+    }
+
+    /// Set transform from a Transform struct, scaling translation by scale_factor.
+    pub fn with_transform(mut self, transform: &crate::transform::Transform, scale: f32) -> Self {
+        if !transform.is_identity() {
+            self.transform = [
+                transform.data[0],         // a
+                transform.data[1],         // b
+                transform.data[3] * scale, // tx (scaled)
+                transform.data[4],         // c
+                transform.data[5],         // d
+                transform.data[7] * scale, // ty (scaled)
+            ];
+        }
+        self
+    }
+
+    /// Set clip region from WorldClip, scaling by scale_factor.
+    pub fn with_clip(
+        mut self,
+        clip: &super::flatten::WorldClip,
+        scale: f32,
+        is_local: bool,
+    ) -> Self {
+        self.clip_rect = [
+            clip.rect.x * scale,
+            clip.rect.y * scale,
+            clip.rect.width * scale,
+            clip.rect.height * scale,
+        ];
+        self.clip_corner_radius = clip.corner_radius * scale;
+        self.clip_curvature = clip.curvature;
+        self.clip_is_local = if is_local { 1.0 } else { 0.0 };
+        self
+    }
+
+    /// Set border properties.
+    pub fn with_border(mut self, border: &super::commands::Border, scale: f32) -> Self {
+        self.border_width = border.width * scale;
+        self.border_color = [
+            border.color.r,
+            border.color.g,
+            border.color.b,
+            border.color.a,
+        ];
+        self
+    }
+
+    /// Set shadow properties.
+    pub fn with_shadow(mut self, shadow: &super::types::Shadow, scale: f32) -> Self {
+        self.shadow_offset = [shadow.offset.0 * scale, shadow.offset.1 * scale];
+        self.shadow_blur = shadow.blur * scale;
+        self.shadow_spread = shadow.spread * scale;
+        self.shadow_color = [
+            shadow.color.r,
+            shadow.color.g,
+            shadow.color.b,
+            shadow.color.a,
+        ];
+        self
+    }
+
+    /// Set gradient properties.
+    pub fn with_gradient(mut self, gradient: &super::types::Gradient) -> Self {
+        self.gradient_start = [
+            gradient.start_color.r,
+            gradient.start_color.g,
+            gradient.start_color.b,
+            gradient.start_color.a,
+        ];
+        self.gradient_end = [
+            gradient.end_color.r,
+            gradient.end_color.g,
+            gradient.end_color.b,
+            gradient.end_color.a,
+        ];
+        self.gradient_type = match gradient.direction {
+            super::types::GradientDir::Horizontal => 1,
+            super::types::GradientDir::Vertical => 2,
+            super::types::GradientDir::Diagonal => 3,
+            super::types::GradientDir::DiagonalReverse => 4,
+        };
+        self
+    }
+
     /// Vertex buffer layout for instance data.
     pub fn desc() -> VertexBufferLayout<'static> {
         VertexBufferLayout {

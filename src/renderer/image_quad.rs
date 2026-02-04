@@ -11,72 +11,14 @@ use wgpu::util::DeviceExt;
 use wgpu::{
     BindGroup, BindGroupLayout, Buffer as WgpuBuffer, Device, Extent3d, Queue, RenderPass,
     RenderPipeline, Sampler, Texture, TextureDimension, TextureFormat, TextureUsages,
-    VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode,
 };
 
-use super::image_texture::SVG_QUALITY_MULTIPLIER;
+use super::commands::DrawCommand;
+use super::constants::{IMAGE_HASH_SAMPLE_SIZE, SVG_QUALITY_MULTIPLIER};
+use super::flatten::FlattenedCommand;
+use super::textured_vertex::{TexturedVertex, to_ndc};
 use crate::widgets::Rect;
 use crate::widgets::image::{ContentFit, ImageSource};
-
-use super::commands::DrawCommand;
-use super::flatten::FlattenedCommand;
-
-/// Vertex with pre-computed NDC position, UV coordinates, and clip data.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct TexturedVertex {
-    /// Position in NDC (pre-computed on CPU)
-    position: [f32; 2],
-    /// Texture coordinates
-    uv: [f32; 2],
-    /// Screen position in physical pixels (for clip calculation)
-    screen_pos: [f32; 2],
-    /// Clip rect in physical pixels [x, y, width, height]
-    clip_rect: [f32; 4],
-    /// Clip parameters [corner_radius, curvature, 0, 0]
-    clip_params: [f32; 4],
-}
-
-impl TexturedVertex {
-    fn desc() -> VertexBufferLayout<'static> {
-        VertexBufferLayout {
-            array_stride: std::mem::size_of::<TexturedVertex>() as u64,
-            step_mode: VertexStepMode::Vertex,
-            attributes: &[
-                // position (NDC)
-                VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: VertexFormat::Float32x2,
-                },
-                // uv
-                VertexAttribute {
-                    offset: 8,
-                    shader_location: 1,
-                    format: VertexFormat::Float32x2,
-                },
-                // screen_pos
-                VertexAttribute {
-                    offset: 16,
-                    shader_location: 2,
-                    format: VertexFormat::Float32x2,
-                },
-                // clip_rect
-                VertexAttribute {
-                    offset: 24,
-                    shader_location: 3,
-                    format: VertexFormat::Float32x4,
-                },
-                // clip_params
-                VertexAttribute {
-                    offset: 40,
-                    shader_location: 4,
-                    format: VertexFormat::Float32x4,
-                },
-            ],
-        }
-    }
-}
 
 /// A prepared image quad ready for rendering.
 pub struct PreparedImageQuad {
@@ -148,7 +90,7 @@ impl ImageQuadRenderer {
         // Load shader from dedicated file
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("ImageQuad Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("image_shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("textured_quad_shader.wgsl").into()),
         });
 
         // Create texture bind group layout
@@ -266,14 +208,6 @@ impl ImageQuadRenderer {
         self.screen_height = height;
     }
 
-    /// Convert screen coordinates to NDC.
-    fn to_ndc(&self, x: f32, y: f32) -> [f32; 2] {
-        [
-            (x / self.screen_width) * 2.0 - 1.0,
-            1.0 - (y / self.screen_height) * 2.0,
-        ]
-    }
-
     /// Begin a new frame (for cache management).
     pub fn begin_frame(&mut self) {
         self.current_frame += 1;
@@ -309,8 +243,8 @@ impl ImageQuadRenderer {
             bytes.hash(hasher);
             return;
         }
-        // Sample: first 256 + middle 256 + last 256 bytes
-        let sample = 256;
+        // Sample: first + middle + last bytes for collision resistance
+        let sample = IMAGE_HASH_SAMPLE_SIZE;
         bytes[..sample].hash(hasher);
         let mid = bytes.len() / 2 - sample / 2;
         bytes[mid..mid + sample].hash(hasher);
@@ -767,28 +701,48 @@ impl ImageQuadRenderer {
         // Convert to NDC and create vertices with clip data
         [
             TexturedVertex {
-                position: self.to_ndc(screen_corners[0].0, screen_corners[0].1),
+                position: to_ndc(
+                    screen_corners[0].0,
+                    screen_corners[0].1,
+                    self.screen_width,
+                    self.screen_height,
+                ),
                 uv: [u_min, v_min],
                 screen_pos: [screen_corners[0].0, screen_corners[0].1],
                 clip_rect,
                 clip_params,
             },
             TexturedVertex {
-                position: self.to_ndc(screen_corners[1].0, screen_corners[1].1),
+                position: to_ndc(
+                    screen_corners[1].0,
+                    screen_corners[1].1,
+                    self.screen_width,
+                    self.screen_height,
+                ),
                 uv: [u_max, v_min],
                 screen_pos: [screen_corners[1].0, screen_corners[1].1],
                 clip_rect,
                 clip_params,
             },
             TexturedVertex {
-                position: self.to_ndc(screen_corners[2].0, screen_corners[2].1),
+                position: to_ndc(
+                    screen_corners[2].0,
+                    screen_corners[2].1,
+                    self.screen_width,
+                    self.screen_height,
+                ),
                 uv: [u_min, v_max],
                 screen_pos: [screen_corners[2].0, screen_corners[2].1],
                 clip_rect,
                 clip_params,
             },
             TexturedVertex {
-                position: self.to_ndc(screen_corners[3].0, screen_corners[3].1),
+                position: to_ndc(
+                    screen_corners[3].0,
+                    screen_corners[3].1,
+                    self.screen_width,
+                    self.screen_height,
+                ),
                 uv: [u_max, v_max],
                 screen_pos: [screen_corners[3].0, screen_corners[3].1],
                 clip_rect,
