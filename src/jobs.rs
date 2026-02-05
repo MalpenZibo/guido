@@ -35,7 +35,7 @@ use crate::tree::{Tree, WidgetId};
 /// Uses HashSet to deduplicate jobs - each (widget_id, job_type) pair is unique.
 static PENDING_JOBS: LazyLock<Mutex<HashSet<Job>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
-/// Job types for reactive invalidation
+/// Job types for reactive invalidation (stored in the queue)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum JobType {
     /// Widget needs layout recalculation
@@ -50,6 +50,28 @@ pub enum JobType {
     Animation,
 }
 
+/// What additional job an animation requires
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequiredJob {
+    /// Animation continuation only - no repaint needed (value hasn't changed)
+    None,
+    /// Animation + Paint (for paint-only animations like background, transform)
+    Paint,
+    /// Animation + Layout (for layout-affecting animations like width, height)
+    Layout,
+}
+
+/// Job request from callers - richer than what's stored
+#[derive(Clone, Copy, Debug)]
+pub enum JobRequest {
+    Layout,
+    Paint,
+    Reconcile,
+    Unregister,
+    /// Animation with required follow-up job (Paint or Layout)
+    Animation(RequiredJob),
+}
+
 /// A reactive update job
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Job {
@@ -57,13 +79,58 @@ pub struct Job {
     pub job_type: JobType,
 }
 
-/// Push a job to the queue (thread-safe).
-/// Duplicate jobs (same widget_id + job_type) are automatically ignored.
-pub fn push_job(widget_id: WidgetId, job_type: JobType) {
-    PENDING_JOBS.lock().unwrap().insert(Job {
-        widget_id,
-        job_type,
-    });
+/// Request a job (handles animation follow-up jobs automatically).
+/// For animations, this inserts both the Animation job and any required follow-up job.
+pub fn request_job(widget_id: WidgetId, request: JobRequest) {
+    let mut jobs = PENDING_JOBS.lock().unwrap();
+    match request {
+        JobRequest::Animation(required) => {
+            jobs.insert(Job {
+                widget_id,
+                job_type: JobType::Animation,
+            });
+            match required {
+                RequiredJob::None => {}
+                RequiredJob::Paint => {
+                    jobs.insert(Job {
+                        widget_id,
+                        job_type: JobType::Paint,
+                    });
+                }
+                RequiredJob::Layout => {
+                    jobs.insert(Job {
+                        widget_id,
+                        job_type: JobType::Layout,
+                    });
+                }
+            }
+        }
+        JobRequest::Layout => {
+            jobs.insert(Job {
+                widget_id,
+                job_type: JobType::Layout,
+            });
+        }
+        JobRequest::Paint => {
+            jobs.insert(Job {
+                widget_id,
+                job_type: JobType::Paint,
+            });
+        }
+        JobRequest::Reconcile => {
+            jobs.insert(Job {
+                widget_id,
+                job_type: JobType::Reconcile,
+            });
+        }
+        JobRequest::Unregister => {
+            jobs.insert(Job {
+                widget_id,
+                job_type: JobType::Unregister,
+            });
+        }
+    }
+    drop(jobs);
     request_frame();
 }
 
@@ -80,27 +147,30 @@ pub fn handle_unregister_jobs(jobs: &[Job], tree: &mut Tree) {
     }
 }
 
-pub fn handle_reconcile_jobs(jobs: &[Job], tree: &mut Tree) {
+pub fn handle_reconcile_jobs(jobs: &[Job], tree: &mut Tree) -> Vec<WidgetId> {
+    let mut roots = Vec::new();
     for job in jobs.iter().filter(|j| j.job_type == JobType::Reconcile) {
-        let widget_cell = tree.get_widget_mut(job.widget_id);
-        if let Some(widget_cell) = widget_cell {
-            let mut widget = widget_cell.borrow_mut();
-            widget.reconcile_children(tree);
-            tree.mark_needs_layout(job.widget_id);
+        tree.with_widget_mut(job.widget_id, |widget, id, tree| {
+            widget.reconcile_children(tree, id);
+        });
+        if let Some(root) = tree.mark_needs_layout(job.widget_id) {
+            roots.push(root);
         }
     }
+    roots
 }
 
-pub fn handle_layout_jobs(jobs: &[Job], tree: &mut Tree) {
-    for job in jobs.iter().filter(|j| j.job_type == JobType::Layout) {
-        tree.mark_needs_layout(job.widget_id);
-    }
+pub fn handle_layout_jobs(jobs: &[Job], tree: &mut Tree) -> Vec<WidgetId> {
+    jobs.iter()
+        .filter(|j| j.job_type == JobType::Layout)
+        .filter_map(|job| tree.mark_needs_layout(job.widget_id))
+        .collect()
 }
 
-pub fn handle_animation_jobs(jobs: &[Job], tree: &Tree) {
+pub fn handle_animation_jobs(jobs: &[Job], tree: &mut Tree) {
     for job in jobs.iter().filter(|j| j.job_type == JobType::Animation) {
-        tree.with_widget_mut(job.widget_id, |widget| {
-            widget.advance_animations(tree);
+        tree.with_widget_mut(job.widget_id, |widget, id, tree| {
+            widget.advance_animations(tree, id);
         });
     }
 }

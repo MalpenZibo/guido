@@ -19,6 +19,7 @@ pub mod renderer;
 pub use guido_macros::component;
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 
 use layout::Constraints;
 use platform::create_wayland_app;
@@ -97,7 +98,7 @@ use crate::{
         drain_pending_jobs, handle_animation_jobs, handle_layout_jobs, handle_reconcile_jobs,
         handle_unregister_jobs, has_pending_jobs, init_wakeup, take_frame_request,
     },
-    tree::Tree,
+    tree::{Tree, WidgetId},
 };
 
 /// A surface definition that stores configuration and widget factory.
@@ -184,6 +185,7 @@ fn render_surface(
     connection: &Connection,
     qh: &QueueHandle<platform::WaylandState>,
     tree: &mut Tree,
+    layout_roots: &mut HashSet<WidgetId>,
 ) {
     // Get wayland surface state
     let Some(wayland_surface) = wayland_state.get_surface_mut(id) else {
@@ -226,8 +228,8 @@ fn render_surface(
 
     // Dispatch events to widget
     for event in &events {
-        tree.with_widget_mut(surface.widget_id, |widget| {
-            widget.event(tree, event);
+        tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
+            widget.event(tree, id, event);
         });
     }
 
@@ -278,10 +280,14 @@ fn render_surface(
     let fully_initialized = first_frame_presented && scale_factor_received;
     let force_render_surface = !fully_initialized;
     let frame_requested = take_frame_request();
-    let has_layout_roots = tree.has_layout_roots();
+    let has_pending_layouts = !layout_roots.is_empty();
 
     // Only render if something changed (or during initialization)
-    if force_render_surface || frame_requested || has_layout_roots || needs_resize || scale_changed
+    if force_render_surface
+        || frame_requested
+        || has_pending_layouts
+        || needs_resize
+        || scale_changed
     {
         // Update renderer for this surface
         renderer.set_screen_size(physical_width as f32, physical_height as f32);
@@ -291,31 +297,33 @@ fn render_surface(
         let jobs = drain_pending_jobs();
 
         handle_unregister_jobs(&jobs, tree);
-        handle_reconcile_jobs(&jobs, tree);
-        handle_layout_jobs(&jobs, tree);
+
+        // Collect layout roots from jobs
+        for root in handle_reconcile_jobs(&jobs, tree) {
+            layout_roots.insert(root);
+        }
+        for root in handle_layout_jobs(&jobs, tree) {
+            layout_roots.insert(root);
+        }
 
         // Re-layout using partial layout from boundaries when available
         let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
-        if tree.has_layout_roots() {
+        if !layout_roots.is_empty() {
             // Partial layout: only update dirty subtrees starting from boundaries
-            let roots = tree.take_layout_roots();
+            let roots: Vec<_> = layout_roots.drain().collect();
             for root_id in roots {
-                if let Some(widget_cell) = tree.get_widget_mut(root_id) {
-                    // Use cached constraints for boundaries, or fall back to parent constraints
-                    let cached = tree.cached_constraints(root_id).unwrap_or(constraints);
+                // Use cached constraints for boundaries, or fall back to parent constraints
+                let cached = tree.cached_constraints(root_id).unwrap_or(constraints);
 
-                    let mut widget = widget_cell.borrow_mut();
-
-                    widget.layout(tree, cached);
-                }
+                tree.with_widget_mut(root_id, |widget, id, tree| {
+                    widget.layout(tree, id, cached);
+                });
             }
         } else if needs_resize {
             // Full layout from root only when explicitly needed (first frame, resize, etc.)
-            if let Some(widget_cell) = tree.get_widget_mut(surface.widget_id) {
-                let mut widget = widget_cell.borrow_mut();
-
-                widget.layout(tree, constraints);
-            }
+            tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
+                widget.layout(tree, id, constraints);
+            });
         }
         // If neither condition is true, skip layout entirely - nothing is dirty
 
@@ -324,9 +332,9 @@ fn render_surface(
         surface.root_node.clear();
         surface.root_node.bounds = widgets::Rect::new(0.0, 0.0, width as f32, height as f32);
 
-        tree.with_widget_mut(surface.widget_id, |widget| {
+        tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
             let mut ctx = PaintContext::new(&mut surface.root_node);
-            widget.paint(tree, &mut ctx);
+            widget.paint(tree, id, &mut ctx);
         });
 
         // Take ownership of root node temporarily, add to tree, then restore
@@ -368,6 +376,8 @@ pub struct App {
     surface_definitions: Vec<SurfaceDefinition>,
     /// The layout tree for widget storage (owned by App)
     tree: Tree,
+    /// Set of layout roots that need re-layout (scheduling concern)
+    layout_roots: HashSet<WidgetId>,
 }
 
 impl App {
@@ -375,6 +385,7 @@ impl App {
         Self {
             surface_definitions: Vec::new(),
             tree: Tree::new(),
+            layout_roots: HashSet::new(),
         }
     }
 
@@ -596,6 +607,7 @@ impl App {
                     &connection,
                     &qh,
                     &mut self.tree,
+                    &mut self.layout_roots,
                 );
             }
 

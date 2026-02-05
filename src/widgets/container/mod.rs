@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::advance_anim;
 use crate::animation::Transition;
-use crate::jobs::{JobType, push_job};
+use crate::jobs::{JobRequest, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{IntoMaybeDyn, MaybeDyn, focused_widget, register_layout_signal};
 use crate::renderer::{GradientDir, PaintContext, Shadow};
@@ -111,8 +111,6 @@ pub enum Overflow {
 }
 
 pub struct Container {
-    pub(super) widget_id: WidgetId,
-
     // Layout and children
     pub(super) layout: Box<dyn Layout>,
     pub(super) children_source: ChildrenSource,
@@ -178,15 +176,15 @@ pub struct Container {
 
     // Constraint caching for layout skip optimization
     pub(super) last_constraints: Option<Constraints>,
+
+    // Pending layout signal registrations (processed when widget ID becomes available)
+    pub(super) pending_layout_signals: Vec<usize>,
 }
 
 impl Container {
     pub fn new() -> Self {
-        let widget_id = WidgetId::next();
-        let mut children_source = ChildrenSource::default();
-        children_source.set_container_id(widget_id);
+        let children_source = ChildrenSource::default();
         Self {
-            widget_id,
             layout: Box::new(Flex::column()),
             children_source,
             padding: MaybeDyn::Static(Padding::default()),
@@ -231,6 +229,7 @@ impl Container {
             h_scrollbar_scale_anim: None,
             ripple: RippleState::new(),
             last_constraints: None,
+            pending_layout_signals: Vec::new(),
         }
     }
 
@@ -282,9 +281,9 @@ impl Container {
     /// ```
     pub fn padding(mut self, value: impl IntoMaybeDyn<f32>) -> Self {
         let value = value.into_maybe_dyn();
-        // Register layout dependency if value is from a signal
+        // Store layout dependency if value is from a signal (will be registered when ID is available)
         if let Some(signal_id) = value.signal_id() {
-            register_layout_signal(self.widget_id, signal_id);
+            self.pending_layout_signals.push(signal_id);
         }
         self.padding = MaybeDyn::Dynamic {
             getter: Arc::new(move || Padding::all(value.get())),
@@ -310,12 +309,12 @@ impl Container {
     ) -> Self {
         let h = horizontal.into_maybe_dyn();
         let v = vertical.into_maybe_dyn();
-        // Register layout dependencies if values are from signals
+        // Store layout dependencies if values are from signals (will be registered when ID is available)
         if let Some(signal_id) = h.signal_id() {
-            register_layout_signal(self.widget_id, signal_id);
+            self.pending_layout_signals.push(signal_id);
         }
         if let Some(signal_id) = v.signal_id() {
-            register_layout_signal(self.widget_id, signal_id);
+            self.pending_layout_signals.push(signal_id);
         }
         self.padding = MaybeDyn::Dynamic {
             getter: Arc::new(move || Padding {
@@ -418,9 +417,9 @@ impl Container {
     /// Set the width of the container.
     pub fn width(mut self, width: impl IntoMaybeDyn<Length>) -> Self {
         let maybe_dyn = width.into_maybe_dyn();
-        // Register layout dependency if value is from a signal
+        // Store layout dependency if value is from a signal (will be registered when ID is available)
         if let Some(signal_id) = maybe_dyn.signal_id() {
-            register_layout_signal(self.widget_id, signal_id);
+            self.pending_layout_signals.push(signal_id);
         }
         self.width = Some(maybe_dyn);
         self
@@ -429,9 +428,9 @@ impl Container {
     /// Set the height of the container.
     pub fn height(mut self, height: impl IntoMaybeDyn<Length>) -> Self {
         let maybe_dyn = height.into_maybe_dyn();
-        // Register layout dependency if value is from a signal
+        // Store layout dependency if value is from a signal (will be registered when ID is available)
         if let Some(signal_id) = maybe_dyn.signal_id() {
-            register_layout_signal(self.widget_id, signal_id);
+            self.pending_layout_signals.push(signal_id);
         }
         self.height = Some(maybe_dyn);
         self
@@ -838,6 +837,63 @@ impl Container {
             self.effective_transform_target(tree)
         })
     }
+
+    /// Check if any state layer properties have animations enabled
+    fn has_animated_state_properties(&self) -> bool {
+        self.background_anim.is_some()
+            || self.corner_radius_anim.is_some()
+            || self.border_color_anim.is_some()
+            || self.transform_anim.is_some()
+    }
+
+    /// Request repaint for state changes (hover/press), with Animation job if needed
+    fn request_state_change_repaint(&self, id: WidgetId) {
+        if self.has_animated_state_properties() {
+            request_job(id, JobRequest::Animation(RequiredJob::Paint));
+        } else {
+            request_job(id, JobRequest::Paint);
+        }
+    }
+
+    /// Internal method for advancing animations on non-tree-registered containers (scrollbars).
+    /// Uses the parent's widget ID for job requests.
+    pub(super) fn advance_animations_internal(&mut self, tree: &Tree, parent_id: WidgetId) -> bool {
+        // Simplified version for scrollbar containers - only advances paint-only animations
+        let mut any_animating = false;
+
+        // Paint-only animations only
+        let bg_target = self.effective_background_target(tree);
+        advance_anim!(
+            self,
+            background_anim,
+            bg_target,
+            parent_id,
+            any_animating,
+            paint
+        );
+
+        let corner_radius_target = self.effective_corner_radius_target(tree);
+        advance_anim!(
+            self,
+            corner_radius_anim,
+            corner_radius_target,
+            parent_id,
+            any_animating,
+            paint
+        );
+
+        let transform_target = self.effective_transform_target(tree);
+        advance_anim!(
+            self,
+            transform_anim,
+            transform_target,
+            parent_id,
+            any_animating,
+            paint
+        );
+
+        any_animating
+    }
 }
 
 /// Convert elevation level to shadow parameters
@@ -875,17 +931,18 @@ impl Default for Container {
 }
 
 impl Widget for Container {
-    fn advance_animations(&mut self, tree: &Tree) -> bool {
+    fn advance_animations(&mut self, tree: &Tree, id: WidgetId) -> bool {
         // Use advance_animations_self for this widget's animations
         let mut any_animating = false;
 
         // Layout-affecting animations: width, height, padding, border_width
-        advance_anim!(self, width_anim, any_animating, layout);
-        advance_anim!(self, height_anim, any_animating, layout);
+        advance_anim!(self, width_anim, id, any_animating, layout);
+        advance_anim!(self, height_anim, id, any_animating, layout);
         advance_anim!(
             self,
             padding_anim,
             self.padding.get(),
+            id,
             any_animating,
             layout
         );
@@ -895,19 +952,21 @@ impl Widget for Container {
             self,
             border_width_anim,
             border_width_target,
+            id,
             any_animating,
             layout
         );
 
         // Paint-only animations: background, corner_radius, border_color, transform
         let bg_target = self.effective_background_target(tree);
-        advance_anim!(self, background_anim, bg_target, any_animating, paint);
+        advance_anim!(self, background_anim, bg_target, id, any_animating, paint);
 
         let corner_radius_target = self.effective_corner_radius_target(tree);
         advance_anim!(
             self,
             corner_radius_anim,
             corner_radius_target,
+            id,
             any_animating,
             paint
         );
@@ -917,12 +976,20 @@ impl Widget for Container {
             self,
             border_color_anim,
             border_color_target,
+            id,
             any_animating,
             paint
         );
 
         let transform_target = self.effective_transform_target(tree);
-        advance_anim!(self, transform_anim, transform_target, any_animating, paint);
+        advance_anim!(
+            self,
+            transform_anim,
+            transform_target,
+            id,
+            any_animating,
+            paint
+        );
 
         // Advance ripple animation
         if self.ripple.is_active()
@@ -930,6 +997,10 @@ impl Widget for Container {
             && let Some(ref config) = state.ripple
         {
             let ripple_animating = self.ripple.advance(config);
+            if ripple_animating {
+                // Ripple is paint-only, request animation continuation with paint
+                request_job(id, JobRequest::Animation(RequiredJob::Paint));
+            }
             any_animating = any_animating || ripple_animating;
         }
 
@@ -939,29 +1010,32 @@ impl Widget for Container {
         if has_scroll_velocity {
             let scroll_animating = self.scroll_state.advance_momentum();
             if scroll_animating {
-                push_job(self.widget_id, JobType::Paint);
+                // Kinetic scroll is paint-only, request animation continuation with paint
+                request_job(id, JobRequest::Animation(RequiredJob::Paint));
             }
             any_animating = any_animating || scroll_animating;
         }
 
         // Advance scrollbar animations (these are owned by this container, not tree children)
+        // Note: These scrollbar containers don't have IDs - they're not in the tree
+        // They use a dummy ID (won't be used since they don't request jobs directly)
         if let Some(ref mut track) = self.v_scrollbar_track
-            && track.advance_animations(tree)
+            && track.advance_animations_internal(tree, id)
         {
             any_animating = true;
         }
         if let Some(ref mut handle) = self.v_scrollbar_handle
-            && handle.advance_animations(tree)
+            && handle.advance_animations_internal(tree, id)
         {
             any_animating = true;
         }
         if let Some(ref mut track) = self.h_scrollbar_track
-            && track.advance_animations(tree)
+            && track.advance_animations_internal(tree, id)
         {
             any_animating = true;
         }
         if let Some(ref mut handle) = self.h_scrollbar_handle
-            && handle.advance_animations(tree)
+            && handle.advance_animations_internal(tree, id)
         {
             any_animating = true;
         }
@@ -974,29 +1048,38 @@ impl Widget for Container {
 
         // Advance scrollbar scale animations (for hover expansion effect)
         // Must be done here since scroll/hover is paint-only and layout may not run
-        if self.advance_scrollbar_scale_animations() {
+        if self.advance_scrollbar_scale_animations_internal(id) {
             any_animating = true;
         }
 
-        // If still animating, push Animation job for next frame
-        if any_animating {
-            push_job(self.widget_id, JobType::Animation);
-        }
+        // Note: No final Animation push needed here - each animation source
+        // (advance_anim! macro, ripple, kinetic scroll) handles its own continuation
 
         any_animating
     }
 
-    fn reconcile_children(&mut self, tree: &mut Tree) -> bool {
+    fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
+        // Ensure container_id is set before reconciliation
+        self.children_source.set_container_id(id);
         self.children_source.reconcile_with_tracking(tree)
     }
 
-    fn register_children(&mut self, tree: &mut Tree) {
-        self.children_source.register_pending(tree, self.widget_id);
+    fn register_children(&mut self, tree: &mut Tree, id: WidgetId) {
+        // Register pending layout signals now that we have the widget ID
+        for signal_id in self.pending_layout_signals.drain(..) {
+            register_layout_signal(id, signal_id);
+        }
+
+        // Set container_id for children source
+        self.children_source.set_container_id(id);
+
+        // Register pending children
+        self.children_source.register_pending(tree, id);
     }
 
-    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size {
+    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
         // Register this widget's relayout boundary status with the tree
-        tree.set_relayout_boundary(self.widget_id, self.is_relayout_boundary_for(constraints));
+        tree.set_relayout_boundary(id, self.is_relayout_boundary_for(constraints));
 
         // Ensure scrollbar containers exist if scrolling is enabled
         self.ensure_scrollbar_containers();
@@ -1005,7 +1088,7 @@ impl Widget for Container {
 
         // Check if this widget was marked dirty by signal changes or animations
         // (animations call mark_needs_layout directly when their value changes)
-        let reactive_changed = tree.is_dirty(self.widget_id);
+        let reactive_changed = tree.is_dirty(id);
 
         let needs_layout = constraints_changed || reactive_changed;
 
@@ -1024,7 +1107,7 @@ impl Widget for Container {
         self.last_constraints = Some(constraints);
 
         // Clear dirty flag since we're doing layout now
-        tree.clear_dirty(self.widget_id);
+        tree.clear_dirty(id);
 
         // Get current animated padding for layout calculations
         let padding = self.animated_padding();
@@ -1141,7 +1224,7 @@ impl Widget for Container {
 
         // Update parent tracking for all children in the tree
         for &child_id in children.iter() {
-            tree.set_parent(child_id, self.widget_id);
+            tree.set_parent(child_id, id);
         }
 
         let content_size = if !children.is_empty() {
@@ -1180,8 +1263,8 @@ impl Widget for Container {
                     anim.set_immediate(effective_target);
                 } else {
                     anim.animate_to(effective_target);
-                    push_job(self.widget_id, JobType::Animation);
-                    push_job(self.widget_id, JobType::Paint);
+                    // Width affects layout, so use RequiredJob::Layout
+                    request_job(id, JobRequest::Animation(RequiredJob::Layout));
                 }
             }
         }
@@ -1198,8 +1281,8 @@ impl Widget for Container {
                     anim.set_immediate(effective_target);
                 } else {
                     anim.animate_to(effective_target);
-                    push_job(self.widget_id, JobType::Animation);
-                    push_job(self.widget_id, JobType::Paint);
+                    // Height affects layout, so use RequiredJob::Layout
+                    request_job(id, JobRequest::Animation(RequiredJob::Layout));
                 }
             }
         }
@@ -1288,15 +1371,15 @@ impl Widget for Container {
         self.bounds.height = size.height;
 
         // Layout scrollbar containers after bounds are set
-        self.layout_scrollbar_containers(tree);
+        self.layout_scrollbar_containers(tree, id);
 
         // Cache constraints and size for partial layout
-        tree.cache_layout(self.widget_id, constraints, size);
+        tree.cache_layout(id, constraints, size);
 
         size
     }
 
-    fn event(&mut self, tree: &Tree, event: &Event) -> EventResponse {
+    fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
         let transform = self.animated_transform(tree);
         let transform_origin = self.transform_origin.get();
         let corner_radius = self.animated_corner_radius(tree);
@@ -1317,7 +1400,7 @@ impl Widget for Container {
         };
 
         // Handle scrollbar events first
-        if let Some(response) = self.handle_scrollbar_event(tree, &local_event) {
+        if let Some(response) = self.handle_scrollbar_event(tree, id, &local_event) {
             return response;
         }
 
@@ -1344,9 +1427,9 @@ impl Widget for Container {
 
         // Let children handle first (layout already reconciled)
         for &child_id in self.children_source.get() {
-            if let Some(response) =
-                tree.with_widget_mut(child_id, |child| child.event(tree, &child_event))
-                && response == EventResponse::Handled
+            if let Some(response) = tree.with_widget_mut(child_id, |child, child_id, tree| {
+                child.event(tree, child_id, &child_event)
+            }) && response == EventResponse::Handled
             {
                 return EventResponse::Handled;
             }
@@ -1359,15 +1442,7 @@ impl Widget for Container {
                     let was_hovered = self.is_hovered;
                     self.is_hovered = true;
                     if !was_hovered && self.hover_state.is_some() {
-                        // Push Animation job if there are animated properties
-                        if self.background_anim.is_some()
-                            || self.corner_radius_anim.is_some()
-                            || self.border_color_anim.is_some()
-                            || self.transform_anim.is_some()
-                        {
-                            push_job(self.widget_id, JobType::Animation);
-                        }
-                        push_job(self.widget_id, JobType::Paint);
+                        self.request_state_change_repaint(id);
                     }
                     if let Some(ref callback) = self.on_hover {
                         callback(true);
@@ -1381,15 +1456,7 @@ impl Widget for Container {
 
                 if was_hovered != self.is_hovered {
                     if self.hover_state.is_some() {
-                        // Push Animation job if there are animated properties
-                        if self.background_anim.is_some()
-                            || self.corner_radius_anim.is_some()
-                            || self.border_color_anim.is_some()
-                            || self.transform_anim.is_some()
-                        {
-                            push_job(self.widget_id, JobType::Animation);
-                        }
-                        push_job(self.widget_id, JobType::Paint);
+                        self.request_state_change_repaint(id);
                     }
                     if let Some(ref callback) = self.on_hover {
                         callback(self.is_hovered);
@@ -1423,21 +1490,12 @@ impl Widget for Container {
                             (screen_x - self.bounds.x, screen_y - self.bounds.y)
                         };
                         self.ripple.start(local_x, local_y);
-                        // Push Animation job for ripple
-                        push_job(self.widget_id, JobType::Animation);
-                        push_job(self.widget_id, JobType::Paint);
+                        // Ripple animation needs Animation + Paint
+                        request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
                     if !was_pressed && self.pressed_state.is_some() {
-                        // Push Animation job if there are animated properties
-                        if self.background_anim.is_some()
-                            || self.corner_radius_anim.is_some()
-                            || self.border_color_anim.is_some()
-                            || self.transform_anim.is_some()
-                        {
-                            push_job(self.widget_id, JobType::Animation);
-                        }
-                        push_job(self.widget_id, JobType::Paint);
+                        self.request_state_change_repaint(id);
                     }
                     if self.on_click.is_some() {
                         return EventResponse::Handled;
@@ -1464,21 +1522,12 @@ impl Widget for Container {
                             (screen_x - self.bounds.x, screen_y - self.bounds.y)
                         };
                         self.ripple.start_fade(local_x, local_y);
-                        // Push Animation job for ripple fade
-                        push_job(self.widget_id, JobType::Animation);
-                        push_job(self.widget_id, JobType::Paint);
+                        // Ripple fade animation needs Animation + Paint
+                        request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
                     if was_pressed && self.pressed_state.is_some() {
-                        // Push Animation job if there are animated properties
-                        if self.background_anim.is_some()
-                            || self.corner_radius_anim.is_some()
-                            || self.border_color_anim.is_some()
-                            || self.transform_anim.is_some()
-                        {
-                            push_job(self.widget_id, JobType::Animation);
-                        }
-                        push_job(self.widget_id, JobType::Paint);
+                        self.request_state_change_repaint(id);
                     }
                     if self.bounds.contains_rounded(*x, *y, corner_radius)
                         && let Some(ref callback) = self.on_click
@@ -1503,23 +1552,14 @@ impl Widget for Container {
                 if self.ripple.is_active() {
                     self.ripple
                         .start_fade_to_center(self.bounds.width, self.bounds.height);
-                    // Push Animation job for ripple fade
-                    push_job(self.widget_id, JobType::Animation);
-                    push_job(self.widget_id, JobType::Paint);
+                    // Ripple fade animation needs Animation + Paint
+                    request_job(id, JobRequest::Animation(RequiredJob::Paint));
                 }
 
                 if (was_hovered && self.hover_state.is_some())
                     || (was_pressed && self.pressed_state.is_some())
                 {
-                    // Push Animation job if there are animated properties
-                    if self.background_anim.is_some()
-                        || self.corner_radius_anim.is_some()
-                        || self.border_color_anim.is_some()
-                        || self.transform_anim.is_some()
-                    {
-                        push_job(self.widget_id, JobType::Animation);
-                    }
-                    push_job(self.widget_id, JobType::Paint);
+                    self.request_state_change_repaint(id);
                 }
             }
             Event::Scroll {
@@ -1533,13 +1573,14 @@ impl Widget for Container {
                     if self.scroll_axis != ScrollAxis::None {
                         let consumed = self.apply_scroll(*delta_x, *delta_y, *source);
                         if consumed {
-                            // Push Animation job for kinetic scrolling if has velocity
+                            // Kinetic scrolling needs Animation + Paint if has velocity
                             let has_velocity = self.scroll_state.velocity_x.abs() > 0.5
                                 || self.scroll_state.velocity_y.abs() > 0.5;
                             if has_velocity {
-                                push_job(self.widget_id, JobType::Animation);
+                                request_job(id, JobRequest::Animation(RequiredJob::Paint));
+                            } else {
+                                request_job(id, JobRequest::Paint);
                             }
-                            push_job(self.widget_id, JobType::Paint);
                             return EventResponse::Handled;
                         }
                     }
@@ -1587,15 +1628,11 @@ impl Widget for Container {
         self.bounds
     }
 
-    fn id(&self) -> WidgetId {
-        self.widget_id
+    fn has_focus_descendant(&self, tree: &Tree, focused_id: WidgetId) -> bool {
+        self.widget_has_focus(tree, focused_id)
     }
 
-    fn has_focus_descendant(&self, tree: &Tree, id: WidgetId) -> bool {
-        self.widget_has_focus(tree, id)
-    }
-
-    fn paint(&self, tree: &Tree, ctx: &mut PaintContext) {
+    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
         let background = self.animated_background(tree);
         let corner_radius = self.animated_corner_radius(tree);
         let corner_curvature = self.corner_curvature.get();
@@ -1696,12 +1733,14 @@ impl Widget for Container {
             child_ctx.set_transform(child_position);
 
             // Paint child via tree
-            tree.with_widget(child_id, |child| child.paint(tree, &mut child_ctx));
+            tree.with_widget(child_id, |child| {
+                child.paint(tree, child_id, &mut child_ctx)
+            });
         }
 
         // Draw scrollbar containers
         if is_scrollable {
-            self.paint_scrollbar_containers(tree, ctx);
+            self.paint_scrollbar_containers(tree, id, ctx);
         }
 
         // Draw ripple effect as overlay (ripple.center is already in local coordinates)

@@ -108,7 +108,6 @@ pub enum ContentFit {
 
 /// Image widget for displaying raster and SVG images.
 pub struct Image {
-    widget_id: WidgetId,
     source: MaybeDyn<ImageSource>,
     width: Option<MaybeDyn<f32>>,
     height: Option<MaybeDyn<f32>>,
@@ -124,7 +123,6 @@ impl Image {
     /// Create a new image widget from a source.
     pub fn new(source: impl IntoMaybeDyn<ImageSource>) -> Self {
         Self {
-            widget_id: WidgetId::next(),
             source: source.into_maybe_dyn(),
             width: None,
             height: None,
@@ -231,9 +229,9 @@ impl Image {
 }
 
 impl Widget for Image {
-    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size {
+    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
         // Images are never relayout boundaries
-        tree.set_relayout_boundary(self.widget_id, false);
+        tree.set_relayout_boundary(id, false);
 
         // Read source (registers layout dependencies if reactive)
         let current_source = self.source.get();
@@ -257,15 +255,15 @@ impl Widget for Image {
         self.bounds.height = size.height;
 
         // Cache constraints and size for partial layout
-        tree.cache_layout(self.widget_id, constraints, size);
+        tree.cache_layout(id, constraints, size);
 
         // Clear dirty flag since layout is complete
-        tree.clear_dirty(self.widget_id);
+        tree.clear_dirty(id);
 
         size
     }
 
-    fn paint(&self, _tree: &Tree, ctx: &mut PaintContext) {
+    fn paint(&self, _tree: &Tree, _id: WidgetId, ctx: &mut PaintContext) {
         // Draw in LOCAL coordinates (0,0 is widget origin)
         // Parent Container sets position transform
         if let Some(ref source) = self.cached_source {
@@ -274,7 +272,12 @@ impl Widget for Image {
         }
     }
 
-    fn event(&mut self, _tree: &Tree, _event: &super::widget::Event) -> EventResponse {
+    fn event(
+        &mut self,
+        _tree: &mut Tree,
+        _id: WidgetId,
+        _event: &super::widget::Event,
+    ) -> EventResponse {
         EventResponse::Ignored
     }
 
@@ -285,10 +288,6 @@ impl Widget for Image {
 
     fn bounds(&self) -> Rect {
         self.bounds
-    }
-
-    fn id(&self) -> WidgetId {
-        self.widget_id
     }
 }
 

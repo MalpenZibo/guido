@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::jobs::{JobType, push_job};
+use crate::jobs::{JobRequest, JobType, request_job};
 use crate::layout::{Constraints, Size};
 use crate::reactive::{OwnerId, dispose_owner, with_signal_tracking};
 use crate::renderer::PaintContext;
@@ -72,14 +72,16 @@ impl ChildrenSource {
     ///
     /// This should be called before layout. It recursively registers the widget tree.
     pub fn register_pending(&mut self, tree: &mut Tree, parent_id: WidgetId) {
-        for mut widget in self.pending_static.drain(..) {
-            let widget_id = widget.id();
-            // Recursively register children first
-            widget.register_children(tree);
-            // Register this widget
-            tree.register(widget_id, widget);
+        for widget in self.pending_static.drain(..) {
+            // Register this widget - tree assigns the ID
+            let widget_id = tree.register(widget);
             tree.set_parent(widget_id, parent_id);
             self.merged.push(widget_id);
+
+            // Recursively register children with the newly assigned widget ID
+            tree.with_widget_mut(widget_id, |widget, id, tree| {
+                widget.register_children(tree, id);
+            });
         }
     }
 
@@ -173,13 +175,16 @@ impl ChildrenSource {
                                 new_merged.push(widget_id);
                             } else {
                                 // Create new widget and register in tree
-                                let mut widget = (item.widget_fn)();
-                                let widget_id = widget.id();
-                                // Recursively register children first
-                                widget.register_children(tree);
-                                tree.register(widget_id, widget);
+                                let widget = (item.widget_fn)();
+                                // Register this widget - tree assigns the ID
+                                let widget_id = tree.register(widget);
                                 tree.set_parent(widget_id, parent_id);
                                 new_merged.push(widget_id);
+
+                                // Recursively register children with the newly assigned widget ID
+                                tree.with_widget_mut(widget_id, |widget, id, tree| {
+                                    widget.register_children(tree, id);
+                                });
                             }
                         }
 
@@ -277,13 +282,13 @@ impl Drop for ChildrenSource {
         // Push unregister jobs - will be processed in main loop
         // This defers the actual unregistration so Drop doesn't need tree access
         for widget_id in self.merged.drain(..) {
-            push_job(widget_id, JobType::Unregister);
+            request_job(widget_id, JobRequest::Unregister);
         }
         // Also push jobs for any widgets still in dynamic caches
         for segment in &mut self.segments {
             if let SegmentType::Dynamic { cached, .. } = segment {
                 for widget_id in cached.values() {
-                    push_job(*widget_id, JobType::Unregister);
+                    request_job(*widget_id, JobRequest::Unregister);
                 }
                 cached.clear();
             }
@@ -420,28 +425,28 @@ impl Drop for OwnedWidget {
 }
 
 impl Widget for OwnedWidget {
-    fn advance_animations(&mut self, tree: &Tree) -> bool {
-        self.inner.advance_animations(tree)
+    fn advance_animations(&mut self, tree: &Tree, id: WidgetId) -> bool {
+        self.inner.advance_animations(tree, id)
     }
 
-    fn reconcile_children(&mut self, tree: &mut Tree) -> bool {
-        self.inner.reconcile_children(tree)
+    fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
+        self.inner.reconcile_children(tree, id)
     }
 
-    fn register_children(&mut self, tree: &mut Tree) {
-        self.inner.register_children(tree)
+    fn register_children(&mut self, tree: &mut Tree, id: WidgetId) {
+        self.inner.register_children(tree, id)
     }
 
-    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size {
-        self.inner.layout(tree, constraints)
+    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
+        self.inner.layout(tree, id, constraints)
     }
 
-    fn paint(&self, tree: &Tree, ctx: &mut PaintContext) {
-        self.inner.paint(tree, ctx)
+    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
+        self.inner.paint(tree, id, ctx)
     }
 
-    fn event(&mut self, tree: &Tree, event: &Event) -> EventResponse {
-        self.inner.event(tree, event)
+    fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
+        self.inner.event(tree, id, event)
     }
 
     fn set_origin(&mut self, x: f32, y: f32) {
@@ -452,15 +457,7 @@ impl Widget for OwnedWidget {
         self.inner.bounds()
     }
 
-    fn id(&self) -> WidgetId {
-        self.inner.id()
-    }
-
-    fn has_focus_descendant(&self, tree: &Tree, id: WidgetId) -> bool {
-        self.inner.has_focus_descendant(tree, id)
-    }
-
-    fn is_relayout_boundary(&self) -> bool {
-        self.inner.is_relayout_boundary()
+    fn has_focus_descendant(&self, tree: &Tree, focused_id: WidgetId) -> bool {
+        self.inner.has_focus_descendant(tree, focused_id)
     }
 }

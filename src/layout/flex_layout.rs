@@ -178,10 +178,9 @@ impl Flex {
         let mut children_main = 0.0f32;
 
         for &child_id in children.iter() {
-            if let Some(widget_cell) = tree.get_widget_mut(child_id) {
-                let mut widget = widget_cell.borrow_mut();
-                let size = widget.layout(tree, child_constraints);
-
+            if let Some(size) = tree.with_widget_mut(child_id, |widget, id, tree| {
+                widget.layout(tree, id, child_constraints)
+            }) {
                 let main_size = size.main_axis(axis);
                 let cross_size = size.cross_axis(axis);
                 total_main += main_size;
@@ -234,11 +233,9 @@ impl Flex {
                 },
             };
             for &child_id in children.iter() {
-                let widget_cell = tree.get_widget_mut(child_id);
-                if let Some(widget_cell) = widget_cell {
-                    let mut widget = widget_cell.borrow_mut();
-
-                    let size = widget.layout(tree, stretch_constraints);
+                if let Some(size) = tree.with_widget_mut(child_id, |widget, id, tree| {
+                    widget.layout(tree, id, stretch_constraints)
+                }) {
                     children_main += size.main_axis(axis);
                     self.child_sizes.push(size);
                 }
@@ -296,7 +293,7 @@ impl Flex {
                 Axis::Vertical => (cross_pos, main_pos),
             };
 
-            tree.with_widget_mut(child_id, |child| child.set_origin(x, y));
+            tree.with_widget_mut(child_id, |child, _id, _tree| child.set_origin(x, y));
             main_pos += child_main + between_spacing;
         }
 

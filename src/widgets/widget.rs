@@ -373,23 +373,23 @@ pub trait Widget: Send + Sync {
     /// Advance animations for this widget and children.
     /// Returns true if any animations are still active and need another frame.
     /// Called once per frame before layout.
-    fn advance_animations(&mut self, tree: &Tree) -> bool {
-        let _ = tree;
+    fn advance_animations(&mut self, tree: &Tree, id: WidgetId) -> bool {
+        let _ = (tree, id);
         false
     }
 
     /// Reconcile dynamic children. Called from main loop before layout.
     /// Returns true if children changed (requires layout).
     /// Default implementation returns false (no dynamic children).
-    fn reconcile_children(&mut self, tree: &mut Tree) -> bool {
-        let _ = tree;
+    fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
+        let _ = (tree, id);
         false
     }
 
-    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size;
-    fn paint(&self, tree: &Tree, ctx: &mut PaintContext);
-    fn event(&mut self, tree: &Tree, event: &Event) -> EventResponse {
-        let _ = (tree, event);
+    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size;
+    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
+    fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
+        let _ = (tree, id, event);
         EventResponse::Ignored
     }
     fn set_origin(&mut self, x: f32, y: f32);
@@ -397,21 +397,10 @@ pub trait Widget: Send + Sync {
     /// Get the widget's bounding rectangle (for hit testing)
     fn bounds(&self) -> Rect;
 
-    /// Get the widget's unique identifier
-    fn id(&self) -> WidgetId;
-
     /// Check if this widget has a descendant with the given ID.
     /// Used by containers to check if a child has focus.
     /// Default implementation returns false (leaf widgets have no children).
     fn has_focus_descendant(&self, _tree: &Tree, _id: WidgetId) -> bool {
-        false
-    }
-
-    /// Check if this widget is a relayout boundary.
-    /// Relayout boundaries have fixed size - layout changes inside
-    /// don't affect their own size or parent layout.
-    /// Default returns false (most widgets are not boundaries).
-    fn is_relayout_boundary(&self) -> bool {
         false
     }
 
@@ -422,7 +411,7 @@ pub trait Widget: Send + Sync {
     /// this to register their pending children.
     ///
     /// Default implementation does nothing (leaf widgets have no children).
-    fn register_children(&mut self, _tree: &mut Tree) {}
+    fn register_children(&mut self, _tree: &mut Tree, _id: WidgetId) {}
 }
 
 #[cfg(test)]

@@ -43,13 +43,17 @@ impl ManagedSurface {
     pub fn new(
         id: SurfaceId,
         config: SurfaceConfig,
-        mut widget: Box<dyn Widget>,
+        widget: Box<dyn Widget>,
         tree: &mut Tree,
     ) -> Self {
-        let widget_id = widget.id();
-        // Register children first (recursively), then the root widget
-        widget.register_children(tree);
-        tree.register(widget_id, widget);
+        // Register root widget - tree assigns the ID
+        let widget_id = tree.register(widget);
+
+        // Register children recursively with the assigned widget ID
+        tree.with_widget_mut(widget_id, |widget, id, tree| {
+            widget.register_children(tree, id);
+        });
+
         Self {
             id,
             config,
@@ -113,12 +117,10 @@ impl ManagedSurface {
     pub fn layout_widget(&self, tree: &mut Tree, width: f32, height: f32) {
         let constraints = Constraints::new(0.0, 0.0, width, height);
 
-        if let Some(widget_cell) = tree.get_widget_mut(self.widget_id) {
-            let mut widget = widget_cell.borrow_mut();
-
-            widget.layout(tree, constraints);
+        tree.with_widget_mut(self.widget_id, |widget, id, tree| {
+            widget.layout(tree, id, constraints);
             widget.set_origin(0.0, 0.0);
-        }
+        });
     }
 }
 

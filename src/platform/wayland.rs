@@ -287,13 +287,21 @@ impl WaylandState {
         }
     }
 
+    /// Helper to modify a surface's layer shell properties and commit.
+    fn with_layer_surface<F>(&mut self, id: SurfaceId, f: F)
+    where
+        F: FnOnce(&LayerSurface),
+    {
+        if let Some(surface_state) = self.surfaces.get_mut(&id) {
+            f(&surface_state.layer_surface);
+            surface_state.wl_surface.commit();
+        }
+    }
+
     /// Set the layer for a surface.
     pub fn set_surface_layer(&mut self, id: SurfaceId, layer: Layer) {
-        if let Some(surface_state) = self.surfaces.get_mut(&id) {
-            surface_state.layer_surface.set_layer(layer);
-            surface_state.wl_surface.commit();
-            log::info!("Surface {:?} layer set to {:?}", id, layer);
-        }
+        self.with_layer_surface(id, |ls| ls.set_layer(layer));
+        log::info!("Surface {:?} layer set to {:?}", id, layer);
     }
 
     /// Set the keyboard interactivity for a surface.
@@ -302,38 +310,26 @@ impl WaylandState {
         id: SurfaceId,
         mode: KeyboardInteractivity,
     ) {
-        if let Some(surface_state) = self.surfaces.get_mut(&id) {
-            surface_state.layer_surface.set_keyboard_interactivity(mode);
-            surface_state.wl_surface.commit();
-            log::info!("Surface {:?} keyboard interactivity set to {:?}", id, mode);
-        }
+        self.with_layer_surface(id, |ls| ls.set_keyboard_interactivity(mode));
+        log::info!("Surface {:?} keyboard interactivity set to {:?}", id, mode);
     }
 
     /// Set the anchor edges for a surface.
     pub fn set_surface_anchor(&mut self, id: SurfaceId, anchor: Anchor) {
-        if let Some(surface_state) = self.surfaces.get_mut(&id) {
-            surface_state.layer_surface.set_anchor(anchor);
-            surface_state.wl_surface.commit();
-            log::info!("Surface {:?} anchor set to {:?}", id, anchor);
-        }
+        self.with_layer_surface(id, |ls| ls.set_anchor(anchor));
+        log::info!("Surface {:?} anchor set to {:?}", id, anchor);
     }
 
     /// Set the size of a surface.
     pub fn set_surface_size(&mut self, id: SurfaceId, width: u32, height: u32) {
-        if let Some(surface_state) = self.surfaces.get_mut(&id) {
-            surface_state.layer_surface.set_size(width, height);
-            surface_state.wl_surface.commit();
-            log::info!("Surface {:?} size set to {}x{}", id, width, height);
-        }
+        self.with_layer_surface(id, |ls| ls.set_size(width, height));
+        log::info!("Surface {:?} size set to {}x{}", id, width, height);
     }
 
     /// Set the exclusive zone for a surface.
     pub fn set_surface_exclusive_zone(&mut self, id: SurfaceId, zone: i32) {
-        if let Some(surface_state) = self.surfaces.get_mut(&id) {
-            surface_state.layer_surface.set_exclusive_zone(zone);
-            surface_state.wl_surface.commit();
-            log::info!("Surface {:?} exclusive zone set to {}", id, zone);
-        }
+        self.with_layer_surface(id, |ls| ls.set_exclusive_zone(zone));
+        log::info!("Surface {:?} exclusive zone set to {}", id, zone);
     }
 
     /// Set the margin for a surface.
@@ -345,20 +341,15 @@ impl WaylandState {
         bottom: i32,
         left: i32,
     ) {
-        if let Some(surface_state) = self.surfaces.get_mut(&id) {
-            surface_state
-                .layer_surface
-                .set_margin(top, right, bottom, left);
-            surface_state.wl_surface.commit();
-            log::info!(
-                "Surface {:?} margin set to top={}, right={}, bottom={}, left={}",
-                id,
-                top,
-                right,
-                bottom,
-                left
-            );
-        }
+        self.with_layer_surface(id, |ls| ls.set_margin(top, right, bottom, left));
+        log::info!(
+            "Surface {:?} margin set to top={}, right={}, bottom={}, left={}",
+            id,
+            top,
+            right,
+            bottom,
+            left
+        );
     }
 
     /// Get a surface state by SurfaceId.

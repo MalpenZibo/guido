@@ -17,72 +17,19 @@ use wgpu::util::DeviceExt;
 use wgpu::{
     BindGroup, BindGroupLayout, Buffer as WgpuBuffer, Device, Extent3d, MultisampleState, Queue,
     RenderPass, RenderPipeline, Sampler, Texture, TextureDescriptor, TextureDimension,
-    TextureFormat, TextureUsages, VertexAttribute, VertexBufferLayout, VertexFormat,
-    VertexStepMode,
+    TextureFormat, TextureUsages,
 };
 
+use super::constants::{TEXT_BUFFER_MARGIN_MULTIPLIER, TEXT_TEXTURE_PADDING};
+use super::textured_vertex::{TexturedVertex, to_ndc};
 use super::types::TextEntry;
 use crate::widgets::font::FontWeight;
 
 /// Quality multiplier for supersampling text textures.
 const QUALITY_MULTIPLIER: f32 = 2.0;
 
-/// Vertex with pre-computed NDC position, UV coordinates, and clip data.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct TexturedVertex {
-    /// Position in NDC (pre-computed on CPU)
-    position: [f32; 2],
-    /// Texture coordinates
-    uv: [f32; 2],
-    /// Screen position in physical pixels (for clip calculation)
-    screen_pos: [f32; 2],
-    /// Clip rect in physical pixels [x, y, width, height]
-    clip_rect: [f32; 4],
-    /// Clip parameters [corner_radius, curvature, 0, 0]
-    clip_params: [f32; 4],
-}
-
-impl TexturedVertex {
-    fn desc() -> VertexBufferLayout<'static> {
-        VertexBufferLayout {
-            array_stride: std::mem::size_of::<TexturedVertex>() as u64,
-            step_mode: VertexStepMode::Vertex,
-            attributes: &[
-                // position (NDC)
-                VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: VertexFormat::Float32x2,
-                },
-                // uv
-                VertexAttribute {
-                    offset: 8,
-                    shader_location: 1,
-                    format: VertexFormat::Float32x2,
-                },
-                // screen_pos
-                VertexAttribute {
-                    offset: 16,
-                    shader_location: 2,
-                    format: VertexFormat::Float32x2,
-                },
-                // clip_rect
-                VertexAttribute {
-                    offset: 24,
-                    shader_location: 3,
-                    format: VertexFormat::Float32x4,
-                },
-                // clip_params
-                VertexAttribute {
-                    offset: 40,
-                    shader_location: 4,
-                    format: VertexFormat::Float32x4,
-                },
-            ],
-        }
-    }
-}
+/// Margin multiplier is imported from constants
+const TEXT_MARGIN: f32 = TEXT_BUFFER_MARGIN_MULTIPLIER;
 
 /// A prepared text quad ready for rendering.
 pub struct PreparedTextQuad {
@@ -134,7 +81,7 @@ impl TextQuadRenderer {
         // Load shader from dedicated file
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("TextQuad Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("text_quad_shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("textured_quad_shader.wgsl").into()),
         });
 
         // Create texture bind group layout
@@ -256,14 +203,6 @@ impl TextQuadRenderer {
         self.screen_height = height;
     }
 
-    /// Convert screen coordinates to NDC.
-    fn to_ndc(&self, x: f32, y: f32) -> [f32; 2] {
-        [
-            (x / self.screen_width) * 2.0 - 1.0,
-            1.0 - (y / self.screen_height) * 2.0,
-        ]
-    }
-
     /// Prepare text entries for rendering as textured quads.
     pub fn prepare(
         &mut self,
@@ -304,8 +243,8 @@ impl TextQuadRenderer {
         );
 
         // Add extra margin to buffer size to account for font rendering differences at scaled sizes
-        let buffer_width = entry.rect.width * effective_scale * 1.1; // 10% extra width
-        let buffer_height = entry.rect.height * effective_scale * 1.1; // 10% extra height
+        let buffer_width = entry.rect.width * effective_scale * TEXT_MARGIN;
+        let buffer_height = entry.rect.height * effective_scale * TEXT_MARGIN;
 
         buffer.set_size(
             &mut self.font_system,
@@ -330,7 +269,7 @@ impl TextQuadRenderer {
         buffer.shape_until_scroll(&mut self.font_system, true);
 
         // Calculate texture size with padding
-        let padding = 4.0 * effective_scale;
+        let padding = TEXT_TEXTURE_PADDING * effective_scale;
         let tex_width = ((buffer_width + padding * 2.0).ceil() as u32).max(1);
         let tex_height = ((buffer_height + padding * 2.0).ceil() as u32).max(1);
 
@@ -502,28 +441,48 @@ impl TextQuadRenderer {
         // Convert to NDC and create vertices with clip data
         let vertices = [
             TexturedVertex {
-                position: self.to_ndc(screen_corners[0].0, screen_corners[0].1),
+                position: to_ndc(
+                    screen_corners[0].0,
+                    screen_corners[0].1,
+                    self.screen_width,
+                    self.screen_height,
+                ),
                 uv: [0.0, 0.0],
                 screen_pos: [screen_corners[0].0, screen_corners[0].1],
                 clip_rect,
                 clip_params,
             },
             TexturedVertex {
-                position: self.to_ndc(screen_corners[1].0, screen_corners[1].1),
+                position: to_ndc(
+                    screen_corners[1].0,
+                    screen_corners[1].1,
+                    self.screen_width,
+                    self.screen_height,
+                ),
                 uv: [1.0, 0.0],
                 screen_pos: [screen_corners[1].0, screen_corners[1].1],
                 clip_rect,
                 clip_params,
             },
             TexturedVertex {
-                position: self.to_ndc(screen_corners[2].0, screen_corners[2].1),
+                position: to_ndc(
+                    screen_corners[2].0,
+                    screen_corners[2].1,
+                    self.screen_width,
+                    self.screen_height,
+                ),
                 uv: [0.0, 1.0],
                 screen_pos: [screen_corners[2].0, screen_corners[2].1],
                 clip_rect,
                 clip_params,
             },
             TexturedVertex {
-                position: self.to_ndc(screen_corners[3].0, screen_corners[3].1),
+                position: to_ndc(
+                    screen_corners[3].0,
+                    screen_corners[3].1,
+                    self.screen_width,
+                    self.screen_height,
+                ),
                 uv: [1.0, 1.0],
                 screen_pos: [screen_corners[3].0, screen_corners[3].1],
                 clip_rect,

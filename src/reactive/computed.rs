@@ -29,6 +29,18 @@ pub struct Computed<T> {
     inner: Arc<ComputedInner<T>>,
 }
 
+impl<T: Clone + PartialEq + Send + Sync + 'static> ComputedInner<T> {
+    /// Recompute the value if dirty, updating the signal and clearing the flag.
+    fn ensure_fresh(&self) {
+        if self.dirty.get() {
+            let value =
+                with_runtime(|rt| rt.run_with_tracking(self.effect_id, || (self.compute)()));
+            self.signal.set(value);
+            self.dirty.set(false);
+        }
+    }
+}
+
 impl<T: Clone + PartialEq + Send + Sync + 'static> Computed<T> {
     pub fn new<F>(f: F) -> Self
     where
@@ -75,26 +87,12 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Computed<T> {
     }
 
     pub fn get(&self) -> T {
-        // If dirty, recompute before returning
-        if self.inner.dirty.get() {
-            let value = with_runtime(|rt| {
-                rt.run_with_tracking(self.inner.effect_id, || (self.inner.compute)())
-            });
-            self.inner.signal.set(value);
-            self.inner.dirty.set(false);
-        }
+        self.inner.ensure_fresh();
         self.inner.signal.get()
     }
 
     pub fn get_untracked(&self) -> T {
-        // If dirty, recompute before returning
-        if self.inner.dirty.get() {
-            let value = with_runtime(|rt| {
-                rt.run_with_tracking(self.inner.effect_id, || (self.inner.compute)())
-            });
-            self.inner.signal.set(value);
-            self.inner.dirty.set(false);
-        }
+        self.inner.ensure_fresh();
         self.inner.signal.get_untracked()
     }
 
@@ -102,14 +100,7 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Computed<T> {
     where
         F: FnOnce(&T) -> R,
     {
-        // If dirty, recompute before accessing
-        if self.inner.dirty.get() {
-            let value = with_runtime(|rt| {
-                rt.run_with_tracking(self.inner.effect_id, || (self.inner.compute)())
-            });
-            self.inner.signal.set(value);
-            self.inner.dirty.set(false);
-        }
+        self.inner.ensure_fresh();
         self.inner.signal.with(f)
     }
 }

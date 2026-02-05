@@ -7,6 +7,21 @@ use super::storage::{
     create_signal_value, get_signal_value, set_signal_value, update_signal_value, with_signal_value,
 };
 
+/// Common read operations for signal types.
+/// Tracks reads for effect dependencies and layout invalidation.
+fn tracked_get<T: Clone + Send + Sync + 'static>(id: SignalId) -> T {
+    try_with_runtime(|rt| rt.track_read(id));
+    record_signal_read(id);
+    get_signal_value(id)
+}
+
+/// Common read-with-borrow operation for signal types.
+fn tracked_with<T: Send + Sync + 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -> R {
+    try_with_runtime(|rt| rt.track_read(id));
+    record_signal_read(id);
+    with_signal_value(id, f)
+}
+
 /// A reactive signal that can be read and written from any thread.
 ///
 /// Signals are the core primitive of the reactive system. When a signal's
@@ -54,12 +69,7 @@ impl<T> Signal<T> {
 impl<T: Clone + Send + Sync + 'static> Signal<T> {
     /// Get the current value (tracks as dependency on main thread for effects)
     pub fn get(&self) -> T {
-        // Track reads only on main thread (for effects)
-        try_with_runtime(|rt| rt.track_read(self.id));
-        // Track layout dependencies if layout tracking is active
-        record_signal_read(self.id);
-        // Get value from global storage (works from any thread)
-        get_signal_value(self.id)
+        tracked_get(self.id)
     }
 
     /// Get the current value without tracking
@@ -69,9 +79,7 @@ impl<T: Clone + Send + Sync + 'static> Signal<T> {
 
     /// Borrow the value for reading
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        try_with_runtime(|rt| rt.track_read(self.id));
-        record_signal_read(self.id);
-        with_signal_value(self.id, f)
+        tracked_with(self.id, f)
     }
 
     /// Borrow the value without tracking
@@ -148,9 +156,7 @@ impl<T> ReadSignal<T> {
 
 impl<T: Clone + Send + Sync + 'static> ReadSignal<T> {
     pub fn get(&self) -> T {
-        try_with_runtime(|rt| rt.track_read(self.id));
-        record_signal_read(self.id);
-        get_signal_value(self.id)
+        tracked_get(self.id)
     }
 
     pub fn get_untracked(&self) -> T {
@@ -158,9 +164,7 @@ impl<T: Clone + Send + Sync + 'static> ReadSignal<T> {
     }
 
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        try_with_runtime(|rt| rt.track_read(self.id));
-        record_signal_read(self.id);
-        with_signal_value(self.id, f)
+        tracked_with(self.id, f)
     }
 
     pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {

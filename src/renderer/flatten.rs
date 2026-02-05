@@ -177,6 +177,22 @@ fn flatten_node(
     }
 }
 
+/// Compute axis-aligned bounding box from an array of points.
+fn aabb_from_points(points: &[(f32, f32)]) -> Rect {
+    let (min_x, max_x, min_y, max_y) = points.iter().fold(
+        (
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ),
+        |(min_x, max_x, min_y, max_y), &(x, y)| {
+            (min_x.min(x), max_x.max(x), min_y.min(y), max_y.max(y))
+        },
+    );
+    Rect::new(min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
 /// Transform a local clip region to world space (axis-aligned bounding box).
 ///
 /// When the transform includes rotation, the clip becomes the AABB of
@@ -194,30 +210,12 @@ fn transform_clip_to_world(clip: &ClipRegion, transform: &Transform) -> WorldCli
         ),
     ];
 
-    let min_x = corners
-        .iter()
-        .map(|(x, _)| *x)
-        .fold(f32::INFINITY, f32::min);
-    let max_x = corners
-        .iter()
-        .map(|(x, _)| *x)
-        .fold(f32::NEG_INFINITY, f32::max);
-    let min_y = corners
-        .iter()
-        .map(|(_, y)| *y)
-        .fold(f32::INFINITY, f32::min);
-    let max_y = corners
-        .iter()
-        .map(|(_, y)| *y)
-        .fold(f32::NEG_INFINITY, f32::max);
-
     // Scale corner radius by transform scale
     let scale = transform.extract_scale();
-    let scaled_radius = clip.corner_radius * scale;
 
     WorldClip {
-        rect: Rect::new(min_x, min_y, max_x - min_x, max_y - min_y),
-        corner_radius: scaled_radius,
+        rect: aabb_from_points(&corners),
+        corner_radius: clip.corner_radius * scale,
         curvature: clip.curvature,
     }
 }
