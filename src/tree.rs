@@ -52,6 +52,14 @@ impl WidgetId {
     pub fn as_u64(self) -> u64 {
         ((self.generation as u64) << 32) | (self.index as u64)
     }
+
+    /// Reconstruct a WidgetId from a u64 (reverse of `as_u64`).
+    pub fn from_u64(val: u64) -> Self {
+        Self {
+            index: val as u32,
+            generation: (val >> 32) as u32,
+        }
+    }
 }
 
 /// Entry in the sparse map, pointing to a dense array slot.
@@ -72,6 +80,8 @@ struct Node {
     children: Vec<WidgetId>,
     /// Whether this widget needs layout
     is_dirty: bool,
+    /// Whether this widget needs paint
+    needs_paint: bool,
     /// Whether this widget is a relayout boundary
     is_relayout_boundary: bool,
     /// Cached constraints from last layout
@@ -82,6 +92,8 @@ struct Node {
     origin: (f32, f32),
     /// Back-pointer to sparse array index (for swap-remove fixup)
     sparse_index: u32,
+    /// Cached paint output from last frame
+    cached_paint: Option<crate::renderer::RenderNode>,
 }
 
 /// Central tree for widget storage using arena-based sparse-set architecture.
@@ -139,11 +151,13 @@ impl Tree {
             parent: None,
             children: Vec::new(),
             is_dirty: false,
+            needs_paint: true,
             is_relayout_boundary: false,
             cached_constraints: None,
             cached_size: None,
             origin: (0.0, 0.0),
             sparse_index,
+            cached_paint: None,
         });
 
         // Update sparse map
@@ -342,6 +356,54 @@ impl Tree {
             .unwrap_or(false)
     }
 
+    /// Mark a widget as needing paint, propagating up to the root.
+    ///
+    /// Similar to `mark_needs_layout`, this bubbles the paint-dirty flag
+    /// upward so that ancestors know to repaint. Early-exits if a node
+    /// is already marked (its ancestors must already be marked too).
+    pub fn mark_needs_paint(&mut self, widget_id: WidgetId) {
+        let mut current = widget_id;
+        loop {
+            let Some(dense_idx) = self.get_dense_index(current) else {
+                return;
+            };
+            if self.dense[dense_idx].needs_paint {
+                return; // Already marked — ancestors are too
+            }
+            self.dense[dense_idx].needs_paint = true;
+            match self.dense[dense_idx].parent {
+                Some(parent) => current = parent,
+                None => return,
+            }
+        }
+    }
+
+    /// Clear the needs-paint flag for a widget.
+    pub fn clear_needs_paint(&mut self, id: WidgetId) {
+        if let Some(idx) = self.get_dense_index(id) {
+            self.dense[idx].needs_paint = false;
+        }
+    }
+
+    /// Check if a widget needs paint.
+    pub fn needs_paint(&self, id: WidgetId) -> bool {
+        self.get_dense_index(id)
+            .map(|idx| self.dense[idx].needs_paint)
+            .unwrap_or(true) // Default to true for unknown widgets
+    }
+
+    /// Mark a widget and all its descendants as needing paint.
+    pub fn mark_subtree_needs_paint(&mut self, widget_id: WidgetId) {
+        let Some(dense_idx) = self.get_dense_index(widget_id) else {
+            return;
+        };
+        self.dense[dense_idx].needs_paint = true;
+        let children = self.dense[dense_idx].children.clone();
+        for child_id in children {
+            self.mark_subtree_needs_paint(child_id);
+        }
+    }
+
     /// Set whether a widget is a relayout boundary.
     pub fn set_relayout_boundary(&mut self, id: WidgetId, is_boundary: bool) {
         if let Some(idx) = self.get_dense_index(id) {
@@ -399,6 +461,19 @@ impl Tree {
             size.width,
             size.height,
         ))
+    }
+
+    /// Cache a widget's paint output.
+    pub fn cache_paint(&mut self, id: WidgetId, node: crate::renderer::RenderNode) {
+        if let Some(idx) = self.get_dense_index(id) {
+            self.dense[idx].cached_paint = Some(node);
+        }
+    }
+
+    /// Get a widget's cached paint output.
+    pub fn cached_paint(&self, id: WidgetId) -> Option<&crate::renderer::RenderNode> {
+        self.get_dense_index(id)
+            .and_then(|idx| self.dense[idx].cached_paint.as_ref())
     }
 
     /// Clear all widgets and metadata.
@@ -594,5 +669,97 @@ mod tests {
         // We should still be able to access them
         assert!(tree.with_widget(id2, |_| ()).is_some());
         assert!(tree.with_widget(id3, |_| ()).is_some());
+    }
+
+    #[test]
+    fn test_widget_id_from_u64_roundtrip() {
+        let id = WidgetId::new(42, 7);
+        let val = id.as_u64();
+        let id2 = WidgetId::from_u64(val);
+        assert_eq!(id, id2);
+    }
+
+    #[test]
+    fn test_new_widget_needs_paint() {
+        let mut tree = Tree::new();
+        let id = tree.register(Box::new(MockWidget::new()));
+        assert!(tree.needs_paint(id));
+    }
+
+    #[test]
+    fn test_needs_paint_propagation() {
+        let mut tree = Tree::new();
+        let root_id = tree.register(Box::new(MockWidget::new()));
+        let child_id = tree.register(Box::new(MockWidget::new()));
+        let grandchild_id = tree.register(Box::new(MockWidget::new()));
+
+        tree.set_parent(child_id, root_id);
+        tree.set_parent(grandchild_id, child_id);
+
+        // Clear all paint flags
+        tree.clear_needs_paint(root_id);
+        tree.clear_needs_paint(child_id);
+        tree.clear_needs_paint(grandchild_id);
+
+        assert!(!tree.needs_paint(root_id));
+        assert!(!tree.needs_paint(child_id));
+        assert!(!tree.needs_paint(grandchild_id));
+
+        // Mark grandchild - should propagate to root
+        tree.mark_needs_paint(grandchild_id);
+        assert!(tree.needs_paint(grandchild_id));
+        assert!(tree.needs_paint(child_id));
+        assert!(tree.needs_paint(root_id));
+    }
+
+    #[test]
+    fn test_needs_paint_early_exit() {
+        let mut tree = Tree::new();
+        let root_id = tree.register(Box::new(MockWidget::new()));
+        let child_id = tree.register(Box::new(MockWidget::new()));
+
+        tree.set_parent(child_id, root_id);
+
+        // Clear all
+        tree.clear_needs_paint(root_id);
+        tree.clear_needs_paint(child_id);
+
+        // Mark child → root marked
+        tree.mark_needs_paint(child_id);
+        assert!(tree.needs_paint(root_id));
+
+        // Clear child but leave root marked
+        tree.clear_needs_paint(child_id);
+
+        // Mark child again — should early-exit at root (already marked)
+        tree.mark_needs_paint(child_id);
+        assert!(tree.needs_paint(child_id));
+        assert!(tree.needs_paint(root_id));
+    }
+
+    #[test]
+    fn test_mark_subtree_needs_paint() {
+        let mut tree = Tree::new();
+        let root_id = tree.register(Box::new(MockWidget::new()));
+        let child1_id = tree.register(Box::new(MockWidget::new()));
+        let child2_id = tree.register(Box::new(MockWidget::new()));
+        let grandchild_id = tree.register(Box::new(MockWidget::new()));
+
+        tree.set_parent(child1_id, root_id);
+        tree.set_parent(child2_id, root_id);
+        tree.set_parent(grandchild_id, child1_id);
+
+        // Clear all
+        tree.clear_needs_paint(root_id);
+        tree.clear_needs_paint(child1_id);
+        tree.clear_needs_paint(child2_id);
+        tree.clear_needs_paint(grandchild_id);
+
+        // Mark subtree at root — all should be marked
+        tree.mark_subtree_needs_paint(root_id);
+        assert!(tree.needs_paint(root_id));
+        assert!(tree.needs_paint(child1_id));
+        assert!(tree.needs_paint(child2_id));
+        assert!(tree.needs_paint(grandchild_id));
     }
 }
