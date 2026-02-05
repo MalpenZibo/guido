@@ -213,7 +213,7 @@ All widgets implement this trait:
 pub trait Widget: Send + Sync {
     /// Advance animations for this widget and children.
     /// Returns true if any animations are still active.
-    fn advance_animations(&mut self, tree: &Tree, id: WidgetId) -> bool { false }
+    fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool { false }
 
     /// Reconcile dynamic children. Returns true if children changed.
     fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool { false }
@@ -221,7 +221,7 @@ pub trait Widget: Send + Sync {
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size;
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse;
-    fn set_origin(&mut self, x: f32, y: f32);
+    fn set_origin(&mut self, tree: &mut Tree, id: WidgetId, x: f32, y: f32);
     fn bounds(&self) -> Rect;
 
     /// Check if a descendant has the given ID (for focus tracking)

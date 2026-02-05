@@ -119,7 +119,7 @@ impl ManagedSurface {
 
         tree.with_widget_mut(self.widget_id, |widget, id, tree| {
             widget.layout(tree, id, constraints);
-            widget.set_origin(0.0, 0.0);
+            widget.set_origin(tree, id, 0.0, 0.0);
         });
     }
 }

@@ -281,7 +281,8 @@ impl Widget for Image {
         EventResponse::Ignored
     }
 
-    fn set_origin(&mut self, x: f32, y: f32) {
+    fn set_origin(&mut self, tree: &mut Tree, id: WidgetId, x: f32, y: f32) {
+        tree.set_origin(id, x, y);
         self.bounds.x = x;
         self.bounds.y = y;
     }

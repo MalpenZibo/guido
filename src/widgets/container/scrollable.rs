@@ -175,7 +175,7 @@ impl Container {
                 max_height: track_rect.height,
             };
             Widget::layout(track.as_mut(), tree, id, track_constraints);
-            track.set_origin(track_rect.x, track_rect.y);
+            track.set_origin(tree, WidgetId::UNREGISTERED, track_rect.x, track_rect.y);
 
             // Set scale transform
             let (transform, origin) = match axis {
@@ -201,7 +201,7 @@ impl Container {
                 max_height: handle_rect.height,
             };
             Widget::layout(handle.as_mut(), tree, id, handle_constraints);
-            handle.set_origin(handle_rect.x, handle_rect.y);
+            handle.set_origin(tree, WidgetId::UNREGISTERED, handle_rect.x, handle_rect.y);
 
             // Set scale transform
             let (transform, origin) = match axis {
@@ -344,7 +344,7 @@ impl Container {
     /// Update scrollbar handle positions based on current scroll offset.
     /// Called from advance_animations to ensure handles are positioned correctly
     /// even when layout doesn't run (scroll is paint-only).
-    pub(super) fn update_scrollbar_handle_positions(&mut self) {
+    pub(super) fn update_scrollbar_handle_positions(&mut self, tree: &mut Tree) {
         if self.scroll_axis == ScrollAxis::None
             || self.scrollbar_visibility == ScrollbarVisibility::Hidden
         {
@@ -365,7 +365,7 @@ impl Container {
                 &self.scrollbar_config,
                 needs_horizontal,
             );
-            handle.set_origin(handle_rect.x, handle_rect.y);
+            handle.set_origin(tree, WidgetId::UNREGISTERED, handle_rect.x, handle_rect.y);
         }
 
         // Update horizontal scrollbar handle position
@@ -379,13 +379,13 @@ impl Container {
                 &self.scrollbar_config,
                 needs_vertical,
             );
-            handle.set_origin(handle_rect.x, handle_rect.y);
+            handle.set_origin(tree, WidgetId::UNREGISTERED, handle_rect.x, handle_rect.y);
         }
     }
 
     /// Update scrollbar container origins after the container's position changes.
     /// Called from set_origin to ensure scrollbar track and handle are positioned correctly.
-    pub(super) fn update_scrollbar_origins(&mut self) {
+    pub(super) fn update_scrollbar_origins(&mut self, tree: &mut Tree) {
         if self.scroll_axis == ScrollAxis::None
             || self.scrollbar_visibility == ScrollbarVisibility::Hidden
         {
@@ -411,10 +411,10 @@ impl Container {
             );
 
             if let Some(ref mut track) = self.v_scrollbar_track {
-                track.set_origin(track_rect.x, track_rect.y);
+                track.set_origin(tree, WidgetId::UNREGISTERED, track_rect.x, track_rect.y);
             }
             if let Some(ref mut handle) = self.v_scrollbar_handle {
-                handle.set_origin(handle_rect.x, handle_rect.y);
+                handle.set_origin(tree, WidgetId::UNREGISTERED, handle_rect.x, handle_rect.y);
             }
         }
 
@@ -434,10 +434,10 @@ impl Container {
             );
 
             if let Some(ref mut track) = self.h_scrollbar_track {
-                track.set_origin(track_rect.x, track_rect.y);
+                track.set_origin(tree, WidgetId::UNREGISTERED, track_rect.x, track_rect.y);
             }
             if let Some(ref mut handle) = self.h_scrollbar_handle {
-                handle.set_origin(handle_rect.x, handle_rect.y);
+                handle.set_origin(tree, WidgetId::UNREGISTERED, handle_rect.x, handle_rect.y);
             }
         }
     }

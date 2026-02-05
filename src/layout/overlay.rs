@@ -38,7 +38,7 @@ impl Layout for Overlay {
         for &child_id in children.iter() {
             if let Some(child_size) = tree.with_widget_mut(child_id, |widget, id, tree| {
                 let size = widget.layout(tree, id, constraints);
-                widget.set_origin(origin.0, origin.1);
+                widget.set_origin(tree, id, origin.0, origin.1);
                 size
             }) {
                 max_width = max_width.max(child_size.width);

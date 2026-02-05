@@ -931,7 +931,7 @@ impl Default for Container {
 }
 
 impl Widget for Container {
-    fn advance_animations(&mut self, tree: &Tree, id: WidgetId) -> bool {
+    fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         // Use advance_animations_self for this widget's animations
         let mut any_animating = false;
 
@@ -1043,7 +1043,7 @@ impl Widget for Container {
         // Update scrollbar handle positions based on current scroll offset
         // (scroll is paint-only, so layout may not run during scrolling)
         if self.scroll_axis != ScrollAxis::None {
-            self.update_scrollbar_handle_positions();
+            self.update_scrollbar_handle_positions(tree);
         }
 
         // Advance scrollbar scale animations (for hover expansion effect)
@@ -1598,7 +1598,10 @@ impl Widget for Container {
         EventResponse::Ignored
     }
 
-    fn set_origin(&mut self, x: f32, y: f32) {
+    fn set_origin(&mut self, tree: &mut Tree, id: WidgetId, x: f32, y: f32) {
+        // Store origin in tree
+        tree.set_origin(id, x, y);
+
         // Calculate delta from previous position
         let dx = x - self.bounds.x;
         let dy = y - self.bounds.y;
@@ -1620,7 +1623,7 @@ impl Widget for Container {
         // Scrollbar layout calculates positions using self.bounds, but bounds.x/y are
         // only set correctly after set_origin is called by the parent.
         if self.scroll_axis != ScrollAxis::None {
-            self.update_scrollbar_origins();
+            self.update_scrollbar_origins(tree);
         }
     }
 

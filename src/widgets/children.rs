@@ -425,7 +425,7 @@ impl Drop for OwnedWidget {
 }
 
 impl Widget for OwnedWidget {
-    fn advance_animations(&mut self, tree: &Tree, id: WidgetId) -> bool {
+    fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         self.inner.advance_animations(tree, id)
     }
 
@@ -449,8 +449,8 @@ impl Widget for OwnedWidget {
         self.inner.event(tree, id, event)
     }
 
-    fn set_origin(&mut self, x: f32, y: f32) {
-        self.inner.set_origin(x, y)
+    fn set_origin(&mut self, tree: &mut Tree, id: WidgetId, x: f32, y: f32) {
+        self.inner.set_origin(tree, id, x, y)
     }
 
     fn bounds(&self) -> Rect {

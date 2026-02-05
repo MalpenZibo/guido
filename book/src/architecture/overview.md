@@ -115,12 +115,11 @@ All widgets implement:
 
 ```rust
 pub trait Widget: Send + Sync {
-    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size;
-    fn paint(&self, tree: &Tree, ctx: &mut PaintContext);
-    fn event(&mut self, tree: &Tree, event: &Event) -> EventResponse;
-    fn set_origin(&mut self, x: f32, y: f32);
+    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size;
+    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
+    fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse;
+    fn set_origin(&mut self, tree: &mut Tree, id: WidgetId, x: f32, y: f32);
     fn bounds(&self) -> Rect;
-    fn id(&self) -> WidgetId;
 }
 ```
 

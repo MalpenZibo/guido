@@ -373,7 +373,7 @@ pub trait Widget: Send + Sync {
     /// Advance animations for this widget and children.
     /// Returns true if any animations are still active and need another frame.
     /// Called once per frame before layout.
-    fn advance_animations(&mut self, tree: &Tree, id: WidgetId) -> bool {
+    fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         let _ = (tree, id);
         false
     }
@@ -392,9 +392,19 @@ pub trait Widget: Send + Sync {
         let _ = (tree, id, event);
         EventResponse::Ignored
     }
-    fn set_origin(&mut self, x: f32, y: f32);
 
-    /// Get the widget's bounding rectangle (for hit testing)
+    /// Set the widget's position (called by parent after layout).
+    ///
+    /// Implementations should:
+    /// 1. Store the origin in the Tree via `tree.set_origin(id, x, y)`
+    /// 2. Cache locally if needed for internal calculations
+    fn set_origin(&mut self, tree: &mut Tree, id: WidgetId, x: f32, y: f32);
+
+    /// Get the widget's bounding rectangle (for hit testing).
+    ///
+    /// Note: For widgets in the Tree, prefer `tree.get_bounds(id)` when available.
+    /// This method is kept for internal widgets (like scrollbars) that aren't
+    /// registered in the Tree.
     fn bounds(&self) -> Rect;
 
     /// Check if this widget has a descendant with the given ID.
