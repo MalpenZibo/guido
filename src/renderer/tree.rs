@@ -38,6 +38,11 @@ pub struct RenderNode {
     /// Transform relative to parent (identity by default)
     pub local_transform: Transform,
 
+    /// The position transform set by the parent (before user transforms).
+    /// Used for cache reuse: when reusing a cached node with a new parent
+    /// position, we can extract the user transform part and recompose.
+    pub parent_position: Transform,
+
     /// Transform origin for local_transform
     pub transform_origin: TransformOrigin,
 
@@ -71,6 +76,7 @@ impl RenderNode {
         Self {
             id,
             local_transform: Transform::IDENTITY,
+            parent_position: Transform::IDENTITY,
             transform_origin: TransformOrigin::CENTER,
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
             commands: Vec::new(),
@@ -84,7 +90,6 @@ impl RenderNode {
     /// Create a new render node with bounds.
     pub fn with_bounds(id: NodeId, bounds: Rect) -> Self {
         Self {
-            id,
             bounds,
             ..Self::new(id)
         }
@@ -93,6 +98,7 @@ impl RenderNode {
     /// Clear all commands and children for reuse.
     pub fn clear(&mut self) {
         self.local_transform = Transform::IDENTITY;
+        self.parent_position = Transform::IDENTITY;
         self.transform_origin = TransformOrigin::CENTER;
         self.commands.clear();
         self.children.clear();
