@@ -1632,7 +1632,7 @@ impl Widget for Container {
         self.widget_has_focus(tree, focused_id)
     }
 
-    fn paint(&self, tree: &Tree, _id: WidgetId, ctx: &mut PaintContext) {
+    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
         let background = self.animated_background(tree);
         let corner_radius = self.animated_corner_radius(tree);
         let corner_curvature = self.corner_curvature.get();
@@ -1740,7 +1740,7 @@ impl Widget for Container {
 
         // Draw scrollbar containers
         if is_scrollable {
-            self.paint_scrollbar_containers(tree, ctx);
+            self.paint_scrollbar_containers(tree, id, ctx);
         }
 
         // Draw ripple effect as overlay (ripple.center is already in local coordinates)

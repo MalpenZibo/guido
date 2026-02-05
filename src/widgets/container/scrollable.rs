@@ -443,18 +443,19 @@ impl Container {
     }
 
     /// Paint scrollbar container widgets.
-    /// Note: scrollbar containers are not registered in tree, so we use a placeholder id.
-    pub(super) fn paint_scrollbar_containers(&self, tree: &Tree, ctx: &mut PaintContext) {
+    /// Scrollbar containers use the parent container's ID since they're logically part of it.
+    pub(super) fn paint_scrollbar_containers(
+        &self,
+        tree: &Tree,
+        id: WidgetId,
+        ctx: &mut PaintContext,
+    ) {
         use crate::transform::Transform;
         use crate::widgets::Rect;
 
         if self.scrollbar_visibility == ScrollbarVisibility::Hidden {
             return;
         }
-
-        // Scrollbar containers don't have their own IDs (not registered in tree).
-        // Use a dummy ID - paint doesn't use it for scrollbars since they don't have children.
-        let dummy_id = WidgetId::from_raw(0, 0);
 
         // Vertical scrollbar
         if self.scroll_axis.allows_vertical() && self.scroll_state.needs_vertical_scrollbar() {
@@ -467,7 +468,7 @@ impl Container {
 
                 let mut track_ctx = ctx.add_child(0, track_local);
                 track_ctx.set_transform(Transform::translate(track_offset_x, track_offset_y));
-                track.paint(tree, dummy_id, &mut track_ctx);
+                track.paint(tree, id, &mut track_ctx);
             }
             if let Some(ref handle) = self.v_scrollbar_handle {
                 let handle_global = handle.bounds();
@@ -477,7 +478,7 @@ impl Container {
 
                 let mut handle_ctx = ctx.add_child(0, handle_local);
                 handle_ctx.set_transform(Transform::translate(handle_offset_x, handle_offset_y));
-                handle.paint(tree, dummy_id, &mut handle_ctx);
+                handle.paint(tree, id, &mut handle_ctx);
             }
         }
 
@@ -491,7 +492,7 @@ impl Container {
 
                 let mut track_ctx = ctx.add_child(0, track_local);
                 track_ctx.set_transform(Transform::translate(track_offset_x, track_offset_y));
-                track.paint(tree, dummy_id, &mut track_ctx);
+                track.paint(tree, id, &mut track_ctx);
             }
             if let Some(ref handle) = self.h_scrollbar_handle {
                 let handle_global = handle.bounds();
@@ -501,7 +502,7 @@ impl Container {
 
                 let mut handle_ctx = ctx.add_child(0, handle_local);
                 handle_ctx.set_transform(Transform::translate(handle_offset_x, handle_offset_y));
-                handle.paint(tree, dummy_id, &mut handle_ctx);
+                handle.paint(tree, id, &mut handle_ctx);
             }
         }
     }

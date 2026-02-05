@@ -47,12 +47,6 @@ impl WidgetId {
         Self { index, generation }
     }
 
-    /// Create a WidgetId from raw index and generation values.
-    /// Used internally for non-tree widgets like scrollbar containers.
-    pub fn from_raw(index: u32, generation: u32) -> Self {
-        Self { index, generation }
-    }
-
     /// Convert to a u64 for external use (e.g., render layer IDs).
     /// Combines generation (high bits) with index (low bits).
     pub fn as_u64(self) -> u64 {
