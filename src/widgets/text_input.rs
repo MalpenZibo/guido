@@ -189,8 +189,6 @@ impl Selection {
 }
 
 pub struct TextInput {
-    widget_id: WidgetId,
-
     // Content (actual value, never masked)
     /// Signal for two-way binding
     value: Signal<String>,
@@ -265,8 +263,6 @@ impl TextInput {
         let cached_char_count = cached_value.chars().count();
         let default_family = default_font_family();
         Self {
-            // widget_id will be assigned by Tree::register()
-            widget_id: WidgetId::placeholder(),
             value: signal,
             cached_value,
             cached_char_count,
@@ -504,8 +500,8 @@ impl TextInput {
     }
 
     /// Update cursor blink state
-    fn update_cursor_blink(&mut self) {
-        if has_focus(self.widget_id) {
+    fn update_cursor_blink(&mut self, id: WidgetId) {
+        if has_focus(id) {
             let now = Instant::now();
             if now.duration_since(self.last_cursor_toggle) >= Duration::from_millis(CURSOR_BLINK_MS)
             {
@@ -513,7 +509,7 @@ impl TextInput {
                 self.last_cursor_toggle = now;
             }
             // Keep requesting frames for blinking
-            request_job(self.widget_id, JobRequest::Paint);
+            request_job(id, JobRequest::Paint);
         }
     }
 
@@ -524,8 +520,8 @@ impl TextInput {
     }
 
     /// Handle key repeat for held keys
-    fn handle_key_repeat(&mut self) {
-        if !has_focus(self.widget_id) {
+    fn handle_key_repeat(&mut self, id: WidgetId) {
+        if !has_focus(id) {
             self.pressed_key = None;
             return;
         }
@@ -545,7 +541,7 @@ impl TextInput {
             }
 
             // Keep requesting frames while a key is held
-            request_job(self.widget_id, JobRequest::Paint);
+            request_job(id, JobRequest::Paint);
         }
     }
 
@@ -986,19 +982,19 @@ impl TextInput {
 }
 
 impl Widget for TextInput {
-    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size {
+    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
         // Text inputs are never relayout boundaries
-        tree.set_relayout_boundary(self.widget_id, false);
+        tree.set_relayout_boundary(id, false);
 
         // Refresh cached values from reactive properties
         // This reads signals and registers layout dependencies
         self.refresh();
 
         // Update cursor blink if focused
-        self.update_cursor_blink();
+        self.update_cursor_blink(id);
 
         // Handle key repeat for held keys
-        self.handle_key_repeat();
+        self.handle_key_repeat(id);
 
         // Update measurement cache (has internal dirty check)
         self.update_measurements();
@@ -1025,20 +1021,20 @@ impl Widget for TextInput {
         self.bounds.height = size.height;
 
         // Cache constraints and size for partial layout
-        tree.cache_layout(self.widget_id, constraints, size);
+        tree.cache_layout(id, constraints, size);
 
         // Clear dirty flag since layout is complete
-        tree.clear_dirty(self.widget_id);
+        tree.clear_dirty(id);
 
         size
     }
 
-    fn paint(&self, _tree: &Tree, ctx: &mut PaintContext) {
+    fn paint(&self, _tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
         // Draw in LOCAL coordinates (0,0 is widget origin)
         // Parent Container sets position transform
         let display = self.display_text_cached();
         let text_color = self.text_color.get();
-        let is_focused = has_focus(self.widget_id);
+        let is_focused = has_focus(id);
 
         // TODO: Clipping temporarily disabled - will be re-implemented in a future PR
 
@@ -1081,13 +1077,13 @@ impl Widget for TextInput {
         }
     }
 
-    fn event(&mut self, _tree: &mut Tree, event: &Event) -> EventResponse {
+    fn event(&mut self, _tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
         match event {
             Event::MouseDown { x, y, button } => {
                 if self.bounds.contains(*x, *y) && *button == MouseButton::Left {
                     // Request focus
-                    request_focus(self.widget_id);
-                    request_job(self.widget_id, JobRequest::Paint);
+                    request_focus(id);
+                    request_job(id, JobRequest::Paint);
 
                     // Set cursor position
                     let char_index = self.char_index_at_x(*x);
@@ -1116,7 +1112,7 @@ impl Widget for TextInput {
                     let char_index = self.char_index_at_x(*x);
                     self.selection.cursor = char_index;
                     self.ensure_cursor_visible();
-                    request_job(self.widget_id, JobRequest::Paint);
+                    request_job(id, JobRequest::Paint);
                     return EventResponse::Handled;
                 }
             }
@@ -1127,7 +1123,7 @@ impl Widget for TextInput {
                 }
             }
             Event::KeyDown { key, modifiers } => {
-                if has_focus(self.widget_id) {
+                if has_focus(id) {
                     // Track key for repeat
                     let now = Instant::now();
                     self.pressed_key = Some((*key, *modifiers));
@@ -1136,7 +1132,7 @@ impl Widget for TextInput {
 
                     let response = self.handle_key(key, modifiers.ctrl, modifiers.shift);
                     if response == EventResponse::Handled {
-                        request_job(self.widget_id, JobRequest::Paint);
+                        request_job(id, JobRequest::Paint);
                     }
                     return response;
                 }
@@ -1150,11 +1146,11 @@ impl Widget for TextInput {
                 }
             }
             Event::FocusOut => {
-                if has_focus(self.widget_id) {
-                    release_focus(self.widget_id);
+                if has_focus(id) {
+                    release_focus(id);
                     self.cursor_visible = false;
                     self.is_dragging = false;
-                    request_job(self.widget_id, JobRequest::Paint);
+                    request_job(id, JobRequest::Paint);
                 }
             }
             Event::MouseLeave => {
@@ -1176,14 +1172,6 @@ impl Widget for TextInput {
 
     fn bounds(&self) -> Rect {
         self.bounds
-    }
-
-    fn id(&self) -> WidgetId {
-        self.widget_id
-    }
-
-    fn set_id(&mut self, id: WidgetId) {
-        self.widget_id = id;
     }
 }
 

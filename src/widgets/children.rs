@@ -72,13 +72,16 @@ impl ChildrenSource {
     ///
     /// This should be called before layout. It recursively registers the widget tree.
     pub fn register_pending(&mut self, tree: &mut Tree, parent_id: WidgetId) {
-        for mut widget in self.pending_static.drain(..) {
-            // Recursively register children first
-            widget.register_children(tree);
+        for widget in self.pending_static.drain(..) {
             // Register this widget - tree assigns the ID
             let widget_id = tree.register(widget);
             tree.set_parent(widget_id, parent_id);
             self.merged.push(widget_id);
+
+            // Recursively register children with the newly assigned widget ID
+            tree.with_widget_mut(widget_id, |widget, id, tree| {
+                widget.register_children(tree, id);
+            });
         }
     }
 
@@ -172,13 +175,16 @@ impl ChildrenSource {
                                 new_merged.push(widget_id);
                             } else {
                                 // Create new widget and register in tree
-                                let mut widget = (item.widget_fn)();
-                                // Recursively register children first
-                                widget.register_children(tree);
+                                let widget = (item.widget_fn)();
                                 // Register this widget - tree assigns the ID
                                 let widget_id = tree.register(widget);
                                 tree.set_parent(widget_id, parent_id);
                                 new_merged.push(widget_id);
+
+                                // Recursively register children with the newly assigned widget ID
+                                tree.with_widget_mut(widget_id, |widget, id, tree| {
+                                    widget.register_children(tree, id);
+                                });
                             }
                         }
 
@@ -419,28 +425,28 @@ impl Drop for OwnedWidget {
 }
 
 impl Widget for OwnedWidget {
-    fn advance_animations(&mut self, tree: &Tree) -> bool {
-        self.inner.advance_animations(tree)
+    fn advance_animations(&mut self, tree: &Tree, id: WidgetId) -> bool {
+        self.inner.advance_animations(tree, id)
     }
 
-    fn reconcile_children(&mut self, tree: &mut Tree) -> bool {
-        self.inner.reconcile_children(tree)
+    fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
+        self.inner.reconcile_children(tree, id)
     }
 
-    fn register_children(&mut self, tree: &mut Tree) {
-        self.inner.register_children(tree)
+    fn register_children(&mut self, tree: &mut Tree, id: WidgetId) {
+        self.inner.register_children(tree, id)
     }
 
-    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size {
-        self.inner.layout(tree, constraints)
+    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
+        self.inner.layout(tree, id, constraints)
     }
 
-    fn paint(&self, tree: &Tree, ctx: &mut PaintContext) {
-        self.inner.paint(tree, ctx)
+    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
+        self.inner.paint(tree, id, ctx)
     }
 
-    fn event(&mut self, tree: &mut Tree, event: &Event) -> EventResponse {
-        self.inner.event(tree, event)
+    fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
+        self.inner.event(tree, id, event)
     }
 
     fn set_origin(&mut self, x: f32, y: f32) {
@@ -451,16 +457,8 @@ impl Widget for OwnedWidget {
         self.inner.bounds()
     }
 
-    fn id(&self) -> WidgetId {
-        self.inner.id()
-    }
-
-    fn set_id(&mut self, id: WidgetId) {
-        self.inner.set_id(id);
-    }
-
-    fn has_focus_descendant(&self, tree: &Tree, id: WidgetId) -> bool {
-        self.inner.has_focus_descendant(tree, id)
+    fn has_focus_descendant(&self, tree: &Tree, focused_id: WidgetId) -> bool {
+        self.inner.has_focus_descendant(tree, focused_id)
     }
 
     fn is_relayout_boundary(&self) -> bool {

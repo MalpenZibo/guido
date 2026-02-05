@@ -36,8 +36,8 @@ impl Layout for Overlay {
 
         // Layout all children at the same origin, giving them the full constraints
         for &child_id in children.iter() {
-            if let Some(child_size) = tree.with_widget_mut(child_id, |widget, tree| {
-                let size = widget.layout(tree, constraints);
+            if let Some(child_size) = tree.with_widget_mut(child_id, |widget, id, tree| {
+                let size = widget.layout(tree, id, constraints);
                 widget.set_origin(origin.0, origin.1);
                 size
             }) {

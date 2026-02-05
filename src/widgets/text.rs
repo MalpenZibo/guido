@@ -9,7 +9,6 @@ use super::font::{FontFamily, FontWeight};
 use super::widget::{Color, EventResponse, Rect, Widget};
 
 pub struct Text {
-    widget_id: WidgetId,
     content: MaybeDyn<String>,
     color: MaybeDyn<Color>,
     font_size: MaybeDyn<f32>,
@@ -33,8 +32,6 @@ impl Text {
         // The cached_text will be populated during the first layout via refresh().
         let default_family = default_font_family();
         Self {
-            // widget_id will be assigned by Tree::register()
-            widget_id: WidgetId::placeholder(),
             content,
             color: MaybeDyn::Static(Color::WHITE),
             font_size: MaybeDyn::Static(14.0),
@@ -117,8 +114,8 @@ impl Text {
     /// Refresh cached values from reactive properties.
     /// Uses signal tracking to register layout dependencies so the widget
     /// is re-laid out when any of these signals change.
-    fn refresh(&mut self) {
-        with_signal_tracking(self.widget_id, JobType::Layout, || {
+    fn refresh(&mut self, id: WidgetId) {
+        with_signal_tracking(id, JobType::Layout, || {
             self.cached_text = self.content.get();
             self.cached_font_size = self.font_size.get();
             self.cached_font_family = self.font_family.get();
@@ -128,13 +125,13 @@ impl Text {
 }
 
 impl Widget for Text {
-    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size {
+    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
         // Text widgets are never relayout boundaries
-        tree.set_relayout_boundary(self.widget_id, false);
+        tree.set_relayout_boundary(id, false);
 
         // Refresh cached values from reactive properties
         // This reads signals and registers layout dependencies
-        self.refresh();
+        self.refresh(id);
 
         // Determine the effective max_width for measurement
         // If nowrap is true, don't pass max_width so text won't wrap
@@ -170,15 +167,15 @@ impl Widget for Text {
         self.bounds.height = size.height;
 
         // Cache constraints and size for partial layout
-        tree.cache_layout(self.widget_id, constraints, size);
+        tree.cache_layout(id, constraints, size);
 
         // Clear dirty flag since layout is complete
-        tree.clear_dirty(self.widget_id);
+        tree.clear_dirty(id);
 
         size
     }
 
-    fn paint(&self, _tree: &Tree, ctx: &mut PaintContext) {
+    fn paint(&self, _tree: &Tree, _id: WidgetId, ctx: &mut PaintContext) {
         // Draw in LOCAL coordinates (0,0 is widget origin)
         // Parent Container sets position transform
         let local_bounds = Rect::new(0.0, 0.0, self.bounds.width, self.bounds.height);
@@ -193,7 +190,12 @@ impl Widget for Text {
         );
     }
 
-    fn event(&mut self, _tree: &mut Tree, _event: &super::widget::Event) -> EventResponse {
+    fn event(
+        &mut self,
+        _tree: &mut Tree,
+        _id: WidgetId,
+        _event: &super::widget::Event,
+    ) -> EventResponse {
         EventResponse::Ignored
     }
 
@@ -204,14 +206,6 @@ impl Widget for Text {
 
     fn bounds(&self) -> Rect {
         self.bounds
-    }
-
-    fn id(&self) -> WidgetId {
-        self.widget_id
-    }
-
-    fn set_id(&mut self, id: WidgetId) {
-        self.widget_id = id;
     }
 }
 

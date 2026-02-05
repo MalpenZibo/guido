@@ -373,37 +373,29 @@ pub trait Widget: Send + Sync {
     /// Advance animations for this widget and children.
     /// Returns true if any animations are still active and need another frame.
     /// Called once per frame before layout.
-    fn advance_animations(&mut self, tree: &Tree) -> bool {
-        let _ = tree;
+    fn advance_animations(&mut self, tree: &Tree, id: WidgetId) -> bool {
+        let _ = (tree, id);
         false
     }
 
     /// Reconcile dynamic children. Called from main loop before layout.
     /// Returns true if children changed (requires layout).
     /// Default implementation returns false (no dynamic children).
-    fn reconcile_children(&mut self, tree: &mut Tree) -> bool {
-        let _ = tree;
+    fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
+        let _ = (tree, id);
         false
     }
 
-    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size;
-    fn paint(&self, tree: &Tree, ctx: &mut PaintContext);
-    fn event(&mut self, tree: &mut Tree, event: &Event) -> EventResponse {
-        let _ = (tree, event);
+    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size;
+    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
+    fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
+        let _ = (tree, id, event);
         EventResponse::Ignored
     }
     fn set_origin(&mut self, x: f32, y: f32);
 
     /// Get the widget's bounding rectangle (for hit testing)
     fn bounds(&self) -> Rect;
-
-    /// Get the widget's unique identifier.
-    /// The ID is assigned by the tree during registration.
-    fn id(&self) -> WidgetId;
-
-    /// Set the widget's unique identifier.
-    /// Called by Tree::register() to assign the arena-allocated ID.
-    fn set_id(&mut self, id: WidgetId);
 
     /// Check if this widget has a descendant with the given ID.
     /// Used by containers to check if a child has focus.
@@ -427,7 +419,7 @@ pub trait Widget: Send + Sync {
     /// this to register their pending children.
     ///
     /// Default implementation does nothing (leaf widgets have no children).
-    fn register_children(&mut self, _tree: &mut Tree) {}
+    fn register_children(&mut self, _tree: &mut Tree, _id: WidgetId) {}
 }
 
 #[cfg(test)]

@@ -47,19 +47,10 @@ impl WidgetId {
         Self { index, generation }
     }
 
-    /// Create a placeholder WidgetId for widget construction.
-    /// This will be replaced with a real ID when the widget is registered.
-    /// Uses max values to make it obvious if accidentally used.
-    pub fn placeholder() -> Self {
-        Self {
-            index: u32::MAX,
-            generation: u32::MAX,
-        }
-    }
-
-    /// Check if this is a placeholder ID (not yet registered).
-    pub fn is_placeholder(&self) -> bool {
-        self.index == u32::MAX && self.generation == u32::MAX
+    /// Create a WidgetId from raw index and generation values.
+    /// Used internally for non-tree widgets like scrollbar containers.
+    pub fn from_raw(index: u32, generation: u32) -> Self {
+        Self { index, generation }
     }
 
     /// Convert to a u64 for external use (e.g., render layer IDs).
@@ -125,7 +116,7 @@ impl Tree {
     ///
     /// This stores the widget and creates metadata for it.
     /// Parent-child relationships are set separately via `set_parent`.
-    pub fn register(&mut self, mut widget: Box<dyn Widget>) -> WidgetId {
+    pub fn register(&mut self, widget: Box<dyn Widget>) -> WidgetId {
         // Allocate a sparse index (reuse from free list or allocate new)
         let (sparse_index, generation) = if let Some(idx) = self.free_indices.pop() {
             // Reuse a freed slot - increment generation
@@ -146,10 +137,7 @@ impl Tree {
         // Create the widget ID
         let id = WidgetId::new(sparse_index, generation);
 
-        // Set the widget's ID before storing
-        widget.set_id(id);
-
-        // Create the node
+        // Create the node (widget ID is passed to methods, not stored in widget)
         self.dense.push(Node {
             widget,
             parent: None,
@@ -228,45 +216,39 @@ impl Tree {
 
     /// Mutate a widget via a closure.
     ///
-    /// The closure receives mutable access to the widget and the tree, allowing
-    /// operations that need both (like calling layout on children).
+    /// The closure receives the widget ID, mutable access to the widget, and the tree,
+    /// allowing operations that need all three (like calling layout on children).
     ///
     /// The widget is temporarily extracted from the tree during the closure execution.
     /// Returns `None` if the widget is not found (invalid or stale ID).
     pub fn with_widget_mut<R>(
         &mut self,
         id: WidgetId,
-        f: impl FnOnce(&mut dyn Widget, &mut Tree) -> R,
+        f: impl FnOnce(&mut dyn Widget, WidgetId, &mut Tree) -> R,
     ) -> Option<R> {
         let dense_index = self.get_dense_index(id)?;
 
         // Placeholder widget for extraction
-        struct PlaceholderWidget(WidgetId);
+        struct PlaceholderWidget;
         impl Widget for PlaceholderWidget {
-            fn layout(&mut self, _: &mut Tree, _: Constraints) -> Size {
+            fn layout(&mut self, _: &mut Tree, _: WidgetId, _: Constraints) -> Size {
                 Size::zero()
             }
-            fn paint(&self, _: &Tree, _: &mut crate::renderer::PaintContext) {}
+            fn paint(&self, _: &Tree, _: WidgetId, _: &mut crate::renderer::PaintContext) {}
             fn set_origin(&mut self, _: f32, _: f32) {}
             fn bounds(&self) -> crate::widgets::Rect {
                 crate::widgets::Rect::new(0.0, 0.0, 0.0, 0.0)
-            }
-            fn id(&self) -> WidgetId {
-                self.0
-            }
-            fn set_id(&mut self, id: WidgetId) {
-                self.0 = id;
             }
         }
 
         // Extract widget
         let mut widget = std::mem::replace(
             &mut self.dense[dense_index].widget,
-            Box::new(PlaceholderWidget(id)),
+            Box::new(PlaceholderWidget),
         );
 
-        // Run closure with &mut dyn Widget (not Box)
-        let result = f(&mut *widget, self);
+        // Run closure with &mut dyn Widget, WidgetId, and &mut Tree
+        let result = f(&mut *widget, id, self);
 
         // Restore widget
         if let Some(idx) = self.get_dense_index(id) {
@@ -425,37 +407,25 @@ mod tests {
     use super::*;
 
     // Mock widget for testing
-    struct MockWidget {
-        id: WidgetId,
-    }
+    struct MockWidget;
 
     impl MockWidget {
         fn new() -> Self {
-            Self {
-                id: WidgetId::new(0, 0), // Will be set by tree.register()
-            }
+            Self
         }
     }
 
     impl Widget for MockWidget {
-        fn layout(&mut self, _tree: &mut Tree, constraints: Constraints) -> Size {
+        fn layout(&mut self, _tree: &mut Tree, _id: WidgetId, constraints: Constraints) -> Size {
             Size::new(constraints.max_width, constraints.max_height)
         }
 
-        fn paint(&self, _tree: &Tree, _ctx: &mut crate::renderer::PaintContext) {}
+        fn paint(&self, _tree: &Tree, _id: WidgetId, _ctx: &mut crate::renderer::PaintContext) {}
 
         fn set_origin(&mut self, _x: f32, _y: f32) {}
 
         fn bounds(&self) -> crate::widgets::Rect {
             crate::widgets::Rect::new(0.0, 0.0, 0.0, 0.0)
-        }
-
-        fn id(&self) -> WidgetId {
-            self.id
-        }
-
-        fn set_id(&mut self, id: WidgetId) {
-            self.id = id;
         }
     }
 
@@ -585,9 +555,9 @@ mod tests {
         let mut tree = Tree::new();
         let id = tree.register(Box::new(MockWidget::new()));
 
-        // Read widget
-        let widget_id = tree.with_widget(id, |w| w.id());
-        assert_eq!(widget_id, Some(id));
+        // Read widget bounds
+        let bounds = tree.with_widget(id, |w| w.bounds());
+        assert!(bounds.is_some());
     }
 
     #[test]

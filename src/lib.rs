@@ -228,8 +228,8 @@ fn render_surface(
 
     // Dispatch events to widget
     for event in &events {
-        tree.with_widget_mut(surface.widget_id, |widget, tree| {
-            widget.event(tree, event);
+        tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
+            widget.event(tree, id, event);
         });
     }
 
@@ -315,14 +315,14 @@ fn render_surface(
                 // Use cached constraints for boundaries, or fall back to parent constraints
                 let cached = tree.cached_constraints(root_id).unwrap_or(constraints);
 
-                tree.with_widget_mut(root_id, |widget, tree| {
-                    widget.layout(tree, cached);
+                tree.with_widget_mut(root_id, |widget, id, tree| {
+                    widget.layout(tree, id, cached);
                 });
             }
         } else if needs_resize {
             // Full layout from root only when explicitly needed (first frame, resize, etc.)
-            tree.with_widget_mut(surface.widget_id, |widget, tree| {
-                widget.layout(tree, constraints);
+            tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
+                widget.layout(tree, id, constraints);
             });
         }
         // If neither condition is true, skip layout entirely - nothing is dirty
@@ -332,9 +332,9 @@ fn render_surface(
         surface.root_node.clear();
         surface.root_node.bounds = widgets::Rect::new(0.0, 0.0, width as f32, height as f32);
 
-        tree.with_widget_mut(surface.widget_id, |widget, tree| {
+        tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
             let mut ctx = PaintContext::new(&mut surface.root_node);
-            widget.paint(tree, &mut ctx);
+            widget.paint(tree, id, &mut ctx);
         });
 
         // Take ownership of root node temporarily, add to tree, then restore

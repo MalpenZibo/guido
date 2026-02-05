@@ -177,7 +177,7 @@ impl<T: Animatable> AnimationState<T> {
 #[macro_export]
 macro_rules! advance_anim {
     // Layout animation: marks needs_layout when value changes
-    ($self:expr, $anim:ident, $any_animating:expr, layout) => {
+    ($self:expr, $anim:ident, $id:expr, $any_animating:expr, layout) => {
         if let Some(ref mut anim) = $self.$anim {
             if anim.is_animating() {
                 $any_animating = true;
@@ -186,15 +186,12 @@ macro_rules! advance_anim {
                 } else {
                     $crate::jobs::RequiredJob::None
                 };
-                $crate::jobs::request_job(
-                    $self.widget_id,
-                    $crate::jobs::JobRequest::Animation(required),
-                );
+                $crate::jobs::request_job($id, $crate::jobs::JobRequest::Animation(required));
             }
         }
     };
     // Layout animation with target update
-    ($self:expr, $anim:ident, $target_expr:expr, $any_animating:expr, layout) => {
+    ($self:expr, $anim:ident, $target_expr:expr, $id:expr, $any_animating:expr, layout) => {
         if let Some(ref mut anim) = $self.$anim {
             anim.animate_to($target_expr);
             if anim.is_animating() {
@@ -204,15 +201,12 @@ macro_rules! advance_anim {
                 } else {
                     $crate::jobs::RequiredJob::None
                 };
-                $crate::jobs::request_job(
-                    $self.widget_id,
-                    $crate::jobs::JobRequest::Animation(required),
-                );
+                $crate::jobs::request_job($id, $crate::jobs::JobRequest::Animation(required));
             }
         }
     };
     // Paint animation: push paint job when value changes
-    ($self:expr, $anim:ident, $any_animating:expr, paint) => {
+    ($self:expr, $anim:ident, $id:expr, $any_animating:expr, paint) => {
         if let Some(ref mut anim) = $self.$anim {
             if anim.is_animating() {
                 $any_animating = true;
@@ -221,15 +215,12 @@ macro_rules! advance_anim {
                 } else {
                     $crate::jobs::RequiredJob::None
                 };
-                $crate::jobs::request_job(
-                    $self.widget_id,
-                    $crate::jobs::JobRequest::Animation(required),
-                );
+                $crate::jobs::request_job($id, $crate::jobs::JobRequest::Animation(required));
             }
         }
     };
     // Paint animation with target update
-    ($self:expr, $anim:ident, $target_expr:expr, $any_animating:expr, paint) => {
+    ($self:expr, $anim:ident, $target_expr:expr, $id:expr, $any_animating:expr, paint) => {
         if let Some(ref mut anim) = $self.$anim {
             anim.animate_to($target_expr);
             if anim.is_animating() {
@@ -239,10 +230,7 @@ macro_rules! advance_anim {
                 } else {
                     $crate::jobs::RequiredJob::None
                 };
-                $crate::jobs::request_job(
-                    $self.widget_id,
-                    $crate::jobs::JobRequest::Animation(required),
-                );
+                $crate::jobs::request_job($id, $crate::jobs::JobRequest::Animation(required));
             }
         }
     };
