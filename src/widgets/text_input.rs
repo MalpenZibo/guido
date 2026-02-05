@@ -537,8 +537,8 @@ impl TextInput {
                 }
             }
 
-            // Keep requesting frames while a key is held
-            request_job(id, JobRequest::Paint);
+            // Keep requesting layout while a key is held so handle_key_repeat() runs each frame
+            request_job(id, JobRequest::Layout);
         }
     }
 

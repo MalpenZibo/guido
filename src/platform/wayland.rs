@@ -1020,7 +1020,7 @@ impl KeyboardHandler for WaylandState {
         // Track serial for clipboard operations
         self.keyboard_serial = serial;
 
-        if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref()) {
+        if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref(), true) {
             let key_event = Event::KeyDown {
                 key,
                 modifiers: self.modifiers,
@@ -1043,7 +1043,7 @@ impl KeyboardHandler for WaylandState {
         _serial: u32,
         event: KeyEvent,
     ) {
-        if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref()) {
+        if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref(), false) {
             let key_event = Event::KeyUp {
                 key,
                 modifiers: self.modifiers,
@@ -1085,7 +1085,7 @@ impl KeyboardHandler for WaylandState {
         event: KeyEvent,
     ) {
         // Treat key repeat as a new key press
-        if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref()) {
+        if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref(), true) {
             let key_event = Event::KeyDown {
                 key,
                 modifiers: self.modifiers,
@@ -1102,7 +1102,7 @@ impl KeyboardHandler for WaylandState {
 }
 
 /// Convert XKB keysym to our Key type
-fn keysym_to_key(keysym: Keysym, utf8: Option<&str>) -> Option<Key> {
+fn keysym_to_key(keysym: Keysym, utf8: Option<&str>, is_press: bool) -> Option<Key> {
     // Named keys first
     match keysym {
         Keysym::BackSpace => return Some(Key::Backspace),
@@ -1129,20 +1129,22 @@ fn keysym_to_key(keysym: Keysym, utf8: Option<&str>) -> Option<Key> {
         }
     }
 
-    // Fallback: convert keysym directly for printable ASCII characters
-    // This is needed for KeyUp events where utf8 may be None
-    let raw = keysym.raw();
+    // Fallback: convert keysym directly for release events where utf8 is always None.
+    // On press, utf8 = None means a compose sequence is in progress — don't insert anything.
+    if !is_press {
+        let raw = keysym.raw();
 
-    // Printable ASCII range (space through tilde): 0x20-0x7E
-    // XKB keysyms for these characters have the same value as ASCII
-    if (0x20..=0x7e).contains(&raw) {
-        return Some(Key::Char(char::from_u32(raw)?));
-    }
+        // Printable ASCII range (space through tilde): 0x20-0x7E
+        // XKB keysyms for these characters have the same value as ASCII
+        if (0x20..=0x7e).contains(&raw) {
+            return Some(Key::Char(char::from_u32(raw)?));
+        }
 
-    // Handle keypad numbers (KP_0 through KP_9)
-    // XKB_KEY_KP_0 = 0xffb0, XKB_KEY_KP_9 = 0xffb9
-    if (0xffb0..=0xffb9).contains(&raw) {
-        return Some(Key::Char(char::from_u32(raw - 0xffb0 + 0x30)?)); // Convert to '0'-'9'
+        // Handle keypad numbers (KP_0 through KP_9)
+        // XKB_KEY_KP_0 = 0xffb0, XKB_KEY_KP_9 = 0xffb9
+        if (0xffb0..=0xffb9).contains(&raw) {
+            return Some(Key::Char(char::from_u32(raw - 0xffb0 + 0x30)?)); // Convert to '0'-'9'
+        }
     }
 
     None
