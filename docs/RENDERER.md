@@ -238,9 +238,12 @@ instance.corner_radius = radius * scale;
 ## Example: Implementing paint()
 
 ```rust
-fn paint(&self, ctx: &mut PaintContext) {
+fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
+    // Get bounds from Tree (single source of truth)
+    let bounds = tree.get_bounds(id).unwrap_or_default();
+
     // Set local bounds (0,0 origin with widget dimensions)
-    let local_bounds = Rect::new(0.0, 0.0, self.bounds.width, self.bounds.height);
+    let local_bounds = Rect::new(0.0, 0.0, bounds.width, bounds.height);
     ctx.set_bounds(local_bounds);
 
     // Apply user transform if set (parent already set position via set_transform)
@@ -252,17 +255,16 @@ fn paint(&self, ctx: &mut PaintContext) {
     ctx.draw_rounded_rect(local_bounds, self.background, self.corner_radius);
 
     // Paint children - set their position, then let them apply their own transforms
-    for child in &self.children {
-        let child_global = child.bounds();
-        let child_local = Rect::new(0.0, 0.0, child_global.width, child_global.height);
+    for &child_id in self.children.iter() {
+        // Get child bounds from Tree - these are in LOCAL coordinates (relative to parent)
+        let child_bounds = tree.get_bounds(child_id).unwrap_or_default();
+        let child_local = Rect::new(0.0, 0.0, child_bounds.width, child_bounds.height);
 
-        // Calculate offset from parent's origin to child's position
-        let offset_x = child_global.x - self.bounds.x;
-        let offset_y = child_global.y - self.bounds.y;
-
-        let mut child_ctx = ctx.add_child(child.id(), child_local);
-        child_ctx.set_transform(Transform::translate(offset_x, offset_y));
-        child.paint(&mut child_ctx);  // Child applies its own transform
+        let mut child_ctx = ctx.add_child(child_id.as_u64(), child_local);
+        child_ctx.set_transform(Transform::translate(child_bounds.x, child_bounds.y));
+        tree.with_widget(child_id, |child| {
+            child.paint(tree, child_id, &mut child_ctx);
+        });
     }
 
     // Draw overlay effects (after children) in LOCAL coords

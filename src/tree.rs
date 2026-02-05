@@ -78,6 +78,8 @@ struct Node {
     cached_constraints: Option<Constraints>,
     /// Cached size from last layout
     cached_size: Option<Size>,
+    /// Widget origin (set after layout by parent)
+    origin: (f32, f32),
     /// Back-pointer to sparse array index (for swap-remove fixup)
     sparse_index: u32,
 }
@@ -140,6 +142,7 @@ impl Tree {
             is_relayout_boundary: false,
             cached_constraints: None,
             cached_size: None,
+            origin: (0.0, 0.0),
             sparse_index,
         });
 
@@ -229,10 +232,6 @@ impl Tree {
                 Size::zero()
             }
             fn paint(&self, _: &Tree, _: WidgetId, _: &mut crate::renderer::PaintContext) {}
-            fn set_origin(&mut self, _: f32, _: f32) {}
-            fn bounds(&self) -> crate::widgets::Rect {
-                crate::widgets::Rect::new(0.0, 0.0, 0.0, 0.0)
-            }
         }
 
         // Extract widget
@@ -377,6 +376,31 @@ impl Tree {
             .and_then(|idx| self.dense[idx].cached_size)
     }
 
+    /// Set the origin (position) for a widget.
+    pub fn set_origin(&mut self, id: WidgetId, x: f32, y: f32) {
+        if let Some(idx) = self.get_dense_index(id) {
+            self.dense[idx].origin = (x, y);
+        }
+    }
+
+    /// Get the origin (position) for a widget.
+    pub fn get_origin(&self, id: WidgetId) -> Option<(f32, f32)> {
+        self.get_dense_index(id).map(|idx| self.dense[idx].origin)
+    }
+
+    /// Get the bounds (origin + cached size) for a widget.
+    pub fn get_bounds(&self, id: WidgetId) -> Option<crate::widgets::Rect> {
+        let idx = self.get_dense_index(id)?;
+        let node = &self.dense[idx];
+        let size = node.cached_size?;
+        Some(crate::widgets::Rect::new(
+            node.origin.0,
+            node.origin.1,
+            size.width,
+            size.height,
+        ))
+    }
+
     /// Clear all widgets and metadata.
     pub fn clear(&mut self) {
         self.dense.clear();
@@ -415,12 +439,6 @@ mod tests {
         }
 
         fn paint(&self, _tree: &Tree, _id: WidgetId, _ctx: &mut crate::renderer::PaintContext) {}
-
-        fn set_origin(&mut self, _x: f32, _y: f32) {}
-
-        fn bounds(&self) -> crate::widgets::Rect {
-            crate::widgets::Rect::new(0.0, 0.0, 0.0, 0.0)
-        }
     }
 
     #[test]
@@ -549,9 +567,9 @@ mod tests {
         let mut tree = Tree::new();
         let id = tree.register(Box::new(MockWidget::new()));
 
-        // Read widget bounds
-        let bounds = tree.with_widget(id, |w| w.bounds());
-        assert!(bounds.is_some());
+        // Test that we can access widget through with_widget
+        let exists = tree.with_widget(id, |_w| true);
+        assert!(exists.is_some());
     }
 
     #[test]

@@ -293,7 +293,7 @@ impl Flex {
                 Axis::Vertical => (cross_pos, main_pos),
             };
 
-            tree.with_widget_mut(child_id, |child, _id, _tree| child.set_origin(x, y));
+            tree.set_origin(child_id, x, y);
             main_pos += child_main + between_spacing;
         }
 

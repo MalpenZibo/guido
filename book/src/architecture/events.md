@@ -55,11 +55,16 @@ Events propagate from children to parents (bubble up):
 5. Continues until handled or reaches root
 
 ```rust
-fn event(&mut self, event: &Event) -> EventResponse {
+fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
     // Check children first (innermost)
-    for child in self.children.iter_mut().rev() {
-        if child.bounds().contains(event.position()) {
-            if child.event(event) == EventResponse::Handled {
+    for &child_id in self.children.iter().rev() {
+        // Get child bounds from Tree
+        let child_bounds = tree.get_bounds(child_id).unwrap_or_default();
+        if child_bounds.contains(event.position()) {
+            let response = tree.with_widget_mut(child_id, |child, cid, tree| {
+                child.event(tree, cid, event)
+            });
+            if response == Some(EventResponse::Handled) {
                 return EventResponse::Handled;
             }
         }

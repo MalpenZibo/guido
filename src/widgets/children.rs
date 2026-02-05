@@ -8,7 +8,7 @@ use crate::renderer::PaintContext;
 use crate::tree::{Tree, WidgetId};
 
 use super::Widget;
-use super::widget::{Event, EventResponse, Rect};
+use super::widget::{Event, EventResponse};
 
 /// Segment metadata - tracks what kind of source each segment is
 enum SegmentType {
@@ -425,7 +425,7 @@ impl Drop for OwnedWidget {
 }
 
 impl Widget for OwnedWidget {
-    fn advance_animations(&mut self, tree: &Tree, id: WidgetId) -> bool {
+    fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         self.inner.advance_animations(tree, id)
     }
 
@@ -447,14 +447,6 @@ impl Widget for OwnedWidget {
 
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
         self.inner.event(tree, id, event)
-    }
-
-    fn set_origin(&mut self, x: f32, y: f32) {
-        self.inner.set_origin(x, y)
-    }
-
-    fn bounds(&self) -> Rect {
-        self.inner.bounds()
     }
 
     fn has_focus_descendant(&self, tree: &Tree, focused_id: WidgetId) -> bool {

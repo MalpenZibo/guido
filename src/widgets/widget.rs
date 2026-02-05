@@ -39,7 +39,7 @@ impl Default for Color {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Rect {
     pub x: f32,
     pub y: f32,
@@ -373,7 +373,7 @@ pub trait Widget: Send + Sync {
     /// Advance animations for this widget and children.
     /// Returns true if any animations are still active and need another frame.
     /// Called once per frame before layout.
-    fn advance_animations(&mut self, tree: &Tree, id: WidgetId) -> bool {
+    fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         let _ = (tree, id);
         false
     }
@@ -392,10 +392,6 @@ pub trait Widget: Send + Sync {
         let _ = (tree, id, event);
         EventResponse::Ignored
     }
-    fn set_origin(&mut self, x: f32, y: f32);
-
-    /// Get the widget's bounding rectangle (for hit testing)
-    fn bounds(&self) -> Rect;
 
     /// Check if this widget has a descendant with the given ID.
     /// Used by containers to check if a child has focus.

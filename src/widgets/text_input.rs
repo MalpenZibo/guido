@@ -245,9 +245,6 @@ pub struct TextInput {
     // Horizontal scroll offset for text overflow
     scroll_offset: f32,
 
-    // Layout
-    bounds: Rect,
-
     // Callbacks
     on_change: Option<TextCallback>,
     on_submit: Option<TextCallback>,
@@ -292,7 +289,6 @@ impl TextInput {
             is_hovered: false,
             history: History::new(),
             scroll_offset: 0.0,
-            bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
             on_change: None,
             on_submit: None,
         }
@@ -520,7 +516,7 @@ impl TextInput {
     }
 
     /// Handle key repeat for held keys
-    fn handle_key_repeat(&mut self, id: WidgetId) {
+    fn handle_key_repeat(&mut self, tree: &Tree, id: WidgetId) {
         if !has_focus(id) {
             self.pressed_key = None;
             return;
@@ -535,7 +531,8 @@ impl TextInput {
             if since_press >= Duration::from_millis(KEY_REPEAT_DELAY_MS) {
                 // Check if it's time for another repeat
                 if since_repeat >= Duration::from_millis(KEY_REPEAT_INTERVAL_MS) {
-                    self.handle_key(&key, modifiers.ctrl, modifiers.shift);
+                    let bounds_width = tree.cached_size(id).map(|s| s.width).unwrap_or(0.0);
+                    self.handle_key(&key, modifiers.ctrl, modifiers.shift, bounds_width);
                     self.last_repeat_time = now;
                 }
             }
@@ -547,8 +544,8 @@ impl TextInput {
 
     /// Get character index from x coordinate relative to text start.
     /// Uses cached glyph positions for O(log n) binary search.
-    fn char_index_at_x(&self, x: f32) -> usize {
-        let text_x = self.bounds.x;
+    fn char_index_at_x(&self, x: f32, bounds: Rect) -> usize {
+        let text_x = bounds.x;
         // Account for scroll offset
         let relative_x = x - text_x + self.scroll_offset;
 
@@ -599,12 +596,12 @@ impl TextInput {
     }
 
     /// Ensure the cursor is visible by adjusting scroll offset
-    fn ensure_cursor_visible(&mut self) {
+    fn ensure_cursor_visible(&mut self, bounds_width: f32) {
         // Ensure measurements are up to date
         self.update_measurements();
 
         let cursor_x = self.cached_width_at_char(self.selection.cursor);
-        let visible_width = self.bounds.width - SCROLL_PADDING * 2.0;
+        let visible_width = bounds_width - SCROLL_PADDING * 2.0;
 
         if visible_width <= 0.0 {
             return;
@@ -624,7 +621,7 @@ impl TextInput {
     }
 
     /// Insert text at cursor, replacing any selection
-    fn insert_text(&mut self, text: &str) {
+    fn insert_text(&mut self, text: &str, bounds_width: f32) {
         // Save state before modification
         self.save_to_history(EditType::Insert);
 
@@ -647,11 +644,11 @@ impl TextInput {
 
         self.notify_change();
         self.reset_cursor_blink();
-        self.ensure_cursor_visible();
+        self.ensure_cursor_visible(bounds_width);
     }
 
     /// Delete selected text or character before/after cursor
-    fn delete(&mut self, forward: bool) {
+    fn delete(&mut self, forward: bool, bounds_width: f32) {
         // Check if there's anything to delete
         let has_content_to_delete = if self.selection.has_selection() {
             true
@@ -684,7 +681,7 @@ impl TextInput {
             }
         }
         self.reset_cursor_blink();
-        self.ensure_cursor_visible();
+        self.ensure_cursor_visible(bounds_width);
     }
 
     /// Delete a range of characters
@@ -703,7 +700,13 @@ impl TextInput {
     }
 
     /// Move cursor left/right, optionally extending selection
-    fn move_cursor(&mut self, direction: i32, extend_selection: bool, word: bool) {
+    fn move_cursor(
+        &mut self,
+        direction: i32,
+        extend_selection: bool,
+        word: bool,
+        bounds_width: f32,
+    ) {
         let new_pos = if word {
             self.find_word_boundary(self.selection.cursor, direction)
         } else if direction < 0 {
@@ -717,7 +720,7 @@ impl TextInput {
             self.selection.collapse();
         }
         self.reset_cursor_blink();
-        self.ensure_cursor_visible();
+        self.ensure_cursor_visible(bounds_width);
     }
 
     /// Find word boundary in given direction
@@ -772,21 +775,21 @@ impl TextInput {
     }
 
     /// Move cursor to start/end
-    fn move_to_edge(&mut self, to_start: bool, extend_selection: bool) {
+    fn move_to_edge(&mut self, to_start: bool, extend_selection: bool, bounds_width: f32) {
         self.selection.cursor = if to_start { 0 } else { self.cached_char_count };
         if !extend_selection {
             self.selection.collapse();
         }
         self.reset_cursor_blink();
-        self.ensure_cursor_visible();
+        self.ensure_cursor_visible(bounds_width);
     }
 
     /// Select all text
-    fn select_all(&mut self) {
+    fn select_all(&mut self, bounds_width: f32) {
         self.selection.anchor = 0;
         self.selection.cursor = self.cached_char_count;
         self.reset_cursor_blink();
-        self.ensure_cursor_visible();
+        self.ensure_cursor_visible(bounds_width);
     }
 
     /// Get selected text
@@ -808,17 +811,17 @@ impl TextInput {
     }
 
     /// Cut selected text (copy and delete)
-    fn cut_selection(&mut self) {
+    fn cut_selection(&mut self, bounds_width: f32) {
         if self.selection.has_selection() {
             self.copy_selection();
-            self.delete(false); // Delete the selection
+            self.delete(false, bounds_width); // Delete the selection
         }
     }
 
     /// Paste text from clipboard
-    fn paste(&mut self) {
+    fn paste(&mut self, bounds_width: f32) {
         if let Some(text) = clipboard_paste() {
-            self.insert_text(&text);
+            self.insert_text(&text, bounds_width);
         }
     }
 
@@ -844,7 +847,7 @@ impl TextInput {
     }
 
     /// Undo the last change
-    fn undo(&mut self) {
+    fn undo(&mut self, bounds_width: f32) {
         let current = self.current_history_entry();
         if let Some(previous) = self.history.undo(current) {
             self.cached_value = previous.text;
@@ -856,12 +859,12 @@ impl TextInput {
             self.history.reset_coalescing();
             self.notify_change();
             self.reset_cursor_blink();
-            self.ensure_cursor_visible();
+            self.ensure_cursor_visible(bounds_width);
         }
     }
 
     /// Redo the last undone change
-    fn redo(&mut self) {
+    fn redo(&mut self, bounds_width: f32) {
         let current = self.current_history_entry();
         if let Some(next) = self.history.redo(current) {
             self.cached_value = next.text;
@@ -873,7 +876,7 @@ impl TextInput {
             self.history.reset_coalescing();
             self.notify_change();
             self.reset_cursor_blink();
-            self.ensure_cursor_visible();
+            self.ensure_cursor_visible(bounds_width);
         }
     }
 
@@ -888,14 +891,20 @@ impl TextInput {
     }
 
     /// Handle key down event
-    fn handle_key(&mut self, key: &Key, ctrl: bool, shift: bool) -> EventResponse {
+    fn handle_key(
+        &mut self,
+        key: &Key,
+        ctrl: bool,
+        shift: bool,
+        bounds_width: f32,
+    ) -> EventResponse {
         match key {
             Key::Backspace => {
-                self.delete(false);
+                self.delete(false, bounds_width);
                 EventResponse::Handled
             }
             Key::Delete => {
-                self.delete(true);
+                self.delete(true, bounds_width);
                 EventResponse::Handled
             }
             Key::Enter => {
@@ -911,7 +920,7 @@ impl TextInput {
                     self.selection = Selection::new(start);
                     self.reset_cursor_blink();
                 } else {
-                    self.move_cursor(-1, shift, ctrl);
+                    self.move_cursor(-1, shift, ctrl, bounds_width);
                 }
                 EventResponse::Handled
             }
@@ -922,23 +931,23 @@ impl TextInput {
                     self.selection = Selection::new(end);
                     self.reset_cursor_blink();
                 } else {
-                    self.move_cursor(1, shift, ctrl);
+                    self.move_cursor(1, shift, ctrl, bounds_width);
                 }
                 EventResponse::Handled
             }
             Key::Home => {
-                self.move_to_edge(true, shift);
+                self.move_to_edge(true, shift, bounds_width);
                 EventResponse::Handled
             }
             Key::End => {
-                self.move_to_edge(false, shift);
+                self.move_to_edge(false, shift, bounds_width);
                 EventResponse::Handled
             }
             Key::Char(c) => {
                 if ctrl {
                     match c.to_ascii_lowercase() {
                         'a' => {
-                            self.select_all();
+                            self.select_all(bounds_width);
                             EventResponse::Handled
                         }
                         'c' => {
@@ -946,31 +955,31 @@ impl TextInput {
                             EventResponse::Handled
                         }
                         'x' => {
-                            self.cut_selection();
+                            self.cut_selection(bounds_width);
                             EventResponse::Handled
                         }
                         'v' => {
-                            self.paste();
+                            self.paste(bounds_width);
                             EventResponse::Handled
                         }
                         'z' => {
                             // Ctrl+Shift+Z = redo, Ctrl+Z = undo
                             if shift {
-                                self.redo();
+                                self.redo(bounds_width);
                             } else {
-                                self.undo();
+                                self.undo(bounds_width);
                             }
                             EventResponse::Handled
                         }
                         'y' => {
                             // Ctrl+Y = redo
-                            self.redo();
+                            self.redo(bounds_width);
                             EventResponse::Handled
                         }
                         _ => EventResponse::Ignored,
                     }
                 } else if !c.is_control() {
-                    self.insert_text(&c.to_string());
+                    self.insert_text(&c.to_string(), bounds_width);
                     EventResponse::Handled
                 } else {
                     EventResponse::Ignored
@@ -994,13 +1003,15 @@ impl Widget for TextInput {
         self.update_cursor_blink(id);
 
         // Handle key repeat for held keys
-        self.handle_key_repeat(id);
+        self.handle_key_repeat(tree, id);
 
         // Update measurement cache (has internal dirty check)
         self.update_measurements();
 
         // Use cached text width for sizing (TextMeasurer caches the actual measurement)
-        let height = (self.cached_font_size * 1.2).max(self.bounds.height);
+        // Use previous height from tree to maintain stable sizing
+        let prev_height = tree.cached_size(id).map(|s| s.height).unwrap_or(0.0);
+        let height = (self.cached_font_size * 1.2).max(prev_height);
 
         // Text inputs should fill available width (like HTML input elements)
         // Use max_width if available, otherwise fall back to measured width
@@ -1017,9 +1028,6 @@ impl Widget for TextInput {
                 .min(constraints.max_height),
         );
 
-        self.bounds.width = size.width;
-        self.bounds.height = size.height;
-
         // Cache constraints and size for partial layout
         tree.cache_layout(id, constraints, size);
 
@@ -1029,9 +1037,10 @@ impl Widget for TextInput {
         size
     }
 
-    fn paint(&self, _tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
+    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
         // Draw in LOCAL coordinates (0,0 is widget origin)
         // Parent Container sets position transform
+        let bounds = tree.get_bounds(id).unwrap_or_default();
         let display = self.display_text_cached();
         let text_color = self.text_color.get();
         let is_focused = has_focus(id);
@@ -1044,7 +1053,7 @@ impl Widget for TextInput {
             let start_x = self.cached_width_at_char(start) - self.scroll_offset;
             let end_x = self.cached_width_at_char(end) - self.scroll_offset;
 
-            let selection_rect = Rect::new(start_x, 0.0, end_x - start_x, self.bounds.height);
+            let selection_rect = Rect::new(start_x, 0.0, end_x - start_x, bounds.height);
             ctx.draw_rounded_rect(selection_rect, self.selection_color.get(), 0.0);
         }
 
@@ -1052,8 +1061,8 @@ impl Widget for TextInput {
         let text_bounds = Rect::new(
             -self.scroll_offset,
             0.0,
-            self.cached_text_width.max(self.bounds.width),
-            self.bounds.height,
+            self.cached_text_width.max(bounds.width),
+            bounds.height,
         );
         ctx.draw_text_styled(
             display,
@@ -1071,32 +1080,35 @@ impl Widget for TextInput {
                 cursor_x,
                 0.0,
                 1.5, // cursor width
-                self.bounds.height,
+                bounds.height,
             );
             ctx.draw_rounded_rect(cursor_rect, self.cursor_color.get(), 0.0);
         }
     }
 
-    fn event(&mut self, _tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
+    fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
+        // Get bounds from Tree for hit testing
+        let bounds = tree.get_bounds(id).unwrap_or_default();
+
         match event {
             Event::MouseDown { x, y, button } => {
-                if self.bounds.contains(*x, *y) && *button == MouseButton::Left {
+                if bounds.contains(*x, *y) && *button == MouseButton::Left {
                     // Request focus
                     request_focus(id);
                     request_job(id, JobRequest::Paint);
 
                     // Set cursor position
-                    let char_index = self.char_index_at_x(*x);
+                    let char_index = self.char_index_at_x(*x, bounds);
                     self.selection = Selection::new(char_index);
                     self.is_dragging = true;
                     self.reset_cursor_blink();
-                    self.ensure_cursor_visible();
+                    self.ensure_cursor_visible(bounds.width);
 
                     return EventResponse::Handled;
                 }
             }
             Event::MouseMove { x, y, .. } => {
-                let in_bounds = self.bounds.contains(*x, *y);
+                let in_bounds = bounds.contains(*x, *y);
 
                 // Update hover state and cursor
                 if in_bounds && !self.is_hovered {
@@ -1109,9 +1121,9 @@ impl Widget for TextInput {
 
                 if self.is_dragging {
                     // Extend selection while dragging
-                    let char_index = self.char_index_at_x(*x);
+                    let char_index = self.char_index_at_x(*x, bounds);
                     self.selection.cursor = char_index;
-                    self.ensure_cursor_visible();
+                    self.ensure_cursor_visible(bounds.width);
                     request_job(id, JobRequest::Paint);
                     return EventResponse::Handled;
                 }
@@ -1130,7 +1142,8 @@ impl Widget for TextInput {
                     self.key_press_time = now;
                     self.last_repeat_time = now;
 
-                    let response = self.handle_key(key, modifiers.ctrl, modifiers.shift);
+                    let response =
+                        self.handle_key(key, modifiers.ctrl, modifiers.shift, bounds.width);
                     if response == EventResponse::Handled {
                         request_job(id, JobRequest::Paint);
                     }
@@ -1163,15 +1176,6 @@ impl Widget for TextInput {
         }
 
         EventResponse::Ignored
-    }
-
-    fn set_origin(&mut self, x: f32, y: f32) {
-        self.bounds.x = x;
-        self.bounds.y = y;
-    }
-
-    fn bounds(&self) -> Rect {
-        self.bounds
     }
 }
 
