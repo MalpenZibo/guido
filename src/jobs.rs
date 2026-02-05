@@ -80,19 +80,24 @@ pub fn handle_unregister_jobs(jobs: &[Job], tree: &mut Tree) {
     }
 }
 
-pub fn handle_reconcile_jobs(jobs: &[Job], tree: &mut Tree) {
+pub fn handle_reconcile_jobs(jobs: &[Job], tree: &mut Tree) -> Vec<WidgetId> {
+    let mut roots = Vec::new();
     for job in jobs.iter().filter(|j| j.job_type == JobType::Reconcile) {
         tree.with_widget_mut(job.widget_id, |widget, tree| {
             widget.reconcile_children(tree);
         });
-        tree.mark_needs_layout(job.widget_id);
+        if let Some(root) = tree.mark_needs_layout(job.widget_id) {
+            roots.push(root);
+        }
     }
+    roots
 }
 
-pub fn handle_layout_jobs(jobs: &[Job], tree: &mut Tree) {
-    for job in jobs.iter().filter(|j| j.job_type == JobType::Layout) {
-        tree.mark_needs_layout(job.widget_id);
-    }
+pub fn handle_layout_jobs(jobs: &[Job], tree: &mut Tree) -> Vec<WidgetId> {
+    jobs.iter()
+        .filter(|j| j.job_type == JobType::Layout)
+        .filter_map(|job| tree.mark_needs_layout(job.widget_id))
+        .collect()
 }
 
 pub fn handle_animation_jobs(jobs: &[Job], tree: &mut Tree) {

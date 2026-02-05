@@ -23,8 +23,6 @@
 //!   bubbles up to the nearest relayout boundary, which is added to the
 //!   layout queue. Only dirty subtrees are re-laid out.
 
-use std::collections::HashSet;
-
 use crate::layout::{Constraints, Size};
 use crate::widgets::Widget;
 
@@ -111,8 +109,6 @@ pub struct Tree {
     sparse: Vec<Option<SparseEntry>>,
     /// Free list of reusable sparse indices
     free_indices: Vec<u32>,
-    /// Set of relayout boundaries that need layout (the layout queue)
-    layout_roots: HashSet<WidgetId>,
 }
 
 impl Tree {
@@ -122,7 +118,6 @@ impl Tree {
             dense: Vec::new(),
             sparse: Vec::new(),
             free_indices: Vec::new(),
-            layout_roots: HashSet::new(),
         }
     }
 
@@ -211,7 +206,6 @@ impl Tree {
         // Invalidate the sparse entry (keep generation for next allocation)
         self.sparse[id.index as usize] = None;
         self.free_indices.push(id.index);
-        self.layout_roots.remove(&id);
 
         // Now drop the removed widget (may trigger recursive unregisters)
         drop(removed_node);
@@ -318,26 +312,24 @@ impl Tree {
             .unwrap_or_default()
     }
 
-    /// Mark a widget as needing layout.
+    /// Mark a widget as needing layout, returning the layout root.
     ///
-    /// The dirty flag bubbles up to the nearest relayout boundary,
-    /// which is added to the layout queue.
+    /// The dirty flag bubbles up to the nearest relayout boundary or root.
+    /// Returns `Some(root_id)` if a layout root was found and should be queued.
+    /// Returns `None` if the widget was already dirty (boundary already queued).
     ///
     /// Optimization: If a widget is already dirty, we stop early since its
     /// boundary must already be in the queue. This requires all widgets to
     /// call `clear_dirty` after completing layout.
-    pub fn mark_needs_layout(&mut self, widget_id: WidgetId) {
+    pub fn mark_needs_layout(&mut self, widget_id: WidgetId) -> Option<WidgetId> {
         let mut current = widget_id;
 
         loop {
-            let dense_idx = match self.get_dense_index(current) {
-                Some(idx) => idx,
-                None => return,
-            };
+            let dense_idx = self.get_dense_index(current)?;
 
             // Optimization: Stop if already dirty - boundary is already in queue
             if self.dense[dense_idx].is_dirty {
-                return;
+                return None;
             }
 
             // Mark as dirty
@@ -345,9 +337,7 @@ impl Tree {
 
             // Check if this is a relayout boundary
             if self.dense[dense_idx].is_relayout_boundary {
-                // Stop! Add to layout queue
-                self.layout_roots.insert(current);
-                return;
+                return Some(current);
             }
 
             // Move up to parent
@@ -356,9 +346,8 @@ impl Tree {
                     current = parent;
                 }
                 None => {
-                    // Reached root, add to queue
-                    self.layout_roots.insert(current);
-                    return;
+                    // Reached root
+                    return Some(current);
                 }
             }
         }
@@ -412,27 +401,11 @@ impl Tree {
             .and_then(|idx| self.dense[idx].cached_size)
     }
 
-    /// Take all layout roots (clears the set).
-    pub fn take_layout_roots(&mut self) -> Vec<WidgetId> {
-        self.layout_roots.drain().collect()
-    }
-
-    /// Check if any layout roots are pending.
-    pub fn has_layout_roots(&self) -> bool {
-        !self.layout_roots.is_empty()
-    }
-
-    /// Add a layout root directly.
-    pub fn add_layout_root(&mut self, id: WidgetId) {
-        self.layout_roots.insert(id);
-    }
-
     /// Clear all widgets and metadata.
     pub fn clear(&mut self) {
         self.dense.clear();
         self.sparse.clear();
         self.free_indices.clear();
-        self.layout_roots.clear();
     }
 
     /// Get the number of registered widgets.
@@ -539,16 +512,15 @@ mod tests {
         tree.set_parent(child_id, root_id);
         tree.set_parent(grandchild_id, child_id);
 
-        // Mark grandchild dirty - should bubble to root
-        tree.mark_needs_layout(grandchild_id);
+        // Mark grandchild dirty - should bubble to root and return root
+        let layout_root = tree.mark_needs_layout(grandchild_id);
 
         assert!(tree.is_dirty(grandchild_id));
         assert!(tree.is_dirty(child_id));
         assert!(tree.is_dirty(root_id));
 
-        // Root should be in layout_roots
-        let roots = tree.take_layout_roots();
-        assert!(roots.contains(&root_id));
+        // Root should be returned as the layout root
+        assert_eq!(layout_root, Some(root_id));
     }
 
     #[test]
@@ -565,17 +537,15 @@ mod tests {
         // Mark boundary as relayout boundary
         tree.set_relayout_boundary(boundary_id, true);
 
-        // Mark leaf dirty - should stop at boundary
-        tree.mark_needs_layout(leaf_id);
+        // Mark leaf dirty - should stop at boundary and return boundary
+        let layout_root = tree.mark_needs_layout(leaf_id);
 
         assert!(tree.is_dirty(leaf_id));
         assert!(tree.is_dirty(boundary_id));
         assert!(!tree.is_dirty(root_id)); // Root should NOT be dirty
 
-        // Boundary should be in layout_roots, not root
-        let roots = tree.take_layout_roots();
-        assert!(roots.contains(&boundary_id));
-        assert!(!roots.contains(&root_id));
+        // Boundary should be returned as the layout root, not root
+        assert_eq!(layout_root, Some(boundary_id));
     }
 
     #[test]
@@ -586,31 +556,28 @@ mod tests {
 
         tree.set_parent(child_id, root_id);
 
-        // Mark child dirty - root should be added to layout_roots
-        tree.mark_needs_layout(child_id);
+        // Mark child dirty - root should be returned
+        let layout_root = tree.mark_needs_layout(child_id);
         assert!(tree.is_dirty(child_id));
         assert!(tree.is_dirty(root_id));
-        assert!(tree.has_layout_roots());
+        assert_eq!(layout_root, Some(root_id));
 
-        // Simulate layout running: take roots and clear ALL dirty flags
+        // Simulate layout running: clear ALL dirty flags
         // (this is what widgets should do after layout)
-        tree.take_layout_roots();
         tree.clear_dirty(root_id);
         tree.clear_dirty(child_id);
 
-        // Mark child dirty again - should add root to layout_roots
-        tree.mark_needs_layout(child_id);
-        assert!(tree.has_layout_roots());
+        // Mark child dirty again - should return root again
+        let layout_root = tree.mark_needs_layout(child_id);
+        assert_eq!(layout_root, Some(root_id));
 
-        // Now test the optimization: if child is still dirty, stop early
-        tree.take_layout_roots();
-        // Don't clear dirty flags this time
+        // Clear only root's dirty flag, leave child dirty
+        tree.clear_dirty(root_id);
+        // Don't clear child's dirty flag
 
-        // Mark child dirty again - should stop early (already dirty)
-        tree.mark_needs_layout(child_id);
-
-        // layout_roots should be empty because we stopped at the dirty child
-        assert!(!tree.has_layout_roots());
+        // Mark child dirty again - should return None (already dirty)
+        let layout_root = tree.mark_needs_layout(child_id);
+        assert_eq!(layout_root, None);
     }
 
     #[test]
