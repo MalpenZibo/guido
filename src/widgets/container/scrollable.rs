@@ -227,7 +227,7 @@ impl Container {
     /// Advance scrollbar scale animations and apply transforms.
     /// Called from advance_animations since scroll is paint-only and layout
     /// may not run during hover events.
-    pub(super) fn advance_scrollbar_scale_animations_internal(&mut self, _id: WidgetId) -> bool {
+    pub(super) fn advance_scrollbar_scale_animations_internal(&mut self, id: WidgetId) -> bool {
         if self.scroll_axis == ScrollAxis::None
             || self.scrollbar_visibility == ScrollbarVisibility::Hidden
         {
@@ -242,19 +242,24 @@ impl Container {
         // Advance vertical scrollbar scale animation
         if self.scroll_axis.allows_vertical() && needs_vertical {
             any_animating |=
-                self.advance_scrollbar_scale_axis(ScrollbarAxis::Vertical, scale_factor);
+                self.advance_scrollbar_scale_axis(ScrollbarAxis::Vertical, scale_factor, id);
         }
 
         // Advance horizontal scrollbar scale animation
         if self.scroll_axis.allows_horizontal() && needs_horizontal {
             any_animating |=
-                self.advance_scrollbar_scale_axis(ScrollbarAxis::Horizontal, scale_factor);
+                self.advance_scrollbar_scale_axis(ScrollbarAxis::Horizontal, scale_factor, id);
         }
 
         any_animating
     }
 
-    fn advance_scrollbar_scale_axis(&mut self, axis: ScrollbarAxis, scale_factor: f32) -> bool {
+    fn advance_scrollbar_scale_axis(
+        &mut self,
+        axis: ScrollbarAxis,
+        scale_factor: f32,
+        id: WidgetId,
+    ) -> bool {
         // Determine target scale based on hover state
         let is_hovered = self.scroll_state.is_track_hovered(axis)
             || self.scroll_state.is_handle_hovered(axis)
@@ -266,13 +271,18 @@ impl Container {
             ScrollbarAxis::Horizontal => &mut self.h_scrollbar_scale_anim,
         };
 
-        // Advance the animation
-        // Scale transforms are applied during paint, not stored on widgets
+        // Advance the animation and request continuation if still animating.
+        // Scale transforms are applied during paint, not stored on widgets.
         let mut animating = false;
         if let Some(anim) = scale_anim {
             anim.animate_to(target_scale);
             if anim.is_animating() {
-                let _ = anim.advance(); // Paint-only, ignore result
+                let required = if anim.advance().is_changed() {
+                    RequiredJob::Paint
+                } else {
+                    RequiredJob::None
+                };
+                request_job(id, JobRequest::Animation(required));
                 animating = true;
             }
         }
@@ -752,7 +762,7 @@ impl Container {
         axis: ScrollbarAxis,
         x: f32,
         y: f32,
-        event: &Event,
+        _event: &Event,
     ) -> bool {
         let needs_other = match axis {
             ScrollbarAxis::Vertical => self.scroll_state.needs_horizontal_scrollbar(),
@@ -786,15 +796,34 @@ impl Container {
             needs_repaint = true;
         }
 
-        // Forward event to handle container for state layer hover
+        // Send synthetic MouseEnter/MouseLeave events to handle container when hover state changes.
+        // We can't forward raw MouseMove events because the Container's bounds check would fail
+        // (coordinates are in parent space, not local to the handle widget).
         let handle_id = match axis {
             ScrollbarAxis::Vertical => self.v_scrollbar_handle_id,
             ScrollbarAxis::Horizontal => self.h_scrollbar_handle_id,
         };
         if let Some(handle_id) = handle_id {
-            tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
-                widget.event(tree, widget_id, event);
-            });
+            if is_hovered && !was_hovered {
+                // Transitioning to hovered state - send coordinates at handle center
+                let center_x = handle_rect.x + handle_rect.width / 2.0;
+                let center_y = handle_rect.y + handle_rect.height / 2.0;
+                tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
+                    widget.event(
+                        tree,
+                        widget_id,
+                        &Event::MouseEnter {
+                            x: center_x,
+                            y: center_y,
+                        },
+                    );
+                });
+            } else if !is_hovered && was_hovered {
+                // Transitioning away from hovered state
+                tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
+                    widget.event(tree, widget_id, &Event::MouseLeave);
+                });
+            }
         }
 
         needs_repaint
