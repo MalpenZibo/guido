@@ -79,7 +79,7 @@ struct Node {
     /// Child widget IDs
     children: Vec<WidgetId>,
     /// Whether this widget needs layout
-    is_dirty: bool,
+    needs_layout: bool,
     /// Whether this widget needs paint
     needs_paint: bool,
     /// Whether this widget is a relayout boundary
@@ -150,7 +150,7 @@ impl Tree {
             widget,
             parent: None,
             children: Vec::new(),
-            is_dirty: false,
+            needs_layout: false,
             needs_paint: true,
             is_relayout_boundary: false,
             cached_constraints: None,
@@ -303,26 +303,26 @@ impl Tree {
 
     /// Mark a widget as needing layout, returning the layout root.
     ///
-    /// The dirty flag bubbles up to the nearest relayout boundary or root.
+    /// The needs_layout flag bubbles up to the nearest relayout boundary or root.
     /// Returns `Some(root_id)` if a layout root was found and should be queued.
-    /// Returns `None` if the widget was already dirty (boundary already queued).
+    /// Returns `None` if the widget already needs layout (boundary already queued).
     ///
-    /// Optimization: If a widget is already dirty, we stop early since its
+    /// Optimization: If a widget already needs layout, we stop early since its
     /// boundary must already be in the queue. This requires all widgets to
-    /// call `clear_dirty` after completing layout.
+    /// call `clear_needs_layout` after completing layout.
     pub fn mark_needs_layout(&mut self, widget_id: WidgetId) -> Option<WidgetId> {
         let mut current = widget_id;
 
         loop {
             let dense_idx = self.get_dense_index(current)?;
 
-            // Optimization: Stop if already dirty - boundary is already in queue
-            if self.dense[dense_idx].is_dirty {
+            // Optimization: Stop if already marked - boundary is already in queue
+            if self.dense[dense_idx].needs_layout {
                 return None;
             }
 
-            // Mark as dirty
-            self.dense[dense_idx].is_dirty = true;
+            // Mark as needing layout
+            self.dense[dense_idx].needs_layout = true;
 
             // Check if this is a relayout boundary
             if self.dense[dense_idx].is_relayout_boundary {
@@ -342,17 +342,17 @@ impl Tree {
         }
     }
 
-    /// Clear dirty flag for a widget.
-    pub fn clear_dirty(&mut self, id: WidgetId) {
+    /// Clear the needs-layout flag for a widget.
+    pub fn clear_needs_layout(&mut self, id: WidgetId) {
         if let Some(idx) = self.get_dense_index(id) {
-            self.dense[idx].is_dirty = false;
+            self.dense[idx].needs_layout = false;
         }
     }
 
-    /// Check if a widget is dirty.
-    pub fn is_dirty(&self, id: WidgetId) -> bool {
+    /// Check if a widget needs layout.
+    pub fn needs_layout(&self, id: WidgetId) -> bool {
         self.get_dense_index(id)
-            .map(|idx| self.dense[idx].is_dirty)
+            .map(|idx| self.dense[idx].needs_layout)
             .unwrap_or(false)
     }
 
@@ -559,7 +559,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tree_dirty_propagation() {
+    fn test_tree_needs_layout_propagation() {
         let mut tree = Tree::new();
         let root_id = tree.register(Box::new(MockWidget::new()));
         let child_id = tree.register(Box::new(MockWidget::new()));
@@ -569,12 +569,12 @@ mod tests {
         tree.set_parent(child_id, root_id);
         tree.set_parent(grandchild_id, child_id);
 
-        // Mark grandchild dirty - should bubble to root and return root
+        // Mark grandchild needs_layout - should bubble to root and return root
         let layout_root = tree.mark_needs_layout(grandchild_id);
 
-        assert!(tree.is_dirty(grandchild_id));
-        assert!(tree.is_dirty(child_id));
-        assert!(tree.is_dirty(root_id));
+        assert!(tree.needs_layout(grandchild_id));
+        assert!(tree.needs_layout(child_id));
+        assert!(tree.needs_layout(root_id));
 
         // Root should be returned as the layout root
         assert_eq!(layout_root, Some(root_id));
@@ -594,45 +594,44 @@ mod tests {
         // Mark boundary as relayout boundary
         tree.set_relayout_boundary(boundary_id, true);
 
-        // Mark leaf dirty - should stop at boundary and return boundary
+        // Mark leaf needs_layout - should stop at boundary and return boundary
         let layout_root = tree.mark_needs_layout(leaf_id);
 
-        assert!(tree.is_dirty(leaf_id));
-        assert!(tree.is_dirty(boundary_id));
-        assert!(!tree.is_dirty(root_id)); // Root should NOT be dirty
+        assert!(tree.needs_layout(leaf_id));
+        assert!(tree.needs_layout(boundary_id));
+        assert!(!tree.needs_layout(root_id)); // Root should NOT need layout
 
         // Boundary should be returned as the layout root, not root
         assert_eq!(layout_root, Some(boundary_id));
     }
 
     #[test]
-    fn test_tree_dirty_optimization() {
+    fn test_tree_needs_layout_optimization() {
         let mut tree = Tree::new();
         let root_id = tree.register(Box::new(MockWidget::new()));
         let child_id = tree.register(Box::new(MockWidget::new()));
 
         tree.set_parent(child_id, root_id);
 
-        // Mark child dirty - root should be returned
+        // Mark child needs_layout - root should be returned
         let layout_root = tree.mark_needs_layout(child_id);
-        assert!(tree.is_dirty(child_id));
-        assert!(tree.is_dirty(root_id));
+        assert!(tree.needs_layout(child_id));
+        assert!(tree.needs_layout(root_id));
         assert_eq!(layout_root, Some(root_id));
 
-        // Simulate layout running: clear ALL dirty flags
+        // Simulate layout running: clear ALL needs_layout flags
         // (this is what widgets should do after layout)
-        tree.clear_dirty(root_id);
-        tree.clear_dirty(child_id);
+        tree.clear_needs_layout(root_id);
+        tree.clear_needs_layout(child_id);
 
-        // Mark child dirty again - should return root again
+        // Mark child again - should return root again
         let layout_root = tree.mark_needs_layout(child_id);
         assert_eq!(layout_root, Some(root_id));
 
-        // Clear only root's dirty flag, leave child dirty
-        tree.clear_dirty(root_id);
-        // Don't clear child's dirty flag
+        // Clear only root's flag, leave child marked
+        tree.clear_needs_layout(root_id);
 
-        // Mark child dirty again - should return None (already dirty)
+        // Mark child again - should return None (already marked)
         let layout_root = tree.mark_needs_layout(child_id);
         assert_eq!(layout_root, None);
     }

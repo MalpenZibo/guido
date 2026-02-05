@@ -1009,7 +1009,7 @@ impl Widget for Container {
 
         // Check if this widget was marked dirty by signal changes or animations
         // (animations call mark_needs_layout directly when their value changes)
-        let reactive_changed = tree.is_dirty(id);
+        let reactive_changed = tree.needs_layout(id);
 
         let needs_layout = constraints_changed || reactive_changed;
 
@@ -1027,7 +1027,7 @@ impl Widget for Container {
         );
 
         // Clear dirty flag since we're doing layout now
-        tree.clear_dirty(id);
+        tree.clear_needs_layout(id);
 
         // Get current animated padding for layout calculations
         let padding = self.animated_padding();

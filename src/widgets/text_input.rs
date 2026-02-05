@@ -1031,8 +1031,8 @@ impl Widget for TextInput {
         // Cache constraints and size for partial layout
         tree.cache_layout(id, constraints, size);
 
-        // Clear dirty flag since layout is complete
-        tree.clear_dirty(id);
+        // Clear needs_layout flag since layout is complete
+        tree.clear_needs_layout(id);
 
         size
     }
