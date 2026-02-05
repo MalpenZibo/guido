@@ -1611,8 +1611,6 @@ impl Widget for Container {
             let child_offset_x = child_bounds.x;
             let child_offset_y = child_bounds.y;
 
-            let mut child_ctx = ctx.add_child(child_id.as_u64(), child_local);
-
             // Child's position transform (may include scroll offset)
             let child_position = if is_scrollable {
                 Transform::translate(
@@ -1622,6 +1620,26 @@ impl Widget for Container {
             } else {
                 Transform::translate(child_offset_x, child_offset_y)
             };
+
+            // Try cached paint for clean children
+            if !tree.needs_paint(child_id)
+                && let Some(cached) = tree.cached_paint(child_id)
+            {
+                let mut reused = cached.clone();
+                // Decompose: extract user transform, recompose with new position
+                let user_part = cached
+                    .parent_position
+                    .inverse()
+                    .then(&cached.local_transform);
+                reused.local_transform = child_position.then(&user_part);
+                reused.parent_position = child_position;
+                reused.bounds = child_local;
+                ctx.add_child_node(reused);
+                continue;
+            }
+
+            // Full paint (child is dirty or no cache available)
+            let mut child_ctx = ctx.add_child(child_id.as_u64(), child_local);
             child_ctx.set_transform(child_position);
 
             // Paint child via tree
