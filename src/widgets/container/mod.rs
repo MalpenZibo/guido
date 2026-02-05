@@ -182,9 +182,10 @@ pub struct Container {
 
 impl Container {
     pub fn new() -> Self {
-        let widget_id = WidgetId::next();
-        let mut children_source = ChildrenSource::default();
-        children_source.set_container_id(widget_id);
+        // widget_id will be assigned by Tree::register()
+        // Use a placeholder that will be overwritten
+        let widget_id = WidgetId::placeholder();
+        let children_source = ChildrenSource::default();
         Self {
             widget_id,
             layout: Box::new(Flex::column()),
@@ -1296,7 +1297,7 @@ impl Widget for Container {
         size
     }
 
-    fn event(&mut self, tree: &Tree, event: &Event) -> EventResponse {
+    fn event(&mut self, tree: &mut Tree, event: &Event) -> EventResponse {
         let transform = self.animated_transform(tree);
         let transform_origin = self.transform_origin.get();
         let corner_radius = self.animated_corner_radius(tree);
@@ -1345,7 +1346,7 @@ impl Widget for Container {
         // Let children handle first (layout already reconciled)
         for &child_id in self.children_source.get() {
             if let Some(response) =
-                tree.with_widget_mut(child_id, |child| child.event(tree, &child_event))
+                tree.with_widget_mut(child_id, |child, tree| child.event(tree, &child_event))
                 && response == EventResponse::Handled
             {
                 return EventResponse::Handled;
@@ -1589,6 +1590,11 @@ impl Widget for Container {
 
     fn id(&self) -> WidgetId {
         self.widget_id
+    }
+
+    fn set_id(&mut self, id: WidgetId) {
+        self.widget_id = id;
+        self.children_source.set_container_id(id);
     }
 
     fn has_focus_descendant(&self, tree: &Tree, id: WidgetId) -> bool {

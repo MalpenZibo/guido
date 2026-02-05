@@ -1,12 +1,20 @@
-//! tree-based widget storage for efficient partial layout.
+//! Arena-based widget storage for efficient partial layout.
 //!
-//! The Tree provides centralized widget storage and layout metadata,
-//! enabling efficient partial layout by only re-laying out dirty subtrees.
+//! The Tree provides centralized widget storage using a sparse-set architecture
+//! with generational indices, enabling efficient partial layout by only
+//! re-laying out dirty subtrees.
 //!
 //! ## Key Features
 //!
-//! - **Central Widget Storage**: All widgets are stored in a single tree,
-//!   with containers holding child IDs rather than owned widgets.
+//! - **Generational Indices**: WidgetId contains index + generation to prevent
+//!   ABA problems (detecting stale references to reallocated slots).
+//!
+//! - **Dense Storage**: Widgets stored contiguously for cache-friendly iteration
+//!   during layout and paint passes.
+//!
+//! - **Sparse Map**: O(1) lookup from stable WidgetId to dense array index.
+//!
+//! - **Swap-Remove**: O(1) removal without creating holes in dense storage.
 //!
 //! - **Layout Metadata**: Each widget has associated metadata tracking
 //!   parent/child relationships, dirty state, and cached constraints/size.
@@ -14,87 +22,95 @@
 //! - **Partial Layout**: When a widget is marked dirty, the dirty flag
 //!   bubbles up to the nearest relayout boundary, which is added to the
 //!   layout queue. Only dirty subtrees are re-laid out.
-//!
-//! ## Interior Mutability
-//!
-//! The tree uses `RefCell` for interior mutability of:
-//! - Widget storage (`widgets`)
-//! - Layout nodes (`nodes`)
-//! - Layout roots queue (`layout_roots`)
-//!
-//! This allows the tree to be borrowed immutably while individual
-//! widgets are borrowed mutably for layout, and metadata can be updated
-//! during the layout pass.
 
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::HashSet;
 
 use crate::layout::{Constraints, Size};
 use crate::widgets::Widget;
 
-/// Metadata for a widget in the layout tree.
-#[derive(Default)]
-pub struct Node {
-    /// Parent widget ID (None for root)
-    pub parent: Option<WidgetId>,
-    /// Child widget IDs
-    pub children: Vec<WidgetId>,
-    /// Whether this widget needs layout
-    pub is_dirty: bool,
-    /// Whether this widget is a relayout boundary
-    pub is_relayout_boundary: bool,
-    /// Cached constraints from last layout
-    pub cached_constraints: Option<Constraints>,
-    /// Cached size from last layout
-    pub cached_size: Option<Size>,
-}
-
-impl Node {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
+/// Unique identifier for a widget in the tree.
 ///
-/// Unique identifier for a widget in the tree
+/// Uses a generational index design:
+/// - `index`: Position in the sparse array (reusable after removal)
+/// - `generation`: Version counter that increments when a slot is reused
+///
+/// This prevents ABA problems where a stale ID might accidentally refer
+/// to a new widget that was allocated in the same slot.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct WidgetId(u64);
-
-static NEXT_WIDGET_ID: AtomicU64 = AtomicU64::new(1);
+pub struct WidgetId {
+    index: u32,
+    generation: u32,
+}
 
 impl WidgetId {
-    /// Generate a new unique widget ID
-    pub fn next() -> Self {
-        WidgetId(NEXT_WIDGET_ID.fetch_add(1, Ordering::Relaxed))
+    /// Create a new WidgetId with the given index and generation.
+    /// This is internal - users get IDs from Tree::register().
+    fn new(index: u32, generation: u32) -> Self {
+        Self { index, generation }
     }
 
-    /// Get the raw u64 value of this widget ID
+    /// Create a placeholder WidgetId for widget construction.
+    /// This will be replaced with a real ID when the widget is registered.
+    /// Uses max values to make it obvious if accidentally used.
+    pub fn placeholder() -> Self {
+        Self {
+            index: u32::MAX,
+            generation: u32::MAX,
+        }
+    }
+
+    /// Check if this is a placeholder ID (not yet registered).
+    pub fn is_placeholder(&self) -> bool {
+        self.index == u32::MAX && self.generation == u32::MAX
+    }
+
+    /// Convert to a u64 for external use (e.g., render layer IDs).
+    /// Combines generation (high bits) with index (low bits).
     pub fn as_u64(self) -> u64 {
-        self.0
+        ((self.generation as u64) << 32) | (self.index as u64)
     }
 }
 
-/// Reference-counted widget cell for safe nested access.
-///
-/// Using Rc allows us to clone the reference, release the HashMap borrow,
-/// and then access the widget - avoiding RefCell borrow conflicts when
-/// callbacks need to register/unregister widgets.
-type WidgetCell = Rc<RefCell<Box<dyn Widget>>>;
+/// Entry in the sparse map, pointing to a dense array slot.
+struct SparseEntry {
+    /// Index into the dense array
+    dense_index: usize,
+    /// Generation of this entry (for validation)
+    generation: u32,
+}
 
-/// Central tree for widget storage and layout metadata.
+/// A node in the tree, containing a widget and its metadata.
+struct Node {
+    /// The widget stored at this node
+    widget: Box<dyn Widget>,
+    /// Parent widget ID (None for root)
+    parent: Option<WidgetId>,
+    /// Child widget IDs
+    children: Vec<WidgetId>,
+    /// Whether this widget needs layout
+    is_dirty: bool,
+    /// Whether this widget is a relayout boundary
+    is_relayout_boundary: bool,
+    /// Cached constraints from last layout
+    cached_constraints: Option<Constraints>,
+    /// Cached size from last layout
+    cached_size: Option<Size>,
+    /// Back-pointer to sparse array index (for swap-remove fixup)
+    sparse_index: u32,
+}
+
+/// Central tree for widget storage using arena-based sparse-set architecture.
 ///
-/// The tree stores all widgets in a HashMap with interior mutability,
-/// allowing widgets to be accessed and modified during layout and event
-/// handling without requiring mutable access to the entire tree.
+/// The tree stores all widgets in a dense Vec for cache-friendly iteration,
+/// with a sparse map for O(1) lookup by WidgetId. Generational indices
+/// prevent use-after-free bugs.
 pub struct Tree {
-    /// Central widget storage - uses Rc to allow cloning references
-    /// before releasing the HashMap borrow
-    widgets: HashMap<WidgetId, WidgetCell>,
-
-    /// Tree metadata for each widget (interior mutability)
-    nodes: HashMap<WidgetId, Node>,
-
+    /// Dense array of nodes (widgets + metadata)
+    dense: Vec<Node>,
+    /// Sparse map from index to dense position + generation
+    sparse: Vec<Option<SparseEntry>>,
+    /// Free list of reusable sparse indices
+    free_indices: Vec<u32>,
     /// Set of relayout boundaries that need layout (the layout queue)
     layout_roots: HashSet<WidgetId>,
 }
@@ -103,82 +119,172 @@ impl Tree {
     /// Create a new empty tree.
     pub fn new() -> Self {
         Self {
-            widgets: HashMap::new(),
-            nodes: HashMap::new(),
+            dense: Vec::new(),
+            sparse: Vec::new(),
+            free_indices: Vec::new(),
             layout_roots: HashSet::new(),
         }
     }
 
-    /// Register a widget in the tree.
+    /// Register a widget in the tree and return its unique ID.
     ///
-    /// This stores the widget and creates an empty node for it.
+    /// This stores the widget and creates metadata for it.
     /// Parent-child relationships are set separately via `set_parent`.
-    pub fn register(&mut self, id: WidgetId, widget: Box<dyn Widget>) {
-        self.widgets.insert(id, Rc::new(RefCell::new(widget)));
-        self.nodes.entry(id).or_default();
+    pub fn register(&mut self, mut widget: Box<dyn Widget>) -> WidgetId {
+        // Allocate a sparse index (reuse from free list or allocate new)
+        let (sparse_index, generation) = if let Some(idx) = self.free_indices.pop() {
+            // Reuse a freed slot - increment generation
+            let old_gen = self.sparse[idx as usize]
+                .as_ref()
+                .map(|e| e.generation)
+                .unwrap_or(0);
+            (idx, old_gen.wrapping_add(1))
+        } else {
+            // Allocate new slot
+            let idx = self.sparse.len() as u32;
+            self.sparse.push(None);
+            (idx, 0)
+        };
+
+        let dense_index = self.dense.len();
+
+        // Create the widget ID
+        let id = WidgetId::new(sparse_index, generation);
+
+        // Set the widget's ID before storing
+        widget.set_id(id);
+
+        // Create the node
+        self.dense.push(Node {
+            widget,
+            parent: None,
+            children: Vec::new(),
+            is_dirty: false,
+            is_relayout_boundary: false,
+            cached_constraints: None,
+            cached_size: None,
+            sparse_index,
+        });
+
+        // Update sparse map
+        self.sparse[sparse_index as usize] = Some(SparseEntry {
+            dense_index,
+            generation,
+        });
+
+        id
     }
 
     /// Remove a widget from the tree.
     ///
+    /// Uses swap-remove to maintain dense storage without holes.
     /// Also removes the widget from its parent's children list.
     pub fn unregister(&mut self, id: WidgetId) {
-        // Remove from parent's children list
-        let parent_id = self.nodes.get(&id).and_then(|n| n.parent);
-        if let Some(parent_id) = parent_id
-            && let Some(parent_node) = self.nodes.get_mut(&parent_id)
+        // Validate and get dense index
+        let dense_index = match self.get_dense_index(id) {
+            Some(idx) => idx,
+            None => return, // Invalid or stale ID
+        };
+
+        // First, remove from parent's children list (before modifying dense array)
+        if let Some(parent_id) = self.dense[dense_index].parent
+            && let Some(parent_dense) = self.get_dense_index(parent_id)
         {
-            parent_node.children.retain(|&child_id| child_id != id);
+            self.dense[parent_dense].children.retain(|&c| c != id);
         }
 
-        // Remove widget from HashMap, but drop it AFTER releasing the borrow.
-        // This is critical because dropping a Container triggers ChildrenSource::drop,
-        // which recursively calls unregister_widget for all children.
-        let removed_widget = self.widgets.remove(&id);
-        self.nodes.remove(&id);
+        // Take ownership of the widget to drop it AFTER fixing up indices
+        // This is critical for recursive unregistration during Drop
+        let last_dense_index = self.dense.len() - 1;
+
+        // Swap-remove: move last element to this position
+        let removed_node = self.dense.swap_remove(dense_index);
+
+        // Fix up the moved node's sparse entry (if we didn't remove the last element)
+        if dense_index != last_dense_index && !self.dense.is_empty() {
+            let moved_sparse_idx = self.dense[dense_index].sparse_index;
+            if let Some(ref mut entry) = self.sparse[moved_sparse_idx as usize] {
+                entry.dense_index = dense_index;
+            }
+        }
+
+        // Invalidate the sparse entry (keep generation for next allocation)
+        self.sparse[id.index as usize] = None;
+        self.free_indices.push(id.index);
         self.layout_roots.remove(&id);
 
-        // Now the borrow is released, we can safely drop the widget
-        // (which may trigger recursive unregisters)
-        drop(removed_widget);
+        // Now drop the removed widget (may trigger recursive unregisters)
+        drop(removed_node);
+    }
+
+    /// Get the dense array index for a WidgetId, validating generation.
+    fn get_dense_index(&self, id: WidgetId) -> Option<usize> {
+        self.sparse
+            .get(id.index as usize)
+            .and_then(|e| e.as_ref())
+            .filter(|e| e.generation == id.generation)
+            .map(|e| e.dense_index)
     }
 
     /// Access a widget via a closure.
-    ///
-    /// This clones the Rc before releasing the HashMap borrow, allowing
-    /// the callback to safely register/unregister other widgets.
     pub fn with_widget<R>(&self, id: WidgetId, f: impl FnOnce(&dyn Widget) -> R) -> Option<R> {
-        // Clone the Rc so we can release the HashMap borrow
-        let widget_cell = self.widgets.get(&id).cloned();
-        widget_cell.map(|cell| {
-            let widget = cell.borrow();
-            f(&**widget)
-        })
+        self.get_dense_index(id)
+            .map(|idx| f(&*self.dense[idx].widget))
     }
 
-    /// Get a widget for mutation via a closure.
+    /// Mutate a widget via a closure.
     ///
-    /// This clones the Rc before releasing the HashMap borrow, allowing
-    /// the callback to safely register/unregister other widgets.
+    /// The closure receives mutable access to the widget and the tree, allowing
+    /// operations that need both (like calling layout on children).
+    ///
+    /// The widget is temporarily extracted from the tree during the closure execution.
+    /// Returns `None` if the widget is not found (invalid or stale ID).
     pub fn with_widget_mut<R>(
-        &self,
+        &mut self,
         id: WidgetId,
-        f: impl FnOnce(&mut dyn Widget) -> R,
+        f: impl FnOnce(&mut dyn Widget, &mut Tree) -> R,
     ) -> Option<R> {
-        // Clone the Rc so we can release the HashMap borrow
-        let widget_cell = self.widgets.get(&id).cloned();
-        widget_cell.map(|cell| {
-            let mut widget = cell.borrow_mut();
-            f(&mut **widget)
-        })
-    }
+        let dense_index = self.get_dense_index(id)?;
 
-    pub fn get_widget_mut(&self, id: WidgetId) -> Option<WidgetCell> {
-        self.widgets.get(&id).cloned()
+        // Placeholder widget for extraction
+        struct PlaceholderWidget(WidgetId);
+        impl Widget for PlaceholderWidget {
+            fn layout(&mut self, _: &mut Tree, _: Constraints) -> Size {
+                Size::zero()
+            }
+            fn paint(&self, _: &Tree, _: &mut crate::renderer::PaintContext) {}
+            fn set_origin(&mut self, _: f32, _: f32) {}
+            fn bounds(&self) -> crate::widgets::Rect {
+                crate::widgets::Rect::new(0.0, 0.0, 0.0, 0.0)
+            }
+            fn id(&self) -> WidgetId {
+                self.0
+            }
+            fn set_id(&mut self, id: WidgetId) {
+                self.0 = id;
+            }
+        }
+
+        // Extract widget
+        let mut widget = std::mem::replace(
+            &mut self.dense[dense_index].widget,
+            Box::new(PlaceholderWidget(id)),
+        );
+
+        // Run closure with &mut dyn Widget (not Box)
+        let result = f(&mut *widget, self);
+
+        // Restore widget
+        if let Some(idx) = self.get_dense_index(id) {
+            self.dense[idx].widget = widget;
+        }
+
+        Some(result)
     }
 
     /// Check if a widget is registered.
     pub fn contains(&self, id: WidgetId) -> bool {
-        self.widgets.contains_key(&id)
+        self.get_dense_index(id).is_some()
     }
 
     /// Set the parent of a widget.
@@ -186,25 +292,29 @@ impl Tree {
     /// Also adds the widget to the parent's children list.
     pub fn set_parent(&mut self, child_id: WidgetId, parent_id: WidgetId) {
         // Update child's parent reference
-        self.nodes.entry(child_id).or_default().parent = Some(parent_id);
+        if let Some(child_dense) = self.get_dense_index(child_id) {
+            self.dense[child_dense].parent = Some(parent_id);
+        }
 
         // Add to parent's children list (if not already present)
-        let parent_node = self.nodes.entry(parent_id).or_default();
-        if !parent_node.children.contains(&child_id) {
-            parent_node.children.push(child_id);
+        if let Some(parent_dense) = self.get_dense_index(parent_id) {
+            let children = &mut self.dense[parent_dense].children;
+            if !children.contains(&child_id) {
+                children.push(child_id);
+            }
         }
     }
 
     /// Get the parent of a widget.
     pub fn get_parent(&self, id: WidgetId) -> Option<WidgetId> {
-        self.nodes.get(&id).and_then(|n| n.parent)
+        self.get_dense_index(id)
+            .and_then(|idx| self.dense[idx].parent)
     }
 
     /// Get the children of a widget.
     pub fn get_children(&self, id: WidgetId) -> Vec<WidgetId> {
-        self.nodes
-            .get(&id)
-            .map(|n| n.children.clone())
+        self.get_dense_index(id)
+            .map(|idx| self.dense[idx].children.clone())
             .unwrap_or_default()
     }
 
@@ -220,25 +330,28 @@ impl Tree {
         let mut current = widget_id;
 
         loop {
-            let node = self.nodes.entry(current).or_default();
+            let dense_idx = match self.get_dense_index(current) {
+                Some(idx) => idx,
+                None => return,
+            };
 
             // Optimization: Stop if already dirty - boundary is already in queue
-            if node.is_dirty {
+            if self.dense[dense_idx].is_dirty {
                 return;
             }
 
             // Mark as dirty
-            node.is_dirty = true;
+            self.dense[dense_idx].is_dirty = true;
 
             // Check if this is a relayout boundary
-            if node.is_relayout_boundary {
+            if self.dense[dense_idx].is_relayout_boundary {
                 // Stop! Add to layout queue
                 self.layout_roots.insert(current);
                 return;
             }
 
             // Move up to parent
-            match node.parent {
+            match self.dense[dense_idx].parent {
                 Some(parent) => {
                     current = parent;
                 }
@@ -253,42 +366,50 @@ impl Tree {
 
     /// Clear dirty flag for a widget.
     pub fn clear_dirty(&mut self, id: WidgetId) {
-        if let Some(node) = self.nodes.get_mut(&id) {
-            node.is_dirty = false;
+        if let Some(idx) = self.get_dense_index(id) {
+            self.dense[idx].is_dirty = false;
         }
     }
 
     /// Check if a widget is dirty.
     pub fn is_dirty(&self, id: WidgetId) -> bool {
-        self.nodes.get(&id).is_some_and(|n| n.is_dirty)
+        self.get_dense_index(id)
+            .map(|idx| self.dense[idx].is_dirty)
+            .unwrap_or(false)
     }
 
     /// Set whether a widget is a relayout boundary.
     pub fn set_relayout_boundary(&mut self, id: WidgetId, is_boundary: bool) {
-        self.nodes.entry(id).or_default().is_relayout_boundary = is_boundary;
+        if let Some(idx) = self.get_dense_index(id) {
+            self.dense[idx].is_relayout_boundary = is_boundary;
+        }
     }
 
     /// Check if a widget is a relayout boundary.
     pub fn is_relayout_boundary(&self, id: WidgetId) -> bool {
-        self.nodes.get(&id).is_some_and(|n| n.is_relayout_boundary)
+        self.get_dense_index(id)
+            .map(|idx| self.dense[idx].is_relayout_boundary)
+            .unwrap_or(false)
     }
 
     /// Cache the constraints and size for a widget.
     pub fn cache_layout(&mut self, id: WidgetId, constraints: Constraints, size: Size) {
-        if let Some(node) = self.nodes.get_mut(&id) {
-            node.cached_constraints = Some(constraints);
-            node.cached_size = Some(size);
+        if let Some(idx) = self.get_dense_index(id) {
+            self.dense[idx].cached_constraints = Some(constraints);
+            self.dense[idx].cached_size = Some(size);
         }
     }
 
     /// Get cached constraints for a widget.
     pub fn cached_constraints(&self, id: WidgetId) -> Option<Constraints> {
-        self.nodes.get(&id).and_then(|n| n.cached_constraints)
+        self.get_dense_index(id)
+            .and_then(|idx| self.dense[idx].cached_constraints)
     }
 
     /// Get cached size for a widget.
     pub fn cached_size(&self, id: WidgetId) -> Option<Size> {
-        self.nodes.get(&id).and_then(|n| n.cached_size)
+        self.get_dense_index(id)
+            .and_then(|idx| self.dense[idx].cached_size)
     }
 
     /// Take all layout roots (clears the set).
@@ -308,14 +429,15 @@ impl Tree {
 
     /// Clear all widgets and metadata.
     pub fn clear(&mut self) {
-        self.widgets.clear();
-        self.nodes.clear();
+        self.dense.clear();
+        self.sparse.clear();
+        self.free_indices.clear();
         self.layout_roots.clear();
     }
 
     /// Get the number of registered widgets.
     pub fn widget_count(&self) -> usize {
-        self.widgets.len()
+        self.dense.len()
     }
 }
 
@@ -334,6 +456,14 @@ mod tests {
         id: WidgetId,
     }
 
+    impl MockWidget {
+        fn new() -> Self {
+            Self {
+                id: WidgetId::new(0, 0), // Will be set by tree.register()
+            }
+        }
+    }
+
     impl Widget for MockWidget {
         fn layout(&mut self, _tree: &mut Tree, constraints: Constraints) -> Size {
             Size::new(constraints.max_width, constraints.max_height)
@@ -350,15 +480,16 @@ mod tests {
         fn id(&self) -> WidgetId {
             self.id
         }
+
+        fn set_id(&mut self, id: WidgetId) {
+            self.id = id;
+        }
     }
 
     #[test]
     fn test_tree_register_unregister() {
         let mut tree = Tree::new();
-        let id = WidgetId::next();
-        let widget = Box::new(MockWidget { id });
-
-        tree.register(id, widget);
+        let id = tree.register(Box::new(MockWidget::new()));
         assert!(tree.contains(id));
 
         tree.unregister(id);
@@ -366,13 +497,30 @@ mod tests {
     }
 
     #[test]
+    fn test_tree_generational_index() {
+        let mut tree = Tree::new();
+
+        // Register and unregister a widget
+        let id1 = tree.register(Box::new(MockWidget::new()));
+        tree.unregister(id1);
+
+        // Register a new widget (should reuse the slot)
+        let id2 = tree.register(Box::new(MockWidget::new()));
+
+        // id1 should be invalid (different generation)
+        assert!(!tree.contains(id1));
+        assert!(tree.contains(id2));
+
+        // They should have the same index but different generations
+        assert_eq!(id1.index, id2.index);
+        assert_ne!(id1.generation, id2.generation);
+    }
+
+    #[test]
     fn test_tree_parent_child() {
         let mut tree = Tree::new();
-        let parent_id = WidgetId::next();
-        let child_id = WidgetId::next();
-
-        tree.register(parent_id, Box::new(MockWidget { id: parent_id }));
-        tree.register(child_id, Box::new(MockWidget { id: child_id }));
+        let parent_id = tree.register(Box::new(MockWidget::new()));
+        let child_id = tree.register(Box::new(MockWidget::new()));
 
         tree.set_parent(child_id, parent_id);
 
@@ -383,15 +531,11 @@ mod tests {
     #[test]
     fn test_tree_dirty_propagation() {
         let mut tree = Tree::new();
-        let root_id = WidgetId::next();
-        let child_id = WidgetId::next();
-        let grandchild_id = WidgetId::next();
+        let root_id = tree.register(Box::new(MockWidget::new()));
+        let child_id = tree.register(Box::new(MockWidget::new()));
+        let grandchild_id = tree.register(Box::new(MockWidget::new()));
 
         // Build tree: root -> child -> grandchild
-        tree.register(root_id, Box::new(MockWidget { id: root_id }));
-        tree.register(child_id, Box::new(MockWidget { id: child_id }));
-        tree.register(grandchild_id, Box::new(MockWidget { id: grandchild_id }));
-
         tree.set_parent(child_id, root_id);
         tree.set_parent(grandchild_id, child_id);
 
@@ -410,15 +554,11 @@ mod tests {
     #[test]
     fn test_tree_relayout_boundary_stops_propagation() {
         let mut tree = Tree::new();
-        let root_id = WidgetId::next();
-        let boundary_id = WidgetId::next();
-        let leaf_id = WidgetId::next();
+        let root_id = tree.register(Box::new(MockWidget::new()));
+        let boundary_id = tree.register(Box::new(MockWidget::new()));
+        let leaf_id = tree.register(Box::new(MockWidget::new()));
 
         // Build tree: root -> boundary (relayout) -> leaf
-        tree.register(root_id, Box::new(MockWidget { id: root_id }));
-        tree.register(boundary_id, Box::new(MockWidget { id: boundary_id }));
-        tree.register(leaf_id, Box::new(MockWidget { id: leaf_id }));
-
         tree.set_parent(boundary_id, root_id);
         tree.set_parent(leaf_id, boundary_id);
 
@@ -441,11 +581,9 @@ mod tests {
     #[test]
     fn test_tree_dirty_optimization() {
         let mut tree = Tree::new();
-        let root_id = WidgetId::next();
-        let child_id = WidgetId::next();
+        let root_id = tree.register(Box::new(MockWidget::new()));
+        let child_id = tree.register(Box::new(MockWidget::new()));
 
-        tree.register(root_id, Box::new(MockWidget { id: root_id }));
-        tree.register(child_id, Box::new(MockWidget { id: child_id }));
         tree.set_parent(child_id, root_id);
 
         // Mark child dirty - root should be added to layout_roots
@@ -478,20 +616,34 @@ mod tests {
     #[test]
     fn test_tree_with_widget() {
         let mut tree = Tree::new();
-        let id = WidgetId::next();
-        tree.register(id, Box::new(MockWidget { id }));
+        let id = tree.register(Box::new(MockWidget::new()));
 
         // Read widget
         let widget_id = tree.with_widget(id, |w| w.id());
         assert_eq!(widget_id, Some(id));
+    }
 
-        // Mutate widget (layout)
-        let widget_cell = tree.get_widget_mut(id);
-        let size = widget_cell.map(|cell| {
-            let mut widget = cell.borrow_mut();
-            widget.layout(&mut tree, Constraints::new(0.0, 0.0, 100.0, 100.0))
-        });
+    #[test]
+    fn test_tree_swap_remove_fixup() {
+        let mut tree = Tree::new();
 
-        assert_eq!(size, Some(Size::new(100.0, 100.0)));
+        // Register three widgets
+        let id1 = tree.register(Box::new(MockWidget::new()));
+        let id2 = tree.register(Box::new(MockWidget::new()));
+        let id3 = tree.register(Box::new(MockWidget::new()));
+
+        // Remove the first one - id3 should be moved to its position
+        tree.unregister(id1);
+
+        // id1 should be invalid
+        assert!(!tree.contains(id1));
+
+        // id2 and id3 should still be valid
+        assert!(tree.contains(id2));
+        assert!(tree.contains(id3));
+
+        // We should still be able to access them
+        assert!(tree.with_widget(id2, |_| ()).is_some());
+        assert!(tree.with_widget(id3, |_| ()).is_some());
     }
 }

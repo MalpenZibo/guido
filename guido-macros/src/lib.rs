@@ -261,7 +261,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 self.__inner.read().unwrap().as_ref().unwrap().paint(tree, ctx)
             }
 
-            fn event(&mut self, tree: &::guido::tree::Tree, event: &::guido::widgets::Event) -> ::guido::widgets::EventResponse {
+            fn event(&mut self, tree: &mut ::guido::tree::Tree, event: &::guido::widgets::Event) -> ::guido::widgets::EventResponse {
                 self.ensure_built();
                 self.__inner.write().unwrap().as_mut().unwrap().event(tree, event)
             }
@@ -279,6 +279,11 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             fn id(&self) -> ::guido::tree::WidgetId {
                 self.ensure_built();
                 self.__inner.read().unwrap().as_ref().unwrap().id()
+            }
+
+            fn set_id(&mut self, id: ::guido::tree::WidgetId) {
+                self.ensure_built();
+                self.__inner.write().unwrap().as_mut().unwrap().set_id(id)
             }
 
             fn has_focus_descendant(&self, tree: &::guido::tree::Tree, id: ::guido::tree::WidgetId) -> bool {

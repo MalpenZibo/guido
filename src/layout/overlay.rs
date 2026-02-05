@@ -36,17 +36,11 @@ impl Layout for Overlay {
 
         // Layout all children at the same origin, giving them the full constraints
         for &child_id in children.iter() {
-            let child_size = if let Some(widget_cell) = tree.get_widget_mut(child_id) {
-                let mut widget = widget_cell.borrow_mut();
+            if let Some(child_size) = tree.with_widget_mut(child_id, |widget, tree| {
                 let size = widget.layout(tree, constraints);
-
                 widget.set_origin(origin.0, origin.1);
-                Some(size)
-            } else {
-                None
-            };
-
-            if let Some(child_size) = child_size {
+                size
+            }) {
                 max_width = max_width.max(child_size.width);
                 max_height = max_height.max(child_size.height);
             }

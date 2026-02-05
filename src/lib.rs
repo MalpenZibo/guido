@@ -226,7 +226,7 @@ fn render_surface(
 
     // Dispatch events to widget
     for event in &events {
-        tree.with_widget_mut(surface.widget_id, |widget| {
+        tree.with_widget_mut(surface.widget_id, |widget, tree| {
             widget.event(tree, event);
         });
     }
@@ -300,22 +300,18 @@ fn render_surface(
             // Partial layout: only update dirty subtrees starting from boundaries
             let roots = tree.take_layout_roots();
             for root_id in roots {
-                if let Some(widget_cell) = tree.get_widget_mut(root_id) {
-                    // Use cached constraints for boundaries, or fall back to parent constraints
-                    let cached = tree.cached_constraints(root_id).unwrap_or(constraints);
+                // Use cached constraints for boundaries, or fall back to parent constraints
+                let cached = tree.cached_constraints(root_id).unwrap_or(constraints);
 
-                    let mut widget = widget_cell.borrow_mut();
-
+                tree.with_widget_mut(root_id, |widget, tree| {
                     widget.layout(tree, cached);
-                }
+                });
             }
         } else if needs_resize {
             // Full layout from root only when explicitly needed (first frame, resize, etc.)
-            if let Some(widget_cell) = tree.get_widget_mut(surface.widget_id) {
-                let mut widget = widget_cell.borrow_mut();
-
+            tree.with_widget_mut(surface.widget_id, |widget, tree| {
                 widget.layout(tree, constraints);
-            }
+            });
         }
         // If neither condition is true, skip layout entirely - nothing is dirty
 
@@ -324,7 +320,7 @@ fn render_surface(
         surface.root_node.clear();
         surface.root_node.bounds = widgets::Rect::new(0.0, 0.0, width as f32, height as f32);
 
-        tree.with_widget_mut(surface.widget_id, |widget| {
+        tree.with_widget_mut(surface.widget_id, |widget, tree| {
             let mut ctx = PaintContext::new(&mut surface.root_node);
             widget.paint(tree, &mut ctx);
         });

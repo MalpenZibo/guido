@@ -82,12 +82,10 @@ pub fn handle_unregister_jobs(jobs: &[Job], tree: &mut Tree) {
 
 pub fn handle_reconcile_jobs(jobs: &[Job], tree: &mut Tree) {
     for job in jobs.iter().filter(|j| j.job_type == JobType::Reconcile) {
-        let widget_cell = tree.get_widget_mut(job.widget_id);
-        if let Some(widget_cell) = widget_cell {
-            let mut widget = widget_cell.borrow_mut();
+        tree.with_widget_mut(job.widget_id, |widget, tree| {
             widget.reconcile_children(tree);
-            tree.mark_needs_layout(job.widget_id);
-        }
+        });
+        tree.mark_needs_layout(job.widget_id);
     }
 }
 
@@ -97,9 +95,9 @@ pub fn handle_layout_jobs(jobs: &[Job], tree: &mut Tree) {
     }
 }
 
-pub fn handle_animation_jobs(jobs: &[Job], tree: &Tree) {
+pub fn handle_animation_jobs(jobs: &[Job], tree: &mut Tree) {
     for job in jobs.iter().filter(|j| j.job_type == JobType::Animation) {
-        tree.with_widget_mut(job.widget_id, |widget| {
+        tree.with_widget_mut(job.widget_id, |widget, tree| {
             widget.advance_animations(tree);
         });
     }
