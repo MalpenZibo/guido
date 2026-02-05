@@ -21,7 +21,6 @@ pub struct Text {
     cached_font_size: f32,
     cached_font_family: FontFamily,
     cached_font_weight: FontWeight,
-    bounds: Rect,
 }
 
 impl Text {
@@ -42,7 +41,6 @@ impl Text {
             cached_font_size: 14.0,
             cached_font_family: default_family,
             cached_font_weight: FontWeight::NORMAL,
-            bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
         }
     }
 
@@ -163,9 +161,6 @@ impl Widget for Text {
                 .min(constraints.max_height),
         );
 
-        self.bounds.width = size.width;
-        self.bounds.height = size.height;
-
         // Cache constraints and size for partial layout
         tree.cache_layout(id, constraints, size);
 
@@ -175,10 +170,11 @@ impl Widget for Text {
         size
     }
 
-    fn paint(&self, _tree: &Tree, _id: WidgetId, ctx: &mut PaintContext) {
+    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
         // Draw in LOCAL coordinates (0,0 is widget origin)
         // Parent Container sets position transform
-        let local_bounds = Rect::new(0.0, 0.0, self.bounds.width, self.bounds.height);
+        let size = tree.cached_size(id).unwrap_or_default();
+        let local_bounds = Rect::new(0.0, 0.0, size.width, size.height);
         let color = self.color.get();
         ctx.draw_text_styled(
             &self.cached_text,
@@ -197,16 +193,6 @@ impl Widget for Text {
         _event: &super::widget::Event,
     ) -> EventResponse {
         EventResponse::Ignored
-    }
-
-    fn set_origin(&mut self, tree: &mut Tree, id: WidgetId, x: f32, y: f32) {
-        tree.set_origin(id, x, y);
-        self.bounds.x = x;
-        self.bounds.y = y;
-    }
-
-    fn bounds(&self) -> Rect {
-        self.bounds
     }
 }
 

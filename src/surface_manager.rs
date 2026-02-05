@@ -119,8 +119,9 @@ impl ManagedSurface {
 
         tree.with_widget_mut(self.widget_id, |widget, id, tree| {
             widget.layout(tree, id, constraints);
-            widget.set_origin(tree, id, 0.0, 0.0);
         });
+        // Set root widget origin after layout
+        tree.set_origin(self.widget_id, 0.0, 0.0);
     }
 }
 

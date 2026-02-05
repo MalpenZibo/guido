@@ -266,16 +266,6 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 self.__inner.write().unwrap().as_mut().unwrap().event(tree, id, event)
             }
 
-            fn set_origin(&mut self, tree: &mut ::guido::tree::Tree, id: ::guido::tree::WidgetId, x: f32, y: f32) {
-                self.ensure_built();
-                self.__inner.write().unwrap().as_mut().unwrap().set_origin(tree, id, x, y)
-            }
-
-            fn bounds(&self) -> ::guido::widgets::Rect {
-                self.ensure_built();
-                self.__inner.read().unwrap().as_ref().unwrap().bounds()
-            }
-
             fn has_focus_descendant(&self, tree: &::guido::tree::Tree, focused_id: ::guido::tree::WidgetId) -> bool {
                 self.ensure_built();
                 self.__inner.read().unwrap().as_ref().unwrap().has_focus_descendant(tree, focused_id)

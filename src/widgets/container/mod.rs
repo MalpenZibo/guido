@@ -127,7 +127,6 @@ pub struct Container {
     pub(super) width: Option<MaybeDyn<Length>>,
     pub(super) height: Option<MaybeDyn<Length>>,
     pub(super) overflow: Overflow,
-    pub(super) bounds: Rect,
     pub(super) transform: MaybeDyn<Transform>,
     pub(super) transform_origin: MaybeDyn<TransformOrigin>,
 
@@ -161,21 +160,18 @@ pub struct Container {
     pub(super) scrollbar_config: ScrollbarConfig,
     pub(super) scroll_state: ScrollState,
 
-    // Vertical scrollbar containers
-    pub(super) v_scrollbar_track: Option<Box<Container>>,
-    pub(super) v_scrollbar_handle: Option<Box<Container>>,
+    // Vertical scrollbar widget IDs (registered in Tree)
+    pub(super) v_scrollbar_track_id: Option<WidgetId>,
+    pub(super) v_scrollbar_handle_id: Option<WidgetId>,
     pub(super) v_scrollbar_scale_anim: Option<AnimationState<f32>>,
 
-    // Horizontal scrollbar containers
-    pub(super) h_scrollbar_track: Option<Box<Container>>,
-    pub(super) h_scrollbar_handle: Option<Box<Container>>,
+    // Horizontal scrollbar widget IDs (registered in Tree)
+    pub(super) h_scrollbar_track_id: Option<WidgetId>,
+    pub(super) h_scrollbar_handle_id: Option<WidgetId>,
     pub(super) h_scrollbar_scale_anim: Option<AnimationState<f32>>,
 
     // Ripple animation state
     pub(super) ripple: RippleState,
-
-    // Constraint caching for layout skip optimization
-    pub(super) last_constraints: Option<Constraints>,
 
     // Pending layout signal registrations (processed when widget ID becomes available)
     pub(super) pending_layout_signals: Vec<usize>,
@@ -198,7 +194,6 @@ impl Container {
             width: None,
             height: None,
             overflow: Overflow::Visible,
-            bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
             transform: MaybeDyn::Static(Transform::IDENTITY),
             transform_origin: MaybeDyn::Static(TransformOrigin::CENTER),
             on_click: None,
@@ -221,14 +216,13 @@ impl Container {
             scrollbar_visibility: ScrollbarVisibility::Always,
             scrollbar_config: ScrollbarConfig::default(),
             scroll_state: ScrollState::default(),
-            v_scrollbar_track: None,
-            v_scrollbar_handle: None,
+            v_scrollbar_track_id: None,
+            v_scrollbar_handle_id: None,
             v_scrollbar_scale_anim: None,
-            h_scrollbar_track: None,
-            h_scrollbar_handle: None,
+            h_scrollbar_track_id: None,
+            h_scrollbar_handle_id: None,
             h_scrollbar_scale_anim: None,
             ripple: RippleState::new(),
-            last_constraints: None,
             pending_layout_signals: Vec::new(),
         }
     }
@@ -567,16 +561,6 @@ impl Container {
         self
     }
 
-    /// Set the transform on an existing container (non-builder pattern)
-    pub(crate) fn set_transform(&mut self, t: Transform) {
-        self.transform = MaybeDyn::Static(t);
-    }
-
-    /// Set the transform origin on an existing container (non-builder pattern)
-    pub(crate) fn set_transform_origin(&mut self, origin: TransformOrigin) {
-        self.transform_origin = MaybeDyn::Static(origin);
-    }
-
     /// Enable animation for width changes
     pub fn animate_width(mut self, transition: Transition) -> Self {
         let initial = self
@@ -854,46 +838,6 @@ impl Container {
             request_job(id, JobRequest::Paint);
         }
     }
-
-    /// Internal method for advancing animations on non-tree-registered containers (scrollbars).
-    /// Uses the parent's widget ID for job requests.
-    pub(super) fn advance_animations_internal(&mut self, tree: &Tree, parent_id: WidgetId) -> bool {
-        // Simplified version for scrollbar containers - only advances paint-only animations
-        let mut any_animating = false;
-
-        // Paint-only animations only
-        let bg_target = self.effective_background_target(tree);
-        advance_anim!(
-            self,
-            background_anim,
-            bg_target,
-            parent_id,
-            any_animating,
-            paint
-        );
-
-        let corner_radius_target = self.effective_corner_radius_target(tree);
-        advance_anim!(
-            self,
-            corner_radius_anim,
-            corner_radius_target,
-            parent_id,
-            any_animating,
-            paint
-        );
-
-        let transform_target = self.effective_transform_target(tree);
-        advance_anim!(
-            self,
-            transform_anim,
-            transform_target,
-            parent_id,
-            any_animating,
-            paint
-        );
-
-        any_animating
-    }
 }
 
 /// Convert elevation level to shadow parameters
@@ -1016,34 +960,10 @@ impl Widget for Container {
             any_animating = any_animating || scroll_animating;
         }
 
-        // Advance scrollbar animations (these are owned by this container, not tree children)
-        // Note: These scrollbar containers don't have IDs - they're not in the tree
-        // They use a dummy ID (won't be used since they don't request jobs directly)
-        if let Some(ref mut track) = self.v_scrollbar_track
-            && track.advance_animations_internal(tree, id)
-        {
-            any_animating = true;
-        }
-        if let Some(ref mut handle) = self.v_scrollbar_handle
-            && handle.advance_animations_internal(tree, id)
-        {
-            any_animating = true;
-        }
-        if let Some(ref mut track) = self.h_scrollbar_track
-            && track.advance_animations_internal(tree, id)
-        {
-            any_animating = true;
-        }
-        if let Some(ref mut handle) = self.h_scrollbar_handle
-            && handle.advance_animations_internal(tree, id)
-        {
-            any_animating = true;
-        }
-
         // Update scrollbar handle positions based on current scroll offset
         // (scroll is paint-only, so layout may not run during scrolling)
         if self.scroll_axis != ScrollAxis::None {
-            self.update_scrollbar_handle_positions(tree);
+            self.update_scrollbar_handle_positions(tree, id);
         }
 
         // Advance scrollbar scale animations (for hover expansion effect)
@@ -1082,9 +1002,10 @@ impl Widget for Container {
         tree.set_relayout_boundary(id, self.is_relayout_boundary_for(constraints));
 
         // Ensure scrollbar containers exist if scrolling is enabled
-        self.ensure_scrollbar_containers();
+        self.ensure_scrollbar_containers(tree, id);
 
-        let constraints_changed = self.last_constraints != Some(constraints);
+        // Check if constraints changed compared to cached value in Tree
+        let constraints_changed = tree.cached_constraints(id) != Some(constraints);
 
         // Check if this widget was marked dirty by signal changes or animations
         // (animations call mark_needs_layout directly when their value changes)
@@ -1094,7 +1015,8 @@ impl Widget for Container {
 
         if !needs_layout {
             crate::layout_stats::record_layout_skipped();
-            return Size::new(self.bounds.width, self.bounds.height);
+            // Return cached size from Tree
+            return tree.cached_size(id).unwrap_or_default();
         }
 
         crate::layout_stats::record_layout_executed_with_reasons(
@@ -1103,8 +1025,6 @@ impl Widget for Container {
                 reactive_changed,
             },
         );
-
-        self.last_constraints = Some(constraints);
 
         // Clear dirty flag since we're doing layout now
         tree.clear_dirty(id);
@@ -1367,11 +1287,9 @@ impl Widget for Container {
         };
         let size = Size::new(final_width, final_height);
 
-        self.bounds.width = size.width;
-        self.bounds.height = size.height;
-
-        // Layout scrollbar containers after bounds are set
-        self.layout_scrollbar_containers(tree, id);
+        // Layout scrollbar containers after size is determined
+        // Note: cache_layout is called at the end which stores size in Tree
+        self.layout_scrollbar_containers(tree, id, size);
 
         // Cache constraints and size for partial layout
         tree.cache_layout(id, constraints, size);
@@ -1380,6 +1298,9 @@ impl Widget for Container {
     }
 
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
+        // Get bounds from Tree (single source of truth)
+        let bounds = tree.get_bounds(id).unwrap_or_default();
+
         let transform = self.animated_transform(tree);
         let transform_origin = self.transform_origin.get();
         let corner_radius = self.animated_corner_radius(tree);
@@ -1387,7 +1308,7 @@ impl Widget for Container {
         // Transform event coordinates to local space
         let local_event: Cow<'_, Event> = if !transform.is_identity() {
             if let Some((x, y)) = event.coords() {
-                let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
+                let (origin_x, origin_y) = transform_origin.resolve(bounds);
                 // Transform is in screen space, simply center and invert
                 let screen_space_transform = transform.center_at(origin_x, origin_y);
                 let (local_x, local_y) = screen_space_transform.inverse().transform_point(x, y);
@@ -1400,7 +1321,7 @@ impl Widget for Container {
         };
 
         // Handle scrollbar events first
-        if let Some(response) = self.handle_scrollbar_event(tree, id, &local_event) {
+        if let Some(response) = self.handle_scrollbar_event(tree, id, bounds, &local_event) {
             return response;
         }
 
@@ -1408,8 +1329,8 @@ impl Widget for Container {
         // Children are positioned in local coordinates, so events must be too
         let child_event: Cow<'_, Event> = if let Some((x, y)) = local_event.coords() {
             // Convert from global/window coordinates to local (relative to container)
-            let local_x = x - self.bounds.x;
-            let local_y = y - self.bounds.y;
+            let local_x = x - bounds.x;
+            let local_y = y - bounds.y;
 
             // For scrollable containers, also add scroll offset
             let (child_x, child_y) = if self.scroll_axis != ScrollAxis::None {
@@ -1438,7 +1359,7 @@ impl Widget for Container {
         // Handle our own events
         match local_event.as_ref() {
             Event::MouseEnter { x, y } => {
-                if self.bounds.contains_rounded(*x, *y, corner_radius) {
+                if bounds.contains_rounded(*x, *y, corner_radius) {
                     let was_hovered = self.is_hovered;
                     self.is_hovered = true;
                     if !was_hovered && self.hover_state.is_some() {
@@ -1452,7 +1373,7 @@ impl Widget for Container {
             }
             Event::MouseMove { x, y } => {
                 let was_hovered = self.is_hovered;
-                self.is_hovered = self.bounds.contains_rounded(*x, *y, corner_radius);
+                self.is_hovered = bounds.contains_rounded(*x, *y, corner_radius);
 
                 if was_hovered != self.is_hovered {
                     if self.hover_state.is_some() {
@@ -1465,9 +1386,7 @@ impl Widget for Container {
                 }
             }
             Event::MouseDown { x, y, button } => {
-                if self.bounds.contains_rounded(*x, *y, corner_radius)
-                    && *button == MouseButton::Left
-                {
+                if bounds.contains_rounded(*x, *y, corner_radius) && *button == MouseButton::Left {
                     let was_pressed = self.is_pressed;
                     self.is_pressed = true;
 
@@ -1480,14 +1399,14 @@ impl Widget for Container {
                         // Convert screen coords to local coords accounting for transform
                         let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
                         let (local_x, local_y) = if !transform.is_identity() {
-                            let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
+                            let (origin_x, origin_y) = transform_origin.resolve(bounds);
                             let screen_transform = transform.center_at(origin_x, origin_y);
                             let (inv_x, inv_y) = screen_transform
                                 .inverse()
                                 .transform_point(screen_x, screen_y);
-                            (inv_x - self.bounds.x, inv_y - self.bounds.y)
+                            (inv_x - bounds.x, inv_y - bounds.y)
                         } else {
-                            (screen_x - self.bounds.x, screen_y - self.bounds.y)
+                            (screen_x - bounds.x, screen_y - bounds.y)
                         };
                         self.ripple.start(local_x, local_y);
                         // Ripple animation needs Animation + Paint
@@ -1512,14 +1431,14 @@ impl Widget for Container {
                         // Convert screen coords to local coords accounting for transform
                         let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
                         let (local_x, local_y) = if !transform.is_identity() {
-                            let (origin_x, origin_y) = transform_origin.resolve(self.bounds);
+                            let (origin_x, origin_y) = transform_origin.resolve(bounds);
                             let screen_transform = transform.center_at(origin_x, origin_y);
                             let (inv_x, inv_y) = screen_transform
                                 .inverse()
                                 .transform_point(screen_x, screen_y);
-                            (inv_x - self.bounds.x, inv_y - self.bounds.y)
+                            (inv_x - bounds.x, inv_y - bounds.y)
                         } else {
-                            (screen_x - self.bounds.x, screen_y - self.bounds.y)
+                            (screen_x - bounds.x, screen_y - bounds.y)
                         };
                         self.ripple.start_fade(local_x, local_y);
                         // Ripple fade animation needs Animation + Paint
@@ -1529,7 +1448,7 @@ impl Widget for Container {
                     if was_pressed && self.pressed_state.is_some() {
                         self.request_state_change_repaint(id);
                     }
-                    if self.bounds.contains_rounded(*x, *y, corner_radius)
+                    if bounds.contains_rounded(*x, *y, corner_radius)
                         && let Some(ref callback) = self.on_click
                     {
                         callback();
@@ -1551,7 +1470,7 @@ impl Widget for Container {
                 // Start ripple fade to center
                 if self.ripple.is_active() {
                     self.ripple
-                        .start_fade_to_center(self.bounds.width, self.bounds.height);
+                        .start_fade_to_center(bounds.width, bounds.height);
                     // Ripple fade animation needs Animation + Paint
                     request_job(id, JobRequest::Animation(RequiredJob::Paint));
                 }
@@ -1569,7 +1488,7 @@ impl Widget for Container {
                 delta_y,
                 source,
             } => {
-                if self.bounds.contains_rounded(*x, *y, corner_radius) {
+                if bounds.contains_rounded(*x, *y, corner_radius) {
                     if self.scroll_axis != ScrollAxis::None {
                         let consumed = self.apply_scroll(*delta_x, *delta_y, *source);
                         if consumed {
@@ -1598,44 +1517,14 @@ impl Widget for Container {
         EventResponse::Ignored
     }
 
-    fn set_origin(&mut self, tree: &mut Tree, id: WidgetId, x: f32, y: f32) {
-        // Store origin in tree
-        tree.set_origin(id, x, y);
-
-        // Calculate delta from previous position
-        let dx = x - self.bounds.x;
-        let dy = y - self.bounds.y;
-        self.bounds.x = x;
-        self.bounds.y = y;
-
-        // If position changed, offset all children by the delta
-        // This avoids needing tree access - children already have their relative
-        // positions set during layout, we just need to translate them
-        if (dx.abs() > f32::EPSILON || dy.abs() > f32::EPSILON) && !self.children_source.is_empty()
-        {
-            // Children positions need to be updated but we don't have tree access.
-            // The layout engine already positioned children relative to the container
-            // during the layout pass. Paint handles the final positioning via transforms.
-            // No action needed here - paint() uses self.bounds to compute child offsets.
-        }
-
-        // Update scrollbar container positions now that we have the correct origin.
-        // Scrollbar layout calculates positions using self.bounds, but bounds.x/y are
-        // only set correctly after set_origin is called by the parent.
-        if self.scroll_axis != ScrollAxis::None {
-            self.update_scrollbar_origins(tree);
-        }
-    }
-
-    fn bounds(&self) -> Rect {
-        self.bounds
-    }
-
     fn has_focus_descendant(&self, tree: &Tree, focused_id: WidgetId) -> bool {
         self.widget_has_focus(tree, focused_id)
     }
 
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
+        // Get bounds from Tree (single source of truth)
+        let bounds = tree.get_bounds(id).unwrap_or_default();
+
         let background = self.animated_background(tree);
         let corner_radius = self.animated_corner_radius(tree);
         let corner_curvature = self.corner_curvature.get();
@@ -1645,7 +1534,7 @@ impl Widget for Container {
         let transform_origin = self.transform_origin.get();
 
         // LOCAL bounds (0,0 is widget origin) - all drawing uses these
-        let local_bounds = Rect::new(0.0, 0.0, self.bounds.width, self.bounds.height);
+        let local_bounds = Rect::new(0.0, 0.0, bounds.width, bounds.height);
         ctx.set_bounds(local_bounds);
 
         // Apply user transform (rotation, scale, user-specified translate)
@@ -1712,9 +1601,9 @@ impl Widget for Container {
 
         // Draw children - each gets its own node with position transform
         for &child_id in self.children_source.get() {
-            // Get child bounds from tree - these are in LOCAL coordinates (relative to parent)
+            // Get child bounds from Tree - these are in LOCAL coordinates (relative to parent)
             let child_bounds = tree
-                .with_widget(child_id, |child| child.bounds())
+                .get_bounds(child_id)
                 .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
             // Child's LOCAL bounds (0,0 origin with its own width/height)
             let child_local = Rect::new(0.0, 0.0, child_bounds.width, child_bounds.height);
@@ -1756,8 +1645,8 @@ impl Widget for Container {
             // This clips the ripple without affecting children
             ctx.set_overlay_clip(local_bounds, corner_radius, corner_curvature);
 
-            let max_dist_x = local_cx.max(self.bounds.width - local_cx);
-            let max_dist_y = local_cy.max(self.bounds.height - local_cy);
+            let max_dist_x = local_cx.max(bounds.width - local_cx);
+            let max_dist_y = local_cy.max(bounds.height - local_cy);
             let max_radius = (max_dist_x * max_dist_x + max_dist_y * max_dist_y).sqrt();
             let current_radius = max_radius * self.ripple.progress;
 

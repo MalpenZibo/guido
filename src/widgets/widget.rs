@@ -39,7 +39,7 @@ impl Default for Color {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Rect {
     pub x: f32,
     pub y: f32,
@@ -392,20 +392,6 @@ pub trait Widget: Send + Sync {
         let _ = (tree, id, event);
         EventResponse::Ignored
     }
-
-    /// Set the widget's position (called by parent after layout).
-    ///
-    /// Implementations should:
-    /// 1. Store the origin in the Tree via `tree.set_origin(id, x, y)`
-    /// 2. Cache locally if needed for internal calculations
-    fn set_origin(&mut self, tree: &mut Tree, id: WidgetId, x: f32, y: f32);
-
-    /// Get the widget's bounding rectangle (for hit testing).
-    ///
-    /// Note: For widgets in the Tree, prefer `tree.get_bounds(id)` when available.
-    /// This method is kept for internal widgets (like scrollbars) that aren't
-    /// registered in the Tree.
-    fn bounds(&self) -> Rect;
 
     /// Check if this widget has a descendant with the given ID.
     /// Used by containers to check if a child has focus.

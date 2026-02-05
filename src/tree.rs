@@ -41,14 +41,6 @@ pub struct WidgetId {
 }
 
 impl WidgetId {
-    /// A sentinel ID representing an unregistered widget.
-    /// Tree operations with this ID are no-ops.
-    /// Used for internal widgets (like scrollbars) that aren't in the Tree.
-    pub const UNREGISTERED: Self = Self {
-        index: u32::MAX,
-        generation: u32::MAX,
-    };
-
     /// Create a new WidgetId with the given index and generation.
     /// This is internal - users get IDs from Tree::register().
     fn new(index: u32, generation: u32) -> Self {
@@ -240,10 +232,6 @@ impl Tree {
                 Size::zero()
             }
             fn paint(&self, _: &Tree, _: WidgetId, _: &mut crate::renderer::PaintContext) {}
-            fn set_origin(&mut self, _: &mut Tree, _: WidgetId, _: f32, _: f32) {}
-            fn bounds(&self) -> crate::widgets::Rect {
-                crate::widgets::Rect::new(0.0, 0.0, 0.0, 0.0)
-            }
         }
 
         // Extract widget
@@ -451,12 +439,6 @@ mod tests {
         }
 
         fn paint(&self, _tree: &Tree, _id: WidgetId, _ctx: &mut crate::renderer::PaintContext) {}
-
-        fn set_origin(&mut self, _tree: &mut Tree, _id: WidgetId, _x: f32, _y: f32) {}
-
-        fn bounds(&self) -> crate::widgets::Rect {
-            crate::widgets::Rect::new(0.0, 0.0, 0.0, 0.0)
-        }
     }
 
     #[test]
@@ -585,9 +567,9 @@ mod tests {
         let mut tree = Tree::new();
         let id = tree.register(Box::new(MockWidget::new()));
 
-        // Read widget bounds
-        let bounds = tree.with_widget(id, |w| w.bounds());
-        assert!(bounds.is_some());
+        // Test that we can access widget through with_widget
+        let exists = tree.with_widget(id, |_w| true);
+        assert!(exists.is_some());
     }
 
     #[test]

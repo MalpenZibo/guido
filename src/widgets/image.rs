@@ -112,7 +112,6 @@ pub struct Image {
     width: Option<MaybeDyn<f32>>,
     height: Option<MaybeDyn<f32>>,
     content_fit: ContentFit,
-    bounds: Rect,
     /// Cached intrinsic size from the image source
     intrinsic_size: Option<(u32, u32)>,
     /// Cached source for change detection
@@ -127,7 +126,6 @@ impl Image {
             width: None,
             height: None,
             content_fit: ContentFit::default(),
-            bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
             intrinsic_size: None,
             cached_source: None,
         }
@@ -251,8 +249,6 @@ impl Widget for Image {
         self.cached_source = Some(current_source);
 
         let size = self.calculate_size(&constraints);
-        self.bounds.width = size.width;
-        self.bounds.height = size.height;
 
         // Cache constraints and size for partial layout
         tree.cache_layout(id, constraints, size);
@@ -263,11 +259,12 @@ impl Widget for Image {
         size
     }
 
-    fn paint(&self, _tree: &Tree, _id: WidgetId, ctx: &mut PaintContext) {
+    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
         // Draw in LOCAL coordinates (0,0 is widget origin)
         // Parent Container sets position transform
         if let Some(ref source) = self.cached_source {
-            let local_bounds = Rect::new(0.0, 0.0, self.bounds.width, self.bounds.height);
+            let size = tree.cached_size(id).unwrap_or_default();
+            let local_bounds = Rect::new(0.0, 0.0, size.width, size.height);
             ctx.draw_image(source.clone(), local_bounds, self.content_fit);
         }
     }
@@ -279,16 +276,6 @@ impl Widget for Image {
         _event: &super::widget::Event,
     ) -> EventResponse {
         EventResponse::Ignored
-    }
-
-    fn set_origin(&mut self, tree: &mut Tree, id: WidgetId, x: f32, y: f32) {
-        tree.set_origin(id, x, y);
-        self.bounds.x = x;
-        self.bounds.y = y;
-    }
-
-    fn bounds(&self) -> Rect {
-        self.bounds
     }
 }
 
