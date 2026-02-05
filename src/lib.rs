@@ -95,8 +95,9 @@ use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 
 use crate::{
     jobs::{
-        drain_pending_jobs, handle_animation_jobs, handle_layout_jobs, handle_reconcile_jobs,
-        handle_unregister_jobs, has_pending_jobs, init_wakeup, take_frame_request,
+        drain_pending_jobs, handle_animation_jobs, handle_layout_jobs, handle_paint_jobs,
+        handle_reconcile_jobs, handle_unregister_jobs, has_pending_jobs, init_wakeup,
+        take_frame_request,
     },
     tree::{Tree, WidgetId},
 };
@@ -173,6 +174,19 @@ fn process_surface_commands(
         }
     }
     true
+}
+
+/// Walk the render tree after painting and cache each node's output.
+/// Also clears needs_paint flags for cached widgets.
+fn cache_paint_results(tree: &mut Tree, node: &renderer::RenderNode) {
+    let widget_id = WidgetId::from_u64(node.id);
+    if tree.contains(widget_id) {
+        tree.cache_paint(widget_id, node.clone());
+        tree.clear_needs_paint(widget_id);
+    }
+    for child in &node.children {
+        cache_paint_results(tree, child);
+    }
 }
 
 /// Render a single surface using the hierarchical renderer.
@@ -298,6 +312,9 @@ fn render_surface(
 
         handle_unregister_jobs(&jobs, tree);
 
+        // Mark paint-dirty widgets from Paint jobs
+        handle_paint_jobs(&jobs, tree);
+
         // Collect layout roots from jobs
         for root in handle_reconcile_jobs(&jobs, tree) {
             layout_roots.insert(root);
@@ -311,21 +328,31 @@ fn render_surface(
         if !layout_roots.is_empty() {
             // Partial layout: only update dirty subtrees starting from boundaries
             let roots: Vec<_> = layout_roots.drain().collect();
-            for root_id in roots {
+            for root_id in &roots {
                 // Use cached constraints for boundaries, or fall back to parent constraints
-                let cached = tree.cached_constraints(root_id).unwrap_or(constraints);
+                let cached = tree.cached_constraints(*root_id).unwrap_or(constraints);
 
-                tree.with_widget_mut(root_id, |widget, id, tree| {
+                tree.with_widget_mut(*root_id, |widget, id, tree| {
                     widget.layout(tree, id, cached);
                 });
+            }
+            // Layout may reposition children — conservatively mark subtrees as needing paint
+            for root_id in &roots {
+                tree.mark_subtree_needs_paint(*root_id);
             }
         } else if needs_resize {
             // Full layout from root only when explicitly needed (first frame, resize, etc.)
             tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
                 widget.layout(tree, id, constraints);
             });
+            tree.mark_subtree_needs_paint(surface.widget_id);
         }
         // If neither condition is true, skip layout entirely - nothing is dirty
+
+        // Force full repaint on resize, scale change, or during initialization
+        if force_render_surface || needs_resize || scale_changed {
+            tree.mark_subtree_needs_paint(surface.widget_id);
+        }
 
         // Clear and reuse render tree (preserves capacity)
         surface.render_tree.clear();
@@ -336,6 +363,9 @@ fn render_surface(
             let mut ctx = PaintContext::new(&mut surface.root_node);
             widget.paint(tree, id, &mut ctx);
         });
+
+        // Cache paint results and clear needs_paint flags
+        cache_paint_results(tree, &surface.root_node);
 
         // Take ownership of root node temporarily, add to tree, then restore
         let root = std::mem::replace(&mut surface.root_node, renderer::RenderNode::new(0));
