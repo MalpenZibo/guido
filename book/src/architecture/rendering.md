@@ -143,23 +143,29 @@ struct Border {
 The render tree handles transforms hierarchically:
 
 ```rust
-fn paint(&self, ctx: &mut PaintContext) {
+fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
+    // Get bounds from Tree (single source of truth)
+    let bounds = tree.get_bounds(id).unwrap_or_default();
+
     // Apply user transform (rotation, scale) if set
     if !self.user_transform.is_identity() {
         ctx.apply_transform_with_origin(self.user_transform, self.transform_origin);
     }
 
     // Paint content in LOCAL coordinates (0,0 is widget origin)
-    let local_bounds = Rect::new(0.0, 0.0, self.bounds.width, self.bounds.height);
+    let local_bounds = Rect::new(0.0, 0.0, bounds.width, bounds.height);
     ctx.draw_rounded_rect(local_bounds, Color::BLUE, 8.0);
 
     // Paint children - parent sets their position transform
-    for child in &self.children {
-        let mut child_ctx = ctx.add_child(child.id(), local_bounds);
-        let offset_x = child.bounds().x - self.bounds.x;
-        let offset_y = child.bounds().y - self.bounds.y;
-        child_ctx.set_transform(Transform::translate(offset_x, offset_y));
-        child.paint(&mut child_ctx);
+    for &child_id in self.children.iter() {
+        // Get child bounds from Tree - in LOCAL coordinates (relative to parent)
+        let child_bounds = tree.get_bounds(child_id).unwrap_or_default();
+        let child_local = Rect::new(0.0, 0.0, child_bounds.width, child_bounds.height);
+        let mut child_ctx = ctx.add_child(child_id.as_u64(), child_local);
+        child_ctx.set_transform(Transform::translate(child_bounds.x, child_bounds.y));
+        tree.with_widget(child_id, |child| {
+            child.paint(tree, child_id, &mut child_ctx);
+        });
     }
 }
 ```

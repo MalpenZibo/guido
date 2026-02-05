@@ -221,8 +221,6 @@ pub trait Widget: Send + Sync {
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size;
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse;
-    fn set_origin(&mut self, tree: &mut Tree, id: WidgetId, x: f32, y: f32);
-    fn bounds(&self) -> Rect;
 
     /// Check if a descendant has the given ID (for focus tracking)
     fn has_focus_descendant(&self, tree: &Tree, id: WidgetId) -> bool { false }
@@ -231,6 +229,8 @@ pub trait Widget: Send + Sync {
     fn register_children(&mut self, tree: &mut Tree, id: WidgetId) {}
 }
 ```
+
+**Note:** Widget bounds and origins are stored in the `Tree`, not on individual widgets. Use `tree.get_bounds(id)` to retrieve a widget's bounds and `tree.set_origin(id, x, y)` to position widgets during layout.
 
 ## Event Flow
 

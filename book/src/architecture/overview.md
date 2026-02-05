@@ -118,12 +118,10 @@ pub trait Widget: Send + Sync {
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size;
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse;
-    fn set_origin(&mut self, tree: &mut Tree, id: WidgetId, x: f32, y: f32);
-    fn bounds(&self) -> Rect;
 }
 ```
 
-Widgets access children through the `Tree` parameter, which provides centralized widget storage and layout metadata.
+Widgets access children through the `Tree` parameter, which provides centralized widget storage and layout metadata. Widget bounds and origins are stored in the `Tree` (use `tree.get_bounds(id)` and `tree.set_origin(id, x, y)`).
 
 ## Constraints System
 

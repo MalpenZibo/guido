@@ -11,8 +11,6 @@ pub trait Widget: Send + Sync {
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size;
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse;
-    fn set_origin(&mut self, tree: &mut Tree, id: WidgetId, x: f32, y: f32);
-    fn bounds(&self) -> Rect;
 }
 ```
 
@@ -21,8 +19,13 @@ pub trait Widget: Send + Sync {
 - **layout** - Calculate the widget's size given tree access, widget ID, and constraints
 - **paint** - Draw the widget using tree for child access
 - **event** - Handle input events with tree access
-- **set_origin** - Position the widget and store origin in tree (called by parent during layout)
-- **bounds** - Get the bounding rectangle for hit testing
+
+### Bounds and Origins
+
+Widget bounds and origins are stored in the `Tree`, not on individual widgets:
+
+- Use `tree.get_bounds(id)` to retrieve a widget's bounding rectangle for hit testing
+- Use `tree.set_origin(id, x, y)` to position widgets during layout (called by parent layouts)
 
 ## Built-in Widgets
 
