@@ -460,8 +460,4 @@ impl Widget for OwnedWidget {
     fn has_focus_descendant(&self, tree: &Tree, focused_id: WidgetId) -> bool {
         self.inner.has_focus_descendant(tree, focused_id)
     }
-
-    fn is_relayout_boundary(&self) -> bool {
-        self.inner.is_relayout_boundary()
-    }
 }

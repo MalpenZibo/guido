@@ -404,14 +404,6 @@ pub trait Widget: Send + Sync {
         false
     }
 
-    /// Check if this widget is a relayout boundary.
-    /// Relayout boundaries have fixed size - layout changes inside
-    /// don't affect their own size or parent layout.
-    /// Default returns false (most widgets are not boundaries).
-    fn is_relayout_boundary(&self) -> bool {
-        false
-    }
-
     /// Register this widget's pending children with the arena.
     ///
     /// Called during widget tree registration to recursively register all

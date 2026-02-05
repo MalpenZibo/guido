@@ -280,11 +280,6 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 self.ensure_built();
                 self.__inner.read().unwrap().as_ref().unwrap().has_focus_descendant(tree, focused_id)
             }
-
-            fn is_relayout_boundary(&self) -> bool {
-                self.ensure_built();
-                self.__inner.read().unwrap().as_ref().unwrap().is_relayout_boundary()
-            }
         }
 
         #vis fn #constructor_name() -> #struct_name {

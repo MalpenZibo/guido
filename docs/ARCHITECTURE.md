@@ -213,30 +213,22 @@ All widgets implement this trait:
 pub trait Widget: Send + Sync {
     /// Advance animations for this widget and children.
     /// Returns true if any animations are still active.
-    fn advance_animations(&mut self, tree: &Tree) -> bool { false }
+    fn advance_animations(&mut self, tree: &Tree, id: WidgetId) -> bool { false }
 
     /// Reconcile dynamic children. Returns true if children changed.
-    fn reconcile_children(&mut self, tree: &mut Tree) -> bool { false }
+    fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool { false }
 
-    fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size;
-    fn paint(&self, tree: &Tree, ctx: &mut PaintContext);
-    fn event(&mut self, tree: &Tree, event: &Event) -> EventResponse;
+    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size;
+    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
+    fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse;
     fn set_origin(&mut self, x: f32, y: f32);
     fn bounds(&self) -> Rect;
-
-    /// Get the widget's unique identifier
-    fn id(&self) -> WidgetId;
 
     /// Check if a descendant has the given ID (for focus tracking)
     fn has_focus_descendant(&self, tree: &Tree, id: WidgetId) -> bool { false }
 
-    /// Check if this widget is a relayout boundary.
-    /// Widgets with fixed size are boundaries - layout changes
-    /// inside don't affect their own size or parent layout.
-    fn is_relayout_boundary(&self) -> bool { false }
-
     /// Register this widget's pending children with the tree.
-    fn register_children(&mut self, tree: &mut Tree) {}
+    fn register_children(&mut self, tree: &mut Tree, id: WidgetId) {}
 }
 ```
 
