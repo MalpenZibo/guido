@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::default_font_family;
-use crate::jobs::{JobType, push_job};
+use crate::jobs::{JobRequest, request_job};
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
     CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, clipboard_copy, clipboard_paste, has_focus,
@@ -265,7 +265,8 @@ impl TextInput {
         let cached_char_count = cached_value.chars().count();
         let default_family = default_font_family();
         Self {
-            widget_id: WidgetId::next(),
+            // widget_id will be assigned by Tree::register()
+            widget_id: WidgetId::placeholder(),
             value: signal,
             cached_value,
             cached_char_count,
@@ -512,7 +513,7 @@ impl TextInput {
                 self.last_cursor_toggle = now;
             }
             // Keep requesting frames for blinking
-            push_job(self.widget_id, JobType::Paint);
+            request_job(self.widget_id, JobRequest::Paint);
         }
     }
 
@@ -544,7 +545,7 @@ impl TextInput {
             }
 
             // Keep requesting frames while a key is held
-            push_job(self.widget_id, JobType::Paint);
+            request_job(self.widget_id, JobRequest::Paint);
         }
     }
 
@@ -1080,13 +1081,13 @@ impl Widget for TextInput {
         }
     }
 
-    fn event(&mut self, _tree: &Tree, event: &Event) -> EventResponse {
+    fn event(&mut self, _tree: &mut Tree, event: &Event) -> EventResponse {
         match event {
             Event::MouseDown { x, y, button } => {
                 if self.bounds.contains(*x, *y) && *button == MouseButton::Left {
                     // Request focus
                     request_focus(self.widget_id);
-                    push_job(self.widget_id, JobType::Paint);
+                    request_job(self.widget_id, JobRequest::Paint);
 
                     // Set cursor position
                     let char_index = self.char_index_at_x(*x);
@@ -1115,7 +1116,7 @@ impl Widget for TextInput {
                     let char_index = self.char_index_at_x(*x);
                     self.selection.cursor = char_index;
                     self.ensure_cursor_visible();
-                    push_job(self.widget_id, JobType::Paint);
+                    request_job(self.widget_id, JobRequest::Paint);
                     return EventResponse::Handled;
                 }
             }
@@ -1135,7 +1136,7 @@ impl Widget for TextInput {
 
                     let response = self.handle_key(key, modifiers.ctrl, modifiers.shift);
                     if response == EventResponse::Handled {
-                        push_job(self.widget_id, JobType::Paint);
+                        request_job(self.widget_id, JobRequest::Paint);
                     }
                     return response;
                 }
@@ -1153,7 +1154,7 @@ impl Widget for TextInput {
                     release_focus(self.widget_id);
                     self.cursor_visible = false;
                     self.is_dragging = false;
-                    push_job(self.widget_id, JobType::Paint);
+                    request_job(self.widget_id, JobRequest::Paint);
                 }
             }
             Event::MouseLeave => {
@@ -1179,6 +1180,10 @@ impl Widget for TextInput {
 
     fn id(&self) -> WidgetId {
         self.widget_id
+    }
+
+    fn set_id(&mut self, id: WidgetId) {
+        self.widget_id = id;
     }
 }
 

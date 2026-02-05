@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::jobs::{JobType, push_job};
+use crate::jobs::{JobRequest, JobType, request_job};
 use crate::layout::{Constraints, Size};
 use crate::reactive::{OwnerId, dispose_owner, with_signal_tracking};
 use crate::renderer::PaintContext;
@@ -73,11 +73,10 @@ impl ChildrenSource {
     /// This should be called before layout. It recursively registers the widget tree.
     pub fn register_pending(&mut self, tree: &mut Tree, parent_id: WidgetId) {
         for mut widget in self.pending_static.drain(..) {
-            let widget_id = widget.id();
             // Recursively register children first
             widget.register_children(tree);
-            // Register this widget
-            tree.register(widget_id, widget);
+            // Register this widget - tree assigns the ID
+            let widget_id = tree.register(widget);
             tree.set_parent(widget_id, parent_id);
             self.merged.push(widget_id);
         }
@@ -174,10 +173,10 @@ impl ChildrenSource {
                             } else {
                                 // Create new widget and register in tree
                                 let mut widget = (item.widget_fn)();
-                                let widget_id = widget.id();
                                 // Recursively register children first
                                 widget.register_children(tree);
-                                tree.register(widget_id, widget);
+                                // Register this widget - tree assigns the ID
+                                let widget_id = tree.register(widget);
                                 tree.set_parent(widget_id, parent_id);
                                 new_merged.push(widget_id);
                             }
@@ -277,13 +276,13 @@ impl Drop for ChildrenSource {
         // Push unregister jobs - will be processed in main loop
         // This defers the actual unregistration so Drop doesn't need tree access
         for widget_id in self.merged.drain(..) {
-            push_job(widget_id, JobType::Unregister);
+            request_job(widget_id, JobRequest::Unregister);
         }
         // Also push jobs for any widgets still in dynamic caches
         for segment in &mut self.segments {
             if let SegmentType::Dynamic { cached, .. } = segment {
                 for widget_id in cached.values() {
-                    push_job(*widget_id, JobType::Unregister);
+                    request_job(*widget_id, JobRequest::Unregister);
                 }
                 cached.clear();
             }
@@ -440,7 +439,7 @@ impl Widget for OwnedWidget {
         self.inner.paint(tree, ctx)
     }
 
-    fn event(&mut self, tree: &Tree, event: &Event) -> EventResponse {
+    fn event(&mut self, tree: &mut Tree, event: &Event) -> EventResponse {
         self.inner.event(tree, event)
     }
 
@@ -454,6 +453,10 @@ impl Widget for OwnedWidget {
 
     fn id(&self) -> WidgetId {
         self.inner.id()
+    }
+
+    fn set_id(&mut self, id: WidgetId) {
+        self.inner.set_id(id);
     }
 
     fn has_focus_descendant(&self, tree: &Tree, id: WidgetId) -> bool {

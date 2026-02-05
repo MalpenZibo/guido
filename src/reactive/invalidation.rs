@@ -22,7 +22,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
-use crate::jobs::{JobType, push_job};
+use crate::jobs::{JobRequest, JobType, request_job};
 use crate::tree::WidgetId;
 
 /// Context for tracking signal reads and associating them with a widget
@@ -104,7 +104,15 @@ pub fn notify_signal_change(signal_id: usize) {
         .unwrap_or_default();
 
     for sub in &subscribers {
-        push_job(sub.widget_id, sub.job_type);
+        // Convert JobType to JobRequest for the new API
+        let request = match sub.job_type {
+            JobType::Layout => JobRequest::Layout,
+            JobType::Paint => JobRequest::Paint,
+            JobType::Reconcile => JobRequest::Reconcile,
+            JobType::Unregister => JobRequest::Unregister,
+            JobType::Animation => JobRequest::Animation(crate::jobs::RequiredJob::None),
+        };
+        request_job(sub.widget_id, request);
     }
 }
 

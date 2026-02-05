@@ -200,7 +200,8 @@ The jobs system connects reactive signals to widget invalidation.
 
 **How It Works:**
 - Signals push jobs to a global queue when values change
-- `push_job()` is thread-safe and wakes the event loop
+- `request_job()` is thread-safe and wakes the event loop
+- For animations, `request_job()` with `JobRequest::Animation(RequiredJob)` adds both the Animation job and any required follow-up job (Paint or Layout)
 - Main loop drains jobs and processes by type in order
 - Animation jobs run after paint to advance state for next frame
 

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::advance_anim;
 use crate::animation::Transition;
-use crate::jobs::{JobType, push_job};
+use crate::jobs::{JobRequest, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{IntoMaybeDyn, MaybeDyn, focused_widget, register_layout_signal};
 use crate::renderer::{GradientDir, PaintContext, Shadow};
@@ -839,6 +839,23 @@ impl Container {
             self.effective_transform_target(tree)
         })
     }
+
+    /// Check if any state layer properties have animations enabled
+    fn has_animated_state_properties(&self) -> bool {
+        self.background_anim.is_some()
+            || self.corner_radius_anim.is_some()
+            || self.border_color_anim.is_some()
+            || self.transform_anim.is_some()
+    }
+
+    /// Request repaint for state changes (hover/press), with Animation job if needed
+    fn request_state_change_repaint(&self) {
+        if self.has_animated_state_properties() {
+            request_job(self.widget_id, JobRequest::Animation(RequiredJob::Paint));
+        } else {
+            request_job(self.widget_id, JobRequest::Paint);
+        }
+    }
 }
 
 /// Convert elevation level to shadow parameters
@@ -931,6 +948,10 @@ impl Widget for Container {
             && let Some(ref config) = state.ripple
         {
             let ripple_animating = self.ripple.advance(config);
+            if ripple_animating {
+                // Ripple is paint-only, request animation continuation with paint
+                request_job(self.widget_id, JobRequest::Animation(RequiredJob::Paint));
+            }
             any_animating = any_animating || ripple_animating;
         }
 
@@ -940,7 +961,8 @@ impl Widget for Container {
         if has_scroll_velocity {
             let scroll_animating = self.scroll_state.advance_momentum();
             if scroll_animating {
-                push_job(self.widget_id, JobType::Paint);
+                // Kinetic scroll is paint-only, request animation continuation with paint
+                request_job(self.widget_id, JobRequest::Animation(RequiredJob::Paint));
             }
             any_animating = any_animating || scroll_animating;
         }
@@ -979,10 +1001,8 @@ impl Widget for Container {
             any_animating = true;
         }
 
-        // If still animating, push Animation job for next frame
-        if any_animating {
-            push_job(self.widget_id, JobType::Animation);
-        }
+        // Note: No final Animation push needed here - each animation source
+        // (advance_anim! macro, ripple, kinetic scroll) handles its own continuation
 
         any_animating
     }
@@ -1181,8 +1201,8 @@ impl Widget for Container {
                     anim.set_immediate(effective_target);
                 } else {
                     anim.animate_to(effective_target);
-                    push_job(self.widget_id, JobType::Animation);
-                    push_job(self.widget_id, JobType::Paint);
+                    // Width affects layout, so use RequiredJob::Layout
+                    request_job(self.widget_id, JobRequest::Animation(RequiredJob::Layout));
                 }
             }
         }
@@ -1199,8 +1219,8 @@ impl Widget for Container {
                     anim.set_immediate(effective_target);
                 } else {
                     anim.animate_to(effective_target);
-                    push_job(self.widget_id, JobType::Animation);
-                    push_job(self.widget_id, JobType::Paint);
+                    // Height affects layout, so use RequiredJob::Layout
+                    request_job(self.widget_id, JobRequest::Animation(RequiredJob::Layout));
                 }
             }
         }
@@ -1360,15 +1380,7 @@ impl Widget for Container {
                     let was_hovered = self.is_hovered;
                     self.is_hovered = true;
                     if !was_hovered && self.hover_state.is_some() {
-                        // Push Animation job if there are animated properties
-                        if self.background_anim.is_some()
-                            || self.corner_radius_anim.is_some()
-                            || self.border_color_anim.is_some()
-                            || self.transform_anim.is_some()
-                        {
-                            push_job(self.widget_id, JobType::Animation);
-                        }
-                        push_job(self.widget_id, JobType::Paint);
+                        self.request_state_change_repaint();
                     }
                     if let Some(ref callback) = self.on_hover {
                         callback(true);
@@ -1382,15 +1394,7 @@ impl Widget for Container {
 
                 if was_hovered != self.is_hovered {
                     if self.hover_state.is_some() {
-                        // Push Animation job if there are animated properties
-                        if self.background_anim.is_some()
-                            || self.corner_radius_anim.is_some()
-                            || self.border_color_anim.is_some()
-                            || self.transform_anim.is_some()
-                        {
-                            push_job(self.widget_id, JobType::Animation);
-                        }
-                        push_job(self.widget_id, JobType::Paint);
+                        self.request_state_change_repaint();
                     }
                     if let Some(ref callback) = self.on_hover {
                         callback(self.is_hovered);
@@ -1424,21 +1428,12 @@ impl Widget for Container {
                             (screen_x - self.bounds.x, screen_y - self.bounds.y)
                         };
                         self.ripple.start(local_x, local_y);
-                        // Push Animation job for ripple
-                        push_job(self.widget_id, JobType::Animation);
-                        push_job(self.widget_id, JobType::Paint);
+                        // Ripple animation needs Animation + Paint
+                        request_job(self.widget_id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
                     if !was_pressed && self.pressed_state.is_some() {
-                        // Push Animation job if there are animated properties
-                        if self.background_anim.is_some()
-                            || self.corner_radius_anim.is_some()
-                            || self.border_color_anim.is_some()
-                            || self.transform_anim.is_some()
-                        {
-                            push_job(self.widget_id, JobType::Animation);
-                        }
-                        push_job(self.widget_id, JobType::Paint);
+                        self.request_state_change_repaint();
                     }
                     if self.on_click.is_some() {
                         return EventResponse::Handled;
@@ -1465,21 +1460,12 @@ impl Widget for Container {
                             (screen_x - self.bounds.x, screen_y - self.bounds.y)
                         };
                         self.ripple.start_fade(local_x, local_y);
-                        // Push Animation job for ripple fade
-                        push_job(self.widget_id, JobType::Animation);
-                        push_job(self.widget_id, JobType::Paint);
+                        // Ripple fade animation needs Animation + Paint
+                        request_job(self.widget_id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
                     if was_pressed && self.pressed_state.is_some() {
-                        // Push Animation job if there are animated properties
-                        if self.background_anim.is_some()
-                            || self.corner_radius_anim.is_some()
-                            || self.border_color_anim.is_some()
-                            || self.transform_anim.is_some()
-                        {
-                            push_job(self.widget_id, JobType::Animation);
-                        }
-                        push_job(self.widget_id, JobType::Paint);
+                        self.request_state_change_repaint();
                     }
                     if self.bounds.contains_rounded(*x, *y, corner_radius)
                         && let Some(ref callback) = self.on_click
@@ -1504,23 +1490,14 @@ impl Widget for Container {
                 if self.ripple.is_active() {
                     self.ripple
                         .start_fade_to_center(self.bounds.width, self.bounds.height);
-                    // Push Animation job for ripple fade
-                    push_job(self.widget_id, JobType::Animation);
-                    push_job(self.widget_id, JobType::Paint);
+                    // Ripple fade animation needs Animation + Paint
+                    request_job(self.widget_id, JobRequest::Animation(RequiredJob::Paint));
                 }
 
                 if (was_hovered && self.hover_state.is_some())
                     || (was_pressed && self.pressed_state.is_some())
                 {
-                    // Push Animation job if there are animated properties
-                    if self.background_anim.is_some()
-                        || self.corner_radius_anim.is_some()
-                        || self.border_color_anim.is_some()
-                        || self.transform_anim.is_some()
-                    {
-                        push_job(self.widget_id, JobType::Animation);
-                    }
-                    push_job(self.widget_id, JobType::Paint);
+                    self.request_state_change_repaint();
                 }
             }
             Event::Scroll {
@@ -1534,13 +1511,17 @@ impl Widget for Container {
                     if self.scroll_axis != ScrollAxis::None {
                         let consumed = self.apply_scroll(*delta_x, *delta_y, *source);
                         if consumed {
-                            // Push Animation job for kinetic scrolling if has velocity
+                            // Kinetic scrolling needs Animation + Paint if has velocity
                             let has_velocity = self.scroll_state.velocity_x.abs() > 0.5
                                 || self.scroll_state.velocity_y.abs() > 0.5;
                             if has_velocity {
-                                push_job(self.widget_id, JobType::Animation);
+                                request_job(
+                                    self.widget_id,
+                                    JobRequest::Animation(RequiredJob::Paint),
+                                );
+                            } else {
+                                request_job(self.widget_id, JobRequest::Paint);
                             }
-                            push_job(self.widget_id, JobType::Paint);
                             return EventResponse::Handled;
                         }
                     }

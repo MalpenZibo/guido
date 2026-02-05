@@ -1,7 +1,7 @@
 //! Scrollable container functionality.
 
 use crate::animation::{SpringConfig, Transition};
-use crate::jobs::{JobType, push_job};
+use crate::jobs::{JobRequest, RequiredJob, request_job};
 use crate::layout::Constraints;
 use crate::renderer::PaintContext;
 use crate::transform::Transform;
@@ -157,8 +157,7 @@ impl Container {
             anim.animate_to(target_scale);
             if anim.is_animating() {
                 let _ = anim.advance(); // Paint-only, ignore result
-                push_job(self.widget_id, JobType::Animation);
-                push_job(self.widget_id, JobType::Paint);
+                request_job(self.widget_id, JobRequest::Animation(RequiredJob::Paint));
             }
         }
 
@@ -502,7 +501,7 @@ impl Container {
     /// Handle scrollbar-related events, returns EventResponse if handled
     pub(super) fn handle_scrollbar_event(
         &mut self,
-        tree: &Tree,
+        tree: &mut Tree,
         event: &Event,
     ) -> Option<EventResponse> {
         if self.scroll_axis == ScrollAxis::None
@@ -559,8 +558,7 @@ impl Container {
                 }
 
                 if needs_repaint {
-                    push_job(self.widget_id, JobType::Animation);
-                    push_job(self.widget_id, JobType::Paint);
+                    request_job(self.widget_id, JobRequest::Animation(RequiredJob::Paint));
                 }
             }
 
@@ -570,7 +568,7 @@ impl Container {
                     if let Some(ref mut handle) = self.v_scrollbar_handle {
                         handle.event(tree, event);
                     }
-                    push_job(self.widget_id, JobType::Paint);
+                    request_job(self.widget_id, JobRequest::Paint);
                     return Some(EventResponse::Handled);
                 }
                 if self.scroll_state.h_scrollbar_dragging {
@@ -578,7 +576,7 @@ impl Container {
                     if let Some(ref mut handle) = self.h_scrollbar_handle {
                         handle.event(tree, event);
                     }
-                    push_job(self.widget_id, JobType::Paint);
+                    request_job(self.widget_id, JobRequest::Paint);
                     return Some(EventResponse::Handled);
                 }
             }
@@ -594,13 +592,13 @@ impl Container {
                     if let Some(ref mut handle) = self.h_scrollbar_handle {
                         handle.event(tree, event);
                     }
-                    push_job(self.widget_id, JobType::Paint);
+                    request_job(self.widget_id, JobRequest::Paint);
                 }
                 // Stop dragging
                 if self.scroll_state.scrollbar_dragging || self.scroll_state.h_scrollbar_dragging {
                     self.scroll_state.scrollbar_dragging = false;
                     self.scroll_state.h_scrollbar_dragging = false;
-                    push_job(self.widget_id, JobType::Paint);
+                    request_job(self.widget_id, JobRequest::Paint);
                 }
             }
 
@@ -612,7 +610,7 @@ impl Container {
 
     fn handle_scrollbar_click(
         &mut self,
-        tree: &Tree,
+        tree: &mut Tree,
         axis: ScrollbarAxis,
         x: f32,
         y: f32,
@@ -653,7 +651,7 @@ impl Container {
                 handle.event(tree, event);
             }
 
-            push_job(self.widget_id, JobType::Paint);
+            request_job(self.widget_id, JobRequest::Paint);
             return Some(EventResponse::Handled);
         } else if hit_area.contains(x, y) {
             // Click on track - jump to position
@@ -694,7 +692,7 @@ impl Container {
                 let ratio = (click_pos / available).clamp(0.0, 1.0);
                 let offset = ratio * self.scroll_state.max_scroll(axis);
                 self.scroll_state.set_offset(axis, offset);
-                push_job(self.widget_id, JobType::Paint);
+                request_job(self.widget_id, JobRequest::Paint);
             }
             return Some(EventResponse::Handled);
         }
@@ -729,8 +727,8 @@ impl Container {
             let new_offset =
                 (start_offset + scroll_delta).clamp(0.0, self.scroll_state.max_scroll(axis));
             self.scroll_state.set_offset(axis, new_offset);
-            push_job(self.widget_id, JobType::Animation);
-            push_job(self.widget_id, JobType::Paint);
+            // Scrollbar dragging needs Animation + Paint for smooth updates
+            request_job(self.widget_id, JobRequest::Animation(RequiredJob::Paint));
         }
 
         EventResponse::Handled
@@ -738,7 +736,7 @@ impl Container {
 
     fn update_scrollbar_hover(
         &mut self,
-        tree: &Tree,
+        tree: &mut Tree,
         axis: ScrollbarAxis,
         x: f32,
         y: f32,
