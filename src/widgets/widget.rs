@@ -388,7 +388,7 @@ pub trait Widget: Send + Sync {
 
     fn layout(&mut self, tree: &mut Tree, constraints: Constraints) -> Size;
     fn paint(&self, tree: &Tree, ctx: &mut PaintContext);
-    fn event(&mut self, tree: &Tree, event: &Event) -> EventResponse {
+    fn event(&mut self, tree: &mut Tree, event: &Event) -> EventResponse {
         let _ = (tree, event);
         EventResponse::Ignored
     }
@@ -397,8 +397,13 @@ pub trait Widget: Send + Sync {
     /// Get the widget's bounding rectangle (for hit testing)
     fn bounds(&self) -> Rect;
 
-    /// Get the widget's unique identifier
+    /// Get the widget's unique identifier.
+    /// The ID is assigned by the tree during registration.
     fn id(&self) -> WidgetId;
+
+    /// Set the widget's unique identifier.
+    /// Called by Tree::register() to assign the arena-allocated ID.
+    fn set_id(&mut self, id: WidgetId);
 
     /// Check if this widget has a descendant with the given ID.
     /// Used by containers to check if a child has focus.

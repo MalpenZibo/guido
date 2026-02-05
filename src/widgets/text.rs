@@ -33,7 +33,8 @@ impl Text {
         // The cached_text will be populated during the first layout via refresh().
         let default_family = default_font_family();
         Self {
-            widget_id: WidgetId::next(),
+            // widget_id will be assigned by Tree::register()
+            widget_id: WidgetId::placeholder(),
             content,
             color: MaybeDyn::Static(Color::WHITE),
             font_size: MaybeDyn::Static(14.0),
@@ -192,7 +193,7 @@ impl Widget for Text {
         );
     }
 
-    fn event(&mut self, _tree: &Tree, _event: &super::widget::Event) -> EventResponse {
+    fn event(&mut self, _tree: &mut Tree, _event: &super::widget::Event) -> EventResponse {
         EventResponse::Ignored
     }
 
@@ -207,6 +208,10 @@ impl Widget for Text {
 
     fn id(&self) -> WidgetId {
         self.widget_id
+    }
+
+    fn set_id(&mut self, id: WidgetId) {
+        self.widget_id = id;
     }
 }
 

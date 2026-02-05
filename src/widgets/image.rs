@@ -124,7 +124,8 @@ impl Image {
     /// Create a new image widget from a source.
     pub fn new(source: impl IntoMaybeDyn<ImageSource>) -> Self {
         Self {
-            widget_id: WidgetId::next(),
+            // widget_id will be assigned by Tree::register()
+            widget_id: WidgetId::placeholder(),
             source: source.into_maybe_dyn(),
             width: None,
             height: None,
@@ -274,7 +275,7 @@ impl Widget for Image {
         }
     }
 
-    fn event(&mut self, _tree: &Tree, _event: &super::widget::Event) -> EventResponse {
+    fn event(&mut self, _tree: &mut Tree, _event: &super::widget::Event) -> EventResponse {
         EventResponse::Ignored
     }
 
@@ -289,6 +290,10 @@ impl Widget for Image {
 
     fn id(&self) -> WidgetId {
         self.widget_id
+    }
+
+    fn set_id(&mut self, id: WidgetId) {
+        self.widget_id = id;
     }
 }
 
