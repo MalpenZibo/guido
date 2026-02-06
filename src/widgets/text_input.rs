@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::default_font_family;
-use crate::jobs::{JobRequest, request_job};
+use crate::jobs::{JobRequest, RequiredJob, request_job};
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
     CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, clipboard_copy, clipboard_paste, has_focus,
@@ -495,8 +495,9 @@ impl TextInput {
         }
     }
 
-    /// Update cursor blink state
-    fn update_cursor_blink(&mut self, id: WidgetId) {
+    /// Update cursor blink state.
+    /// Returns true if the cursor is actively blinking (widget is focused).
+    fn update_cursor_blink(&mut self, id: WidgetId) -> bool {
         if has_focus(id) {
             let now = Instant::now();
             if now.duration_since(self.last_cursor_toggle) >= Duration::from_millis(CURSOR_BLINK_MS)
@@ -504,8 +505,11 @@ impl TextInput {
                 self.cursor_visible = !self.cursor_visible;
                 self.last_cursor_toggle = now;
             }
-            // Keep requesting frames for blinking
-            request_job(id, JobRequest::Paint);
+            // Keep requesting animation frames for blinking
+            request_job(id, JobRequest::Animation(RequiredJob::Paint));
+            true
+        } else {
+            false
         }
     }
 
@@ -991,6 +995,10 @@ impl TextInput {
 }
 
 impl Widget for TextInput {
+    fn advance_animations(&mut self, _tree: &mut Tree, id: WidgetId) -> bool {
+        self.update_cursor_blink(id)
+    }
+
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
         // Text inputs are never relayout boundaries
         tree.set_relayout_boundary(id, false);
@@ -998,9 +1006,6 @@ impl Widget for TextInput {
         // Refresh cached values from reactive properties
         // This reads signals and registers layout dependencies
         self.refresh();
-
-        // Update cursor blink if focused
-        self.update_cursor_blink(id);
 
         // Handle key repeat for held keys
         self.handle_key_repeat(tree, id);
@@ -1093,9 +1098,9 @@ impl Widget for TextInput {
         match event {
             Event::MouseDown { x, y, button } => {
                 if bounds.contains(*x, *y) && *button == MouseButton::Left {
-                    // Request focus
+                    // Request focus and start cursor blink animation
                     request_focus(id);
-                    request_job(id, JobRequest::Paint);
+                    request_job(id, JobRequest::Animation(RequiredJob::Paint));
 
                     // Set cursor position
                     let char_index = self.char_index_at_x(*x, bounds);
