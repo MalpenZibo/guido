@@ -1634,6 +1634,7 @@ impl Widget for Container {
                 reused.local_transform = child_position.then(&user_part);
                 reused.parent_position = child_position;
                 reused.bounds = child_local;
+                reused.repainted = false;
                 ctx.add_child_node(reused);
                 continue;
             }

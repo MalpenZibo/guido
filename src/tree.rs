@@ -24,7 +24,18 @@
 //!   layout queue. Only dirty subtrees are re-laid out.
 
 use crate::layout::{Constraints, Size};
-use crate::widgets::Widget;
+use crate::widgets::{Rect, Widget};
+
+/// Accumulated damage region for a frame.
+#[derive(Debug, Clone)]
+pub enum DamageRegion {
+    /// No damage — nothing changed.
+    None,
+    /// Partial damage — only the given rect needs redraw.
+    Partial(Rect),
+    /// Full damage — the entire surface needs redraw.
+    Full,
+}
 
 /// Unique identifier for a widget in the tree.
 ///
@@ -108,6 +119,8 @@ pub struct Tree {
     sparse: Vec<Option<SparseEntry>>,
     /// Free list of reusable sparse indices
     free_indices: Vec<u32>,
+    /// Accumulated damage region for the current frame
+    damage: DamageRegion,
 }
 
 impl Tree {
@@ -117,6 +130,7 @@ impl Tree {
             dense: Vec::new(),
             sparse: Vec::new(),
             free_indices: Vec::new(),
+            damage: DamageRegion::None,
         }
     }
 
@@ -361,7 +375,15 @@ impl Tree {
     /// Similar to `mark_needs_layout`, this bubbles the paint-dirty flag
     /// upward so that ancestors know to repaint. Early-exits if a node
     /// is already marked (its ancestors must already be marked too).
+    ///
+    /// Also accumulates the widget's surface-relative bounds into the
+    /// damage region for Wayland damage reporting.
     pub fn mark_needs_paint(&mut self, widget_id: WidgetId) {
+        // Accumulate damage for the actual dirty widget (before propagation)
+        if let Some(bounds) = self.get_surface_relative_bounds(widget_id) {
+            self.expand_damage_rect(bounds);
+        }
+
         let mut current = widget_id;
         loop {
             let Some(dense_idx) = self.get_dense_index(current) else {
@@ -393,15 +415,71 @@ impl Tree {
     }
 
     /// Mark a widget and all its descendants as needing paint.
+    ///
+    /// Sets full damage since the entire subtree is being repainted.
     pub fn mark_subtree_needs_paint(&mut self, widget_id: WidgetId) {
+        self.damage = DamageRegion::Full;
+        self.mark_subtree_needs_paint_inner(widget_id);
+    }
+
+    fn mark_subtree_needs_paint_inner(&mut self, widget_id: WidgetId) {
         let Some(dense_idx) = self.get_dense_index(widget_id) else {
             return;
         };
         self.dense[dense_idx].needs_paint = true;
         let children = self.dense[dense_idx].children.clone();
         for child_id in children {
-            self.mark_subtree_needs_paint(child_id);
+            self.mark_subtree_needs_paint_inner(child_id);
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Damage Region Tracking
+    // -------------------------------------------------------------------------
+
+    /// Get the surface-relative bounds of a widget by walking up the parent chain
+    /// and summing origins.
+    fn get_surface_relative_bounds(&self, id: WidgetId) -> Option<Rect> {
+        let idx = self.get_dense_index(id)?;
+        let size = self.dense[idx].cached_size?;
+        let mut x = 0.0f32;
+        let mut y = 0.0f32;
+        let mut current = id;
+        loop {
+            let dense_idx = self.get_dense_index(current)?;
+            x += self.dense[dense_idx].origin.0;
+            y += self.dense[dense_idx].origin.1;
+            match self.dense[dense_idx].parent {
+                Some(parent) => current = parent,
+                None => break,
+            }
+        }
+        Some(Rect::new(x, y, size.width, size.height))
+    }
+
+    /// Union a rect into the accumulated damage region.
+    fn expand_damage_rect(&mut self, rect: Rect) {
+        self.damage = match &self.damage {
+            DamageRegion::None => DamageRegion::Partial(rect),
+            DamageRegion::Partial(existing) => {
+                let min_x = existing.x.min(rect.x);
+                let min_y = existing.y.min(rect.y);
+                let max_x = (existing.x + existing.width).max(rect.x + rect.width);
+                let max_y = (existing.y + existing.height).max(rect.y + rect.height);
+                DamageRegion::Partial(Rect::new(min_x, min_y, max_x - min_x, max_y - min_y))
+            }
+            DamageRegion::Full => DamageRegion::Full,
+        };
+    }
+
+    /// Set full-surface damage (e.g., on resize or initialization).
+    pub fn set_full_damage(&mut self) {
+        self.damage = DamageRegion::Full;
+    }
+
+    /// Take the accumulated damage region, resetting it to None.
+    pub fn take_damage(&mut self) -> DamageRegion {
+        std::mem::replace(&mut self.damage, DamageRegion::None)
     }
 
     /// Set whether a widget is a relayout boundary.

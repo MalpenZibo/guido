@@ -99,7 +99,7 @@ use crate::{
         handle_reconcile_jobs, handle_unregister_jobs, has_pending_jobs, init_wakeup,
         take_frame_request,
     },
-    tree::{Tree, WidgetId},
+    tree::{DamageRegion, Tree, WidgetId},
 };
 
 /// A surface definition that stores configuration and widget factory.
@@ -354,6 +354,13 @@ fn render_surface(
             tree.mark_subtree_needs_paint(surface.widget_id);
         }
 
+        // Skip frame if nothing needs paint
+        if !tree.needs_paint(surface.widget_id) {
+            handle_animation_jobs(&jobs, tree);
+            layout_stats::end_frame();
+            return;
+        }
+
         // Clear and reuse render tree (preserves capacity)
         surface.render_tree.clear();
         surface.root_node.clear();
@@ -372,7 +379,7 @@ fn render_surface(
         surface.render_tree.add_root(root);
 
         // Flatten tree into reused buffer
-        flatten_tree_into(&surface.render_tree, &mut surface.flattened_commands);
+        flatten_tree_into(&mut surface.render_tree, &mut surface.flattened_commands);
         renderer.render(
             wgpu_surface,
             &surface.flattened_commands,
@@ -390,6 +397,27 @@ fn render_surface(
 
         // Track layout stats (when compiled with --features layout-stats)
         layout_stats::end_frame();
+
+        // Report damage region to Wayland compositor
+        let damage = tree.take_damage();
+        match damage {
+            DamageRegion::None => {
+                // Shouldn't happen since we're rendering, but report full damage to be safe
+                wl_surface.damage_buffer(0, 0, physical_width as i32, physical_height as i32);
+            }
+            DamageRegion::Partial(rect) => {
+                let scale = scale_factor;
+                wl_surface.damage_buffer(
+                    (rect.x * scale) as i32,
+                    (rect.y * scale) as i32,
+                    (rect.width * scale).ceil() as i32,
+                    (rect.height * scale).ceil() as i32,
+                );
+            }
+            DamageRegion::Full => {
+                wl_surface.damage_buffer(0, 0, physical_width as i32, physical_height as i32);
+            }
+        }
 
         // Commit surface
         wl_surface.commit();

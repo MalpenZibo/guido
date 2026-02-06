@@ -5,6 +5,7 @@ use crate::transform_origin::TransformOrigin;
 use crate::widgets::Rect;
 
 use super::commands::DrawCommand;
+use super::flatten::FlattenedCommand;
 
 /// Clip region for a render node (in local coordinates).
 ///
@@ -22,6 +23,19 @@ pub struct ClipRegion {
 
 /// Unique identifier for a render node (typically matches widget ID).
 pub type NodeId = u64;
+
+/// Cached flattened commands from a previous frame.
+///
+/// Stored on each RenderNode after flattening, enabling incremental
+/// flatten: clean subtrees reuse their cached commands with a
+/// translation offset instead of re-flattening.
+#[derive(Debug, Clone)]
+pub struct CachedFlatten {
+    /// The flattened commands produced by this subtree.
+    pub commands: Vec<FlattenedCommand>,
+    /// The world transform at the time of caching.
+    pub world_transform: Transform,
+}
 
 /// A node in the render tree representing a widget's visual output.
 ///
@@ -68,6 +82,13 @@ pub struct RenderNode {
     /// Used for effects like ripples that need clipping to rounded corners
     /// without affecting child content.
     pub overlay_clip: Option<ClipRegion>,
+
+    /// Whether this node was freshly painted (true) or reused from cache (false).
+    /// The flattener uses this to decide whether to reuse cached flatten output.
+    pub repainted: bool,
+
+    /// Cached flattened commands from a previous flatten pass.
+    pub cached_flatten: Option<CachedFlatten>,
 }
 
 impl RenderNode {
@@ -84,6 +105,8 @@ impl RenderNode {
             overlay_commands: Vec::new(),
             clip: None,
             overlay_clip: None,
+            repainted: true,
+            cached_flatten: None,
         }
     }
 
@@ -105,6 +128,8 @@ impl RenderNode {
         self.overlay_commands.clear();
         self.clip = None;
         self.overlay_clip = None;
+        self.repainted = true;
+        self.cached_flatten = None;
     }
 }
 
