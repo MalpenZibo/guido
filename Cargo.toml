@@ -29,7 +29,7 @@ license.workspace = true
 
 [features]
 default = []
-layout-stats = []
+render-stats = []
 
 [dependencies]
 guido-macros = { workspace = true }
@@ -72,8 +72,8 @@ name = "text_input_example"
 path = "examples/text_input_example.rs"
 
 [[example]]
-name = "layout_stats_test"
-path = "examples/layout_stats_test.rs"
+name = "render_stats_test"
+path = "examples/render_stats_test.rs"
 
 [[example]]
 name = "renderer_v2_test"

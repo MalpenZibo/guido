@@ -130,6 +130,7 @@ fn flatten_node(
             }
             out.push(adjusted);
         }
+        crate::render_stats::record_flatten_cached();
         return;
     }
 
@@ -220,6 +221,7 @@ fn flatten_node(
         commands: out[start_idx..].to_vec(),
         world_transform,
     });
+    crate::render_stats::record_flatten_full();
 }
 
 /// Compute axis-aligned bounding box from an array of points.

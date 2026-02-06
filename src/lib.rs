@@ -2,8 +2,8 @@ pub mod animation;
 pub mod image_metadata;
 mod jobs;
 pub mod layout;
-pub mod layout_stats;
 pub mod reactive;
+pub mod render_stats;
 pub mod surface;
 mod surface_manager;
 pub mod transform;
@@ -357,7 +357,8 @@ fn render_surface(
         // Skip frame if nothing needs paint
         if !tree.needs_paint(surface.widget_id) {
             handle_animation_jobs(&jobs, tree);
-            layout_stats::end_frame();
+            render_stats::record_frame_skipped();
+            render_stats::end_frame(&DamageRegion::None);
             return;
         }
 
@@ -395,11 +396,12 @@ fn render_surface(
         // This only processes widgets with Animation jobs, not the entire tree
         handle_animation_jobs(&jobs, tree);
 
-        // Track layout stats (when compiled with --features layout-stats)
-        layout_stats::end_frame();
-
         // Report damage region to Wayland compositor
         let damage = tree.take_damage();
+
+        // Track render stats (when compiled with --features render-stats)
+        render_stats::record_frame_painted();
+        render_stats::end_frame(&damage);
         match damage {
             DamageRegion::None => {
                 // Shouldn't happen since we're rendering, but report full damage to be safe

@@ -1014,13 +1014,13 @@ impl Widget for Container {
         let needs_layout = constraints_changed || reactive_changed;
 
         if !needs_layout {
-            crate::layout_stats::record_layout_skipped();
+            crate::render_stats::record_layout_skipped();
             // Return cached size from Tree
             return tree.cached_size(id).unwrap_or_default();
         }
 
-        crate::layout_stats::record_layout_executed_with_reasons(
-            crate::layout_stats::LayoutReasons {
+        crate::render_stats::record_layout_executed_with_reasons(
+            crate::render_stats::LayoutReasons {
                 constraints_changed,
                 reactive_changed,
             },
@@ -1636,6 +1636,7 @@ impl Widget for Container {
                 reused.bounds = child_local;
                 reused.repainted = false;
                 ctx.add_child_node(reused);
+                crate::render_stats::record_paint_child_cached();
                 continue;
             }
 
@@ -1647,6 +1648,7 @@ impl Widget for Container {
             tree.with_widget(child_id, |child| {
                 child.paint(tree, child_id, &mut child_ctx)
             });
+            crate::render_stats::record_paint_child_painted();
         }
 
         // Draw scrollbar containers

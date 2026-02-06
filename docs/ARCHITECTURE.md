@@ -336,15 +336,18 @@ border/background.
 Text measurement results are cached to avoid redundant computation when text content
 hasn't changed.
 
-### Layout Stats (Debug Feature)
-Enable the `layout-stats` feature to get real-time statistics about layout performance:
+### Render Stats (Debug Feature)
+Enable the `render-stats` feature to get real-time statistics about rendering performance:
 ```bash
-cargo run --example your_example --features layout-stats
+cargo run --example your_example --features render-stats
 ```
 
 This prints per-second statistics showing:
-- Total layout calls and skip rate
-- Breakdown of reasons layouts were executed (constraints, animations, reactive changes)
+- Frame counts (painted vs skipped)
+- Layout calls, skip rate, and execution reasons
+- Paint child cache hits/misses
+- Flatten cache hits/misses
+- Damage region distribution (none, partial, full)
 
 The feature has zero overhead when disabled (code is completely compiled out).
 

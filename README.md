@@ -110,7 +110,7 @@ cargo run --example component_example
 - **scroll_mixed_content** - Scrolling with text, text input, and images combined
 - **text_styling_example** - Font families and weights for text styling
 - **service_example** - Background services with automatic cleanup
-- **layout_stats_test** - Layout performance debugging (requires `--features layout-stats`)
+- **render_stats_test** - Render performance debugging (requires `--features render-stats`)
 
 ## Documentation
 
