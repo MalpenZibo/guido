@@ -96,16 +96,21 @@ Hardware-accelerated rendering using wgpu.
 - `RenderTree` / `RenderNode` - Hierarchical render tree with local coordinates
 - Custom WGSL shaders for SDF-based instanced rendering
 
-**Rendering Pipeline:**
+**Rendering Pipeline (per frame):**
 1. `drain_pending_jobs()` - Collect pending reactive jobs
 2. `handle_unregister_jobs()` - Cleanup dropped widgets
-3. `handle_reconcile_jobs()` - Reconcile dynamic children
-4. `handle_layout_jobs()` - Mark widgets needing layout
+3. `handle_paint_jobs()` - Mark widgets needing paint (propagates upward, accumulates damage)
+4. `handle_reconcile_jobs()` / `handle_layout_jobs()` - Collect layout roots
 5. Partial layout from `layout_roots` - Only dirty subtrees re-layout
-6. `widget.paint(tree, ctx)` - Build render tree via PaintContext
-7. `flatten_tree()` - Flatten render tree to draw commands with inherited transforms
-8. `handle_animation_jobs()` - Advance animations
-9. Instanced GPU rendering with HiDPI scaling
+6. Force full repaint on resize, scale change, or initialization
+7. **Skip frame** if root widget doesn't need paint (animations still advance)
+8. `widget.paint(tree, ctx)` - Build render tree via PaintContext (clean children reuse cached nodes)
+9. `cache_paint_results()` - Store paint output per widget, clear `needs_paint` flags
+10. `flatten_tree_into()` - Flatten render tree to draw commands (incremental: clean subtrees reuse cached commands)
+11. GPU rendering with instanced SDF shapes and HiDPI scaling
+12. Report damage region to Wayland via `wl_surface.damage_buffer()`
+13. `handle_animation_jobs()` - Advance animations for next frame
+14. `wl_surface.commit()` - Present frame
 
 **Shape Features:**
 - Rounded rectangles with configurable superellipse curvature
@@ -193,7 +198,7 @@ The jobs system connects reactive signals to widget invalidation.
 
 **Job Types:**
 - `Layout` - Widget needs layout recalculation
-- `Paint` - Widget needs repaint (future: partial repaint)
+- `Paint` - Widget needs repaint (partial paint with caching)
 - `Reconcile` - Dynamic children need reconciliation (implies layout)
 - `Unregister` - Widget needs cleanup (deferred Drop)
 - `Animation` - Widget has active animations
@@ -301,6 +306,31 @@ Layout only recalculates when:
 - Constraints change
 - Animations are active
 - A tracked signal dependency changes (widget is marked dirty)
+
+### Partial Paint and Damage Tracking
+
+The paint system tracks which widgets need repainting:
+
+- **`needs_paint` flag**: Each widget in the Tree has a `needs_paint` flag that propagates
+  upward to ancestors (like `needs_layout`). Only widgets marked dirty are repainted.
+- **Cached paint**: After painting, each widget's `RenderNode` output is cached. On subsequent
+  frames, Container reuses cached nodes for clean children by cloning with an updated position
+  transform (decomposing parent position from user transform).
+- **Skip frame**: If the root widget doesn't need paint after job processing and layout,
+  the entire paint→flatten→render→commit cycle is skipped. Animation jobs still run.
+- **Damage regions**: `mark_needs_paint()` accumulates surface-relative bounds into a
+  `DamageRegion` (None/Partial/Full). Before commit, the damage is reported to the Wayland
+  compositor via `wl_surface.damage_buffer()`, enabling compositor-side optimizations.
+- **Incremental flatten**: `RenderNode` caches its flattened commands. Clean subtrees
+  (with `repainted == false`) reuse cached commands with a translation offset, skipping
+  the full recursive flatten.
+
+### Focus Paint Invalidation
+
+When focus changes between widgets, the focus system (`request_focus`, `release_focus`,
+`clear_focus`) automatically queues a Paint job for the previously focused widget. This
+ensures parent containers with `focused_state` styling repaint to drop their focused
+border/background.
 
 ### Text Measurement Caching
 Text measurement results are cached to avoid redundant computation when text content
