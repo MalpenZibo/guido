@@ -2,8 +2,8 @@ pub mod animation;
 pub mod image_metadata;
 mod jobs;
 pub mod layout;
-pub mod layout_stats;
 pub mod reactive;
+pub mod render_stats;
 pub mod surface;
 mod surface_manager;
 pub mod transform;
@@ -95,10 +95,11 @@ use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 
 use crate::{
     jobs::{
-        drain_pending_jobs, handle_animation_jobs, handle_layout_jobs, handle_reconcile_jobs,
-        handle_unregister_jobs, has_pending_jobs, init_wakeup, take_frame_request,
+        drain_pending_jobs, handle_animation_jobs, handle_layout_jobs, handle_paint_jobs,
+        handle_reconcile_jobs, handle_unregister_jobs, has_pending_jobs, init_wakeup,
+        take_frame_request,
     },
-    tree::{Tree, WidgetId},
+    tree::{DamageRegion, Tree, WidgetId},
 };
 
 /// A surface definition that stores configuration and widget factory.
@@ -173,6 +174,22 @@ fn process_surface_commands(
         }
     }
     true
+}
+
+/// Walk the render tree after painting and cache each node's output.
+/// Skips cache-reused nodes (repainted == false) since their tree cache is already valid.
+/// Also clears needs_paint flags for freshly painted widgets.
+fn cache_paint_results(tree: &mut Tree, node: &renderer::RenderNode) {
+    if node.repainted {
+        let widget_id = WidgetId::from_u64(node.id);
+        if tree.contains(widget_id) {
+            tree.cache_paint(widget_id, node.clone());
+            tree.clear_needs_paint(widget_id);
+        }
+    }
+    for child in &node.children {
+        cache_paint_results(tree, child);
+    }
 }
 
 /// Render a single surface using the hierarchical renderer.
@@ -298,6 +315,9 @@ fn render_surface(
 
         handle_unregister_jobs(&jobs, tree);
 
+        // Mark paint-dirty widgets from Paint jobs
+        handle_paint_jobs(&jobs, tree);
+
         // Collect layout roots from jobs
         for root in handle_reconcile_jobs(&jobs, tree) {
             layout_roots.insert(root);
@@ -311,21 +331,39 @@ fn render_surface(
         if !layout_roots.is_empty() {
             // Partial layout: only update dirty subtrees starting from boundaries
             let roots: Vec<_> = layout_roots.drain().collect();
-            for root_id in roots {
+            for root_id in &roots {
                 // Use cached constraints for boundaries, or fall back to parent constraints
-                let cached = tree.cached_constraints(root_id).unwrap_or(constraints);
+                let cached = tree.cached_constraints(*root_id).unwrap_or(constraints);
 
-                tree.with_widget_mut(root_id, |widget, id, tree| {
+                tree.with_widget_mut(*root_id, |widget, id, tree| {
                     widget.layout(tree, id, cached);
                 });
+            }
+            // Layout may reposition children — conservatively mark subtrees as needing paint
+            for root_id in &roots {
+                tree.mark_subtree_needs_paint(*root_id);
             }
         } else if needs_resize {
             // Full layout from root only when explicitly needed (first frame, resize, etc.)
             tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
                 widget.layout(tree, id, constraints);
             });
+            tree.mark_subtree_needs_paint(surface.widget_id);
         }
         // If neither condition is true, skip layout entirely - nothing is dirty
+
+        // Force full repaint on resize, scale change, or during initialization
+        if force_render_surface || needs_resize || scale_changed {
+            tree.mark_subtree_needs_paint(surface.widget_id);
+        }
+
+        // Skip frame if nothing needs paint
+        if !tree.needs_paint(surface.widget_id) {
+            handle_animation_jobs(&jobs, tree);
+            render_stats::record_frame_skipped();
+            render_stats::end_frame(&DamageRegion::None);
+            return;
+        }
 
         // Clear and reuse render tree (preserves capacity)
         surface.render_tree.clear();
@@ -342,7 +380,7 @@ fn render_surface(
         surface.render_tree.add_root(root);
 
         // Flatten tree into reused buffer
-        flatten_tree_into(&surface.render_tree, &mut surface.flattened_commands);
+        flatten_tree_into(&mut surface.render_tree, &mut surface.flattened_commands);
         renderer.render(
             wgpu_surface,
             &surface.flattened_commands,
@@ -354,12 +392,38 @@ fn render_surface(
             surface.root_node = root;
         }
 
+        // Cache paint results AFTER flatten so cached_flatten data is preserved.
+        // This enables incremental flatten for paint-cached nodes on subsequent frames.
+        cache_paint_results(tree, &surface.root_node);
+
         // Process Animation jobs AFTER paint (advance for next frame)
         // This only processes widgets with Animation jobs, not the entire tree
         handle_animation_jobs(&jobs, tree);
 
-        // Track layout stats (when compiled with --features layout-stats)
-        layout_stats::end_frame();
+        // Report damage region to Wayland compositor
+        let damage = tree.take_damage();
+
+        // Track render stats (when compiled with --features render-stats)
+        render_stats::record_frame_painted();
+        render_stats::end_frame(&damage);
+        match damage {
+            DamageRegion::None => {
+                // Shouldn't happen since we're rendering, but report full damage to be safe
+                wl_surface.damage_buffer(0, 0, physical_width as i32, physical_height as i32);
+            }
+            DamageRegion::Partial(rect) => {
+                let scale = scale_factor;
+                wl_surface.damage_buffer(
+                    (rect.x * scale) as i32,
+                    (rect.y * scale) as i32,
+                    (rect.width * scale).ceil() as i32,
+                    (rect.height * scale).ceil() as i32,
+                );
+            }
+            DamageRegion::Full => {
+                wl_surface.damage_buffer(0, 0, physical_width as i32, physical_height as i32);
+            }
+        }
 
         // Commit surface
         wl_surface.commit();

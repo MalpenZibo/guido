@@ -155,11 +155,18 @@ All widgets implement:
 
 ### Rendering Pipeline
 
-1. Main loop calls `widget.layout(constraints)` with screen dimensions
-2. `widget.paint(ctx)` adds shapes and text to PaintContext
-3. Renderer converts logical coordinates to physical pixels (HiDPI scaling)
-4. Shapes rendered in order: background shapes → text → overlay shapes
-5. Each shape uses vertex buffer with custom shader for rounded corners, gradients, clipping
+Each frame follows this pipeline:
+1. `drain_pending_jobs()` - Collect reactive jobs (paint, layout, reconcile, unregister, animation)
+2. Process jobs: unregister dropped widgets, mark paint/layout dirty flags, reconcile dynamic children
+3. Partial layout from `layout_roots` - Only dirty subtrees re-layout
+4. **Skip frame** if root widget doesn't need paint (animations still advance)
+5. `widget.paint(tree, ctx)` - Build render tree (clean children reuse cached `RenderNode`s)
+6. `cache_paint_results()` - Store paint output per widget, clear `needs_paint` flags
+7. `flatten_tree_into()` - Flatten render tree to draw commands (incremental: clean subtrees reuse cached commands)
+8. GPU rendering with instanced SDF shapes, HiDPI scaling, layer ordering (shapes → images → text → overlay)
+9. Report damage region to Wayland via `wl_surface.damage_buffer()`
+10. `handle_animation_jobs()` - Advance animations for next frame
+11. `wl_surface.commit()` - Present frame
 
 ### Event System
 
@@ -342,4 +349,4 @@ This is a work-in-progress GUI library. Current implemented features:
 - Image widget with raster and SVG support
 
 Planned features (see TODO.md):
-- Relayout boundaries for performance optimization
+- Additional widget types (toggle, checkbox)

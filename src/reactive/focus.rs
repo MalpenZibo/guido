@@ -5,6 +5,7 @@
 
 use std::cell::RefCell;
 
+use crate::jobs::{JobRequest, request_job};
 use crate::tree::WidgetId;
 
 thread_local! {
@@ -13,19 +14,29 @@ thread_local! {
 }
 
 /// Request keyboard focus for a widget.
-/// If another widget has focus, it will lose focus.
+/// Both the old and new widget are repainted so focus-dependent styling updates.
 pub fn request_focus(id: WidgetId) {
     FOCUSED_WIDGET.with(|cell| {
-        *cell.borrow_mut() = Some(id);
+        let mut focused = cell.borrow_mut();
+        // Repaint the previously focused widget so it drops focused styling
+        if let Some(old_id) = *focused
+            && old_id != id
+        {
+            request_job(old_id, JobRequest::Paint);
+        }
+        *focused = Some(id);
+        // Repaint the newly focused widget so it picks up focused styling
+        request_job(id, JobRequest::Paint);
     });
 }
 
 /// Release keyboard focus from a widget.
-/// Only releases if the given widget currently has focus.
+/// Only releases if the given widget currently has focus, and repaints it.
 pub fn release_focus(id: WidgetId) {
     FOCUSED_WIDGET.with(|cell| {
         let mut focused = cell.borrow_mut();
         if *focused == Some(id) {
+            request_job(id, JobRequest::Paint);
             *focused = None;
         }
     });
@@ -42,8 +53,12 @@ pub fn focused_widget() -> Option<WidgetId> {
 }
 
 /// Clear all focus (no widget will have focus).
+/// Repaints the previously focused widget if any.
 pub fn clear_focus() {
     FOCUSED_WIDGET.with(|cell| {
-        *cell.borrow_mut() = None;
+        let mut focused = cell.borrow_mut();
+        if let Some(old_id) = focused.take() {
+            request_job(old_id, JobRequest::Paint);
+        }
     });
 }

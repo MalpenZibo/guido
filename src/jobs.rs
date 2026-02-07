@@ -167,6 +167,12 @@ pub fn handle_layout_jobs(jobs: &[Job], tree: &mut Tree) -> Vec<WidgetId> {
         .collect()
 }
 
+pub fn handle_paint_jobs(jobs: &[Job], tree: &mut Tree) {
+    for job in jobs.iter().filter(|j| j.job_type == JobType::Paint) {
+        tree.mark_needs_paint(job.widget_id);
+    }
+}
+
 pub fn handle_animation_jobs(jobs: &[Job], tree: &mut Tree) {
     for job in jobs.iter().filter(|j| j.job_type == JobType::Animation) {
         tree.with_widget_mut(job.widget_id, |widget, id, tree| {

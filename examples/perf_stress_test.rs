@@ -7,7 +7,7 @@
 //! - A status indicator
 //!
 //! Run with: cargo run --example perf_stress_test
-//! Run with layout stats: cargo run --example perf_stress_test --features layout-stats
+//! Run with render stats: cargo run --example perf_stress_test --features render-stats
 
 use guido::prelude::*;
 

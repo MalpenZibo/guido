@@ -20,15 +20,18 @@ Each widget creates a `RenderNode` containing its visual output:
 
 ```rust
 pub struct RenderNode {
-    pub id: NodeId,                         // Unique identifier (matches widget ID)
-    pub bounds: Rect,                       // Local bounds for transform origin
-    pub local_transform: Transform,         // Transform relative to parent
-    pub transform_origin: TransformOrigin,  // Pivot point for transforms
-    pub commands: Vec<DrawCommand>,         // Draw commands (shapes, text, images)
-    pub children: Vec<RenderNode>,          // Child nodes
-    pub overlay_commands: Vec<DrawCommand>, // Commands drawn after children
-    pub clip: Option<ClipRegion>,           // Clips this node and children
-    pub overlay_clip: Option<ClipRegion>,   // Clips only overlay commands
+    pub id: NodeId,                             // Unique identifier (matches widget ID)
+    pub bounds: Rect,                           // Local bounds for transform origin
+    pub local_transform: Transform,             // Transform relative to parent
+    pub parent_position: Transform,             // Position set by parent (for cache reuse)
+    pub transform_origin: TransformOrigin,      // Pivot point for transforms
+    pub commands: Vec<DrawCommand>,             // Draw commands (shapes, text, images)
+    pub children: Vec<RenderNode>,              // Child nodes
+    pub overlay_commands: Vec<DrawCommand>,     // Commands drawn after children
+    pub clip: Option<ClipRegion>,               // Clips this node and children
+    pub overlay_clip: Option<ClipRegion>,       // Clips only overlay commands
+    pub repainted: bool,                        // true = freshly painted, false = cache reused
+    pub cached_flatten: Option<CachedFlatten>,  // Cached flatten output for incremental reuse
 }
 ```
 
@@ -185,6 +188,24 @@ pub struct FlattenedCommand {
     pub clip_is_local: bool,
 }
 ```
+
+### Incremental Flatten
+
+The flattener caches results per node to avoid re-flattening clean subtrees:
+
+```rust
+pub struct CachedFlatten {
+    pub commands: Vec<FlattenedCommand>,  // Flattened output from this subtree
+    pub world_transform: Transform,       // World transform at time of caching
+}
+```
+
+When a `RenderNode` has `repainted == false` (reused from paint cache) and both the
+cached and current world transforms are translation-only, the flattener reuses cached
+commands with a (dx, dy) offset instead of recursing into children. After a full flatten,
+results are cached back onto the node for next frame.
+
+`flatten_tree_into()` takes `&mut RenderTree` to enable this caching.
 
 ## GPU Rendering Pipeline
 

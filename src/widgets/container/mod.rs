@@ -14,7 +14,9 @@ use crate::advance_anim;
 use crate::animation::Transition;
 use crate::jobs::{JobRequest, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
-use crate::reactive::{IntoMaybeDyn, MaybeDyn, focused_widget, register_layout_signal};
+use crate::reactive::{
+    IntoMaybeDyn, MaybeDyn, focused_widget, register_layout_signal, register_paint_signal,
+};
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
@@ -175,6 +177,8 @@ pub struct Container {
 
     // Pending layout signal registrations (processed when widget ID becomes available)
     pub(super) pending_layout_signals: Vec<usize>,
+    // Pending paint signal registrations (e.g. transform signals)
+    pub(super) pending_paint_signals: Vec<usize>,
 }
 
 impl Container {
@@ -224,6 +228,7 @@ impl Container {
             h_scrollbar_scale_anim: None,
             ripple: RippleState::new(),
             pending_layout_signals: Vec::new(),
+            pending_paint_signals: Vec::new(),
         }
     }
 
@@ -489,13 +494,20 @@ impl Container {
 
     /// Set the transform for this container
     pub fn transform(mut self, t: impl IntoMaybeDyn<Transform>) -> Self {
-        self.transform = t.into_maybe_dyn();
+        let t = t.into_maybe_dyn();
+        if let Some(signal_id) = t.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
+        self.transform = t;
         self
     }
 
     /// Rotate this container by the given angle in degrees
     pub fn rotate(mut self, degrees: impl IntoMaybeDyn<f32>) -> Self {
         let degrees = degrees.into_maybe_dyn();
+        if let Some(signal_id) = degrees.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
         self.transform = MaybeDyn::Dynamic {
@@ -512,6 +524,9 @@ impl Container {
     /// Scale this container uniformly
     pub fn scale(mut self, s: impl IntoMaybeDyn<f32>) -> Self {
         let s = s.into_maybe_dyn();
+        if let Some(signal_id) = s.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
         self.transform = MaybeDyn::Dynamic {
@@ -525,6 +540,12 @@ impl Container {
     pub fn scale_xy(mut self, sx: impl IntoMaybeDyn<f32>, sy: impl IntoMaybeDyn<f32>) -> Self {
         let sx = sx.into_maybe_dyn();
         let sy = sy.into_maybe_dyn();
+        if let Some(signal_id) = sx.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
+        if let Some(signal_id) = sy.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
         self.transform = MaybeDyn::Dynamic {
@@ -542,6 +563,12 @@ impl Container {
     pub fn translate(mut self, x: impl IntoMaybeDyn<f32>, y: impl IntoMaybeDyn<f32>) -> Self {
         let x = x.into_maybe_dyn();
         let y = y.into_maybe_dyn();
+        if let Some(signal_id) = x.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
+        if let Some(signal_id) = y.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
         self.transform = MaybeDyn::Dynamic {
@@ -989,6 +1016,10 @@ impl Widget for Container {
         for signal_id in self.pending_layout_signals.drain(..) {
             register_layout_signal(id, signal_id);
         }
+        // Register pending paint signals (e.g. transform signals)
+        for signal_id in self.pending_paint_signals.drain(..) {
+            register_paint_signal(id, signal_id);
+        }
 
         // Set container_id for children source
         self.children_source.set_container_id(id);
@@ -1009,25 +1040,25 @@ impl Widget for Container {
 
         // Check if this widget was marked dirty by signal changes or animations
         // (animations call mark_needs_layout directly when their value changes)
-        let reactive_changed = tree.is_dirty(id);
+        let reactive_changed = tree.needs_layout(id);
 
         let needs_layout = constraints_changed || reactive_changed;
 
         if !needs_layout {
-            crate::layout_stats::record_layout_skipped();
+            crate::render_stats::record_layout_skipped();
             // Return cached size from Tree
             return tree.cached_size(id).unwrap_or_default();
         }
 
-        crate::layout_stats::record_layout_executed_with_reasons(
-            crate::layout_stats::LayoutReasons {
+        crate::render_stats::record_layout_executed_with_reasons(
+            crate::render_stats::LayoutReasons {
                 constraints_changed,
                 reactive_changed,
             },
         );
 
         // Clear dirty flag since we're doing layout now
-        tree.clear_dirty(id);
+        tree.clear_needs_layout(id);
 
         // Get current animated padding for layout calculations
         let padding = self.animated_padding();
@@ -1611,8 +1642,6 @@ impl Widget for Container {
             let child_offset_x = child_bounds.x;
             let child_offset_y = child_bounds.y;
 
-            let mut child_ctx = ctx.add_child(child_id.as_u64(), child_local);
-
             // Child's position transform (may include scroll offset)
             let child_position = if is_scrollable {
                 Transform::translate(
@@ -1622,12 +1651,35 @@ impl Widget for Container {
             } else {
                 Transform::translate(child_offset_x, child_offset_y)
             };
+
+            // Try cached paint for clean children
+            if !tree.needs_paint(child_id)
+                && let Some(cached) = tree.cached_paint(child_id)
+            {
+                let mut reused = cached.clone();
+                // Decompose: extract user transform, recompose with new position
+                let user_part = cached
+                    .parent_position
+                    .inverse()
+                    .then(&cached.local_transform);
+                reused.local_transform = child_position.then(&user_part);
+                reused.parent_position = child_position;
+                reused.bounds = child_local;
+                reused.repainted = false;
+                ctx.add_child_node(reused);
+                crate::render_stats::record_paint_child_cached();
+                continue;
+            }
+
+            // Full paint (child is dirty or no cache available)
+            let mut child_ctx = ctx.add_child(child_id.as_u64(), child_local);
             child_ctx.set_transform(child_position);
 
             // Paint child via tree
             tree.with_widget(child_id, |child| {
                 child.paint(tree, child_id, &mut child_ctx)
             });
+            crate::render_stats::record_paint_child_painted();
         }
 
         // Draw scrollbar containers

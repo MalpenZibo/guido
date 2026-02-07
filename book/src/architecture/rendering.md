@@ -5,20 +5,20 @@ This page explains how Guido renders widgets to the screen.
 ## Pipeline Overview
 
 ```
-1. Animation Advancement
-   widget.advance_animations() → Update animation states
-
-2. Layout Pass
-   widget.layout(constraints) → Size (skipped if cached)
-
-3. Paint Pass
-   widget.paint(ctx) → Shapes added to PaintContext
-
-4. GPU Submission
-   PaintContext → Vertex/Index buffers → GPU
-
-5. Render Order
-   Background shapes → Text → Overlay shapes
+ 1. drain_pending_jobs()         → Collect pending reactive jobs
+ 2. handle_unregister_jobs()     → Cleanup dropped widgets
+ 3. handle_paint_jobs()          → Mark widgets needing paint, accumulate damage
+ 4. handle_reconcile_jobs()      → Reconcile dynamic children
+ 5. handle_layout_jobs()         → Collect layout roots
+ 6. Partial layout               → Only dirty subtrees re-layout
+ 7. Skip-frame check             → Skip paint if root is clean
+ 8. widget.paint(tree, ctx)      → Build render tree (cache reuse for clean children)
+ 9. cache_paint_results()        → Store rendered nodes, clear needs_paint flags
+10. flatten_tree_into()          → Flatten to draw commands (incremental for clean subtrees)
+11. GPU rendering                → Instanced SDF shapes with HiDPI scaling
+12. damage_buffer()              → Report damage region to Wayland compositor
+13. handle_animation_jobs()      → Advance animations for next frame
+14. wl_surface.commit()          → Present frame
 ```
 
 ## Layout Pass
@@ -197,17 +197,20 @@ Clipping respects corner radius and curvature for proper rounded container clipp
 
 ## Animation Advancement
 
-Before layout, the render loop calls `advance_animations()` on the widget tree:
+Animations run *after* paint to advance state for the next frame:
 
 ```rust
 // Main loop each frame:
-widget.advance_animations();  // Update animation states
-widget.layout(constraints);   // Calculate sizes (may skip if cached)
-widget.paint(ctx);            // Render to screen
+widget.layout(constraints);           // Calculate sizes (may skip if cached)
+widget.paint(ctx);                    // Render to screen
+widget.advance_animations(tree, id);  // Advance animations for next frame
 ```
 
-This allows animations to update their internal state (e.g., spring physics,
-time-based easing) before layout reads the animated values.
+This ordering means the current frame renders with the current animation state,
+and `advance_animations()` prepares values for the next frame. Widgets like
+TextInput use `advance_animations()` to drive cursor blinking via `Animation(Paint)`
+jobs, which mark the widget for repaint on the next frame when the cursor
+visibility toggles.
 
 ## Performance Notes
 
@@ -246,3 +249,26 @@ not a layout change. When content scrolls:
 5. Clip bounds are adjusted for correct clipping
 
 This means scrolling doesn't trigger layout, significantly reducing CPU overhead.
+
+### Paint Caching and Damage Regions
+
+The rendering pipeline includes several optimizations to avoid redundant work:
+
+**Partial Paint**: Each widget in the Tree has a `needs_paint` flag. When a widget's
+visual state changes (e.g., a signal update triggers a Paint job), the flag propagates
+upward to ancestors. During paint, Container checks each child's flag — clean children
+reuse their cached `RenderNode` from the previous frame, with only the parent position
+transform updated.
+
+**Skip Frame**: If no widget needs paint after job processing and layout, the entire
+paint→flatten→render→commit cycle is skipped. Animation jobs still advance to keep
+timers running.
+
+**Damage Regions**: As widgets are marked for paint, their surface-relative bounds are
+accumulated into a `DamageRegion` (None, Partial, or Full). Before presenting, the
+damage is reported to the Wayland compositor via `wl_surface.damage_buffer()`, allowing
+the compositor to optimize its own compositing.
+
+**Incremental Flatten**: The flattener caches its output per `RenderNode`. Clean subtrees
+(where `repainted == false`) reuse their cached flattened commands with a translation
+offset, avoiding the cost of recursing into unchanged subtrees.

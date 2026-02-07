@@ -4,7 +4,7 @@ use crate::transform::Transform;
 use crate::widgets::Rect;
 
 use super::commands::DrawCommand;
-use super::tree::{ClipRegion, RenderNode, RenderTree};
+use super::tree::{CachedFlatten, ClipRegion, RenderNode, RenderTree};
 
 /// Render layer for draw command ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -57,7 +57,7 @@ pub struct FlattenedCommand {
 ///
 /// This walks the tree depth-first, computing world transforms as it goes.
 /// Commands are sorted by layer for correct render order.
-pub fn flatten_tree(tree: &RenderTree) -> Vec<FlattenedCommand> {
+pub fn flatten_tree(tree: &mut RenderTree) -> Vec<FlattenedCommand> {
     let mut commands = Vec::new();
     flatten_tree_into(tree, &mut commands);
     commands
@@ -67,10 +67,13 @@ pub fn flatten_tree(tree: &RenderTree) -> Vec<FlattenedCommand> {
 ///
 /// This is more efficient than `flatten_tree` when called repeatedly,
 /// as it avoids reallocating the output vector each frame.
-pub fn flatten_tree_into(tree: &RenderTree, commands: &mut Vec<FlattenedCommand>) {
+///
+/// Takes `&mut RenderTree` so that flatten results can be cached on nodes
+/// for incremental reuse in subsequent frames.
+pub fn flatten_tree_into(tree: &mut RenderTree, commands: &mut Vec<FlattenedCommand>) {
     commands.clear();
 
-    for root in &tree.roots {
+    for root in &mut tree.roots {
         flatten_node(root, Transform::IDENTITY, None, None, commands);
     }
 
@@ -79,8 +82,12 @@ pub fn flatten_tree_into(tree: &RenderTree, commands: &mut Vec<FlattenedCommand>
 }
 
 /// Recursively flatten a node and its children.
+///
+/// For nodes with `repainted == false` and a valid `cached_flatten`,
+/// reuse the cached commands with a translation offset instead of
+/// re-flattening the entire subtree.
 fn flatten_node(
-    node: &RenderNode,
+    node: &mut RenderNode,
     parent_world_transform: Transform,
     parent_world_origin: Option<(f32, f32)>,
     parent_clip: Option<&WorldClip>,
@@ -96,6 +103,39 @@ fn flatten_node(
         node.local_transform.center_at(origin_x, origin_y)
     };
     let world_transform = parent_world_transform.then(&local_centered);
+
+    // Try cached flatten for clean subtrees (translation-only optimization)
+    if !node.repainted
+        && parent_clip.is_none()
+        && node.clip.is_none()
+        && let Some(ref cached) = node.cached_flatten
+        && cached.world_transform.is_translation_only()
+        && world_transform.is_translation_only()
+    {
+        let dx = world_transform.tx() - cached.world_transform.tx();
+        let dy = world_transform.ty() - cached.world_transform.ty();
+        for cmd in &cached.commands {
+            let mut adjusted = cmd.clone();
+            adjusted
+                .world_transform
+                .set_tx(cmd.world_transform.tx() + dx);
+            adjusted
+                .world_transform
+                .set_ty(cmd.world_transform.ty() + dy);
+            if let Some(ref mut clip) = adjusted.clip
+                && !adjusted.clip_is_local
+            {
+                clip.rect.x += dx;
+                clip.rect.y += dy;
+            }
+            out.push(adjusted);
+        }
+        crate::render_stats::record_flatten_cached();
+        return;
+    }
+
+    // Full flatten — existing logic
+    let start_idx = out.len();
 
     // Compute world transform origin (for shapes that need it)
     let world_origin = if !node.local_transform.is_identity() {
@@ -137,7 +177,7 @@ fn flatten_node(
     }
 
     // Recurse to children with effective clip
-    for child in &node.children {
+    for child in &mut node.children {
         flatten_node(
             child,
             world_transform,
@@ -175,6 +215,13 @@ fn flatten_node(
             clip_is_local: overlay_clip_is_local,
         });
     }
+
+    // Cache flatten results for next frame
+    node.cached_flatten = Some(CachedFlatten {
+        commands: out[start_idx..].to_vec(),
+        world_transform,
+    });
+    crate::render_stats::record_flatten_full();
 }
 
 /// Compute axis-aligned bounding box from an array of points.

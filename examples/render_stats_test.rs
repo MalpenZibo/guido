@@ -1,13 +1,13 @@
-//! Minimal test for layout stats - static UI with animation.
-//! Tests layout skipping during animation frames.
+//! Minimal test for render stats - static UI with animation.
+//! Tests layout skipping, paint caching, and flatten caching during animation frames.
 //!
 //! Run with:
 //! ```bash
-//! cargo run --example layout_stats_test --features layout-stats
+//! cargo run --example render_stats_test --features render-stats
 //! ```
 //!
 //! The rotating container triggers continuous rendering,
-//! but the static children should have their layouts skipped.
+//! but the static children should have their layouts skipped and paint cached.
 
 use guido::prelude::*;
 
@@ -34,7 +34,7 @@ fn main() {
             container()
                 .padding(8.0)
                 .background(Color::rgb(0.2, 0.2, 0.3))
-                .transform(move || Transform::rotate_degrees(rotation.get()))
+                .rotate(rotation)
                 .child(text("Rotating").color(Color::WHITE)),
         )
         // Static containers (should have layout skipped after first frame)
@@ -57,7 +57,7 @@ fn main() {
             .height(200)
             .anchor(Anchor::TOP | Anchor::LEFT)
             .layer(Layer::Top)
-            .namespace("layout-stats-test")
+            .namespace("render-stats-test")
             .background_color(Color::rgb(0.08, 0.08, 0.12)),
         move || view,
     );
