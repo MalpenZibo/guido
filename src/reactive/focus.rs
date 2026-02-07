@@ -14,17 +14,19 @@ thread_local! {
 }
 
 /// Request keyboard focus for a widget.
-/// If another widget has focus, it will lose focus and be repainted.
+/// Both the old and new widget are repainted so focus-dependent styling updates.
 pub fn request_focus(id: WidgetId) {
     FOCUSED_WIDGET.with(|cell| {
         let mut focused = cell.borrow_mut();
-        // Repaint the previously focused widget so its parent drops the focused styling
+        // Repaint the previously focused widget so it drops focused styling
         if let Some(old_id) = *focused
             && old_id != id
         {
             request_job(old_id, JobRequest::Paint);
         }
         *focused = Some(id);
+        // Repaint the newly focused widget so it picks up focused styling
+        request_job(id, JobRequest::Paint);
     });
 }
 
