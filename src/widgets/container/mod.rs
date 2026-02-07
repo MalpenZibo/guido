@@ -14,7 +14,9 @@ use crate::advance_anim;
 use crate::animation::Transition;
 use crate::jobs::{JobRequest, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
-use crate::reactive::{IntoMaybeDyn, MaybeDyn, focused_widget, register_layout_signal};
+use crate::reactive::{
+    IntoMaybeDyn, MaybeDyn, focused_widget, register_layout_signal, register_paint_signal,
+};
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
@@ -175,6 +177,8 @@ pub struct Container {
 
     // Pending layout signal registrations (processed when widget ID becomes available)
     pub(super) pending_layout_signals: Vec<usize>,
+    // Pending paint signal registrations (e.g. transform signals)
+    pub(super) pending_paint_signals: Vec<usize>,
 }
 
 impl Container {
@@ -224,6 +228,7 @@ impl Container {
             h_scrollbar_scale_anim: None,
             ripple: RippleState::new(),
             pending_layout_signals: Vec::new(),
+            pending_paint_signals: Vec::new(),
         }
     }
 
@@ -489,13 +494,20 @@ impl Container {
 
     /// Set the transform for this container
     pub fn transform(mut self, t: impl IntoMaybeDyn<Transform>) -> Self {
-        self.transform = t.into_maybe_dyn();
+        let t = t.into_maybe_dyn();
+        if let Some(signal_id) = t.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
+        self.transform = t;
         self
     }
 
     /// Rotate this container by the given angle in degrees
     pub fn rotate(mut self, degrees: impl IntoMaybeDyn<f32>) -> Self {
         let degrees = degrees.into_maybe_dyn();
+        if let Some(signal_id) = degrees.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
         self.transform = MaybeDyn::Dynamic {
@@ -512,6 +524,9 @@ impl Container {
     /// Scale this container uniformly
     pub fn scale(mut self, s: impl IntoMaybeDyn<f32>) -> Self {
         let s = s.into_maybe_dyn();
+        if let Some(signal_id) = s.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
         self.transform = MaybeDyn::Dynamic {
@@ -525,6 +540,12 @@ impl Container {
     pub fn scale_xy(mut self, sx: impl IntoMaybeDyn<f32>, sy: impl IntoMaybeDyn<f32>) -> Self {
         let sx = sx.into_maybe_dyn();
         let sy = sy.into_maybe_dyn();
+        if let Some(signal_id) = sx.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
+        if let Some(signal_id) = sy.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
         self.transform = MaybeDyn::Dynamic {
@@ -542,6 +563,12 @@ impl Container {
     pub fn translate(mut self, x: impl IntoMaybeDyn<f32>, y: impl IntoMaybeDyn<f32>) -> Self {
         let x = x.into_maybe_dyn();
         let y = y.into_maybe_dyn();
+        if let Some(signal_id) = x.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
+        if let Some(signal_id) = y.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
         self.transform = MaybeDyn::Dynamic {
@@ -988,6 +1015,10 @@ impl Widget for Container {
         // Register pending layout signals now that we have the widget ID
         for signal_id in self.pending_layout_signals.drain(..) {
             register_layout_signal(id, signal_id);
+        }
+        // Register pending paint signals (e.g. transform signals)
+        for signal_id in self.pending_paint_signals.drain(..) {
+            register_paint_signal(id, signal_id);
         }
 
         // Set container_id for children source
