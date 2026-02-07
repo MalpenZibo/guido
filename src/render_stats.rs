@@ -21,6 +21,25 @@ pub struct LayoutReasons {
     pub reactive_changed: bool,
 }
 
+/// Snapshot of accumulated render statistics.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct StatsSnapshot {
+    pub frames_painted: u64,
+    pub frames_skipped: u64,
+    pub layout_total_calls: u64,
+    pub layout_skipped: u64,
+    pub layout_executed: u64,
+    pub layout_primary_constraints: u64,
+    pub layout_primary_reactive: u64,
+    pub paint_children_cached: u64,
+    pub paint_children_painted: u64,
+    pub flatten_nodes_cached: u64,
+    pub flatten_nodes_flattened: u64,
+    pub damage_none: u64,
+    pub damage_partial: u64,
+    pub damage_full: u64,
+}
+
 #[cfg(feature = "render-stats")]
 mod inner {
     use super::LayoutReasons;
@@ -170,6 +189,36 @@ mod inner {
         });
     }
 
+    /// Return a snapshot of the current stats (for testing).
+    pub fn get_stats() -> super::StatsSnapshot {
+        STATS.with(|s| {
+            let stats = s.borrow();
+            super::StatsSnapshot {
+                frames_painted: stats.frames_painted,
+                frames_skipped: stats.frames_skipped,
+                layout_total_calls: stats.layout_total_calls,
+                layout_skipped: stats.layout_skipped,
+                layout_executed: stats.layout_executed,
+                layout_primary_constraints: stats.layout_primary_constraints,
+                layout_primary_reactive: stats.layout_primary_reactive,
+                paint_children_cached: stats.paint_children_cached,
+                paint_children_painted: stats.paint_children_painted,
+                flatten_nodes_cached: stats.flatten_nodes_cached,
+                flatten_nodes_flattened: stats.flatten_nodes_flattened,
+                damage_none: stats.damage_none,
+                damage_partial: stats.damage_partial,
+                damage_full: stats.damage_full,
+            }
+        })
+    }
+
+    /// Reset all stats to zero (for test isolation).
+    pub fn reset_stats() {
+        STATS.with(|s| {
+            s.borrow_mut().reset();
+        });
+    }
+
     /// Called at the end of each frame to potentially print stats.
     /// Accepts the damage region for this frame.
     pub fn end_frame(damage: &DamageRegion) {
@@ -255,6 +304,16 @@ pub use inner::*;
 
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]
+pub fn get_stats() -> StatsSnapshot {
+    StatsSnapshot::default()
+}
+
+#[cfg(not(feature = "render-stats"))]
+#[inline(always)]
+pub fn reset_stats() {}
+
+#[cfg(not(feature = "render-stats"))]
+#[inline(always)]
 pub fn record_layout_skipped() {}
 
 #[cfg(not(feature = "render-stats"))]
@@ -288,3 +347,186 @@ pub fn record_flatten_full() {}
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]
 pub fn end_frame(_damage: &crate::tree::DamageRegion) {}
+
+#[cfg(test)]
+#[cfg(feature = "render-stats")]
+mod tests {
+    use super::*;
+    use crate::tree::DamageRegion;
+    use crate::widgets::Rect;
+
+    /// Reset stats before each test to ensure isolation
+    /// (tests share the thread-local when run on the same thread).
+    fn setup() {
+        reset_stats();
+    }
+
+    #[test]
+    fn test_frame_painted_counter() {
+        setup();
+        record_frame_painted();
+        record_frame_painted();
+        record_frame_painted();
+        let s = get_stats();
+        assert_eq!(s.frames_painted, 3);
+        assert_eq!(s.frames_skipped, 0);
+    }
+
+    #[test]
+    fn test_frame_skipped_counter() {
+        setup();
+        record_frame_skipped();
+        record_frame_skipped();
+        let s = get_stats();
+        assert_eq!(s.frames_skipped, 2);
+        assert_eq!(s.frames_painted, 0);
+    }
+
+    #[test]
+    fn test_layout_skipped() {
+        setup();
+        record_layout_skipped();
+        record_layout_skipped();
+        record_layout_skipped();
+        let s = get_stats();
+        assert_eq!(s.layout_total_calls, 3);
+        assert_eq!(s.layout_skipped, 3);
+        assert_eq!(s.layout_executed, 0);
+    }
+
+    #[test]
+    fn test_layout_executed_constraints_changed() {
+        setup();
+        record_layout_executed_with_reasons(LayoutReasons {
+            constraints_changed: true,
+            reactive_changed: false,
+        });
+        let s = get_stats();
+        assert_eq!(s.layout_total_calls, 1);
+        assert_eq!(s.layout_executed, 1);
+        assert_eq!(s.layout_primary_constraints, 1);
+        assert_eq!(s.layout_primary_reactive, 0);
+    }
+
+    #[test]
+    fn test_layout_executed_reactive_changed() {
+        setup();
+        record_layout_executed_with_reasons(LayoutReasons {
+            constraints_changed: false,
+            reactive_changed: true,
+        });
+        let s = get_stats();
+        assert_eq!(s.layout_executed, 1);
+        assert_eq!(s.layout_primary_reactive, 1);
+        assert_eq!(s.layout_primary_constraints, 0);
+    }
+
+    #[test]
+    fn test_layout_constraints_takes_priority_over_reactive() {
+        setup();
+        // When both are true, constraints_changed is the primary reason
+        record_layout_executed_with_reasons(LayoutReasons {
+            constraints_changed: true,
+            reactive_changed: true,
+        });
+        let s = get_stats();
+        assert_eq!(s.layout_primary_constraints, 1);
+        assert_eq!(s.layout_primary_reactive, 0);
+    }
+
+    #[test]
+    fn test_paint_child_counters() {
+        setup();
+        record_paint_child_cached();
+        record_paint_child_cached();
+        record_paint_child_cached();
+        record_paint_child_painted();
+        let s = get_stats();
+        assert_eq!(s.paint_children_cached, 3);
+        assert_eq!(s.paint_children_painted, 1);
+    }
+
+    #[test]
+    fn test_flatten_counters() {
+        setup();
+        record_flatten_cached();
+        record_flatten_full();
+        record_flatten_full();
+        let s = get_stats();
+        assert_eq!(s.flatten_nodes_cached, 1);
+        assert_eq!(s.flatten_nodes_flattened, 2);
+    }
+
+    #[test]
+    fn test_damage_region_tracking() {
+        setup();
+        end_frame(&DamageRegion::None);
+        end_frame(&DamageRegion::None);
+        end_frame(&DamageRegion::Partial(Rect::new(0.0, 0.0, 100.0, 50.0)));
+        end_frame(&DamageRegion::Full);
+        let s = get_stats();
+        assert_eq!(s.damage_none, 2);
+        assert_eq!(s.damage_partial, 1);
+        assert_eq!(s.damage_full, 1);
+    }
+
+    #[test]
+    fn test_mixed_layout_skip_rate() {
+        setup();
+        // 3 skipped, 2 executed = 60% skip rate
+        record_layout_skipped();
+        record_layout_skipped();
+        record_layout_skipped();
+        record_layout_executed_with_reasons(LayoutReasons {
+            constraints_changed: true,
+            reactive_changed: false,
+        });
+        record_layout_executed_with_reasons(LayoutReasons {
+            constraints_changed: false,
+            reactive_changed: true,
+        });
+        let s = get_stats();
+        assert_eq!(s.layout_total_calls, 5);
+        assert_eq!(s.layout_skipped, 3);
+        assert_eq!(s.layout_executed, 2);
+        assert_eq!(s.layout_primary_constraints, 1);
+        assert_eq!(s.layout_primary_reactive, 1);
+    }
+
+    #[test]
+    fn test_reset_clears_all_counters() {
+        setup();
+        record_frame_painted();
+        record_frame_skipped();
+        record_layout_skipped();
+        record_layout_executed_with_reasons(LayoutReasons {
+            constraints_changed: true,
+            reactive_changed: false,
+        });
+        record_paint_child_cached();
+        record_paint_child_painted();
+        record_flatten_cached();
+        record_flatten_full();
+        end_frame(&DamageRegion::Full);
+
+        // Verify something was recorded
+        let s = get_stats();
+        assert_ne!(s, StatsSnapshot::default());
+
+        // Reset and verify all zeros
+        reset_stats();
+        let s = get_stats();
+        assert_eq!(s.frames_painted, 0);
+        assert_eq!(s.frames_skipped, 0);
+        assert_eq!(s.layout_total_calls, 0);
+        assert_eq!(s.layout_skipped, 0);
+        assert_eq!(s.layout_executed, 0);
+        assert_eq!(s.paint_children_cached, 0);
+        assert_eq!(s.paint_children_painted, 0);
+        assert_eq!(s.flatten_nodes_cached, 0);
+        assert_eq!(s.flatten_nodes_flattened, 0);
+        assert_eq!(s.damage_none, 0);
+        assert_eq!(s.damage_partial, 0);
+        assert_eq!(s.damage_full, 0);
+    }
+}
