@@ -339,7 +339,11 @@ impl Container {
     /// container().background(Color::rgba(0.0, 0.0, 0.0, 0.5))  // 50% transparent black
     /// ```
     pub fn background(mut self, color: impl IntoMaybeDyn<Color>) -> Self {
-        self.background = color.into_maybe_dyn();
+        let color = color.into_maybe_dyn();
+        if let Some(signal_id) = color.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
+        self.background = color;
         self
     }
 
@@ -356,13 +360,21 @@ impl Container {
     /// container().corner_radius(12.0).squircle()        // iOS-style smooth corners
     /// ```
     pub fn corner_radius(mut self, radius: impl IntoMaybeDyn<f32>) -> Self {
-        self.corner_radius = radius.into_maybe_dyn();
+        let radius = radius.into_maybe_dyn();
+        if let Some(signal_id) = radius.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
+        self.corner_radius = radius;
         self
     }
 
     /// Set the corner curvature using CSS K-value system
     pub fn corner_curvature(mut self, curvature: impl IntoMaybeDyn<f32>) -> Self {
-        self.corner_curvature = curvature.into_maybe_dyn();
+        let curvature = curvature.into_maybe_dyn();
+        if let Some(signal_id) = curvature.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
+        self.corner_curvature = curvature;
         self
     }
 
@@ -390,8 +402,16 @@ impl Container {
         width: impl IntoMaybeDyn<f32>,
         color: impl IntoMaybeDyn<Color>,
     ) -> Self {
-        self.border_width = width.into_maybe_dyn();
-        self.border_color = color.into_maybe_dyn();
+        let width = width.into_maybe_dyn();
+        let color = color.into_maybe_dyn();
+        if let Some(signal_id) = width.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
+        if let Some(signal_id) = color.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
+        self.border_width = width;
+        self.border_color = color;
         self
     }
 
@@ -488,7 +508,11 @@ impl Container {
     }
 
     pub fn elevation(mut self, level: impl IntoMaybeDyn<f32>) -> Self {
-        self.elevation = level.into_maybe_dyn();
+        let level = level.into_maybe_dyn();
+        if let Some(signal_id) = level.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
+        self.elevation = level;
         self
     }
 
