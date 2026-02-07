@@ -57,6 +57,34 @@ name.set("Guido".to_string()); // Effect re-runs, prints: Hello, Guido!
 
 Effects are useful for logging, syncing with external systems, or triggering actions.
 
+## Field Selection
+
+When working with large structs in signals, `select()` lets you derive a signal for a specific field. The derived signal only updates when that field actually changes:
+
+```rust
+#[derive(Clone, PartialEq)]
+struct AppState {
+    user: String,
+    count: i32,
+}
+
+let state = create_signal(AppState { user: "Alice".into(), count: 0 });
+
+// Derive a signal for just the `user` field
+let user = state.select(|s| &s.user);
+
+// This text only re-renders when `user` changes
+text(move || format!("Hello, {}", user.get()))
+```
+
+Selects can be chained for nested fields:
+
+```rust
+let inner_value = state.select(|s| &s.inner).select(|i| &i.value);
+```
+
+This is especially useful with `create_service` for background data — the selector avoids cloning the entire struct just to check if one field changed.
+
 ## Using Signals in Widgets
 
 Most widget properties accept either static values or reactive sources:
@@ -208,6 +236,7 @@ impl<T: Clone> Signal<T> {
     pub fn get_untracked(&self) -> T; // Read without tracking
     pub fn set(&self, value: T);      // Set new value
     pub fn update(&self, f: impl FnOnce(&mut T)); // Update in place
+    pub fn select<U>(&self, f: impl Fn(&T) -> &U) -> Signal<U>; // Field selection
 }
 ```
 
