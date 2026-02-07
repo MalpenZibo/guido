@@ -177,12 +177,15 @@ fn process_surface_commands(
 }
 
 /// Walk the render tree after painting and cache each node's output.
-/// Also clears needs_paint flags for cached widgets.
+/// Skips cache-reused nodes (repainted == false) since their tree cache is already valid.
+/// Also clears needs_paint flags for freshly painted widgets.
 fn cache_paint_results(tree: &mut Tree, node: &renderer::RenderNode) {
-    let widget_id = WidgetId::from_u64(node.id);
-    if tree.contains(widget_id) {
-        tree.cache_paint(widget_id, node.clone());
-        tree.clear_needs_paint(widget_id);
+    if node.repainted {
+        let widget_id = WidgetId::from_u64(node.id);
+        if tree.contains(widget_id) {
+            tree.cache_paint(widget_id, node.clone());
+            tree.clear_needs_paint(widget_id);
+        }
     }
     for child in &node.children {
         cache_paint_results(tree, child);
@@ -372,9 +375,6 @@ fn render_surface(
             widget.paint(tree, id, &mut ctx);
         });
 
-        // Cache paint results and clear needs_paint flags
-        cache_paint_results(tree, &surface.root_node);
-
         // Take ownership of root node temporarily, add to tree, then restore
         let root = std::mem::replace(&mut surface.root_node, renderer::RenderNode::new(0));
         surface.render_tree.add_root(root);
@@ -391,6 +391,10 @@ fn render_surface(
         if let Some(root) = surface.render_tree.roots.pop() {
             surface.root_node = root;
         }
+
+        // Cache paint results AFTER flatten so cached_flatten data is preserved.
+        // This enables incremental flatten for paint-cached nodes on subsequent frames.
+        cache_paint_results(tree, &surface.root_node);
 
         // Process Animation jobs AFTER paint (advance for next frame)
         // This only processes widgets with Animation jobs, not the entire tree
