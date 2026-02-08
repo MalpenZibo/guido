@@ -14,10 +14,7 @@ use crate::advance_anim;
 use crate::animation::Transition;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
-use crate::reactive::{
-    IntoMaybeDyn, MaybeDyn, focused_widget, register_layout_signal, register_paint_signal,
-    register_subscriber, with_signal_tracking,
-};
+use crate::reactive::{IntoMaybeDyn, MaybeDyn, focused_widget, with_signal_tracking};
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
@@ -175,11 +172,6 @@ pub struct Container {
 
     // Ripple animation state
     pub(super) ripple: RippleState,
-
-    // Pending layout signal registrations (processed when widget ID becomes available)
-    pub(super) pending_layout_signals: Vec<usize>,
-    // Pending paint signal registrations (e.g. transform signals)
-    pub(super) pending_paint_signals: Vec<usize>,
 }
 
 impl Container {
@@ -228,8 +220,6 @@ impl Container {
             h_scrollbar_handle_id: None,
             h_scrollbar_scale_anim: None,
             ripple: RippleState::new(),
-            pending_layout_signals: Vec::new(),
-            pending_paint_signals: Vec::new(),
         }
     }
 
@@ -281,14 +271,7 @@ impl Container {
     /// ```
     pub fn padding(mut self, value: impl IntoMaybeDyn<f32>) -> Self {
         let value = value.into_maybe_dyn();
-        // Store layout dependency if value is from a signal (will be registered when ID is available)
-        if let Some(signal_id) = value.signal_id() {
-            self.pending_layout_signals.push(signal_id);
-        }
-        self.padding = MaybeDyn::Dynamic {
-            getter: Arc::new(move || Padding::all(value.get())),
-            signal_id: None, // Compound MaybeDyn, original signal already registered
-        };
+        self.padding = MaybeDyn::Dynamic(Arc::new(move || Padding::all(value.get())));
         self
     }
 
@@ -309,22 +292,12 @@ impl Container {
     ) -> Self {
         let h = horizontal.into_maybe_dyn();
         let v = vertical.into_maybe_dyn();
-        // Store layout dependencies if values are from signals (will be registered when ID is available)
-        if let Some(signal_id) = h.signal_id() {
-            self.pending_layout_signals.push(signal_id);
-        }
-        if let Some(signal_id) = v.signal_id() {
-            self.pending_layout_signals.push(signal_id);
-        }
-        self.padding = MaybeDyn::Dynamic {
-            getter: Arc::new(move || Padding {
-                left: h.get(),
-                right: h.get(),
-                top: v.get(),
-                bottom: v.get(),
-            }),
-            signal_id: None, // Compound MaybeDyn, original signals already registered
-        };
+        self.padding = MaybeDyn::Dynamic(Arc::new(move || Padding {
+            left: h.get(),
+            right: h.get(),
+            top: v.get(),
+            bottom: v.get(),
+        }));
         self
     }
 
@@ -340,11 +313,7 @@ impl Container {
     /// container().background(Color::rgba(0.0, 0.0, 0.0, 0.5))  // 50% transparent black
     /// ```
     pub fn background(mut self, color: impl IntoMaybeDyn<Color>) -> Self {
-        let color = color.into_maybe_dyn();
-        if let Some(signal_id) = color.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        self.background = color;
+        self.background = color.into_maybe_dyn();
         self
     }
 
@@ -361,21 +330,13 @@ impl Container {
     /// container().corner_radius(12.0).squircle()        // iOS-style smooth corners
     /// ```
     pub fn corner_radius(mut self, radius: impl IntoMaybeDyn<f32>) -> Self {
-        let radius = radius.into_maybe_dyn();
-        if let Some(signal_id) = radius.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        self.corner_radius = radius;
+        self.corner_radius = radius.into_maybe_dyn();
         self
     }
 
     /// Set the corner curvature using CSS K-value system
     pub fn corner_curvature(mut self, curvature: impl IntoMaybeDyn<f32>) -> Self {
-        let curvature = curvature.into_maybe_dyn();
-        if let Some(signal_id) = curvature.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        self.corner_curvature = curvature;
+        self.corner_curvature = curvature.into_maybe_dyn();
         self
     }
 
@@ -403,16 +364,8 @@ impl Container {
         width: impl IntoMaybeDyn<f32>,
         color: impl IntoMaybeDyn<Color>,
     ) -> Self {
-        let width = width.into_maybe_dyn();
-        let color = color.into_maybe_dyn();
-        if let Some(signal_id) = width.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        if let Some(signal_id) = color.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        self.border_width = width;
-        self.border_color = color;
+        self.border_width = width.into_maybe_dyn();
+        self.border_color = color.into_maybe_dyn();
         self
     }
 
@@ -436,23 +389,13 @@ impl Container {
 
     /// Set the width of the container.
     pub fn width(mut self, width: impl IntoMaybeDyn<Length>) -> Self {
-        let maybe_dyn = width.into_maybe_dyn();
-        // Store layout dependency if value is from a signal (will be registered when ID is available)
-        if let Some(signal_id) = maybe_dyn.signal_id() {
-            self.pending_layout_signals.push(signal_id);
-        }
-        self.width = Some(maybe_dyn);
+        self.width = Some(width.into_maybe_dyn());
         self
     }
 
     /// Set the height of the container.
     pub fn height(mut self, height: impl IntoMaybeDyn<Length>) -> Self {
-        let maybe_dyn = height.into_maybe_dyn();
-        // Store layout dependency if value is from a signal (will be registered when ID is available)
-        if let Some(signal_id) = maybe_dyn.signal_id() {
-            self.pending_layout_signals.push(signal_id);
-        }
-        self.height = Some(maybe_dyn);
+        self.height = Some(height.into_maybe_dyn());
         self
     }
 
@@ -509,55 +452,37 @@ impl Container {
     }
 
     pub fn elevation(mut self, level: impl IntoMaybeDyn<f32>) -> Self {
-        let level = level.into_maybe_dyn();
-        if let Some(signal_id) = level.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        self.elevation = level;
+        self.elevation = level.into_maybe_dyn();
         self
     }
 
     /// Set the transform for this container
     pub fn transform(mut self, t: impl IntoMaybeDyn<Transform>) -> Self {
-        let t = t.into_maybe_dyn();
-        if let Some(signal_id) = t.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        self.transform = t;
+        self.transform = t.into_maybe_dyn();
         self
     }
 
     /// Rotate this container by the given angle in degrees
     pub fn rotate(mut self, degrees: impl IntoMaybeDyn<f32>) -> Self {
         let degrees = degrees.into_maybe_dyn();
-        if let Some(signal_id) = degrees.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic {
-            getter: Arc::new(move || {
-                prev_transform
-                    .get()
-                    .then(&Transform::rotate_degrees(degrees.get()))
-            }),
-            signal_id: None,
-        };
+        self.transform = MaybeDyn::Dynamic(Arc::new(move || {
+            prev_transform
+                .get()
+                .then(&Transform::rotate_degrees(degrees.get()))
+        }));
         self
     }
 
     /// Scale this container uniformly
     pub fn scale(mut self, s: impl IntoMaybeDyn<f32>) -> Self {
         let s = s.into_maybe_dyn();
-        if let Some(signal_id) = s.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic {
-            getter: Arc::new(move || prev_transform.get().then(&Transform::scale(s.get()))),
-            signal_id: None,
-        };
+        self.transform = MaybeDyn::Dynamic(Arc::new(move || {
+            prev_transform.get().then(&Transform::scale(s.get()))
+        }));
         self
     }
 
@@ -565,22 +490,13 @@ impl Container {
     pub fn scale_xy(mut self, sx: impl IntoMaybeDyn<f32>, sy: impl IntoMaybeDyn<f32>) -> Self {
         let sx = sx.into_maybe_dyn();
         let sy = sy.into_maybe_dyn();
-        if let Some(signal_id) = sx.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        if let Some(signal_id) = sy.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic {
-            getter: Arc::new(move || {
-                prev_transform
-                    .get()
-                    .then(&Transform::scale_xy(sx.get(), sy.get()))
-            }),
-            signal_id: None,
-        };
+        self.transform = MaybeDyn::Dynamic(Arc::new(move || {
+            prev_transform
+                .get()
+                .then(&Transform::scale_xy(sx.get(), sy.get()))
+        }));
         self
     }
 
@@ -588,32 +504,19 @@ impl Container {
     pub fn translate(mut self, x: impl IntoMaybeDyn<f32>, y: impl IntoMaybeDyn<f32>) -> Self {
         let x = x.into_maybe_dyn();
         let y = y.into_maybe_dyn();
-        if let Some(signal_id) = x.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        if let Some(signal_id) = y.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic {
-            getter: Arc::new(move || {
-                prev_transform
-                    .get()
-                    .then(&Transform::translate(x.get(), y.get()))
-            }),
-            signal_id: None,
-        };
+        self.transform = MaybeDyn::Dynamic(Arc::new(move || {
+            prev_transform
+                .get()
+                .then(&Transform::translate(x.get(), y.get()))
+        }));
         self
     }
 
     /// Set the transform origin (pivot point) for this container.
     pub fn transform_origin(mut self, origin: impl IntoMaybeDyn<TransformOrigin>) -> Self {
-        let origin = origin.into_maybe_dyn();
-        if let Some(signal_id) = origin.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        self.transform_origin = origin;
+        self.transform_origin = origin.into_maybe_dyn();
         self
     }
 
@@ -1062,21 +965,6 @@ impl Widget for Container {
     }
 
     fn register_children(&mut self, tree: &mut Tree, id: WidgetId) {
-        // Register pending layout signals now that we have the widget ID
-        for signal_id in self.pending_layout_signals.drain(..) {
-            register_layout_signal(id, signal_id);
-        }
-        // Register pending paint signals (e.g. transform signals)
-        let has_paint_anims = self.has_animated_state_properties();
-        for signal_id in self.pending_paint_signals.drain(..) {
-            register_paint_signal(id, signal_id);
-            // When paint animations exist, also trigger advance_animations
-            // so animation targets get updated when signals change
-            if has_paint_anims {
-                register_subscriber(id, signal_id, JobType::Animation);
-            }
-        }
-
         // Set container_id for children source
         self.children_source.set_container_id(id);
 

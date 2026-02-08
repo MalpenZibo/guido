@@ -21,8 +21,7 @@ pub use cursor::{CursorIcon, get_current_cursor, set_cursor, take_cursor_change}
 pub use effect::{Effect, create_effect};
 pub use focus::{clear_focus, focused_widget, has_focus, release_focus, request_focus};
 pub use invalidation::{
-    notify_signal_change, record_signal_read, register_layout_signal, register_paint_signal,
-    register_subscriber, with_signal_tracking,
+    notify_signal_change, record_signal_read, register_subscriber, with_signal_tracking,
 };
 pub use maybe_dyn::{IntoMaybeDyn, MaybeDyn};
 // Only on_cleanup is public API - with_owner, dispose_owner, and OwnerId are

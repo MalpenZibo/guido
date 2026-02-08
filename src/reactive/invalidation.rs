@@ -198,19 +198,6 @@ pub fn clear_signal_subscribers(signal_id: usize) {
     SIGNAL_CALLBACKS.lock().unwrap().remove(&signal_id);
 }
 
-/// Register a layout dependency: when the signal changes, the widget needs re-layout.
-/// Called at widget construction time when a layout-affecting property is set to a signal.
-/// This is an alias for register_subscriber with JobType::Layout for backward compatibility.
-pub fn register_layout_signal(widget_id: WidgetId, signal_id: usize) {
-    register_subscriber(widget_id, signal_id, JobType::Layout);
-}
-
-/// Register a paint dependency: when the signal changes, the widget needs repaint.
-/// Called at widget construction time when a paint-affecting property (e.g. transform) is set to a signal.
-pub fn register_paint_signal(widget_id: WidgetId, signal_id: usize) {
-    register_subscriber(widget_id, signal_id, JobType::Paint);
-}
-
 /// Notify all layout subscribers of a signal that it has changed.
 /// Called from Signal::set() and Signal::update().
 ///
