@@ -1,6 +1,8 @@
 # Background Threads
 
-Guido signals are thread-safe and can be updated from background threads. The `create_service` API provides a convenient way to spawn background services that are automatically cleaned up when the component unmounts.
+Guido signals (`Signal<T>`) live on the main thread and are `!Send` — they cannot be captured directly in background threads. To update signals from a background thread, call `.writer()` to obtain a `WriteSignal<T>`, which **is** `Send`. Writes through a `WriteSignal` are queued and applied on the main thread during the next frame.
+
+The `create_service` API provides a convenient way to spawn background services that are automatically cleaned up when the component unmounts.
 
 ## Basic Pattern: Read-Only Service
 
@@ -10,11 +12,12 @@ For services that only push data to signals (no commands from UI):
 use std::time::Duration;
 
 let time = create_signal(String::new());
+let time_w = time.writer(); // Get a Send-able write handle
 
 // Spawn a read-only service - use () as command type
 let _ = create_service::<(), _>(move |_rx, ctx| {
     while ctx.is_running() {
-        time.set(chrono::Local::now().format("%H:%M:%S").to_string());
+        time_w.set(chrono::Local::now().format("%H:%M:%S").to_string());
         std::thread::sleep(Duration::from_secs(1));
     }
 });
@@ -33,6 +36,7 @@ enum Cmd {
 }
 
 let data = create_signal(String::new());
+let data_w = data.writer(); // Get a Send-able write handle
 
 let service = create_service(move |rx, ctx| {
     let mut interval = Duration::from_secs(1);
@@ -42,7 +46,7 @@ let service = create_service(move |rx, ctx| {
         while let Ok(cmd) = rx.try_recv() {
             match cmd {
                 Cmd::Refresh => {
-                    data.set(fetch_data());
+                    data_w.set(fetch_data());
                 }
                 Cmd::SetInterval(secs) => {
                     interval = Duration::from_secs(secs);
@@ -51,7 +55,7 @@ let service = create_service(move |rx, ctx| {
         }
 
         // Periodic update
-        data.set(fetch_data());
+        data_w.set(fetch_data());
         std::thread::sleep(interval);
     }
 });
@@ -74,13 +78,18 @@ fn main() {
     let memory_usage = create_signal(0.0f32);
     let time = create_signal(String::new());
 
+    // Get Send-able write handles for the background thread
+    let cpu_w = cpu_usage.writer();
+    let mem_w = memory_usage.writer();
+    let time_w = time.writer();
+
     // Background monitoring service
     let _ = create_service::<(), _>(move |_rx, ctx| {
         while ctx.is_running() {
             // Simulate system monitoring
-            cpu_usage.set(rand::random::<f32>() * 100.0);
-            memory_usage.set(rand::random::<f32>() * 100.0);
-            time.set(chrono::Local::now().format("%H:%M:%S").to_string());
+            cpu_w.set(rand::random::<f32>() * 100.0);
+            mem_w.set(rand::random::<f32>() * 100.0);
+            time_w.set(chrono::Local::now().format("%H:%M:%S").to_string());
 
             std::thread::sleep(Duration::from_secs(1));
         }
@@ -115,10 +124,13 @@ You can create multiple independent services:
 let weather = create_signal(String::new());
 let news = create_signal(String::new());
 
+let weather_w = weather.writer();
+let news_w = news.writer();
+
 // Weather service
 let _ = create_service::<(), _>(move |_rx, ctx| {
     while ctx.is_running() {
-        weather.set(fetch_weather());
+        weather_w.set(fetch_weather());
         std::thread::sleep(Duration::from_secs(300)); // Every 5 minutes
     }
 });
@@ -126,7 +138,7 @@ let _ = create_service::<(), _>(move |_rx, ctx| {
 // News service
 let _ = create_service::<(), _>(move |_rx, ctx| {
     while ctx.is_running() {
-        news.set(fetch_news());
+        news_w.set(fetch_news());
         std::thread::sleep(Duration::from_secs(60)); // Every minute
     }
 });
@@ -144,12 +156,13 @@ enum DataState {
 }
 
 let status = create_signal(DataState::Loading);
+let status_w = status.writer();
 
 let _ = create_service::<(), _>(move |_rx, ctx| {
     while ctx.is_running() {
         match fetch_data() {
-            Ok(data) => status.set(DataState::Success(data)),
-            Err(e) => status.set(DataState::Error(e.to_string())),
+            Ok(data) => status_w.set(DataState::Success(data)),
+            Err(e) => status_w.set(DataState::Error(e.to_string())),
         }
         std::thread::sleep(Duration::from_secs(1));
     }
@@ -169,11 +182,12 @@ Simple clock using a service:
 
 ```rust
 let time = create_signal(String::new());
+let time_w = time.writer();
 
 let _ = create_service::<(), _>(move |_rx, ctx| {
     while ctx.is_running() {
         let now = chrono::Local::now();
-        time.set(now.format("%H:%M:%S").to_string());
+        time_w.set(now.format("%H:%M:%S").to_string());
         std::thread::sleep(Duration::from_millis(100));
     }
 });
@@ -222,14 +236,18 @@ while ctx.is_running() {
 If multiple signals update together, update them in sequence:
 
 ```rust
+let cpu_w = cpu.writer();
+let memory_w = memory.writer();
+let disk_w = disk.writer();
+
 let _ = create_service::<(), _>(move |_rx, ctx| {
     while ctx.is_running() {
         let data = fetch_all_data();
 
         // All updates happen before next render
-        cpu.set(data.cpu);
-        memory.set(data.memory);
-        disk.set(data.disk);
+        cpu_w.set(data.cpu);
+        memory_w.set(data.memory);
+        disk_w.set(data.disk);
 
         std::thread::sleep(Duration::from_secs(1));
     }

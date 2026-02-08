@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::rc::Rc;
 
 use super::signal::{ReadSignal, Signal};
 
@@ -6,11 +6,7 @@ use super::signal::{ReadSignal, Signal};
 /// This allows widget properties to accept both plain values and signals.
 pub enum MaybeDyn<T: 'static> {
     Static(T),
-    Dynamic {
-        getter: Arc<dyn Fn() -> T + Send + Sync>,
-        /// Signal ID if this was created from a Signal, None if from a closure
-        signal_id: Option<usize>,
-    },
+    Dynamic(Rc<dyn Fn() -> T>),
 }
 
 impl<T: Clone + 'static> MaybeDyn<T> {
@@ -18,16 +14,7 @@ impl<T: Clone + 'static> MaybeDyn<T> {
     pub fn get(&self) -> T {
         match self {
             MaybeDyn::Static(v) => v.clone(),
-            MaybeDyn::Dynamic { getter, .. } => getter(),
-        }
-    }
-
-    /// Get the signal ID if this MaybeDyn was created from a Signal.
-    /// Returns None for static values or closures.
-    pub fn signal_id(&self) -> Option<usize> {
-        match self {
-            MaybeDyn::Static(_) => None,
-            MaybeDyn::Dynamic { signal_id, .. } => *signal_id,
+            MaybeDyn::Dynamic(getter) => getter(),
         }
     }
 
@@ -37,11 +24,8 @@ impl<T: Clone + 'static> MaybeDyn<T> {
     }
 
     /// Create a dynamic MaybeDyn from a closure
-    pub fn dynamic<F: Fn() -> T + Send + Sync + 'static>(f: F) -> Self {
-        MaybeDyn::Dynamic {
-            getter: Arc::new(f),
-            signal_id: None,
-        }
+    pub fn dynamic<F: Fn() -> T + 'static>(f: F) -> Self {
+        MaybeDyn::Dynamic(Rc::new(f))
     }
 }
 
@@ -49,17 +33,10 @@ impl<T: Clone + 'static> Clone for MaybeDyn<T> {
     fn clone(&self) -> Self {
         match self {
             MaybeDyn::Static(v) => MaybeDyn::Static(v.clone()),
-            MaybeDyn::Dynamic { getter, signal_id } => MaybeDyn::Dynamic {
-                getter: getter.clone(),
-                signal_id: *signal_id,
-            },
+            MaybeDyn::Dynamic(getter) => MaybeDyn::Dynamic(getter.clone()),
         }
     }
 }
-
-// MaybeDyn is Send + Sync when T is Send + Sync
-unsafe impl<T: Send + Sync + 'static> Send for MaybeDyn<T> {}
-unsafe impl<T: Send + Sync + 'static> Sync for MaybeDyn<T> {}
 
 /// Trait for types that can be converted into `MaybeDyn<T>`
 pub trait IntoMaybeDyn<T: Clone + 'static> {
@@ -119,14 +96,11 @@ impl IntoMaybeDyn<bool> for bool {
 
 impl<T, F> IntoMaybeDyn<T> for F
 where
-    T: Clone + Send + Sync + 'static,
-    F: Fn() -> T + Send + Sync + 'static,
+    T: Clone + 'static,
+    F: Fn() -> T + 'static,
 {
     fn into_maybe_dyn(self) -> MaybeDyn<T> {
-        MaybeDyn::Dynamic {
-            getter: Arc::new(self),
-            signal_id: None,
-        }
+        MaybeDyn::Dynamic(Rc::new(self))
     }
 }
 
@@ -134,23 +108,15 @@ where
 // Signal implementations
 // ============================================================================
 
-impl<T: Clone + Send + Sync + 'static> IntoMaybeDyn<T> for Signal<T> {
+impl<T: Clone + 'static> IntoMaybeDyn<T> for Signal<T> {
     fn into_maybe_dyn(self) -> MaybeDyn<T> {
-        let id = self.id();
-        MaybeDyn::Dynamic {
-            getter: Arc::new(move || self.get()),
-            signal_id: Some(id),
-        }
+        MaybeDyn::Dynamic(Rc::new(move || self.get()))
     }
 }
 
-impl<T: Clone + Send + Sync + 'static> IntoMaybeDyn<T> for ReadSignal<T> {
+impl<T: Clone + 'static> IntoMaybeDyn<T> for ReadSignal<T> {
     fn into_maybe_dyn(self) -> MaybeDyn<T> {
-        let id = self.id();
-        MaybeDyn::Dynamic {
-            getter: Arc::new(move || self.get()),
-            signal_id: Some(id),
-        }
+        MaybeDyn::Dynamic(Rc::new(move || self.get()))
     }
 }
 
@@ -240,7 +206,7 @@ mod tests {
         });
         let value2 = value1.clone();
 
-        // Both share the same closure (Arc)
+        // Both share the same closure (Rc)
         value1.get();
         value2.get();
         assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 2);

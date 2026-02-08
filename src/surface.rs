@@ -37,7 +37,6 @@
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
 
 use crate::platform::{Anchor, KeyboardInteractivity, Layer};
 use crate::widgets::{Color, Widget};
@@ -175,18 +174,12 @@ impl SurfaceConfig {
 #[derive(Clone)]
 pub struct SurfaceHandle {
     id: SurfaceId,
-    command_sender: Sender<SurfaceCommand>,
 }
 
 impl SurfaceHandle {
-    /// Create a new surface handle.
-    pub(crate) fn new(id: SurfaceId, command_sender: Sender<SurfaceCommand>) -> Self {
-        Self { id, command_sender }
-    }
-
     /// Close this surface (removes from screen, destroys widget tree).
     pub fn close(&self) {
-        let _ = self.command_sender.send(SurfaceCommand::Close(self.id));
+        push_surface_command(SurfaceCommand::Close(self.id));
     }
 
     /// Get the surface ID.
@@ -199,9 +192,7 @@ impl SurfaceHandle {
     /// Changes take effect immediately. Use `Layer::Overlay` to appear above
     /// other windows, `Layer::Top` for normal status bars, etc.
     pub fn set_layer(&self, layer: Layer) {
-        let _ = self
-            .command_sender
-            .send(SurfaceCommand::SetLayer { id: self.id, layer });
+        push_surface_command(SurfaceCommand::SetLayer { id: self.id, layer });
     }
 
     /// Set the keyboard interactivity mode for this surface.
@@ -210,9 +201,7 @@ impl SurfaceHandle {
     /// - `KeyboardInteractivity::OnDemand`: Surface receives focus when clicked.
     /// - `KeyboardInteractivity::Exclusive`: Surface grabs keyboard focus exclusively.
     pub fn set_keyboard_interactivity(&self, mode: KeyboardInteractivity) {
-        let _ = self
-            .command_sender
-            .send(SurfaceCommand::SetKeyboardInteractivity { id: self.id, mode });
+        push_surface_command(SurfaceCommand::SetKeyboardInteractivity { id: self.id, mode });
     }
 
     /// Set the anchor edges for this surface.
@@ -221,7 +210,7 @@ impl SurfaceHandle {
     /// For example, `Anchor::TOP | Anchor::LEFT | Anchor::RIGHT` creates a
     /// top bar that spans the width of the screen.
     pub fn set_anchor(&self, anchor: Anchor) {
-        let _ = self.command_sender.send(SurfaceCommand::SetAnchor {
+        push_surface_command(SurfaceCommand::SetAnchor {
             id: self.id,
             anchor,
         });
@@ -232,7 +221,7 @@ impl SurfaceHandle {
     /// Note: When anchored to both edges on an axis (e.g., LEFT and RIGHT),
     /// the compositor may override that dimension.
     pub fn set_size(&self, width: u32, height: u32) {
-        let _ = self.command_sender.send(SurfaceCommand::SetSize {
+        push_surface_command(SurfaceCommand::SetSize {
             id: self.id,
             width,
             height,
@@ -245,9 +234,7 @@ impl SurfaceHandle {
     /// overlap. Pass 0 for no exclusive zone, or a positive value for
     /// the number of pixels to reserve.
     pub fn set_exclusive_zone(&self, zone: i32) {
-        let _ = self
-            .command_sender
-            .send(SurfaceCommand::SetExclusiveZone { id: self.id, zone });
+        push_surface_command(SurfaceCommand::SetExclusiveZone { id: self.id, zone });
     }
 
     /// Set the margin for this surface.
@@ -255,7 +242,7 @@ impl SurfaceHandle {
     /// Margins add space between the surface and the screen edge it's
     /// anchored to.
     pub fn set_margin(&self, top: i32, right: i32, bottom: i32, left: i32) {
-        let _ = self.command_sender.send(SurfaceCommand::SetMargin {
+        push_surface_command(SurfaceCommand::SetMargin {
             id: self.id,
             top,
             right,
@@ -272,7 +259,7 @@ pub(crate) enum SurfaceCommand {
     Create {
         id: SurfaceId,
         config: SurfaceConfig,
-        widget_fn: Box<dyn FnOnce() -> Box<dyn Widget> + Send>,
+        widget_fn: Box<dyn FnOnce() -> Box<dyn Widget>>,
     },
     /// Close and destroy a surface by ID.
     Close(SurfaceId),
@@ -303,19 +290,22 @@ pub(crate) enum SurfaceCommand {
     },
 }
 
-// Thread-local storage for the surface command channel.
-// This allows spawn_surface to be called from anywhere in widget code.
+// Thread-local storage for the surface command queue.
+// Both sender and receiver are on the main thread — this is just a deferred command queue.
 thread_local! {
-    static SURFACE_COMMAND_TX: RefCell<Option<Sender<SurfaceCommand>>> = const { RefCell::new(None) };
+    static SURFACE_COMMANDS: RefCell<Vec<SurfaceCommand>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Initialize the surface command channel. Called by App::run().
-pub(crate) fn init_surface_commands() -> Receiver<SurfaceCommand> {
-    let (tx, rx) = channel();
-    SURFACE_COMMAND_TX.with(|cell| {
-        *cell.borrow_mut() = Some(tx);
+/// Push a surface command to the thread-local queue.
+fn push_surface_command(cmd: SurfaceCommand) {
+    SURFACE_COMMANDS.with(|cmds| {
+        cmds.borrow_mut().push(cmd);
     });
-    rx
+}
+
+/// Drain all pending surface commands. Called by the main event loop.
+pub(crate) fn drain_surface_commands() -> Vec<SurfaceCommand> {
+    SURFACE_COMMANDS.with(|cmds| cmds.borrow_mut().drain(..).collect())
 }
 
 /// Spawn a new surface at runtime.
@@ -333,10 +323,6 @@ pub(crate) fn init_surface_commands() -> Receiver<SurfaceCommand> {
 /// # Returns
 ///
 /// A `SurfaceHandle` that can be used to close the surface later.
-///
-/// # Panics
-///
-/// Panics if called before `App::run()` has initialized the command channel.
 ///
 /// # Example
 ///
@@ -359,23 +345,17 @@ pub(crate) fn init_surface_commands() -> Receiver<SurfaceCommand> {
 pub fn spawn_surface<W, F>(config: SurfaceConfig, widget_fn: F) -> SurfaceHandle
 where
     W: Widget + 'static,
-    F: FnOnce() -> W + Send + 'static,
+    F: FnOnce() -> W + 'static,
 {
     let id = SurfaceId::next();
-    let tx = SURFACE_COMMAND_TX.with(|cell| {
-        cell.borrow()
-            .clone()
-            .expect("spawn_surface called before App::run()")
-    });
 
-    let cmd = SurfaceCommand::Create {
+    push_surface_command(SurfaceCommand::Create {
         id,
         config,
         widget_fn: Box::new(move || Box::new(widget_fn())),
-    };
-    tx.send(cmd).expect("Event loop closed");
+    });
 
-    SurfaceHandle::new(id, tx)
+    SurfaceHandle { id }
 }
 
 /// Get a handle to control an existing surface.
@@ -383,10 +363,6 @@ where
 /// This can be used to modify surfaces added via `add_surface()` or `spawn_surface()`.
 /// The handle allows changing surface properties like layer, keyboard interactivity,
 /// anchor, size, exclusive zone, and margin.
-///
-/// # Panics
-///
-/// Panics if called before `App::run()` has initialized the command channel.
 ///
 /// # Example
 ///
@@ -405,10 +381,5 @@ where
 /// app.run();
 /// ```
 pub fn surface_handle(id: SurfaceId) -> SurfaceHandle {
-    let tx = SURFACE_COMMAND_TX.with(|cell| {
-        cell.borrow()
-            .clone()
-            .expect("surface_handle called before App::run()")
-    });
-    SurfaceHandle::new(id, tx)
+    SurfaceHandle { id }
 }

@@ -8,16 +8,13 @@ pub use animations::{AdvanceResult, AnimationState, get_animated_value};
 pub use ripple::RippleState;
 
 use std::borrow::Cow;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use crate::advance_anim;
 use crate::animation::Transition;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
-use crate::reactive::{
-    IntoMaybeDyn, MaybeDyn, focused_widget, register_layout_signal, register_paint_signal,
-    register_subscriber,
-};
+use crate::reactive::{IntoMaybeDyn, MaybeDyn, focused_widget, with_signal_tracking};
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
@@ -34,11 +31,11 @@ use super::widget::{
 };
 
 /// Callback for click events
-pub type ClickCallback = Arc<dyn Fn() + Send + Sync>;
+pub type ClickCallback = Rc<dyn Fn()>;
 /// Callback for hover events (bool = is_hovered)
-pub type HoverCallback = Arc<dyn Fn(bool) + Send + Sync>;
+pub type HoverCallback = Rc<dyn Fn(bool)>;
 /// Callback for scroll events (delta_x, delta_y, source)
-pub type ScrollCallback = Arc<dyn Fn(f32, f32, ScrollSource) + Send + Sync>;
+pub type ScrollCallback = Rc<dyn Fn(f32, f32, ScrollSource)>;
 
 /// Gradient direction for linear gradients
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -175,11 +172,6 @@ pub struct Container {
 
     // Ripple animation state
     pub(super) ripple: RippleState,
-
-    // Pending layout signal registrations (processed when widget ID becomes available)
-    pub(super) pending_layout_signals: Vec<usize>,
-    // Pending paint signal registrations (e.g. transform signals)
-    pub(super) pending_paint_signals: Vec<usize>,
 }
 
 impl Container {
@@ -228,8 +220,6 @@ impl Container {
             h_scrollbar_handle_id: None,
             h_scrollbar_scale_anim: None,
             ripple: RippleState::new(),
-            pending_layout_signals: Vec::new(),
-            pending_paint_signals: Vec::new(),
         }
     }
 
@@ -281,14 +271,7 @@ impl Container {
     /// ```
     pub fn padding(mut self, value: impl IntoMaybeDyn<f32>) -> Self {
         let value = value.into_maybe_dyn();
-        // Store layout dependency if value is from a signal (will be registered when ID is available)
-        if let Some(signal_id) = value.signal_id() {
-            self.pending_layout_signals.push(signal_id);
-        }
-        self.padding = MaybeDyn::Dynamic {
-            getter: Arc::new(move || Padding::all(value.get())),
-            signal_id: None, // Compound MaybeDyn, original signal already registered
-        };
+        self.padding = MaybeDyn::Dynamic(Rc::new(move || Padding::all(value.get())));
         self
     }
 
@@ -309,22 +292,12 @@ impl Container {
     ) -> Self {
         let h = horizontal.into_maybe_dyn();
         let v = vertical.into_maybe_dyn();
-        // Store layout dependencies if values are from signals (will be registered when ID is available)
-        if let Some(signal_id) = h.signal_id() {
-            self.pending_layout_signals.push(signal_id);
-        }
-        if let Some(signal_id) = v.signal_id() {
-            self.pending_layout_signals.push(signal_id);
-        }
-        self.padding = MaybeDyn::Dynamic {
-            getter: Arc::new(move || Padding {
-                left: h.get(),
-                right: h.get(),
-                top: v.get(),
-                bottom: v.get(),
-            }),
-            signal_id: None, // Compound MaybeDyn, original signals already registered
-        };
+        self.padding = MaybeDyn::Dynamic(Rc::new(move || Padding {
+            left: h.get(),
+            right: h.get(),
+            top: v.get(),
+            bottom: v.get(),
+        }));
         self
     }
 
@@ -340,11 +313,7 @@ impl Container {
     /// container().background(Color::rgba(0.0, 0.0, 0.0, 0.5))  // 50% transparent black
     /// ```
     pub fn background(mut self, color: impl IntoMaybeDyn<Color>) -> Self {
-        let color = color.into_maybe_dyn();
-        if let Some(signal_id) = color.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        self.background = color;
+        self.background = color.into_maybe_dyn();
         self
     }
 
@@ -361,21 +330,13 @@ impl Container {
     /// container().corner_radius(12.0).squircle()        // iOS-style smooth corners
     /// ```
     pub fn corner_radius(mut self, radius: impl IntoMaybeDyn<f32>) -> Self {
-        let radius = radius.into_maybe_dyn();
-        if let Some(signal_id) = radius.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        self.corner_radius = radius;
+        self.corner_radius = radius.into_maybe_dyn();
         self
     }
 
     /// Set the corner curvature using CSS K-value system
     pub fn corner_curvature(mut self, curvature: impl IntoMaybeDyn<f32>) -> Self {
-        let curvature = curvature.into_maybe_dyn();
-        if let Some(signal_id) = curvature.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        self.corner_curvature = curvature;
+        self.corner_curvature = curvature.into_maybe_dyn();
         self
     }
 
@@ -403,16 +364,8 @@ impl Container {
         width: impl IntoMaybeDyn<f32>,
         color: impl IntoMaybeDyn<Color>,
     ) -> Self {
-        let width = width.into_maybe_dyn();
-        let color = color.into_maybe_dyn();
-        if let Some(signal_id) = width.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        if let Some(signal_id) = color.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        self.border_width = width;
-        self.border_color = color;
+        self.border_width = width.into_maybe_dyn();
+        self.border_color = color.into_maybe_dyn();
         self
     }
 
@@ -436,23 +389,13 @@ impl Container {
 
     /// Set the width of the container.
     pub fn width(mut self, width: impl IntoMaybeDyn<Length>) -> Self {
-        let maybe_dyn = width.into_maybe_dyn();
-        // Store layout dependency if value is from a signal (will be registered when ID is available)
-        if let Some(signal_id) = maybe_dyn.signal_id() {
-            self.pending_layout_signals.push(signal_id);
-        }
-        self.width = Some(maybe_dyn);
+        self.width = Some(width.into_maybe_dyn());
         self
     }
 
     /// Set the height of the container.
     pub fn height(mut self, height: impl IntoMaybeDyn<Length>) -> Self {
-        let maybe_dyn = height.into_maybe_dyn();
-        // Store layout dependency if value is from a signal (will be registered when ID is available)
-        if let Some(signal_id) = maybe_dyn.signal_id() {
-            self.pending_layout_signals.push(signal_id);
-        }
-        self.height = Some(maybe_dyn);
+        self.height = Some(height.into_maybe_dyn());
         self
     }
 
@@ -484,8 +427,8 @@ impl Container {
         self
     }
 
-    pub fn on_click<F: Fn() + Send + Sync + 'static>(mut self, callback: F) -> Self {
-        self.on_click = Some(Arc::new(callback));
+    pub fn on_click<F: Fn() + 'static>(mut self, callback: F) -> Self {
+        self.on_click = Some(Rc::new(callback));
         self
     }
 
@@ -495,69 +438,48 @@ impl Container {
         self
     }
 
-    pub fn on_hover<F: Fn(bool) + Send + Sync + 'static>(mut self, callback: F) -> Self {
-        self.on_hover = Some(Arc::new(callback));
+    pub fn on_hover<F: Fn(bool) + 'static>(mut self, callback: F) -> Self {
+        self.on_hover = Some(Rc::new(callback));
         self
     }
 
-    pub fn on_scroll<F: Fn(f32, f32, ScrollSource) + Send + Sync + 'static>(
-        mut self,
-        callback: F,
-    ) -> Self {
-        self.on_scroll = Some(Arc::new(callback));
+    pub fn on_scroll<F: Fn(f32, f32, ScrollSource) + 'static>(mut self, callback: F) -> Self {
+        self.on_scroll = Some(Rc::new(callback));
         self
     }
 
     pub fn elevation(mut self, level: impl IntoMaybeDyn<f32>) -> Self {
-        let level = level.into_maybe_dyn();
-        if let Some(signal_id) = level.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        self.elevation = level;
+        self.elevation = level.into_maybe_dyn();
         self
     }
 
     /// Set the transform for this container
     pub fn transform(mut self, t: impl IntoMaybeDyn<Transform>) -> Self {
-        let t = t.into_maybe_dyn();
-        if let Some(signal_id) = t.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        self.transform = t;
+        self.transform = t.into_maybe_dyn();
         self
     }
 
     /// Rotate this container by the given angle in degrees
     pub fn rotate(mut self, degrees: impl IntoMaybeDyn<f32>) -> Self {
         let degrees = degrees.into_maybe_dyn();
-        if let Some(signal_id) = degrees.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic {
-            getter: Arc::new(move || {
-                prev_transform
-                    .get()
-                    .then(&Transform::rotate_degrees(degrees.get()))
-            }),
-            signal_id: None,
-        };
+        self.transform = MaybeDyn::Dynamic(Rc::new(move || {
+            prev_transform
+                .get()
+                .then(&Transform::rotate_degrees(degrees.get()))
+        }));
         self
     }
 
     /// Scale this container uniformly
     pub fn scale(mut self, s: impl IntoMaybeDyn<f32>) -> Self {
         let s = s.into_maybe_dyn();
-        if let Some(signal_id) = s.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic {
-            getter: Arc::new(move || prev_transform.get().then(&Transform::scale(s.get()))),
-            signal_id: None,
-        };
+        self.transform = MaybeDyn::Dynamic(Rc::new(move || {
+            prev_transform.get().then(&Transform::scale(s.get()))
+        }));
         self
     }
 
@@ -565,22 +487,13 @@ impl Container {
     pub fn scale_xy(mut self, sx: impl IntoMaybeDyn<f32>, sy: impl IntoMaybeDyn<f32>) -> Self {
         let sx = sx.into_maybe_dyn();
         let sy = sy.into_maybe_dyn();
-        if let Some(signal_id) = sx.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        if let Some(signal_id) = sy.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic {
-            getter: Arc::new(move || {
-                prev_transform
-                    .get()
-                    .then(&Transform::scale_xy(sx.get(), sy.get()))
-            }),
-            signal_id: None,
-        };
+        self.transform = MaybeDyn::Dynamic(Rc::new(move || {
+            prev_transform
+                .get()
+                .then(&Transform::scale_xy(sx.get(), sy.get()))
+        }));
         self
     }
 
@@ -588,32 +501,19 @@ impl Container {
     pub fn translate(mut self, x: impl IntoMaybeDyn<f32>, y: impl IntoMaybeDyn<f32>) -> Self {
         let x = x.into_maybe_dyn();
         let y = y.into_maybe_dyn();
-        if let Some(signal_id) = x.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        if let Some(signal_id) = y.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic {
-            getter: Arc::new(move || {
-                prev_transform
-                    .get()
-                    .then(&Transform::translate(x.get(), y.get()))
-            }),
-            signal_id: None,
-        };
+        self.transform = MaybeDyn::Dynamic(Rc::new(move || {
+            prev_transform
+                .get()
+                .then(&Transform::translate(x.get(), y.get()))
+        }));
         self
     }
 
     /// Set the transform origin (pivot point) for this container.
     pub fn transform_origin(mut self, origin: impl IntoMaybeDyn<TransformOrigin>) -> Self {
-        let origin = origin.into_maybe_dyn();
-        if let Some(signal_id) = origin.signal_id() {
-            self.pending_paint_signals.push(signal_id);
-        }
-        self.transform_origin = origin;
+        self.transform_origin = origin.into_maybe_dyn();
         self
     }
 
@@ -1062,21 +962,6 @@ impl Widget for Container {
     }
 
     fn register_children(&mut self, tree: &mut Tree, id: WidgetId) {
-        // Register pending layout signals now that we have the widget ID
-        for signal_id in self.pending_layout_signals.drain(..) {
-            register_layout_signal(id, signal_id);
-        }
-        // Register pending paint signals (e.g. transform signals)
-        let has_paint_anims = self.has_animated_state_properties();
-        for signal_id in self.pending_paint_signals.drain(..) {
-            register_paint_signal(id, signal_id);
-            // When paint animations exist, also trigger advance_animations
-            // so animation targets get updated when signals change
-            if has_paint_anims {
-                register_subscriber(id, signal_id, JobType::Animation);
-            }
-        }
-
         // Set container_id for children source
         self.children_source.set_container_id(id);
 
@@ -1116,12 +1001,17 @@ impl Widget for Container {
         // Clear dirty flag since we're doing layout now
         tree.clear_needs_layout(id);
 
-        // Get current animated padding for layout calculations
-        let padding = self.animated_padding();
-
-        // Get width/height Length values
-        let width_length = self.width.as_ref().map(|w| w.get()).unwrap_or_default();
-        let height_length = self.height.as_ref().map(|h| h.get()).unwrap_or_default();
+        // Auto-track signal reads for layout properties.
+        // Any signals read here (including closures) will register this widget
+        // as a Layout subscriber so future changes trigger re-layout.
+        let (padding, width_length, height_length) =
+            with_signal_tracking(id, JobType::Layout, || {
+                (
+                    self.animated_padding(),
+                    self.width.as_ref().map(|w| w.get()).unwrap_or_default(),
+                    self.height.as_ref().map(|h| h.get()).unwrap_or_default(),
+                )
+            });
 
         // Calculate current container dimensions
         let current_width = if let Some(ref anim) = self.width_anim {
@@ -1671,13 +1561,46 @@ impl Widget for Container {
         // Get bounds from Tree (single source of truth)
         let bounds = tree.get_bounds(id).unwrap_or_default();
 
-        let background = self.animated_background(tree);
-        let corner_radius = self.animated_corner_radius(tree);
-        let corner_curvature = self.corner_curvature.get();
-        let elevation_level = self.effective_elevation(tree);
+        // Auto-track signal reads for paint properties.
+        // Any signals read here (including closures) will register this widget
+        // as a Paint subscriber so future changes trigger repaint.
+        let (
+            background,
+            corner_radius,
+            corner_curvature,
+            elevation_level,
+            user_transform,
+            transform_origin,
+            border_width,
+            border_color,
+        ) = with_signal_tracking(id, JobType::Paint, || {
+            (
+                self.animated_background(tree),
+                self.animated_corner_radius(tree),
+                self.corner_curvature.get(),
+                self.effective_elevation(tree),
+                self.animated_transform(tree),
+                self.transform_origin.get(),
+                self.animated_border_width(tree),
+                self.animated_border_color(tree),
+            )
+        });
+
+        // When animations exist, also track raw signal reads for Animation jobs.
+        // This ensures signal changes trigger advance_animations() to update targets.
+        // (The animated_* methods above may read from the animation cache instead of the signal,
+        // so we do a second pass reading raw signals for Animation subscriber registration.)
+        if self.has_animated_state_properties() {
+            with_signal_tracking(id, JobType::Animation, || {
+                let _ = self.background.get();
+                let _ = self.corner_radius.get();
+                let _ = self.border_width.get();
+                let _ = self.border_color.get();
+                let _ = self.transform.get();
+            });
+        }
+
         let shadow = elevation_to_shadow(elevation_level);
-        let user_transform = self.animated_transform(tree);
-        let transform_origin = self.transform_origin.get();
 
         // LOCAL bounds (0,0 is widget origin) - all drawing uses these
         let local_bounds = Rect::new(0.0, 0.0, bounds.width, bounds.height);
@@ -1721,10 +1644,7 @@ impl Widget for Container {
             }
         }
 
-        // Draw border using LOCAL coordinates
-        let border_width = self.animated_border_width(tree);
-        let border_color = self.animated_border_color(tree);
-
+        // Draw border using LOCAL coordinates (values captured above in with_signal_tracking)
         if border_width > 0.0 {
             ctx.draw_border_frame_with_curvature(
                 local_bounds,

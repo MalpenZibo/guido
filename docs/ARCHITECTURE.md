@@ -10,7 +10,7 @@ This document provides an overview of Guido's architecture for developers workin
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
 │  │   Widgets   │  │  Reactive   │  │       Platform          │  │
 │  │  Container  │  │   Signals   │  │   Wayland Layer Shell   │  │
-│  │    Text     │  │  Computed   │  │   Event Loop (calloop)  │  │
+│  │    Text     │  │    Memo     │  │   Event Loop (calloop)  │  │
 │  │   Layout    │  │   Effects   │  │                         │  │
 │  └──────┬──────┘  └──────┬──────┘  └───────────┬─────────────┘  │
 │         │                │                     │                 │
@@ -28,24 +28,24 @@ This document provides an overview of Guido's architecture for developers workin
 
 ### `reactive/` - Reactive System
 
-Thread-safe reactive primitives inspired by SolidJS and Floem.
+Single-threaded reactive primitives inspired by SolidJS and Floem.
 
 **Key Types:**
-- `Signal<T>` - Reactive values with automatic dependency tracking. Signals are `Copy` (backed by `Arc`), so no cloning needed.
-- `Computed<T>` - Derived values that auto-update when dependencies change
+- `Signal<T>` - Reactive values with automatic dependency tracking. Signals are `Copy` (backed by thread-local storage), so no cloning needed. `!Send` — use `.writer()` for background thread updates.
+- `Memo<T>` - Eager derived values that recompute when dependencies change, only notify on actual changes (`PartialEq`)
 - `Effect` - Side effects that re-run when tracked signals change
 - `MaybeDyn<T>` - Enum allowing properties to be static or reactive
 
 **How it works:**
 ```rust
 let count = create_signal(0);           // Create a signal
-let doubled = create_computed(move ||   // Create derived value
+let doubled = create_memo(move ||      // Create derived value
     count.get() * 2
 );
 count.set(5);                           // doubled automatically becomes 10
 ```
 
-The runtime uses thread-local storage for automatic dependency tracking. When a signal is read inside a `Computed` or `Effect`, it registers itself as a dependency.
+The runtime uses thread-local storage for automatic dependency tracking. When a signal is read inside a `Memo`, `Effect`, or during widget `paint()`/`layout()`, it registers itself as a dependency.
 
 ### `widgets/` - UI Components
 
@@ -72,7 +72,7 @@ Text rendering with:
 **Layout System** (`widgets/layout.rs`)
 Pluggable layouts via the `Layout` trait:
 ```rust
-pub trait Layout: Send + Sync {
+pub trait Layout {
     fn layout(
         &mut self,
         tree: &mut Tree,
@@ -215,7 +215,7 @@ The jobs system connects reactive signals to widget invalidation.
 All widgets implement this trait:
 
 ```rust
-pub trait Widget: Send + Sync {
+pub trait Widget {
     /// Advance animations for this widget and children.
     /// Returns true if any animations are still active.
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool { false }

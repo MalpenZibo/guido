@@ -4,16 +4,15 @@ use super::invalidation::{
     notify_signal_change, record_signal_read, register_signal_callback, unregister_signal_callback,
 };
 use super::owner::{on_cleanup, register_signal};
-use super::runtime::{
-    SignalId, is_main_thread, queue_bg_effect_write, record_effect_read, try_with_runtime,
-};
+use super::runtime::{SignalId, queue_bg_write, record_effect_read, try_with_runtime};
 use super::storage::{
-    create_signal_value, get_signal_value, set_signal_value, update_signal_value, with_signal_value,
+    create_signal_value, get_signal_value, has_signal, set_signal_value, update_signal_value,
+    with_signal_value,
 };
 
 /// Common read operations for signal types.
 /// Tracks reads for effect dependencies and layout invalidation.
-fn tracked_get<T: Clone + Send + Sync + 'static>(id: SignalId) -> T {
+fn tracked_get<T: Clone + 'static>(id: SignalId) -> T {
     record_effect_read(id);
     try_with_runtime(|rt| rt.track_read(id));
     record_signal_read(id);
@@ -21,28 +20,50 @@ fn tracked_get<T: Clone + Send + Sync + 'static>(id: SignalId) -> T {
 }
 
 /// Common read-with-borrow operation for signal types.
-fn tracked_with<T: Send + Sync + 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -> R {
+fn tracked_with<T: 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -> R {
     record_effect_read(id);
     try_with_runtime(|rt| rt.track_read(id));
     record_signal_read(id);
     with_signal_value(id, f)
 }
 
-/// A reactive signal that can be read and written from any thread.
+/// Perform a signal write with change detection and notification (main thread only).
+fn write_and_notify<T: Clone + PartialEq + 'static>(id: SignalId, value: T) {
+    let changed = with_signal_value(id, |old: &T| *old != value);
+    if changed {
+        set_signal_value(id, value);
+        notify_signal_change(id);
+        try_with_runtime(|rt| rt.notify_write(id));
+    }
+}
+
+/// Perform a signal update with change detection and notification (main thread only).
+fn update_and_notify<T: Clone + PartialEq + 'static>(id: SignalId, f: impl FnOnce(&mut T)) {
+    let old = get_signal_value::<T>(id);
+    update_signal_value(id, f);
+    let changed = with_signal_value(id, |new: &T| old != *new);
+    if changed {
+        notify_signal_change(id);
+        try_with_runtime(|rt| rt.notify_write(id));
+    }
+}
+
+/// A reactive signal that can be read and written on the main thread.
 ///
 /// Signals are the core primitive of the reactive system. When a signal's
-/// value changes, any effects that depend on it will be re-run (on the main thread).
+/// value changes, any effects that depend on it will be re-run.
 ///
 /// Signals are Copy - they can be freely passed into closures without cloning.
 ///
 /// # Thread Safety
-/// Signal values can be read and written from any thread. However, effects
-/// only run on the main thread. When you call `set()` from a background thread,
-/// the value is updated immediately, but effect notification is skipped.
-/// The UI will still update because the render loop reads signal values each frame.
+///
+/// `Signal<T>` is `!Send` — it can only be used on the main thread where it
+/// was created. To write from a background thread, use [`Signal::writer()`]
+/// to get a [`WriteSignal<T>`] which is `Send`.
 pub struct Signal<T> {
     id: SignalId,
     _marker: PhantomData<T>,
+    _not_send: PhantomData<*const ()>, // makes Signal !Send !Sync
 }
 
 // Manually implement Clone and Copy to avoid unnecessary bounds on T
@@ -55,8 +76,6 @@ impl<T> Clone for Signal<T> {
 impl<T> Copy for Signal<T> {}
 
 // Implement PartialEq by comparing SignalId.
-// This allows Signal<T> to be stored in data structures that require PartialEq
-// (e.g., Vec<ItemData> where ItemData contains Signal fields).
 impl<T> PartialEq for Signal<T> {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
@@ -72,8 +91,8 @@ impl<T> Signal<T> {
     }
 }
 
-impl<T: Clone + Send + Sync + 'static> Signal<T> {
-    /// Get the current value (tracks as dependency on main thread for effects)
+impl<T: Clone + 'static> Signal<T> {
+    /// Get the current value (tracks as dependency for effects)
     pub fn get(&self) -> T {
         tracked_get(self.id)
     }
@@ -94,42 +113,29 @@ impl<T: Clone + Send + Sync + 'static> Signal<T> {
     }
 }
 
-impl<T: Clone + PartialEq + Send + Sync + 'static> Signal<T> {
+impl<T: Clone + PartialEq + Send + 'static> Signal<T> {
+    /// Get a `WriteSignal<T>` for writing from background threads.
+    ///
+    /// `WriteSignal<T>` is `Send` and can be captured in `create_service` closures.
+    /// Writes from background threads are queued and applied on the main thread
+    /// at the start of the next frame.
+    pub fn writer(&self) -> WriteSignal<T> {
+        WriteSignal {
+            id: self.id,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T: Clone + PartialEq + 'static> Signal<T> {
     /// Set a new value (notifies subscribers if changed)
     pub fn set(&self, value: T) {
-        // Check if value changed
-        let changed = with_signal_value(self.id, |old: &T| *old != value);
-        if changed {
-            set_signal_value(self.id, value);
-            // Notify widget subscribers (layout/paint/reconcile jobs)
-            notify_signal_change(self.id);
-            // Notify effect runtime
-            if is_main_thread() {
-                // On main thread: notify directly (synchronous effect execution)
-                try_with_runtime(|rt| rt.notify_write(self.id));
-            } else {
-                // On background thread: queue for main-thread processing
-                queue_bg_effect_write(self.id);
-            }
-        }
+        write_and_notify(self.id, value);
     }
 
     /// Update the value using a closure
     pub fn update<F: FnOnce(&mut T)>(&self, f: F) {
-        let changed = {
-            let old = get_signal_value::<T>(self.id);
-            update_signal_value(self.id, f);
-            let new = get_signal_value::<T>(self.id);
-            old != new
-        };
-        if changed {
-            notify_signal_change(self.id);
-            if is_main_thread() {
-                try_with_runtime(|rt| rt.notify_write(self.id));
-            } else {
-                queue_bg_effect_write(self.id);
-            }
-        }
+        update_and_notify(self.id, f);
     }
 
     /// Split into read and write handles
@@ -138,6 +144,7 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Signal<T> {
             ReadSignal {
                 id: self.id,
                 _marker: PhantomData,
+                _not_send: PhantomData,
             },
             WriteSignal {
                 id: self.id,
@@ -152,8 +159,8 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Signal<T> {
     /// a field. The derived signal only updates (clones) when the selected field
     /// actually changes, avoiding unnecessary clones of the entire parent object.
     ///
-    /// This uses the invalidation system (global `Mutex`), NOT effects, so it
-    /// works correctly with background thread updates from `create_service`.
+    /// This uses the invalidation system, NOT effects, so it works correctly
+    /// with background thread updates from `create_service`.
     ///
     /// # Example
     ///
@@ -167,8 +174,8 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Signal<T> {
     /// ```
     pub fn select<U, F>(&self, f: F) -> Signal<U>
     where
-        U: Clone + PartialEq + Send + Sync + 'static,
-        F: Fn(&T) -> &U + Send + Sync + 'static,
+        U: Clone + PartialEq + Send + 'static,
+        F: Fn(&T) -> &U + 'static,
     {
         let source = *self;
         let derived = create_signal(self.with(|v| f(v).clone()));
@@ -196,6 +203,7 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Signal<T> {
 pub struct ReadSignal<T> {
     id: SignalId,
     _marker: PhantomData<T>,
+    _not_send: PhantomData<*const ()>, // makes ReadSignal !Send !Sync
 }
 
 // Manually implement Clone and Copy to avoid unnecessary bounds on T
@@ -214,7 +222,7 @@ impl<T> ReadSignal<T> {
     }
 }
 
-impl<T: Clone + Send + Sync + 'static> ReadSignal<T> {
+impl<T: Clone + 'static> ReadSignal<T> {
     pub fn get(&self) -> T {
         tracked_get(self.id)
     }
@@ -232,14 +240,14 @@ impl<T: Clone + Send + Sync + 'static> ReadSignal<T> {
     }
 }
 
-impl<T: Clone + PartialEq + Send + Sync + 'static> ReadSignal<T> {
+impl<T: Clone + PartialEq + 'static> ReadSignal<T> {
     /// Create a derived signal that tracks a specific field of this signal's value.
     ///
     /// See [`Signal::select()`] for full documentation.
     pub fn select<U, F>(&self, f: F) -> Signal<U>
     where
-        U: Clone + PartialEq + Send + Sync + 'static,
-        F: Fn(&T) -> &U + Send + Sync + 'static,
+        U: Clone + PartialEq + Send + 'static,
+        F: Fn(&T) -> &U + 'static,
     {
         let source_id = self.id;
         let derived = create_signal(self.with(|v| f(v).clone()));
@@ -262,7 +270,25 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> ReadSignal<T> {
     }
 }
 
-/// Write-only handle to a signal.
+/// Write-only handle to a signal. `Send` — can be used from background threads.
+///
+/// On the main thread, writes are applied immediately with change detection.
+/// On background threads, writes are queued and applied at the start of the
+/// next frame on the main thread.
+///
+/// # Example
+///
+/// ```ignore
+/// let time = create_signal(get_current_time());
+/// let time_w = time.writer();
+///
+/// let _ = create_service::<(), _>(move |_rx, ctx| {
+///     while ctx.is_running() {
+///         time_w.set(get_current_time()); // queued for main thread
+///         std::thread::sleep(Duration::from_secs(1));
+///     }
+/// });
+/// ```
 pub struct WriteSignal<T> {
     id: SignalId,
     _marker: PhantomData<T>,
@@ -277,42 +303,48 @@ impl<T> Clone for WriteSignal<T> {
 
 impl<T> Copy for WriteSignal<T> {}
 
-impl<T: Clone + PartialEq + Send + Sync + 'static> WriteSignal<T> {
+impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
     /// Sets the signal's value, only triggering updates if the value actually changed.
+    ///
+    /// If the signal exists in the current thread's storage: applies immediately.
+    /// Otherwise (background threads): queued for next frame.
     pub fn set(&self, value: T) {
-        let changed = with_signal_value(self.id, |old: &T| *old != value);
-        if changed {
-            set_signal_value(self.id, value);
-            notify_signal_change(self.id);
-            try_with_runtime(|rt| rt.notify_write(self.id));
+        if has_signal(self.id) {
+            write_and_notify(self.id, value);
+        } else {
+            let id = self.id;
+            queue_bg_write(move || {
+                write_and_notify(id, value);
+            });
         }
     }
 
     /// Updates the signal's value using a closure, only triggering updates if the value changed.
+    ///
+    /// If the signal exists in the current thread's storage: applies immediately.
+    /// Otherwise (background threads): queued for next frame.
     pub fn update<F>(&self, f: F)
     where
-        F: FnOnce(&mut T),
+        F: FnOnce(&mut T) + Send + 'static,
     {
-        let changed = {
-            let old = get_signal_value::<T>(self.id);
-            update_signal_value(self.id, f);
-            let new = get_signal_value::<T>(self.id);
-            old != new
-        };
-        if changed {
-            notify_signal_change(self.id);
-            try_with_runtime(|rt| rt.notify_write(self.id));
+        if has_signal(self.id) {
+            update_and_notify(self.id, f);
+        } else {
+            let id = self.id;
+            queue_bg_write(move || {
+                update_and_notify(id, f);
+            });
         }
     }
 
-    /// Get the current value (useful for read-modify-write patterns)
+    /// Get the current value (useful for read-modify-write patterns on main thread)
     pub fn get(&self) -> T {
         get_signal_value(self.id)
     }
 }
 
-pub fn create_signal<T: Clone + PartialEq + Send + Sync + 'static>(value: T) -> Signal<T> {
-    // Create value in global storage
+pub fn create_signal<T: Clone + PartialEq + Send + 'static>(value: T) -> Signal<T> {
+    // Create value in thread-local storage
     let id = create_signal_value(value);
     // Register with thread-local runtime for subscriber tracking
     try_with_runtime(|rt| rt.register_signal(id));
@@ -321,6 +353,7 @@ pub fn create_signal<T: Clone + PartialEq + Send + Sync + 'static>(value: T) -> 
     Signal {
         id,
         _marker: PhantomData,
+        _not_send: PhantomData,
     }
 }
 
@@ -513,5 +546,25 @@ mod tests {
 
         write.update(|o| o.name = "Bob".into());
         assert_eq!(name.get(), "Bob");
+    }
+
+    // ================================================================
+    // writer() tests
+    // ================================================================
+
+    #[test]
+    fn test_writer_set_on_main_thread() {
+        let signal = create_signal(42);
+        let writer = signal.writer();
+        writer.set(100);
+        assert_eq!(signal.get(), 100);
+    }
+
+    #[test]
+    fn test_writer_update_on_main_thread() {
+        let signal = create_signal(10);
+        let writer = signal.writer();
+        writer.update(|v| *v += 5);
+        assert_eq!(signal.get(), 15);
     }
 }

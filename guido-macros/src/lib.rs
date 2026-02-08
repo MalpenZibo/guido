@@ -7,7 +7,7 @@ use syn::{Fields, ItemStruct, Meta, Type, parse_macro_input};
 /// # Attributes on fields
 /// - `#[prop]` - Standard prop, generates builder method accepting `impl IntoMaybeDyn<T>`
 /// - `#[prop(default = "expr")]` - Prop with default value
-/// - `#[prop(callback)]` - Generates callback accepting `impl Fn() + Send + Sync + 'static`
+/// - `#[prop(callback)]` - Generates callback accepting `impl Fn() + 'static`
 /// - `#[prop(children)]` - Marks field for children support
 ///
 /// # Example
@@ -99,11 +99,11 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
 
         if field.is_callback {
             quote! {
-                #name: Option<std::sync::Arc<dyn Fn() + Send + Sync>>
+                #name: Option<std::rc::Rc<dyn Fn()>>
             }
         } else if field.is_children {
             quote! {
-                __children: std::sync::RwLock<::guido::widgets::ChildrenSource>
+                __children: std::cell::RefCell<::guido::widgets::ChildrenSource>
             }
         } else {
             quote! {
@@ -122,7 +122,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             }
         } else if field.is_children {
             quote! {
-                __children: std::sync::RwLock::new(::guido::widgets::ChildrenSource::default())
+                __children: std::cell::RefCell::new(::guido::widgets::ChildrenSource::default())
             }
         } else if let Some(default) = &field.default_value {
             let default_tokens: proc_macro2::TokenStream = default.parse().unwrap();
@@ -143,8 +143,8 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
 
         if field.is_callback {
             quote! {
-                #vis fn #name<F: Fn() + Send + Sync + 'static>(mut self, f: F) -> Self {
-                    self.#name = Some(std::sync::Arc::new(f));
+                #vis fn #name<F: Fn() + 'static>(mut self, f: F) -> Self {
+                    self.#name = Some(std::rc::Rc::new(f));
                     self
                 }
             }
@@ -165,7 +165,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     let children_methods = if has_children {
         quote! {
             #vis fn child(self, child: impl ::guido::widgets::IntoChild) -> Self {
-                child.add_to_container(&mut *self.__children.write().unwrap());
+                child.add_to_container(&mut *self.__children.borrow_mut());
                 self
             }
 
@@ -173,13 +173,13 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             where
                 I: ::guido::widgets::IntoChildren,
             {
-                children.add_to_container(&mut *self.__children.write().unwrap());
+                children.add_to_container(&mut *self.__children.borrow_mut());
                 self
             }
 
             /// Take the children source (consumes the children)
             fn take_children(&self) -> ::guido::widgets::ChildrenSource {
-                std::mem::take(&mut *self.__children.write().unwrap())
+                std::mem::take(&mut *self.__children.borrow_mut())
             }
         }
     } else {
@@ -193,16 +193,16 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     let expanded = quote! {
         #vis struct #struct_name {
             #(#field_defs,)*
-            __inner: std::sync::RwLock<Option<Box<dyn ::guido::widgets::Widget>>>,
-            __owner_id: std::sync::atomic::AtomicUsize,
+            __inner: std::cell::RefCell<Option<Box<dyn ::guido::widgets::Widget>>>,
+            __owner_id: std::cell::Cell<usize>,
         }
 
         impl #struct_name {
             #vis fn new() -> Self {
                 Self {
                     #(#field_inits,)*
-                    __inner: std::sync::RwLock::new(None),
-                    __owner_id: std::sync::atomic::AtomicUsize::new(0),
+                    __inner: std::cell::RefCell::new(None),
+                    __owner_id: std::cell::Cell::new(0),
                 }
             }
 
@@ -211,29 +211,23 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             #children_methods
 
             fn ensure_built(&self) {
-                // Check if already built using a read lock first
-                if self.__inner.read().unwrap().is_some() {
-                    return;
-                }
-                // Acquire write lock and check again (double-checked locking)
-                let mut inner = self.__inner.write().unwrap();
-                if inner.is_some() {
+                if self.__inner.borrow().is_some() {
                     return;
                 }
                 // Wrap render() in an owner scope for automatic cleanup
                 let (widget, owner_id) = ::guido::reactive::__internal::with_owner(|| {
                     self.render()
                 });
-                // Store owner_id as usize + 1 (0 means no owner)
-                self.__owner_id.store(owner_id + 1, std::sync::atomic::Ordering::Relaxed);
-                *inner = Some(Box::new(widget));
+                // Store owner_id + 1 (0 means no owner)
+                self.__owner_id.set(owner_id + 1);
+                *self.__inner.borrow_mut() = Some(Box::new(widget));
             }
         }
 
         impl Drop for #struct_name {
             fn drop(&mut self) {
                 // Dispose the owner and all its signals/effects/cleanups
-                let stored = self.__owner_id.load(std::sync::atomic::Ordering::Relaxed);
+                let stored = self.__owner_id.get();
                 if stored > 0 {
                     ::guido::reactive::__internal::dispose_owner(stored - 1);
                 }
@@ -243,32 +237,32 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         impl ::guido::widgets::Widget for #struct_name {
             fn register_children(&mut self, tree: &mut ::guido::tree::Tree, id: ::guido::tree::WidgetId) {
                 self.ensure_built();
-                self.__inner.write().unwrap().as_mut().unwrap().register_children(tree, id)
+                self.__inner.borrow_mut().as_mut().unwrap().register_children(tree, id)
             }
 
             fn reconcile_children(&mut self, tree: &mut ::guido::tree::Tree, id: ::guido::tree::WidgetId) -> bool {
                 self.ensure_built();
-                self.__inner.write().unwrap().as_mut().unwrap().reconcile_children(tree, id)
+                self.__inner.borrow_mut().as_mut().unwrap().reconcile_children(tree, id)
             }
 
             fn layout(&mut self, tree: &mut ::guido::tree::Tree, id: ::guido::tree::WidgetId, constraints: ::guido::layout::Constraints) -> ::guido::layout::Size {
                 self.ensure_built();
-                self.__inner.write().unwrap().as_mut().unwrap().layout(tree, id, constraints)
+                self.__inner.borrow_mut().as_mut().unwrap().layout(tree, id, constraints)
             }
 
             fn paint(&self, tree: &::guido::tree::Tree, id: ::guido::tree::WidgetId, ctx: &mut ::guido::renderer::PaintContext) {
                 self.ensure_built();
-                self.__inner.read().unwrap().as_ref().unwrap().paint(tree, id, ctx)
+                self.__inner.borrow().as_ref().unwrap().paint(tree, id, ctx)
             }
 
             fn event(&mut self, tree: &mut ::guido::tree::Tree, id: ::guido::tree::WidgetId, event: &::guido::widgets::Event) -> ::guido::widgets::EventResponse {
                 self.ensure_built();
-                self.__inner.write().unwrap().as_mut().unwrap().event(tree, id, event)
+                self.__inner.borrow_mut().as_mut().unwrap().event(tree, id, event)
             }
 
             fn has_focus_descendant(&self, tree: &::guido::tree::Tree, focused_id: ::guido::tree::WidgetId) -> bool {
                 self.ensure_built();
-                self.__inner.read().unwrap().as_ref().unwrap().has_focus_descendant(tree, focused_id)
+                self.__inner.borrow().as_ref().unwrap().has_focus_descendant(tree, focused_id)
             }
         }
 

@@ -10,11 +10,12 @@ fn main() {
 
     // Animation service - updates the angle signal continuously
     let start_time = std::time::Instant::now();
+    let angle_w = angle.writer();
     let _ = create_service::<(), _>(move |_rx, ctx| {
         while ctx.is_running() {
             let elapsed = start_time.elapsed().as_secs_f32();
             let new_angle = (elapsed * 45.0) % 360.0; // 45 degrees per second
-            angle.set(new_angle);
+            angle_w.set(new_angle);
             std::thread::sleep(Duration::from_millis(16));
         }
     });

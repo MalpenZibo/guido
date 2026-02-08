@@ -10,7 +10,7 @@ This section covers Guido's internal architecture for developers who want to und
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
 │  │   Widgets   │  │  Reactive   │  │       Platform          │  │
 │  │  Container  │  │   Signals   │  │   Wayland Layer Shell   │  │
-│  │    Text     │  │  Computed   │  │   Event Loop (calloop)  │  │
+│  │    Text     │  │    Memo     │  │   Event Loop (calloop)  │  │
 │  │   Layout    │  │   Effects   │  │                         │  │
 │  └──────┬──────┘  └──────┬──────┘  └───────────┬─────────────┘  │
 │         │                │                     │                 │
@@ -28,7 +28,7 @@ This section covers Guido's internal architecture for developers who want to und
 
 | Module | Purpose |
 |--------|---------|
-| `reactive/` | Signals, computed values, effects |
+| `reactive/` | Signals, memos, effects |
 | `widgets/` | Container, Text, Layout trait |
 | `renderer/` | wgpu rendering, shaders, text |
 | `platform/` | Wayland layer shell integration |

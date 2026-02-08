@@ -369,7 +369,7 @@ impl Event {
     }
 }
 
-pub trait Widget: Send + Sync {
+pub trait Widget {
     /// Advance animations for this widget and children.
     /// Returns true if any animations are still active and need another frame.
     /// Called once per frame before layout.

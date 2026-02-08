@@ -6,21 +6,21 @@ This page details Guido's module structure and key types.
 
 ### `reactive/` - Reactive System
 
-Thread-safe reactive primitives inspired by SolidJS.
+Single-threaded reactive primitives inspired by SolidJS.
 
 **Key Types:**
 - `Signal<T>` - Reactive values with automatic dependency tracking
-- `Computed<T>` - Derived values that auto-update
+- `Memo<T>` - Eager derived values that only notify on actual changes
 - `Effect` - Side effects that re-run on changes
 - `MaybeDyn<T>` - Enum for static or dynamic property values
 
 **How It Works:**
 
-The runtime uses thread-local storage for dependency tracking. When a signal is read inside a `Computed` or `Effect`, it registers as a dependency.
+The runtime uses thread-local storage for dependency tracking. When a signal is read inside a `Memo`, `Effect`, or during widget `paint()`/`layout()`, it registers as a dependency.
 
 ```rust
 let count = create_signal(0);
-let doubled = create_computed(move || count.get() * 2);
+let doubled = create_memo(move || count.get() * 2);
 // Runtime knows doubled depends on count
 ```
 
@@ -51,7 +51,7 @@ Text rendering with:
 Pluggable layouts via the `Layout` trait:
 
 ```rust
-pub trait Layout: Send + Sync {
+pub trait Layout {
     fn layout(
         &mut self,
         tree: &mut Tree,
@@ -114,7 +114,7 @@ TransformOrigin::custom(0.25, 0.75)
 All widgets implement:
 
 ```rust
-pub trait Widget: Send + Sync {
+pub trait Widget {
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size;
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse;

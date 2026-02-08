@@ -76,6 +76,8 @@ fn create_child_widget(id: u64) -> impl Widget {
     });
 
     // Spawn a background thread for this child
+    // Use .writer() to get a Send-able handle for the background thread
+    let tick_writer = tick_signal.writer();
     let running_clone = running.clone();
     thread::spawn(move || {
         let mut count = 0;
@@ -84,8 +86,8 @@ fn create_child_widget(id: u64) -> impl Widget {
             if running_clone.load(Ordering::SeqCst) {
                 count += 1;
                 log::info!("[Child {} Thread] Tick #{}", id, count);
-                // Update the signal from background thread
-                tick_signal.set(count);
+                // Update the signal from background thread via writer
+                tick_writer.set(count);
             }
         }
         log::info!("[Child {} Thread] STOPPED", id);

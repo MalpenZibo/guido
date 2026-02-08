@@ -12,11 +12,11 @@ fn main() {
     let items = create_signal(vec![1u64, 2, 3]);
 
     // Create a service that adds an item after 2 seconds
-    let items_for_service = items;
+    let items_w = items.writer();
     let _ = create_service::<(), _>(move |_rx, ctx| {
         std::thread::sleep(Duration::from_secs(2));
         if ctx.is_running() && !ADD_TRIGGERED.swap(true, Ordering::SeqCst) {
-            items_for_service.update(|list| {
+            items_w.update(|list| {
                 list.push(4);
             });
         }

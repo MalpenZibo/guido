@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use crate::jobs::{JobRequest, JobType, request_job};
 use crate::layout::{Constraints, Size};
@@ -16,7 +16,7 @@ enum SegmentType {
     Static(usize),
     /// Dynamic source with keyed reconciliation
     Dynamic {
-        items_fn: Arc<dyn Fn() -> Vec<DynItem> + Send + Sync>,
+        items_fn: Rc<dyn Fn() -> Vec<DynItem>>,
         /// Cached widget IDs by key (for reuse during reconciliation)
         cached: HashMap<u64, WidgetId>,
         /// Current keys in display order
@@ -86,9 +86,9 @@ impl ChildrenSource {
     }
 
     /// Add a dynamic children source
-    pub fn add_dynamic(&mut self, items_fn: impl Fn() -> Vec<DynItem> + Send + Sync + 'static) {
+    pub fn add_dynamic(&mut self, items_fn: impl Fn() -> Vec<DynItem> + 'static) {
         self.segments.push(SegmentType::Dynamic {
-            items_fn: Arc::new(items_fn),
+            items_fn: Rc::new(items_fn),
             cached: HashMap::new(),
             current_keys: Vec::new(),
         });

@@ -3,6 +3,7 @@
 //! This example shows:
 //! - Creating a bidirectional service that handles commands
 //! - Creating a read-only service for periodic updates
+//! - Using `.writer()` to get Send-able signal handles for background threads
 //! - Automatic cleanup when components unmount
 
 use std::time::Duration;
@@ -18,13 +19,14 @@ enum WorkspaceCmd {
 fn main() {
     // Clock signal - updated by a read-only service
     let time = create_signal(get_current_time());
+    let time_w = time.writer(); // WriteSignal is Send — can be captured by service
 
     // Clock service - read-only (ignore the receiver)
     let _ = create_service::<(), _>(move |_rx, ctx| {
         log::info!("Clock service started");
 
         while ctx.is_running() {
-            time.set(get_current_time());
+            time_w.set(get_current_time());
             std::thread::sleep(Duration::from_secs(1));
         }
 
@@ -33,6 +35,7 @@ fn main() {
 
     // Workspace signals
     let active = create_signal(1i32);
+    let active_w = active.writer(); // WriteSignal is Send
     let workspaces: Vec<i32> = vec![1, 2, 3, 4, 5];
 
     // Workspace service - bidirectional
@@ -45,7 +48,7 @@ fn main() {
                 match cmd {
                     WorkspaceCmd::Switch(id) => {
                         log::info!("Switching to workspace {}", id);
-                        active.set(id);
+                        active_w.set(id);
                     }
                 }
             }

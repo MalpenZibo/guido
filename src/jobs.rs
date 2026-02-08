@@ -199,7 +199,7 @@ pub fn init_wakeup(ping: Ping) {
 }
 
 /// Request that the main event loop process a frame
-fn request_frame() {
+pub(crate) fn request_frame() {
     // Only ping on first request - avoids redundant syscalls when multiple signals update
     let was_requested = FRAME_REQUESTED.swap(true, Ordering::Relaxed);
     if !was_requested {

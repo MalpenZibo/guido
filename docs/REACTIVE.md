@@ -25,19 +25,27 @@ count.update(|c| *c += 1);
 
 **Key properties:**
 - Signals are `Copy` - no cloning needed
-- Thread-safe - can be updated from background threads
+- Main-thread only reads/writes — use `.writer()` to get a `WriteSignal<T>` for background thread updates
 - Automatic dependency tracking
 
-### Computed Values
+### Memos
 
-Derived values that automatically update when dependencies change:
+Eager computed values that recompute immediately when dependencies change. Memos only notify downstream subscribers when the result actually differs (`PartialEq`), preventing unnecessary updates:
 
 ```rust
 let count = create_signal(0);
-let doubled = create_computed(move || count.get() * 2);
+let doubled = create_memo(move || count.get() * 2);
 
 count.set(5);
 println!("{}", doubled.get()); // Prints: 10
+```
+
+Memos are `Copy` like signals and can be used directly as widget properties:
+
+```rust
+let count = create_signal(0);
+let label = create_memo(move || format!("Count: {}", count.get()));
+text(label)  // Only repaints when the formatted string changes
 ```
 
 ### Field Selection
@@ -143,7 +151,7 @@ The `MaybeDyn<T>` enum allows properties to be either static or dynamic:
 ```rust
 pub enum MaybeDyn<T> {
     Static(T),
-    Dynamic(Box<dyn Fn() -> T>),
+    Dynamic(Rc<dyn Fn() -> T>),
 }
 ```
 
@@ -154,32 +162,44 @@ Properties use `impl IntoMaybeDyn<T>` to accept any of:
 
 ## Background Thread Updates
 
-Signals are thread-safe and can be updated from background threads. Use `create_service` to spawn a background service that is automatically cleaned up when the component unmounts:
+`Signal<T>` is `!Send` — it can only be read and written on the main thread. To update a signal from a background thread, use `.writer()` to obtain a `WriteSignal<T>`, which is `Send`. Writes from `WriteSignal` are queued and applied on the next frame.
+
+Use `create_service` to spawn a background service that is automatically cleaned up when the component unmounts:
 
 ```rust
 let data = create_signal(String::new());
+let data_w = data.writer();  // WriteSignal<T> — Send, for background threads
 
 // Spawn a background service - automatically cleaned up on unmount
 let _ = create_service::<(), _>(move |_rx, ctx| {
     while ctx.is_running() {
         let new_data = fetch_data();
-        data.set(new_data);
+        data_w.set(new_data);  // Queued, applied next frame
         std::thread::sleep(Duration::from_secs(1));
     }
 });
 ```
+
+**Note:** Capturing `data` (a `Signal`) directly in a service closure will **not compile** because `Signal` is `!Send`. Always use `.writer()` to get a `WriteSignal` for background threads.
 
 For bidirectional communication (sending commands to the service):
 
 ```rust
 enum Cmd { Refresh, Stop }
 
+let status = create_signal("idle".to_string());
+let status_w = status.writer();  // WriteSignal for bg thread
+
 let service = create_service(move |rx, ctx| {
     while ctx.is_running() {
         // Handle commands from UI
         while let Ok(cmd) = rx.try_recv() {
             match cmd {
-                Cmd::Refresh => { /* refresh data */ }
+                Cmd::Refresh => {
+                    status_w.set("refreshing".to_string());
+                    // ... do work ...
+                    status_w.set("idle".to_string());
+                }
                 Cmd::Stop => break,
             }
         }
@@ -193,7 +213,7 @@ service.send(Cmd::Refresh);
 
 ## Signal Internals
 
-Signals use `Arc` internally for cheap copies:
+Signals are lightweight handles that index into thread-local storage:
 
 ```rust
 #[derive(Clone, Copy)]
@@ -202,24 +222,32 @@ pub struct Signal<T> {
 }
 ```
 
-The actual value is stored in a global runtime using the `id`. This design allows:
+The actual value is stored in `thread_local! { RefCell<SignalStorage> }`, accessed by `id`. This design allows:
 - Signals to be `Copy`
-- Thread-safe access via `Arc<Mutex<T>>`
+- Zero-lock access on the main thread (thread-local `RefCell` only)
 - Automatic dependency tracking via thread-local runtime
+
+`WriteSignal<T>` is a separate `Send` handle that queues writes through a thread-safe channel, which the main thread drains each frame:
+
+```rust
+pub struct WriteSignal<T> { /* Send */ }
+```
 
 ## Dependency Tracking
 
-When a signal is read inside a `Computed` or `Effect`, the runtime automatically registers the dependency:
+When a signal is read inside a `Memo` or `Effect`, the runtime automatically registers the dependency:
 
 ```rust
 let a = create_signal(1);
 let b = create_signal(2);
 
-// This computed depends on both `a` and `b`
-let sum = create_computed(move || a.get() + b.get());
+// This memo depends on both `a` and `b`
+let sum = create_memo(move || a.get() + b.get());
 ```
 
 Changing either `a` or `b` will cause `sum` to recompute.
+
+Widget properties also participate in auto-tracking. During `paint()` and `layout()`, any signal reads (including inside closures passed as properties) are automatically tracked, so the widget is repainted or relaid out when dependencies change.
 
 ## Best Practices
 
@@ -236,7 +264,7 @@ let value = count.get();
 text(format!("Count: {}", value))  // Won't update when count changes
 ```
 
-### Use Computed for Derived State
+### Use Memo for Derived State
 
 Instead of manually syncing values:
 
@@ -246,9 +274,9 @@ let count = create_signal(0);
 let doubled = create_signal(0);
 // Must remember to update doubled when count changes
 
-// Good: Use computed
+// Good: Use memo
 let count = create_signal(0);
-let doubled = create_computed(move || count.get() * 2);
+let doubled = create_memo(move || count.get() * 2);
 ```
 
 ### Batch Updates
@@ -429,10 +457,12 @@ This behavior helps catch bugs where signals are used after their owner has been
 ### Signal Creation
 
 ```rust
-pub fn create_signal<T: Clone + 'static>(value: T) -> Signal<T>;
-pub fn create_computed<T: Clone + 'static>(f: impl Fn() -> T + 'static) -> Computed<T>;
+pub fn create_signal<T: Clone + PartialEq + Send + 'static>(value: T) -> Signal<T>;
+pub fn create_memo<T: Clone + PartialEq + 'static>(f: impl Fn() -> T + 'static) -> Memo<T>;
 pub fn create_effect(f: impl Fn() + 'static);
 ```
+
+`create_signal` requires `Send` because `WriteSignal<T>` must be able to queue values from background threads.
 
 ### Cleanup Functions
 
@@ -445,22 +475,37 @@ pub fn on_cleanup(f: impl FnOnce() + 'static);
 
 **Note:** `with_owner` and `dispose_owner` are internal functions used by the framework. User code should rely on automatic ownership via dynamic children and the `#[component]` macro.
 
-### Signal Methods
+### Signal Methods (main-thread only)
 
 ```rust
 impl<T: Clone> Signal<T> {
-    pub fn get(&self) -> T;
-    pub fn get_untracked(&self) -> T;  // Read without tracking
-    pub fn set(&self, value: T);
-    pub fn update(&self, f: impl FnOnce(&mut T));
+    pub fn get(&self) -> T;                // Read with tracking
+    pub fn get_untracked(&self) -> T;      // Read without tracking
+    pub fn set(&self, value: T);           // Set immediately
+    pub fn update(&self, f: impl FnOnce(&mut T));  // Mutate in-place
+    pub fn writer(&self) -> WriteSignal<T>;  // Get a Send handle for bg threads
     pub fn select<U>(&self, f: impl Fn(&T) -> &U) -> Signal<U>;  // Field selection
 }
 ```
 
-### Computed Methods
+`Signal<T>` is `!Send` — all methods above must be called on the main thread.
+
+### WriteSignal Methods (Send — background threads)
 
 ```rust
-impl<T: Clone> Computed<T> {
-    pub fn get(&self) -> T;
+impl<T: Clone + Send> WriteSignal<T> {
+    pub fn set(&self, value: T);              // Queue a write (applied next frame)
+    pub fn update(&self, f: impl FnOnce(&mut T));  // Queue a mutation (applied next frame)
+}
+```
+
+`WriteSignal<T>` is `Send` and can be moved into background threads (e.g., `create_service` closures). Writes are queued and applied on the main thread at the start of the next frame.
+
+### Memo Methods
+
+```rust
+impl<T: Clone + PartialEq> Memo<T> {
+    pub fn get(&self) -> T;           // Read with tracking
+    pub fn get_untracked(&self) -> T; // Read without tracking
 }
 ```
