@@ -25,7 +25,7 @@ use layout::Constraints;
 use platform::create_wayland_app;
 use reactive::{set_system_clipboard, take_clipboard_change, take_cursor_change};
 use renderer::{GpuContext, PaintContext, Renderer, flatten_tree_into};
-use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, init_surface_commands};
+use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, drain_surface_commands};
 use surface_manager::{ManagedSurface, SurfaceManager};
 use widgets::Widget;
 use widgets::font::FontFamily;
@@ -89,8 +89,6 @@ pub mod prelude {
     pub use crate::{App, component, default_font_family, set_default_font_family};
 }
 
-use std::sync::mpsc::Receiver;
-
 use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 
 use crate::{
@@ -113,13 +111,12 @@ struct SurfaceDefinition {
 /// Process dynamic surface commands (create, close, property changes).
 /// Returns false if all surfaces have been closed and the app should exit.
 fn process_surface_commands(
-    surface_rx: &Receiver<SurfaceCommand>,
     surface_manager: &mut SurfaceManager,
     wayland_state: &mut platform::WaylandState,
     qh: &QueueHandle<platform::WaylandState>,
     tree: &mut Tree,
 ) -> bool {
-    while let Ok(cmd) = surface_rx.try_recv() {
+    for cmd in drain_surface_commands() {
         match cmd {
             SurfaceCommand::Create {
                 id,
@@ -310,8 +307,8 @@ fn render_surface(
         renderer.set_screen_size(physical_width as f32, physical_height as f32);
         renderer.set_scale_factor(scale_factor);
 
-        // Flush effect notifications from background-thread signal writes
-        reactive::flush_bg_effect_writes();
+        // Flush background-thread signal writes (queued via WriteSignal)
+        reactive::flush_bg_writes();
 
         // Process pending jobs from signal updates (reconciliation + layout marking)
         let jobs = drain_pending_jobs();
@@ -527,9 +524,6 @@ impl App {
 
         let _ = env_logger::try_init();
 
-        // Initialize the surface command channel for dynamic surface spawning
-        let surface_rx = init_surface_commands();
-
         let (connection, mut event_queue, mut wayland_state, qh) = create_wayland_app();
 
         // Create surfaces from add_surface() calls
@@ -643,7 +637,6 @@ impl App {
 
             // Process dynamic surface commands
             if !process_surface_commands(
-                &surface_rx,
                 &mut surface_manager,
                 &mut wayland_state,
                 &qh,
