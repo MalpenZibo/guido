@@ -55,12 +55,29 @@ use crate::widgets::{Color, Rect};
 pub struct PaintContext<'a> {
     /// The node being built
     node: &'a mut RenderNode,
+    /// Optional viewport rect for culling off-screen children.
+    /// Set by scrollable containers and propagated to descendants.
+    /// Coordinates are in this node's local space.
+    cull_rect: Option<Rect>,
 }
 
 impl<'a> PaintContext<'a> {
     /// Create a context for painting to a node.
     pub fn new(node: &'a mut RenderNode) -> Self {
-        Self { node }
+        Self {
+            node,
+            cull_rect: None,
+        }
+    }
+
+    /// Get the cull rect (viewport in this node's local space), if set by a scrollable ancestor.
+    pub fn cull_rect(&self) -> Option<Rect> {
+        self.cull_rect
+    }
+
+    /// Set the cull rect (viewport in this node's local space) for culling off-screen children.
+    pub fn set_cull_rect(&mut self, rect: Rect) {
+        self.cull_rect = Some(rect);
     }
 
     // -------------------------------------------------------------------------

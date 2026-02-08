@@ -1665,6 +1665,20 @@ impl Widget for Container {
             ctx.set_clip(local_bounds, corner_radius, corner_curvature);
         }
 
+        // Determine the effective cull rect for children.
+        // For scrollable containers: viewport mapped to layout space (before scroll transform).
+        // For non-scrollable containers: inherited from parent via PaintContext.
+        let effective_cull_rect = if is_scrollable {
+            Some(Rect::new(
+                self.scroll_state.offset_x,
+                self.scroll_state.offset_y,
+                local_bounds.width,
+                local_bounds.height,
+            ))
+        } else {
+            ctx.cull_rect()
+        };
+
         // Draw children - each gets its own node with position transform
         for &child_id in self.children_source.get() {
             // Get child bounds from Tree - these are in LOCAL coordinates (relative to parent)
@@ -1687,22 +1701,27 @@ impl Widget for Container {
                 Transform::translate(child_offset_x, child_offset_y)
             };
 
-            // Cull clean off-screen children in scrollable containers
-            if is_scrollable && !tree.needs_paint(child_id) {
-                let scrolled_rect = Rect::new(
-                    child_offset_x - self.scroll_state.offset_x,
-                    child_offset_y - self.scroll_state.offset_y,
+            // Cull clean off-screen children using the effective viewport
+            if let Some(ref cull_rect) = effective_cull_rect
+                && !tree.needs_paint(child_id)
+            {
+                let child_rect = Rect::new(
+                    child_offset_x,
+                    child_offset_y,
                     child_bounds.width,
                     child_bounds.height,
                 );
-                if !local_bounds.intersects(&scrolled_rect) {
+                if !cull_rect.intersects(&child_rect) {
                     crate::render_stats::record_paint_child_culled();
                     continue;
                 }
             }
 
-            // Try cached paint for clean children
-            if !tree.needs_paint(child_id)
+            // Try cached paint for clean children.
+            // For scrollable containers, skip cached paint for direct children so their
+            // paint method runs and can cull grandchildren using the propagated cull_rect.
+            if !is_scrollable
+                && !tree.needs_paint(child_id)
                 && let Some(cached) = tree.cached_paint(child_id)
             {
                 let mut reused = cached.clone();
@@ -1720,9 +1739,19 @@ impl Widget for Container {
                 continue;
             }
 
-            // Full paint (child is dirty or no cache available)
+            // Full paint (child is dirty, no cache, or scrollable container child)
             let mut child_ctx = ctx.add_child(child_id.as_u64(), child_local);
             child_ctx.set_transform(child_position);
+
+            // Propagate cull_rect to child (transformed into child's local space)
+            if let Some(ref cull_rect) = effective_cull_rect {
+                child_ctx.set_cull_rect(Rect::new(
+                    cull_rect.x - child_offset_x,
+                    cull_rect.y - child_offset_y,
+                    cull_rect.width,
+                    cull_rect.height,
+                ));
+            }
 
             // Paint child via tree
             tree.with_widget(child_id, |child| {
