@@ -29,7 +29,13 @@
 use std::cell::RefCell;
 use std::sync::Mutex;
 
+use smallvec::SmallVec;
+
 use super::invalidation::suspend_widget_tracking;
+
+/// Buffered signal reads for an effect. Most effects read 1–4 signals,
+/// so SmallVec avoids heap allocation in the common case.
+type EffectReads = SmallVec<[SignalId; 4]>;
 
 thread_local! {
     static RUNTIME: RefCell<Runtime> = RefCell::new(Runtime::new());
@@ -38,7 +44,7 @@ thread_local! {
     /// Needed because the Runtime RefCell is already borrowed when effects run,
     /// so `try_with_runtime(|rt| rt.track_read(id))` silently fails.
     /// We buffer reads here and apply them after the callback returns.
-    static EFFECT_TRACKING: RefCell<Vec<(EffectId, Vec<SignalId>)>> = const { RefCell::new(Vec::new()) };
+    static EFFECT_TRACKING: RefCell<Vec<(EffectId, EffectReads)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Background write queue: closures that perform signal writes, queued from bg threads.
@@ -69,6 +75,7 @@ pub fn record_effect_read(signal_id: SignalId) {
     EFFECT_TRACKING.with(|stack| {
         if let Ok(mut s) = stack.try_borrow_mut()
             && let Some(entry) = s.last_mut()
+            && !entry.1.contains(&signal_id)
         {
             entry.1.push(signal_id);
         }
@@ -192,7 +199,7 @@ impl Runtime {
         // Push tracking context (signal reads are buffered here since
         // try_with_runtime can't borrow the Runtime during callback execution)
         EFFECT_TRACKING.with(|stack| {
-            stack.borrow_mut().push((effect_id, Vec::new()));
+            stack.borrow_mut().push((effect_id, EffectReads::new()));
         });
 
         // Run effect
@@ -239,7 +246,7 @@ impl Runtime {
 
         // Push tracking context
         EFFECT_TRACKING.with(|stack| {
-            stack.borrow_mut().push((effect_id, Vec::new()));
+            stack.borrow_mut().push((effect_id, EffectReads::new()));
         });
 
         // Run closure with tracking
@@ -265,9 +272,12 @@ impl Runtime {
     }
 
     pub fn flush_effects(&mut self) {
+        // Use swap + drain to preserve Vec capacity across frames.
+        // mem::take would replace with a 0-capacity Vec, forcing re-allocation next frame.
+        let mut to_run = Vec::new();
         while !self.pending_effects.is_empty() {
-            let effects = std::mem::take(&mut self.pending_effects);
-            for effect_id in effects {
+            std::mem::swap(&mut to_run, &mut self.pending_effects);
+            for effect_id in to_run.drain(..) {
                 self.run_effect(effect_id);
             }
         }
