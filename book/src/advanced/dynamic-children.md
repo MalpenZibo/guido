@@ -209,7 +209,7 @@ fn dynamic_list_demo() -> impl Widget {
         )
 }
 
-fn button(label: &str, on_click: impl Fn() + Send + Sync + 'static) -> Container {
+fn button(label: &str, on_click: impl Fn() + 'static) -> Container {
     container()
         .padding(8.0)
         .background(Color::rgb(0.3, 0.3, 0.4))
@@ -256,7 +256,7 @@ impl Container {
     // Dynamic keyed children with automatic ownership
     pub fn children<F, I, G, W>(self, children: F) -> Self
     where
-        F: Fn() -> I + Send + Sync + 'static,
+        F: Fn() -> I + 'static,
         I: IntoIterator<Item = (u64, G)>,
         G: FnOnce() -> W + 'static,
         W: Widget + 'static;

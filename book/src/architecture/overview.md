@@ -6,7 +6,7 @@ This page details Guido's module structure and key types.
 
 ### `reactive/` - Reactive System
 
-Thread-safe reactive primitives inspired by SolidJS.
+Single-threaded reactive primitives inspired by SolidJS.
 
 **Key Types:**
 - `Signal<T>` - Reactive values with automatic dependency tracking
@@ -51,7 +51,7 @@ Text rendering with:
 Pluggable layouts via the `Layout` trait:
 
 ```rust
-pub trait Layout: Send + Sync {
+pub trait Layout {
     fn layout(
         &mut self,
         tree: &mut Tree,
@@ -114,7 +114,7 @@ TransformOrigin::custom(0.25, 0.75)
 All widgets implement:
 
 ```rust
-pub trait Widget: Send + Sync {
+pub trait Widget {
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size;
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse;

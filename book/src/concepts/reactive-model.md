@@ -24,7 +24,7 @@ count.update(|c| *c += 1);
 ### Key Properties
 
 - **Copy** - Signals implement `Copy`, so you can use them in multiple closures without cloning
-- **Thread-safe** - Can be updated from background threads
+- **Background updates** - Use `.writer()` to get a `WriteSignal<T>` for background thread updates
 - **Automatic tracking** - Dependencies are tracked when reading inside reactive contexts
 
 ## Memos
@@ -135,7 +135,7 @@ Under the hood, Guido uses `MaybeDyn<T>` to accept static or dynamic values:
 ```rust
 pub enum MaybeDyn<T> {
     Static(T),
-    Dynamic(Box<dyn Fn() -> T>),
+    Dynamic(Rc<dyn Fn() -> T>),
 }
 ```
 
