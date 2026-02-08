@@ -314,11 +314,11 @@ impl Tree {
             .and_then(|idx| self.dense[idx].parent)
     }
 
-    /// Get the children of a widget.
-    pub fn get_children(&self, id: WidgetId) -> Vec<WidgetId> {
+    /// Get the children of a widget (returns a slice to avoid heap allocation).
+    pub fn get_children(&self, id: WidgetId) -> &[WidgetId] {
         self.get_dense_index(id)
-            .map(|idx| self.dense[idx].children.to_vec())
-            .unwrap_or_default()
+            .map(|idx| self.dense[idx].children.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Mark a widget as needing layout, returning the layout root.
@@ -639,7 +639,7 @@ mod tests {
         tree.set_parent(child_id, parent_id);
 
         assert_eq!(tree.get_parent(child_id), Some(parent_id));
-        assert_eq!(tree.get_children(parent_id), vec![child_id]);
+        assert_eq!(tree.get_children(parent_id), &[child_id]);
     }
 
     #[test]
