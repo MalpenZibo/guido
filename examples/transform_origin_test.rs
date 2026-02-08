@@ -5,18 +5,19 @@
 use guido::prelude::*;
 use std::time::Duration;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let angle = create_signal(0.0_f32);
 
     // Animation service - updates the angle signal continuously
     let start_time = std::time::Instant::now();
     let angle_w = angle.writer();
-    let _ = create_service::<(), _>(move |_rx, ctx| {
+    let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
         while ctx.is_running() {
             let elapsed = start_time.elapsed().as_secs_f32();
             let new_angle = (elapsed * 45.0) % 360.0; // 45 degrees per second
             angle_w.set(new_angle);
-            std::thread::sleep(Duration::from_millis(16));
+            tokio::time::sleep(Duration::from_millis(16)).await;
         }
     });
 

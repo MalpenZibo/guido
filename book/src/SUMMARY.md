@@ -57,7 +57,7 @@
 - [Advanced Topics](advanced/README.md)
     - [Creating Components](advanced/components.md)
     - [Dynamic Children](advanced/dynamic-children.md)
-    - [Background Threads](advanced/background-threads.md)
+    - [Background Tasks](advanced/background-threads.md)
     - [Wayland Layer Shell](advanced/wayland.md)
 
 # Architecture

@@ -240,29 +240,34 @@ handle.set_layer(Layer::Overlay);
 handle.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
 ```
 
-### Integrating Background Threads
+### Integrating Background Tasks
 
-Use `create_service` for background tasks that are automatically cleaned up. Use `.writer()` to get a `WriteSignal<T>` that is `Send` and can be moved into the background thread:
+Use `create_service` for async background tasks that are automatically cleaned up. Use `.writer()` to get a `WriteSignal<T>` that is `Send` and can be moved into the async task:
 
 ```rust
 let data = create_signal(String::new());
-let data_w = data.writer();  // WriteSignal<T> — Send, for background threads
+let data_w = data.writer();  // WriteSignal<T> — Send, for background tasks
 
 // Read-only service (ignore receiver)
-let _ = create_service::<(), _>(move |_rx, ctx| {
+let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
     while ctx.is_running() {
         data_w.set(fetch_data());
-        std::thread::sleep(Duration::from_secs(1));
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 });
 
 // Bidirectional service (with commands)
 let status = create_signal(String::new());
 let status_w = status.writer();
-let service = create_service(move |rx, ctx| {
-    while ctx.is_running() {
-        while let Ok(cmd) = rx.try_recv() {
-            status_w.set(format!("Processing: {:?}", cmd));
+let service = create_service(move |mut rx, ctx| async move {
+    loop {
+        tokio::select! {
+            Some(cmd) = rx.recv() => {
+                status_w.set(format!("Processing: {:?}", cmd));
+            }
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                if !ctx.is_running() { break; }
+            }
         }
     }
 });

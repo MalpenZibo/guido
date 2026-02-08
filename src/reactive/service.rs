@@ -1,4 +1,4 @@
-//! Background service system for component-scoped threads.
+//! Background service system for component-scoped async tasks.
 //!
 //! This module provides a convenient API for spawning background services
 //! that are automatically cleaned up when the component unmounts.
@@ -6,9 +6,9 @@
 //! # Example
 //!
 //! ```ignore
-//! let service = create_service(move |rx, ctx| {
+//! let service = create_service(move |mut rx, ctx| async move {
 //!     while ctx.is_running() {
-//!         if let Ok(cmd) = rx.try_recv() {
+//!         if let Some(cmd) = rx.recv().await {
 //!             // handle command
 //!         }
 //!         // update signals
@@ -18,10 +18,11 @@
 //! service.send(MyCommand::DoSomething);
 //! ```
 
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::thread;
+
+use tokio::sync::mpsc;
 
 use super::on_cleanup;
 
@@ -48,7 +49,7 @@ impl ServiceContext {
 /// Clone this handle to send commands from multiple places.
 #[derive(Clone)]
 pub struct Service<Cmd> {
-    sender: Sender<Cmd>,
+    sender: mpsc::UnboundedSender<Cmd>,
 }
 
 impl<Cmd> Service<Cmd> {
@@ -62,7 +63,7 @@ impl<Cmd> Service<Cmd> {
 
 /// Create a background service tied to the current Owner.
 ///
-/// The service thread runs until the component unmounts, at which point
+/// The service task runs until the component unmounts, at which point
 /// `ctx.is_running()` will return `false`. The service function receives:
 ///
 /// - `rx`: A receiver for commands sent via `service.send()`
@@ -76,19 +77,20 @@ impl<Cmd> Service<Cmd> {
 /// }
 ///
 /// let active = create_signal(1i32);
-/// let service = create_service(move |rx, ctx| {
-///     while ctx.is_running() {
-///         // Handle commands from UI
-///         while let Ok(cmd) = rx.try_recv() {
-///             match cmd {
-///                 Cmd::SwitchWorkspace(id) => {
-///                     // perform action
+/// let service = create_service(move |mut rx, ctx| async move {
+///     loop {
+///         tokio::select! {
+///             Some(cmd) = rx.recv() => {
+///                 match cmd {
+///                     Cmd::SwitchWorkspace(id) => {
+///                         // perform action
+///                     }
 ///                 }
 ///             }
+///             _ = tokio::time::sleep(Duration::from_millis(50)) => {
+///                 if !ctx.is_running() { break; }
+///             }
 ///         }
-///         // Update signals from external events
-///         active.set(new_value);
-///         std::thread::sleep(Duration::from_millis(50));
 ///     }
 /// });
 ///
@@ -103,32 +105,32 @@ impl<Cmd> Service<Cmd> {
 ///
 /// ```ignore
 /// let time = create_signal(String::new());
+/// let time_w = time.writer();
 ///
-/// let _ = create_service::<(), _>(move |_rx, ctx| {
+/// let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
 ///     while ctx.is_running() {
-///         time.set(chrono::Local::now().format("%H:%M").to_string());
-///         std::thread::sleep(Duration::from_secs(1));
+///         time_w.set(chrono::Local::now().format("%H:%M").to_string());
+///         tokio::time::sleep(Duration::from_secs(1)).await;
 ///     }
 /// });
 /// ```
-pub fn create_service<Cmd, F>(f: F) -> Service<Cmd>
+pub fn create_service<Cmd, F, Fut>(f: F) -> Service<Cmd>
 where
     Cmd: Send + 'static,
-    F: FnOnce(Receiver<Cmd>, ServiceContext) + Send + 'static,
+    F: FnOnce(mpsc::UnboundedReceiver<Cmd>, ServiceContext) -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
 {
-    let (tx, rx) = channel();
+    let (tx, rx) = mpsc::unbounded_channel();
     let running = Arc::new(AtomicBool::new(true));
     let running_for_cleanup = running.clone();
 
-    // Register cleanup to stop the thread when component unmounts
+    // Register cleanup to stop the task when component unmounts
     on_cleanup(move || {
         running_for_cleanup.store(false, Ordering::SeqCst);
     });
 
     let ctx = ServiceContext { running };
-    thread::spawn(move || {
-        f(rx, ctx);
-    });
+    tokio::spawn(f(rx, ctx));
 
     Service { sender: tx }
 }
@@ -140,22 +142,22 @@ mod tests {
     use std::sync::atomic::AtomicI32;
     use std::time::Duration;
 
-    #[test]
-    fn test_service_stops_on_cleanup() {
+    #[tokio::test]
+    async fn test_service_stops_on_cleanup() {
         let counter = Arc::new(AtomicI32::new(0));
         let counter_clone = counter.clone();
 
         let (_, owner_id) = with_owner(|| {
-            let _ = create_service::<(), _>(move |_rx, ctx| {
+            let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
                 while ctx.is_running() {
                     counter_clone.fetch_add(1, Ordering::SeqCst);
-                    thread::sleep(Duration::from_millis(10));
+                    tokio::time::sleep(Duration::from_millis(10)).await;
                 }
             });
         });
 
         // Let the service run a bit
-        thread::sleep(Duration::from_millis(50));
+        tokio::time::sleep(Duration::from_millis(50)).await;
         let count_before = counter.load(Ordering::SeqCst);
         assert!(count_before > 0, "Service should have run at least once");
 
@@ -163,11 +165,11 @@ mod tests {
         dispose_owner(owner_id);
 
         // Wait for service to notice and stop
-        thread::sleep(Duration::from_millis(50));
+        tokio::time::sleep(Duration::from_millis(50)).await;
         let count_after = counter.load(Ordering::SeqCst);
 
         // Wait a bit more and check count doesn't increase
-        thread::sleep(Duration::from_millis(50));
+        tokio::time::sleep(Duration::from_millis(50)).await;
         let count_final = counter.load(Ordering::SeqCst);
 
         assert_eq!(
@@ -176,18 +178,22 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_service_receives_commands() {
+    #[tokio::test]
+    async fn test_service_receives_commands() {
         let received = Arc::new(AtomicI32::new(0));
         let received_clone = received.clone();
 
         let (service, owner_id) = with_owner(|| {
-            create_service::<i32, _>(move |rx, ctx| {
+            create_service::<i32, _, _>(move |mut rx, ctx| async move {
                 while ctx.is_running() {
-                    if let Ok(cmd) = rx.try_recv() {
-                        received_clone.fetch_add(cmd, Ordering::SeqCst);
+                    match rx.try_recv() {
+                        Ok(cmd) => {
+                            received_clone.fetch_add(cmd, Ordering::SeqCst);
+                        }
+                        Err(_) => {
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
                     }
-                    thread::sleep(Duration::from_millis(5));
                 }
             })
         });
@@ -198,7 +204,7 @@ mod tests {
         service.send(30);
 
         // Wait for processing
-        thread::sleep(Duration::from_millis(50));
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         assert_eq!(received.load(Ordering::SeqCst), 60);
 
@@ -206,18 +212,22 @@ mod tests {
         dispose_owner(owner_id);
     }
 
-    #[test]
-    fn test_service_handle_is_clone() {
+    #[tokio::test]
+    async fn test_service_handle_is_clone() {
         let received = Arc::new(AtomicI32::new(0));
         let received_clone = received.clone();
 
         let (service, owner_id) = with_owner(|| {
-            create_service::<i32, _>(move |rx, ctx| {
+            create_service::<i32, _, _>(move |mut rx, ctx| async move {
                 while ctx.is_running() {
-                    if let Ok(cmd) = rx.try_recv() {
-                        received_clone.fetch_add(cmd, Ordering::SeqCst);
+                    match rx.try_recv() {
+                        Ok(cmd) => {
+                            received_clone.fetch_add(cmd, Ordering::SeqCst);
+                        }
+                        Err(_) => {
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
                     }
-                    thread::sleep(Duration::from_millis(5));
                 }
             })
         });
@@ -227,7 +237,7 @@ mod tests {
         service.send(5);
         service2.send(7);
 
-        thread::sleep(Duration::from_millis(50));
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         assert_eq!(received.load(Ordering::SeqCst), 12);
 
