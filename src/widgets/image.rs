@@ -6,8 +6,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::jobs::JobType;
 use crate::layout::{Constraints, Size};
-use crate::reactive::{IntoMaybeDyn, MaybeDyn};
+use crate::reactive::{IntoMaybeDyn, MaybeDyn, with_signal_tracking};
 use crate::renderer::PaintContext;
 use crate::tree::{Tree, WidgetId};
 
@@ -155,10 +156,12 @@ impl Image {
     }
 
     /// Calculate the display size based on intrinsic size, explicit dimensions, and fit mode.
-    fn calculate_size(&self, constraints: &Constraints) -> Size {
-        let explicit_width = self.width.as_ref().map(|w| w.get());
-        let explicit_height = self.height.as_ref().map(|h| h.get());
-
+    fn calculate_size(
+        &self,
+        constraints: &Constraints,
+        explicit_width: Option<f32>,
+        explicit_height: Option<f32>,
+    ) -> Size {
         // If we have both explicit dimensions, use them
         if let (Some(w), Some(h)) = (explicit_width, explicit_height) {
             return Size::new(
@@ -231,8 +234,15 @@ impl Widget for Image {
         // Images are never relayout boundaries
         tree.set_relayout_boundary(id, false);
 
-        // Read source (registers layout dependencies if reactive)
-        let current_source = self.source.get();
+        // Read reactive properties with signal tracking so changes trigger re-layout
+        let (current_source, explicit_width, explicit_height) =
+            with_signal_tracking(id, JobType::Layout, || {
+                (
+                    self.source.get(),
+                    self.width.as_ref().map(|w| w.get()),
+                    self.height.as_ref().map(|h| h.get()),
+                )
+            });
 
         // Load intrinsic size if not cached or source changed
         let source_changed = self
@@ -248,7 +258,7 @@ impl Widget for Image {
         // Update cached source
         self.cached_source = Some(current_source);
 
-        let size = self.calculate_size(&constraints);
+        let size = self.calculate_size(&constraints, explicit_width, explicit_height);
 
         // Cache constraints and size for partial layout
         tree.cache_layout(id, constraints, size);

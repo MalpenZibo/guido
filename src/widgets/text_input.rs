@@ -12,11 +12,11 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::default_font_family;
-use crate::jobs::{JobRequest, RequiredJob, request_job};
+use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
     CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, clipboard_copy, clipboard_paste, has_focus,
-    release_focus, request_focus, set_cursor,
+    release_focus, request_focus, set_cursor, with_signal_tracking,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled, measure_text_styled};
 use crate::tree::{Tree, WidgetId};
@@ -462,12 +462,19 @@ impl TextInput {
         (byte_start, byte_end)
     }
 
-    /// Refresh cached values from reactive properties
-    fn refresh(&mut self) {
-        let new_value = self.value.get();
-        let new_font_size = self.font_size.get();
-        let new_font_family = self.font_family.get();
-        let new_font_weight = self.font_weight.get();
+    /// Refresh cached values from reactive properties.
+    /// Uses signal tracking to register layout dependencies so the widget
+    /// is re-laid out when any of these signals change.
+    fn refresh(&mut self, id: WidgetId) {
+        let (new_value, new_font_size, new_font_family, new_font_weight) =
+            with_signal_tracking(id, JobType::Layout, || {
+                (
+                    self.value.get(),
+                    self.font_size.get(),
+                    self.font_family.get(),
+                    self.font_weight.get(),
+                )
+            });
 
         // Check if value changed (need to update char count and selection)
         if new_value != self.cached_value {
@@ -1005,7 +1012,7 @@ impl Widget for TextInput {
 
         // Refresh cached values from reactive properties
         // This reads signals and registers layout dependencies
-        self.refresh();
+        self.refresh(id);
 
         // Handle key repeat for held keys
         self.handle_key_repeat(tree, id);
@@ -1047,8 +1054,17 @@ impl Widget for TextInput {
         // Parent Container sets position transform
         let bounds = tree.get_bounds(id).unwrap_or_default();
         let display = self.display_text_cached();
-        let text_color = self.text_color.get();
         let is_focused = has_focus(id);
+
+        // Read color signals with tracking so changes trigger repaint
+        let (text_color, selection_color, cursor_color) =
+            with_signal_tracking(id, JobType::Paint, || {
+                (
+                    self.text_color.get(),
+                    self.selection_color.get(),
+                    self.cursor_color.get(),
+                )
+            });
 
         // TODO: Clipping temporarily disabled - will be re-implemented in a future PR
 
@@ -1059,7 +1075,7 @@ impl Widget for TextInput {
             let end_x = self.cached_width_at_char(end) - self.scroll_offset;
 
             let selection_rect = Rect::new(start_x, 0.0, end_x - start_x, bounds.height);
-            ctx.draw_rounded_rect(selection_rect, self.selection_color.get(), 0.0);
+            ctx.draw_rounded_rect(selection_rect, selection_color, 0.0);
         }
 
         // Draw text with scroll offset (LOCAL coords)
@@ -1087,7 +1103,7 @@ impl Widget for TextInput {
                 1.5, // cursor width
                 bounds.height,
             );
-            ctx.draw_rounded_rect(cursor_rect, self.cursor_color.get(), 0.0);
+            ctx.draw_rounded_rect(cursor_rect, cursor_color, 0.0);
         }
     }
 
