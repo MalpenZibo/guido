@@ -27,7 +27,6 @@
 //! interacting with the runtime directly.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::sync::Mutex;
 
 use super::invalidation::suspend_widget_tracking;
@@ -48,6 +47,20 @@ static WRITE_QUEUE: Mutex<Vec<Box<dyn FnOnce() + Send>>> = Mutex::new(Vec::new()
 
 pub type SignalId = usize;
 pub type EffectId = usize;
+
+/// Insert into a Vec only if not already present (dedup).
+fn vec_insert<T: PartialEq>(vec: &mut Vec<T>, value: T) {
+    if !vec.contains(&value) {
+        vec.push(value);
+    }
+}
+
+/// Remove first occurrence of a value from a Vec using swap_remove (O(1) unstable).
+fn vec_remove<T: PartialEq>(vec: &mut Vec<T>, value: &T) {
+    if let Some(pos) = vec.iter().position(|x| x == value) {
+        vec.swap_remove(pos);
+    }
+}
 
 /// Buffer a signal read for the currently executing effect.
 /// Called from tracked_get/tracked_with since try_with_runtime fails during
@@ -89,10 +102,15 @@ pub fn flush_bg_writes() {
 #[derive(Default)]
 pub struct Runtime {
     current_effect: Option<EffectId>,
-    pending_effects: HashSet<EffectId>,
+    /// Pending effects to run. Uses Vec with dedup — most frames have 0–5 pending effects.
+    pending_effects: Vec<EffectId>,
     effect_callbacks: Vec<Option<Box<dyn FnMut()>>>,
-    effect_dependencies: Vec<HashSet<SignalId>>,
-    signal_subscribers: Vec<HashSet<EffectId>>,
+    /// Per-effect dependencies (which signals it reads). Vec with dedup — most effects
+    /// depend on 1–3 signals, making linear scan faster than HashSet.
+    effect_dependencies: Vec<Vec<SignalId>>,
+    /// Per-signal subscribers (which effects track it). Vec with dedup — most signals
+    /// have 1–5 subscribers.
+    signal_subscribers: Vec<Vec<EffectId>>,
     next_effect_id: EffectId,
     batch_depth: usize,
 }
@@ -106,7 +124,7 @@ impl Runtime {
     pub fn register_signal(&mut self, id: SignalId) {
         // Ensure we have space for subscribers
         while self.signal_subscribers.len() <= id {
-            self.signal_subscribers.push(HashSet::new());
+            self.signal_subscribers.push(Vec::new());
         }
     }
 
@@ -114,7 +132,7 @@ impl Runtime {
         let id = self.next_effect_id;
         self.next_effect_id += 1;
         self.effect_callbacks.push(Some(callback));
-        self.effect_dependencies.push(HashSet::new());
+        self.effect_dependencies.push(Vec::new());
         id
     }
 
@@ -133,8 +151,8 @@ impl Runtime {
         }
 
         if let Some(effect_id) = self.current_effect {
-            self.signal_subscribers[signal_id].insert(effect_id);
-            self.effect_dependencies[effect_id].insert(signal_id);
+            vec_insert(&mut self.signal_subscribers[signal_id], effect_id);
+            vec_insert(&mut self.effect_dependencies[effect_id], signal_id);
         }
     }
 
@@ -144,9 +162,10 @@ impl Runtime {
             return;
         }
 
-        let subscribers: Vec<_> = self.signal_subscribers[signal_id].iter().copied().collect();
-        for effect_id in subscribers {
-            self.pending_effects.insert(effect_id);
+        // Iterate subscribers by index — avoids temporary Vec allocation
+        for i in 0..self.signal_subscribers[signal_id].len() {
+            let effect_id = self.signal_subscribers[signal_id][i];
+            vec_insert(&mut self.pending_effects, effect_id);
         }
 
         if self.batch_depth == 0 {
@@ -158,7 +177,7 @@ impl Runtime {
         // Clear old dependencies
         let old_deps = std::mem::take(&mut self.effect_dependencies[effect_id]);
         for signal_id in old_deps {
-            self.signal_subscribers[signal_id].remove(&effect_id);
+            vec_remove(&mut self.signal_subscribers[signal_id], &effect_id);
         }
 
         // Push tracking context (signal reads are buffered here since
@@ -182,9 +201,9 @@ impl Runtime {
         if let Some((_eid, signal_ids)) = reads {
             for signal_id in signal_ids {
                 if signal_id < self.signal_subscribers.len() {
-                    self.signal_subscribers[signal_id].insert(effect_id);
+                    vec_insert(&mut self.signal_subscribers[signal_id], effect_id);
                 }
-                self.effect_dependencies[effect_id].insert(signal_id);
+                vec_insert(&mut self.effect_dependencies[effect_id], signal_id);
             }
         }
     }
@@ -198,14 +217,14 @@ impl Runtime {
     {
         // Ensure effect_dependencies has space for this effect
         while self.effect_dependencies.len() <= effect_id {
-            self.effect_dependencies.push(HashSet::new());
+            self.effect_dependencies.push(Vec::new());
         }
 
         // Clear old dependencies
         let old_deps = std::mem::take(&mut self.effect_dependencies[effect_id]);
         for signal_id in old_deps {
             if signal_id < self.signal_subscribers.len() {
-                self.signal_subscribers[signal_id].remove(&effect_id);
+                vec_remove(&mut self.signal_subscribers[signal_id], &effect_id);
             }
         }
 
@@ -227,9 +246,9 @@ impl Runtime {
         if let Some((_eid, signal_ids)) = reads {
             for signal_id in signal_ids {
                 if signal_id < self.signal_subscribers.len() {
-                    self.signal_subscribers[signal_id].insert(effect_id);
+                    vec_insert(&mut self.signal_subscribers[signal_id], effect_id);
                 }
-                self.effect_dependencies[effect_id].insert(signal_id);
+                vec_insert(&mut self.effect_dependencies[effect_id], signal_id);
             }
         }
 
@@ -238,7 +257,6 @@ impl Runtime {
 
     pub fn flush_effects(&mut self) {
         while !self.pending_effects.is_empty() {
-            // Use mem::take to avoid Vec allocation - swaps in empty HashSet without allocation
             let effects = std::mem::take(&mut self.pending_effects);
             for effect_id in effects {
                 self.run_effect(effect_id);
@@ -266,11 +284,11 @@ impl Runtime {
         let deps = std::mem::take(&mut self.effect_dependencies[effect_id]);
         for signal_id in deps {
             if signal_id < self.signal_subscribers.len() {
-                self.signal_subscribers[signal_id].remove(&effect_id);
+                vec_remove(&mut self.signal_subscribers[signal_id], &effect_id);
             }
         }
         self.effect_callbacks[effect_id] = None;
-        self.pending_effects.remove(&effect_id);
+        vec_remove(&mut self.pending_effects, &effect_id);
     }
 }
 
