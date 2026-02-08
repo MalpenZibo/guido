@@ -1,9 +1,7 @@
 use std::marker::PhantomData;
 
-use super::invalidation::{
-    notify_signal_change, record_signal_read, register_signal_callback, unregister_signal_callback,
-};
-use super::owner::{on_cleanup, register_signal};
+use super::invalidation::{notify_signal_change, record_signal_read};
+use super::owner::register_signal;
 use super::runtime::{SignalId, queue_bg_write, record_effect_read, try_with_runtime};
 use super::storage::{
     create_signal_value, get_signal_value, has_signal, set_signal_value, update_signal_value,
@@ -152,51 +150,6 @@ impl<T: Clone + PartialEq + 'static> Signal<T> {
             },
         )
     }
-
-    /// Create a derived signal that tracks a specific field of this signal's value.
-    ///
-    /// The selector function borrows the parent value and returns a reference to
-    /// a field. The derived signal only updates (clones) when the selected field
-    /// actually changes, avoiding unnecessary clones of the entire parent object.
-    ///
-    /// This uses the invalidation system, NOT effects, so it works correctly
-    /// with background thread updates from `create_service`.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let data = create_signal(MyStruct { name: "Alice".into(), count: 0 });
-    /// let name: Signal<String> = data.select(|d| &d.name);
-    ///
-    /// // `name` only updates when the `name` field actually changes
-    /// data.update(|d| d.count += 1); // name signal NOT updated
-    /// data.update(|d| d.name = "Bob".into()); // name signal IS updated
-    /// ```
-    pub fn select<U, F>(&self, f: F) -> Signal<U>
-    where
-        U: Clone + PartialEq + Send + 'static,
-        F: Fn(&T) -> &U + 'static,
-    {
-        let source = *self;
-        let derived = create_signal(self.with(|v| f(v).clone()));
-
-        let callback_id = register_signal_callback(source.id(), move || {
-            source.with(|parent| {
-                let field_ref: &U = f(parent);
-                let changed = derived.with_untracked(|current| current != field_ref);
-                if changed {
-                    derived.set(field_ref.clone());
-                }
-            });
-        });
-
-        let source_id = source.id();
-        on_cleanup(move || {
-            unregister_signal_callback(source_id, callback_id);
-        });
-
-        derived
-    }
 }
 
 /// Read-only handle to a signal.
@@ -237,36 +190,6 @@ impl<T: Clone + 'static> ReadSignal<T> {
 
     pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         with_signal_value(self.id, f)
-    }
-}
-
-impl<T: Clone + PartialEq + 'static> ReadSignal<T> {
-    /// Create a derived signal that tracks a specific field of this signal's value.
-    ///
-    /// See [`Signal::select()`] for full documentation.
-    pub fn select<U, F>(&self, f: F) -> Signal<U>
-    where
-        U: Clone + PartialEq + Send + 'static,
-        F: Fn(&T) -> &U + 'static,
-    {
-        let source_id = self.id;
-        let derived = create_signal(self.with(|v| f(v).clone()));
-
-        let callback_id = register_signal_callback(source_id, move || {
-            with_signal_value(source_id, |parent: &T| {
-                let field_ref: &U = f(parent);
-                let changed = derived.with_untracked(|current| current != field_ref);
-                if changed {
-                    derived.set(field_ref.clone());
-                }
-            });
-        });
-
-        on_cleanup(move || {
-            unregister_signal_callback(source_id, callback_id);
-        });
-
-        derived
     }
 }
 
@@ -447,105 +370,6 @@ mod tests {
         let _copy2 = signal;
         // If Signal wasn't Copy, this wouldn't compile
         assert_eq!(signal.get(), 42);
-    }
-
-    // ================================================================
-    // select() tests
-    // ================================================================
-
-    #[derive(Clone, Debug, PartialEq)]
-    struct Inner {
-        value: i32,
-    }
-
-    #[derive(Clone, Debug, PartialEq)]
-    struct Outer {
-        name: String,
-        count: i32,
-        inner: Inner,
-    }
-
-    #[test]
-    fn test_select_returns_field_value() {
-        let source = create_signal(Outer {
-            name: "Alice".into(),
-            count: 0,
-            inner: Inner { value: 42 },
-        });
-        let name = source.select(|o| &o.name);
-        assert_eq!(name.get(), "Alice");
-    }
-
-    #[test]
-    fn test_select_updates_when_field_changes() {
-        let source = create_signal(Outer {
-            name: "Alice".into(),
-            count: 0,
-            inner: Inner { value: 42 },
-        });
-        let name = source.select(|o| &o.name);
-
-        source.update(|o| o.name = "Bob".into());
-        assert_eq!(name.get(), "Bob");
-    }
-
-    #[test]
-    fn test_select_no_update_when_field_unchanged() {
-        let source = create_signal(Outer {
-            name: "Alice".into(),
-            count: 0,
-            inner: Inner { value: 42 },
-        });
-        let name = source.select(|o| &o.name);
-        let count = source.select(|o| &o.count);
-
-        // Change only count — name should remain unchanged
-        source.update(|o| o.count += 1);
-        assert_eq!(name.get(), "Alice");
-        assert_eq!(count.get(), 1);
-
-        // Verify name signal ID hasn't changed (same derived signal)
-        let name_id = name.id();
-        source.update(|o| o.count += 1);
-        assert_eq!(name.id(), name_id);
-        assert_eq!(name.get(), "Alice");
-        assert_eq!(count.get(), 2);
-    }
-
-    #[test]
-    fn test_select_chaining() {
-        let source = create_signal(Outer {
-            name: "Alice".into(),
-            count: 0,
-            inner: Inner { value: 42 },
-        });
-        let inner = source.select(|o| &o.inner);
-        let value = inner.select(|i| &i.value);
-
-        assert_eq!(value.get(), 42);
-
-        source.update(|o| o.inner.value = 99);
-        assert_eq!(value.get(), 99);
-
-        // Changing unrelated field should not affect chained selects
-        source.update(|o| o.name = "Bob".into());
-        assert_eq!(value.get(), 99);
-    }
-
-    #[test]
-    fn test_select_on_read_signal() {
-        let source = create_signal(Outer {
-            name: "Alice".into(),
-            count: 0,
-            inner: Inner { value: 42 },
-        });
-        let (read, write) = source.split();
-
-        let name = read.select(|o| &o.name);
-        assert_eq!(name.get(), "Alice");
-
-        write.update(|o| o.name = "Bob".into());
-        assert_eq!(name.get(), "Bob");
     }
 
     // ================================================================

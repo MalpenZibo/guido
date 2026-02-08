@@ -48,39 +48,6 @@ let label = create_memo(move || format!("Count: {}", count.get()));
 text(label)  // Only repaints when the formatted string changes
 ```
 
-### Field Selection
-
-`Signal::select()` creates a derived signal that tracks a specific field of the parent signal's value. The derived signal only clones the field when it actually changes — no unnecessary clones of the entire parent object:
-
-```rust
-let data = create_signal(MyStruct { name: "Alice".into(), count: 0 });
-
-// Derived signal that tracks only the `name` field
-let name: Signal<String> = data.select(|d| &d.name);
-
-// UI only re-renders when `name` actually changes
-text(move || format!("Name: {}", name.get()))
-
-// Changing `count` does NOT trigger `name` to update
-data.update(|d| d.count += 1);
-
-// Changing `name` DOES trigger `name` to update
-data.update(|d| d.name = "Bob".into());
-```
-
-Selects can be chained for nested fields:
-
-```rust
-let inner_value = data.select(|d| &d.inner).select(|i| &i.value);
-```
-
-**Key properties:**
-- Uses the invalidation system (global Mutex), not effects — works with background thread updates from `create_service`
-- In-place comparison — the parent value is never cloned just for comparison
-- Only clones when the selected field actually changed
-- Cleanup is automatic via the `on_cleanup` ownership system
-- Available on both `Signal<T>` and `ReadSignal<T>`
-
 ### Effects
 
 Side effects that re-run when tracked signals change:
@@ -484,7 +451,6 @@ impl<T: Clone> Signal<T> {
     pub fn set(&self, value: T);           // Set immediately
     pub fn update(&self, f: impl FnOnce(&mut T));  // Mutate in-place
     pub fn writer(&self) -> WriteSignal<T>;  // Get a Send handle for bg threads
-    pub fn select<U>(&self, f: impl Fn(&T) -> &U) -> Signal<U>;  // Field selection
 }
 ```
 
