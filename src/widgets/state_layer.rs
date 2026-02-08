@@ -80,6 +80,8 @@ pub struct StateStyle {
     pub transform: Option<Transform>,
     /// Elevation (shadow) override
     pub elevation: Option<f32>,
+    /// Override the background alpha channel (applied after background override)
+    pub alpha: Option<f32>,
     /// Ripple effect configuration (typically used in pressed_state)
     pub ripple: Option<RippleConfig>,
 }
@@ -170,6 +172,22 @@ impl StateStyle {
     /// Set the elevation (shadow level) for this state.
     pub fn elevation(mut self, elevation: f32) -> Self {
         self.elevation = Some(elevation);
+        self
+    }
+
+    /// Override the background alpha channel.
+    ///
+    /// Applied after any background color override (lighter/darker/exact).
+    /// Useful for making semi-transparent elements more visible on hover.
+    ///
+    /// # Example
+    /// ```ignore
+    /// container()
+    ///     .background(Color::rgba(1.0, 0.5, 0.0, 0.4))
+    ///     .hover_state(|s| s.lighter(0.1).alpha(0.7)) // boost alpha on hover
+    /// ```
+    pub fn alpha(mut self, alpha: f32) -> Self {
+        self.alpha = Some(alpha);
         self
     }
 

@@ -56,6 +56,25 @@ where
     result
 }
 
+/// Suspend widget-level signal tracking during the given closure.
+///
+/// Signal reads inside the closure will NOT register any widget as a subscriber.
+/// Used during effect execution to prevent effects from polluting the widget
+/// tracking context when an effect runs inside a factory during reconciliation.
+///
+/// Effect-level tracking (via EFFECT_TRACKING in runtime.rs) is unaffected.
+pub fn suspend_widget_tracking<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    TRACKING_CONTEXT.with(|ctx| {
+        let saved: Vec<_> = ctx.borrow_mut().drain(..).collect();
+        let result = f();
+        *ctx.borrow_mut() = saved;
+        result
+    })
+}
+
 /// Record that a signal was read. Called from Signal::get().
 /// If tracking is active, registers the current widget as a subscriber.
 pub fn record_signal_read(signal_id: usize) {

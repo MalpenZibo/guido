@@ -175,7 +175,8 @@ impl Widget for Text {
         // Parent Container sets position transform
         let size = tree.cached_size(id).unwrap_or_default();
         let local_bounds = Rect::new(0.0, 0.0, size.width, size.height);
-        let color = self.color.get();
+        // Read color with tracking so signal changes trigger repaint
+        let color = with_signal_tracking(id, JobType::Paint, || self.color.get());
         ctx.draw_text_styled(
             &self.cached_text,
             local_bounds,

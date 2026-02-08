@@ -310,6 +310,9 @@ fn render_surface(
         renderer.set_screen_size(physical_width as f32, physical_height as f32);
         renderer.set_scale_factor(scale_factor);
 
+        // Flush effect notifications from background-thread signal writes
+        reactive::flush_bg_effect_writes();
+
         // Process pending jobs from signal updates (reconciliation + layout marking)
         let jobs = drain_pending_jobs();
 
