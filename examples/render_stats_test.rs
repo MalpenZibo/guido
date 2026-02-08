@@ -16,9 +16,10 @@ fn main() {
     let rotation = create_signal(0.0f32);
 
     // Continuously update rotation to force frame rendering
+    let rotation_w = rotation.writer();
     let _ = create_service::<(), _>(move |_rx, ctx| {
         while ctx.is_running() {
-            rotation.update(|r| *r += 1.0);
+            rotation_w.update(|r| *r += 1.0);
             std::thread::sleep(std::time::Duration::from_millis(16)); // ~60fps
         }
     });

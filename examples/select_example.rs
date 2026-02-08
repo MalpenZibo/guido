@@ -43,16 +43,19 @@ fn main() {
     let mem = stats.select(|s| &s.mem);
 
     // Background service that simulates CPU/mem changes every second
+    let state_w = state.writer(); // WriteSignal is Send
     let _ = create_service::<(), _>(move |_rx, ctx| {
         let mut tick = 0u32;
         while ctx.is_running() {
             std::thread::sleep(Duration::from_secs(1));
             tick += 1;
 
-            state.update(|s| {
-                // CPU/mem change every tick
-                s.stats.cpu = 10.0 + (tick as f32 * 0.7).sin() * 40.0;
-                s.stats.mem = 50.0 + (tick as f32 * 0.3).cos() * 20.0;
+            // Compute values before the closure since WriteSignal::update requires 'static
+            let cpu = 10.0 + (tick as f32 * 0.7).sin() * 40.0;
+            let mem = 50.0 + (tick as f32 * 0.3).cos() * 20.0;
+            state_w.update(move |s| {
+                s.stats.cpu = cpu;
+                s.stats.mem = mem;
             });
         }
     });

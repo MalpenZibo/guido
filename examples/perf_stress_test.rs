@@ -10,11 +10,20 @@
 //! Run with render stats: cargo run --example perf_stress_test --features render-stats
 
 use guido::prelude::*;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 const INITIAL_ITEM_COUNT: usize = 1000;
 
+struct ItemData {
+    id: u64,
+    enabled: Signal<bool>,
+    input_value: Signal<String>,
+}
+
 fn main() {
-    let items: Signal<Vec<ItemData>> = create_signal(
+    // Store item data in a Rc<RefCell<Vec>> since Signal requires Send and ItemData contains !Send signals
+    let item_store: Rc<RefCell<Vec<ItemData>>> = Rc::new(RefCell::new(
         (0..INITIAL_ITEM_COUNT)
             .map(|i| ItemData {
                 id: i as u64,
@@ -22,28 +31,32 @@ fn main() {
                 input_value: create_signal(String::new()),
             })
             .collect(),
-    );
+    ));
 
+    // Signal that tracks the list of item IDs (u64 is Send)
+    let item_ids: Signal<Vec<u64>> = create_signal((0..INITIAL_ITEM_COUNT as u64).collect());
+
+    let store_for_children = item_store.clone();
     let dyn_container_view = container()
         .layout(Flex::column().spacing(10.0))
         .children(move || {
-            items
-                .get()
-                .iter()
-                .map(|item| {
-                    let id = item.id;
-                    let enabled = item.enabled;
-                    let input_value = item.input_value;
-
-                    // Signals are stored in ItemData, so no effects needed.
-                    // Changing item.enabled doesn't mark the Vec as changed.
-                    (id, move || {
-                        create_item_row(enabled, input_value, id as usize)
+            let store = store_for_children.borrow();
+            // Read item_ids to track reactivity
+            let ids = item_ids.get();
+            ids.iter()
+                .filter_map(|&id| {
+                    store.iter().find(|item| item.id == id).map(|item| {
+                        let enabled = item.enabled;
+                        let input_value = item.input_value;
+                        (id, move || {
+                            create_item_row(enabled, input_value, id as usize)
+                        })
                     })
                 })
                 .collect::<Vec<_>>()
         });
 
+    let store_for_button = item_store.clone();
     let view = container()
         .background(Color::rgb(0.12, 0.12, 0.18))
         .padding(20.0)
@@ -53,7 +66,7 @@ fn main() {
                 .color(Color::WHITE)
                 .font_size(28.0),
         )
-        .child(create_add_button(items))
+        .child(create_add_button(item_ids, store_for_button))
         .child(
             container()
                 .height(300.0)
@@ -74,13 +87,6 @@ fn main() {
     app.run();
 }
 
-#[derive(Clone, Copy, PartialEq)]
-struct ItemData {
-    id: u64,
-    enabled: Signal<bool>,
-    input_value: Signal<String>,
-}
-
 fn get_item_name(id: usize) -> String {
     format!("Item {}", id + 1)
 }
@@ -89,7 +95,10 @@ fn get_item_description(id: usize) -> String {
     format!("Description for item {}", id + 1)
 }
 
-fn create_add_button(items: Signal<Vec<ItemData>>) -> Container {
+fn create_add_button(
+    item_ids: Signal<Vec<u64>>,
+    item_store: Rc<RefCell<Vec<ItemData>>>,
+) -> Container {
     container()
         .padding_xy(16.0, 8.0)
         .background(Color::rgb(0.2, 0.4, 0.6))
@@ -97,14 +106,13 @@ fn create_add_button(items: Signal<Vec<ItemData>>) -> Container {
         .hover_state(|s| s.lighter(0.1))
         .pressed_state(|s| s.ripple())
         .on_click(move || {
-            items.update(|list| {
-                let id = list.len() as u64;
-                list.push(ItemData {
-                    id,
-                    enabled: create_signal(false),
-                    input_value: create_signal(String::new()),
-                });
+            let id = item_store.borrow().len() as u64;
+            item_store.borrow_mut().push(ItemData {
+                id,
+                enabled: create_signal(false),
+                input_value: create_signal(String::new()),
             });
+            item_ids.update(|ids| ids.push(id));
         })
         .child(text("Add Item").color(Color::WHITE).font_size(14.0))
 }

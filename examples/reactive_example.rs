@@ -18,11 +18,12 @@ fn main() {
     let scroll_offset = create_signal(0.0f32);
 
     // Spawn a background thread that increments count every 2 seconds
-    // No need to clone signals anymore - they implement Copy!
+    // Use .writer() to get a Send-able handle for the background thread
+    let count_w = count.writer();
     thread::spawn(move || {
         loop {
             thread::sleep(Duration::from_secs(2));
-            count.update(|c| *c += 1);
+            count_w.update(|c| *c += 1);
         }
     });
 
