@@ -43,7 +43,7 @@ const SCROLL_PADDING: f32 = 2.0;
 const HISTORY_COALESCE_MS: u64 = 500;
 
 /// Type alias for text input callbacks
-type TextCallback = Box<dyn Fn(&str) + Send + Sync>;
+type TextCallback = Box<dyn Fn(&str)>;
 
 /// A snapshot of text input state for undo/redo
 #[derive(Clone, Debug)]
@@ -365,13 +365,13 @@ impl TextInput {
     }
 
     /// Set callback for text changes
-    pub fn on_change<F: Fn(&str) + Send + Sync + 'static>(mut self, callback: F) -> Self {
+    pub fn on_change<F: Fn(&str) + 'static>(mut self, callback: F) -> Self {
         self.on_change = Some(Box::new(callback));
         self
     }
 
     /// Set callback for submit (Enter key)
-    pub fn on_submit<F: Fn(&str) + Send + Sync + 'static>(mut self, callback: F) -> Self {
+    pub fn on_submit<F: Fn(&str) + 'static>(mut self, callback: F) -> Self {
         self.on_submit = Some(Box::new(callback));
         self
     }

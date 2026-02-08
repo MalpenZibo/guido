@@ -135,7 +135,7 @@ impl IntoMaybeDyn<Length> for f32 {
 }
 
 /// Trait for layout strategies that position multiple children
-pub trait Layout: Send + Sync {
+pub trait Layout {
     /// Perform layout on children and return the total size.
     ///
     /// Children are identified by WidgetId and accessed via the passed Tree.

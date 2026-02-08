@@ -8,7 +8,7 @@ pub use animations::{AdvanceResult, AnimationState, get_animated_value};
 pub use ripple::RippleState;
 
 use std::borrow::Cow;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use crate::advance_anim;
 use crate::animation::Transition;
@@ -31,11 +31,11 @@ use super::widget::{
 };
 
 /// Callback for click events
-pub type ClickCallback = Arc<dyn Fn() + Send + Sync>;
+pub type ClickCallback = Rc<dyn Fn()>;
 /// Callback for hover events (bool = is_hovered)
-pub type HoverCallback = Arc<dyn Fn(bool) + Send + Sync>;
+pub type HoverCallback = Rc<dyn Fn(bool)>;
 /// Callback for scroll events (delta_x, delta_y, source)
-pub type ScrollCallback = Arc<dyn Fn(f32, f32, ScrollSource) + Send + Sync>;
+pub type ScrollCallback = Rc<dyn Fn(f32, f32, ScrollSource)>;
 
 /// Gradient direction for linear gradients
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -271,7 +271,7 @@ impl Container {
     /// ```
     pub fn padding(mut self, value: impl IntoMaybeDyn<f32>) -> Self {
         let value = value.into_maybe_dyn();
-        self.padding = MaybeDyn::Dynamic(Arc::new(move || Padding::all(value.get())));
+        self.padding = MaybeDyn::Dynamic(Rc::new(move || Padding::all(value.get())));
         self
     }
 
@@ -292,7 +292,7 @@ impl Container {
     ) -> Self {
         let h = horizontal.into_maybe_dyn();
         let v = vertical.into_maybe_dyn();
-        self.padding = MaybeDyn::Dynamic(Arc::new(move || Padding {
+        self.padding = MaybeDyn::Dynamic(Rc::new(move || Padding {
             left: h.get(),
             right: h.get(),
             top: v.get(),
@@ -427,8 +427,8 @@ impl Container {
         self
     }
 
-    pub fn on_click<F: Fn() + Send + Sync + 'static>(mut self, callback: F) -> Self {
-        self.on_click = Some(Arc::new(callback));
+    pub fn on_click<F: Fn() + 'static>(mut self, callback: F) -> Self {
+        self.on_click = Some(Rc::new(callback));
         self
     }
 
@@ -438,16 +438,13 @@ impl Container {
         self
     }
 
-    pub fn on_hover<F: Fn(bool) + Send + Sync + 'static>(mut self, callback: F) -> Self {
-        self.on_hover = Some(Arc::new(callback));
+    pub fn on_hover<F: Fn(bool) + 'static>(mut self, callback: F) -> Self {
+        self.on_hover = Some(Rc::new(callback));
         self
     }
 
-    pub fn on_scroll<F: Fn(f32, f32, ScrollSource) + Send + Sync + 'static>(
-        mut self,
-        callback: F,
-    ) -> Self {
-        self.on_scroll = Some(Arc::new(callback));
+    pub fn on_scroll<F: Fn(f32, f32, ScrollSource) + 'static>(mut self, callback: F) -> Self {
+        self.on_scroll = Some(Rc::new(callback));
         self
     }
 
@@ -467,7 +464,7 @@ impl Container {
         let degrees = degrees.into_maybe_dyn();
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic(Arc::new(move || {
+        self.transform = MaybeDyn::Dynamic(Rc::new(move || {
             prev_transform
                 .get()
                 .then(&Transform::rotate_degrees(degrees.get()))
@@ -480,7 +477,7 @@ impl Container {
         let s = s.into_maybe_dyn();
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic(Arc::new(move || {
+        self.transform = MaybeDyn::Dynamic(Rc::new(move || {
             prev_transform.get().then(&Transform::scale(s.get()))
         }));
         self
@@ -492,7 +489,7 @@ impl Container {
         let sy = sy.into_maybe_dyn();
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic(Arc::new(move || {
+        self.transform = MaybeDyn::Dynamic(Rc::new(move || {
             prev_transform
                 .get()
                 .then(&Transform::scale_xy(sx.get(), sy.get()))
@@ -506,7 +503,7 @@ impl Container {
         let y = y.into_maybe_dyn();
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic(Arc::new(move || {
+        self.transform = MaybeDyn::Dynamic(Rc::new(move || {
             prev_transform
                 .get()
                 .then(&Transform::translate(x.get(), y.get()))

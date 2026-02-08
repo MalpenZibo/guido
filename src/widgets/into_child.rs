@@ -32,11 +32,11 @@ impl<W: Widget + 'static> IntoChild<StaticChild> for W {
 // Use keyed .children() for proper ownership with dynamic lists.
 impl<F, W> IntoChild<DynamicChild> for F
 where
-    F: Fn() -> Option<W> + Send + Sync + 'static,
+    F: Fn() -> Option<W> + 'static,
     W: Widget + 'static,
 {
     fn add_to_container(self, children_source: &mut ChildrenSource) {
-        let child_fn = std::sync::Arc::new(self);
+        let child_fn = std::rc::Rc::new(self);
 
         let items_fn = move || {
             let child_fn = child_fn.clone();
@@ -111,7 +111,7 @@ where
 /// ```
 impl<F, I, G, W> IntoChildren<DynamicChildren> for F
 where
-    F: Fn() -> I + Send + Sync + 'static,
+    F: Fn() -> I + 'static,
     I: IntoIterator<Item = (u64, G)>,
     G: FnOnce() -> W + 'static,
     W: Widget + 'static,
