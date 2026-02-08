@@ -319,12 +319,8 @@ fn render_surface(
         handle_paint_jobs(&jobs, tree);
 
         // Collect layout roots from jobs
-        for root in handle_reconcile_jobs(&jobs, tree) {
-            layout_roots.insert(root);
-        }
-        for root in handle_layout_jobs(&jobs, tree) {
-            layout_roots.insert(root);
-        }
+        handle_reconcile_jobs(&jobs, tree, layout_roots);
+        handle_layout_jobs(&jobs, tree, layout_roots);
 
         // Re-layout using partial layout from boundaries when available
         let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
