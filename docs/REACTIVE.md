@@ -127,27 +127,27 @@ Properties use `impl IntoMaybeDyn<T>` to accept any of:
 - Signal: `Signal<T>`
 - Closure: `impl Fn() -> T`
 
-## Background Thread Updates
+## Background Task Updates
 
-`Signal<T>` is `!Send` — it can only be read and written on the main thread. To update a signal from a background thread, use `.writer()` to obtain a `WriteSignal<T>`, which is `Send`. Writes from `WriteSignal` are queued and applied on the next frame.
+`Signal<T>` is `!Send` — it can only be read and written on the main thread. To update a signal from a background task, use `.writer()` to obtain a `WriteSignal<T>`, which is `Send`. Writes from `WriteSignal` are queued and applied on the next frame.
 
-Use `create_service` to spawn a background service that is automatically cleaned up when the component unmounts:
+Use `create_service` to spawn an async background service that is automatically cleaned up when the component unmounts:
 
 ```rust
 let data = create_signal(String::new());
-let data_w = data.writer();  // WriteSignal<T> — Send, for background threads
+let data_w = data.writer();  // WriteSignal<T> — Send, for background tasks
 
 // Spawn a background service - automatically cleaned up on unmount
-let _ = create_service::<(), _>(move |_rx, ctx| {
+let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
     while ctx.is_running() {
         let new_data = fetch_data();
         data_w.set(new_data);  // Queued, applied next frame
-        std::thread::sleep(Duration::from_secs(1));
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 });
 ```
 
-**Note:** Capturing `data` (a `Signal`) directly in a service closure will **not compile** because `Signal` is `!Send`. Always use `.writer()` to get a `WriteSignal` for background threads.
+**Note:** Capturing `data` (a `Signal`) directly in a service closure will **not compile** because `Signal` is `!Send`. Always use `.writer()` to get a `WriteSignal` for background tasks.
 
 For bidirectional communication (sending commands to the service):
 
@@ -155,22 +155,25 @@ For bidirectional communication (sending commands to the service):
 enum Cmd { Refresh, Stop }
 
 let status = create_signal("idle".to_string());
-let status_w = status.writer();  // WriteSignal for bg thread
+let status_w = status.writer();  // WriteSignal for bg task
 
-let service = create_service(move |rx, ctx| {
-    while ctx.is_running() {
-        // Handle commands from UI
-        while let Ok(cmd) = rx.try_recv() {
-            match cmd {
-                Cmd::Refresh => {
-                    status_w.set("refreshing".to_string());
-                    // ... do work ...
-                    status_w.set("idle".to_string());
+let service = create_service(move |mut rx, ctx| async move {
+    loop {
+        tokio::select! {
+            Some(cmd) = rx.recv() => {
+                match cmd {
+                    Cmd::Refresh => {
+                        status_w.set("refreshing".to_string());
+                        // ... do work ...
+                        status_w.set("idle".to_string());
+                    }
+                    Cmd::Stop => break,
                 }
-                Cmd::Stop => break,
+            }
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                if !ctx.is_running() { break; }
             }
         }
-        std::thread::sleep(Duration::from_millis(50));
     }
 });
 

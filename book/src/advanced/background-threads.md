@@ -1,8 +1,8 @@
-# Background Threads
+# Background Tasks
 
-Guido signals (`Signal<T>`) live on the main thread and are `!Send` — they cannot be captured directly in background threads. To update signals from a background thread, call `.writer()` to obtain a `WriteSignal<T>`, which **is** `Send`. Writes through a `WriteSignal` are queued and applied on the main thread during the next frame.
+Guido signals (`Signal<T>`) live on the main thread and are `!Send` — they cannot be captured directly in background tasks. To update signals from a background task, call `.writer()` to obtain a `WriteSignal<T>`, which **is** `Send`. Writes through a `WriteSignal` are queued and applied on the main thread during the next frame.
 
-The `create_service` API provides a convenient way to spawn background services that are automatically cleaned up when the component unmounts.
+The `create_service` API provides a convenient way to spawn async background tasks that are automatically cleaned up when the component unmounts. Services run as tokio tasks.
 
 ## Basic Pattern: Read-Only Service
 
@@ -15,10 +15,10 @@ let time = create_signal(String::new());
 let time_w = time.writer(); // Get a Send-able write handle
 
 // Spawn a read-only service - use () as command type
-let _ = create_service::<(), _>(move |_rx, ctx| {
+let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
     while ctx.is_running() {
         time_w.set(chrono::Local::now().format("%H:%M:%S").to_string());
-        std::thread::sleep(Duration::from_secs(1));
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 });
 
@@ -27,7 +27,7 @@ let _ = create_service::<(), _>(move |_rx, ctx| {
 
 ## Bidirectional Service
 
-For services that also receive commands from the UI:
+For services that also receive commands from the UI, use `tokio::select!` for efficient async multiplexing:
 
 ```rust
 enum Cmd {
@@ -38,25 +38,26 @@ enum Cmd {
 let data = create_signal(String::new());
 let data_w = data.writer(); // Get a Send-able write handle
 
-let service = create_service(move |rx, ctx| {
+let service = create_service(move |mut rx, ctx| async move {
     let mut interval = Duration::from_secs(1);
 
-    while ctx.is_running() {
-        // Handle commands from UI
-        while let Ok(cmd) = rx.try_recv() {
-            match cmd {
-                Cmd::Refresh => {
-                    data_w.set(fetch_data());
-                }
-                Cmd::SetInterval(secs) => {
-                    interval = Duration::from_secs(secs);
+    loop {
+        tokio::select! {
+            Some(cmd) = rx.recv() => {
+                match cmd {
+                    Cmd::Refresh => {
+                        data_w.set(fetch_data());
+                    }
+                    Cmd::SetInterval(secs) => {
+                        interval = Duration::from_secs(secs);
+                    }
                 }
             }
+            _ = tokio::time::sleep(interval) => {
+                if !ctx.is_running() { break; }
+                data_w.set(fetch_data());
+            }
         }
-
-        // Periodic update
-        data_w.set(fetch_data());
-        std::thread::sleep(interval);
     }
 });
 
@@ -72,26 +73,27 @@ container()
 use guido::prelude::*;
 use std::time::Duration;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     // Signals for system data
     let cpu_usage = create_signal(0.0f32);
     let memory_usage = create_signal(0.0f32);
     let time = create_signal(String::new());
 
-    // Get Send-able write handles for the background thread
+    // Get Send-able write handles for the background task
     let cpu_w = cpu_usage.writer();
     let mem_w = memory_usage.writer();
     let time_w = time.writer();
 
     // Background monitoring service
-    let _ = create_service::<(), _>(move |_rx, ctx| {
+    let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
         while ctx.is_running() {
             // Simulate system monitoring
             cpu_w.set(rand::random::<f32>() * 100.0);
             mem_w.set(rand::random::<f32>() * 100.0);
             time_w.set(chrono::Local::now().format("%H:%M:%S").to_string());
 
-            std::thread::sleep(Duration::from_secs(1));
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     });
 
@@ -128,18 +130,18 @@ let weather_w = weather.writer();
 let news_w = news.writer();
 
 // Weather service
-let _ = create_service::<(), _>(move |_rx, ctx| {
+let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
     while ctx.is_running() {
         weather_w.set(fetch_weather());
-        std::thread::sleep(Duration::from_secs(300)); // Every 5 minutes
+        tokio::time::sleep(Duration::from_secs(300)).await; // Every 5 minutes
     }
 });
 
 // News service
-let _ = create_service::<(), _>(move |_rx, ctx| {
+let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
     while ctx.is_running() {
         news_w.set(fetch_news());
-        std::thread::sleep(Duration::from_secs(60)); // Every minute
+        tokio::time::sleep(Duration::from_secs(60)).await; // Every minute
     }
 });
 ```
@@ -158,13 +160,13 @@ enum DataState {
 let status = create_signal(DataState::Loading);
 let status_w = status.writer();
 
-let _ = create_service::<(), _>(move |_rx, ctx| {
+let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
     while ctx.is_running() {
         match fetch_data() {
             Ok(data) => status_w.set(DataState::Success(data)),
             Err(e) => status_w.set(DataState::Error(e.to_string())),
         }
-        std::thread::sleep(Duration::from_secs(1));
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 });
 
@@ -184,11 +186,11 @@ Simple clock using a service:
 let time = create_signal(String::new());
 let time_w = time.writer();
 
-let _ = create_service::<(), _>(move |_rx, ctx| {
+let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
     while ctx.is_running() {
         let now = chrono::Local::now();
         time_w.set(now.format("%H:%M:%S").to_string());
-        std::thread::sleep(Duration::from_millis(100));
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 });
 
@@ -199,35 +201,26 @@ let view = container()
 
 ## Best Practices
 
-### Check `is_running()` Frequently
+### Use `tokio::select!` for Responsive Shutdown
 
 ```rust
-// Good: Check frequently so service stops promptly
-while ctx.is_running() {
-    // Short sleep
-    std::thread::sleep(Duration::from_millis(50));
-}
-
-// Less responsive: Long sleep means slow shutdown
-while ctx.is_running() {
-    std::thread::sleep(Duration::from_secs(60));
-}
-```
-
-### Use Non-Blocking Operations
-
-```rust
-// Good: Non-blocking receive with timeout
-while ctx.is_running() {
-    if let Ok(cmd) = rx.try_recv() {
-        handle_command(cmd);
+// Good: select! wakes on either event
+loop {
+    tokio::select! {
+        Some(cmd) = rx.recv() => {
+            handle_command(cmd);
+        }
+        _ = tokio::time::sleep(Duration::from_secs(1)) => {
+            if !ctx.is_running() { break; }
+            // periodic work
+        }
     }
-    std::thread::sleep(Duration::from_millis(16));
 }
 
-// Bad: Blocking receive prevents checking is_running()
+// Also fine for simple loops
 while ctx.is_running() {
-    let cmd = rx.recv().unwrap(); // Blocks forever!
+    // do work
+    tokio::time::sleep(Duration::from_millis(50)).await;
 }
 ```
 
@@ -240,7 +233,7 @@ let cpu_w = cpu.writer();
 let memory_w = memory.writer();
 let disk_w = disk.writer();
 
-let _ = create_service::<(), _>(move |_rx, ctx| {
+let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
     while ctx.is_running() {
         let data = fetch_all_data();
 
@@ -249,7 +242,7 @@ let _ = create_service::<(), _>(move |_rx, ctx| {
         memory_w.set(data.memory);
         disk_w.set(data.disk);
 
-        std::thread::sleep(Duration::from_secs(1));
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 });
 ```

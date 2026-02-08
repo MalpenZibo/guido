@@ -24,7 +24,7 @@ count.update(|c| *c += 1);
 ### Key Properties
 
 - **Copy** - Signals implement `Copy`, so you can use them in multiple closures without cloning
-- **Background updates** - Use `.writer()` to get a `WriteSignal<T>` for background thread updates
+- **Background updates** - Use `.writer()` to get a `WriteSignal<T>` for background task updates
 - **Automatic tracking** - Dependencies are tracked when reading inside reactive contexts
 
 ## Memos
@@ -235,11 +235,12 @@ pub fn on_cleanup(f: impl FnOnce() + 'static);
 ### Background Services
 
 ```rust
-// Create a background service with automatic cleanup
-pub fn create_service<Cmd, F>(f: F) -> Service<Cmd>
+// Create an async background service with automatic cleanup
+pub fn create_service<Cmd, F, Fut>(f: F) -> Service<Cmd>
 where
     Cmd: Send + 'static,
-    F: FnOnce(Receiver<Cmd>, ServiceContext) + Send + 'static;
+    F: FnOnce(UnboundedReceiver<Cmd>, ServiceContext) -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static;
 ```
 
-See [Background Threads](../advanced/background-threads.md) for detailed usage.
+See [Background Tasks](../advanced/background-threads.md) for detailed usage.
