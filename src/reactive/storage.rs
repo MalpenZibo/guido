@@ -1,14 +1,14 @@
-//! Global thread-safe storage for signal values.
+//! Thread-local storage for signal values.
 //!
-//! Signal values are stored globally in a static `RwLock`-protected vector,
-//! allowing signals to be read and written from any thread. Each signal value
-//! is type-erased using `Any` and wrapped in `Arc<RwLock<_>>` for safe concurrent
-//! access.
+//! Signal values are stored in a thread-local `RefCell`-protected vector,
+//! using `Box<dyn Any>` to erase `RefCell<T>` for each signal. This eliminates
+//! all locking overhead since signals are only accessed from the main thread.
 //!
 //! ## Thread Safety
 //!
-//! - **Reading**: Multiple threads can read signal values concurrently.
-//! - **Writing**: Writes acquire a write lock and update the value in place.
+//! - **Reading**: Direct `RefCell` borrow — zero locks.
+//! - **Writing**: Direct `RefCell` borrow_mut — zero locks.
+//! - **Background writes**: Queued via `WriteSignal` and flushed each frame.
 //! - **Disposal**: Disposed signals are marked as `None` and will panic if accessed.
 //!
 //! ## Type Safety
@@ -17,13 +17,11 @@
 //! Accessing a signal with the wrong type will panic with a clear error message.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::cell::RefCell;
 
 use super::runtime::SignalId;
 
-type SignalValue = Arc<RwLock<Box<dyn Any + Send + Sync>>>;
-
-static STORAGE: OnceLock<RwLock<SignalStorage>> = OnceLock::new();
+type SignalValue = Box<dyn Any>;
 
 struct SignalStorage {
     values: Vec<Option<SignalValue>>,
@@ -39,26 +37,19 @@ impl SignalStorage {
     }
 }
 
-fn with_storage<F, R>(f: F) -> R
-where
-    F: FnOnce(&mut SignalStorage) -> R,
-{
-    let storage = STORAGE.get_or_init(|| RwLock::new(SignalStorage::new()));
-    f(&mut storage.write().unwrap())
+thread_local! {
+    static STORAGE: RefCell<SignalStorage> = RefCell::new(SignalStorage::new());
 }
 
-fn with_storage_read<F, R>(f: F) -> R
-where
-    F: FnOnce(&SignalStorage) -> R,
-{
-    let storage = STORAGE.get_or_init(|| RwLock::new(SignalStorage::new()));
-    f(&storage.read().unwrap())
-}
-
-/// Get the Arc for a signal, handling errors consistently.
-fn get_signal_arc(id: SignalId, operation: &str) -> SignalValue {
-    with_storage_read(|storage| {
-        storage
+/// Get a reference to the signal's RefCell, handling errors consistently.
+fn with_signal_cell<T: 'static, R>(
+    id: SignalId,
+    operation: &str,
+    f: impl FnOnce(&RefCell<T>) -> R,
+) -> R {
+    STORAGE.with(|storage| {
+        let storage = storage.borrow();
+        let slot = storage
             .values
             .get(id)
             .unwrap_or_else(|| {
@@ -68,24 +59,33 @@ fn get_signal_arc(id: SignalId, operation: &str) -> SignalValue {
                     storage.values.len().saturating_sub(1)
                 )
             })
-            .clone()
+            .as_ref()
             .unwrap_or_else(|| {
                 panic!(
                     "Signal {} was disposed - cannot {} after owner cleanup. \
                      This usually means the signal's owner was disposed while you still hold a reference to the signal.",
                     id, operation
                 )
-            })
+            });
+        let cell = slot.downcast_ref::<RefCell<T>>().unwrap_or_else(|| {
+            panic!(
+                "Signal {} type mismatch: stored type does not match requested type {}",
+                id,
+                std::any::type_name::<T>()
+            )
+        });
+        f(cell)
     })
 }
 
 /// Create a new signal and return its ID
-pub fn create_signal_value<T: Send + Sync + 'static>(value: T) -> SignalId {
-    with_storage(|storage| {
+pub fn create_signal_value<T: 'static>(value: T) -> SignalId {
+    STORAGE.with(|storage| {
+        let mut storage = storage.borrow_mut();
         let id = storage.next_id;
         storage.next_id += 1;
-        let boxed: Box<dyn Any + Send + Sync> = Box::new(value);
-        storage.values.push(Some(Arc::new(RwLock::new(boxed))));
+        let boxed: Box<dyn Any> = Box::new(RefCell::new(value));
+        storage.values.push(Some(boxed));
         id
     })
 }
@@ -95,61 +95,42 @@ pub fn create_signal_value<T: Send + Sync + 'static>(value: T) -> SignalId {
 /// After disposal, any attempt to read or write the signal will panic
 /// with a clear error message.
 pub fn dispose_signal(id: SignalId) {
-    with_storage(|storage| {
+    STORAGE.with(|storage| {
+        let mut storage = storage.borrow_mut();
         if id < storage.values.len() {
             storage.values[id] = None;
         }
     });
 }
 
-/// Downcast helper with consistent error message.
-fn downcast_ref_or_panic<T: 'static>(value: &dyn Any, id: SignalId) -> &T {
-    value.downcast_ref::<T>().unwrap_or_else(|| {
-        panic!(
-            "Signal {} type mismatch: stored type does not match requested type {}",
-            id,
-            std::any::type_name::<T>()
-        )
-    })
-}
-
-/// Downcast helper for mutable access with consistent error message.
-fn downcast_mut_or_panic<T: 'static>(value: &mut dyn Any, id: SignalId) -> &mut T {
-    // Get the type name before attempting downcast to avoid borrow issues
-    let type_name = std::any::type_name::<T>();
-    value.downcast_mut::<T>().unwrap_or_else(|| {
-        panic!(
-            "Signal {} type mismatch: stored type does not match requested type {}",
-            id, type_name
-        )
-    })
-}
-
 /// Get a signal's value (clones it)
-pub fn get_signal_value<T: Clone + Send + Sync + 'static>(id: SignalId) -> T {
-    let arc = get_signal_arc(id, "read");
-    let guard = arc.read().unwrap();
-    downcast_ref_or_panic::<T>(guard.as_ref(), id).clone()
+pub fn get_signal_value<T: Clone + 'static>(id: SignalId) -> T {
+    with_signal_cell(id, "read", |cell: &RefCell<T>| cell.borrow().clone())
 }
 
-/// Set a signal's value
-pub fn set_signal_value<T: Send + Sync + 'static>(id: SignalId, value: T) {
-    let arc = get_signal_arc(id, "write");
-    let mut guard = arc.write().unwrap();
-    *guard = Box::new(value);
+/// Set a signal's value (in-place replace, no Box allocation)
+pub fn set_signal_value<T: 'static>(id: SignalId, value: T) {
+    with_signal_cell(id, "write", |cell: &RefCell<T>| {
+        *cell.borrow_mut() = value;
+    });
 }
 
-/// Update a signal's value with a closure
-pub fn update_signal_value<T: Clone + Send + Sync + 'static>(id: SignalId, f: impl FnOnce(&mut T)) {
-    let arc = get_signal_arc(id, "update");
-    let mut guard = arc.write().unwrap();
-    let value = downcast_mut_or_panic::<T>(guard.as_mut(), id);
-    f(value);
+/// Update a signal's value with a closure. Returns the closure's result.
+pub fn update_signal_value<T: 'static, R>(id: SignalId, f: impl FnOnce(&mut T) -> R) -> R {
+    with_signal_cell(id, "update", |cell: &RefCell<T>| f(&mut cell.borrow_mut()))
 }
 
 /// Borrow a signal's value for reading
-pub fn with_signal_value<T: Send + Sync + 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -> R {
-    let arc = get_signal_arc(id, "borrow");
-    let guard = arc.read().unwrap();
-    f(downcast_ref_or_panic::<T>(guard.as_ref(), id))
+pub fn with_signal_value<T: 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -> R {
+    with_signal_cell(id, "borrow", |cell: &RefCell<T>| f(&cell.borrow()))
+}
+
+/// Check if a signal exists in the current thread's storage.
+/// Used by `WriteSignal` to determine if we can write directly (same thread)
+/// or must queue the write for the main thread.
+pub fn has_signal(id: SignalId) -> bool {
+    STORAGE.with(|storage| {
+        let storage = storage.borrow();
+        storage.values.get(id).and_then(|v| v.as_ref()).is_some()
+    })
 }

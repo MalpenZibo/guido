@@ -28,8 +28,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::sync::{Mutex, OnceLock};
-use std::thread::ThreadId;
+use std::sync::Mutex;
 
 use super::invalidation::suspend_widget_tracking;
 
@@ -43,11 +42,9 @@ thread_local! {
     static EFFECT_TRACKING: RefCell<Vec<(EffectId, Vec<SignalId>)>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Main thread ID — set on first `with_runtime` call.
-static MAIN_THREAD_ID: OnceLock<ThreadId> = OnceLock::new();
-
-/// Signal writes from background threads, pending effect flush on the main thread.
-static PENDING_BG_WRITES: Mutex<Vec<SignalId>> = Mutex::new(Vec::new());
+/// Background write queue: closures that perform signal writes, queued from bg threads.
+/// Each closure calls `set_signal_value` + `notify_signal_change` on the main thread.
+static WRITE_QUEUE: Mutex<Vec<Box<dyn FnOnce() + Send>>> = Mutex::new(Vec::new());
 
 pub type SignalId = usize;
 pub type EffectId = usize;
@@ -65,33 +62,27 @@ pub fn record_effect_read(signal_id: SignalId) {
     });
 }
 
-/// Returns true if the caller is on the main thread (where effects execute).
-pub fn is_main_thread() -> bool {
-    MAIN_THREAD_ID
-        .get()
-        .is_none_or(|id| *id == std::thread::current().id())
-}
-
-/// Queue a signal write for deferred effect processing on the main thread.
-pub fn queue_bg_effect_write(signal_id: SignalId) {
-    if let Ok(mut q) = PENDING_BG_WRITES.lock() {
-        q.push(signal_id);
+/// Queue a closure for execution on the main thread (next frame).
+/// Used by `WriteSignal::set()`/`update()` from background threads.
+pub fn queue_bg_write(f: impl FnOnce() + Send + 'static) {
+    if let Ok(mut q) = WRITE_QUEUE.lock() {
+        q.push(Box::new(f));
     }
+    // Wake the event loop so flush_bg_writes() runs on the next frame
+    crate::jobs::request_frame();
 }
 
-/// Drain queued background signal writes and run their dependent effects.
+/// Drain queued background writes and execute them on the main thread.
 /// Called from the main event loop before processing widget jobs.
-pub fn flush_bg_effect_writes() {
+pub fn flush_bg_writes() {
     loop {
-        let writes: Vec<SignalId> = match PENDING_BG_WRITES.lock() {
+        let writes: Vec<Box<dyn FnOnce() + Send>> = match WRITE_QUEUE.lock() {
             Ok(mut q) if !q.is_empty() => q.drain(..).collect(),
             _ => return,
         };
-        with_runtime(|rt| {
-            for signal_id in writes {
-                rt.notify_write(signal_id);
-            }
-        });
+        for write_fn in writes {
+            write_fn();
+        }
     }
 }
 
@@ -287,7 +278,6 @@ pub fn with_runtime<F, R>(f: F) -> R
 where
     F: FnOnce(&mut Runtime) -> R,
 {
-    MAIN_THREAD_ID.get_or_init(|| std::thread::current().id());
     RUNTIME.with(|rt| f(&mut rt.borrow_mut()))
 }
 

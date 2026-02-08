@@ -21,7 +21,9 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex};
+
+use std::rc::Rc;
 
 use crate::jobs::{JobRequest, JobType, request_job};
 use crate::tree::WidgetId;
@@ -109,13 +111,15 @@ static SIGNAL_SUBSCRIBERS: LazyLock<Mutex<HashMap<usize, HashSet<Subscriber>>>> 
 pub(crate) type CallbackId = usize;
 
 /// A callback invoked when a signal changes.
-/// Wrapped in `Arc` so it can be cloned out of the lock before firing.
-type SignalCallback = Arc<dyn Fn() + Send + Sync>;
+/// Wrapped in `Rc` so it can be cloned out of the lock before firing.
+type SignalCallback = Rc<dyn Fn()>;
 
 /// Map from signal ID → list of (callback_id, callback)
 type CallbackMap = HashMap<usize, Vec<(CallbackId, SignalCallback)>>;
-static SIGNAL_CALLBACKS: LazyLock<Mutex<CallbackMap>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+thread_local! {
+    static SIGNAL_CALLBACKS: RefCell<CallbackMap> = RefCell::new(HashMap::new());
+}
 
 /// Monotonically increasing counter for callback IDs
 static NEXT_CALLBACK_ID: AtomicUsize = AtomicUsize::new(0);
@@ -124,23 +128,25 @@ static NEXT_CALLBACK_ID: AtomicUsize = AtomicUsize::new(0);
 /// Returns a `CallbackId` that can be used to unregister later.
 pub(crate) fn register_signal_callback(
     signal_id: usize,
-    callback: impl Fn() + Send + Sync + 'static,
+    callback: impl Fn() + 'static,
 ) -> CallbackId {
     let id = NEXT_CALLBACK_ID.fetch_add(1, Ordering::Relaxed);
-    SIGNAL_CALLBACKS
-        .lock()
-        .unwrap()
-        .entry(signal_id)
-        .or_default()
-        .push((id, Arc::new(callback)));
+    SIGNAL_CALLBACKS.with(|cbs| {
+        cbs.borrow_mut()
+            .entry(signal_id)
+            .or_default()
+            .push((id, Rc::new(callback)));
+    });
     id
 }
 
 /// Remove a previously registered signal callback.
 pub(crate) fn unregister_signal_callback(signal_id: usize, callback_id: CallbackId) {
-    if let Some(callbacks) = SIGNAL_CALLBACKS.lock().unwrap().get_mut(&signal_id) {
-        callbacks.retain(|(id, _)| *id != callback_id);
-    }
+    SIGNAL_CALLBACKS.with(|cbs| {
+        if let Some(callbacks) = cbs.borrow_mut().get_mut(&signal_id) {
+            callbacks.retain(|(id, _)| *id != callback_id);
+        }
+    });
 }
 
 /// Register a widget as a subscriber for a signal with a specific job type
@@ -178,14 +184,14 @@ pub fn notify_signal_change(signal_id: usize) {
     }
 
     // Fire signal callbacks (for select() derived signals).
-    // Clone Arc handles under the lock, then fire after releasing — prevents
-    // deadlock when a callback triggers cascading signal updates (which re-lock).
-    let callbacks: Vec<SignalCallback> = SIGNAL_CALLBACKS
-        .lock()
-        .unwrap()
-        .get(&signal_id)
-        .map(|cbs| cbs.iter().map(|(_, cb)| Arc::clone(cb)).collect())
-        .unwrap_or_default();
+    // Clone Rc handles out of the borrow, then fire after releasing — prevents
+    // panic when a callback triggers cascading signal updates (which re-borrow).
+    let callbacks: Vec<SignalCallback> = SIGNAL_CALLBACKS.with(|cbs| {
+        cbs.borrow()
+            .get(&signal_id)
+            .map(|list| list.iter().map(|(_, cb)| Rc::clone(cb)).collect())
+            .unwrap_or_default()
+    });
 
     for cb in &callbacks {
         cb();
@@ -195,7 +201,9 @@ pub fn notify_signal_change(signal_id: usize) {
 /// Clear signal subscribers and callbacks for a specific signal (when signal is disposed)
 pub fn clear_signal_subscribers(signal_id: usize) {
     SIGNAL_SUBSCRIBERS.lock().unwrap().remove(&signal_id);
-    SIGNAL_CALLBACKS.lock().unwrap().remove(&signal_id);
+    SIGNAL_CALLBACKS.with(|cbs| {
+        cbs.borrow_mut().remove(&signal_id);
+    });
 }
 
 /// Notify all layout subscribers of a signal that it has changed.

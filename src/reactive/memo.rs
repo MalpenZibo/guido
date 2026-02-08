@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::rc::Rc;
 
 use super::effect::create_effect;
 use super::maybe_dyn::{IntoMaybeDyn, MaybeDyn};
@@ -24,18 +24,18 @@ use super::signal::{Signal, create_signal};
 ///     if doubled.get() > 10 { Color::RED } else { Color::BLUE }
 /// })
 /// ```
-pub struct Memo<T: Clone + PartialEq + Send + Sync + 'static> {
+pub struct Memo<T: Clone + PartialEq + Send + 'static> {
     signal: Signal<T>,
 }
 
 // Manually implement Clone and Copy to avoid unnecessary bounds on T
-impl<T: Clone + PartialEq + Send + Sync + 'static> Clone for Memo<T> {
+impl<T: Clone + PartialEq + Send + 'static> Clone for Memo<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T: Clone + PartialEq + Send + Sync + 'static> Copy for Memo<T> {}
+impl<T: Clone + PartialEq + Send + 'static> Copy for Memo<T> {}
 
 /// Create an eagerly-evaluated memo that recomputes when dependencies change.
 ///
@@ -51,7 +51,7 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Copy for Memo<T> {}
 /// ```
 pub fn create_memo<T, F>(f: F) -> Memo<T>
 where
-    T: Clone + PartialEq + Send + Sync + 'static,
+    T: Clone + PartialEq + Send + 'static,
     F: Fn() -> T + 'static,
 {
     let initial = f();
@@ -65,7 +65,7 @@ where
     Memo { signal }
 }
 
-impl<T: Clone + PartialEq + Send + Sync + 'static> Memo<T> {
+impl<T: Clone + PartialEq + Send + 'static> Memo<T> {
     /// Get the current memo value (tracked for dependency tracking).
     pub fn get(&self) -> T {
         self.signal.get()
@@ -87,9 +87,9 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Memo<T> {
     }
 }
 
-impl<T: Clone + PartialEq + Send + Sync + 'static> IntoMaybeDyn<T> for Memo<T> {
+impl<T: Clone + PartialEq + Send + 'static> IntoMaybeDyn<T> for Memo<T> {
     fn into_maybe_dyn(self) -> MaybeDyn<T> {
-        MaybeDyn::Dynamic(Arc::new(move || self.signal.get()))
+        MaybeDyn::Dynamic(Rc::new(move || self.signal.get()))
     }
 }
 
