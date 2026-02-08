@@ -22,7 +22,6 @@
 //! When a job is pushed, the system automatically wakes the event loop via a ping
 //! mechanism, ensuring the frame is processed promptly.
 
-use std::collections::HashSet;
 use std::sync::{
     LazyLock, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
@@ -155,21 +154,25 @@ pub fn handle_unregister_jobs(jobs: &[Job], tree: &mut Tree) {
     }
 }
 
-pub fn handle_reconcile_jobs(jobs: &[Job], tree: &mut Tree, layout_roots: &mut HashSet<WidgetId>) {
+pub fn handle_reconcile_jobs(jobs: &[Job], tree: &mut Tree, layout_roots: &mut Vec<WidgetId>) {
     for job in jobs.iter().filter(|j| j.job_type == JobType::Reconcile) {
         tree.with_widget_mut(job.widget_id, |widget, id, tree| {
             widget.reconcile_children(tree, id);
         });
-        if let Some(root) = tree.mark_needs_layout(job.widget_id) {
-            layout_roots.insert(root);
+        if let Some(root) = tree.mark_needs_layout(job.widget_id)
+            && !layout_roots.contains(&root)
+        {
+            layout_roots.push(root);
         }
     }
 }
 
-pub fn handle_layout_jobs(jobs: &[Job], tree: &mut Tree, layout_roots: &mut HashSet<WidgetId>) {
+pub fn handle_layout_jobs(jobs: &[Job], tree: &mut Tree, layout_roots: &mut Vec<WidgetId>) {
     for job in jobs.iter().filter(|j| j.job_type == JobType::Layout) {
-        if let Some(root) = tree.mark_needs_layout(job.widget_id) {
-            layout_roots.insert(root);
+        if let Some(root) = tree.mark_needs_layout(job.widget_id)
+            && !layout_roots.contains(&root)
+        {
+            layout_roots.push(root);
         }
     }
 }
