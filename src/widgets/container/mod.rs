@@ -16,7 +16,7 @@ use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
     IntoMaybeDyn, MaybeDyn, focused_widget, register_layout_signal, register_paint_signal,
-    register_subscriber,
+    register_subscriber, with_signal_tracking,
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
@@ -1116,12 +1116,17 @@ impl Widget for Container {
         // Clear dirty flag since we're doing layout now
         tree.clear_needs_layout(id);
 
-        // Get current animated padding for layout calculations
-        let padding = self.animated_padding();
-
-        // Get width/height Length values
-        let width_length = self.width.as_ref().map(|w| w.get()).unwrap_or_default();
-        let height_length = self.height.as_ref().map(|h| h.get()).unwrap_or_default();
+        // Auto-track signal reads for layout properties.
+        // Any signals read here (including closures) will register this widget
+        // as a Layout subscriber so future changes trigger re-layout.
+        let (padding, width_length, height_length) =
+            with_signal_tracking(id, JobType::Layout, || {
+                (
+                    self.animated_padding(),
+                    self.width.as_ref().map(|w| w.get()).unwrap_or_default(),
+                    self.height.as_ref().map(|h| h.get()).unwrap_or_default(),
+                )
+            });
 
         // Calculate current container dimensions
         let current_width = if let Some(ref anim) = self.width_anim {
@@ -1671,13 +1676,46 @@ impl Widget for Container {
         // Get bounds from Tree (single source of truth)
         let bounds = tree.get_bounds(id).unwrap_or_default();
 
-        let background = self.animated_background(tree);
-        let corner_radius = self.animated_corner_radius(tree);
-        let corner_curvature = self.corner_curvature.get();
-        let elevation_level = self.effective_elevation(tree);
+        // Auto-track signal reads for paint properties.
+        // Any signals read here (including closures) will register this widget
+        // as a Paint subscriber so future changes trigger repaint.
+        let (
+            background,
+            corner_radius,
+            corner_curvature,
+            elevation_level,
+            user_transform,
+            transform_origin,
+            border_width,
+            border_color,
+        ) = with_signal_tracking(id, JobType::Paint, || {
+            (
+                self.animated_background(tree),
+                self.animated_corner_radius(tree),
+                self.corner_curvature.get(),
+                self.effective_elevation(tree),
+                self.animated_transform(tree),
+                self.transform_origin.get(),
+                self.animated_border_width(tree),
+                self.animated_border_color(tree),
+            )
+        });
+
+        // When animations exist, also track raw signal reads for Animation jobs.
+        // This ensures signal changes trigger advance_animations() to update targets.
+        // (The animated_* methods above may read from the animation cache instead of the signal,
+        // so we do a second pass reading raw signals for Animation subscriber registration.)
+        if self.has_animated_state_properties() {
+            with_signal_tracking(id, JobType::Animation, || {
+                let _ = self.background.get();
+                let _ = self.corner_radius.get();
+                let _ = self.border_width.get();
+                let _ = self.border_color.get();
+                let _ = self.transform.get();
+            });
+        }
+
         let shadow = elevation_to_shadow(elevation_level);
-        let user_transform = self.animated_transform(tree);
-        let transform_origin = self.transform_origin.get();
 
         // LOCAL bounds (0,0 is widget origin) - all drawing uses these
         let local_bounds = Rect::new(0.0, 0.0, bounds.width, bounds.height);
@@ -1721,10 +1759,7 @@ impl Widget for Container {
             }
         }
 
-        // Draw border using LOCAL coordinates
-        let border_width = self.animated_border_width(tree);
-        let border_color = self.animated_border_color(tree);
-
+        // Draw border using LOCAL coordinates (values captured above in with_signal_tracking)
         if border_width > 0.0 {
             ctx.draw_border_frame_with_curvature(
                 local_bounds,
