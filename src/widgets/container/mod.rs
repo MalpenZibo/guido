@@ -12,10 +12,11 @@ use std::sync::Arc;
 
 use crate::advance_anim;
 use crate::animation::Transition;
-use crate::jobs::{JobRequest, RequiredJob, request_job};
+use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
     IntoMaybeDyn, MaybeDyn, focused_widget, register_layout_signal, register_paint_signal,
+    register_subscriber,
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
@@ -747,6 +748,17 @@ impl Container {
     /// Check if this widget is a relayout boundary given constraints.
     /// A widget is a boundary if its size doesn't depend on children.
     fn is_relayout_boundary_for(&self, constraints: Constraints) -> bool {
+        // A widget with an active layout-affecting animation is NOT a boundary,
+        // because its size changes each frame and the parent must reposition siblings.
+        let has_active_layout_anim =
+            self.width_anim.as_ref().is_some_and(|a| a.is_animating())
+                || self.height_anim.as_ref().is_some_and(|a| a.is_animating())
+                || self.padding_anim.as_ref().is_some_and(|a| a.is_animating())
+                || self.border_width_anim.as_ref().is_some_and(|a| a.is_animating());
+        if has_active_layout_anim {
+            return false;
+        }
+
         // Widget is a boundary if its size doesn't depend on children.
         // This happens when:
         // 1. It has explicit fixed width AND height
@@ -1041,8 +1053,14 @@ impl Widget for Container {
             register_layout_signal(id, signal_id);
         }
         // Register pending paint signals (e.g. transform signals)
+        let has_paint_anims = self.has_animated_state_properties();
         for signal_id in self.pending_paint_signals.drain(..) {
             register_paint_signal(id, signal_id);
+            // When paint animations exist, also trigger advance_animations
+            // so animation targets get updated when signals change
+            if has_paint_anims {
+                register_subscriber(id, signal_id, JobType::Animation);
+            }
         }
 
         // Set container_id for children source
@@ -1094,7 +1112,7 @@ impl Widget for Container {
         // Calculate current container dimensions
         let current_width = if let Some(ref anim) = self.width_anim {
             if anim.is_initial() {
-                constraints.max_width
+                width_length.exact.unwrap_or(constraints.max_width)
             } else {
                 *anim.current()
             }
@@ -1106,7 +1124,7 @@ impl Widget for Container {
 
         let current_height = if let Some(ref anim) = self.height_anim {
             if anim.is_initial() {
-                constraints.max_height
+                height_length.exact.unwrap_or(constraints.max_height)
             } else {
                 *anim.current()
             }
@@ -1240,6 +1258,10 @@ impl Widget for Container {
                     anim.animate_to(effective_target);
                     // Width affects layout, so use RequiredJob::Layout
                     request_job(id, JobRequest::Animation(RequiredJob::Layout));
+                    // Parent must reposition siblings as this child's width changes
+                    if let Some(parent_id) = tree.get_parent(id) {
+                        request_job(parent_id, JobRequest::Layout);
+                    }
                 }
             }
         }
@@ -1258,7 +1280,37 @@ impl Widget for Container {
                     anim.animate_to(effective_target);
                     // Height affects layout, so use RequiredJob::Layout
                     request_job(id, JobRequest::Animation(RequiredJob::Layout));
+                    // Parent must reposition siblings as this child's height changes
+                    if let Some(parent_id) = tree.get_parent(id) {
+                        request_job(parent_id, JobRequest::Layout);
+                    }
                 }
+            }
+        }
+
+        // Initialize paint animations on first layout (set_immediate so they start
+        // from the correct signal value rather than a stale construction-time value)
+        // Compute targets first to avoid borrow conflicts with &mut anim + &self
+        let bg_init = self.background_anim.as_ref().is_some_and(|a| a.is_initial());
+        let cr_init = self.corner_radius_anim.as_ref().is_some_and(|a| a.is_initial());
+        let bc_init = self.border_color_anim.as_ref().is_some_and(|a| a.is_initial());
+        let tf_init = self.transform_anim.as_ref().is_some_and(|a| a.is_initial());
+        if bg_init || cr_init || bc_init || tf_init {
+            let bg_target = if bg_init { Some(self.effective_background_target(tree)) } else { None };
+            let cr_target = if cr_init { Some(self.effective_corner_radius_target(tree)) } else { None };
+            let bc_target = if bc_init { Some(self.effective_border_color_target(tree)) } else { None };
+            let tf_target = if tf_init { Some(self.effective_transform_target(tree)) } else { None };
+            if let (Some(anim), Some(target)) = (&mut self.background_anim, bg_target) {
+                anim.set_immediate(target);
+            }
+            if let (Some(anim), Some(target)) = (&mut self.corner_radius_anim, cr_target) {
+                anim.set_immediate(target);
+            }
+            if let (Some(anim), Some(target)) = (&mut self.border_color_anim, bc_target) {
+                anim.set_immediate(target);
+            }
+            if let (Some(anim), Some(target)) = (&mut self.transform_anim, tf_target) {
+                anim.set_immediate(target);
             }
         }
 
