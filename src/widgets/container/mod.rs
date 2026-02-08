@@ -808,10 +808,23 @@ impl Container {
     fn effective_background_target(&self, tree: &Tree) -> Color {
         let base = self.background.get();
         self.resolve_state_value(tree, base, |state| {
-            state
+            let bg_color = state
                 .background
                 .as_ref()
-                .map(|bg| resolve_background(base, bg))
+                .map(|bg| resolve_background(base, bg));
+            match (bg_color, state.alpha) {
+                (Some(mut c), Some(a)) => {
+                    c.a = a;
+                    Some(c)
+                }
+                (Some(c), None) => Some(c),
+                (None, Some(a)) => {
+                    let mut c = base;
+                    c.a = a;
+                    Some(c)
+                }
+                (None, None) => None,
+            }
         })
     }
 
