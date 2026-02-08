@@ -57,10 +57,10 @@ pub type EffectId = usize;
 /// effect execution (Runtime RefCell already borrowed).
 pub fn record_effect_read(signal_id: SignalId) {
     EFFECT_TRACKING.with(|stack| {
-        if let Ok(mut s) = stack.try_borrow_mut() {
-            if let Some(entry) = s.last_mut() {
-                entry.1.push(signal_id);
-            }
+        if let Ok(mut s) = stack.try_borrow_mut()
+            && let Some(entry) = s.last_mut()
+        {
+            entry.1.push(signal_id);
         }
     });
 }
@@ -69,7 +69,7 @@ pub fn record_effect_read(signal_id: SignalId) {
 pub fn is_main_thread() -> bool {
     MAIN_THREAD_ID
         .get()
-        .map_or(true, |id| *id == std::thread::current().id())
+        .is_none_or(|id| *id == std::thread::current().id())
 }
 
 /// Queue a signal write for deferred effect processing on the main thread.
@@ -181,7 +181,7 @@ impl Runtime {
         self.current_effect = Some(effect_id);
 
         if let Some(callback) = self.effect_callbacks[effect_id].as_mut() {
-            suspend_widget_tracking(|| callback());
+            suspend_widget_tracking(callback);
         }
 
         self.current_effect = prev_effect;
