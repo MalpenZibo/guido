@@ -220,11 +220,17 @@ fn flatten_node(
         });
     }
 
-    // Cache flatten results for next frame
-    node.cached_flatten = Some(Box::new(CachedFlatten {
-        commands: out[start_idx..].to_vec(),
-        world_transform,
-    }));
+    // Cache flatten results for next frame, but only when reuse is possible.
+    // The cache reuse path requires no clips and translation-only transforms,
+    // so skip caching for nodes that would never hit it.
+    if node.clip.is_none() && parent_clip.is_none() && world_transform.is_translation_only() {
+        node.cached_flatten = Some(Box::new(CachedFlatten {
+            commands: out[start_idx..].to_vec(),
+            world_transform,
+        }));
+    } else {
+        node.cached_flatten = None;
+    }
     crate::render_stats::record_flatten_full();
 }
 
