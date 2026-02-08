@@ -28,13 +28,72 @@
 
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
+use std::thread::ThreadId;
+
+use super::invalidation::suspend_widget_tracking;
 
 thread_local! {
     static RUNTIME: RefCell<Runtime> = RefCell::new(Runtime::new());
+
+    /// Stack of (effect_id, buffered_signal_reads) for tracking during effect execution.
+    /// Needed because the Runtime RefCell is already borrowed when effects run,
+    /// so `try_with_runtime(|rt| rt.track_read(id))` silently fails.
+    /// We buffer reads here and apply them after the callback returns.
+    static EFFECT_TRACKING: RefCell<Vec<(EffectId, Vec<SignalId>)>> = const { RefCell::new(Vec::new()) };
 }
+
+/// Main thread ID — set on first `with_runtime` call.
+static MAIN_THREAD_ID: OnceLock<ThreadId> = OnceLock::new();
+
+/// Signal writes from background threads, pending effect flush on the main thread.
+static PENDING_BG_WRITES: Mutex<Vec<SignalId>> = Mutex::new(Vec::new());
 
 pub type SignalId = usize;
 pub type EffectId = usize;
+
+/// Buffer a signal read for the currently executing effect.
+/// Called from tracked_get/tracked_with since try_with_runtime fails during
+/// effect execution (Runtime RefCell already borrowed).
+pub fn record_effect_read(signal_id: SignalId) {
+    EFFECT_TRACKING.with(|stack| {
+        if let Ok(mut s) = stack.try_borrow_mut() {
+            if let Some(entry) = s.last_mut() {
+                entry.1.push(signal_id);
+            }
+        }
+    });
+}
+
+/// Returns true if the caller is on the main thread (where effects execute).
+pub fn is_main_thread() -> bool {
+    MAIN_THREAD_ID
+        .get()
+        .map_or(true, |id| *id == std::thread::current().id())
+}
+
+/// Queue a signal write for deferred effect processing on the main thread.
+pub fn queue_bg_effect_write(signal_id: SignalId) {
+    if let Ok(mut q) = PENDING_BG_WRITES.lock() {
+        q.push(signal_id);
+    }
+}
+
+/// Drain queued background signal writes and run their dependent effects.
+/// Called from the main event loop before processing widget jobs.
+pub fn flush_bg_effect_writes() {
+    loop {
+        let writes: Vec<SignalId> = match PENDING_BG_WRITES.lock() {
+            Ok(mut q) if !q.is_empty() => q.drain(..).collect(),
+            _ => return,
+        };
+        with_runtime(|rt| {
+            for signal_id in writes {
+                rt.notify_write(signal_id);
+            }
+        });
+    }
+}
 
 #[derive(Default)]
 pub struct Runtime {
@@ -111,15 +170,32 @@ impl Runtime {
             self.signal_subscribers[signal_id].remove(&effect_id);
         }
 
-        // Run effect with tracking
+        // Push tracking context (signal reads are buffered here since
+        // try_with_runtime can't borrow the Runtime during callback execution)
+        EFFECT_TRACKING.with(|stack| {
+            stack.borrow_mut().push((effect_id, Vec::new()));
+        });
+
+        // Run effect
         let prev_effect = self.current_effect;
         self.current_effect = Some(effect_id);
 
         if let Some(callback) = self.effect_callbacks[effect_id].as_mut() {
-            callback();
+            suspend_widget_tracking(|| callback());
         }
 
         self.current_effect = prev_effect;
+
+        // Pop tracking context and register buffered reads as dependencies
+        let reads = EFFECT_TRACKING.with(|stack| stack.borrow_mut().pop());
+        if let Some((_eid, signal_ids)) = reads {
+            for signal_id in signal_ids {
+                if signal_id < self.signal_subscribers.len() {
+                    self.signal_subscribers[signal_id].insert(effect_id);
+                }
+                self.effect_dependencies[effect_id].insert(signal_id);
+            }
+        }
     }
 
     /// Run a closure with dependency tracking for the given effect ID.
@@ -142,6 +218,11 @@ impl Runtime {
             }
         }
 
+        // Push tracking context
+        EFFECT_TRACKING.with(|stack| {
+            stack.borrow_mut().push((effect_id, Vec::new()));
+        });
+
         // Run closure with tracking
         let prev_effect = self.current_effect;
         self.current_effect = Some(effect_id);
@@ -149,6 +230,18 @@ impl Runtime {
         let result = f();
 
         self.current_effect = prev_effect;
+
+        // Pop tracking context and register buffered reads
+        let reads = EFFECT_TRACKING.with(|stack| stack.borrow_mut().pop());
+        if let Some((_eid, signal_ids)) = reads {
+            for signal_id in signal_ids {
+                if signal_id < self.signal_subscribers.len() {
+                    self.signal_subscribers[signal_id].insert(effect_id);
+                }
+                self.effect_dependencies[effect_id].insert(signal_id);
+            }
+        }
+
         result
     }
 
@@ -194,6 +287,7 @@ pub fn with_runtime<F, R>(f: F) -> R
 where
     F: FnOnce(&mut Runtime) -> R,
 {
+    MAIN_THREAD_ID.get_or_init(|| std::thread::current().id());
     RUNTIME.with(|rt| f(&mut rt.borrow_mut()))
 }
 

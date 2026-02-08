@@ -4,7 +4,9 @@ use super::invalidation::{
     notify_signal_change, record_signal_read, register_signal_callback, unregister_signal_callback,
 };
 use super::owner::{on_cleanup, register_signal};
-use super::runtime::{SignalId, try_with_runtime};
+use super::runtime::{
+    SignalId, is_main_thread, queue_bg_effect_write, record_effect_read, try_with_runtime,
+};
 use super::storage::{
     create_signal_value, get_signal_value, set_signal_value, update_signal_value, with_signal_value,
 };
@@ -12,6 +14,7 @@ use super::storage::{
 /// Common read operations for signal types.
 /// Tracks reads for effect dependencies and layout invalidation.
 fn tracked_get<T: Clone + Send + Sync + 'static>(id: SignalId) -> T {
+    record_effect_read(id);
     try_with_runtime(|rt| rt.track_read(id));
     record_signal_read(id);
     get_signal_value(id)
@@ -19,6 +22,7 @@ fn tracked_get<T: Clone + Send + Sync + 'static>(id: SignalId) -> T {
 
 /// Common read-with-borrow operation for signal types.
 fn tracked_with<T: Send + Sync + 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -> R {
+    record_effect_read(id);
     try_with_runtime(|rt| rt.track_read(id));
     record_signal_read(id);
     with_signal_value(id, f)
@@ -97,10 +101,16 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Signal<T> {
         let changed = with_signal_value(self.id, |old: &T| *old != value);
         if changed {
             set_signal_value(self.id, value);
-            // Notify layout subscribers (widgets depending on this signal)
+            // Notify widget subscribers (layout/paint/reconcile jobs)
             notify_signal_change(self.id);
-            // Notify runtime (only on main thread)
-            try_with_runtime(|rt| rt.notify_write(self.id));
+            // Notify effect runtime
+            if is_main_thread() {
+                // On main thread: notify directly (synchronous effect execution)
+                try_with_runtime(|rt| rt.notify_write(self.id));
+            } else {
+                // On background thread: queue for main-thread processing
+                queue_bg_effect_write(self.id);
+            }
         }
     }
 
@@ -113,9 +123,12 @@ impl<T: Clone + PartialEq + Send + Sync + 'static> Signal<T> {
             old != new
         };
         if changed {
-            // Notify layout subscribers (widgets depending on this signal)
             notify_signal_change(self.id);
-            try_with_runtime(|rt| rt.notify_write(self.id));
+            if is_main_thread() {
+                try_with_runtime(|rt| rt.notify_write(self.id));
+            } else {
+                queue_bg_effect_write(self.id);
+            }
         }
     }
 
