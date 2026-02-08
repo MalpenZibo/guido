@@ -112,6 +112,8 @@ pub struct Runtime {
     /// have 1–5 subscribers.
     signal_subscribers: Vec<Vec<EffectId>>,
     next_effect_id: EffectId,
+    /// Free list of reusable effect IDs (from disposed effects).
+    free_effect_ids: Vec<EffectId>,
     batch_depth: usize,
 }
 
@@ -129,6 +131,13 @@ impl Runtime {
     }
 
     pub fn allocate_effect(&mut self, callback: Box<dyn FnMut()>) -> EffectId {
+        // Reuse a freed slot if available
+        if let Some(id) = self.free_effect_ids.pop() {
+            self.effect_callbacks[id] = Some(callback);
+            self.effect_dependencies[id].clear();
+            return id;
+        }
+        // Otherwise allocate new
         let id = self.next_effect_id;
         self.next_effect_id += 1;
         self.effect_callbacks.push(Some(callback));
@@ -289,6 +298,7 @@ impl Runtime {
         }
         self.effect_callbacks[effect_id] = None;
         vec_remove(&mut self.pending_effects, &effect_id);
+        self.free_effect_ids.push(effect_id);
     }
 }
 
