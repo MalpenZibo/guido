@@ -78,15 +78,15 @@ cargo test
 
 ### Core Modules
 
-**`reactive/`** - Thread-safe reactive system inspired by SolidJS
-- `Signal<T>`: Thread-safe reactive values with automatic dependency tracking
-- `MaybeDyn<T>`: Enum allowing widget properties to accept either static values or reactive signals/closures
+**`reactive/`** - Single-threaded reactive system inspired by SolidJS
+- `Signal<T>`: Main-thread reactive values with automatic dependency tracking. `!Send` — use `.writer()` for background thread updates
+- `MaybeDyn<T>`: Enum allowing widget properties to accept either static values or reactive signals/closures (uses `Rc<dyn Fn() -> T>`)
 - `Memo<T>`: Eager computed values that recompute when dependencies change, only notify on actual changes (`PartialEq`)
 - `Effect`: Side effects that re-run when tracked signals change
 - `Owner`: Ownership system for automatic resource cleanup (signals, effects, custom callbacks)
 - Runtime uses thread-local storage for automatic dependency tracking on the main thread
 - Container paint/layout auto-tracks signal reads via `with_signal_tracking()` — closures work as reactive properties
-- Background threads can update signal values; effects only run on main thread
+- Background threads update signals via `WriteSignal` (queued writes, flushed each frame)
 
 **`widgets/`** - Composable UI primitives implementing the `Widget` trait
 - `Container`: Handles padding, background colors, gradients, borders, corner radius, and event handlers (click, hover, scroll)
@@ -143,7 +143,7 @@ container().background(move || {
 })
 ```
 
-Signals are thread-safe and can be updated from background threads. The main render loop re-layouts and re-paints each frame, reading current signal values.
+Signals are main-thread only. Background threads use `.writer()` to get a `WriteSignal<T>` that queues writes for the next frame. The main render loop re-layouts and re-paints each frame, reading current signal values.
 
 ### Widget Trait
 
@@ -242,24 +242,27 @@ handle.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
 
 ### Integrating Background Threads
 
-Use `create_service` for background tasks that are automatically cleaned up:
+Use `create_service` for background tasks that are automatically cleaned up. Use `.writer()` to get a `WriteSignal<T>` that is `Send` and can be moved into the background thread:
 
 ```rust
 let data = create_signal(String::new());
+let data_w = data.writer();  // WriteSignal<T> — Send, for background threads
 
 // Read-only service (ignore receiver)
 let _ = create_service::<(), _>(move |_rx, ctx| {
     while ctx.is_running() {
-        data.set(fetch_data());
+        data_w.set(fetch_data());
         std::thread::sleep(Duration::from_secs(1));
     }
 });
 
 // Bidirectional service (with commands)
+let status = create_signal(String::new());
+let status_w = status.writer();
 let service = create_service(move |rx, ctx| {
     while ctx.is_running() {
         while let Ok(cmd) = rx.try_recv() {
-            // handle commands
+            status_w.set(format!("Processing: {:?}", cmd));
         }
     }
 });
