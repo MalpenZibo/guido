@@ -23,8 +23,14 @@
 //!   bubbles up to the nearest relayout boundary, which is added to the
 //!   layout queue. Only dirty subtrees are re-laid out.
 
+use smallvec::SmallVec;
+
 use crate::layout::{Constraints, Size};
 use crate::widgets::{Rect, Widget};
+
+/// Inline capacity for children. Most widgets have 0–4 children,
+/// so this avoids a heap allocation for the common case.
+type ChildrenVec = SmallVec<[WidgetId; 4]>;
 
 /// Accumulated damage region for a frame.
 #[derive(Debug, Clone)]
@@ -87,8 +93,8 @@ struct Node {
     widget: Box<dyn Widget>,
     /// Parent widget ID (None for root)
     parent: Option<WidgetId>,
-    /// Child widget IDs
-    children: Vec<WidgetId>,
+    /// Child widget IDs (inline for ≤4 children to avoid heap allocation)
+    children: ChildrenVec,
     /// Whether this widget needs layout
     needs_layout: bool,
     /// Whether this widget needs paint
@@ -163,7 +169,7 @@ impl Tree {
         self.dense.push(Node {
             widget,
             parent: None,
-            children: Vec::new(),
+            children: ChildrenVec::new(),
             needs_layout: false,
             needs_paint: true,
             is_relayout_boundary: false,
@@ -198,7 +204,7 @@ impl Tree {
         if let Some(parent_id) = self.dense[dense_index].parent
             && let Some(parent_dense) = self.get_dense_index(parent_id)
         {
-            self.dense[parent_dense].children.retain(|&c| c != id);
+            self.dense[parent_dense].children.retain(|c| *c != id);
         }
 
         // Take ownership of the widget to drop it AFTER fixing up indices
@@ -311,7 +317,7 @@ impl Tree {
     /// Get the children of a widget.
     pub fn get_children(&self, id: WidgetId) -> Vec<WidgetId> {
         self.get_dense_index(id)
-            .map(|idx| self.dense[idx].children.clone())
+            .map(|idx| self.dense[idx].children.to_vec())
             .unwrap_or_default()
     }
 
