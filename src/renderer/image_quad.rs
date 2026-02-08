@@ -512,7 +512,7 @@ impl ImageQuadRenderer {
         cmd: &FlattenedCommand,
         scale_factor: f32,
     ) -> Option<PreparedImageQuad> {
-        let (source, rect, content_fit) = match &cmd.command {
+        let (source, rect, content_fit) = match &*cmd.command {
             DrawCommand::Image {
                 source,
                 rect,

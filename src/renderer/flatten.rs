@@ -1,5 +1,7 @@
 //! Tree flattening with world transform computation.
 
+use std::rc::Rc;
+
 use crate::transform::Transform;
 use crate::widgets::Rect;
 
@@ -36,10 +38,12 @@ pub struct WorldClip {
 /// A draw command with computed world transform.
 ///
 /// This is the flattened representation ready for GPU submission.
+/// Uses `Rc<DrawCommand>` so cloning (e.g. for cached flatten reuse)
+/// is a reference count bump instead of deep-cloning String/FontFamily.
 #[derive(Debug, Clone)]
 pub struct FlattenedCommand {
-    /// The draw command
-    pub command: DrawCommand,
+    /// The draw command (shared via Rc to avoid clone overhead)
+    pub command: Rc<DrawCommand>,
     /// World transform (composed from all ancestors)
     pub world_transform: Transform,
     /// World transform origin in screen coordinates
@@ -167,7 +171,7 @@ fn flatten_node(
             _ => RenderLayer::Shapes,
         };
         out.push(FlattenedCommand {
-            command: clone_command(cmd),
+            command: Rc::new(cmd.clone()),
             world_transform,
             world_transform_origin: world_origin,
             layer,
@@ -207,7 +211,7 @@ fn flatten_node(
     // Add overlay commands (layer = Overlay) with overlay-specific clip
     for cmd in &node.overlay_commands {
         out.push(FlattenedCommand {
-            command: clone_command(cmd),
+            command: Rc::new(cmd.clone()),
             world_transform,
             world_transform_origin: world_origin,
             layer: RenderLayer::Overlay,
@@ -296,13 +300,4 @@ fn intersect_clips(a: &WorldClip, b: &WorldClip) -> WorldClip {
         corner_radius,
         curvature,
     }
-}
-
-/// Clone a draw command without applying any coordinate transformation.
-///
-/// All coordinate transformation is handled by the GPU shader using the
-/// world_transform stored in FlattenedCommand. This avoids double-transformation
-/// issues when rotation/scale is involved.
-fn clone_command(cmd: &DrawCommand) -> DrawCommand {
-    cmd.clone()
 }
