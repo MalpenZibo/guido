@@ -134,6 +134,8 @@ pub struct WaylandState {
     keyboard: Option<wl_keyboard::WlKeyboard>,
     modifiers: Modifiers,
     keyboard_serial: u32,
+    /// Track raw_code → Key for press/release matching (handles compose sequences)
+    pressed_keys: HashMap<u32, Key>,
 
     // Clipboard state
     data_device_manager: Option<DataDeviceManagerState>,
@@ -193,6 +195,7 @@ pub fn create_wayland_app() -> (
         keyboard: None,
         modifiers: Modifiers::default(),
         keyboard_serial: 0,
+        pressed_keys: HashMap::new(),
         data_device_manager,
         data_device: None,
         clipboard_content: None,
@@ -1021,6 +1024,10 @@ impl KeyboardHandler for WaylandState {
         self.keyboard_serial = serial;
 
         if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref(), true) {
+            // Store raw_code → Key mapping so release_key can emit the correct Key
+            // (e.g., composed 'é' instead of raw 'e' after a compose sequence)
+            self.pressed_keys.insert(event.raw_code, key);
+
             let key_event = Event::KeyDown {
                 key,
                 modifiers: self.modifiers,
@@ -1043,7 +1050,14 @@ impl KeyboardHandler for WaylandState {
         _serial: u32,
         event: KeyEvent,
     ) {
-        if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref(), false) {
+        // Use the stored key from press_key if available (handles compose sequences
+        // where the composed character differs from the raw keysym on release)
+        let key = self
+            .pressed_keys
+            .remove(&event.raw_code)
+            .or_else(|| keysym_to_key(event.keysym, event.utf8.as_deref(), false));
+
+        if let Some(key) = key {
             let key_event = Event::KeyUp {
                 key,
                 modifiers: self.modifiers,
