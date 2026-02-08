@@ -221,10 +221,10 @@ fn flatten_node(
     }
 
     // Cache flatten results for next frame
-    node.cached_flatten = Some(CachedFlatten {
+    node.cached_flatten = Some(Box::new(CachedFlatten {
         commands: out[start_idx..].to_vec(),
         world_transform,
-    });
+    }));
     crate::render_stats::record_flatten_full();
 }
 

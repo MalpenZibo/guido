@@ -88,7 +88,8 @@ pub struct RenderNode {
     pub repainted: bool,
 
     /// Cached flattened commands from a previous flatten pass.
-    pub cached_flatten: Option<CachedFlatten>,
+    /// Boxed to reduce inline RenderNode size (CachedFlatten contains Vec + Transform).
+    pub cached_flatten: Option<Box<CachedFlatten>>,
 }
 
 impl RenderNode {
