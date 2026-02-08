@@ -609,7 +609,11 @@ impl Container {
 
     /// Set the transform origin (pivot point) for this container.
     pub fn transform_origin(mut self, origin: impl IntoMaybeDyn<TransformOrigin>) -> Self {
-        self.transform_origin = origin.into_maybe_dyn();
+        let origin = origin.into_maybe_dyn();
+        if let Some(signal_id) = origin.signal_id() {
+            self.pending_paint_signals.push(signal_id);
+        }
+        self.transform_origin = origin;
         self
     }
 
@@ -750,11 +754,9 @@ impl Container {
     fn is_relayout_boundary_for(&self, constraints: Constraints) -> bool {
         // A widget with an active layout-affecting animation is NOT a boundary,
         // because its size changes each frame and the parent must reposition siblings.
-        let has_active_layout_anim =
-            self.width_anim.as_ref().is_some_and(|a| a.is_animating())
-                || self.height_anim.as_ref().is_some_and(|a| a.is_animating())
-                || self.padding_anim.as_ref().is_some_and(|a| a.is_animating())
-                || self.border_width_anim.as_ref().is_some_and(|a| a.is_animating());
+        let has_active_layout_anim = self.width_anim.as_ref().is_some_and(|a| a.is_animating())
+            || self.height_anim.as_ref().is_some_and(|a| a.is_animating())
+            || self.padding_anim.as_ref().is_some_and(|a| a.is_animating());
         if has_active_layout_anim {
             return false;
         }
@@ -955,7 +957,7 @@ impl Widget for Container {
         // Use advance_animations_self for this widget's animations
         let mut any_animating = false;
 
-        // Layout-affecting animations: width, height, padding, border_width
+        // Layout-affecting animations: width, height, padding
         advance_anim!(self, width_anim, id, any_animating, layout);
         advance_anim!(self, height_anim, id, any_animating, layout);
         advance_anim!(
@@ -967,6 +969,7 @@ impl Widget for Container {
             layout
         );
 
+        // Paint-only animations: border_width, background, corner_radius, border_color, transform
         let border_width_target = self.effective_border_width_target(tree);
         advance_anim!(
             self,
@@ -974,10 +977,8 @@ impl Widget for Container {
             border_width_target,
             id,
             any_animating,
-            layout
+            paint
         );
-
-        // Paint-only animations: background, corner_radius, border_color, transform
         let bg_target = self.effective_background_target(tree);
         advance_anim!(self, background_anim, bg_target, id, any_animating, paint);
 
@@ -1304,15 +1305,40 @@ impl Widget for Container {
         // Initialize paint animations on first layout (set_immediate so they start
         // from the correct signal value rather than a stale construction-time value)
         // Compute targets first to avoid borrow conflicts with &mut anim + &self
-        let bg_init = self.background_anim.as_ref().is_some_and(|a| a.is_initial());
-        let cr_init = self.corner_radius_anim.as_ref().is_some_and(|a| a.is_initial());
-        let bc_init = self.border_color_anim.as_ref().is_some_and(|a| a.is_initial());
+        let bg_init = self
+            .background_anim
+            .as_ref()
+            .is_some_and(|a| a.is_initial());
+        let cr_init = self
+            .corner_radius_anim
+            .as_ref()
+            .is_some_and(|a| a.is_initial());
+        let bc_init = self
+            .border_color_anim
+            .as_ref()
+            .is_some_and(|a| a.is_initial());
         let tf_init = self.transform_anim.as_ref().is_some_and(|a| a.is_initial());
         if bg_init || cr_init || bc_init || tf_init {
-            let bg_target = if bg_init { Some(self.effective_background_target(tree)) } else { None };
-            let cr_target = if cr_init { Some(self.effective_corner_radius_target(tree)) } else { None };
-            let bc_target = if bc_init { Some(self.effective_border_color_target(tree)) } else { None };
-            let tf_target = if tf_init { Some(self.effective_transform_target(tree)) } else { None };
+            let bg_target = if bg_init {
+                Some(self.effective_background_target(tree))
+            } else {
+                None
+            };
+            let cr_target = if cr_init {
+                Some(self.effective_corner_radius_target(tree))
+            } else {
+                None
+            };
+            let bc_target = if bc_init {
+                Some(self.effective_border_color_target(tree))
+            } else {
+                None
+            };
+            let tf_target = if tf_init {
+                Some(self.effective_transform_target(tree))
+            } else {
+                None
+            };
             if let (Some(anim), Some(target)) = (&mut self.background_anim, bg_target) {
                 anim.set_immediate(target);
             }
