@@ -205,10 +205,10 @@ impl<T: Clone + 'static> ReadSignal<T> {
 /// let time = create_signal(get_current_time());
 /// let time_w = time.writer();
 ///
-/// let _ = create_service::<(), _>(move |_rx, ctx| {
+/// let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
 ///     while ctx.is_running() {
 ///         time_w.set(get_current_time()); // queued for main thread
-///         std::thread::sleep(Duration::from_secs(1));
+///         tokio::time::sleep(Duration::from_secs(1)).await;
 ///     }
 /// });
 /// ```

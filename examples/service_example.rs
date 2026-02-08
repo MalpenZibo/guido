@@ -16,18 +16,19 @@ enum WorkspaceCmd {
     Switch(i32),
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     // Clock signal - updated by a read-only service
     let time = create_signal(get_current_time());
     let time_w = time.writer(); // WriteSignal is Send — can be captured by service
 
     // Clock service - read-only (ignore the receiver)
-    let _ = create_service::<(), _>(move |_rx, ctx| {
+    let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
         log::info!("Clock service started");
 
         while ctx.is_running() {
             time_w.set(get_current_time());
-            std::thread::sleep(Duration::from_secs(1));
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
 
         log::info!("Clock service stopped");
@@ -39,7 +40,7 @@ fn main() {
     let workspaces: Vec<i32> = vec![1, 2, 3, 4, 5];
 
     // Workspace service - bidirectional
-    let service = create_service(move |rx, ctx| {
+    let service = create_service(move |mut rx, ctx| async move {
         log::info!("Workspace service started");
 
         while ctx.is_running() {
@@ -53,7 +54,7 @@ fn main() {
                 }
             }
 
-            std::thread::sleep(Duration::from_millis(16));
+            tokio::time::sleep(Duration::from_millis(16)).await;
         }
 
         log::info!("Workspace service stopped");

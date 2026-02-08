@@ -11,16 +11,17 @@
 
 use guido::prelude::*;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     // Signal to drive rotation animation
     let rotation = create_signal(0.0f32);
 
     // Continuously update rotation to force frame rendering
     let rotation_w = rotation.writer();
-    let _ = create_service::<(), _>(move |_rx, ctx| {
+    let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
         while ctx.is_running() {
             rotation_w.update(|r| *r += 1.0);
-            std::thread::sleep(std::time::Duration::from_millis(16)); // ~60fps
+            tokio::time::sleep(std::time::Duration::from_millis(16)).await; // ~60fps
         }
     });
 

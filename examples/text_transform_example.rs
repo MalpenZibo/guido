@@ -13,19 +13,20 @@ use guido::prelude::*;
 use std::f32::consts::PI;
 use std::time::Duration;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     // Animated rotation angle
     let angle = create_signal(0.0_f32);
 
     // Animation service - updates the angle signal continuously
     let start_time = std::time::Instant::now();
     let angle_w = angle.writer();
-    let _ = create_service::<(), _>(move |_rx, ctx| {
+    let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
         while ctx.is_running() {
             let elapsed = start_time.elapsed().as_secs_f32();
             let new_angle = (elapsed * PI / 2.0).to_degrees() % 360.0;
             angle_w.set(new_angle);
-            std::thread::sleep(Duration::from_millis(16));
+            tokio::time::sleep(Duration::from_millis(16)).await;
         }
     });
 
