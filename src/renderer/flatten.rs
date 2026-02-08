@@ -165,13 +165,13 @@ fn flatten_node(
 
     // Add main commands with appropriate layers and clip
     for cmd in &node.commands {
-        let layer = match cmd {
+        let layer = match &**cmd {
             DrawCommand::Text { .. } => RenderLayer::Text,
             DrawCommand::Image { .. } => RenderLayer::Images,
             _ => RenderLayer::Shapes,
         };
         out.push(FlattenedCommand {
-            command: Rc::new(cmd.clone()),
+            command: Rc::clone(cmd),
             world_transform,
             world_transform_origin: world_origin,
             layer,
@@ -211,7 +211,7 @@ fn flatten_node(
     // Add overlay commands (layer = Overlay) with overlay-specific clip
     for cmd in &node.overlay_commands {
         out.push(FlattenedCommand {
-            command: Rc::new(cmd.clone()),
+            command: Rc::clone(cmd),
             world_transform,
             world_transform_origin: world_origin,
             layer: RenderLayer::Overlay,
