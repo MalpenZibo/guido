@@ -495,7 +495,7 @@ impl ImageQuadRenderer {
         &mut self,
         device: &Device,
         queue: &Queue,
-        commands: &[&FlattenedCommand],
+        commands: &[FlattenedCommand],
         scale_factor: f32,
     ) -> Vec<PreparedImageQuad> {
         commands
