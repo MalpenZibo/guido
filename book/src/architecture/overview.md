@@ -10,17 +10,17 @@ Thread-safe reactive primitives inspired by SolidJS.
 
 **Key Types:**
 - `Signal<T>` - Reactive values with automatic dependency tracking
-- `Computed<T>` - Derived values that auto-update
+- `Memo<T>` - Eager derived values that only notify on actual changes
 - `Effect` - Side effects that re-run on changes
 - `MaybeDyn<T>` - Enum for static or dynamic property values
 
 **How It Works:**
 
-The runtime uses thread-local storage for dependency tracking. When a signal is read inside a `Computed` or `Effect`, it registers as a dependency.
+The runtime uses thread-local storage for dependency tracking. When a signal is read inside a `Memo`, `Effect`, or during widget `paint()`/`layout()`, it registers as a dependency.
 
 ```rust
 let count = create_signal(0);
-let doubled = create_computed(move || count.get() * 2);
+let doubled = create_memo(move || count.get() * 2);
 // Runtime knows doubled depends on count
 ```
 

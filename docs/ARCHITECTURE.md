@@ -10,7 +10,7 @@ This document provides an overview of Guido's architecture for developers workin
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
 │  │   Widgets   │  │  Reactive   │  │       Platform          │  │
 │  │  Container  │  │   Signals   │  │   Wayland Layer Shell   │  │
-│  │    Text     │  │  Computed   │  │   Event Loop (calloop)  │  │
+│  │    Text     │  │    Memo     │  │   Event Loop (calloop)  │  │
 │  │   Layout    │  │   Effects   │  │                         │  │
 │  └──────┬──────┘  └──────┬──────┘  └───────────┬─────────────┘  │
 │         │                │                     │                 │
@@ -32,20 +32,20 @@ Thread-safe reactive primitives inspired by SolidJS and Floem.
 
 **Key Types:**
 - `Signal<T>` - Reactive values with automatic dependency tracking. Signals are `Copy` (backed by `Arc`), so no cloning needed.
-- `Computed<T>` - Derived values that auto-update when dependencies change
+- `Memo<T>` - Eager derived values that recompute when dependencies change, only notify on actual changes (`PartialEq`)
 - `Effect` - Side effects that re-run when tracked signals change
 - `MaybeDyn<T>` - Enum allowing properties to be static or reactive
 
 **How it works:**
 ```rust
 let count = create_signal(0);           // Create a signal
-let doubled = create_computed(move ||   // Create derived value
+let doubled = create_memo(move ||      // Create derived value
     count.get() * 2
 );
 count.set(5);                           // doubled automatically becomes 10
 ```
 
-The runtime uses thread-local storage for automatic dependency tracking. When a signal is read inside a `Computed` or `Effect`, it registers itself as a dependency.
+The runtime uses thread-local storage for automatic dependency tracking. When a signal is read inside a `Memo`, `Effect`, or during widget `paint()`/`layout()`, it registers itself as a dependency.
 
 ### `widgets/` - UI Components
 

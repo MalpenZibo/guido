@@ -28,16 +28,24 @@ count.update(|c| *c += 1);
 - Thread-safe - can be updated from background threads
 - Automatic dependency tracking
 
-### Computed Values
+### Memos
 
-Derived values that automatically update when dependencies change:
+Eager computed values that recompute immediately when dependencies change. Memos only notify downstream subscribers when the result actually differs (`PartialEq`), preventing unnecessary updates:
 
 ```rust
 let count = create_signal(0);
-let doubled = create_computed(move || count.get() * 2);
+let doubled = create_memo(move || count.get() * 2);
 
 count.set(5);
 println!("{}", doubled.get()); // Prints: 10
+```
+
+Memos are `Copy` like signals and can be used directly as widget properties:
+
+```rust
+let count = create_signal(0);
+let label = create_memo(move || format!("Count: {}", count.get()));
+text(label)  // Only repaints when the formatted string changes
 ```
 
 ### Field Selection
@@ -209,17 +217,19 @@ The actual value is stored in a global runtime using the `id`. This design allow
 
 ## Dependency Tracking
 
-When a signal is read inside a `Computed` or `Effect`, the runtime automatically registers the dependency:
+When a signal is read inside a `Memo` or `Effect`, the runtime automatically registers the dependency:
 
 ```rust
 let a = create_signal(1);
 let b = create_signal(2);
 
-// This computed depends on both `a` and `b`
-let sum = create_computed(move || a.get() + b.get());
+// This memo depends on both `a` and `b`
+let sum = create_memo(move || a.get() + b.get());
 ```
 
 Changing either `a` or `b` will cause `sum` to recompute.
+
+Widget properties also participate in auto-tracking. During `paint()` and `layout()`, any signal reads (including inside closures passed as properties) are automatically tracked, so the widget is repainted or relaid out when dependencies change.
 
 ## Best Practices
 
@@ -236,7 +246,7 @@ let value = count.get();
 text(format!("Count: {}", value))  // Won't update when count changes
 ```
 
-### Use Computed for Derived State
+### Use Memo for Derived State
 
 Instead of manually syncing values:
 
@@ -246,9 +256,9 @@ let count = create_signal(0);
 let doubled = create_signal(0);
 // Must remember to update doubled when count changes
 
-// Good: Use computed
+// Good: Use memo
 let count = create_signal(0);
-let doubled = create_computed(move || count.get() * 2);
+let doubled = create_memo(move || count.get() * 2);
 ```
 
 ### Batch Updates
@@ -430,7 +440,7 @@ This behavior helps catch bugs where signals are used after their owner has been
 
 ```rust
 pub fn create_signal<T: Clone + 'static>(value: T) -> Signal<T>;
-pub fn create_computed<T: Clone + 'static>(f: impl Fn() -> T + 'static) -> Computed<T>;
+pub fn create_memo<T: Clone + PartialEq + 'static>(f: impl Fn() -> T + 'static) -> Memo<T>;
 pub fn create_effect(f: impl Fn() + 'static);
 ```
 
@@ -457,10 +467,11 @@ impl<T: Clone> Signal<T> {
 }
 ```
 
-### Computed Methods
+### Memo Methods
 
 ```rust
-impl<T: Clone> Computed<T> {
-    pub fn get(&self) -> T;
+impl<T: Clone + PartialEq> Memo<T> {
+    pub fn get(&self) -> T;           // Read with tracking
+    pub fn get_untracked(&self) -> T; // Read without tracking
 }
 ```

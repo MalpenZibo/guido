@@ -27,19 +27,24 @@ count.update(|c| *c += 1);
 - **Thread-safe** - Can be updated from background threads
 - **Automatic tracking** - Dependencies are tracked when reading inside reactive contexts
 
-## Computed Values
+## Memos
 
-Derived values that automatically update when their dependencies change:
+Eagerly computed values that automatically update when their dependencies change. Memos only notify downstream subscribers when the result actually differs (`PartialEq`), preventing unnecessary updates:
 
 ```rust
 let count = create_signal(0);
-let doubled = create_computed(move || count.get() * 2);
+let doubled = create_memo(move || count.get() * 2);
 
 count.set(5);
 println!("{}", doubled.get()); // Prints: 10
 ```
 
-Computed values are lazy - they only recompute when read after a dependency changes.
+Memos are `Copy` like signals and can be used directly as widget properties:
+
+```rust
+let label = create_memo(move || format!("Count: {}", count.get()));
+text(label)  // Only repaints when the formatted string changes
+```
 
 ## Effects
 
@@ -193,7 +198,7 @@ let value = count.get();
 text(format!("Count: {}", value))  // Won't update!
 ```
 
-### Use Computed for Derived State
+### Use Memo for Derived State
 
 Instead of manually syncing values:
 
@@ -203,9 +208,9 @@ let count = create_signal(0);
 let doubled = create_signal(0);
 // Must remember to update doubled when count changes
 
-// Good: Use computed
+// Good: Use memo
 let count = create_signal(0);
-let doubled = create_computed(move || count.get() * 2);
+let doubled = create_memo(move || count.get() * 2);
 ```
 
 ### Batch Updates
@@ -224,7 +229,7 @@ last_name.set("Doe");
 
 ```rust
 pub fn create_signal<T: Clone + 'static>(value: T) -> Signal<T>;
-pub fn create_computed<T: Clone + 'static>(f: impl Fn() -> T + 'static) -> Computed<T>;
+pub fn create_memo<T: Clone + PartialEq + 'static>(f: impl Fn() -> T + 'static) -> Memo<T>;
 pub fn create_effect(f: impl Fn() + 'static);
 ```
 
@@ -240,11 +245,12 @@ impl<T: Clone> Signal<T> {
 }
 ```
 
-### Computed Methods
+### Memo Methods
 
 ```rust
-impl<T: Clone> Computed<T> {
-    pub fn get(&self) -> T; // Read with tracking
+impl<T: Clone + PartialEq> Memo<T> {
+    pub fn get(&self) -> T;           // Read with tracking
+    pub fn get_untracked(&self) -> T; // Read without tracking
 }
 ```
 

@@ -81,10 +81,11 @@ cargo test
 **`reactive/`** - Thread-safe reactive system inspired by SolidJS
 - `Signal<T>`: Thread-safe reactive values with automatic dependency tracking
 - `MaybeDyn<T>`: Enum allowing widget properties to accept either static values or reactive signals/closures
-- `Computed<T>`: Derived values that automatically update when dependencies change
+- `Memo<T>`: Eager computed values that recompute when dependencies change, only notify on actual changes (`PartialEq`)
 - `Effect`: Side effects that re-run when tracked signals change
 - `Owner`: Ownership system for automatic resource cleanup (signals, effects, custom callbacks)
 - Runtime uses thread-local storage for automatic dependency tracking on the main thread
+- Container paint/layout auto-tracks signal reads via `with_signal_tracking()` — closures work as reactive properties
 - Background threads can update signal values; effects only run on main thread
 
 **`widgets/`** - Composable UI primitives implementing the `Widget` trait
