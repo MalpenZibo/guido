@@ -33,6 +33,7 @@ pub struct StatsSnapshot {
     pub layout_primary_reactive: u64,
     pub paint_children_cached: u64,
     pub paint_children_painted: u64,
+    pub paint_children_culled: u64,
     pub flatten_nodes_cached: u64,
     pub flatten_nodes_flattened: u64,
     pub damage_none: u64,
@@ -64,6 +65,7 @@ mod inner {
         // Paint child cache
         paint_children_cached: u64,
         paint_children_painted: u64,
+        paint_children_culled: u64,
         // Flatten cache
         flatten_nodes_cached: u64,
         flatten_nodes_flattened: u64,
@@ -87,6 +89,7 @@ mod inner {
                 frames_skipped: 0,
                 paint_children_cached: 0,
                 paint_children_painted: 0,
+                paint_children_culled: 0,
                 flatten_nodes_cached: 0,
                 flatten_nodes_flattened: 0,
                 damage_none: 0,
@@ -106,6 +109,7 @@ mod inner {
             self.frames_skipped = 0;
             self.paint_children_cached = 0;
             self.paint_children_painted = 0;
+            self.paint_children_culled = 0;
             self.flatten_nodes_cached = 0;
             self.flatten_nodes_flattened = 0;
             self.damage_none = 0;
@@ -173,6 +177,14 @@ mod inner {
         });
     }
 
+    /// Record a clean off-screen child that was culled (skipped paint).
+    #[inline]
+    pub fn record_paint_child_culled() {
+        STATS.with(|s| {
+            s.borrow_mut().paint_children_culled += 1;
+        });
+    }
+
     /// Record a flatten node that reused cached commands.
     #[inline]
     pub fn record_flatten_cached() {
@@ -203,6 +215,7 @@ mod inner {
                 layout_primary_reactive: stats.layout_primary_reactive,
                 paint_children_cached: stats.paint_children_cached,
                 paint_children_painted: stats.paint_children_painted,
+                paint_children_culled: stats.paint_children_culled,
                 flatten_nodes_cached: stats.flatten_nodes_cached,
                 flatten_nodes_flattened: stats.flatten_nodes_flattened,
                 damage_none: stats.damage_none,
@@ -241,7 +254,9 @@ mod inner {
                     0.0
                 };
 
-                let paint_total = stats.paint_children_cached + stats.paint_children_painted;
+                let paint_total = stats.paint_children_cached
+                    + stats.paint_children_painted
+                    + stats.paint_children_culled;
                 let paint_cache_rate = if paint_total > 0 {
                     (stats.paint_children_cached as f64 / paint_total as f64) * 100.0
                 } else {
@@ -273,10 +288,11 @@ mod inner {
                     );
                 }
                 eprintln!(
-                    "  paint: children={} cached={} painted={} cache_rate={:.1}%",
+                    "  paint: children={} cached={} painted={} culled={} cache_rate={:.1}%",
                     paint_total,
                     stats.paint_children_cached,
                     stats.paint_children_painted,
+                    stats.paint_children_culled,
                     paint_cache_rate
                 );
                 eprintln!(
@@ -335,6 +351,10 @@ pub fn record_paint_child_cached() {}
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]
 pub fn record_paint_child_painted() {}
+
+#[cfg(not(feature = "render-stats"))]
+#[inline(always)]
+pub fn record_paint_child_culled() {}
 
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]
@@ -505,6 +525,7 @@ mod tests {
         });
         record_paint_child_cached();
         record_paint_child_painted();
+        record_paint_child_culled();
         record_flatten_cached();
         record_flatten_full();
         end_frame(&DamageRegion::Full);
@@ -523,6 +544,7 @@ mod tests {
         assert_eq!(s.layout_executed, 0);
         assert_eq!(s.paint_children_cached, 0);
         assert_eq!(s.paint_children_painted, 0);
+        assert_eq!(s.paint_children_culled, 0);
         assert_eq!(s.flatten_nodes_cached, 0);
         assert_eq!(s.flatten_nodes_flattened, 0);
         assert_eq!(s.damage_none, 0);

@@ -1687,6 +1687,20 @@ impl Widget for Container {
                 Transform::translate(child_offset_x, child_offset_y)
             };
 
+            // Cull clean off-screen children in scrollable containers
+            if is_scrollable && !tree.needs_paint(child_id) {
+                let scrolled_rect = Rect::new(
+                    child_offset_x - self.scroll_state.offset_x,
+                    child_offset_y - self.scroll_state.offset_y,
+                    child_bounds.width,
+                    child_bounds.height,
+                );
+                if !local_bounds.intersects(&scrolled_rect) {
+                    crate::render_stats::record_paint_child_culled();
+                    continue;
+                }
+            }
+
             // Try cached paint for clean children
             if !tree.needs_paint(child_id)
                 && let Some(cached) = tree.cached_paint(child_id)

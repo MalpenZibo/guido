@@ -83,6 +83,13 @@ impl Rect {
         }
     }
 
+    pub fn intersects(&self, other: &Rect) -> bool {
+        self.x < other.x + other.width
+            && self.x + self.width > other.x
+            && self.y < other.y + other.height
+            && self.y + self.height > other.y
+    }
+
     pub fn contains(&self, x: f32, y: f32) -> bool {
         x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
     }
