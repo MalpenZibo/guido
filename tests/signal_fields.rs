@@ -1,4 +1,7 @@
+use std::cell::Cell;
+
 use guido::SignalFields;
+use guido::prelude::*;
 
 #[derive(Clone, PartialEq, SignalFields)]
 struct TestState {
@@ -109,4 +112,128 @@ fn test_vec_field() {
     });
     assert_eq!(signals.items.get(), vec!["c".to_string()]);
     assert_eq!(signals.count.get(), 1);
+}
+
+// --- Effect batching tests ---
+
+#[test]
+fn test_writers_set_batches_effects() {
+    let signals = TestStateSignals::new(TestState {
+        count: 0,
+        name: "a".into(),
+    });
+
+    let run_count = Cell::new(0u32);
+    // SAFETY: run_count is on the stack and outlives the effect.
+    // We use a raw pointer to avoid moving it into the closure.
+    let run_count_ptr = &run_count as *const Cell<u32>;
+
+    // Effect reads both fields — should run once on creation.
+    // Hold the effect so it doesn't get disposed on drop.
+    let _effect = create_effect(move || {
+        let _ = signals.count.get();
+        let _ = signals.name.get();
+        unsafe { &*run_count_ptr }.set(unsafe { &*run_count_ptr }.get() + 1);
+    });
+
+    // Effect runs once on creation
+    assert_eq!(run_count.get(), 1);
+
+    // writers.set() updates both fields in a batch — effect should run once, not twice
+    let writers = signals.writers();
+    writers.set(TestState {
+        count: 42,
+        name: "b".into(),
+    });
+
+    assert_eq!(run_count.get(), 2); // 1 (initial) + 1 (batched set) = 2
+    assert_eq!(signals.count.get(), 42);
+    assert_eq!(signals.name.get(), "b");
+}
+
+// --- Generic struct tests ---
+
+#[derive(Clone, PartialEq, SignalFields)]
+struct GenericState<T: Clone + PartialEq + Send + 'static> {
+    value: T,
+    label: String,
+}
+
+#[test]
+fn test_generic_signal_fields() {
+    let signals = GenericStateSignals::new(GenericState {
+        value: 42i32,
+        label: "hello".into(),
+    });
+    assert_eq!(signals.value.get(), 42);
+    assert_eq!(signals.label.get(), "hello");
+}
+
+#[test]
+fn test_generic_writers() {
+    let signals = GenericStateSignals::new(GenericState {
+        value: 0i32,
+        label: "a".into(),
+    });
+    let writers = signals.writers();
+    writers.set(GenericState {
+        value: 99,
+        label: "b".into(),
+    });
+    assert_eq!(signals.value.get(), 99);
+    assert_eq!(signals.label.get(), "b");
+}
+
+#[test]
+fn test_generic_signals_are_copy() {
+    // String is !Copy, but GenericStateSignals<String> should still be Copy
+    // because Signal<T> is Copy regardless of T.
+    fn assert_copy<T: Copy>() {}
+    assert_copy::<GenericStateSignals<String>>();
+}
+
+#[test]
+fn test_generic_writers_are_send() {
+    fn assert_send<T: Send>() {}
+    assert_send::<GenericStateWriters<String>>();
+}
+
+#[derive(Clone, PartialEq, SignalFields)]
+struct MultiGeneric<A: Clone + PartialEq + Send + 'static, B: Clone + PartialEq + Send + 'static> {
+    first: A,
+    second: B,
+}
+
+#[test]
+fn test_multi_generic() {
+    let signals = MultiGenericSignals::new(MultiGeneric {
+        first: 1u32,
+        second: "x".to_string(),
+    });
+    assert_eq!(signals.first.get(), 1);
+    assert_eq!(signals.second.get(), "x");
+
+    let writers = signals.writers();
+    writers.set(MultiGeneric {
+        first: 2,
+        second: "y".to_string(),
+    });
+    assert_eq!(signals.first.get(), 2);
+    assert_eq!(signals.second.get(), "y");
+}
+
+#[derive(Clone, PartialEq, SignalFields)]
+struct WhereClauseGeneric<T>
+where
+    T: Clone + PartialEq + Send + 'static,
+{
+    data: T,
+}
+
+#[test]
+fn test_where_clause_generic() {
+    let signals = WhereClauseGenericSignals::new(WhereClauseGeneric {
+        data: vec![1, 2, 3],
+    });
+    assert_eq!(signals.data.get(), vec![1, 2, 3]);
 }

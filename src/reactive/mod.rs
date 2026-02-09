@@ -31,6 +31,7 @@ pub(crate) use owner::{OwnerId, dispose_owner, with_owner};
 #[doc(hidden)]
 pub mod __internal {
     pub use super::owner::{OwnerId, dispose_owner, with_owner};
+    pub use super::runtime::batch;
 }
 pub(crate) use runtime::flush_bg_writes;
 pub use service::{Service, ServiceContext, create_service};

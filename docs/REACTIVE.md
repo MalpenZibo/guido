@@ -97,7 +97,19 @@ let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
 });
 ```
 
-**Zero-clone decomposition:** `writers.set(state)` destructures the struct and moves each field into its signal. Each field's `set()` uses `PartialEq` to skip unchanged values — only the actually-changed widgets re-render.
+**Zero-clone decomposition:** `writers.set(state)` destructures the struct and moves each field into its signal. Each field's `set()` uses `PartialEq` to skip unchanged values — only the actually-changed widgets re-render. The call is batched so that shared effects (depending on multiple fields) run only once.
+
+**Generic structs** are supported — the generated types carry the same generic parameters:
+
+```rust
+#[derive(Clone, PartialEq, SignalFields)]
+pub struct Pair<A: Clone + PartialEq + Send + 'static, B: Clone + PartialEq + Send + 'static> {
+    pub first: A,
+    pub second: B,
+}
+
+let pair = PairSignals::new(Pair { first: 1i32, second: "hello".to_string() });
+```
 
 **When to use what:**
 - `Signal<T>` — single reactive value

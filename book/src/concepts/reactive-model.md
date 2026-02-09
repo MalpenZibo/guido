@@ -146,7 +146,8 @@ let writers = state.writers();
 
 let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
     while ctx.is_running() {
-        // Each field is set individually with PartialEq change detection
+        // Each field is set individually with PartialEq change detection.
+        // Effects that depend on multiple fields run only once (batched).
         writers.set(AppState {
             cpu: read_cpu(),
             memory: read_memory(),
@@ -155,6 +156,18 @@ let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 });
+```
+
+Generic structs are supported — the generated types carry the same generic parameters:
+
+```rust
+#[derive(Clone, PartialEq, SignalFields)]
+pub struct Pair<A: Clone + PartialEq + Send + 'static, B: Clone + PartialEq + Send + 'static> {
+    pub first: A,
+    pub second: B,
+}
+
+let pair = PairSignals::new(Pair { first: 1i32, second: "hello".to_string() });
 ```
 
 ## Untracked Reads

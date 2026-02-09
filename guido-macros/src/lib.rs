@@ -36,7 +36,14 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     // Extract fields
     let fields = match &input.fields {
         Fields::Named(fields) => &fields.named,
-        _ => panic!("Component can only be used on structs with named fields"),
+        _ => {
+            return syn::Error::new_spanned(
+                &input,
+                "Component can only be used on structs with named fields",
+            )
+            .to_compile_error()
+            .into();
+        }
     };
 
     // Parse field information
@@ -308,6 +315,8 @@ fn to_snake_case(s: &str) -> String {
 /// - `{Name}Signals` — contains a `Signal<T>` for each field (`Copy`)
 /// - `{Name}Writers` — contains a `WriteSignal<T>` for each field (`Copy + Send`)
 ///
+/// Supports generic structs — the generated types carry the same generic parameters.
+///
 /// # Example
 ///
 /// ```ignore
@@ -326,19 +335,43 @@ fn to_snake_case(s: &str) -> String {
 /// // Widgets subscribe to individual signals
 /// text(move || format!("Count: {}", state.count.get()))
 /// ```
+///
+/// # Generic example
+///
+/// ```ignore
+/// #[derive(Clone, PartialEq, SignalFields)]
+/// pub struct Pair<A: Clone + PartialEq + Send + 'static, B: Clone + PartialEq + Send + 'static> {
+///     pub first: A,
+///     pub second: B,
+/// }
+///
+/// let pair = PairSignals::new(Pair { first: 1i32, second: "hello".to_string() });
+/// ```
 #[proc_macro_derive(SignalFields)]
 pub fn derive_signal_fields(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     let struct_name = &input.ident;
     let vis = &input.vis;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
     let fields = match &input.data {
         syn::Data::Struct(data) => match &data.fields {
             Fields::Named(fields) => &fields.named,
-            _ => panic!("SignalFields can only be derived for structs with named fields"),
+            _ => {
+                return syn::Error::new_spanned(
+                    &input,
+                    "SignalFields can only be derived for structs with named fields",
+                )
+                .to_compile_error()
+                .into();
+            }
         },
-        _ => panic!("SignalFields can only be derived for structs"),
+        _ => {
+            return syn::Error::new_spanned(&input, "SignalFields can only be derived for structs")
+                .to_compile_error()
+                .into();
+        }
     };
 
     let signals_name = format_ident!("{}Signals", struct_name);
@@ -379,33 +412,46 @@ pub fn derive_signal_fields(input: TokenStream) -> TokenStream {
     });
 
     let expanded = quote! {
-        #[derive(Clone, Copy)]
-        #vis struct #signals_name {
+        #vis struct #signals_name #impl_generics #where_clause {
             #(#signals_fields,)*
         }
 
-        impl #signals_name {
-            pub fn new(initial: #struct_name) -> Self {
+        // Manual Clone/Copy — Signal<T> is Copy regardless of T,
+        // but #[derive(Copy)] would add a spurious T: Copy bound.
+        impl #impl_generics Clone for #signals_name #ty_generics #where_clause {
+            fn clone(&self) -> Self { *self }
+        }
+        impl #impl_generics Copy for #signals_name #ty_generics #where_clause {}
+
+        impl #impl_generics #signals_name #ty_generics #where_clause {
+            pub fn new(initial: #struct_name #ty_generics) -> Self {
                 Self {
                     #(#new_inits,)*
                 }
             }
 
-            pub fn writers(&self) -> #writers_name {
+            pub fn writers(&self) -> #writers_name #ty_generics {
                 #writers_name {
                     #(#writers_inits,)*
                 }
             }
         }
 
-        #[derive(Clone, Copy)]
-        #vis struct #writers_name {
+        #vis struct #writers_name #impl_generics #where_clause {
             #(#writers_fields,)*
         }
 
-        impl #writers_name {
-            pub fn set(&self, state: #struct_name) {
-                #(#set_calls)*
+        // Manual Clone/Copy — WriteSignal<T> is Copy regardless of T.
+        impl #impl_generics Clone for #writers_name #ty_generics #where_clause {
+            fn clone(&self) -> Self { *self }
+        }
+        impl #impl_generics Copy for #writers_name #ty_generics #where_clause {}
+
+        impl #impl_generics #writers_name #ty_generics #where_clause {
+            pub fn set(&self, state: #struct_name #ty_generics) {
+                ::guido::reactive::__internal::batch(|| {
+                    #(#set_calls)*
+                });
             }
         }
     };

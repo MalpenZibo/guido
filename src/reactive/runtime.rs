@@ -20,7 +20,7 @@
 //! Most code should use the higher-level APIs in the `reactive` module rather than
 //! interacting with the runtime directly.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::Mutex;
 
 use smallvec::SmallVec;
@@ -39,6 +39,10 @@ thread_local! {
     /// so `try_with_runtime(|rt| rt.track_read(id))` silently fails.
     /// We buffer reads here and apply them after the callback returns.
     static EFFECT_TRACKING: RefCell<Vec<(EffectId, EffectReads)>> = const { RefCell::new(Vec::new()) };
+
+    /// Nesting depth for `batch()`. When > 0, `notify_write()` collects pending
+    /// effects but defers `flush_effects()` until the batch completes.
+    static BATCH_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
 
 /// Background write queue: closures that perform signal writes, queued from bg threads.
@@ -169,7 +173,11 @@ impl Runtime {
             vec_insert(&mut self.pending_effects, effect_id);
         }
 
-        self.flush_effects();
+        // When inside a batch(), defer effect execution until the batch completes
+        let batching = BATCH_DEPTH.with(|d| d.get() > 0);
+        if !batching {
+            self.flush_effects();
+        }
     }
 
     pub fn run_effect(&mut self, effect_id: EffectId) {
@@ -253,4 +261,22 @@ where
         }
         // If borrow fails (already borrowed), skip - this can happen during effect execution
     });
+}
+
+/// Batch multiple signal writes so that shared effects run only once.
+///
+/// Inside the closure, `notify_write()` collects pending effects but defers
+/// `flush_effects()` until the batch completes. Widget invalidation (paint/layout
+/// jobs) is NOT batched — widgets still get per-field jobs immediately.
+pub fn batch<R>(f: impl FnOnce() -> R) -> R {
+    BATCH_DEPTH.with(|d| d.set(d.get() + 1));
+    let result = f();
+    BATCH_DEPTH.with(|d| {
+        let new = d.get() - 1;
+        d.set(new);
+        if new == 0 {
+            try_with_runtime(|rt| rt.flush_effects());
+        }
+    });
+    result
 }
