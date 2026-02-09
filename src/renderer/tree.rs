@@ -1,5 +1,7 @@
 //! Render tree data structures.
 
+use std::rc::Rc;
+
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
 use crate::widgets::Rect;
@@ -65,14 +67,15 @@ pub struct RenderNode {
 
     /// Draw commands for this node (shapes, text, etc.).
     /// These are in LOCAL coordinates - world transform applied during flatten.
-    pub commands: Vec<DrawCommand>,
+    /// Wrapped in Rc so flatten can share them via Rc::clone() instead of deep-cloning.
+    pub commands: Vec<Rc<DrawCommand>>,
 
     /// Child nodes (nested widgets)
     pub children: Vec<RenderNode>,
 
     /// Overlay commands - drawn AFTER all children (for ripples, effects).
     /// These are also in local coordinates.
-    pub overlay_commands: Vec<DrawCommand>,
+    pub overlay_commands: Vec<Rc<DrawCommand>>,
 
     /// Optional clip region that applies to this node and children.
     /// The clip rect is in local coordinates (0,0 = node origin).
@@ -88,7 +91,8 @@ pub struct RenderNode {
     pub repainted: bool,
 
     /// Cached flattened commands from a previous flatten pass.
-    pub cached_flatten: Option<CachedFlatten>,
+    /// Boxed to reduce inline RenderNode size (CachedFlatten contains Vec + Transform).
+    pub cached_flatten: Option<Box<CachedFlatten>>,
 }
 
 impl RenderNode {

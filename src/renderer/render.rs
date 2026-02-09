@@ -52,6 +52,11 @@ pub struct Renderer {
     // Image rendering
     image_quad_renderer: ImageQuadRenderer,
 
+    // Reusable per-frame buffers (cleared and reused each frame to avoid allocations)
+    shape_instance_buf: Vec<ShapeInstance>,
+    overlay_instance_buf: Vec<ShapeInstance>,
+    text_entry_buf: Vec<TextEntry>,
+
     // Screen dimensions
     screen_width: f32,
     screen_height: f32,
@@ -149,6 +154,9 @@ impl Renderer {
             text_state,
             text_quad_renderer,
             image_quad_renderer,
+            shape_instance_buf: Vec::new(),
+            overlay_instance_buf: Vec::new(),
+            text_entry_buf: Vec::new(),
             screen_width: 800.0,
             screen_height: 600.0,
             scale_factor: 1.0,
@@ -273,40 +281,43 @@ impl Renderer {
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
-        // Separate commands by layer
-        let shape_commands: Vec<_> = commands
-            .iter()
-            .filter(|c| c.layer == RenderLayer::Shapes)
-            .collect();
-        let image_commands: Vec<_> = commands
-            .iter()
-            .filter(|c| c.layer == RenderLayer::Images)
-            .collect();
-        let text_commands: Vec<_> = commands
-            .iter()
-            .filter(|c| c.layer == RenderLayer::Text)
-            .collect();
-        let overlay_commands: Vec<_> = commands
-            .iter()
-            .filter(|c| c.layer == RenderLayer::Overlay)
-            .collect();
+        // Commands are sorted by layer (Shapes < Images < Text < Overlay).
+        // Use partition_point to find layer boundaries as slice ranges — no allocations.
+        let images_start = commands.partition_point(|c| c.layer < RenderLayer::Images);
+        let text_start = commands.partition_point(|c| c.layer < RenderLayer::Text);
+        let overlay_start = commands.partition_point(|c| c.layer < RenderLayer::Overlay);
 
-        // Convert shape commands to instances
-        let shape_instances = self.commands_to_instances(&shape_commands);
-        let overlay_instances = self.commands_to_instances(&overlay_commands);
+        let shape_commands = &commands[..images_start];
+        let image_commands = &commands[images_start..text_start];
+        let text_commands = &commands[text_start..overlay_start];
+        let overlay_commands = &commands[overlay_start..];
 
-        // Convert text commands to TextEntry for text rendering
-        let text_entries: Vec<TextEntry> = text_commands
-            .iter()
-            .filter_map(|cmd| self.command_to_text_entry(cmd))
-            .collect();
+        // Convert shape commands to instances (reuse buffers)
+        let scale = self.scale_factor;
+        self.shape_instance_buf.clear();
+        self.shape_instance_buf.extend(
+            shape_commands
+                .iter()
+                .filter_map(|c| command_to_instance(c, scale)),
+        );
+        self.overlay_instance_buf.clear();
+        self.overlay_instance_buf.extend(
+            overlay_commands
+                .iter()
+                .filter_map(|c| command_to_instance(c, scale)),
+        );
+
+        // Convert text commands to TextEntry for text rendering (reuse buffer)
+        self.text_entry_buf.clear();
+        self.text_entry_buf
+            .extend(text_commands.iter().filter_map(command_to_text_entry));
 
         // Prepare regular text and get indices of texts that need texture-based rendering
-        let transformed_indices = if !text_entries.is_empty() {
+        let transformed_indices = if !self.text_entry_buf.is_empty() {
             self.text_state.prepare_text(
                 &self.device,
                 &self.queue,
-                &text_entries,
+                &self.text_entry_buf,
                 self.screen_width as u32,
                 self.screen_height as u32,
                 self.scale_factor,
@@ -327,7 +338,7 @@ impl Renderer {
             self.text_quad_renderer.prepare(
                 &self.device,
                 &self.queue,
-                &text_entries,
+                &self.text_entry_buf,
                 &transformed_indices,
                 self.scale_factor,
             )
@@ -343,7 +354,7 @@ impl Renderer {
             self.image_quad_renderer.prepare(
                 &self.device,
                 &self.queue,
-                &image_commands,
+                image_commands,
                 self.scale_factor,
             )
         } else {
@@ -351,7 +362,7 @@ impl Renderer {
         };
 
         // Ensure we have enough capacity
-        let total_instances = shape_instances.len() + overlay_instances.len();
+        let total_instances = self.shape_instance_buf.len() + self.overlay_instance_buf.len();
         self.ensure_instance_capacity(total_instances);
 
         let mut encoder = self
@@ -389,14 +400,14 @@ impl Renderer {
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 
             // Draw shapes (background layer)
-            if !shape_instances.is_empty() {
+            if !self.shape_instance_buf.is_empty() {
                 self.queue.write_buffer(
                     &self.instance_buffer,
                     0,
-                    bytemuck::cast_slice(&shape_instances),
+                    bytemuck::cast_slice(&self.shape_instance_buf),
                 );
                 render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-                render_pass.draw_indexed(0..6, 0, 0..shape_instances.len() as u32);
+                render_pass.draw_indexed(0..6, 0, 0..self.shape_instance_buf.len() as u32);
             }
 
             // Draw images (after shapes, before text)
@@ -407,8 +418,8 @@ impl Renderer {
 
             // Draw text layer (between images and overlay)
             // Only render non-transformed text via glyphon
-            let has_non_transformed_text =
-                !text_entries.is_empty() && transformed_indices.len() < text_entries.len();
+            let has_non_transformed_text = !self.text_entry_buf.is_empty()
+                && transformed_indices.len() < self.text_entry_buf.len();
             if has_non_transformed_text {
                 self.text_state.render(&mut render_pass, &self.device);
             }
@@ -421,7 +432,7 @@ impl Renderer {
             }
 
             // Draw overlay shapes (after text, for effects like ripples)
-            if !overlay_instances.is_empty() {
+            if !self.overlay_instance_buf.is_empty() {
                 // Re-set the shape pipeline (text/image renderers may have changed it)
                 render_pass.set_pipeline(&self.pipeline);
                 render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
@@ -430,138 +441,129 @@ impl Renderer {
                     .set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 
                 // Write overlay instances after shape instances
-                let offset = (shape_instances.len() * std::mem::size_of::<ShapeInstance>()) as u64;
+                let offset =
+                    (self.shape_instance_buf.len() * std::mem::size_of::<ShapeInstance>()) as u64;
                 self.queue.write_buffer(
                     &self.instance_buffer,
                     offset,
-                    bytemuck::cast_slice(&overlay_instances),
+                    bytemuck::cast_slice(&self.overlay_instance_buf),
                 );
                 render_pass.set_vertex_buffer(
                     1,
                     self.instance_buffer.slice(
                         offset
                             ..offset
-                                + (overlay_instances.len() * std::mem::size_of::<ShapeInstance>())
+                                + (self.overlay_instance_buf.len()
+                                    * std::mem::size_of::<ShapeInstance>())
                                     as u64,
                     ),
                 );
-                render_pass.draw_indexed(0..6, 0, 0..overlay_instances.len() as u32);
+                render_pass.draw_indexed(0..6, 0, 0..self.overlay_instance_buf.len() as u32);
             }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
     }
+}
 
-    /// Convert flattened commands to shape instances.
-    fn commands_to_instances(&self, commands: &[&FlattenedCommand]) -> Vec<ShapeInstance> {
-        commands
-            .iter()
-            .filter_map(|cmd| self.command_to_instance(cmd))
-            .collect()
-    }
+/// Convert a single flattened command to a shape instance.
+fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstance> {
+    match &*cmd.command {
+        DrawCommand::RoundedRect {
+            rect,
+            color,
+            radius,
+            curvature,
+            border,
+            shadow,
+            gradient,
+        } => {
+            let mut instance = ShapeInstance::from_rect(
+                [
+                    rect.x * scale,
+                    rect.y * scale,
+                    rect.width * scale,
+                    rect.height * scale,
+                ],
+                [color.r, color.g, color.b, color.a],
+                radius * scale,
+                *curvature,
+            )
+            .with_transform(&cmd.world_transform, scale);
 
-    /// Convert a single command to a shape instance.
-    fn command_to_instance(&self, cmd: &FlattenedCommand) -> Option<ShapeInstance> {
-        match &cmd.command {
-            DrawCommand::RoundedRect {
-                rect,
-                color,
-                radius,
-                curvature,
-                border,
-                shadow,
-                gradient,
-            } => {
-                let scale = self.scale_factor;
-
-                let mut instance = ShapeInstance::from_rect(
-                    [
-                        rect.x * scale,
-                        rect.y * scale,
-                        rect.width * scale,
-                        rect.height * scale,
-                    ],
-                    [color.r, color.g, color.b, color.a],
-                    radius * scale,
-                    *curvature,
-                )
-                .with_transform(&cmd.world_transform, scale);
-
-                if let Some(b) = border {
-                    instance = instance.with_border(b, scale);
-                }
-                if let Some(s) = shadow {
-                    instance = instance.with_shadow(s, scale);
-                }
-                if let Some(g) = gradient {
-                    instance = instance.with_gradient(g);
-                }
-                if let Some(ref clip) = cmd.clip {
-                    instance = instance.with_clip(clip, scale, cmd.clip_is_local);
-                }
-
-                Some(instance)
+            if let Some(b) = border {
+                instance = instance.with_border(b, scale);
             }
-            DrawCommand::Circle {
-                center,
-                radius,
-                color,
-            } => {
-                // Convert circle to a rounded rect with radius = half size
-                let scale = self.scale_factor;
-                let rect_x = (center.0 - radius) * scale;
-                let rect_y = (center.1 - radius) * scale;
-                let size = radius * 2.0 * scale;
-
-                let mut instance = ShapeInstance::from_rect(
-                    [rect_x, rect_y, size, size],
-                    [color.r, color.g, color.b, color.a],
-                    radius * scale, // Full radius = circle
-                    1.0,            // Circular corners
-                )
-                .with_transform(&cmd.world_transform, scale);
-
-                if let Some(ref clip) = cmd.clip {
-                    instance = instance.with_clip(clip, scale, cmd.clip_is_local);
-                }
-
-                Some(instance)
+            if let Some(s) = shadow {
+                instance = instance.with_shadow(s, scale);
             }
-            // Text commands are handled separately via command_to_text_entry
-            DrawCommand::Text { .. } => None,
-            // Image commands are handled separately via ImageQuadRenderer
-            DrawCommand::Image { .. } => None,
+            if let Some(g) = gradient {
+                instance = instance.with_gradient(g);
+            }
+            if let Some(ref clip) = cmd.clip {
+                instance = instance.with_clip(clip, scale, cmd.clip_is_local);
+            }
+
+            Some(instance)
         }
-    }
+        DrawCommand::Circle {
+            center,
+            radius,
+            color,
+        } => {
+            // Convert circle to a rounded rect with radius = half size
+            let rect_x = (center.0 - radius) * scale;
+            let rect_y = (center.1 - radius) * scale;
+            let size = radius * 2.0 * scale;
 
-    /// Convert a text command to a TextEntry for text rendering.
-    fn command_to_text_entry(&self, cmd: &FlattenedCommand) -> Option<TextEntry> {
-        match &cmd.command {
-            DrawCommand::Text {
-                text,
-                rect,
-                color,
-                font_size,
-                font_family,
-                font_weight,
-            } => {
-                // Convert WorldClip to Rect for text clipping
-                let clip_rect = cmd.clip.as_ref().map(|clip| clip.rect);
+            let mut instance = ShapeInstance::from_rect(
+                [rect_x, rect_y, size, size],
+                [color.r, color.g, color.b, color.a],
+                radius * scale, // Full radius = circle
+                1.0,            // Circular corners
+            )
+            .with_transform(&cmd.world_transform, scale);
 
-                Some(TextEntry {
-                    text: text.clone(),
-                    rect: *rect,
-                    color: *color,
-                    font_size: *font_size,
-                    font_family: font_family.clone(),
-                    font_weight: *font_weight,
-                    clip_rect,
-                    transform: cmd.world_transform,
-                    transform_origin: cmd.world_transform_origin,
-                })
+            if let Some(ref clip) = cmd.clip {
+                instance = instance.with_clip(clip, scale, cmd.clip_is_local);
             }
-            _ => None,
+
+            Some(instance)
         }
+        // Text commands are handled separately via command_to_text_entry
+        DrawCommand::Text { .. } => None,
+        // Image commands are handled separately via ImageQuadRenderer
+        DrawCommand::Image { .. } => None,
+    }
+}
+
+/// Convert a text command to a TextEntry for text rendering.
+fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
+    match &*cmd.command {
+        DrawCommand::Text {
+            text,
+            rect,
+            color,
+            font_size,
+            font_family,
+            font_weight,
+        } => {
+            // Convert WorldClip to Rect for text clipping
+            let clip_rect = cmd.clip.as_ref().map(|clip| clip.rect);
+
+            Some(TextEntry {
+                text: text.clone(),
+                rect: *rect,
+                color: *color,
+                font_size: *font_size,
+                font_family: font_family.clone(),
+                font_weight: *font_weight,
+                clip_rect,
+                transform: cmd.world_transform,
+                transform_origin: cmd.world_transform_origin,
+            })
+        }
+        _ => None,
     }
 }

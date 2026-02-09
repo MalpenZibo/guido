@@ -25,6 +25,8 @@ type SignalValue = Box<dyn Any>;
 
 struct SignalStorage {
     values: Vec<Option<SignalValue>>,
+    /// Free list of reusable signal IDs (from disposed signals).
+    free_ids: Vec<SignalId>,
     next_id: SignalId,
 }
 
@@ -32,6 +34,7 @@ impl SignalStorage {
     fn new() -> Self {
         Self {
             values: Vec::new(),
+            free_ids: Vec::new(),
             next_id: 0,
         }
     }
@@ -78,27 +81,35 @@ fn with_signal_cell<T: 'static, R>(
     })
 }
 
-/// Create a new signal and return its ID
+/// Create a new signal and return its ID.
+/// Reuses IDs from disposed signals when available to prevent unbounded growth.
 pub fn create_signal_value<T: 'static>(value: T) -> SignalId {
     STORAGE.with(|storage| {
         let mut storage = storage.borrow_mut();
+        let boxed: Box<dyn Any> = Box::new(RefCell::new(value));
+        // Reuse a freed slot if available
+        if let Some(id) = storage.free_ids.pop() {
+            storage.values[id] = Some(boxed);
+            return id;
+        }
+        // Otherwise allocate new
         let id = storage.next_id;
         storage.next_id += 1;
-        let boxed: Box<dyn Any> = Box::new(RefCell::new(value));
         storage.values.push(Some(boxed));
         id
     })
 }
 
-/// Dispose a signal, marking it as unavailable.
+/// Dispose a signal, marking it as unavailable and adding its ID to the free list.
 ///
 /// After disposal, any attempt to read or write the signal will panic
-/// with a clear error message.
+/// with a clear error message. The ID will be reused by the next `create_signal_value`.
 pub fn dispose_signal(id: SignalId) {
     STORAGE.with(|storage| {
         let mut storage = storage.borrow_mut();
         if id < storage.values.len() {
             storage.values[id] = None;
+            storage.free_ids.push(id);
         }
     });
 }

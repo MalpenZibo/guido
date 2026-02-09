@@ -13,17 +13,18 @@
 //!
 //! ## Deduplication
 //!
-//! Jobs are stored in a `HashSet`, so each `(widget_id, job_type)` pair is unique.
-//! Multiple signals updating the same widget in one frame result in a single job.
+//! Jobs are stored in a `Vec` with contains-check for dedup. Each `(widget_id, job_type)`
+//! pair is unique. Multiple signals updating the same widget in one frame result in a
+//! single job. Linear scan is faster than HashSet for typical frame sizes (0–20 jobs).
 //!
 //! ## Frame Request
 //!
 //! When a job is pushed, the system automatically wakes the event loop via a ping
 //! mechanism, ensuring the frame is processed promptly.
 
-use std::collections::HashSet;
+use std::cell::RefCell;
 use std::sync::{
-    LazyLock, Mutex, OnceLock,
+    OnceLock,
     atomic::{AtomicBool, Ordering},
 };
 
@@ -31,9 +32,12 @@ use smithay_client_toolkit::reexports::calloop::ping::Ping;
 
 use crate::tree::{Tree, WidgetId};
 
-/// Thread-safe job queue for pending reactive updates.
-/// Uses HashSet to deduplicate jobs - each (widget_id, job_type) pair is unique.
-static PENDING_JOBS: LazyLock<Mutex<HashSet<Job>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+// Thread-local job queue for pending reactive updates.
+// All job producers (signal writes, animations) run on the main thread,
+// so no Mutex is needed. Uses Vec with contains-check for dedup.
+thread_local! {
+    static PENDING_JOBS: RefCell<Vec<Job>> = const { RefCell::new(Vec::new()) };
+}
 
 /// Job types for reactive invalidation (stored in the queue)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -79,66 +83,73 @@ pub struct Job {
     pub job_type: JobType,
 }
 
+/// Push a job into the queue if not already present.
+fn push_job(jobs: &mut Vec<Job>, job: Job) {
+    if !jobs.contains(&job) {
+        jobs.push(job);
+    }
+}
+
 /// Request a job (handles animation follow-up jobs automatically).
 /// For animations, this inserts both the Animation job and any required follow-up job.
 pub fn request_job(widget_id: WidgetId, request: JobRequest) {
-    let mut jobs = PENDING_JOBS.lock().unwrap();
-    match request {
-        JobRequest::Animation(required) => {
-            jobs.insert(Job {
-                widget_id,
-                job_type: JobType::Animation,
-            });
-            match required {
-                RequiredJob::None => {}
-                RequiredJob::Paint => {
-                    jobs.insert(Job {
+    PENDING_JOBS.with(|jobs| {
+        let mut jobs = jobs.borrow_mut();
+        match request {
+            JobRequest::Animation(required) => {
+                push_job(
+                    &mut jobs,
+                    Job {
                         widget_id,
-                        job_type: JobType::Paint,
-                    });
-                }
-                RequiredJob::Layout => {
-                    jobs.insert(Job {
-                        widget_id,
-                        job_type: JobType::Layout,
-                    });
+                        job_type: JobType::Animation,
+                    },
+                );
+                match required {
+                    RequiredJob::None => {}
+                    RequiredJob::Paint => {
+                        push_job(
+                            &mut jobs,
+                            Job {
+                                widget_id,
+                                job_type: JobType::Paint,
+                            },
+                        );
+                    }
+                    RequiredJob::Layout => {
+                        push_job(
+                            &mut jobs,
+                            Job {
+                                widget_id,
+                                job_type: JobType::Layout,
+                            },
+                        );
+                    }
                 }
             }
+            _ => {
+                let job_type = match request {
+                    JobRequest::Layout => JobType::Layout,
+                    JobRequest::Paint => JobType::Paint,
+                    JobRequest::Reconcile => JobType::Reconcile,
+                    JobRequest::Unregister => JobType::Unregister,
+                    JobRequest::Animation(_) => unreachable!(),
+                };
+                push_job(
+                    &mut jobs,
+                    Job {
+                        widget_id,
+                        job_type,
+                    },
+                );
+            }
         }
-        JobRequest::Layout => {
-            jobs.insert(Job {
-                widget_id,
-                job_type: JobType::Layout,
-            });
-        }
-        JobRequest::Paint => {
-            jobs.insert(Job {
-                widget_id,
-                job_type: JobType::Paint,
-            });
-        }
-        JobRequest::Reconcile => {
-            jobs.insert(Job {
-                widget_id,
-                job_type: JobType::Reconcile,
-            });
-        }
-        JobRequest::Unregister => {
-            jobs.insert(Job {
-                widget_id,
-                job_type: JobType::Unregister,
-            });
-        }
-    }
-    drop(jobs);
+    });
     request_frame();
 }
 
 /// Drain all pending jobs
 pub fn drain_pending_jobs() -> Vec<Job> {
-    std::mem::take(&mut *PENDING_JOBS.lock().unwrap())
-        .into_iter()
-        .collect()
+    PENDING_JOBS.with(|jobs| std::mem::take(&mut *jobs.borrow_mut()))
 }
 
 pub fn handle_unregister_jobs(jobs: &[Job], tree: &mut Tree) {
@@ -147,24 +158,27 @@ pub fn handle_unregister_jobs(jobs: &[Job], tree: &mut Tree) {
     }
 }
 
-pub fn handle_reconcile_jobs(jobs: &[Job], tree: &mut Tree) -> Vec<WidgetId> {
-    let mut roots = Vec::new();
+pub fn handle_reconcile_jobs(jobs: &[Job], tree: &mut Tree, layout_roots: &mut Vec<WidgetId>) {
     for job in jobs.iter().filter(|j| j.job_type == JobType::Reconcile) {
         tree.with_widget_mut(job.widget_id, |widget, id, tree| {
             widget.reconcile_children(tree, id);
         });
-        if let Some(root) = tree.mark_needs_layout(job.widget_id) {
-            roots.push(root);
+        if let Some(root) = tree.mark_needs_layout(job.widget_id)
+            && !layout_roots.contains(&root)
+        {
+            layout_roots.push(root);
         }
     }
-    roots
 }
 
-pub fn handle_layout_jobs(jobs: &[Job], tree: &mut Tree) -> Vec<WidgetId> {
-    jobs.iter()
-        .filter(|j| j.job_type == JobType::Layout)
-        .filter_map(|job| tree.mark_needs_layout(job.widget_id))
-        .collect()
+pub fn handle_layout_jobs(jobs: &[Job], tree: &mut Tree, layout_roots: &mut Vec<WidgetId>) {
+    for job in jobs.iter().filter(|j| j.job_type == JobType::Layout) {
+        if let Some(root) = tree.mark_needs_layout(job.widget_id)
+            && !layout_roots.contains(&root)
+        {
+            layout_roots.push(root);
+        }
+    }
 }
 
 pub fn handle_paint_jobs(jobs: &[Job], tree: &mut Tree) {
@@ -181,10 +195,10 @@ pub fn handle_animation_jobs(jobs: &[Job], tree: &mut Tree) {
     }
 }
 
-/// Check if there are pending jobs (thread-safe)
+/// Check if there are pending jobs.
 /// This includes both regular jobs and animation jobs.
 pub fn has_pending_jobs() -> bool {
-    !PENDING_JOBS.lock().unwrap().is_empty()
+    PENDING_JOBS.with(|jobs| !jobs.borrow().is_empty())
 }
 
 /// Global flag to indicate a frame is requested

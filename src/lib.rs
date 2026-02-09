@@ -19,7 +19,6 @@ pub mod renderer;
 pub use guido_macros::component;
 
 use std::cell::RefCell;
-use std::collections::HashSet;
 
 use layout::Constraints;
 use platform::create_wayland_app;
@@ -199,7 +198,7 @@ fn render_surface(
     connection: &Connection,
     qh: &QueueHandle<platform::WaylandState>,
     tree: &mut Tree,
-    layout_roots: &mut HashSet<WidgetId>,
+    layout_roots: &mut Vec<WidgetId>,
 ) {
     // Get wayland surface state
     let Some(wayland_surface) = wayland_state.get_surface_mut(id) else {
@@ -319,18 +318,15 @@ fn render_surface(
         handle_paint_jobs(&jobs, tree);
 
         // Collect layout roots from jobs
-        for root in handle_reconcile_jobs(&jobs, tree) {
-            layout_roots.insert(root);
-        }
-        for root in handle_layout_jobs(&jobs, tree) {
-            layout_roots.insert(root);
-        }
+        handle_reconcile_jobs(&jobs, tree, layout_roots);
+        handle_layout_jobs(&jobs, tree, layout_roots);
 
         // Re-layout using partial layout from boundaries when available
         let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
         if !layout_roots.is_empty() {
             // Partial layout: only update dirty subtrees starting from boundaries
-            let roots: Vec<_> = layout_roots.drain().collect();
+            let mut roots = Vec::new();
+            std::mem::swap(&mut roots, layout_roots);
             for root_id in &roots {
                 // Use cached constraints for boundaries, or fall back to parent constraints
                 let cached = tree.cached_constraints(*root_id).unwrap_or(constraints);
@@ -440,8 +436,8 @@ pub struct App {
     surface_definitions: Vec<SurfaceDefinition>,
     /// The layout tree for widget storage (owned by App)
     tree: Tree,
-    /// Set of layout roots that need re-layout (scheduling concern)
-    layout_roots: HashSet<WidgetId>,
+    /// Layout roots that need re-layout (Vec with dedup — typically 1–3 per frame)
+    layout_roots: Vec<WidgetId>,
 }
 
 impl App {
@@ -449,7 +445,7 @@ impl App {
         Self {
             surface_definitions: Vec::new(),
             tree: Tree::new(),
-            layout_roots: HashSet::new(),
+            layout_roots: Vec::new(),
         }
     }
 

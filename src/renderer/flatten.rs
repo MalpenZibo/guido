@@ -1,5 +1,7 @@
 //! Tree flattening with world transform computation.
 
+use std::rc::Rc;
+
 use crate::transform::Transform;
 use crate::widgets::Rect;
 
@@ -36,10 +38,12 @@ pub struct WorldClip {
 /// A draw command with computed world transform.
 ///
 /// This is the flattened representation ready for GPU submission.
+/// Uses `Rc<DrawCommand>` so cloning (e.g. for cached flatten reuse)
+/// is a reference count bump instead of deep-cloning String/FontFamily.
 #[derive(Debug, Clone)]
 pub struct FlattenedCommand {
-    /// The draw command
-    pub command: DrawCommand,
+    /// The draw command (shared via Rc to avoid clone overhead)
+    pub command: Rc<DrawCommand>,
     /// World transform (composed from all ancestors)
     pub world_transform: Transform,
     /// World transform origin in screen coordinates
@@ -161,13 +165,13 @@ fn flatten_node(
 
     // Add main commands with appropriate layers and clip
     for cmd in &node.commands {
-        let layer = match cmd {
+        let layer = match &**cmd {
             DrawCommand::Text { .. } => RenderLayer::Text,
             DrawCommand::Image { .. } => RenderLayer::Images,
             _ => RenderLayer::Shapes,
         };
         out.push(FlattenedCommand {
-            command: clone_command(cmd),
+            command: Rc::clone(cmd),
             world_transform,
             world_transform_origin: world_origin,
             layer,
@@ -207,7 +211,7 @@ fn flatten_node(
     // Add overlay commands (layer = Overlay) with overlay-specific clip
     for cmd in &node.overlay_commands {
         out.push(FlattenedCommand {
-            command: clone_command(cmd),
+            command: Rc::clone(cmd),
             world_transform,
             world_transform_origin: world_origin,
             layer: RenderLayer::Overlay,
@@ -216,11 +220,17 @@ fn flatten_node(
         });
     }
 
-    // Cache flatten results for next frame
-    node.cached_flatten = Some(CachedFlatten {
-        commands: out[start_idx..].to_vec(),
-        world_transform,
-    });
+    // Cache flatten results for next frame, but only when reuse is possible.
+    // The cache reuse path requires no clips and translation-only transforms,
+    // so skip caching for nodes that would never hit it.
+    if node.clip.is_none() && parent_clip.is_none() && world_transform.is_translation_only() {
+        node.cached_flatten = Some(Box::new(CachedFlatten {
+            commands: out[start_idx..].to_vec(),
+            world_transform,
+        }));
+    } else {
+        node.cached_flatten = None;
+    }
     crate::render_stats::record_flatten_full();
 }
 
@@ -296,13 +306,4 @@ fn intersect_clips(a: &WorldClip, b: &WorldClip) -> WorldClip {
         corner_radius,
         curvature,
     }
-}
-
-/// Clone a draw command without applying any coordinate transformation.
-///
-/// All coordinate transformation is handled by the GPU shader using the
-/// world_transform stored in FlattenedCommand. This avoids double-transformation
-/// issues when rotation/scale is involved.
-fn clone_command(cmd: &DrawCommand) -> DrawCommand {
-    cmd.clone()
 }
