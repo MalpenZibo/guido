@@ -67,6 +67,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         let mut default_value: Option<String> = None;
         let mut is_callback = false;
         let mut is_children = false;
+        let mut is_slot = false;
 
         if let Meta::List(meta_list) = &prop_attr.meta {
             let tokens_str = meta_list.tokens.to_string();
@@ -78,6 +79,10 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             if tokens_str.contains("children") {
                 is_children = true;
                 has_children = true;
+            }
+
+            if tokens_str.contains("slot") {
+                is_slot = true;
             }
 
             if tokens_str.contains("default") {
@@ -96,6 +101,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             default_value,
             is_callback,
             is_children,
+            is_slot,
         });
     }
 
@@ -111,6 +117,10 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         } else if field.is_children {
             quote! {
                 __children: std::cell::RefCell<::guido::widgets::ChildrenSource>
+            }
+        } else if field.is_slot {
+            quote! {
+                #name: std::cell::RefCell<Option<Box<dyn ::guido::widgets::Widget>>>
             }
         } else {
             quote! {
@@ -130,6 +140,10 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         } else if field.is_children {
             quote! {
                 __children: std::cell::RefCell::new(::guido::widgets::ChildrenSource::default())
+            }
+        } else if field.is_slot {
+            quote! {
+                #name: std::cell::RefCell::new(None)
             }
         } else if let Some(default) = &field.default_value {
             let default_tokens: proc_macro2::TokenStream = default.parse().unwrap();
@@ -158,6 +172,13 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         } else if field.is_children {
             // Don't generate a builder method for children - use child/children instead
             quote! {}
+        } else if field.is_slot {
+            quote! {
+                #vis fn #name(self, widget: impl ::guido::widgets::Widget + 'static) -> Self {
+                    *self.#name.borrow_mut() = Some(Box::new(widget));
+                    self
+                }
+            }
         } else {
             quote! {
                 #vis fn #name(mut self, value: impl ::guido::reactive::IntoMaybeDyn<#ty>) -> Self {
@@ -193,6 +214,21 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         quote! {}
     };
 
+    // Generate take_ accessors for slot fields
+    let slot_methods: Vec<_> = prop_fields
+        .iter()
+        .filter(|f| f.is_slot)
+        .map(|field| {
+            let name = &field.name;
+            let take_name = format_ident!("take_{}", name);
+            quote! {
+                fn #take_name(&self) -> Option<Box<dyn ::guido::widgets::Widget>> {
+                    self.#name.borrow_mut().take()
+                }
+            }
+        })
+        .collect();
+
     // Create snake_case constructor name
     let constructor_name =
         syn::Ident::new(&to_snake_case(&struct_name.to_string()), struct_name.span());
@@ -216,6 +252,8 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             #(#builder_methods)*
 
             #children_methods
+
+            #(#slot_methods)*
 
             fn ensure_built(&self) {
                 if self.__inner.borrow().is_some() {
@@ -287,6 +325,7 @@ struct PropField {
     default_value: Option<String>,
     is_callback: bool,
     is_children: bool,
+    is_slot: bool,
 }
 
 fn to_snake_case(s: &str) -> String {
