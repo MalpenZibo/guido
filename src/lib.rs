@@ -18,7 +18,8 @@ pub mod renderer;
 // Re-export macros
 pub use guido_macros::{SignalFields, component};
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::sync::Arc;
 
 use layout::Constraints;
 use platform::create_wayland_app;
@@ -38,6 +39,8 @@ use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 // Thread-local storage for the default font family
 thread_local! {
     static DEFAULT_FONT_FAMILY: RefCell<FontFamily> = const { RefCell::new(FontFamily::SansSerif) };
+    static CUSTOM_FONTS: RefCell<Vec<Arc<Vec<u8>>>> = const { RefCell::new(Vec::new()) };
+    static FONTS_CONSUMED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Set the application-wide default font family.
@@ -59,6 +62,40 @@ pub fn set_default_font_family(family: FontFamily) {
 /// Get the current application-wide default font family.
 pub fn default_font_family() -> FontFamily {
     DEFAULT_FONT_FAMILY.with(|f| f.borrow().clone())
+}
+
+/// Load custom font data into the application.
+///
+/// The font bytes will be loaded into all internal FontSystem instances,
+/// making the font available for use via `FontFamily::Name(...)`.
+///
+/// This should be called before creating any widgets or surfaces.
+///
+/// # Example
+///
+/// ```ignore
+/// const NERD_FONT: &[u8] = include_bytes!("../assets/MyFont.ttf");
+/// guido::load_font(NERD_FONT.to_vec());
+/// ```
+pub fn load_font(data: Vec<u8>) {
+    if FONTS_CONSUMED.with(|f| f.get()) {
+        log::warn!(
+            "load_font() called after FontSystem initialization — \
+             this font will not be available. Call load_font() before App::run()."
+        );
+    }
+    CUSTOM_FONTS.with(|fonts| {
+        fonts.borrow_mut().push(Arc::new(data));
+    });
+}
+
+/// Take all registered custom font data (for loading into FontSystems).
+///
+/// This drains the storage so the `Arc` pointers are released once all
+/// FontSystems have been initialized. Subsequent calls return an empty vec.
+pub(crate) fn take_registered_fonts() -> Vec<Arc<Vec<u8>>> {
+    FONTS_CONSUMED.with(|f| f.set(true));
+    CUSTOM_FONTS.with(|fonts| std::mem::take(&mut *fonts.borrow_mut()))
 }
 
 pub mod prelude {
@@ -85,7 +122,9 @@ pub mod prelude {
         ScrollbarVisibility, Selection, StateStyle, Text, TextInput, Widget, container, image,
         text, text_input,
     };
-    pub use crate::{App, SignalFields, component, default_font_family, set_default_font_family};
+    pub use crate::{
+        App, SignalFields, component, default_font_family, load_font, set_default_font_family,
+    };
 }
 
 use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
