@@ -9,6 +9,7 @@ use smithay_client_toolkit::reexports::client::Connection;
 
 use crate::layout::Constraints;
 use crate::platform::{WaylandState, WaylandWindowWrapper};
+use crate::reactive::owner::{OwnerId, dispose_owner};
 use crate::renderer::{FlattenedCommand, GpuContext, RenderNode, RenderTree, SurfaceState};
 use crate::surface::{SurfaceConfig, SurfaceId};
 use crate::tree::{Tree, WidgetId};
@@ -25,6 +26,8 @@ pub struct ManagedSurface {
     pub config: SurfaceConfig,
     /// The root widget ID (widget is stored in the tree)
     pub widget_id: WidgetId,
+    /// Owner for reactive primitives created in the widget factory
+    owner_id: OwnerId,
     /// The wgpu surface state (None until GPU init)
     pub wgpu_surface: Option<SurfaceState>,
     /// Previous scale factor for detecting changes
@@ -44,6 +47,7 @@ impl ManagedSurface {
         id: SurfaceId,
         config: SurfaceConfig,
         widget: Box<dyn Widget>,
+        owner_id: OwnerId,
         tree: &mut Tree,
     ) -> Self {
         // Register root widget - tree assigns the ID
@@ -58,6 +62,7 @@ impl ManagedSurface {
             id,
             config,
             widget_id,
+            owner_id,
             wgpu_surface: None,
             previous_scale_factor: 1.0,
             render_tree: RenderTree::new(),
@@ -122,6 +127,12 @@ impl ManagedSurface {
         });
         // Set root widget origin after layout
         tree.set_origin(self.widget_id, 0.0, 0.0);
+    }
+}
+
+impl Drop for ManagedSurface {
+    fn drop(&mut self) {
+        dispose_owner(self.owner_id);
     }
 }
 

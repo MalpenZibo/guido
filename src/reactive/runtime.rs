@@ -98,6 +98,7 @@ pub fn flush_bg_writes() {
             Ok(mut q) if !q.is_empty() => q.drain(..).collect(),
             _ => return,
         };
+        log::trace!("flush_bg_writes: processing {} queued writes", writes.len());
         for write_fn in writes {
             write_fn();
         }

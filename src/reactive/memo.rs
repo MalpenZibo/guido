@@ -58,6 +58,10 @@ where
     // The effect runs immediately (establishing dependencies) and re-runs
     // whenever any dependency changes. Signal::set() uses PartialEq to
     // skip notification when the value hasn't changed.
+    //
+    // The effect is registered with the current owner via register_effect().
+    // Effect::Drop checks effect_has_owner() and skips disposal for owned
+    // effects, so the underscore-prefixed binding is safe here.
     let _effect = create_effect(move || {
         signal.set(f());
     });
