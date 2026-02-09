@@ -48,6 +48,74 @@ let label = create_memo(move || format!("Count: {}", count.get()));
 text(label)  // Only repaints when the formatted string changes
 ```
 
+### Per-Field Signals (`SignalFields`)
+
+When a `Signal<AppState>` changes, **all** subscribers re-render — even if only one field changed. The `#[derive(SignalFields)]` macro solves this by generating per-field signal decomposition with zero-clone updates.
+
+```rust
+use guido::prelude::*;
+
+#[derive(Clone, PartialEq, SignalFields)]
+pub struct AppState {
+    pub count: i32,
+    pub name: String,
+    pub items: Vec<Item>,
+}
+```
+
+This generates:
+- `AppStateSignals` — struct with `Signal<T>` per field (`Copy`)
+- `AppStateWriters` — struct with `WriteSignal<T>` per field (`Copy + Send`)
+
+**Usage:**
+
+```rust
+// Create per-field signals from initial values
+let state = AppStateSignals::new(AppState {
+    count: 0,
+    name: "foo".into(),
+    items: vec![],
+});
+
+// Widgets subscribe to individual signals — only re-render when their field changes
+text(move || format!("Count: {}", state.count.get()))  // ignores name/items changes
+text(move || state.name.get())                          // ignores count/items changes
+```
+
+**Background task integration:**
+
+```rust
+// Get writer handles (Send + Copy) for background services
+let writers = state.writers();
+
+let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+    while ctx.is_running() {
+        let new_state = fetch_state().await;
+        writers.set(new_state);  // Decomposes struct, sets each field individually
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+});
+```
+
+**Zero-clone decomposition:** `writers.set(state)` destructures the struct and moves each field into its signal. Each field's `set()` uses `PartialEq` to skip unchanged values — only the actually-changed widgets re-render. The call is batched so that shared effects (depending on multiple fields) run only once.
+
+**Generic structs** are supported — the generated types carry the same generic parameters:
+
+```rust
+#[derive(Clone, PartialEq, SignalFields)]
+pub struct Pair<A: Clone + PartialEq + Send + 'static, B: Clone + PartialEq + Send + 'static> {
+    pub first: A,
+    pub second: B,
+}
+
+let pair = PairSignals::new(Pair { first: 1i32, second: "hello".to_string() });
+```
+
+**When to use what:**
+- `Signal<T>` — single reactive value
+- `create_memo` — derived value from other signals
+- `#[derive(SignalFields)]` — struct with independently-changing fields (e.g., backend state with many independent pieces)
+
 ### Effects
 
 Side effects that re-run when tracked signals change:
@@ -247,16 +315,6 @@ let doubled = create_signal(0);
 // Good: Use memo
 let count = create_signal(0);
 let doubled = create_memo(move || count.get() * 2);
-```
-
-### Batch Updates
-
-When updating multiple related signals, the render will naturally batch:
-
-```rust
-// Both updates happen before the next render
-first_name.set("John");
-last_name.set("Doe");
 ```
 
 ## Reactive Ownership (Resource Cleanup)
@@ -475,6 +533,6 @@ impl<T: Clone + Send> WriteSignal<T> {
 ```rust
 impl<T: Clone + PartialEq> Memo<T> {
     pub fn get(&self) -> T;           // Read with tracking
-    pub fn get_untracked(&self) -> T; // Read without tracking
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R; // Borrow with tracking
 }
 ```

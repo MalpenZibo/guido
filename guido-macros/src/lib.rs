@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
-use quote::quote;
-use syn::{Fields, ItemStruct, Meta, Type, parse_macro_input};
+use quote::{format_ident, quote};
+use syn::{DeriveInput, Fields, ItemStruct, Meta, Type, parse_macro_input};
 
 /// Attribute macro to create a reusable component with builder pattern that automatically implements Widget
 ///
@@ -36,7 +36,14 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     // Extract fields
     let fields = match &input.fields {
         Fields::Named(fields) => &fields.named,
-        _ => panic!("Component can only be used on structs with named fields"),
+        _ => {
+            return syn::Error::new_spanned(
+                &input,
+                "Component can only be used on structs with named fields",
+            )
+            .to_compile_error()
+            .into();
+        }
     };
 
     // Parse field information
@@ -300,4 +307,154 @@ fn to_snake_case(s: &str) -> String {
     }
 
     result
+}
+
+/// Derive macro for per-field signal decomposition.
+///
+/// Generates two companion structs for a given struct:
+/// - `{Name}Signals` — contains a `Signal<T>` for each field (`Copy`)
+/// - `{Name}Writers` — contains a `WriteSignal<T>` for each field (`Copy + Send`)
+///
+/// Supports generic structs — the generated types carry the same generic parameters.
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(Clone, PartialEq, SignalFields)]
+/// pub struct AppState {
+///     pub count: i32,
+///     pub name: String,
+/// }
+///
+/// // Creates per-field signals from initial values
+/// let state = AppStateSignals::new(AppState { count: 0, name: "foo".into() });
+///
+/// // Get writer handles for background tasks (Send + Copy)
+/// let writers = state.writers();
+///
+/// // Widgets subscribe to individual signals
+/// text(move || format!("Count: {}", state.count.get()))
+/// ```
+///
+/// # Generic example
+///
+/// ```ignore
+/// #[derive(Clone, PartialEq, SignalFields)]
+/// pub struct Pair<A: Clone + PartialEq + Send + 'static, B: Clone + PartialEq + Send + 'static> {
+///     pub first: A,
+///     pub second: B,
+/// }
+///
+/// let pair = PairSignals::new(Pair { first: 1i32, second: "hello".to_string() });
+/// ```
+#[proc_macro_derive(SignalFields)]
+pub fn derive_signal_fields(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    let struct_name = &input.ident;
+    let vis = &input.vis;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    let fields = match &input.data {
+        syn::Data::Struct(data) => match &data.fields {
+            Fields::Named(fields) => &fields.named,
+            _ => {
+                return syn::Error::new_spanned(
+                    &input,
+                    "SignalFields can only be derived for structs with named fields",
+                )
+                .to_compile_error()
+                .into();
+            }
+        },
+        _ => {
+            return syn::Error::new_spanned(&input, "SignalFields can only be derived for structs")
+                .to_compile_error()
+                .into();
+        }
+    };
+
+    let signals_name = format_ident!("{}Signals", struct_name);
+    let writers_name = format_ident!("{}Writers", struct_name);
+
+    let field_names: Vec<_> = fields.iter().map(|f| f.ident.as_ref().unwrap()).collect();
+    let field_types: Vec<_> = fields.iter().map(|f| &f.ty).collect();
+
+    // Generate {Name}Signals struct fields
+    let signals_fields = field_names
+        .iter()
+        .zip(field_types.iter())
+        .map(|(name, ty)| {
+            quote! { pub #name: ::guido::reactive::signal::Signal<#ty> }
+        });
+
+    // Generate {Name}Writers struct fields
+    let writers_fields = field_names
+        .iter()
+        .zip(field_types.iter())
+        .map(|(name, ty)| {
+            quote! { pub #name: ::guido::reactive::signal::WriteSignal<#ty> }
+        });
+
+    // Generate new() field initializers: create_signal(initial.field)
+    let new_inits = field_names.iter().map(|name| {
+        quote! { #name: ::guido::reactive::signal::create_signal(initial.#name) }
+    });
+
+    // Generate writers() field initializers: self.field.writer()
+    let writers_inits = field_names.iter().map(|name| {
+        quote! { #name: self.#name.writer() }
+    });
+
+    // Generate set() calls: self.field.set(state.field)
+    let set_calls = field_names.iter().map(|name| {
+        quote! { self.#name.set(state.#name); }
+    });
+
+    let expanded = quote! {
+        #vis struct #signals_name #impl_generics #where_clause {
+            #(#signals_fields,)*
+        }
+
+        // Manual Clone/Copy — Signal<T> is Copy regardless of T,
+        // but #[derive(Copy)] would add a spurious T: Copy bound.
+        impl #impl_generics Clone for #signals_name #ty_generics #where_clause {
+            fn clone(&self) -> Self { *self }
+        }
+        impl #impl_generics Copy for #signals_name #ty_generics #where_clause {}
+
+        impl #impl_generics #signals_name #ty_generics #where_clause {
+            pub fn new(initial: #struct_name #ty_generics) -> Self {
+                Self {
+                    #(#new_inits,)*
+                }
+            }
+
+            pub fn writers(&self) -> #writers_name #ty_generics {
+                #writers_name {
+                    #(#writers_inits,)*
+                }
+            }
+        }
+
+        #vis struct #writers_name #impl_generics #where_clause {
+            #(#writers_fields,)*
+        }
+
+        // Manual Clone/Copy — WriteSignal<T> is Copy regardless of T.
+        impl #impl_generics Clone for #writers_name #ty_generics #where_clause {
+            fn clone(&self) -> Self { *self }
+        }
+        impl #impl_generics Copy for #writers_name #ty_generics #where_clause {}
+
+        impl #impl_generics #writers_name #ty_generics #where_clause {
+            pub fn set(&self, state: #struct_name #ty_generics) {
+                ::guido::reactive::__internal::batch(|| {
+                    #(#set_calls)*
+                });
+            }
+        }
+    };
+
+    TokenStream::from(expanded)
 }

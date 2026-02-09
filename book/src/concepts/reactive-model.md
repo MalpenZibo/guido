@@ -116,6 +116,60 @@ You don't need to use this directly - the `impl IntoMaybeDyn<T>` trait accepts:
 - Signals: `Signal<T>`
 - Closures: `impl Fn() -> T`
 
+## Per-Field Signals
+
+When multiple widgets depend on different fields of the same struct, `#[derive(SignalFields)]` generates per-field signals so each widget only re-renders when its specific field changes:
+
+```rust
+#[derive(Clone, PartialEq, SignalFields)]
+pub struct AppState {
+    pub cpu: f64,
+    pub memory: f64,
+    pub title: String,
+}
+
+// Creates individual Signal<T> for each field
+let state = AppStateSignals::new(AppState {
+    cpu: 0.0, memory: 0.0, title: "App".into(),
+});
+
+// Each widget subscribes to only the field it reads
+text(move || format!("CPU: {:.0}%", state.cpu.get()))
+text(move || format!("MEM: {:.0}%", state.memory.get()))
+text(move || state.title.get())
+```
+
+Use `.writers()` to get `Send` handles for background task updates:
+
+```rust
+let writers = state.writers();
+
+let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+    while ctx.is_running() {
+        // Each field is set individually with PartialEq change detection.
+        // Effects that depend on multiple fields run only once (batched).
+        writers.set(AppState {
+            cpu: read_cpu(),
+            memory: read_memory(),
+            title: get_title(),
+        });
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+});
+```
+
+Generic structs are supported — the generated types carry the same generic parameters:
+
+```rust
+#[derive(Clone, PartialEq, SignalFields)]
+pub struct Pair<A: Clone + PartialEq + Send + 'static, B: Clone + PartialEq + Send + 'static> {
+    pub first: A,
+    pub second: B,
+}
+
+let pair = PairSignals::new(Pair { first: 1i32, second: "hello".to_string() });
+```
+
 ## Untracked Reads
 
 Sometimes you want to read a signal without creating a dependency:
@@ -185,16 +239,6 @@ let count = create_signal(0);
 let doubled = create_memo(move || count.get() * 2);
 ```
 
-### Batch Updates
-
-When updating multiple signals, they naturally batch before the next render:
-
-```rust
-// Both updates happen before the next render
-first_name.set("John");
-last_name.set("Doe");
-```
-
 ## API Reference
 
 ### Signal Creation
@@ -211,8 +255,11 @@ pub fn create_effect(f: impl Fn() + 'static);
 impl<T: Clone> Signal<T> {
     pub fn get(&self) -> T;           // Read with tracking
     pub fn get_untracked(&self) -> T; // Read without tracking
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R; // Borrow with tracking
+    pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R; // Borrow without tracking
     pub fn set(&self, value: T);      // Set new value
     pub fn update(&self, f: impl FnOnce(&mut T)); // Update in place
+    pub fn writer(&self) -> WriteSignal<T>; // Get Send handle for background threads
 }
 ```
 
@@ -221,7 +268,7 @@ impl<T: Clone> Signal<T> {
 ```rust
 impl<T: Clone + PartialEq> Memo<T> {
     pub fn get(&self) -> T;           // Read with tracking
-    pub fn get_untracked(&self) -> T; // Read without tracking
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R; // Borrow with tracking
 }
 ```
 

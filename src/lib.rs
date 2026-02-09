@@ -16,7 +16,7 @@ pub mod platform;
 pub mod renderer;
 
 // Re-export macros
-pub use guido_macros::component;
+pub use guido_macros::{SignalFields, component};
 
 use std::cell::RefCell;
 
@@ -68,9 +68,8 @@ pub mod prelude {
     };
     pub use crate::platform::{Anchor, KeyboardInteractivity, Layer};
     pub use crate::reactive::{
-        CursorIcon, Effect, IntoMaybeDyn, MaybeDyn, Memo, ReadSignal, Service, ServiceContext,
-        Signal, WriteSignal, batch, create_effect, create_memo, create_service, create_signal,
-        on_cleanup, set_cursor,
+        CursorIcon, Memo, Service, Signal, WriteSignal, create_effect, create_memo, create_service,
+        create_signal, on_cleanup, set_cursor,
     };
     pub use crate::renderer::{PaintContext, Shadow, measure_text};
     pub use crate::surface::{
@@ -85,7 +84,7 @@ pub mod prelude {
         ScrollbarVisibility, Selection, StateStyle, Text, TextInput, Widget, container, image,
         text, text_input,
     };
-    pub use crate::{App, component, default_font_family, set_default_font_family};
+    pub use crate::{App, SignalFields, component, default_font_family, set_default_font_family};
 }
 
 use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};

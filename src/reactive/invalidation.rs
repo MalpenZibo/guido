@@ -139,20 +139,3 @@ pub fn notify_signal_change(signal_id: usize) {
 pub fn clear_signal_subscribers(signal_id: usize) {
     SIGNAL_SUBSCRIBERS.lock().unwrap().remove(&signal_id);
 }
-
-/// Notify all layout subscribers of a signal that it has changed.
-/// Called from Signal::set() and Signal::update().
-///
-/// This function now calls notify_signal_change which pushes jobs to the
-/// pending queue. The main loop calls `process_pending_jobs()` to process them.
-///
-/// This is kept for backward compatibility - new code should use notify_signal_change.
-pub fn notify_layout_subscribers(signal_id: usize) {
-    notify_signal_change(signal_id);
-}
-
-/// Clear layout subscribers for a specific signal (when signal is disposed)
-/// This is an alias for clear_signal_subscribers for backward compatibility.
-pub fn clear_layout_subscribers(signal_id: usize) {
-    clear_signal_subscribers(signal_id);
-}

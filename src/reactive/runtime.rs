@@ -15,18 +15,12 @@
 //! the effect's dependencies. When any dependency changes, the effect is scheduled
 //! to re-run.
 //!
-//! ## Batching
-//!
-//! The [`batch()`] function allows multiple signal updates to be grouped together,
-//! deferring effect execution until the batch completes. This prevents unnecessary
-//! intermediate re-renders.
-//!
 //! ## Usage
 //!
 //! Most code should use the higher-level APIs in the `reactive` module rather than
 //! interacting with the runtime directly.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::Mutex;
 
 use smallvec::SmallVec;
@@ -45,6 +39,10 @@ thread_local! {
     /// so `try_with_runtime(|rt| rt.track_read(id))` silently fails.
     /// We buffer reads here and apply them after the callback returns.
     static EFFECT_TRACKING: RefCell<Vec<(EffectId, EffectReads)>> = const { RefCell::new(Vec::new()) };
+
+    /// Nesting depth for `batch()`. When > 0, `notify_write()` collects pending
+    /// effects but defers `flush_effects()` until the batch completes.
+    static BATCH_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
 
 /// Background write queue: closures that perform signal writes, queued from bg threads.
@@ -121,7 +119,6 @@ pub struct Runtime {
     next_effect_id: EffectId,
     /// Free list of reusable effect IDs (from disposed effects).
     free_effect_ids: Vec<EffectId>,
-    batch_depth: usize,
 }
 
 impl Runtime {
@@ -152,14 +149,6 @@ impl Runtime {
         id
     }
 
-    /// Replace the callback for an existing effect.
-    /// Used by lazy computed values to set up their dirty-marking callback.
-    pub fn set_effect_callback(&mut self, effect_id: EffectId, callback: Box<dyn FnMut()>) {
-        if effect_id < self.effect_callbacks.len() {
-            self.effect_callbacks[effect_id] = Some(callback);
-        }
-    }
-
     pub fn track_read(&mut self, signal_id: SignalId) {
         // Check if this signal exists in our runtime (it might not if called from another thread)
         if signal_id >= self.signal_subscribers.len() {
@@ -184,7 +173,9 @@ impl Runtime {
             vec_insert(&mut self.pending_effects, effect_id);
         }
 
-        if self.batch_depth == 0 {
+        // When inside a batch(), defer effect execution until the batch completes
+        let batching = BATCH_DEPTH.with(|d| d.get() > 0);
+        if !batching {
             self.flush_effects();
         }
     }
@@ -224,53 +215,6 @@ impl Runtime {
         }
     }
 
-    /// Run a closure with dependency tracking for the given effect ID.
-    /// This clears old dependencies and tracks new ones read during the closure.
-    /// Used by lazy computed values to recompute with proper dependency tracking.
-    pub fn run_with_tracking<F, R>(&mut self, effect_id: EffectId, f: F) -> R
-    where
-        F: FnOnce() -> R,
-    {
-        // Ensure effect_dependencies has space for this effect
-        while self.effect_dependencies.len() <= effect_id {
-            self.effect_dependencies.push(Vec::new());
-        }
-
-        // Clear old dependencies
-        let old_deps = std::mem::take(&mut self.effect_dependencies[effect_id]);
-        for signal_id in old_deps {
-            if signal_id < self.signal_subscribers.len() {
-                vec_remove(&mut self.signal_subscribers[signal_id], &effect_id);
-            }
-        }
-
-        // Push tracking context
-        EFFECT_TRACKING.with(|stack| {
-            stack.borrow_mut().push((effect_id, EffectReads::new()));
-        });
-
-        // Run closure with tracking
-        let prev_effect = self.current_effect;
-        self.current_effect = Some(effect_id);
-
-        let result = f();
-
-        self.current_effect = prev_effect;
-
-        // Pop tracking context and register buffered reads
-        let reads = EFFECT_TRACKING.with(|stack| stack.borrow_mut().pop());
-        if let Some((_eid, signal_ids)) = reads {
-            for signal_id in signal_ids {
-                if signal_id < self.signal_subscribers.len() {
-                    vec_insert(&mut self.signal_subscribers[signal_id], effect_id);
-                }
-                vec_insert(&mut self.effect_dependencies[effect_id], signal_id);
-            }
-        }
-
-        result
-    }
-
     pub fn flush_effects(&mut self) {
         // Use swap + drain to preserve Vec capacity across frames.
         // mem::take would replace with a 0-capacity Vec, forcing re-allocation next frame.
@@ -281,21 +225,6 @@ impl Runtime {
                 self.run_effect(effect_id);
             }
         }
-    }
-
-    pub fn batch<F, R>(&mut self, f: F) -> R
-    where
-        F: FnOnce() -> R,
-    {
-        self.batch_depth += 1;
-        let result = f();
-        self.batch_depth -= 1;
-
-        if self.batch_depth == 0 {
-            self.flush_effects();
-        }
-
-        result
     }
 
     pub fn dispose_effect(&mut self, effect_id: EffectId) {
@@ -334,9 +263,20 @@ where
     });
 }
 
-pub fn batch<F, R>(f: F) -> R
-where
-    F: FnOnce() -> R,
-{
-    with_runtime(|rt| rt.batch(f))
+/// Batch multiple signal writes so that shared effects run only once.
+///
+/// Inside the closure, `notify_write()` collects pending effects but defers
+/// `flush_effects()` until the batch completes. Widget invalidation (paint/layout
+/// jobs) is NOT batched — widgets still get per-field jobs immediately.
+pub fn batch<R>(f: impl FnOnce() -> R) -> R {
+    BATCH_DEPTH.with(|d| d.set(d.get() + 1));
+    let result = f();
+    BATCH_DEPTH.with(|d| {
+        let new = d.get() - 1;
+        d.set(new);
+        if new == 0 {
+            try_with_runtime(|rt| rt.flush_effects());
+        }
+    });
+    result
 }

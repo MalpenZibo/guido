@@ -82,13 +82,6 @@ impl<T> PartialEq for Signal<T> {
 
 impl<T> Eq for Signal<T> {}
 
-impl<T> Signal<T> {
-    /// Get the internal signal ID
-    pub fn id(&self) -> usize {
-        self.id
-    }
-}
-
 impl<T: Clone + 'static> Signal<T> {
     /// Get the current value (tracks as dependency for effects)
     pub fn get(&self) -> T {
@@ -134,62 +127,6 @@ impl<T: Clone + PartialEq + 'static> Signal<T> {
     /// Update the value using a closure
     pub fn update<F: FnOnce(&mut T)>(&self, f: F) {
         update_and_notify(self.id, f);
-    }
-
-    /// Split into read and write handles
-    pub fn split(self) -> (ReadSignal<T>, WriteSignal<T>) {
-        (
-            ReadSignal {
-                id: self.id,
-                _marker: PhantomData,
-                _not_send: PhantomData,
-            },
-            WriteSignal {
-                id: self.id,
-                _marker: PhantomData,
-            },
-        )
-    }
-}
-
-/// Read-only handle to a signal.
-pub struct ReadSignal<T> {
-    id: SignalId,
-    _marker: PhantomData<T>,
-    _not_send: PhantomData<*const ()>, // makes ReadSignal !Send !Sync
-}
-
-// Manually implement Clone and Copy to avoid unnecessary bounds on T
-impl<T> Clone for ReadSignal<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> Copy for ReadSignal<T> {}
-
-impl<T> ReadSignal<T> {
-    /// Get the internal signal ID
-    pub fn id(&self) -> usize {
-        self.id
-    }
-}
-
-impl<T: Clone + 'static> ReadSignal<T> {
-    pub fn get(&self) -> T {
-        tracked_get(self.id)
-    }
-
-    pub fn get_untracked(&self) -> T {
-        get_signal_value(self.id)
-    }
-
-    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        tracked_with(self.id, f)
-    }
-
-    pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        with_signal_value(self.id, f)
     }
 }
 
@@ -316,16 +253,6 @@ mod tests {
         let signal = create_signal(100);
         let value = signal.get_untracked();
         assert_eq!(value, 100);
-    }
-
-    #[test]
-    fn test_split_into_read_write_handles() {
-        let signal = create_signal(7);
-        let (read, write) = signal.split();
-
-        assert_eq!(read.get(), 7);
-        write.set(14);
-        assert_eq!(read.get(), 14);
     }
 
     #[test]

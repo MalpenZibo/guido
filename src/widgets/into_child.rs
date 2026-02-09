@@ -15,7 +15,7 @@ pub struct DynamicChild;
 /// - Static widgets (evaluated once at creation) - uses `StaticChild` marker
 /// - Dynamic closures returning `Option<Widget>` (reactive) - uses `DynamicChild` marker
 ///
-/// The marker parameter defaults to `StaticChild` for backwards compatibility.
+/// The marker parameter defaults to `StaticChild` so `.child(widget)` works without annotation.
 pub trait IntoChild<Marker = StaticChild> {
     fn add_to_container(self, children_source: &mut ChildrenSource);
 }
@@ -67,7 +67,7 @@ pub struct DynamicChildren;
 /// - Static children (iterator of widgets) - uses `StaticChildren` marker
 /// - Dynamic children (closure returning keyed items) - uses `DynamicChildren` marker
 ///
-/// The marker parameter defaults to `StaticChildren` for backwards compatibility.
+/// The marker parameter defaults to `StaticChildren` so `.children([...])` works without annotation.
 pub trait IntoChildren<Marker = StaticChildren> {
     fn add_to_container(self, children_source: &mut ChildrenSource);
 }

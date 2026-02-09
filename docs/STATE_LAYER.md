@@ -196,31 +196,6 @@ Ripples are rendered in the overlay layer (on top of text and other content). Th
 - Contract toward the release point when the mouse is released
 - Work correctly with transformed containers (rotated, scaled, translated)
 
-## Migration from Signal-Based Hover
-
-The state layer API replaces the older pattern of using signals for hover states:
-
-**Old pattern (deprecated):**
-```rust
-let hover_color = create_signal(Color::rgb(0.2, 0.2, 0.3));
-container()
-    .background(hover_color)
-    .on_hover(move |hovered| {
-        if hovered {
-            hover_color.set(Color::rgb(0.3, 0.3, 0.4));
-        } else {
-            hover_color.set(Color::rgb(0.2, 0.2, 0.3));
-        }
-    })
-```
-
-**New pattern (recommended):**
-```rust
-container()
-    .background(Color::rgb(0.2, 0.2, 0.3))
-    .hover_state(|s| s.lighter(0.1))
-    .pressed_state(|s| s.ripple())
-```
 
 Benefits of the new API:
 - Less boilerplate code
