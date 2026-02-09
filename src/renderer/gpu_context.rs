@@ -96,9 +96,15 @@ impl GpuContext {
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: caps
                 .alpha_modes
-                .first()
+                .iter()
+                .find(|m| **m == wgpu::CompositeAlphaMode::PreMultiplied)
                 .copied()
-                .unwrap_or(wgpu::CompositeAlphaMode::Auto),
+                .unwrap_or_else(|| {
+                    caps.alpha_modes
+                        .first()
+                        .copied()
+                        .unwrap_or(wgpu::CompositeAlphaMode::Auto)
+                }),
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
