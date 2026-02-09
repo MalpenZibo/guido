@@ -417,6 +417,30 @@ pub trait Widget {
     fn register_children(&mut self, _tree: &mut Tree, _id: WidgetId) {}
 }
 
+impl Widget for Box<dyn Widget> {
+    fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
+        (**self).advance_animations(tree, id)
+    }
+    fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
+        (**self).reconcile_children(tree, id)
+    }
+    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
+        (**self).layout(tree, id, constraints)
+    }
+    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
+        (**self).paint(tree, id, ctx)
+    }
+    fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
+        (**self).event(tree, id, event)
+    }
+    fn has_focus_descendant(&self, tree: &Tree, id: WidgetId) -> bool {
+        (**self).has_focus_descendant(tree, id)
+    }
+    fn register_children(&mut self, tree: &mut Tree, id: WidgetId) {
+        (**self).register_children(tree, id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
