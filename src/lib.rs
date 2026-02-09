@@ -22,6 +22,7 @@ use std::cell::RefCell;
 
 use layout::Constraints;
 use platform::create_wayland_app;
+use reactive::owner::with_owner;
 use reactive::{set_system_clipboard, take_clipboard_change, take_cursor_change};
 use renderer::{GpuContext, PaintContext, Renderer, flatten_tree_into};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, drain_surface_commands};
@@ -126,9 +127,10 @@ fn process_surface_commands(
                 // Create Wayland surface
                 wayland_state.create_surface_with_id(qh, id, &config);
 
-                // Create the widget and managed surface (GPU init happens later)
-                let widget = widget_fn();
-                let managed = ManagedSurface::new(id, config, widget, tree);
+                // Create the widget inside an owner scope so that signals/effects
+                // created in the factory are properly owned.
+                let (widget, owner_id) = with_owner(widget_fn);
+                let managed = ManagedSurface::new(id, config, widget, owner_id, tree);
                 surface_manager.add(managed);
             }
             SurfaceCommand::Close(id) => {
@@ -550,9 +552,11 @@ impl App {
                 .get_surface(def.id)
                 .expect("Surface should exist after configure");
 
-            // Create the widget and managed surface
-            let widget = (def.widget_fn)();
-            let mut managed = ManagedSurface::new(def.id, def.config, widget, &mut self.tree);
+            // Create the widget inside an owner scope so that signals/effects
+            // created in the factory (e.g. create_memo) are properly owned.
+            let (widget, owner_id) = with_owner(|| (def.widget_fn)());
+            let mut managed =
+                ManagedSurface::new(def.id, def.config, widget, owner_id, &mut self.tree);
 
             // Initialize GPU surface
             managed.init_gpu(
