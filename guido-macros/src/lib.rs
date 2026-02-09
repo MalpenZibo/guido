@@ -9,6 +9,7 @@ use syn::{DeriveInput, Fields, ItemStruct, Meta, Type, parse_macro_input};
 /// - `#[prop(default = "expr")]` - Prop with default value
 /// - `#[prop(callback)]` - Generates callback accepting `impl Fn() + 'static`
 /// - `#[prop(children)]` - Marks field for children support
+/// - `#[prop(slot)]` - Named widget slot, generates `RefCell<Option<Box<dyn Widget>>>` with builder and `take_` accessor
 ///
 /// # Example
 /// ```ignore

@@ -135,6 +135,47 @@ card()
     .child(text("Second child"))
 ```
 
+## Slot Props
+
+Slots let a component accept named widget positions — useful for layout components
+like headers, sidebars, or multi-region containers:
+
+```rust
+#[component]
+pub struct CenterBox {
+    #[prop(slot)]
+    left: (),
+    #[prop(slot)]
+    center: (),
+    #[prop(slot)]
+    right: (),
+}
+
+impl CenterBox {
+    fn render(&self) -> impl Widget {
+        container()
+            .layout(Flex::row())
+            .children(vec![
+                self.take_left(),
+                self.take_center(),
+                self.take_right(),
+            ].into_iter().flatten())
+    }
+}
+```
+
+Use with the auto-generated builder methods:
+
+```rust
+center_box()
+    .left(text("Left"))
+    .center(text("Center"))
+    .right(text("Right"))
+```
+
+Each slot accepts any `impl Widget + 'static`. Inside `render`, call `self.take_<name>()`
+to consume the slot — it returns `Option<Box<dyn Widget>>`.
+
 ## Reactive Props
 
 Props accept signals and closures:
