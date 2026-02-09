@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use super::signal::{ReadSignal, Signal};
+use super::signal::Signal;
 
 /// A value that can be either static or dynamic (reactive).
 /// This allows widget properties to accept both plain values and signals.
@@ -109,12 +109,6 @@ where
 // ============================================================================
 
 impl<T: Clone + 'static> IntoMaybeDyn<T> for Signal<T> {
-    fn into_maybe_dyn(self) -> MaybeDyn<T> {
-        MaybeDyn::Dynamic(Rc::new(move || self.get()))
-    }
-}
-
-impl<T: Clone + 'static> IntoMaybeDyn<T> for ReadSignal<T> {
     fn into_maybe_dyn(self) -> MaybeDyn<T> {
         MaybeDyn::Dynamic(Rc::new(move || self.get()))
     }

@@ -15,12 +15,6 @@
 //! the effect's dependencies. When any dependency changes, the effect is scheduled
 //! to re-run.
 //!
-//! ## Batching
-//!
-//! The [`batch()`] function allows multiple signal updates to be grouped together,
-//! deferring effect execution until the batch completes. This prevents unnecessary
-//! intermediate re-renders.
-//!
 //! ## Usage
 //!
 //! Most code should use the higher-level APIs in the `reactive` module rather than
@@ -332,11 +326,4 @@ where
         }
         // If borrow fails (already borrowed), skip - this can happen during effect execution
     });
-}
-
-pub fn batch<F, R>(f: F) -> R
-where
-    F: FnOnce() -> R,
-{
-    with_runtime(|rt| rt.batch(f))
 }

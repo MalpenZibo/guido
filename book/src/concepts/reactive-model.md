@@ -185,16 +185,6 @@ let count = create_signal(0);
 let doubled = create_memo(move || count.get() * 2);
 ```
 
-### Batch Updates
-
-When updating multiple signals, they naturally batch before the next render:
-
-```rust
-// Both updates happen before the next render
-first_name.set("John");
-last_name.set("Doe");
-```
-
 ## API Reference
 
 ### Signal Creation
@@ -221,7 +211,7 @@ impl<T: Clone> Signal<T> {
 ```rust
 impl<T: Clone + PartialEq> Memo<T> {
     pub fn get(&self) -> T;           // Read with tracking
-    pub fn get_untracked(&self) -> T; // Read without tracking
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R; // Borrow with tracking
 }
 ```
 

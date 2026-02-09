@@ -305,16 +305,6 @@ let count = create_signal(0);
 let doubled = create_memo(move || count.get() * 2);
 ```
 
-### Batch Updates
-
-When updating multiple related signals, the render will naturally batch:
-
-```rust
-// Both updates happen before the next render
-first_name.set("John");
-last_name.set("Doe");
-```
-
 ## Reactive Ownership (Resource Cleanup)
 
 Signals and effects persist in memory by default. The **reactive owner** system provides automatic cleanup when components are removed.
@@ -531,6 +521,6 @@ impl<T: Clone + Send> WriteSignal<T> {
 ```rust
 impl<T: Clone + PartialEq> Memo<T> {
     pub fn get(&self) -> T;           // Read with tracking
-    pub fn get_untracked(&self) -> T; // Read without tracking
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R; // Borrow with tracking
 }
 ```

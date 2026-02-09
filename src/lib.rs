@@ -68,9 +68,8 @@ pub mod prelude {
     };
     pub use crate::platform::{Anchor, KeyboardInteractivity, Layer};
     pub use crate::reactive::{
-        CursorIcon, Effect, IntoMaybeDyn, MaybeDyn, Memo, ReadSignal, Service, ServiceContext,
-        Signal, WriteSignal, batch, create_effect, create_memo, create_service, create_signal,
-        on_cleanup, set_cursor,
+        CursorIcon, Memo, Service, Signal, WriteSignal, create_effect, create_memo, create_service,
+        create_signal, on_cleanup, set_cursor,
     };
     pub use crate::renderer::{PaintContext, Shadow, measure_text};
     pub use crate::surface::{

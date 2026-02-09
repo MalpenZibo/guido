@@ -71,19 +71,9 @@ impl<T: Clone + PartialEq + Send + 'static> Memo<T> {
         self.signal.get()
     }
 
-    /// Get the current memo value without tracking as a dependency.
-    pub fn get_untracked(&self) -> T {
-        self.signal.get_untracked()
-    }
-
     /// Borrow the current value (tracked for dependency tracking).
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         self.signal.with(f)
-    }
-
-    /// Get the underlying signal ID.
-    pub fn id(&self) -> usize {
-        self.signal.id()
     }
 }
 
@@ -111,13 +101,6 @@ mod tests {
         let memo2 = memo; // Copy
         assert_eq!(memo.get(), 1);
         assert_eq!(memo2.get(), 1);
-    }
-
-    #[test]
-    fn test_memo_get_untracked() {
-        let signal = create_signal(42);
-        let memo = create_memo(move || signal.get());
-        assert_eq!(memo.get_untracked(), 42);
     }
 
     #[test]
