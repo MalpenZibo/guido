@@ -22,8 +22,12 @@ pub struct TextMeasurer {
 
 impl TextMeasurer {
     pub fn new() -> Self {
+        let mut font_system = FontSystem::new();
+        for data in crate::registered_fonts() {
+            font_system.db_mut().load_font_data(data);
+        }
         Self {
-            font_system: FontSystem::new(),
+            font_system,
             measure_cache: HashMap::new(),
         }
     }

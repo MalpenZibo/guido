@@ -70,7 +70,10 @@ pub struct TextQuadRenderer {
 impl TextQuadRenderer {
     pub fn new(device: &Device, queue: &Queue, format: TextureFormat) -> Self {
         // Initialize text rendering components
-        let font_system = FontSystem::new();
+        let mut font_system = FontSystem::new();
+        for data in crate::registered_fonts() {
+            font_system.db_mut().load_font_data(data);
+        }
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
         let mut atlas = TextAtlas::new(device, queue, &cache, format);
