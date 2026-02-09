@@ -6,10 +6,9 @@ use super::signal::{Signal, create_signal};
 
 /// Eager computed value that recomputes immediately when dependencies change.
 ///
-/// Unlike lazy `Computed<T>`, a `Memo<T>` updates eagerly whenever any
-/// dependency signal changes. It only notifies downstream subscribers when
-/// the computed result actually differs (`PartialEq`), which prevents
-/// unnecessary repaints/relayouts.
+/// A `Memo<T>` updates eagerly whenever any dependency signal changes.
+/// It only notifies downstream subscribers when the computed result actually
+/// differs (`PartialEq`), which prevents unnecessary repaints/relayouts.
 ///
 /// `Memo<T>` is `Copy` (like `Signal<T>`) and can be used directly as a
 /// widget property via `IntoMaybeDyn`.
