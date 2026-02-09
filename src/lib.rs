@@ -18,7 +18,8 @@ pub mod renderer;
 // Re-export macros
 pub use guido_macros::{SignalFields, component};
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::sync::Arc;
 
 use layout::Constraints;
 use platform::create_wayland_app;
@@ -38,7 +39,8 @@ use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 // Thread-local storage for the default font family
 thread_local! {
     static DEFAULT_FONT_FAMILY: RefCell<FontFamily> = const { RefCell::new(FontFamily::SansSerif) };
-    static CUSTOM_FONTS: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    static CUSTOM_FONTS: RefCell<Vec<Arc<Vec<u8>>>> = const { RefCell::new(Vec::new()) };
+    static FONTS_CONSUMED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Set the application-wide default font family.
@@ -76,14 +78,24 @@ pub fn default_font_family() -> FontFamily {
 /// guido::load_font(NERD_FONT.to_vec());
 /// ```
 pub fn load_font(data: Vec<u8>) {
+    if FONTS_CONSUMED.with(|f| f.get()) {
+        log::warn!(
+            "load_font() called after FontSystem initialization — \
+             this font will not be available. Call load_font() before App::run()."
+        );
+    }
     CUSTOM_FONTS.with(|fonts| {
-        fonts.borrow_mut().push(data);
+        fonts.borrow_mut().push(Arc::new(data));
     });
 }
 
-/// Get clones of all registered custom font data (for loading into FontSystems).
-pub(crate) fn registered_fonts() -> Vec<Vec<u8>> {
-    CUSTOM_FONTS.with(|fonts| fonts.borrow().clone())
+/// Take all registered custom font data (for loading into FontSystems).
+///
+/// This drains the storage so the `Arc` pointers are released once all
+/// FontSystems have been initialized. Subsequent calls return an empty vec.
+pub(crate) fn take_registered_fonts() -> Vec<Arc<Vec<u8>>> {
+    FONTS_CONSUMED.with(|f| f.set(true));
+    CUSTOM_FONTS.with(|fonts| std::mem::take(&mut *fonts.borrow_mut()))
 }
 
 pub mod prelude {
