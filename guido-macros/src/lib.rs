@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
-use quote::quote;
-use syn::{Fields, ItemStruct, Meta, Type, parse_macro_input};
+use quote::{format_ident, quote};
+use syn::{DeriveInput, Fields, ItemStruct, Meta, Type, parse_macro_input};
 
 /// Attribute macro to create a reusable component with builder pattern that automatically implements Widget
 ///
@@ -300,4 +300,115 @@ fn to_snake_case(s: &str) -> String {
     }
 
     result
+}
+
+/// Derive macro for per-field signal decomposition.
+///
+/// Generates two companion structs for a given struct:
+/// - `{Name}Signals` — contains a `Signal<T>` for each field (`Copy`)
+/// - `{Name}Writers` — contains a `WriteSignal<T>` for each field (`Copy + Send`)
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(Clone, PartialEq, SignalFields)]
+/// pub struct AppState {
+///     pub count: i32,
+///     pub name: String,
+/// }
+///
+/// // Creates per-field signals from initial values
+/// let state = AppStateSignals::new(AppState { count: 0, name: "foo".into() });
+///
+/// // Get writer handles for background tasks (Send + Copy)
+/// let writers = state.writers();
+///
+/// // Widgets subscribe to individual signals
+/// text(move || format!("Count: {}", state.count.get()))
+/// ```
+#[proc_macro_derive(SignalFields)]
+pub fn derive_signal_fields(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    let struct_name = &input.ident;
+    let vis = &input.vis;
+
+    let fields = match &input.data {
+        syn::Data::Struct(data) => match &data.fields {
+            Fields::Named(fields) => &fields.named,
+            _ => panic!("SignalFields can only be derived for structs with named fields"),
+        },
+        _ => panic!("SignalFields can only be derived for structs"),
+    };
+
+    let signals_name = format_ident!("{}Signals", struct_name);
+    let writers_name = format_ident!("{}Writers", struct_name);
+
+    let field_names: Vec<_> = fields.iter().map(|f| f.ident.as_ref().unwrap()).collect();
+    let field_types: Vec<_> = fields.iter().map(|f| &f.ty).collect();
+
+    // Generate {Name}Signals struct fields
+    let signals_fields = field_names
+        .iter()
+        .zip(field_types.iter())
+        .map(|(name, ty)| {
+            quote! { pub #name: ::guido::reactive::signal::Signal<#ty> }
+        });
+
+    // Generate {Name}Writers struct fields
+    let writers_fields = field_names
+        .iter()
+        .zip(field_types.iter())
+        .map(|(name, ty)| {
+            quote! { pub #name: ::guido::reactive::signal::WriteSignal<#ty> }
+        });
+
+    // Generate new() field initializers: create_signal(initial.field)
+    let new_inits = field_names.iter().map(|name| {
+        quote! { #name: ::guido::reactive::signal::create_signal(initial.#name) }
+    });
+
+    // Generate writers() field initializers: self.field.writer()
+    let writers_inits = field_names.iter().map(|name| {
+        quote! { #name: self.#name.writer() }
+    });
+
+    // Generate set() calls: self.field.set(state.field)
+    let set_calls = field_names.iter().map(|name| {
+        quote! { self.#name.set(state.#name); }
+    });
+
+    let expanded = quote! {
+        #[derive(Clone, Copy)]
+        #vis struct #signals_name {
+            #(#signals_fields,)*
+        }
+
+        impl #signals_name {
+            pub fn new(initial: #struct_name) -> Self {
+                Self {
+                    #(#new_inits,)*
+                }
+            }
+
+            pub fn writers(&self) -> #writers_name {
+                #writers_name {
+                    #(#writers_inits,)*
+                }
+            }
+        }
+
+        #[derive(Clone, Copy)]
+        #vis struct #writers_name {
+            #(#writers_fields,)*
+        }
+
+        impl #writers_name {
+            pub fn set(&self, state: #struct_name) {
+                #(#set_calls)*
+            }
+        }
+    };
+
+    TokenStream::from(expanded)
 }

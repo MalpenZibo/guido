@@ -16,7 +16,7 @@ pub mod platform;
 pub mod renderer;
 
 // Re-export macros
-pub use guido_macros::component;
+pub use guido_macros::{SignalFields, component};
 
 use std::cell::RefCell;
 
@@ -85,7 +85,7 @@ pub mod prelude {
         ScrollbarVisibility, Selection, StateStyle, Text, TextInput, Widget, container, image,
         text, text_input,
     };
-    pub use crate::{App, component, default_font_family, set_default_font_family};
+    pub use crate::{App, SignalFields, component, default_font_family, set_default_font_family};
 }
 
 use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
