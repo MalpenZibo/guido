@@ -152,6 +152,25 @@ pub fn drain_pending_jobs() -> Vec<Job> {
     PENDING_JOBS.with(|jobs| std::mem::take(&mut *jobs.borrow_mut()))
 }
 
+/// Drain all pending jobs EXCEPT Animation jobs.
+/// Animation jobs are left in PENDING_JOBS for centralized processing
+/// in the main loop, preventing cross-surface job loss.
+pub fn drain_non_animation_jobs() -> Vec<Job> {
+    PENDING_JOBS.with(|jobs| {
+        let mut jobs = jobs.borrow_mut();
+        let mut non_anim = Vec::new();
+        jobs.retain(|job| {
+            if job.job_type == JobType::Animation {
+                true // keep in PENDING_JOBS
+            } else {
+                non_anim.push(*job);
+                false // remove
+            }
+        });
+        non_anim
+    })
+}
+
 pub fn handle_unregister_jobs(jobs: &[Job], tree: &mut Tree) {
     for job in jobs.iter().filter(|j| j.job_type == JobType::Unregister) {
         tree.unregister(job.widget_id);

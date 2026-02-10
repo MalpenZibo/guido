@@ -131,9 +131,9 @@ use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 
 use crate::{
     jobs::{
-        drain_pending_jobs, handle_animation_jobs, handle_layout_jobs, handle_paint_jobs,
-        handle_reconcile_jobs, handle_unregister_jobs, has_pending_jobs, init_wakeup,
-        take_frame_request,
+        drain_non_animation_jobs, drain_pending_jobs, handle_animation_jobs, handle_layout_jobs,
+        handle_paint_jobs, handle_reconcile_jobs, handle_unregister_jobs, has_pending_jobs,
+        init_wakeup, take_frame_request,
     },
     tree::{DamageRegion, Tree, WidgetId},
 };
@@ -330,6 +330,20 @@ fn render_surface(
         surface.previous_scale_factor = scale_factor;
     }
 
+    // Process pending non-animation jobs BEFORE render condition check.
+    // Events dispatched above may have created Paint/Animation jobs (e.g. hover state
+    // changes). Processing them first ensures tree.needs_paint() reflects these changes
+    // so the render condition correctly decides whether to paint this frame.
+    //
+    // Animation jobs are left in PENDING_JOBS and processed once per frame in the main
+    // loop (after all surfaces render). This prevents cross-surface job loss where one
+    // surface's drain swallows another surface's animation continuation jobs.
+    let jobs = drain_non_animation_jobs();
+    handle_unregister_jobs(&jobs, tree);
+    handle_paint_jobs(&jobs, tree);
+    handle_reconcile_jobs(&jobs, tree, layout_roots);
+    handle_layout_jobs(&jobs, tree, layout_roots);
+
     // Check render conditions
     let fully_initialized = first_frame_presented && scale_factor_received;
     let force_render_surface = !fully_initialized;
@@ -346,21 +360,6 @@ fn render_surface(
         // Update renderer for this surface
         renderer.set_screen_size(physical_width as f32, physical_height as f32);
         renderer.set_scale_factor(scale_factor);
-
-        // Flush background-thread signal writes (queued via WriteSignal)
-        reactive::flush_bg_writes();
-
-        // Process pending jobs from signal updates (reconciliation + layout marking)
-        let jobs = drain_pending_jobs();
-
-        handle_unregister_jobs(&jobs, tree);
-
-        // Mark paint-dirty widgets from Paint jobs
-        handle_paint_jobs(&jobs, tree);
-
-        // Collect layout roots from jobs
-        handle_reconcile_jobs(&jobs, tree, layout_roots);
-        handle_layout_jobs(&jobs, tree, layout_roots);
 
         // Re-layout using partial layout from boundaries when available
         let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
@@ -396,7 +395,6 @@ fn render_surface(
 
         // Skip frame if nothing needs paint
         if !tree.needs_paint(surface.widget_id) {
-            handle_animation_jobs(&jobs, tree);
             render_stats::record_frame_skipped();
             render_stats::end_frame(&DamageRegion::None);
             return;
@@ -432,10 +430,6 @@ fn render_surface(
         // Cache paint results AFTER flatten so cached_flatten data is preserved.
         // This enables incremental flatten for paint-cached nodes on subsequent frames.
         cache_paint_results(tree, &surface.root_node);
-
-        // Process Animation jobs AFTER paint (advance for next frame)
-        // This only processes widgets with Animation jobs, not the entire tree
-        handle_animation_jobs(&jobs, tree);
 
         // Report damage region to Wayland compositor
         let damage = tree.take_damage();
@@ -692,6 +686,11 @@ impl App {
                 &mut self.tree,
             );
 
+            // Flush background-thread signal writes once per frame (queued via WriteSignal).
+            // Must run before take_frame_request() so that signal changes from bg writes
+            // are processed into jobs before we check the frame request flag.
+            reactive::flush_bg_writes();
+
             // Check frame request once for all surfaces (not per-surface)
             let frame_requested = take_frame_request();
 
@@ -713,6 +712,12 @@ impl App {
                     frame_requested,
                 );
             }
+
+            // Process all animation jobs once per frame, after all surfaces rendered.
+            // This prevents cross-surface job draining where one surface's
+            // drain_pending_jobs swallows another surface's animation continuation jobs.
+            let animation_jobs = drain_pending_jobs();
+            handle_animation_jobs(&animation_jobs, &mut self.tree);
 
             // Flush the connection once for all surfaces
             connection.flush().expect("Failed to flush connection");
