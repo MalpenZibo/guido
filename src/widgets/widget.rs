@@ -376,6 +376,12 @@ impl Event {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LayoutHints {
+    pub fill_width: bool,
+    pub fill_height: bool,
+}
+
 pub trait Widget {
     /// Advance animations for this widget and children.
     /// Returns true if any animations are still active and need another frame.
@@ -391,6 +397,10 @@ pub trait Widget {
     fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         let _ = (tree, id);
         false
+    }
+
+    fn layout_hints(&self) -> LayoutHints {
+        LayoutHints::default()
     }
 
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size;
@@ -423,6 +433,9 @@ impl Widget for Box<dyn Widget> {
     }
     fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         (**self).reconcile_children(tree, id)
+    }
+    fn layout_hints(&self) -> LayoutHints {
+        (**self).layout_hints()
     }
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
         (**self).layout(tree, id, constraints)

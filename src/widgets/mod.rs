@@ -19,7 +19,8 @@ pub use state_layer::{BackgroundOverride, RippleConfig, StateStyle};
 pub use text::{Text, text};
 pub use text_input::{Selection, TextInput, text_input};
 pub use widget::{
-    Color, Event, EventResponse, Key, Modifiers, MouseButton, Padding, Rect, ScrollSource, Widget,
+    Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding, Rect,
+    ScrollSource, Widget,
 };
 
 // IntoMaybeDyn implementations for widget types
