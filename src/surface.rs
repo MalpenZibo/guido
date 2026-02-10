@@ -301,6 +301,7 @@ fn push_surface_command(cmd: SurfaceCommand) {
     SURFACE_COMMANDS.with(|cmds| {
         cmds.borrow_mut().push(cmd);
     });
+    crate::jobs::request_frame();
 }
 
 /// Drain all pending surface commands. Called by the main event loop.

@@ -239,6 +239,7 @@ fn render_surface(
     qh: &QueueHandle<platform::WaylandState>,
     tree: &mut Tree,
     layout_roots: &mut Vec<WidgetId>,
+    frame_requested: bool,
 ) {
     // Get wayland surface state
     let Some(wayland_surface) = wayland_state.get_surface_mut(id) else {
@@ -332,7 +333,6 @@ fn render_surface(
     // Check render conditions
     let fully_initialized = first_frame_presented && scale_factor_received;
     let force_render_surface = !fully_initialized;
-    let frame_requested = take_frame_request();
     let has_pending_layouts = !layout_roots.is_empty();
 
     // Only render if something changed (or during initialization)
@@ -341,6 +341,7 @@ fn render_surface(
         || has_pending_layouts
         || needs_resize
         || scale_changed
+        || tree.needs_paint(surface.widget_id)
     {
         // Update renderer for this surface
         renderer.set_screen_size(physical_width as f32, physical_height as f32);
@@ -691,6 +692,9 @@ impl App {
                 &mut self.tree,
             );
 
+            // Check frame request once for all surfaces (not per-surface)
+            let frame_requested = take_frame_request();
+
             // Render each surface
             let surface_ids: Vec<SurfaceId> = surface_manager.ids().collect();
             for id in surface_ids {
@@ -706,6 +710,7 @@ impl App {
                     &qh,
                     &mut self.tree,
                     &mut self.layout_roots,
+                    frame_requested,
                 );
             }
 
