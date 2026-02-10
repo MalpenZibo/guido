@@ -27,7 +27,7 @@ use super::scroll::{
 };
 use super::state_layer::{StateStyle, resolve_background};
 use super::widget::{
-    Color, Event, EventResponse, MouseButton, Padding, Rect, ScrollSource, Widget,
+    Color, Event, EventResponse, LayoutHints, MouseButton, Padding, Rect, ScrollSource, Widget,
 };
 
 /// Callback for click events
@@ -36,6 +36,8 @@ pub type ClickCallback = Rc<dyn Fn()>;
 pub type HoverCallback = Rc<dyn Fn(bool)>;
 /// Callback for scroll events (delta_x, delta_y, source)
 pub type ScrollCallback = Rc<dyn Fn(f32, f32, ScrollSource)>;
+/// Callback for pointer move events (x, y in surface-local coords)
+pub type PointerMoveCallback = Rc<dyn Fn(f32, f32)>;
 
 /// Gradient direction for linear gradients
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -134,6 +136,7 @@ pub struct Container {
     pub(super) on_click: Option<ClickCallback>,
     pub(super) on_hover: Option<HoverCallback>,
     pub(super) on_scroll: Option<ScrollCallback>,
+    pub(super) on_pointer_move: Option<PointerMoveCallback>,
 
     // Internal state for event handling
     pub(super) is_hovered: bool,
@@ -196,6 +199,7 @@ impl Container {
             on_click: None,
             on_hover: None,
             on_scroll: None,
+            on_pointer_move: None,
             is_hovered: false,
             is_pressed: false,
             width_anim: None,
@@ -445,6 +449,11 @@ impl Container {
 
     pub fn on_scroll<F: Fn(f32, f32, ScrollSource) + 'static>(mut self, callback: F) -> Self {
         self.on_scroll = Some(Rc::new(callback));
+        self
+    }
+
+    pub fn on_pointer_move<F: Fn(f32, f32) + 'static>(mut self, callback: F) -> Self {
+        self.on_pointer_move = Some(Rc::new(callback));
         self
     }
 
@@ -969,6 +978,13 @@ impl Widget for Container {
         self.children_source.register_pending(tree, id);
     }
 
+    fn layout_hints(&self) -> LayoutHints {
+        LayoutHints {
+            fill_width: self.width.as_ref().map(|w| w.get().fill).unwrap_or(false),
+            fill_height: self.height.as_ref().map(|h| h.get().fill).unwrap_or(false),
+        }
+    }
+
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
         // Register this widget's relayout boundary status with the tree
         tree.set_relayout_boundary(id, self.is_relayout_boundary_for(constraints));
@@ -1012,9 +1028,6 @@ impl Widget for Container {
                     self.height.as_ref().map(|h| h.get()).unwrap_or_default(),
                 )
             });
-
-        // Record fill intent so parent Flex layout can distribute remaining space
-        tree.set_fills(id, width_length.fill, height_length.fill);
 
         // Calculate current container dimensions
         let current_width = if let Some(ref anim) = self.width_anim {
@@ -1271,12 +1284,14 @@ impl Widget for Container {
             exact
         } else if width_length.fill {
             constraints.max_width
-        } else if let Some(min) = width_length.min {
-            content_width.max(min)
         } else {
             content_width
         };
 
+        // Apply Length min/max as post-adjustments (works with all cases including fill)
+        if let Some(min) = width_length.min {
+            width = width.max(min);
+        }
         if let Some(max) = width_length.max {
             width = width.min(max);
         }
@@ -1291,11 +1306,17 @@ impl Widget for Container {
             exact
         } else if height_length.fill {
             constraints.max_height
-        } else if let Some(min) = height_length.min {
-            content_height.max(min)
         } else {
             content_height
         };
+
+        // Apply Length min/max as post-adjustments (works with all cases including fill)
+        if let Some(min) = height_length.min {
+            height = height.max(min);
+        }
+        if let Some(max) = height_length.max {
+            height = height.min(max);
+        }
 
         if let Some(max) = height_length.max {
             height = height.min(max);
@@ -1364,6 +1385,43 @@ impl Widget for Container {
             return response;
         }
 
+        // Pre-dispatch: update hover state and fire pointer move callback
+        // before children get the event. This ensures parent hover tracking
+        // works even when a child container handles the MouseMove/MouseEnter.
+        match local_event.as_ref() {
+            Event::MouseEnter { x, y } => {
+                if bounds.contains_rounded(*x, *y, corner_radius) && !self.is_hovered {
+                    self.is_hovered = true;
+                    if self.hover_state.is_some() {
+                        self.request_state_change_repaint(id);
+                    }
+                    if let Some(ref callback) = self.on_hover {
+                        callback(true);
+                    }
+                }
+            }
+            Event::MouseMove { x, y } => {
+                if let Some(ref callback) = self.on_pointer_move
+                    && bounds.contains_rounded(*x, *y, corner_radius)
+                {
+                    callback(*x, *y);
+                }
+
+                let was_hovered = self.is_hovered;
+                self.is_hovered = bounds.contains_rounded(*x, *y, corner_radius);
+
+                if was_hovered != self.is_hovered {
+                    if self.hover_state.is_some() {
+                        self.request_state_change_repaint(id);
+                    }
+                    if let Some(ref callback) = self.on_hover {
+                        callback(self.is_hovered);
+                    }
+                }
+            }
+            _ => {}
+        }
+
         // Transform event coordinates to local space (relative to container origin)
         // Children are positioned in local coordinates, so events must be too
         let child_event: Cow<'_, Event> = if let Some((x, y)) = local_event.coords() {
@@ -1397,33 +1455,10 @@ impl Widget for Container {
 
         // Handle our own events
         match local_event.as_ref() {
-            Event::MouseEnter { x, y } => {
-                if bounds.contains_rounded(*x, *y, corner_radius) {
-                    let was_hovered = self.is_hovered;
-                    self.is_hovered = true;
-                    if !was_hovered && self.hover_state.is_some() {
-                        self.request_state_change_repaint(id);
-                    }
-                    if let Some(ref callback) = self.on_hover {
-                        callback(true);
-                    }
-                    return EventResponse::Handled;
-                }
-            }
-            Event::MouseMove { x, y } => {
-                let was_hovered = self.is_hovered;
-                self.is_hovered = bounds.contains_rounded(*x, *y, corner_radius);
-
-                if was_hovered != self.is_hovered {
-                    if self.hover_state.is_some() {
-                        self.request_state_change_repaint(id);
-                    }
-                    if let Some(ref callback) = self.on_hover {
-                        callback(self.is_hovered);
-                    }
-                    return EventResponse::Handled;
-                }
-            }
+            // Hover tracking already handled in pre-dispatch above.
+            // Don't return Handled — hover changes should not prevent
+            // sibling containers from tracking their own hover state.
+            Event::MouseEnter { .. } | Event::MouseMove { .. } => {}
             Event::MouseDown { x, y, button } => {
                 if bounds.contains_rounded(*x, *y, corner_radius) && *button == MouseButton::Left {
                     let was_pressed = self.is_pressed;
