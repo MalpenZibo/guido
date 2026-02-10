@@ -1013,6 +1013,9 @@ impl Widget for Container {
                 )
             });
 
+        // Record fill intent so parent Flex layout can distribute remaining space
+        tree.set_fills(id, width_length.fill, height_length.fill);
+
         // Calculate current container dimensions
         let current_width = if let Some(ref anim) = self.width_anim {
             if anim.is_initial() {

@@ -172,7 +172,9 @@ impl Flex {
             },
         };
 
-        // First pass: measure all children
+        // First pass: measure all children with full main-axis constraints.
+        // Container children with fill() will expand to main_max and record
+        // their fill intent in the tree via set_fills().
         let mut total_main = 0.0f32;
         let mut max_cross = 0.0f32;
         let mut children_main = 0.0f32;
@@ -187,6 +189,62 @@ impl Flex {
                 children_main += main_size;
                 max_cross = max_cross.max(cross_size);
                 self.child_sizes.push(size);
+            }
+        }
+
+        // Second pass: re-measure fill children with remaining space.
+        // After the first pass, Container has called tree.set_fills() for each
+        // child, so we can now identify which children want fill behavior and
+        // distribute the remaining main-axis space among them.
+        let fill_indices: Vec<usize> = children
+            .iter()
+            .enumerate()
+            .filter(|&(_, &id)| tree.fills(id, axis))
+            .map(|(i, _)| i)
+            .collect();
+
+        if !fill_indices.is_empty() {
+            let non_fill_main: f32 = self
+                .child_sizes
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !fill_indices.contains(i))
+                .map(|(_, s)| s.main_axis(axis))
+                .sum();
+
+            let total_spacing = if children.len() > 1 {
+                spacing * (children.len() - 1) as f32
+            } else {
+                0.0
+            };
+            let remaining = (main_max - non_fill_main - total_spacing).max(0.0);
+            let per_fill = remaining / fill_indices.len() as f32;
+
+            let fill_constraints = match axis {
+                Axis::Horizontal => Constraints {
+                    max_width: per_fill,
+                    min_width: per_fill,
+                    ..child_constraints
+                },
+                Axis::Vertical => Constraints {
+                    max_height: per_fill,
+                    min_height: per_fill,
+                    ..child_constraints
+                },
+            };
+
+            for &i in &fill_indices {
+                if let Some(size) = tree.with_widget_mut(children[i], |widget, id, tree| {
+                    widget.layout(tree, id, fill_constraints)
+                }) {
+                    let old_main = self.child_sizes[i].main_axis(axis);
+                    total_main -= old_main;
+                    children_main -= old_main;
+                    total_main += size.main_axis(axis);
+                    children_main += size.main_axis(axis);
+                    max_cross = max_cross.max(size.cross_axis(axis));
+                    self.child_sizes[i] = size;
+                }
             }
         }
 

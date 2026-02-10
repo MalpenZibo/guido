@@ -25,7 +25,7 @@
 
 use smallvec::SmallVec;
 
-use crate::layout::{Constraints, Size};
+use crate::layout::{Axis, Constraints, Size};
 use crate::widgets::{Rect, Widget};
 
 /// Inline capacity for children. Most widgets have 0–4 children,
@@ -109,6 +109,10 @@ struct Node {
     origin: (f32, f32),
     /// Back-pointer to sparse array index (for swap-remove fixup)
     sparse_index: u32,
+    /// Whether this widget wants to fill available width (set by Container during layout)
+    fills_width: bool,
+    /// Whether this widget wants to fill available height (set by Container during layout)
+    fills_height: bool,
     /// Cached paint output from last frame
     cached_paint: Option<crate::renderer::RenderNode>,
 }
@@ -177,6 +181,8 @@ impl Tree {
             cached_size: None,
             origin: (0.0, 0.0),
             sparse_index,
+            fills_width: false,
+            fills_height: false,
             cached_paint: None,
         });
 
@@ -520,6 +526,24 @@ impl Tree {
     pub fn cached_size(&self, id: WidgetId) -> Option<Size> {
         self.get_dense_index(id)
             .and_then(|idx| self.dense[idx].cached_size)
+    }
+
+    /// Record whether a widget wants to fill available space on each axis.
+    /// Called by Container during layout when `width(fill())` or `height(fill())` is set.
+    pub fn set_fills(&mut self, id: WidgetId, width: bool, height: bool) {
+        if let Some(idx) = self.get_dense_index(id) {
+            self.dense[idx].fills_width = width;
+            self.dense[idx].fills_height = height;
+        }
+    }
+
+    /// Check whether a widget wants to fill available space on the given axis.
+    /// Used by Flex layout to distribute remaining space to fill children.
+    pub fn fills(&self, id: WidgetId, axis: Axis) -> bool {
+        self.get_dense_index(id).map_or(false, |idx| match axis {
+            Axis::Horizontal => self.dense[idx].fills_width,
+            Axis::Vertical => self.dense[idx].fills_height,
+        })
     }
 
     /// Set the origin (position) for a widget.
