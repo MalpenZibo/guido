@@ -19,6 +19,7 @@ use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
 use crate::tree::{Tree, WidgetId};
+use crate::widget_ref::{WidgetRef, register_widget_ref};
 
 use super::children::ChildrenSource;
 use super::into_child::{IntoChild, IntoChildren};
@@ -138,6 +139,9 @@ pub struct Container {
     pub(super) on_scroll: Option<ScrollCallback>,
     pub(super) on_pointer_move: Option<PointerMoveCallback>,
 
+    // Widget ref for reactive bounds tracking
+    pub(super) widget_ref: Option<WidgetRef>,
+
     // Internal state for event handling
     pub(super) is_hovered: bool,
     pub(super) is_pressed: bool,
@@ -200,6 +204,7 @@ impl Container {
             on_hover: None,
             on_scroll: None,
             on_pointer_move: None,
+            widget_ref: None,
             is_hovered: false,
             is_pressed: false,
             width_anim: None,
@@ -454,6 +459,12 @@ impl Container {
 
     pub fn on_pointer_move<F: Fn(f32, f32) + 'static>(mut self, callback: F) -> Self {
         self.on_pointer_move = Some(Rc::new(callback));
+        self
+    }
+
+    /// Attach a [`WidgetRef`] to track this container's surface-relative bounds.
+    pub fn widget_ref(mut self, r: WidgetRef) -> Self {
+        self.widget_ref = Some(r);
         self
     }
 
@@ -1353,6 +1364,11 @@ impl Widget for Container {
 
         // Cache constraints and size for partial layout
         tree.cache_layout(id, constraints, size);
+
+        // Register widget ref so update_widget_refs() can refresh bounds
+        if let Some(ref wr) = self.widget_ref {
+            register_widget_ref(id, wr.rect());
+        }
 
         size
     }
