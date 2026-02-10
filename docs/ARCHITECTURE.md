@@ -97,20 +97,32 @@ Hardware-accelerated rendering using wgpu.
 - Custom WGSL shaders for SDF-based instanced rendering
 
 **Rendering Pipeline (per frame):**
-1. `drain_pending_jobs()` - Collect pending reactive jobs
-2. `handle_unregister_jobs()` - Cleanup dropped widgets
-3. `handle_paint_jobs()` - Mark widgets needing paint (propagates upward, accumulates damage)
-4. `handle_reconcile_jobs()` / `handle_layout_jobs()` - Collect layout roots
-5. Partial layout from `layout_roots` - Only dirty subtrees re-layout
-6. Force full repaint on resize, scale change, or initialization
-7. **Skip frame** if root widget doesn't need paint (animations still advance)
-8. `widget.paint(tree, ctx)` - Build render tree via PaintContext (clean children reuse cached nodes)
-9. `cache_paint_results()` - Store paint output per widget, clear `needs_paint` flags
-10. `flatten_tree_into()` - Flatten render tree to draw commands (incremental: clean subtrees reuse cached commands)
-11. GPU rendering with instanced SDF shapes and HiDPI scaling
-12. Report damage region to Wayland via `wl_surface.damage_buffer()`
-13. `handle_animation_jobs()` - Advance animations for next frame
-14. `wl_surface.commit()` - Present frame
+
+*Main loop (once per frame):*
+1. `flush_bg_writes()` - Drain queued background-thread signal writes
+2. `take_frame_request()` - Check if a frame was requested
+
+*Per-surface rendering:*
+3. Dispatch events to widgets
+4. `drain_non_animation_jobs()` - Collect Paint/Layout/Reconcile/Unregister jobs (Animation jobs stay in queue)
+5. `handle_unregister_jobs()` - Cleanup dropped widgets
+6. `handle_paint_jobs()` - Mark widgets needing paint (propagates upward, accumulates damage)
+7. `handle_reconcile_jobs()` / `handle_layout_jobs()` - Collect layout roots
+8. Partial layout from `layout_roots` - Only dirty subtrees re-layout
+9. Force full repaint on resize, scale change, or initialization
+10. **Skip frame** if root widget doesn't need paint
+11. `widget.paint(tree, ctx)` - Build render tree via PaintContext (clean children reuse cached nodes)
+12. `cache_paint_results()` - Store paint output per widget, clear `needs_paint` flags
+13. `flatten_tree_into()` - Flatten render tree to draw commands (incremental: clean subtrees reuse cached commands)
+14. GPU rendering with instanced SDF shapes and HiDPI scaling
+15. Report damage region to Wayland via `wl_surface.damage_buffer()`
+16. `wl_surface.commit()` - Present frame
+
+*After all surfaces render:*
+17. `drain_pending_jobs()` - Collect remaining Animation jobs
+18. `handle_animation_jobs()` - Advance animations once per frame
+
+Animation jobs are processed centrally to prevent cross-surface job loss in multi-surface apps, where one surface's drain could swallow another surface's animation continuation jobs.
 
 **Shape Features:**
 - Rounded rectangles with configurable superellipse curvature

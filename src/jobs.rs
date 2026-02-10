@@ -247,3 +247,102 @@ pub(crate) fn request_frame() {
 pub fn take_frame_request() -> bool {
     FRAME_REQUESTED.swap(false, Ordering::Relaxed)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tree::WidgetId;
+
+    fn widget_id(n: u64) -> WidgetId {
+        WidgetId::from_u64(n)
+    }
+
+    /// Helper: directly push jobs into PENDING_JOBS for testing.
+    fn push_test_jobs(jobs: &[Job]) {
+        PENDING_JOBS.with(|pending| {
+            let mut pending = pending.borrow_mut();
+            for job in jobs {
+                push_job(&mut pending, *job);
+            }
+        });
+    }
+
+    #[test]
+    fn drain_non_animation_keeps_animation_jobs() {
+        // Clear any leftover state from other tests
+        drain_pending_jobs();
+
+        let anim_job = Job {
+            widget_id: widget_id(1),
+            job_type: JobType::Animation,
+        };
+        let paint_job = Job {
+            widget_id: widget_id(2),
+            job_type: JobType::Paint,
+        };
+        let layout_job = Job {
+            widget_id: widget_id(3),
+            job_type: JobType::Layout,
+        };
+
+        push_test_jobs(&[anim_job, paint_job, layout_job]);
+
+        // drain_non_animation_jobs should return Paint + Layout, keep Animation
+        let drained = drain_non_animation_jobs();
+        assert_eq!(drained.len(), 2);
+        assert!(drained.contains(&paint_job));
+        assert!(drained.contains(&layout_job));
+
+        // Animation job should still be in PENDING_JOBS
+        let remaining = drain_pending_jobs();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0], anim_job);
+    }
+
+    #[test]
+    fn drain_non_animation_with_no_animations() {
+        drain_pending_jobs();
+
+        let paint_job = Job {
+            widget_id: widget_id(1),
+            job_type: JobType::Paint,
+        };
+        let unregister_job = Job {
+            widget_id: widget_id(2),
+            job_type: JobType::Unregister,
+        };
+
+        push_test_jobs(&[paint_job, unregister_job]);
+
+        let drained = drain_non_animation_jobs();
+        assert_eq!(drained.len(), 2);
+
+        // Nothing should remain
+        let remaining = drain_pending_jobs();
+        assert!(remaining.is_empty());
+    }
+
+    #[test]
+    fn drain_non_animation_with_only_animations() {
+        drain_pending_jobs();
+
+        let anim1 = Job {
+            widget_id: widget_id(1),
+            job_type: JobType::Animation,
+        };
+        let anim2 = Job {
+            widget_id: widget_id(2),
+            job_type: JobType::Animation,
+        };
+
+        push_test_jobs(&[anim1, anim2]);
+
+        // Should return empty — all jobs are animations
+        let drained = drain_non_animation_jobs();
+        assert!(drained.is_empty());
+
+        // Both should remain
+        let remaining = drain_pending_jobs();
+        assert_eq!(remaining.len(), 2);
+    }
+}

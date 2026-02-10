@@ -5,21 +5,34 @@ This page explains how Guido renders widgets to the screen.
 ## Pipeline Overview
 
 ```
- 1. drain_pending_jobs()         → Collect pending reactive jobs
- 2. handle_unregister_jobs()     → Cleanup dropped widgets
- 3. handle_paint_jobs()          → Mark widgets needing paint, accumulate damage
- 4. handle_reconcile_jobs()      → Reconcile dynamic children
- 5. handle_layout_jobs()         → Collect layout roots
- 6. Partial layout               → Only dirty subtrees re-layout
- 7. Skip-frame check             → Skip paint if root is clean
- 8. widget.paint(tree, ctx)      → Build render tree (cache reuse for clean children)
- 9. cache_paint_results()        → Store rendered nodes, clear needs_paint flags
-10. flatten_tree_into()          → Flatten to draw commands (incremental for clean subtrees)
-11. GPU rendering                → Instanced SDF shapes with HiDPI scaling
-12. damage_buffer()              → Report damage region to Wayland compositor
-13. handle_animation_jobs()      → Advance animations for next frame
-14. wl_surface.commit()          → Present frame
+Main loop (once per frame):
+ 1. flush_bg_writes()              → Drain queued background-thread signal writes
+ 2. take_frame_request()           → Check if a frame was requested
+
+Per-surface rendering:
+ 3. Dispatch events                → Route input events to widgets
+ 4. drain_non_animation_jobs()     → Collect non-animation jobs (Animation jobs stay in queue)
+ 5. handle_unregister_jobs()       → Cleanup dropped widgets
+ 6. handle_paint_jobs()            → Mark widgets needing paint, accumulate damage
+ 7. handle_reconcile_jobs()        → Reconcile dynamic children
+ 8. handle_layout_jobs()           → Collect layout roots
+ 9. Partial layout                 → Only dirty subtrees re-layout
+10. Skip-frame check               → Skip paint if root is clean
+11. widget.paint(tree, ctx)        → Build render tree (cache reuse for clean children)
+12. cache_paint_results()          → Store rendered nodes, clear needs_paint flags
+13. flatten_tree_into()            → Flatten to draw commands (incremental for clean subtrees)
+14. GPU rendering                  → Instanced SDF shapes with HiDPI scaling
+15. damage_buffer()                → Report damage region to Wayland compositor
+16. wl_surface.commit()            → Present frame
+
+After all surfaces render:
+17. drain_pending_jobs()           → Collect remaining Animation jobs
+18. handle_animation_jobs()        → Advance animations once per frame
 ```
+
+Animation jobs are processed centrally after all surfaces render. This prevents
+cross-surface job loss in multi-surface apps, where one surface's drain could
+swallow another surface's animation continuation jobs.
 
 ## Layout Pass
 
@@ -197,13 +210,12 @@ Clipping respects corner radius and curvature for proper rounded container clipp
 
 ## Animation Advancement
 
-Animations run *after* paint to advance state for the next frame:
+Animations advance *after all surfaces render*, once per frame in the main loop:
 
 ```rust
-// Main loop each frame:
-widget.layout(constraints);           // Calculate sizes (may skip if cached)
-widget.paint(ctx);                    // Render to screen
-widget.advance_animations(tree, id);  // Advance animations for next frame
+// After all surfaces have rendered:
+let animation_jobs = drain_pending_jobs();  // Only Animation jobs remain
+handle_animation_jobs(&animation_jobs, &mut tree);
 ```
 
 This ordering means the current frame renders with the current animation state,
@@ -261,8 +273,8 @@ reuse their cached `RenderNode` from the previous frame, with only the parent po
 transform updated.
 
 **Skip Frame**: If no widget needs paint after job processing and layout, the entire
-paint→flatten→render→commit cycle is skipped. Animation jobs still advance to keep
-timers running.
+paint→flatten→render→commit cycle is skipped for that surface. Animation jobs are
+processed centrally in the main loop regardless, so they always advance.
 
 **Damage Regions**: As widgets are marked for paint, their surface-relative bounds are
 accumulated into a `DamageRegion` (None, Partial, or Full). Before presenting, the

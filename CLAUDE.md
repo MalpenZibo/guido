@@ -156,18 +156,30 @@ All widgets implement:
 
 ### Rendering Pipeline
 
-Each frame follows this pipeline:
-1. `drain_pending_jobs()` - Collect reactive jobs (paint, layout, reconcile, unregister, animation)
-2. Process jobs: unregister dropped widgets, mark paint/layout dirty flags, reconcile dynamic children
-3. Partial layout from `layout_roots` - Only dirty subtrees re-layout
-4. **Skip frame** if root widget doesn't need paint (animations still advance)
-5. `widget.paint(tree, ctx)` - Build render tree (clean children reuse cached `RenderNode`s)
-6. `cache_paint_results()` - Store paint output per widget, clear `needs_paint` flags
-7. `flatten_tree_into()` - Flatten render tree to draw commands (incremental: clean subtrees reuse cached commands)
-8. GPU rendering with instanced SDF shapes, HiDPI scaling, layer ordering (shapes → images → text → overlay)
-9. Report damage region to Wayland via `wl_surface.damage_buffer()`
-10. `handle_animation_jobs()` - Advance animations for next frame
-11. `wl_surface.commit()` - Present frame
+Each frame has two phases — per-surface rendering and centralized animation processing:
+
+**Main loop (once per frame):**
+1. `flush_bg_writes()` - Drain queued background-thread signal writes
+2. `take_frame_request()` - Check if a frame was requested
+
+**Per-surface rendering:**
+3. Dispatch events to widgets
+4. `drain_non_animation_jobs()` - Collect Paint/Layout/Reconcile/Unregister jobs (Animation jobs stay in queue)
+5. Process jobs: unregister dropped widgets, mark paint/layout dirty flags, reconcile dynamic children
+6. Partial layout from `layout_roots` - Only dirty subtrees re-layout
+7. **Skip frame** if root widget doesn't need paint
+8. `widget.paint(tree, ctx)` - Build render tree (clean children reuse cached `RenderNode`s)
+9. `cache_paint_results()` - Store paint output per widget, clear `needs_paint` flags
+10. `flatten_tree_into()` - Flatten render tree to draw commands (incremental: clean subtrees reuse cached commands)
+11. GPU rendering with instanced SDF shapes, HiDPI scaling, layer ordering (shapes → images → text → overlay)
+12. Report damage region to Wayland via `wl_surface.damage_buffer()`
+13. `wl_surface.commit()` - Present frame
+
+**After all surfaces render:**
+14. `drain_pending_jobs()` - Collect remaining Animation jobs
+15. `handle_animation_jobs()` - Advance animations once per frame
+
+Animation jobs are processed centrally to prevent cross-surface job loss in multi-surface apps.
 
 ### Event System
 
