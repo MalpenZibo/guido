@@ -445,7 +445,7 @@ impl Tree {
 
     /// Get the surface-relative bounds of a widget by walking up the parent chain
     /// and summing origins.
-    fn get_surface_relative_bounds(&self, id: WidgetId) -> Option<Rect> {
+    pub fn get_surface_relative_bounds(&self, id: WidgetId) -> Option<Rect> {
         let idx = self.get_dense_index(id)?;
         let size = self.dense[idx].cached_size?;
         let mut x = 0.0f32;

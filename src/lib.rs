@@ -9,6 +9,7 @@ mod surface_manager;
 pub mod transform;
 pub mod transform_origin;
 pub mod tree;
+pub mod widget_ref;
 pub mod widgets;
 
 // These modules are public for advanced use cases
@@ -115,6 +116,7 @@ pub mod prelude {
     };
     pub use crate::transform::Transform;
     pub use crate::transform_origin::{HorizontalAnchor, TransformOrigin, VerticalAnchor};
+    pub use crate::widget_ref::{WidgetRef, create_widget_ref};
     pub use crate::widgets::{
         Border, Color, Container, ContentFit, Event, EventResponse, FontFamily, FontWeight,
         GradientDirection, Image, ImageSource, IntoChildren, Key, LinearGradient, Modifiers,
@@ -387,6 +389,9 @@ fn render_surface(
             tree.mark_subtree_needs_paint(surface.widget_id);
         }
         // If neither condition is true, skip layout entirely - nothing is dirty
+
+        // Update widget ref signals with current bounds after layout
+        widget_ref::update_widget_refs(tree);
 
         // Force full repaint on resize, scale change, or during initialization
         if force_render_surface || needs_resize || scale_changed {
