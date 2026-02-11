@@ -411,7 +411,10 @@ fn render_surface(
         });
 
         // Take ownership of root node temporarily, add to tree, then restore
-        let root = std::mem::replace(&mut surface.root_node, renderer::RenderNode::new(0));
+        let root = std::mem::replace(
+            &mut surface.root_node,
+            renderer::RenderNode::new(surface.widget_id.as_u64()),
+        );
         surface.render_tree.add_root(root);
 
         // Flatten tree into reused buffer
