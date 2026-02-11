@@ -66,7 +66,7 @@ impl ManagedSurface {
             wgpu_surface: None,
             previous_scale_factor: 1.0,
             render_tree: RenderTree::new(),
-            root_node: RenderNode::new(0),
+            root_node: RenderNode::new(widget_id.as_u64()),
             flattened_commands: Vec::new(),
         }
     }
