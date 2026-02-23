@@ -37,6 +37,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use super::invalidation::clear_signal_subscribers;
 use super::runtime::{EffectId, SignalId, with_runtime};
 use super::storage::dispose_signal;
 
@@ -196,8 +197,9 @@ pub fn dispose_owner(id: OwnerId) {
         with_runtime(|rt| rt.dispose_effect(effect_id));
     }
 
-    // Dispose signals
+    // Dispose signals (clear subscribers first to prevent stale notifications)
     for signal_id in owner.signals {
+        clear_signal_subscribers(signal_id);
         dispose_signal(signal_id);
     }
 }

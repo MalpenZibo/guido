@@ -13,9 +13,9 @@
 //!
 //! ## Deduplication
 //!
-//! Jobs are stored in a `Vec` with contains-check for dedup. Each `(widget_id, job_type)`
-//! pair is unique. Multiple signals updating the same widget in one frame result in a
-//! single job. Linear scan is faster than HashSet for typical frame sizes (0–20 jobs).
+//! Jobs are stored in a `JobQueue` with `HashSet` for O(1) dedup + `Vec` for ordered
+//! iteration. Each `(widget_id, job_type)` pair is unique. Multiple signals updating
+//! the same widget in one frame result in a single job.
 //!
 //! ## Frame Request
 //!
@@ -23,6 +23,7 @@
 //! mechanism, ensuring the frame is processed promptly.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::sync::{
     OnceLock,
     atomic::{AtomicBool, Ordering},
@@ -30,13 +31,58 @@ use std::sync::{
 
 use smithay_client_toolkit::reexports::calloop::ping::Ping;
 
+use crate::reactive::invalidation::clear_widget_subscribers;
 use crate::tree::{Tree, WidgetId};
+
+/// Job queue with O(1) dedup via HashSet + Vec for ordered iteration.
+struct JobQueue {
+    set: HashSet<Job>,
+    vec: Vec<Job>,
+}
+
+impl JobQueue {
+    fn new() -> Self {
+        Self {
+            set: HashSet::new(),
+            vec: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, job: Job) {
+        if self.set.insert(job) {
+            self.vec.push(job);
+        }
+    }
+
+    fn drain_all(&mut self) -> Vec<Job> {
+        self.set.clear();
+        std::mem::take(&mut self.vec)
+    }
+
+    fn drain_non_animation(&mut self) -> Vec<Job> {
+        let mut non_anim = Vec::new();
+        self.vec.retain(|job| {
+            if job.job_type == JobType::Animation {
+                true
+            } else {
+                self.set.remove(job);
+                non_anim.push(*job);
+                false
+            }
+        });
+        non_anim
+    }
+
+    fn is_empty(&self) -> bool {
+        self.vec.is_empty()
+    }
+}
 
 // Thread-local job queue for pending reactive updates.
 // All job producers (signal writes, animations) run on the main thread,
-// so no Mutex is needed. Uses Vec with contains-check for dedup.
+// so no Mutex is needed.
 thread_local! {
-    static PENDING_JOBS: RefCell<Vec<Job>> = const { RefCell::new(Vec::new()) };
+    static PENDING_JOBS: RefCell<JobQueue> = RefCell::new(JobQueue::new());
 }
 
 /// Job types for reactive invalidation (stored in the queue)
@@ -83,13 +129,6 @@ pub struct Job {
     pub job_type: JobType,
 }
 
-/// Push a job into the queue if not already present.
-fn push_job(jobs: &mut Vec<Job>, job: Job) {
-    if !jobs.contains(&job) {
-        jobs.push(job);
-    }
-}
-
 /// Request a job (handles animation follow-up jobs automatically).
 /// For animations, this inserts both the Animation job and any required follow-up job.
 pub fn request_job(widget_id: WidgetId, request: JobRequest) {
@@ -97,32 +136,23 @@ pub fn request_job(widget_id: WidgetId, request: JobRequest) {
         let mut jobs = jobs.borrow_mut();
         match request {
             JobRequest::Animation(required) => {
-                push_job(
-                    &mut jobs,
-                    Job {
-                        widget_id,
-                        job_type: JobType::Animation,
-                    },
-                );
+                jobs.push(Job {
+                    widget_id,
+                    job_type: JobType::Animation,
+                });
                 match required {
                     RequiredJob::None => {}
                     RequiredJob::Paint => {
-                        push_job(
-                            &mut jobs,
-                            Job {
-                                widget_id,
-                                job_type: JobType::Paint,
-                            },
-                        );
+                        jobs.push(Job {
+                            widget_id,
+                            job_type: JobType::Paint,
+                        });
                     }
                     RequiredJob::Layout => {
-                        push_job(
-                            &mut jobs,
-                            Job {
-                                widget_id,
-                                job_type: JobType::Layout,
-                            },
-                        );
+                        jobs.push(Job {
+                            widget_id,
+                            job_type: JobType::Layout,
+                        });
                     }
                 }
             }
@@ -134,13 +164,10 @@ pub fn request_job(widget_id: WidgetId, request: JobRequest) {
                     JobRequest::Unregister => JobType::Unregister,
                     JobRequest::Animation(_) => unreachable!(),
                 };
-                push_job(
-                    &mut jobs,
-                    Job {
-                        widget_id,
-                        job_type,
-                    },
-                );
+                jobs.push(Job {
+                    widget_id,
+                    job_type,
+                });
             }
         }
     });
@@ -149,30 +176,19 @@ pub fn request_job(widget_id: WidgetId, request: JobRequest) {
 
 /// Drain all pending jobs
 pub fn drain_pending_jobs() -> Vec<Job> {
-    PENDING_JOBS.with(|jobs| std::mem::take(&mut *jobs.borrow_mut()))
+    PENDING_JOBS.with(|jobs| jobs.borrow_mut().drain_all())
 }
 
 /// Drain all pending jobs EXCEPT Animation jobs.
 /// Animation jobs are left in PENDING_JOBS for centralized processing
 /// in the main loop, preventing cross-surface job loss.
 pub fn drain_non_animation_jobs() -> Vec<Job> {
-    PENDING_JOBS.with(|jobs| {
-        let mut jobs = jobs.borrow_mut();
-        let mut non_anim = Vec::new();
-        jobs.retain(|job| {
-            if job.job_type == JobType::Animation {
-                true // keep in PENDING_JOBS
-            } else {
-                non_anim.push(*job);
-                false // remove
-            }
-        });
-        non_anim
-    })
+    PENDING_JOBS.with(|jobs| jobs.borrow_mut().drain_non_animation())
 }
 
 pub fn handle_unregister_jobs(jobs: &[Job], tree: &mut Tree) {
     for job in jobs.iter().filter(|j| j.job_type == JobType::Unregister) {
+        clear_widget_subscribers(job.widget_id);
         tree.unregister(job.widget_id);
     }
 }
@@ -220,6 +236,14 @@ pub fn has_pending_jobs() -> bool {
     PENDING_JOBS.with(|jobs| !jobs.borrow().is_empty())
 }
 
+/// Clear all pending jobs (for testing)
+#[cfg(test)]
+fn clear_pending_jobs() {
+    PENDING_JOBS.with(|jobs| {
+        jobs.borrow_mut().drain_all();
+    });
+}
+
 /// Global flag to indicate a frame is requested
 static FRAME_REQUESTED: AtomicBool = AtomicBool::new(false);
 
@@ -262,7 +286,7 @@ mod tests {
         PENDING_JOBS.with(|pending| {
             let mut pending = pending.borrow_mut();
             for job in jobs {
-                push_job(&mut pending, *job);
+                pending.push(*job);
             }
         });
     }
@@ -270,7 +294,7 @@ mod tests {
     #[test]
     fn drain_non_animation_keeps_animation_jobs() {
         // Clear any leftover state from other tests
-        drain_pending_jobs();
+        clear_pending_jobs();
 
         let anim_job = Job {
             widget_id: widget_id(1),
@@ -301,7 +325,7 @@ mod tests {
 
     #[test]
     fn drain_non_animation_with_no_animations() {
-        drain_pending_jobs();
+        clear_pending_jobs();
 
         let paint_job = Job {
             widget_id: widget_id(1),
@@ -324,7 +348,7 @@ mod tests {
 
     #[test]
     fn drain_non_animation_with_only_animations() {
-        drain_pending_jobs();
+        clear_pending_jobs();
 
         let anim1 = Job {
             widget_id: widget_id(1),
