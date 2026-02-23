@@ -132,6 +132,24 @@ container()
 
 See [Animations](../animations/README.md) for timing and spring options.
 
+## Visibility
+
+Control whether a container is visible. When hidden, it takes up no space in layout, does not paint, and ignores all events.
+
+```rust
+// Static
+container().visible(false)
+
+// Reactive signal
+let show = create_signal(true);
+container().visible(show)
+
+// Reactive closure
+container().visible(move || tab.get() == "settings")
+```
+
+Unlike `.maybe_child()` which adds or removes a child from the tree, `.visible()` keeps the widget in the tree but hides it completely. This is useful when you want to toggle visibility without recreating the widget and its state.
+
 ## Scrolling
 
 Make containers scrollable when content overflows:
@@ -256,6 +274,9 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 - `.animate_transform(transition)` - Animate transform
 - `.animate_border_width(transition)` - Animate border width
 - `.animate_border_color(transition)` - Animate border color
+
+### Visibility
+- `.visible(condition)` - Show or hide the container (accepts static, signal, or closure)
 
 ### Scrolling
 - `.scrollable(axis)` - Enable scrolling (None, Vertical, Horizontal, Both)

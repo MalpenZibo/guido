@@ -130,6 +130,7 @@ pub struct Container {
     pub(super) width: Option<MaybeDyn<Length>>,
     pub(super) height: Option<MaybeDyn<Length>>,
     pub(super) overflow: Overflow,
+    pub(super) visible: MaybeDyn<bool>,
     pub(super) transform: MaybeDyn<Transform>,
     pub(super) transform_origin: MaybeDyn<TransformOrigin>,
 
@@ -198,6 +199,7 @@ impl Container {
             width: None,
             height: None,
             overflow: Overflow::Visible,
+            visible: MaybeDyn::Static(true),
             transform: MaybeDyn::Static(Transform::IDENTITY),
             transform_origin: MaybeDyn::Static(TransformOrigin::CENTER),
             on_click: None,
@@ -411,6 +413,15 @@ impl Container {
     /// Set the overflow behavior for content that exceeds container bounds
     pub fn overflow(mut self, overflow: Overflow) -> Self {
         self.overflow = overflow;
+        self
+    }
+
+    /// Set visibility of this container.
+    ///
+    /// When `visible` is false, the container takes up no space in layout,
+    /// does not paint, and ignores all events.
+    pub fn visible(mut self, visible: impl IntoMaybeDyn<bool>) -> Self {
+        self.visible = visible.into_maybe_dyn();
         self
     }
 
@@ -990,6 +1001,9 @@ impl Widget for Container {
     }
 
     fn layout_hints(&self) -> LayoutHints {
+        if !self.visible.get() {
+            return LayoutHints::default();
+        }
         LayoutHints {
             fill_width: self.width.as_ref().map(|w| w.get().fill).unwrap_or(false),
             fill_height: self.height.as_ref().map(|h| h.get().fill).unwrap_or(false),
@@ -997,6 +1011,16 @@ impl Widget for Container {
     }
 
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
+        // Check visibility with signal tracking so changes trigger re-layout
+        let is_visible = with_signal_tracking(id, JobType::Layout, || self.visible.get());
+        if !is_visible {
+            tree.set_relayout_boundary(id, true);
+            let size = Size::zero();
+            tree.cache_layout(id, constraints, size);
+            tree.clear_needs_layout(id);
+            return size;
+        }
+
         // Register this widget's relayout boundary status with the tree
         tree.set_relayout_boundary(id, self.is_relayout_boundary_for(constraints));
 
@@ -1374,6 +1398,10 @@ impl Widget for Container {
     }
 
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
+        if !self.visible.get() {
+            return EventResponse::Ignored;
+        }
+
         // Get bounds from Tree (single source of truth)
         let bounds = tree.get_bounds(id).unwrap_or_default();
 
@@ -1608,10 +1636,18 @@ impl Widget for Container {
     }
 
     fn has_focus_descendant(&self, tree: &Tree, focused_id: WidgetId) -> bool {
+        if !self.visible.get() {
+            return false;
+        }
         self.widget_has_focus(tree, focused_id)
     }
 
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
+        let is_visible = with_signal_tracking(id, JobType::Paint, || self.visible.get());
+        if !is_visible {
+            return;
+        }
+
         // Get bounds from Tree (single source of truth)
         let bounds = tree.get_bounds(id).unwrap_or_default();
 
