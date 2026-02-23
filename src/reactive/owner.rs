@@ -102,6 +102,26 @@ thread_local! {
     static OWNERS: RefCell<OwnerArena> = RefCell::new(OwnerArena::new());
 }
 
+/// Create a root owner and set it as the current owner.
+///
+/// This is used by `App::run()` to establish a root scope for all reactive
+/// primitives created during setup. The root owner owns everything — when
+/// disposed, all signals, effects, and cleanup callbacks cascade.
+pub(crate) fn create_root_owner() -> OwnerId {
+    let id = OWNERS.with(|owners| owners.borrow_mut().allocate());
+    CURRENT_OWNER.with(|current| *current.borrow_mut() = Some(id));
+    id
+}
+
+/// Reset all owner state (current owner + arena).
+///
+/// Called during `App::drop()` after `dispose_owner()` has cleaned up the
+/// reactive graph. This wipes the arena so the next `App` run starts fresh.
+pub(crate) fn reset_owners() {
+    CURRENT_OWNER.with(|c| *c.borrow_mut() = None);
+    OWNERS.with(|o| *o.borrow_mut() = OwnerArena::new());
+}
+
 /// Execute a closure within a new owner scope.
 ///
 /// All signals and effects created within the closure will be registered
@@ -490,5 +510,38 @@ mod tests {
         // Both should be disposed
         assert!(!effect_has_owner(inner_effect));
         assert!(!effect_has_owner(outer_effect));
+    }
+
+    #[test]
+    fn test_root_owner_and_reset() {
+        use super::super::signal::create_signal;
+
+        // Simulate App lifecycle: create root owner → create signals → dispose → reset
+        let root_id = create_root_owner();
+        assert!(current_owner().is_some());
+
+        let signal = create_signal(42);
+        assert_eq!(signal.get(), 42);
+
+        // Dispose root owner — cascades signal disposal
+        dispose_owner(root_id);
+
+        // Signal should be disposed (reading would panic)
+        let panicked = std::panic::catch_unwind(|| signal.get()).is_err();
+        assert!(panicked, "Accessing disposed signal should panic");
+
+        // Reset owner arena
+        reset_owners();
+        assert!(current_owner().is_none());
+
+        // After reset, creating a new root owner should work cleanly
+        let new_root = create_root_owner();
+        assert!(current_owner().is_some());
+        let signal2 = create_signal(99);
+        assert_eq!(signal2.get(), 99);
+
+        // Cleanup
+        dispose_owner(new_root);
+        reset_owners();
     }
 }

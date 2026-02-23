@@ -24,7 +24,7 @@ pub use memo::{Memo, create_memo};
 // Only on_cleanup is public API - with_owner, dispose_owner, and OwnerId are
 // internal and automatically used by the dynamic children system
 pub use owner::on_cleanup;
-pub(crate) use owner::{OwnerId, dispose_owner, with_owner};
+pub(crate) use owner::{OwnerId, create_root_owner, dispose_owner, with_owner};
 
 /// Internal module for macro support. NOT PART OF PUBLIC API.
 /// Do not use directly - these are re-exported for proc macros only.
@@ -36,3 +36,17 @@ pub mod __internal {
 pub(crate) use runtime::flush_bg_writes;
 pub use service::{Service, ServiceContext, create_service};
 pub use signal::{Signal, WriteSignal, create_signal};
+
+/// Reset all reactive system state.
+///
+/// Called during `App::drop()` to wipe all thread-local reactive state,
+/// enabling clean restart of the application.
+pub(crate) fn reset_reactive() {
+    owner::reset_owners();
+    runtime::reset_runtime();
+    storage::reset_storage();
+    invalidation::reset_invalidation();
+    clipboard::reset_clipboard();
+    cursor::reset_cursor();
+    focus::reset_focus();
+}

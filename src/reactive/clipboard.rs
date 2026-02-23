@@ -87,6 +87,16 @@ pub fn request_clipboard_read() {
     });
 }
 
+/// Reset all clipboard state.
+///
+/// Called during `App::drop()` to wipe clipboard buffers.
+pub(crate) fn reset_clipboard() {
+    CLIPBOARD.with(|c| *c.borrow_mut() = None);
+    CLIPBOARD_CHANGED.with(|c| *c.borrow_mut() = false);
+    CLIPBOARD_READ_REQUESTED.with(|c| *c.borrow_mut() = false);
+    SYSTEM_CLIPBOARD.with(|c| *c.borrow_mut() = None);
+}
+
 /// Check and clear clipboard read request
 pub fn take_clipboard_read_request() -> bool {
     CLIPBOARD_READ_REQUESTED.with(|r| {
