@@ -37,8 +37,12 @@ pub type ClickCallback = Rc<dyn Fn()>;
 pub type HoverCallback = Rc<dyn Fn(bool)>;
 /// Callback for scroll events (delta_x, delta_y, source)
 pub type ScrollCallback = Rc<dyn Fn(f32, f32, ScrollSource)>;
-/// Callback for pointer move events (x, y in surface-local coords)
+/// Callback for pointer move events (x, y in container-local coords)
 pub type PointerMoveCallback = Rc<dyn Fn(f32, f32)>;
+/// Callback for mouse down events (x, y in container-local coords)
+pub type MouseDownCallback = Rc<dyn Fn(f32, f32)>;
+/// Callback for mouse up events (x, y in container-local coords)
+pub type MouseUpCallback = Rc<dyn Fn(f32, f32)>;
 
 /// Gradient direction for linear gradients
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -139,6 +143,8 @@ pub struct Container {
     pub(super) on_hover: Option<HoverCallback>,
     pub(super) on_scroll: Option<ScrollCallback>,
     pub(super) on_pointer_move: Option<PointerMoveCallback>,
+    pub(super) on_mouse_down: Option<MouseDownCallback>,
+    pub(super) on_mouse_up: Option<MouseUpCallback>,
 
     // Widget ref for reactive bounds tracking
     pub(super) widget_ref: Option<WidgetRef>,
@@ -206,6 +212,8 @@ impl Container {
             on_hover: None,
             on_scroll: None,
             on_pointer_move: None,
+            on_mouse_down: None,
+            on_mouse_up: None,
             widget_ref: None,
             is_hovered: false,
             is_pressed: false,
@@ -470,6 +478,16 @@ impl Container {
 
     pub fn on_pointer_move<F: Fn(f32, f32) + 'static>(mut self, callback: F) -> Self {
         self.on_pointer_move = Some(Rc::new(callback));
+        self
+    }
+
+    pub fn on_mouse_down<F: Fn(f32, f32) + 'static>(mut self, callback: F) -> Self {
+        self.on_mouse_down = Some(Rc::new(callback));
+        self
+    }
+
+    pub fn on_mouse_up<F: Fn(f32, f32) + 'static>(mut self, callback: F) -> Self {
+        self.on_mouse_up = Some(Rc::new(callback));
         self
     }
 
@@ -1446,9 +1464,9 @@ impl Widget for Container {
             }
             Event::MouseMove { x, y } => {
                 if let Some(ref callback) = self.on_pointer_move
-                    && bounds.contains_rounded(*x, *y, corner_radius)
+                    && (bounds.contains_rounded(*x, *y, corner_radius) || self.is_pressed)
                 {
-                    callback(*x, *y);
+                    callback(*x - bounds.x, *y - bounds.y);
                 }
 
                 let was_hovered = self.is_hovered;
@@ -1534,7 +1552,11 @@ impl Widget for Container {
                     if !was_pressed && self.pressed_state.is_some() {
                         self.request_state_change_repaint(id);
                     }
-                    if self.on_click.is_some() {
+                    if let Some(ref callback) = self.on_mouse_down {
+                        callback(*x - bounds.x, *y - bounds.y);
+                        return EventResponse::Handled;
+                    }
+                    if self.on_click.is_some() || self.on_mouse_up.is_some() {
                         return EventResponse::Handled;
                     }
                 }
@@ -1566,10 +1588,18 @@ impl Widget for Container {
                     if was_pressed && self.pressed_state.is_some() {
                         self.request_state_change_repaint(id);
                     }
+                    let mut handled = false;
+                    if let Some(ref callback) = self.on_mouse_up {
+                        callback(*x - bounds.x, *y - bounds.y);
+                        handled = true;
+                    }
                     if bounds.contains_rounded(*x, *y, corner_radius)
                         && let Some(ref callback) = self.on_click
                     {
                         callback();
+                        return EventResponse::Handled;
+                    }
+                    if handled {
                         return EventResponse::Handled;
                     }
                 }
