@@ -188,7 +188,9 @@ Set a default font family for the entire application:
 ```rust
 App::new()
     .default_font_family(FontFamily::Name("Inter".into()))
-    .add_surface(config, || view)
+    .run(|app| {
+        app.add_surface(config, || view);
+    });
 ```
 
 All text widgets will use this font family unless they explicitly override it.
