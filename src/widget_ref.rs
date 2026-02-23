@@ -53,6 +53,13 @@ pub(crate) fn register_widget_ref(id: WidgetId, signal: Signal<Rect>) {
     });
 }
 
+/// Reset the widget ref registry.
+///
+/// Called during `App::drop()` to clear stale widget ref entries.
+pub(crate) fn reset_widget_refs() {
+    WIDGET_REF_REGISTRY.with(|r| r.borrow_mut().clear());
+}
+
 /// Update all registered widget ref signals with current bounds from `tree`.
 ///
 /// Entries whose widget no longer exists in the tree are removed (GC).
