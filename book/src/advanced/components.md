@@ -247,24 +247,32 @@ impl Card {
 }
 
 fn main() {
-    let count = create_signal(0);
+    App::new().run(|app| {
+        let count = create_signal(0);
 
-    let view = container()
-        .padding(16.0)
-        .layout(Flex::column().spacing(12.0))
-        .child(
-            card()
-                .title("Counter")
-                .child(text(move || format!("Count: {}", count.get())).color(Color::WHITE))
-                .child(
-                    container()
-                        .layout(Flex::row().spacing(8.0))
-                        .child(button().label("Increment").on_click(move || count.update(|c| *c += 1)))
-                        .child(button().label("Reset").on_click(move || count.set(0)))
-                )
+        let view = container()
+            .padding(16.0)
+            .layout(Flex::column().spacing(12.0))
+            .child(
+                card()
+                    .title("Counter")
+                    .child(text(move || format!("Count: {}", count.get())).color(Color::WHITE))
+                    .child(
+                        container()
+                            .layout(Flex::row().spacing(8.0))
+                            .child(button().label("Increment").on_click(move || count.update(|c| *c += 1)))
+                            .child(button().label("Reset").on_click(move || count.set(0)))
+                    )
+            );
+
+        app.add_surface(
+            SurfaceConfig::new()
+                .width(400)
+                .height(200)
+                .background_color(Color::rgb(0.1, 0.1, 0.15)),
+            move || view,
         );
-
-    App::new().width(400).height(200).run(view);
+    });
 }
 ```
 

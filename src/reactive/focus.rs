@@ -52,6 +52,13 @@ pub fn focused_widget() -> Option<WidgetId> {
     FOCUSED_WIDGET.with(|cell| *cell.borrow())
 }
 
+/// Reset focus state (without paint jobs — used during App teardown).
+///
+/// Called during `App::drop()` to clear focus state.
+pub(crate) fn reset_focus() {
+    FOCUSED_WIDGET.with(|f| *f.borrow_mut() = None);
+}
+
 /// Clear all focus (no widget will have focus).
 /// Repaints the previously focused widget if any.
 pub fn clear_focus() {

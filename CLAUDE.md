@@ -228,17 +228,29 @@ let view = container()
 ### App Configuration
 
 ```rust
-let (app, surface_id) = App::new().add_surface(
-    SurfaceConfig::new()
-        .height(32)
-        .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
-        .layer(Layer::Top)
-        .keyboard_interactivity(KeyboardInteractivity::OnDemand)
-        .namespace("my-app")
-        .background_color(Color::rgb(0.1, 0.1, 0.15)),
-    move || view,
-);
-app.run();
+App::new().run(|app| {
+    let count = create_signal(0);
+    let view = container()
+        .layout(Flex::row().spacing(8.0))
+        .children([
+            text(move || format!("Count: {}", count.get())),
+            container()
+                .background(Color::rgb(0.3, 0.3, 0.4))
+                .on_click(move || count.update(|c| *c += 1))
+                .child(text("Click me"))
+        ]);
+
+    app.add_surface(
+        SurfaceConfig::new()
+            .height(32)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+            .layer(Layer::Top)
+            .keyboard_interactivity(KeyboardInteractivity::OnDemand)
+            .namespace("my-app")
+            .background_color(Color::rgb(0.1, 0.1, 0.15)),
+        move || view,
+    );
+});
 ```
 
 ### Dynamic Surface Properties

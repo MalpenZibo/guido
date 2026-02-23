@@ -176,41 +176,46 @@ Here's a complete example showing various image features:
 use guido::prelude::*;
 
 fn main() {
-    let svg_icon = r##"
-        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="12" cy="12" r="10" fill="#3b82f6"/>
-        </svg>
-    "##;
+    App::new().run(|app| {
+        let svg_icon = r##"
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="12" cy="12" r="10" fill="#3b82f6"/>
+            </svg>
+        "##;
 
-    let view = container()
-        .padding(16.0)
-        .layout(Flex::row().spacing(16.0))
-        .child(
-            // PNG image
-            image("./logo.png")
-                .width(48.0)
-                .height(48.0)
-        )
-        .child(
-            // SVG from memory
-            image(ImageSource::SvgBytes(svg_icon.as_bytes().into()))
-                .width(32.0)
-                .height(32.0)
-        )
-        .child(
-            // Rotated image
-            container()
-                .rotate(15.0)
-                .child(
-                    image("./icon.svg")
-                        .width(24.0)
-                        .height(24.0)
-                )
+        let view = container()
+            .padding(16.0)
+            .layout(Flex::row().spacing(16.0))
+            .child(
+                // PNG image
+                image("./logo.png")
+                    .width(48.0)
+                    .height(48.0)
+            )
+            .child(
+                // SVG from memory
+                image(ImageSource::SvgBytes(svg_icon.as_bytes().into()))
+                    .width(32.0)
+                    .height(32.0)
+            )
+            .child(
+                // Rotated image
+                container()
+                    .rotate(15.0)
+                    .child(
+                        image("./icon.svg")
+                            .width(24.0)
+                            .height(24.0)
+                    )
+            );
+
+        app.add_surface(
+            SurfaceConfig::new()
+                .height(80)
+                .background_color(Color::rgb(0.1, 0.1, 0.15)),
+            move || view,
         );
-
-    App::new()
-        .height(80)
-        .run(view);
+    });
 }
 ```
 

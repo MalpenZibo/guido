@@ -25,7 +25,7 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::sync::{
-    OnceLock,
+    Mutex,
     atomic::{AtomicBool, Ordering},
 };
 
@@ -247,12 +247,15 @@ fn clear_pending_jobs() {
 /// Global flag to indicate a frame is requested
 static FRAME_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-/// Global wakeup handle for signaling the event loop
-static WAKEUP_PING: OnceLock<Ping> = OnceLock::new();
+/// Global wakeup handle for signaling the event loop.
+/// Uses `Mutex<Option<Ping>>` instead of `OnceLock` so it can be reset on App drop.
+static WAKEUP_PING: Mutex<Option<Ping>> = Mutex::new(None);
 
 /// Initialize the wakeup mechanism (called from App::run())
 pub fn init_wakeup(ping: Ping) {
-    let _ = WAKEUP_PING.set(ping);
+    if let Ok(mut guard) = WAKEUP_PING.lock() {
+        *guard = Some(ping);
+    }
 }
 
 /// Request that the main event loop process a frame
@@ -261,9 +264,24 @@ pub(crate) fn request_frame() {
     let was_requested = FRAME_REQUESTED.swap(true, Ordering::Relaxed);
     if !was_requested {
         // Wake up the event loop immediately
-        if let Some(ping) = WAKEUP_PING.get() {
+        if let Ok(guard) = WAKEUP_PING.lock()
+            && let Some(ref ping) = *guard
+        {
             ping.ping();
         }
+    }
+}
+
+/// Reset all job state (pending jobs, frame request flag, wakeup ping).
+///
+/// Called during `App::drop()` to clear stale jobs and allow re-initialization.
+pub(crate) fn reset_jobs() {
+    PENDING_JOBS.with(|jobs| {
+        jobs.borrow_mut().drain_all();
+    });
+    FRAME_REQUESTED.store(false, Ordering::Relaxed);
+    if let Ok(mut guard) = WAKEUP_PING.lock() {
+        *guard = None;
     }
 }
 

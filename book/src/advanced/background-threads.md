@@ -73,48 +73,48 @@ container()
 use guido::prelude::*;
 use std::time::Duration;
 
-#[tokio::main]
-async fn main() {
-    // Signals for system data
-    let cpu_usage = create_signal(0.0f32);
-    let memory_usage = create_signal(0.0f32);
-    let time = create_signal(String::new());
+fn main() {
+    App::new().run(|app| {
+        // Signals for system data
+        let cpu_usage = create_signal(0.0f32);
+        let memory_usage = create_signal(0.0f32);
+        let time = create_signal(String::new());
 
-    // Get Send-able write handles for the background task
-    let cpu_w = cpu_usage.writer();
-    let mem_w = memory_usage.writer();
-    let time_w = time.writer();
+        // Get Send-able write handles for the background task
+        let cpu_w = cpu_usage.writer();
+        let mem_w = memory_usage.writer();
+        let time_w = time.writer();
 
-    // Background monitoring service
-    let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
-        while ctx.is_running() {
-            // Simulate system monitoring
-            cpu_w.set(rand::random::<f32>() * 100.0);
-            mem_w.set(rand::random::<f32>() * 100.0);
-            time_w.set(chrono::Local::now().format("%H:%M:%S").to_string());
+        // Background monitoring service
+        let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+            while ctx.is_running() {
+                // Simulate system monitoring
+                cpu_w.set(rand::random::<f32>() * 100.0);
+                mem_w.set(rand::random::<f32>() * 100.0);
+                time_w.set(chrono::Local::now().format("%H:%M:%S").to_string());
 
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        });
+
+        // Build UI
+        let view = container()
+            .layout(Flex::column().spacing(8.0))
+            .padding(16.0)
+            .children([
+                text(move || format!("CPU: {:.1}%", cpu_usage.get())).color(Color::WHITE),
+                text(move || format!("Memory: {:.1}%", memory_usage.get())).color(Color::WHITE),
+                text(move || format!("Time: {}", time.get())).color(Color::WHITE),
+            ]);
+
+        app.add_surface(
+            SurfaceConfig::new()
+                .width(200)
+                .height(100)
+                .background_color(Color::rgb(0.1, 0.1, 0.15)),
+            move || view,
+        );
     });
-
-    // Build UI
-    let view = container()
-        .layout(Flex::column().spacing(8.0))
-        .padding(16.0)
-        .children([
-            text(move || format!("CPU: {:.1}%", cpu_usage.get())).color(Color::WHITE),
-            text(move || format!("Memory: {:.1}%", memory_usage.get())).color(Color::WHITE),
-            text(move || format!("Time: {}", time.get())).color(Color::WHITE),
-        ]);
-
-    let (app, _) = App::new().add_surface(
-        SurfaceConfig::new()
-            .width(200)
-            .height(100)
-            .background_color(Color::rgb(0.1, 0.1, 0.15)),
-        move || view,
-    );
-    app.run();
 }
 ```
 

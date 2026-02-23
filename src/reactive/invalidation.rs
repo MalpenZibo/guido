@@ -157,6 +157,14 @@ pub fn clear_widget_subscribers(widget_id: WidgetId) {
     });
 }
 
+/// Reset all invalidation state (tracking context + subscriber registry).
+///
+/// Called during `App::drop()` to wipe stale widget-signal subscriptions.
+pub(crate) fn reset_invalidation() {
+    TRACKING_CONTEXT.with(|ctx| ctx.borrow_mut().clear());
+    SIGNAL_SUBSCRIBERS.with(|subs| subs.borrow_mut().clear());
+}
+
 /// Get the number of signals with active subscribers (for testing).
 #[cfg(test)]
 fn subscriber_count() -> usize {

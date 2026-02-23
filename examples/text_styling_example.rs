@@ -8,33 +8,34 @@ use guido::prelude::*;
 fn main() {
     // Set an app-level default font (widgets will use this unless overridden)
     // Note: The actual font availability depends on the system
-    let (app, _) = App::new()
+    App::new()
         .default_font_family(FontFamily::SansSerif)
-        .add_surface(
-            SurfaceConfig::new()
-                .width(600)
-                .height(600)
-                .anchor(Anchor::TOP | Anchor::LEFT)
-                .background_color(Color::rgb(0.08, 0.08, 0.12)),
-            || {
-                container()
-                    .background(Color::rgb(0.08, 0.08, 0.12))
-                    .padding(24.0)
-                    .layout(Flex::column().spacing(20.0))
-                    .child(
-                        // Title
-                        text("Text Styling Demo")
-                            .font_size(28.0)
-                            .bold()
-                            .color(Color::rgb(0.9, 0.9, 0.95)),
-                    )
-                    .child(create_font_family_section())
-                    .child(create_font_weight_section())
-                    .child(create_combined_section())
-                    .child(create_text_input_section())
-            },
-        );
-    app.run();
+        .run(|app| {
+            app.add_surface(
+                SurfaceConfig::new()
+                    .width(600)
+                    .height(600)
+                    .anchor(Anchor::TOP | Anchor::LEFT)
+                    .background_color(Color::rgb(0.08, 0.08, 0.12)),
+                || {
+                    container()
+                        .background(Color::rgb(0.08, 0.08, 0.12))
+                        .padding(24.0)
+                        .layout(Flex::column().spacing(20.0))
+                        .child(
+                            // Title
+                            text("Text Styling Demo")
+                                .font_size(28.0)
+                                .bold()
+                                .color(Color::rgb(0.9, 0.9, 0.95)),
+                        )
+                        .child(create_font_family_section())
+                        .child(create_font_weight_section())
+                        .child(create_combined_section())
+                        .child(create_text_input_section())
+                },
+            );
+        });
 }
 
 /// Section demonstrating different font families

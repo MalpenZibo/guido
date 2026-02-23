@@ -82,6 +82,14 @@ pub fn take_cursor_change() -> Option<CursorIcon> {
     }
 }
 
+/// Reset cursor state to defaults.
+///
+/// Called during `App::drop()` to clear cursor state.
+pub(crate) fn reset_cursor() {
+    CURRENT_CURSOR.with(|c| *c.borrow_mut() = CursorIcon::Default);
+    CURSOR_CHANGED.with(|c| *c.borrow_mut() = false);
+}
+
 /// Get the current cursor without clearing the change flag.
 pub fn get_current_cursor() -> CursorIcon {
     CURRENT_CURSOR.with(|c| *c.borrow())

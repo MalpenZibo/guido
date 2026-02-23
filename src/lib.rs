@@ -25,7 +25,7 @@ use std::sync::Arc;
 use layout::Constraints;
 use platform::create_wayland_app;
 use reactive::owner::with_owner;
-use reactive::{set_system_clipboard, take_clipboard_change, take_cursor_change};
+use reactive::{OwnerId, set_system_clipboard, take_clipboard_change, take_cursor_change};
 use renderer::{GpuContext, PaintContext, Renderer, flatten_tree_into};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, drain_surface_commands};
 use surface_manager::{ManagedSurface, SurfaceManager};
@@ -497,6 +497,9 @@ pub struct App {
     tree: Tree,
     /// Layout roots that need re-layout (Vec with dedup — typically 1–3 per frame)
     layout_roots: Vec<WidgetId>,
+    /// Root owner for the reactive graph. When disposed, cascades cleanup
+    /// through all signals, effects, and cleanup callbacks.
+    root_owner_id: Option<OwnerId>,
 }
 
 impl App {
@@ -505,6 +508,7 @@ impl App {
             surface_definitions: Vec::new(),
             tree: Tree::new(),
             layout_roots: Vec::new(),
+            root_owner_id: None,
         }
     }
 
@@ -534,14 +538,14 @@ impl App {
     ///
     /// The widget factory closure creates the root widget for the surface.
     ///
-    /// Returns a tuple of `(Self, SurfaceId)` where `SurfaceId` can be used to get
-    /// a `SurfaceHandle` later via `surface_handle()` to modify surface properties.
+    /// Returns a `SurfaceId` that can be used to get a `SurfaceHandle` later via
+    /// `surface_handle()` to modify surface properties.
     ///
     /// # Example
     ///
     /// ```ignore
-    /// let (app, bar_id) = App::new()
-    ///     .add_surface(
+    /// App::new().run(|app| {
+    ///     let bar_id = app.add_surface(
     ///         SurfaceConfig::new()
     ///             .height(32)
     ///             .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
@@ -549,9 +553,9 @@ impl App {
     ///             .namespace("status-bar"),
     ///         || status_bar_widget()
     ///     );
-    /// app.run();
+    /// });
     /// ```
-    pub fn add_surface<W, F>(mut self, config: SurfaceConfig, widget_fn: F) -> (Self, SurfaceId)
+    pub fn add_surface<W, F>(&mut self, config: SurfaceConfig, widget_fn: F) -> SurfaceId
     where
         W: Widget + 'static,
         F: FnOnce() -> W + 'static,
@@ -562,17 +566,33 @@ impl App {
             config,
             widget_fn: Box::new(move || Box::new(widget_fn())),
         });
-        (self, id)
+        id
     }
 
-    /// Run the application.
+    /// Run the application with a setup closure.
     ///
-    /// This requires at least one surface to have been added via `add_surface()`.
+    /// The setup closure runs inside a root owner scope — all signals, effects,
+    /// and other reactive primitives created within it are automatically cleaned
+    /// up when the `App` is dropped. Use `app.add_surface()` inside the closure
+    /// to define surfaces.
     ///
     /// # Panics
     ///
-    /// Panics if no surfaces were added via `add_surface()`.
-    pub fn run(mut self) {
+    /// Panics if no surfaces were added via `add_surface()` inside the closure.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// App::new().run(|app| {
+    ///     let count = create_signal(0);
+    ///     app.add_surface(config, move || build_ui(count));
+    /// });
+    /// ```
+    pub fn run(mut self, setup: impl FnOnce(&mut Self)) {
+        // Create root owner scope — all signals/effects created in setup are owned
+        self.root_owner_id = Some(reactive::create_root_owner());
+        setup(&mut self);
+
         if self.surface_definitions.is_empty() {
             panic!("No surfaces defined. Use add_surface() to add at least one surface.");
         }
@@ -740,6 +760,24 @@ impl App {
             // Flush the connection once for all surfaces
             connection.flush().expect("Failed to flush connection");
         }
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        // Dispose the root owner first — cascades cleanup through the entire
+        // reactive graph (signals, effects, cleanup callbacks).
+        if let Some(root_id) = self.root_owner_id {
+            reactive::dispose_owner(root_id);
+        }
+
+        // Reset all thread-local and static state so the next App can start clean.
+        reactive::reset_reactive();
+        jobs::reset_jobs();
+        surface::reset_surface_commands();
+        widget_ref::reset_widget_refs();
+        FONTS_CONSUMED.with(|f| f.set(false));
+        self.tree.clear();
     }
 }
 
