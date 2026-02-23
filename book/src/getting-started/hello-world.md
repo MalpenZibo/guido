@@ -22,38 +22,39 @@ Replace `src/main.rs` with:
 use guido::prelude::*;
 
 fn main() {
-    let (app, _) = App::new().add_surface(
-        SurfaceConfig::new()
-            .height(32)
-            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
-            .background_color(Color::rgb(0.1, 0.1, 0.15)),
-        || {
-            container()
-                .height(fill())
-                .layout(
-                    Flex::row()
-                        .spacing(8.0)
-                        .main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                        .cross_axis_alignment(CrossAxisAlignment::Center),
-                )
-                .child(
-                    container()
-                        .padding(8.0)
-                        .background(Color::rgb(0.2, 0.2, 0.3))
-                        .corner_radius(4.0)
-                        .child(text("Guido")),
-                )
-                .child(container().padding(8.0).child(text("Hello World!")))
-                .child(
-                    container()
-                        .padding(8.0)
-                        .background(Color::rgb(0.3, 0.2, 0.2))
-                        .corner_radius(4.0)
-                        .child(text("Status Bar")),
-                )
-        },
-    );
-    app.run();
+    App::new().run(|app| {
+        app.add_surface(
+            SurfaceConfig::new()
+                .height(32)
+                .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+                .background_color(Color::rgb(0.1, 0.1, 0.15)),
+            || {
+                container()
+                    .height(fill())
+                    .layout(
+                        Flex::row()
+                            .spacing(8.0)
+                            .main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                    )
+                    .child(
+                        container()
+                            .padding(8.0)
+                            .background(Color::rgb(0.2, 0.2, 0.3))
+                            .corner_radius(4.0)
+                            .child(text("Guido")),
+                    )
+                    .child(container().padding(8.0).child(text("Hello World!")))
+                    .child(
+                        container()
+                            .padding(8.0)
+                            .background(Color::rgb(0.3, 0.2, 0.2))
+                            .corner_radius(4.0)
+                            .child(text("Status Bar")),
+                    )
+            },
+        );
+    });
 }
 ```
 
@@ -74,14 +75,15 @@ The prelude imports everything you need: widgets, colors, layout types, and reac
 ### Surface Configuration
 
 ```rust
-let (app, _surface_id) = App::new().add_surface(
-    SurfaceConfig::new()
-        .height(32)
-        .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
-        .background_color(Color::rgb(0.1, 0.1, 0.15)),
-    || { /* widget tree */ },
-);
-app.run();
+App::new().run(|app| {
+    let _surface_id = app.add_surface(
+        SurfaceConfig::new()
+            .height(32)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+            .background_color(Color::rgb(0.1, 0.1, 0.15)),
+        || { /* widget tree */ },
+    );
+});
 ```
 
 The `SurfaceConfig` defines how the window appears:
@@ -89,7 +91,7 @@ The `SurfaceConfig` defines how the window appears:
 - **Anchor** - Attached to top, left, and right edges (full width)
 - **Background color** - Dark background for the bar
 
-Note: `add_surface()` returns a tuple `(App, SurfaceId)`. The `SurfaceId` can be used later to get a `SurfaceHandle` for modifying surface properties dynamically.
+Note: `run()` takes a setup closure where you add surfaces. `add_surface()` returns a `SurfaceId` that can be used to get a `SurfaceHandle` for modifying surface properties dynamically.
 
 ### Building the View
 
@@ -148,43 +150,44 @@ Let's make it interactive with a click counter. Update your code:
 use guido::prelude::*;
 
 fn main() {
-    let count = create_signal(0);
+    App::new().run(|app| {
+        let count = create_signal(0);
 
-    let (app, _) = App::new().add_surface(
-        SurfaceConfig::new()
-            .height(32)
-            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
-            .background_color(Color::rgb(0.1, 0.1, 0.15)),
-        move || {
-            container()
-                .height(fill())
-                .layout(
-                    Flex::row()
-                        .spacing(8.0)
-                        .main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                        .cross_axis_alignment(CrossAxisAlignment::Center),
-                )
-                .child(
-                    container()
-                        .padding(8.0)
-                        .background(Color::rgb(0.2, 0.2, 0.3))
-                        .corner_radius(4.0)
-                        .hover_state(|s| s.lighter(0.1))
-                        .pressed_state(|s| s.ripple())
-                        .on_click(move || count.update(|c| *c += 1))
-                        .child(text(move || format!("Clicks: {}", count.get()))),
-                )
-                .child(container().padding(8.0).child(text("Hello World!")))
-                .child(
-                    container()
-                        .padding(8.0)
-                        .background(Color::rgb(0.3, 0.2, 0.2))
-                        .corner_radius(4.0)
-                        .child(text("Status Bar")),
-                )
-        },
-    );
-    app.run();
+        app.add_surface(
+            SurfaceConfig::new()
+                .height(32)
+                .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+                .background_color(Color::rgb(0.1, 0.1, 0.15)),
+            move || {
+                container()
+                    .height(fill())
+                    .layout(
+                        Flex::row()
+                            .spacing(8.0)
+                            .main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                    )
+                    .child(
+                        container()
+                            .padding(8.0)
+                            .background(Color::rgb(0.2, 0.2, 0.3))
+                            .corner_radius(4.0)
+                            .hover_state(|s| s.lighter(0.1))
+                            .pressed_state(|s| s.ripple())
+                            .on_click(move || count.update(|c| *c += 1))
+                            .child(text(move || format!("Clicks: {}", count.get()))),
+                    )
+                    .child(container().padding(8.0).child(text("Hello World!")))
+                    .child(
+                        container()
+                            .padding(8.0)
+                            .background(Color::rgb(0.3, 0.2, 0.2))
+                            .corner_radius(4.0)
+                            .child(text("Status Bar")),
+                    )
+            },
+        );
+    });
 }
 ```
 

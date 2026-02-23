@@ -7,21 +7,22 @@ Guido uses the Wayland layer shell protocol for positioning widgets on the deskt
 Each surface is configured using `SurfaceConfig`:
 
 ```rust
-let (app, _surface_id) = App::new().add_surface(
-    SurfaceConfig::new()
-        .width(1920)
-        .height(32)
-        .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
-        .layer(Layer::Top)
-        .keyboard_interactivity(KeyboardInteractivity::OnDemand)
-        .namespace("my-status-bar")
-        .background_color(Color::rgb(0.1, 0.1, 0.15)),
-    || view,
-);
-app.run();
+App::new().run(|app| {
+    let _surface_id = app.add_surface(
+        SurfaceConfig::new()
+            .width(1920)
+            .height(32)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+            .layer(Layer::Top)
+            .keyboard_interactivity(KeyboardInteractivity::OnDemand)
+            .namespace("my-status-bar")
+            .background_color(Color::rgb(0.1, 0.1, 0.15)),
+        || view,
+    );
+});
 ```
 
-Note: `add_surface()` returns `(App, SurfaceId)`. The `SurfaceId` can be used to get a `SurfaceHandle` for dynamic property modification.
+Note: `run()` takes a setup closure where you add surfaces. `add_surface()` returns a `SurfaceId` that can be used to get a `SurfaceHandle` for dynamic property modification.
 
 ## Layers
 
@@ -176,59 +177,61 @@ Define multiple surfaces at startup:
 
 ```rust
 fn main() {
-    // Shared reactive state
-    let count = create_signal(0);
+    App::new().run(|app| {
+        // Shared reactive state
+        let count = create_signal(0);
 
-    // Top status bar
-    let (app, _bar_id) = App::new().add_surface(
-        SurfaceConfig::new()
-            .height(32)
-            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
-            .layer(Layer::Top)
-            .namespace("status-bar")
-            .background_color(Color::rgb(0.1, 0.1, 0.15)),
-        move || {
-            container()
-                .height(fill())
-                .layout(
-                    Flex::row()
-                        .main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                        .cross_axis_alignment(CrossAxisAlignment::Center)
-                )
-                .padding_xy(16.0, 0.0)
-                .child(text("Status Bar"))
-                .child(text(move || format!("Count: {}", count.get())))
-        },
-    );
-    // Bottom dock
-    let (app, _dock_id) = app.add_surface(
-        SurfaceConfig::new()
-            .height(48)
-            .anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT)
-            .layer(Layer::Top)
-            .namespace("dock")
-            .background_color(Color::rgb(0.15, 0.15, 0.2)),
-        move || {
-            container()
-                .height(fill())
-                .layout(
-                    Flex::row()
-                        .spacing(16.0)
-                        .main_axis_alignment(MainAxisAlignment::Center)
-                        .cross_axis_alignment(CrossAxisAlignment::Center)
-                )
-                .child(
-                    container()
-                        .padding_xy(16.0, 8.0)
-                        .background(Color::rgb(0.3, 0.3, 0.4))
-                        .corner_radius(8.0)
-                        .hover_state(|s| s.lighter(0.1))
-                        .on_click(move || count.update(|c| *c += 1))
-                        .child(text("+").color(Color::WHITE))
-                )
-        },
-    );
-    app.run();
+        // Top status bar
+        app.add_surface(
+            SurfaceConfig::new()
+                .height(32)
+                .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+                .layer(Layer::Top)
+                .namespace("status-bar")
+                .background_color(Color::rgb(0.1, 0.1, 0.15)),
+            move || {
+                container()
+                    .height(fill())
+                    .layout(
+                        Flex::row()
+                            .main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                            .cross_axis_alignment(CrossAxisAlignment::Center)
+                    )
+                    .padding_xy(16.0, 0.0)
+                    .child(text("Status Bar"))
+                    .child(text(move || format!("Count: {}", count.get())))
+            },
+        );
+
+        // Bottom dock
+        app.add_surface(
+            SurfaceConfig::new()
+                .height(48)
+                .anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT)
+                .layer(Layer::Top)
+                .namespace("dock")
+                .background_color(Color::rgb(0.15, 0.15, 0.2)),
+            move || {
+                container()
+                    .height(fill())
+                    .layout(
+                        Flex::row()
+                            .spacing(16.0)
+                            .main_axis_alignment(MainAxisAlignment::Center)
+                            .cross_axis_alignment(CrossAxisAlignment::Center)
+                    )
+                    .child(
+                        container()
+                            .padding_xy(16.0, 8.0)
+                            .background(Color::rgb(0.3, 0.3, 0.4))
+                            .corner_radius(8.0)
+                            .hover_state(|s| s.lighter(0.1))
+                            .on_click(move || count.update(|c| *c += 1))
+                            .child(text("+").color(Color::WHITE))
+                    )
+            },
+        );
+    });
 }
 ```
 
@@ -247,50 +250,51 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 fn main() {
-    let popup_handle: Rc<RefCell<Option<SurfaceHandle>>> = Rc::new(RefCell::new(None));
-    let popup_clone = popup_handle.clone();
+    App::new().run(|app| {
+        let popup_handle: Rc<RefCell<Option<SurfaceHandle>>> = Rc::new(RefCell::new(None));
+        let popup_clone = popup_handle.clone();
 
-    let (app, _) = App::new().add_surface(
-        SurfaceConfig::new()
-            .height(32)
-            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
-        move || {
-            container()
-                .child(
-                    container()
-                        .padding(8.0)
-                        .hover_state(|s| s.lighter(0.1))
-                        .on_click({
-                            let popup_handle = popup_clone.clone();
-                            move || {
-                                let mut handle = popup_handle.borrow_mut();
-                                if let Some(h) = handle.take() {
-                                    // Close existing popup
-                                    h.close();
-                                } else {
-                                    // Create new popup
-                                    let new_handle = spawn_surface(
-                                        SurfaceConfig::new()
-                                            .width(200)
-                                            .height(300)
-                                            .anchor(Anchor::TOP | Anchor::RIGHT)
-                                            .layer(Layer::Overlay)
-                                            .keyboard_interactivity(KeyboardInteractivity::Exclusive),
-                                        || {
-                                            container()
-                                                .padding(16.0)
-                                                .child(text("Popup Content"))
-                                        }
-                                    );
-                                    *handle = Some(new_handle);
+        app.add_surface(
+            SurfaceConfig::new()
+                .height(32)
+                .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+            move || {
+                container()
+                    .child(
+                        container()
+                            .padding(8.0)
+                            .hover_state(|s| s.lighter(0.1))
+                            .on_click({
+                                let popup_handle = popup_clone.clone();
+                                move || {
+                                    let mut handle = popup_handle.borrow_mut();
+                                    if let Some(h) = handle.take() {
+                                        // Close existing popup
+                                        h.close();
+                                    } else {
+                                        // Create new popup
+                                        let new_handle = spawn_surface(
+                                            SurfaceConfig::new()
+                                                .width(200)
+                                                .height(300)
+                                                .anchor(Anchor::TOP | Anchor::RIGHT)
+                                                .layer(Layer::Overlay)
+                                                .keyboard_interactivity(KeyboardInteractivity::Exclusive),
+                                            || {
+                                                container()
+                                                    .padding(16.0)
+                                                    .child(text("Popup Content"))
+                                            }
+                                        );
+                                        *handle = Some(new_handle);
+                                    }
                                 }
-                            }
-                        })
-                        .child(text("Toggle Popup"))
-                )
-        },
-    );
-    app.run();
+                            })
+                            .child(text("Toggle Popup"))
+                    )
+            },
+        );
+    });
 }
 ```
 
@@ -331,18 +335,19 @@ impl SurfaceHandle {
 Use `surface_handle()` to get a handle for any surface by its ID:
 
 ```rust
-// Store the ID when adding the surface
-let (app, status_bar_id) = App::new().add_surface(config, move || {
-    container()
-        .on_click(move || {
-            // Get handle and modify properties dynamically
-            let handle = surface_handle(status_bar_id);
-            handle.set_layer(Layer::Overlay);
-            handle.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
-        })
-        .child(text("Click to promote to overlay"))
+App::new().run(|app| {
+    // Store the ID when adding the surface
+    let status_bar_id = app.add_surface(config, move || {
+        container()
+            .on_click(move || {
+                // Get handle and modify properties dynamically
+                let handle = surface_handle(status_bar_id);
+                handle.set_layer(Layer::Overlay);
+                handle.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
+            })
+            .child(text("Click to promote to overlay"))
+    });
 });
-app.run();
 ```
 
 ## Complete Examples
@@ -351,30 +356,31 @@ app.run();
 
 ```rust
 fn main() {
-    let (app, _) = App::new().add_surface(
-        SurfaceConfig::new()
-            .height(32)
-            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
-            .layer(Layer::Top)
-            .exclusive_zone(Some(32))
-            .namespace("status-bar")
-            .background_color(Color::rgb(0.1, 0.1, 0.15)),
-        || {
-            container()
-                .height(fill())
-                .layout(
-                    Flex::row()
-                        .main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                        .cross_axis_alignment(CrossAxisAlignment::Center)
-                )
-                .children([
-                    left_section(),
-                    center_section(),
-                    right_section(),
-                ])
-        },
-    );
-    app.run();
+    App::new().run(|app| {
+        app.add_surface(
+            SurfaceConfig::new()
+                .height(32)
+                .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+                .layer(Layer::Top)
+                .exclusive_zone(Some(32))
+                .namespace("status-bar")
+                .background_color(Color::rgb(0.1, 0.1, 0.15)),
+            || {
+                container()
+                    .height(fill())
+                    .layout(
+                        Flex::row()
+                            .main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                            .cross_axis_alignment(CrossAxisAlignment::Center)
+                    )
+                    .children([
+                        left_section(),
+                        center_section(),
+                        right_section(),
+                    ])
+            },
+        );
+    });
 }
 ```
 
@@ -382,31 +388,32 @@ fn main() {
 
 ```rust
 fn main() {
-    let (app, _) = App::new().add_surface(
-        SurfaceConfig::new()
-            .height(64)
-            .anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT)
-            .layer(Layer::Top)
-            .exclusive_zone(Some(64))
-            .namespace("dock")
-            .background_color(Color::rgba(0.1, 0.1, 0.15, 0.9)),
-        || {
-            container()
-                .height(fill())
-                .layout(
-                    Flex::row()
-                        .spacing(8.0)
-                        .main_axis_alignment(MainAxisAlignment::Center)
-                        .cross_axis_alignment(CrossAxisAlignment::Center)
-                )
-                .children([
-                    dock_icon("terminal"),
-                    dock_icon("browser"),
-                    dock_icon("files"),
-                ])
-        },
-    );
-    app.run();
+    App::new().run(|app| {
+        app.add_surface(
+            SurfaceConfig::new()
+                .height(64)
+                .anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT)
+                .layer(Layer::Top)
+                .exclusive_zone(Some(64))
+                .namespace("dock")
+                .background_color(Color::rgba(0.1, 0.1, 0.15, 0.9)),
+            || {
+                container()
+                    .height(fill())
+                    .layout(
+                        Flex::row()
+                            .spacing(8.0)
+                            .main_axis_alignment(MainAxisAlignment::Center)
+                            .cross_axis_alignment(CrossAxisAlignment::Center)
+                    )
+                    .children([
+                        dock_icon("terminal"),
+                        dock_icon("browser"),
+                        dock_icon("files"),
+                    ])
+            },
+        );
+    });
 }
 ```
 
@@ -414,24 +421,25 @@ fn main() {
 
 ```rust
 fn main() {
-    let (app, _) = App::new().add_surface(
-        SurfaceConfig::new()
-            .width(300)
-            .height(100)
-            .anchor(Anchor::TOP | Anchor::RIGHT)
-            .layer(Layer::Overlay)
-            .keyboard_interactivity(KeyboardInteractivity::Exclusive)
-            .namespace("notification")
-            .background_color(Color::TRANSPARENT),
-        || {
-            container()
-                .padding(20.0)
-                .background(Color::rgb(0.15, 0.15, 0.2))
-                .corner_radius(12.0)
-                .child(text("Notification").color(Color::WHITE))
-        },
-    );
-    app.run();
+    App::new().run(|app| {
+        app.add_surface(
+            SurfaceConfig::new()
+                .width(300)
+                .height(100)
+                .anchor(Anchor::TOP | Anchor::RIGHT)
+                .layer(Layer::Overlay)
+                .keyboard_interactivity(KeyboardInteractivity::Exclusive)
+                .namespace("notification")
+                .background_color(Color::TRANSPARENT),
+            || {
+                container()
+                    .padding(20.0)
+                    .background(Color::rgb(0.15, 0.15, 0.2))
+                    .corner_radius(12.0)
+                    .child(text("Notification").color(Color::WHITE))
+            },
+        );
+    });
 }
 ```
 
@@ -458,11 +466,11 @@ impl SurfaceConfig {
 ```rust
 impl App {
     pub fn new() -> Self;
-    pub fn add_surface<W, F>(self, config: SurfaceConfig, widget_fn: F) -> (Self, SurfaceId)
+    pub fn run(self, setup: impl FnOnce(&mut Self));
+    pub fn add_surface<W, F>(&mut self, config: SurfaceConfig, widget_fn: F) -> SurfaceId
     where
         W: Widget + 'static,
         F: FnOnce() -> W + 'static;
-    pub fn run(self);
 }
 ```
 

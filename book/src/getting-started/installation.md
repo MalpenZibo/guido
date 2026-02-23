@@ -70,15 +70,20 @@ Create a minimal test application to verify everything works:
 use guido::prelude::*;
 
 fn main() {
-    let view = container()
-        .padding(20.0)
-        .background(Color::rgb(0.2, 0.3, 0.4))
-        .child(text("Hello, Guido!").color(Color::WHITE));
-
-    App::new()
-        .width(200)
-        .height(100)
-        .run(view);
+    App::new().run(|app| {
+        app.add_surface(
+            SurfaceConfig::new()
+                .width(200)
+                .height(100)
+                .background_color(Color::rgb(0.1, 0.1, 0.15)),
+            || {
+                container()
+                    .padding(20.0)
+                    .background(Color::rgb(0.2, 0.3, 0.4))
+                    .child(text("Hello, Guido!").color(Color::WHITE))
+            },
+        );
+    });
 }
 ```
 

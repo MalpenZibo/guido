@@ -29,10 +29,10 @@ Guido is a GPU-accelerated GUI library built with Rust and wgpu, designed specif
 use guido::prelude::*;
 
 fn main() {
-    let count = create_signal(0);
+    App::new().run(|app| {
+        let count = create_signal(0);
 
-    App::new()
-        .add_surface(
+        app.add_surface(
             SurfaceConfig::new()
                 .width(300)
                 .height(100)
@@ -56,8 +56,8 @@ fn main() {
                             .child(text(move || format!("Clicked {} times", count.get())))
                     )
             },
-        )
-        .run();
+        );
+    });
 }
 ```
 
