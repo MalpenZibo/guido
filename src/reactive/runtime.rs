@@ -251,6 +251,18 @@ where
     });
 }
 
+/// Reset all runtime state (effects, tracking, batch depth, write queue).
+///
+/// Called during `App::drop()` to ensure the next `App` run starts fresh.
+pub(crate) fn reset_runtime() {
+    RUNTIME.with(|rt| *rt.borrow_mut() = Runtime::new());
+    EFFECT_TRACKING.with(|et| et.borrow_mut().clear());
+    BATCH_DEPTH.with(|bd| bd.set(0));
+    if let Ok(mut q) = WRITE_QUEUE.lock() {
+        q.clear();
+    }
+}
+
 /// Batch multiple signal writes so that shared effects run only once.
 ///
 /// Inside the closure, `notify_write()` collects pending effects but defers

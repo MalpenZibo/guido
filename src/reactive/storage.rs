@@ -136,6 +136,13 @@ pub fn with_signal_value<T: 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -
     with_signal_cell(id, "borrow", |cell: &RefCell<T>| f(&cell.borrow()))
 }
 
+/// Reset all signal storage.
+///
+/// Called during `App::drop()` to wipe all stored signal values.
+pub(crate) fn reset_storage() {
+    STORAGE.with(|s| *s.borrow_mut() = SignalStorage::new());
+}
+
 /// Check if a signal exists in the current thread's storage.
 /// Used by `WriteSignal` to determine if we can write directly (same thread)
 /// or must queue the write for the main thread.
