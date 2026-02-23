@@ -332,18 +332,34 @@ fn render_surface(
         surface.previous_scale_factor = scale_factor;
     }
 
-    // Process pending non-animation jobs BEFORE render condition check.
-    // Events dispatched above may have created Paint/Animation jobs (e.g. hover state
-    // changes). Processing them first ensures tree.needs_paint() reflects these changes
-    // so the render condition correctly decides whether to paint this frame.
+    // Process ALL pending jobs BEFORE paint.
+    // This includes Animation jobs which were previously deferred to end-of-frame.
+    // Processing animations here ensures hover/pressed state changes update animation
+    // targets before paint, eliminating the 1-frame delay where animated values were
+    // stale because advance_animations() hadn't run yet.
     //
-    // Animation jobs are left in PENDING_JOBS and processed once per frame in the main
-    // loop (after all surfaces render). This prevents cross-surface job loss where one
-    // surface's drain swallows another surface's animation continuation jobs.
-    let jobs = drain_non_animation_jobs();
+    // Order matters:
+    // 1. Unregister — cleanup removed widgets first
+    // 2. Animation — advance animated values (width/height/bg) so layout and paint
+    //    see current values. May push Layout/Paint follow-up jobs.
+    // 3. Reconcile — create/remove dynamic children. May push Layout follow-ups.
+    // 4. Layout — needs updated animation values + reconciled children
+    // 5. Paint — needs final layout positions
+    //
+    // Cross-surface note: in multi-surface apps, one surface's drain may advance
+    // animations for widgets belonging to another surface. The second surface then
+    // picks up continuation jobs and re-advances. This is practically harmless —
+    // advance() is time-based (computes nearly the same value), and follow-up
+    // jobs are deduped by the JobQueue HashSet.
+    let mut jobs = drain_pending_jobs();
     handle_unregister_jobs(&jobs, tree);
-    handle_paint_jobs(&jobs, tree);
+    handle_animation_jobs(&jobs, tree);
     handle_reconcile_jobs(&jobs, tree, layout_roots);
+
+    // Merge follow-up jobs from animation advances and reconciliation
+    jobs.extend(drain_non_animation_jobs());
+
+    handle_paint_jobs(&jobs, tree);
     handle_layout_jobs(&jobs, tree, layout_roots);
 
     // Check render conditions
@@ -720,12 +736,6 @@ impl App {
                     frame_requested,
                 );
             }
-
-            // Process all animation jobs once per frame, after all surfaces rendered.
-            // This prevents cross-surface job draining where one surface's
-            // drain_pending_jobs swallows another surface's animation continuation jobs.
-            let animation_jobs = drain_pending_jobs();
-            handle_animation_jobs(&animation_jobs, &mut self.tree);
 
             // Flush the connection once for all surfaces
             connection.flush().expect("Failed to flush connection");
