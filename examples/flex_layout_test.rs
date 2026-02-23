@@ -1,8 +1,8 @@
 //! Flex Layout Test Example
 //!
 //! This example demonstrates and tests all flex layout alignment options:
-//! - MainAxisAlignment: Start, Center, End, SpaceBetween, SpaceAround, SpaceEvenly
-//! - CrossAxisAlignment: Start, Center, End, Stretch
+//! - MainAlignment: Start, Center, End, SpaceBetween, SpaceAround, SpaceEvenly
+//! - CrossAlignment: Start, Center, End, Stretch
 //!
 //! Run with: cargo run --example flex_layout_test
 
@@ -27,13 +27,13 @@ fn main() {
                             .child(
                                 container()
                                     .layout(Flex::column().spacing(3.0))
-                                    .child(section_title("Row - MainAxisAlignment"))
+                                    .child(section_title("Row - MainAlignment"))
                                     .child(row_main_axis_tests()),
                             )
                             .child(
                                 container()
                                     .layout(Flex::column().spacing(3.0))
-                                    .child(section_title("Row - CrossAxisAlignment"))
+                                    .child(section_title("Row - CrossAlignment"))
                                     .child(row_cross_axis_tests()),
                             )
                             .child(
@@ -50,13 +50,13 @@ fn main() {
                             .child(
                                 container()
                                     .layout(Flex::column().spacing(3.0))
-                                    .child(section_title("Column - MainAxisAlignment"))
+                                    .child(section_title("Column - MainAlignment"))
                                     .child(column_main_axis_tests()),
                             )
                             .child(
                                 container()
                                     .layout(Flex::column().spacing(3.0))
-                                    .child(section_title("Column - CrossAxisAlignment"))
+                                    .child(section_title("Column - CrossAlignment"))
                                     .child(column_cross_axis_tests()),
                             ),
                     )
@@ -90,7 +90,7 @@ fn test_box_varied(width: f32, height: f32, color: Color) -> Container {
 }
 
 /// Test box with minimum height (for row cross-axis tests)
-/// Height can stretch beyond min_height when CrossAxisAlignment::Stretch is used
+/// Height can stretch beyond min_height when CrossAlignment::Stretch is used
 fn test_box_min_height(width: f32, min_height: f32, color: Color) -> Container {
     container()
         .width(width)
@@ -100,7 +100,7 @@ fn test_box_min_height(width: f32, min_height: f32, color: Color) -> Container {
 }
 
 /// Test box with minimum width (for column cross-axis tests)
-/// Width can stretch beyond min_width when CrossAxisAlignment::Stretch is used
+/// Width can stretch beyond min_width when CrossAlignment::Stretch is used
 fn test_box_min_width(min_width: f32, height: f32, color: Color) -> Container {
     container()
         .width(at_least(min_width))
@@ -110,24 +110,21 @@ fn test_box_min_width(min_width: f32, height: f32, color: Color) -> Container {
 }
 
 // =============================================================================
-// Row MainAxisAlignment Tests
+// Row MainAlignment Tests
 // =============================================================================
 
 fn row_main_axis_tests() -> impl Widget {
     container()
         .layout(Flex::column().spacing(2.0))
-        .child(row_main_axis_row("Start", MainAxisAlignment::Start))
-        .child(row_main_axis_row("Center", MainAxisAlignment::Center))
-        .child(row_main_axis_row("End", MainAxisAlignment::End))
-        .child(row_main_axis_row(
-            "Between",
-            MainAxisAlignment::SpaceBetween,
-        ))
-        .child(row_main_axis_row("Around", MainAxisAlignment::SpaceAround))
-        .child(row_main_axis_row("Evenly", MainAxisAlignment::SpaceEvenly))
+        .child(row_main_axis_row("Start", MainAlignment::Start))
+        .child(row_main_axis_row("Center", MainAlignment::Center))
+        .child(row_main_axis_row("End", MainAlignment::End))
+        .child(row_main_axis_row("Between", MainAlignment::SpaceBetween))
+        .child(row_main_axis_row("Around", MainAlignment::SpaceAround))
+        .child(row_main_axis_row("Evenly", MainAlignment::SpaceEvenly))
 }
 
-fn row_main_axis_row(name: &'static str, alignment: MainAxisAlignment) -> impl Widget {
+fn row_main_axis_row(name: &'static str, alignment: MainAlignment) -> impl Widget {
     container()
         .layout(Flex::row().spacing(4.0))
         .child(container().width(42.0).child(label(name)))
@@ -137,7 +134,7 @@ fn row_main_axis_row(name: &'static str, alignment: MainAxisAlignment) -> impl W
                 .height(22.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
                 .corner_radius(3.0)
-                .layout(Flex::row().spacing(3.0).main_axis_alignment(alignment))
+                .layout(Flex::row().spacing(3.0).main_alignment(alignment))
                 .child(test_box(Color::rgb(0.8, 0.3, 0.3)))
                 .child(test_box(Color::rgb(0.3, 0.8, 0.3)))
                 .child(test_box(Color::rgb(0.3, 0.3, 0.8))),
@@ -145,19 +142,19 @@ fn row_main_axis_row(name: &'static str, alignment: MainAxisAlignment) -> impl W
 }
 
 // =============================================================================
-// Row CrossAxisAlignment Tests
+// Row CrossAlignment Tests
 // =============================================================================
 
 fn row_cross_axis_tests() -> impl Widget {
     container()
         .layout(Flex::column().spacing(2.0))
-        .child(row_cross_axis_row("Start", CrossAxisAlignment::Start))
-        .child(row_cross_axis_row("Center", CrossAxisAlignment::Center))
-        .child(row_cross_axis_row("End", CrossAxisAlignment::End))
-        .child(row_cross_axis_row("Stretch", CrossAxisAlignment::Stretch))
+        .child(row_cross_axis_row("Start", CrossAlignment::Start))
+        .child(row_cross_axis_row("Center", CrossAlignment::Center))
+        .child(row_cross_axis_row("End", CrossAlignment::End))
+        .child(row_cross_axis_row("Stretch", CrossAlignment::Stretch))
 }
 
-fn row_cross_axis_row(name: &'static str, alignment: CrossAxisAlignment) -> impl Widget {
+fn row_cross_axis_row(name: &'static str, alignment: CrossAlignment) -> impl Widget {
     container()
         .layout(Flex::row().spacing(4.0))
         .child(container().width(42.0).child(label(name)))
@@ -167,7 +164,7 @@ fn row_cross_axis_row(name: &'static str, alignment: CrossAxisAlignment) -> impl
                 .height(36.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
                 .corner_radius(3.0)
-                .layout(Flex::row().spacing(3.0).cross_axis_alignment(alignment))
+                .layout(Flex::row().spacing(3.0).cross_alignment(alignment))
                 // Use at_least() for height (cross-axis in row) so Stretch can expand them
                 .child(test_box_min_height(24.0, 12.0, Color::rgb(0.8, 0.3, 0.3)))
                 .child(test_box_min_height(24.0, 26.0, Color::rgb(0.3, 0.8, 0.3)))
@@ -176,30 +173,21 @@ fn row_cross_axis_row(name: &'static str, alignment: CrossAxisAlignment) -> impl
 }
 
 // =============================================================================
-// Column MainAxisAlignment Tests
+// Column MainAlignment Tests
 // =============================================================================
 
 fn column_main_axis_tests() -> impl Widget {
     container()
         .layout(Flex::row().spacing(4.0))
-        .child(column_main_axis_col("Start", MainAxisAlignment::Start))
-        .child(column_main_axis_col("Center", MainAxisAlignment::Center))
-        .child(column_main_axis_col("End", MainAxisAlignment::End))
-        .child(column_main_axis_col(
-            "Between",
-            MainAxisAlignment::SpaceBetween,
-        ))
-        .child(column_main_axis_col(
-            "Around",
-            MainAxisAlignment::SpaceAround,
-        ))
-        .child(column_main_axis_col(
-            "Evenly",
-            MainAxisAlignment::SpaceEvenly,
-        ))
+        .child(column_main_axis_col("Start", MainAlignment::Start))
+        .child(column_main_axis_col("Center", MainAlignment::Center))
+        .child(column_main_axis_col("End", MainAlignment::End))
+        .child(column_main_axis_col("Between", MainAlignment::SpaceBetween))
+        .child(column_main_axis_col("Around", MainAlignment::SpaceAround))
+        .child(column_main_axis_col("Evenly", MainAlignment::SpaceEvenly))
 }
 
-fn column_main_axis_col(name: &'static str, alignment: MainAxisAlignment) -> impl Widget {
+fn column_main_axis_col(name: &'static str, alignment: MainAlignment) -> impl Widget {
     container()
         .layout(Flex::column().spacing(2.0))
         .child(label(name))
@@ -209,7 +197,7 @@ fn column_main_axis_col(name: &'static str, alignment: MainAxisAlignment) -> imp
                 .height(80.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
                 .corner_radius(3.0)
-                .layout(Flex::column().spacing(2.0).main_axis_alignment(alignment))
+                .layout(Flex::column().spacing(2.0).main_alignment(alignment))
                 .child(test_box_varied(32.0, 12.0, Color::rgb(0.8, 0.5, 0.3)))
                 .child(test_box_varied(32.0, 12.0, Color::rgb(0.5, 0.8, 0.3)))
                 .child(test_box_varied(32.0, 12.0, Color::rgb(0.3, 0.5, 0.8))),
@@ -217,22 +205,19 @@ fn column_main_axis_col(name: &'static str, alignment: MainAxisAlignment) -> imp
 }
 
 // =============================================================================
-// Column CrossAxisAlignment Tests
+// Column CrossAlignment Tests
 // =============================================================================
 
 fn column_cross_axis_tests() -> impl Widget {
     container()
         .layout(Flex::row().spacing(4.0))
-        .child(column_cross_axis_col("Start", CrossAxisAlignment::Start))
-        .child(column_cross_axis_col("Center", CrossAxisAlignment::Center))
-        .child(column_cross_axis_col("End", CrossAxisAlignment::End))
-        .child(column_cross_axis_col(
-            "Stretch",
-            CrossAxisAlignment::Stretch,
-        ))
+        .child(column_cross_axis_col("Start", CrossAlignment::Start))
+        .child(column_cross_axis_col("Center", CrossAlignment::Center))
+        .child(column_cross_axis_col("End", CrossAlignment::End))
+        .child(column_cross_axis_col("Stretch", CrossAlignment::Stretch))
 }
 
-fn column_cross_axis_col(name: &'static str, alignment: CrossAxisAlignment) -> impl Widget {
+fn column_cross_axis_col(name: &'static str, alignment: CrossAlignment) -> impl Widget {
     container()
         .layout(Flex::column().spacing(2.0))
         .child(label(name))
@@ -242,7 +227,7 @@ fn column_cross_axis_col(name: &'static str, alignment: CrossAxisAlignment) -> i
                 .height(80.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
                 .corner_radius(3.0)
-                .layout(Flex::column().spacing(2.0).cross_axis_alignment(alignment))
+                .layout(Flex::column().spacing(2.0).cross_alignment(alignment))
                 // Use at_least() for width (cross-axis in column) so Stretch can expand them
                 .child(test_box_min_width(16.0, 12.0, Color::rgb(0.8, 0.5, 0.3)))
                 .child(test_box_min_width(38.0, 12.0, Color::rgb(0.5, 0.8, 0.3)))
@@ -269,8 +254,8 @@ fn center_test() -> impl Widget {
                         .corner_radius(4.0)
                         .layout(
                             Flex::row()
-                                .main_axis_alignment(MainAxisAlignment::Center)
-                                .cross_axis_alignment(CrossAxisAlignment::Center),
+                                .main_alignment(MainAlignment::Center)
+                                .cross_alignment(CrossAlignment::Center),
                         )
                         .child(test_box(Color::rgb(0.8, 0.4, 0.4))),
                 )
@@ -282,8 +267,8 @@ fn center_test() -> impl Widget {
                         .corner_radius(4.0)
                         .layout(
                             Flex::column()
-                                .main_axis_alignment(MainAxisAlignment::Center)
-                                .cross_axis_alignment(CrossAxisAlignment::Center),
+                                .main_alignment(MainAlignment::Center)
+                                .cross_alignment(CrossAlignment::Center),
                         )
                         .child(test_box(Color::rgb(0.4, 0.8, 0.4))),
                 ),
@@ -294,7 +279,7 @@ fn center_test() -> impl Widget {
                 .layout(
                     Flex::row()
                         .spacing(6.0)
-                        .cross_axis_alignment(CrossAxisAlignment::Start),
+                        .cross_alignment(CrossAlignment::Start),
                 )
                 .child(container().width(36.0).child(label("Single")))
                 .child(
@@ -305,8 +290,8 @@ fn center_test() -> impl Widget {
                         .corner_radius(4.0)
                         .layout(
                             Flex::row()
-                                .main_axis_alignment(MainAxisAlignment::Center)
-                                .cross_axis_alignment(CrossAxisAlignment::Center),
+                                .main_alignment(MainAlignment::Center)
+                                .cross_alignment(CrossAlignment::Center),
                         )
                         .child(test_box(Color::rgb(0.8, 0.4, 0.4))),
                 ),
@@ -317,7 +302,7 @@ fn center_test() -> impl Widget {
                 .layout(
                     Flex::row()
                         .spacing(6.0)
-                        .cross_axis_alignment(CrossAxisAlignment::Start),
+                        .cross_alignment(CrossAlignment::Start),
                 )
                 .child(container().width(36.0).child(label("Multi")))
                 .child(
@@ -329,8 +314,8 @@ fn center_test() -> impl Widget {
                         .layout(
                             Flex::row()
                                 .spacing(6.0)
-                                .main_axis_alignment(MainAxisAlignment::Center)
-                                .cross_axis_alignment(CrossAxisAlignment::Center),
+                                .main_alignment(MainAlignment::Center)
+                                .cross_alignment(CrossAlignment::Center),
                         )
                         .child(test_box(Color::rgb(0.8, 0.4, 0.4)))
                         .child(test_box(Color::rgb(0.4, 0.8, 0.4))),

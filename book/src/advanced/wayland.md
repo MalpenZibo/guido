@@ -194,8 +194,8 @@ fn main() {
                     .height(fill())
                     .layout(
                         Flex::row()
-                            .main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                            .cross_axis_alignment(CrossAxisAlignment::Center)
+                            .main_alignment(MainAlignment::SpaceBetween)
+                            .cross_alignment(CrossAlignment::Center)
                     )
                     .padding([0.0, 16.0])
                     .child(text("Status Bar"))
@@ -217,8 +217,8 @@ fn main() {
                     .layout(
                         Flex::row()
                             .spacing(16.0)
-                            .main_axis_alignment(MainAxisAlignment::Center)
-                            .cross_axis_alignment(CrossAxisAlignment::Center)
+                            .main_alignment(MainAlignment::Center)
+                            .cross_alignment(CrossAlignment::Center)
                     )
                     .child(
                         container()
@@ -370,8 +370,8 @@ fn main() {
                     .height(fill())
                     .layout(
                         Flex::row()
-                            .main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                            .cross_axis_alignment(CrossAxisAlignment::Center)
+                            .main_alignment(MainAlignment::SpaceBetween)
+                            .cross_alignment(CrossAlignment::Center)
                     )
                     .children([
                         left_section(),
@@ -403,8 +403,8 @@ fn main() {
                     .layout(
                         Flex::row()
                             .spacing(8.0)
-                            .main_axis_alignment(MainAxisAlignment::Center)
-                            .cross_axis_alignment(CrossAxisAlignment::Center)
+                            .main_alignment(MainAlignment::Center)
+                            .cross_alignment(CrossAlignment::Center)
                     )
                     .children([
                         dock_icon("terminal"),

@@ -141,8 +141,8 @@ cargo run --example flex_layout_test
 ![Flex Layout](../images/flex_layout.png)
 
 **Features demonstrated:**
-- `MainAxisAlignment`: Start, Center, End, SpaceBetween, SpaceAround, SpaceEvenly
-- `CrossAxisAlignment`: Start, Center, End, Stretch
+- `MainAlignment`: Start, Center, End, SpaceBetween, SpaceAround, SpaceEvenly
+- `CrossAlignment`: Start, Center, End, Stretch
 - Row and column layouts
 
 ---

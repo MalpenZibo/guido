@@ -45,7 +45,7 @@ container()
 Control distribution along the layout direction:
 
 ```rust
-Flex::row().main_axis_alignment(MainAxisAlignment::Center)
+Flex::row().main_alignment(MainAlignment::Center)
 ```
 
 ### Options
@@ -75,7 +75,7 @@ SpaceEvenly:    [A]   [B]   [C]
 Control alignment perpendicular to the layout direction:
 
 ```rust
-Flex::row().cross_axis_alignment(CrossAxisAlignment::Center)
+Flex::row().cross_alignment(CrossAlignment::Center)
 ```
 
 ### Options
@@ -120,8 +120,8 @@ container()
     .layout(
         Flex::row()
             .spacing(16.0)
-            .main_axis_alignment(MainAxisAlignment::SpaceBetween)
-            .cross_axis_alignment(CrossAxisAlignment::Center)
+            .main_alignment(MainAlignment::SpaceBetween)
+            .cross_alignment(CrossAlignment::Center)
     )
     .padding(20.0)
     .children([
@@ -146,7 +146,7 @@ container()
     .children([
         // Header row
         container()
-            .layout(Flex::row().main_axis_alignment(MainAxisAlignment::SpaceBetween))
+            .layout(Flex::row().main_alignment(MainAlignment::SpaceBetween))
             .children([
                 text("Logo"),
                 text("Menu"),
@@ -160,7 +160,7 @@ container()
             ]),
         // Footer row
         container()
-            .layout(Flex::row().main_axis_alignment(MainAxisAlignment::Center))
+            .layout(Flex::row().main_alignment(MainAlignment::Center))
             .child(text("Footer")),
     ])
 ```
@@ -211,8 +211,8 @@ container()
     .height(fill())
     .layout(
         Flex::row()
-            .main_axis_alignment(MainAxisAlignment::Center)
-            .cross_axis_alignment(CrossAxisAlignment::Center)
+            .main_alignment(MainAlignment::Center)
+            .cross_alignment(CrossAlignment::Center)
     )
     .child(text("Centered in available space"))
 ```
@@ -238,26 +238,26 @@ container()
 Flex::row() -> Flex                    // Horizontal layout
 Flex::column() -> Flex                 // Vertical layout
 .spacing(f32) -> Flex                  // Space between children
-.main_axis_alignment(MainAxisAlignment) -> Flex
-.cross_axis_alignment(CrossAxisAlignment) -> Flex
+.main_alignment(MainAlignment) -> Flex
+.cross_alignment(CrossAlignment) -> Flex
 ```
 
-### MainAxisAlignment
+### MainAlignment
 
 ```rust
-MainAxisAlignment::Start
-MainAxisAlignment::Center
-MainAxisAlignment::End
-MainAxisAlignment::SpaceBetween
-MainAxisAlignment::SpaceAround
-MainAxisAlignment::SpaceEvenly
+MainAlignment::Start
+MainAlignment::Center
+MainAlignment::End
+MainAlignment::SpaceBetween
+MainAlignment::SpaceAround
+MainAlignment::SpaceEvenly
 ```
 
-### CrossAxisAlignment
+### CrossAlignment
 
 ```rust
-CrossAxisAlignment::Start
-CrossAxisAlignment::Center
-CrossAxisAlignment::End
-CrossAxisAlignment::Stretch
+CrossAlignment::Start
+CrossAlignment::Center
+CrossAlignment::End
+CrossAlignment::Stretch
 ```

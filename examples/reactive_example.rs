@@ -39,7 +39,7 @@ fn main() {
                     .layout(
                         Flex::row()
                             .spacing(8.0)
-                            .main_axis_alignment(MainAxisAlignment::SpaceBetween),
+                            .main_alignment(MainAlignment::SpaceBetween),
                     )
                     .child(
                         // Clickable container with state layer - click to increment count

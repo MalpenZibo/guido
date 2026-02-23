@@ -130,7 +130,7 @@ fn create_item_row(enabled: Signal<bool>, input_value: Signal<String>, index: us
         .layout(
             Flex::row()
                 .spacing(20.0)
-                .cross_axis_alignment(CrossAxisAlignment::Center),
+                .cross_alignment(CrossAlignment::Center),
         )
         .child(create_toggle_button(enabled))
         .child(create_info_section(name, description, input_value))

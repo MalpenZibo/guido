@@ -34,8 +34,8 @@ fn main() {
                     .layout(
                         Flex::row()
                             .spacing(8.0)
-                            .main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                            .main_alignment(MainAlignment::SpaceBetween)
+                            .cross_alignment(CrossAlignment::Center),
                     )
                     .child(
                         container()
@@ -103,15 +103,15 @@ container()
     .layout(
         Flex::row()
             .spacing(8.0)
-            .main_axis_alignment(MainAxisAlignment::SpaceBetween)
-            .cross_axis_alignment(CrossAxisAlignment::Center),
+            .main_alignment(MainAlignment::SpaceBetween)
+            .cross_alignment(CrossAlignment::Center),
     )
 ```
 
 This creates a container that:
 - Fills the available height with `fill()`
 - Uses a horizontal flex layout
-- Centers children vertically with `cross_axis_alignment`
+- Centers children vertically with `cross_alignment`
 - Spreads children across the space with `SpaceBetween`
 
 ### Adding Children
@@ -164,8 +164,8 @@ fn main() {
                     .layout(
                         Flex::row()
                             .spacing(8.0)
-                            .main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                            .main_alignment(MainAlignment::SpaceBetween)
+                            .cross_alignment(CrossAlignment::Center),
                     )
                     .child(
                         container()

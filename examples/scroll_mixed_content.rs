@@ -91,9 +91,9 @@ fn main() {
                                     .child(
                                         container()
                                             .layout(
-                                                Flex::row().spacing(16.0).cross_axis_alignment(
-                                                    CrossAxisAlignment::Center,
-                                                ),
+                                                Flex::row()
+                                                    .spacing(16.0)
+                                                    .cross_alignment(CrossAlignment::Center),
                                             )
                                             .child(
                                                 container()
@@ -284,8 +284,8 @@ fn main() {
                                                     .layout(
                                                         Flex::column()
                                                             .spacing(4.0)
-                                                            .cross_axis_alignment(
-                                                                CrossAxisAlignment::Center,
+                                                            .cross_alignment(
+                                                                CrossAlignment::Center,
                                                             ),
                                                     )
                                                     .child(
@@ -298,11 +298,11 @@ fn main() {
                                                             .pressed_state(|s| s.ripple())
                                                             .layout(
                                                                 Flex::column()
-                                                                    .main_axis_alignment(
-                                                                        MainAxisAlignment::Center,
+                                                                    .main_alignment(
+                                                                        MainAlignment::Center,
                                                                     )
-                                                                    .cross_axis_alignment(
-                                                                        CrossAxisAlignment::Center,
+                                                                    .cross_alignment(
+                                                                        CrossAlignment::Center,
                                                                     ),
                                                             )
                                                             .child(

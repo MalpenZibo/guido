@@ -74,8 +74,8 @@ container()
     .layout(
         Flex::row()
             .spacing(8.0)
-            .main_axis_alignment(MainAxisAlignment::Center)
-            .cross_axis_alignment(CrossAxisAlignment::Center)
+            .main_alignment(MainAlignment::Center)
+            .cross_alignment(CrossAlignment::Center)
     )
     .children([...])
 ```

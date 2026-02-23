@@ -195,26 +195,26 @@ container()
     .layout(
         Flex::row()
             .spacing(8.0)
-            .main_axis_alignment(MainAxisAlignment::Center)
-            .cross_axis_alignment(CrossAxisAlignment::Center)
+            .main_alignment(MainAlignment::Center)
+            .cross_alignment(CrossAlignment::Center)
     )
 ```
 
 ### Alignment Options
 
 **Main Axis (direction of flow):**
-- `MainAxisAlignment::Start`
-- `MainAxisAlignment::End`
-- `MainAxisAlignment::Center`
-- `MainAxisAlignment::SpaceBetween`
-- `MainAxisAlignment::SpaceAround`
-- `MainAxisAlignment::SpaceEvenly`
+- `MainAlignment::Start`
+- `MainAlignment::End`
+- `MainAlignment::Center`
+- `MainAlignment::SpaceBetween`
+- `MainAlignment::SpaceAround`
+- `MainAlignment::SpaceEvenly`
 
 **Cross Axis (perpendicular to flow):**
-- `CrossAxisAlignment::Start`
-- `CrossAxisAlignment::End`
-- `CrossAxisAlignment::Center`
-- `CrossAxisAlignment::Stretch`
+- `CrossAlignment::Start`
+- `CrossAlignment::End`
+- `CrossAlignment::Center`
+- `CrossAlignment::Stretch`
 
 ## Complete Example
 

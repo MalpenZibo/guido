@@ -54,7 +54,7 @@ fn main() {
                 .layout(
                     Flex::row()
                         .spacing(16.0)
-                        .cross_axis_alignment(CrossAxisAlignment::Center),
+                        .cross_alignment(CrossAlignment::Center),
                 )
                 .padding([0.0, 16.0])
                 .child(text(move || format!("Count: {}", count.get())).color(Color::WHITE))

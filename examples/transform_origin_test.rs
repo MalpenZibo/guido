@@ -33,8 +33,8 @@ async fn main() {
                     .layout(
                         Flex::column()
                             .spacing(40.0)
-                            .main_axis_alignment(MainAxisAlignment::Center)
-                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                            .main_alignment(MainAlignment::Center)
+                            .cross_alignment(CrossAlignment::Center),
                     )
                     .padding(40.0)
                     .children([
@@ -43,8 +43,8 @@ async fn main() {
                             .layout(
                                 Flex::row()
                                     .spacing(80.0)
-                                    .main_axis_alignment(MainAxisAlignment::Center)
-                                    .cross_axis_alignment(CrossAxisAlignment::Center),
+                                    .main_alignment(MainAlignment::Center)
+                                    .cross_alignment(CrossAlignment::Center),
                             )
                             .children([
                                 // Default origin (center)
@@ -92,8 +92,8 @@ async fn main() {
                             .layout(
                                 Flex::row()
                                     .spacing(80.0)
-                                    .main_axis_alignment(MainAxisAlignment::Center)
-                                    .cross_axis_alignment(CrossAxisAlignment::Center),
+                                    .main_alignment(MainAlignment::Center)
+                                    .cross_alignment(CrossAlignment::Center),
                             )
                             .children([
                                 // Default origin (center) - scale
@@ -125,8 +125,8 @@ async fn main() {
                             .layout(
                                 Flex::row()
                                     .spacing(80.0)
-                                    .main_axis_alignment(MainAxisAlignment::Center)
-                                    .cross_axis_alignment(CrossAxisAlignment::Center),
+                                    .main_alignment(MainAlignment::Center)
+                                    .cross_alignment(CrossAlignment::Center),
                             )
                             .children([
                                 // Center origin - animated
@@ -158,8 +158,8 @@ async fn main() {
                             .layout(
                                 Flex::row()
                                     .spacing(80.0)
-                                    .main_axis_alignment(MainAxisAlignment::Center)
-                                    .cross_axis_alignment(CrossAxisAlignment::Center),
+                                    .main_alignment(MainAlignment::Center)
+                                    .cross_alignment(CrossAlignment::Center),
                             )
                             .children([
                                 // Parent rotated at center, child inside
@@ -170,8 +170,8 @@ async fn main() {
                                     .corner_radius(10.0)
                                     .layout(
                                         Flex::column()
-                                            .main_axis_alignment(MainAxisAlignment::Center)
-                                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                                            .main_alignment(MainAlignment::Center)
+                                            .cross_alignment(CrossAlignment::Center),
                                     )
                                     .rotate(15.0)
                                     .child(
@@ -189,8 +189,8 @@ async fn main() {
                                     .corner_radius(10.0)
                                     .layout(
                                         Flex::column()
-                                            .main_axis_alignment(MainAxisAlignment::Center)
-                                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                                            .main_alignment(MainAlignment::Center)
+                                            .cross_alignment(CrossAlignment::Center),
                                     )
                                     .transform_origin(TransformOrigin::TOP_LEFT)
                                     .rotate(15.0)

@@ -20,8 +20,8 @@ fn main() {
                 .layout(
                     Flex::column()
                         .spacing(30.0)
-                        .main_axis_alignment(MainAxisAlignment::Center)
-                        .cross_axis_alignment(CrossAxisAlignment::Center),
+                        .main_alignment(MainAlignment::Center)
+                        .cross_alignment(CrossAlignment::Center),
                 )
                 .padding(40.0)
                 .children([
@@ -30,7 +30,7 @@ fn main() {
                         .layout(
                             Flex::row()
                                 .spacing(40.0)
-                                .main_axis_alignment(MainAxisAlignment::Center),
+                                .main_alignment(MainAlignment::Center),
                         )
                         .children([
                             // No corner radius (control)
@@ -76,8 +76,8 @@ fn make_box(
         .on_click(move || click_count.update(|c| *c += 1))
         .layout(
             Flex::column()
-                .main_axis_alignment(MainAxisAlignment::Center)
-                .cross_axis_alignment(CrossAxisAlignment::Center),
+                .main_alignment(MainAlignment::Center)
+                .cross_alignment(CrossAlignment::Center),
         )
         .child(text(label).font_size(14.0).color(Color::WHITE))
 }

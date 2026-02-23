@@ -78,12 +78,8 @@ fn main() {
                                                 .hover_state(|s| s.lighter(0.1))
                                                 .layout(
                                                     Flex::column()
-                                                        .main_axis_alignment(
-                                                            MainAxisAlignment::Center,
-                                                        )
-                                                        .cross_axis_alignment(
-                                                            CrossAxisAlignment::Center,
-                                                        ),
+                                                        .main_alignment(MainAlignment::Center)
+                                                        .cross_alignment(CrossAlignment::Center),
                                                 )
                                                 .child(
                                                     text(format!("{}", i + 1)).color(Color::WHITE),

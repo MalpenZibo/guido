@@ -24,7 +24,7 @@ fn main() {
                     .layout(
                         Flex::column()
                             .spacing(20.0)
-                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                            .cross_alignment(CrossAlignment::Center),
                     )
                     .padding(20.0)
                     .children([
@@ -33,7 +33,7 @@ fn main() {
                             .layout(
                                 Flex::row()
                                     .spacing(30.0)
-                                    .main_axis_alignment(MainAxisAlignment::Center),
+                                    .main_alignment(MainAlignment::Center),
                             )
                             .children([
                                 // No transform (control)
@@ -56,7 +56,7 @@ fn main() {
                             .layout(
                                 Flex::row()
                                     .spacing(50.0)
-                                    .main_axis_alignment(MainAxisAlignment::Center),
+                                    .main_alignment(MainAlignment::Center),
                             )
                             .children([
                                 // Nested: parent rotated, child clickable
@@ -68,8 +68,8 @@ fn main() {
                                     .rotate(20.0)
                                     .layout(
                                         Flex::column()
-                                            .main_axis_alignment(MainAxisAlignment::Center)
-                                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                                            .main_alignment(MainAlignment::Center)
+                                            .cross_alignment(CrossAlignment::Center),
                                     )
                                     .child(make_box(
                                         "Nested",
@@ -85,8 +85,8 @@ fn main() {
                                     .scale(1.3)
                                     .layout(
                                         Flex::column()
-                                            .main_axis_alignment(MainAxisAlignment::Center)
-                                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                                            .main_alignment(MainAlignment::Center)
+                                            .cross_alignment(CrossAlignment::Center),
                                     )
                                     .child(
                                         make_box(
@@ -120,8 +120,8 @@ fn make_box(label: &'static str, base_color: Color, click_count: Signal<i32>) ->
         .on_click(move || click_count.update(|c| *c += 1))
         .layout(
             Flex::column()
-                .main_axis_alignment(MainAxisAlignment::Center)
-                .cross_axis_alignment(CrossAxisAlignment::Center),
+                .main_alignment(MainAlignment::Center)
+                .cross_alignment(CrossAlignment::Center),
         )
         .child(text(label).font_size(10.0).color(Color::WHITE).nowrap())
 }

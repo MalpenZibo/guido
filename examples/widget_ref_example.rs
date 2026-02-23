@@ -19,8 +19,8 @@ fn main() {
                     .layout(
                         Flex::row()
                             .spacing(16.0)
-                            .main_axis_alignment(MainAxisAlignment::Center)
-                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                            .main_alignment(MainAlignment::Center)
+                            .cross_alignment(CrossAlignment::Center),
                     )
                     .child(
                         // Spacer
