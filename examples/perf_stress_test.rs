@@ -22,69 +22,71 @@ struct ItemData {
 }
 
 fn main() {
-    // Store item data in a Rc<RefCell<Vec>> since Signal requires Send and ItemData contains !Send signals
-    let item_store: Rc<RefCell<Vec<ItemData>>> = Rc::new(RefCell::new(
-        (0..INITIAL_ITEM_COUNT)
-            .map(|i| ItemData {
-                id: i as u64,
-                enabled: create_signal(false),
-                input_value: create_signal(String::new()),
-            })
-            .collect(),
-    ));
-
-    // Signal that tracks the list of item IDs (u64 is Send)
-    let item_ids: Signal<Vec<u64>> = create_signal((0..INITIAL_ITEM_COUNT as u64).collect());
-
-    let store_for_children = item_store.clone();
-    let dyn_container_view = container()
-        .layout(Flex::column().spacing(10.0))
-        .children(move || {
-            let store = store_for_children.borrow();
-            // Read item_ids to track reactivity
-            let ids = item_ids.get();
-            ids.iter()
-                .filter_map(|&id| {
-                    store.iter().find(|item| item.id == id).map(|item| {
-                        let enabled = item.enabled;
-                        let input_value = item.input_value;
-                        (id, move || {
-                            create_item_row(enabled, input_value, id as usize)
-                        })
-                    })
+    App::new().run(|app| {
+        // Store item data in a Rc<RefCell<Vec>> since Signal requires Send and ItemData contains !Send signals
+        let item_store: Rc<RefCell<Vec<ItemData>>> = Rc::new(RefCell::new(
+            (0..INITIAL_ITEM_COUNT)
+                .map(|i| ItemData {
+                    id: i as u64,
+                    enabled: create_signal(false),
+                    input_value: create_signal(String::new()),
                 })
-                .collect::<Vec<_>>()
-        });
+                .collect(),
+        ));
 
-    let store_for_button = item_store.clone();
-    let view = container()
-        .background(Color::rgb(0.12, 0.12, 0.18))
-        .padding(20.0)
-        .layout(Flex::column().spacing(20.0))
-        .child(
-            text("Performance Stress Test")
-                .color(Color::WHITE)
-                .font_size(28.0),
-        )
-        .child(create_add_button(item_ids, store_for_button))
-        .child(
+        // Signal that tracks the list of item IDs (u64 is Send)
+        let item_ids: Signal<Vec<u64>> = create_signal((0..INITIAL_ITEM_COUNT as u64).collect());
+
+        let store_for_children = item_store.clone();
+        let dyn_container_view =
             container()
-                .height(300.0)
-                .scrollable(ScrollAxis::Vertical)
-                .child(dyn_container_view),
-        );
+                .layout(Flex::column().spacing(10.0))
+                .children(move || {
+                    let store = store_for_children.borrow();
+                    // Read item_ids to track reactivity
+                    let ids = item_ids.get();
+                    ids.iter()
+                        .filter_map(|&id| {
+                            store.iter().find(|item| item.id == id).map(|item| {
+                                let enabled = item.enabled;
+                                let input_value = item.input_value;
+                                (id, move || {
+                                    create_item_row(enabled, input_value, id as usize)
+                                })
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                });
 
-    let (app, _) = App::new().add_surface(
-        SurfaceConfig::new()
-            .width(750)
-            .height(500)
-            .anchor(Anchor::TOP | Anchor::LEFT)
-            .layer(Layer::Top)
-            .namespace("perf-stress-test")
-            .background_color(Color::rgb(0.12, 0.12, 0.18)),
-        move || view,
-    );
-    app.run();
+        let store_for_button = item_store.clone();
+        let view = container()
+            .background(Color::rgb(0.12, 0.12, 0.18))
+            .padding(20.0)
+            .layout(Flex::column().spacing(20.0))
+            .child(
+                text("Performance Stress Test")
+                    .color(Color::WHITE)
+                    .font_size(28.0),
+            )
+            .child(create_add_button(item_ids, store_for_button))
+            .child(
+                container()
+                    .height(300.0)
+                    .scrollable(ScrollAxis::Vertical)
+                    .child(dyn_container_view),
+            );
+
+        app.add_surface(
+            SurfaceConfig::new()
+                .width(750)
+                .height(500)
+                .anchor(Anchor::TOP | Anchor::LEFT)
+                .layer(Layer::Top)
+                .namespace("perf-stress-test")
+                .background_color(Color::rgb(0.12, 0.12, 0.18)),
+            move || view,
+        );
+    });
 }
 
 fn get_item_name(id: usize) -> String {

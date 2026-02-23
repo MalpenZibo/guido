@@ -7,14 +7,15 @@
 use guido::prelude::*;
 
 fn main() {
-    let (app, _) = App::new().add_surface(
-        SurfaceConfig::new()
-            .width(700)
-            .height(400)
-            .anchor(Anchor::TOP | Anchor::LEFT)
-            .background_color(Color::rgb(0.08, 0.08, 0.12)),
-        || {
-            container()
+    App::new().run(|app| {
+        app.add_surface(
+            SurfaceConfig::new()
+                .width(700)
+                .height(400)
+                .anchor(Anchor::TOP | Anchor::LEFT)
+                .background_color(Color::rgb(0.08, 0.08, 0.12)),
+            || {
+                container()
                 .background(Color::rgb(0.08, 0.08, 0.12))
                 .padding(24.0)
                 .layout(Flex::column().spacing(16.0))
@@ -49,9 +50,9 @@ fn main() {
                         ]),
                     ]),
                 )
-        },
-    );
-    app.run();
+            },
+        );
+    });
 }
 
 /// Button with lighter() hover effect

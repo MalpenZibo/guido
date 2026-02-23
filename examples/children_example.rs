@@ -19,6 +19,7 @@ struct Item {
 }
 
 fn main() {
+    App::new().run(|app| {
     // === Signals for reactive state ===
     // No need to clone signals anymore - they implement Copy!
     let show_optional = create_signal(true);
@@ -429,7 +430,7 @@ fn main() {
         )
         );
 
-    let (app, _) = App::new().add_surface(
+    app.add_surface(
         SurfaceConfig::new()
             .width(1800)
             .height(450)
@@ -437,5 +438,5 @@ fn main() {
             .background_color(Color::rgb(0.1, 0.1, 0.15)),
         move || view,
     );
-    app.run();
+    });
 }

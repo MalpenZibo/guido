@@ -52,13 +52,14 @@ fn main() {
                 .child(text("Scale 1.2").font_size(14.0).color(Color::WHITE)),
         ]);
 
-    let (app, _) = App::new().add_surface(
-        SurfaceConfig::new()
-            .width(600)
-            .height(200)
-            .anchor(Anchor::TOP | Anchor::LEFT)
-            .background_color(Color::rgb(0.15, 0.15, 0.2)),
-        move || view,
-    );
-    app.run();
+    App::new().run(|app| {
+        app.add_surface(
+            SurfaceConfig::new()
+                .width(600)
+                .height(200)
+                .anchor(Anchor::TOP | Anchor::LEFT)
+                .background_color(Color::rgb(0.15, 0.15, 0.2)),
+            move || view,
+        );
+    });
 }

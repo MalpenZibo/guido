@@ -5,32 +5,33 @@
 use guido::prelude::*;
 
 fn main() {
-    let (app, _) = App::new().add_surface(
-        SurfaceConfig::new()
-            .height(180)
-            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
-            .background_color(Color::rgb(0.12, 0.12, 0.16)),
-        move || {
-            container()
-                .layout(
-                    Flex::row()
-                        .spacing(60.0)
-                        .main_axis_alignment(MainAxisAlignment::Center),
-                )
-                .padding(30.0)
-                .children([
-                    // Reference: no rotation at any level
-                    three_level(0.0, 0.0, 0.0),
-                    // Only grandparent rotates 20°
-                    three_level(20.0, 0.0, 0.0),
-                    // Each level rotates 10° (total 30°)
-                    three_level(10.0, 10.0, 10.0),
-                    // Grandparent 30°, others 0°
-                    three_level(30.0, 0.0, 0.0),
-                ])
-        },
-    );
-    app.run();
+    App::new().run(|app| {
+        app.add_surface(
+            SurfaceConfig::new()
+                .height(180)
+                .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+                .background_color(Color::rgb(0.12, 0.12, 0.16)),
+            move || {
+                container()
+                    .layout(
+                        Flex::row()
+                            .spacing(60.0)
+                            .main_axis_alignment(MainAxisAlignment::Center),
+                    )
+                    .padding(30.0)
+                    .children([
+                        // Reference: no rotation at any level
+                        three_level(0.0, 0.0, 0.0),
+                        // Only grandparent rotates 20°
+                        three_level(20.0, 0.0, 0.0),
+                        // Each level rotates 10° (total 30°)
+                        three_level(10.0, 10.0, 10.0),
+                        // Grandparent 30°, others 0°
+                        three_level(30.0, 0.0, 0.0),
+                    ])
+            },
+        );
+    });
 }
 
 fn three_level(gp_rot: f32, p_rot: f32, c_rot: f32) -> Container {

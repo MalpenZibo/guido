@@ -7,15 +7,16 @@
 use guido::prelude::*;
 
 fn main() {
-    let click_count = create_signal(0);
+    App::new().run(|app| {
+        let click_count = create_signal(0);
 
-    let (app, _) = App::new().add_surface(
-        SurfaceConfig::new()
-            .height(300)
-            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
-            .background_color(Color::rgb(0.1, 0.1, 0.15)),
-        move || {
-            container()
+        app.add_surface(
+            SurfaceConfig::new()
+                .height(300)
+                .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+                .background_color(Color::rgb(0.1, 0.1, 0.15)),
+            move || {
+                container()
                 .layout(
                     Flex::column()
                         .spacing(30.0)
@@ -54,9 +55,9 @@ fn main() {
                             .color(Color::WHITE),
                     ),
                 ])
-        },
-    );
-    app.run();
+            },
+        );
+    });
 }
 
 fn make_box(

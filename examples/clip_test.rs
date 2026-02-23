@@ -11,28 +11,29 @@
 use guido::prelude::*;
 
 fn main() {
-    let (app, _) = App::new().add_surface(
-        SurfaceConfig::new()
-            .height(480)
-            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
-            .background_color(Color::rgb(0.12, 0.12, 0.16)),
-        move || {
-            container()
-                .layout(Flex::column().spacing(20.0))
-                .padding(20.0)
-                .children([
-                    // Row 1: Simple clip (no transforms)
-                    simple_clip_row(),
-                    // Row 2: Clip on rotated shape
-                    rotated_clip_row(),
-                    // Row 3: Clip on scaled shape
-                    scaled_clip_row(),
-                    // Row 4: Nested transforms with clip
-                    nested_clip_row(),
-                ])
-        },
-    );
-    app.run();
+    App::new().run(|app| {
+        app.add_surface(
+            SurfaceConfig::new()
+                .height(480)
+                .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+                .background_color(Color::rgb(0.12, 0.12, 0.16)),
+            move || {
+                container()
+                    .layout(Flex::column().spacing(20.0))
+                    .padding(20.0)
+                    .children([
+                        // Row 1: Simple clip (no transforms)
+                        simple_clip_row(),
+                        // Row 2: Clip on rotated shape
+                        rotated_clip_row(),
+                        // Row 3: Clip on scaled shape
+                        scaled_clip_row(),
+                        // Row 4: Nested transforms with clip
+                        nested_clip_row(),
+                    ])
+            },
+        );
+    });
 }
 
 /// Row 1: Simple clip - parent clips child that extends beyond bounds
