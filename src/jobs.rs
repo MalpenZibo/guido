@@ -180,8 +180,8 @@ pub fn drain_pending_jobs() -> Vec<Job> {
 }
 
 /// Drain all pending jobs EXCEPT Animation jobs.
-/// Animation jobs are left in PENDING_JOBS for centralized processing
-/// in the main loop, preventing cross-surface job loss.
+/// Used to collect follow-up jobs (Paint/Layout) pushed by animation
+/// advances and reconciliation, without re-draining Animation jobs.
 pub fn drain_non_animation_jobs() -> Vec<Job> {
     PENDING_JOBS.with(|jobs| jobs.borrow_mut().drain_non_animation())
 }
