@@ -35,8 +35,7 @@ thread_local! {
     static RUNTIME: RefCell<Runtime> = RefCell::new(Runtime::new());
 
     /// Stack of (effect_id, buffered_signal_reads) for tracking during effect execution.
-    /// Needed because the Runtime RefCell is already borrowed when effects run,
-    /// so `try_with_runtime(|rt| rt.track_read(id))` silently fails.
+    /// Needed because the Runtime RefCell is already borrowed when effects run.
     /// We buffer reads here and apply them after the callback returns.
     static EFFECT_TRACKING: RefCell<Vec<(EffectId, EffectReads)>> = const { RefCell::new(Vec::new()) };
 
@@ -67,8 +66,8 @@ fn vec_remove<T: PartialEq>(vec: &mut Vec<T>, value: &T) {
 }
 
 /// Buffer a signal read for the currently executing effect.
-/// Called from tracked_get/tracked_with since try_with_runtime fails during
-/// effect execution (Runtime RefCell already borrowed).
+/// Called from tracked_get/tracked_with. During effect execution, the Runtime
+/// RefCell is already borrowed, so reads are buffered here and applied after.
 pub fn record_effect_read(signal_id: SignalId) {
     EFFECT_TRACKING.with(|stack| {
         if let Ok(mut s) = stack.try_borrow_mut()
@@ -150,18 +149,6 @@ impl Runtime {
         id
     }
 
-    pub fn track_read(&mut self, signal_id: SignalId) {
-        // Check if this signal exists in our runtime (it might not if called from another thread)
-        if signal_id >= self.signal_subscribers.len() {
-            return;
-        }
-
-        if let Some(effect_id) = self.current_effect {
-            vec_insert(&mut self.signal_subscribers[signal_id], effect_id);
-            vec_insert(&mut self.effect_dependencies[effect_id], signal_id);
-        }
-    }
-
     pub fn notify_write(&mut self, signal_id: SignalId) {
         // Check if this signal exists in our runtime (it might not if called from another thread)
         if signal_id >= self.signal_subscribers.len() {
@@ -189,7 +176,7 @@ impl Runtime {
         }
 
         // Push tracking context (signal reads are buffered here since
-        // try_with_runtime can't borrow the Runtime during callback execution)
+        // the Runtime RefCell is already borrowed during callback execution)
         EFFECT_TRACKING.with(|stack| {
             stack.borrow_mut().push((effect_id, EffectReads::new()));
         });

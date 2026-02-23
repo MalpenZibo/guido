@@ -9,10 +9,9 @@ use super::storage::{
 };
 
 /// Common read operations for signal types.
-/// Tracks reads for effect dependencies and layout invalidation.
+/// Tracks reads for effect dependencies and widget invalidation.
 fn tracked_get<T: Clone + 'static>(id: SignalId) -> T {
     record_effect_read(id);
-    try_with_runtime(|rt| rt.track_read(id));
     record_signal_read(id);
     get_signal_value(id)
 }
@@ -20,7 +19,6 @@ fn tracked_get<T: Clone + 'static>(id: SignalId) -> T {
 /// Common read-with-borrow operation for signal types.
 fn tracked_with<T: 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -> R {
     record_effect_read(id);
-    try_with_runtime(|rt| rt.track_read(id));
     record_signal_read(id);
     with_signal_value(id, f)
 }
