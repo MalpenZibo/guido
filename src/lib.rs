@@ -102,8 +102,8 @@ pub(crate) fn take_registered_fonts() -> Vec<Arc<Vec<u8>>> {
 pub mod prelude {
     pub use crate::animation::{SpringConfig, TimingFunction, Transition};
     pub use crate::layout::{
-        Axis, Constraints, CrossAxisAlignment, Flex, Length, MainAxisAlignment, Overlay, Size,
-        at_least, at_most, fill,
+        Axis, Constraints, CrossAlignment, Flex, Length, MainAlignment, Overlay, Size, at_least,
+        at_most, fill,
     };
     pub use crate::platform::{Anchor, KeyboardInteractivity, Layer};
     pub use crate::reactive::{

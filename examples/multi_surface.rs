@@ -27,10 +27,10 @@ fn main() {
                     .layout(
                         Flex::row()
                             .spacing(8.0)
-                            .main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                            .main_alignment(MainAlignment::SpaceBetween)
+                            .cross_alignment(CrossAlignment::Center),
                     )
-                    .padding_xy(16.0, 0.0)
+                    .padding([0.0, 16.0])
                     .child(
                         text("Multi-Surface Demo")
                             .color(Color::WHITE)
@@ -57,13 +57,13 @@ fn main() {
                     .layout(
                         Flex::row()
                             .spacing(16.0)
-                            .main_axis_alignment(MainAxisAlignment::Center)
-                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                            .main_alignment(MainAlignment::Center)
+                            .cross_alignment(CrossAlignment::Center),
                     )
                     .children([
                         container()
                             .background(Color::rgb(0.3, 0.3, 0.4))
-                            .padding_xy(16.0, 8.0)
+                            .padding([8.0, 16.0])
                             .corner_radius(8.0)
                             .hover_state(|s| s.lighter(0.1))
                             .pressed_state(|s| s.ripple())
@@ -71,7 +71,7 @@ fn main() {
                             .child(text("+").color(Color::WHITE).font_size(16.0)),
                         container()
                             .background(Color::rgb(0.3, 0.3, 0.4))
-                            .padding_xy(16.0, 8.0)
+                            .padding([8.0, 16.0])
                             .corner_radius(8.0)
                             .hover_state(|s| s.lighter(0.1))
                             .pressed_state(|s| s.ripple())
@@ -79,7 +79,7 @@ fn main() {
                             .child(text("-").color(Color::WHITE).font_size(16.0)),
                         container()
                             .background(Color::rgb(0.4, 0.2, 0.2))
-                            .padding_xy(16.0, 8.0)
+                            .padding([8.0, 16.0])
                             .corner_radius(8.0)
                             .hover_state(|s| s.lighter(0.1))
                             .pressed_state(|s| s.ripple())

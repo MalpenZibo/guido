@@ -10,13 +10,13 @@
 //!
 //! ## Alignment Options
 //!
-//! **Main axis** ([`MainAxisAlignment`]):
+//! **Main axis** ([`MainAlignment`]):
 //! - `Start`, `Center`, `End` - Position children at start/center/end
 //! - `SpaceBetween` - Equal space between children, none at edges
 //! - `SpaceAround` - Equal space around children (half at edges)
 //! - `SpaceEvenly` - Equal space including edges
 //!
-//! **Cross axis** ([`CrossAxisAlignment`]):
+//! **Cross axis** ([`CrossAlignment`]):
 //! - `Start`, `Center`, `End` - Align children along cross axis
 //! - `Stretch` - Stretch children to fill cross axis (default)
 //!
@@ -24,11 +24,11 @@
 //!
 //! ```ignore
 //! container()
-//!     .layout(Flex::row().spacing(8.0).main_axis_alignment(MainAxisAlignment::Center))
+//!     .layout(Flex::row().spacing(8.0).main_alignment(MainAlignment::Center))
 //!     .children([button_a, button_b, button_c])
 //! ```
 
-use super::{Axis, Constraints, CrossAxisAlignment, Layout, MainAxisAlignment, Size};
+use super::{Axis, Constraints, CrossAlignment, Layout, MainAlignment, Size};
 use crate::{
     reactive::{IntoMaybeDyn, MaybeDyn},
     tree::{Tree, WidgetId},
@@ -38,8 +38,8 @@ use crate::{
 pub struct Flex {
     direction: MaybeDyn<Axis>,
     spacing: MaybeDyn<f32>,
-    main_axis_alignment: MaybeDyn<MainAxisAlignment>,
-    cross_axis_alignment: MaybeDyn<CrossAxisAlignment>,
+    main_alignment: MaybeDyn<MainAlignment>,
+    cross_alignment: MaybeDyn<CrossAlignment>,
 
     child_sizes: Vec<Size>,
 }
@@ -48,14 +48,14 @@ impl Flex {
     /// Create a new flex layout with the given direction
     ///
     /// Default alignments match CSS Flexbox:
-    /// - `main_axis_alignment`: `Start` (CSS `justify-content: flex-start`)
-    /// - `cross_axis_alignment`: `Stretch` (CSS `align-items: stretch`)
+    /// - `main_alignment`: `Start` (CSS `justify-content: flex-start`)
+    /// - `cross_alignment`: `Stretch` (CSS `align-items: stretch`)
     pub fn new(direction: Axis) -> Self {
         Self {
             direction: MaybeDyn::Static(direction),
             spacing: MaybeDyn::Static(0.0),
-            main_axis_alignment: MaybeDyn::Static(MainAxisAlignment::Start),
-            cross_axis_alignment: MaybeDyn::Static(CrossAxisAlignment::Stretch),
+            main_alignment: MaybeDyn::Static(MainAlignment::Start),
+            cross_alignment: MaybeDyn::Static(CrossAlignment::Stretch),
             child_sizes: Vec::with_capacity(8),
         }
     }
@@ -77,44 +77,41 @@ impl Flex {
     }
 
     /// Set the main axis alignment
-    pub fn main_axis_alignment(mut self, alignment: impl IntoMaybeDyn<MainAxisAlignment>) -> Self {
-        self.main_axis_alignment = alignment.into_maybe_dyn();
+    pub fn main_alignment(mut self, alignment: impl IntoMaybeDyn<MainAlignment>) -> Self {
+        self.main_alignment = alignment.into_maybe_dyn();
         self
     }
 
     /// Set the cross axis alignment
-    pub fn cross_axis_alignment(
-        mut self,
-        alignment: impl IntoMaybeDyn<CrossAxisAlignment>,
-    ) -> Self {
-        self.cross_axis_alignment = alignment.into_maybe_dyn();
+    pub fn cross_alignment(mut self, alignment: impl IntoMaybeDyn<CrossAlignment>) -> Self {
+        self.cross_alignment = alignment.into_maybe_dyn();
         self
     }
 
     /// Calculate initial offset and spacing between children based on main axis alignment
     fn calc_main_axis_spacing(
         &self,
-        main_align: MainAxisAlignment,
+        main_align: MainAlignment,
         spacing: f32,
         free_space: f32,
         child_count: usize,
     ) -> (f32, f32) {
         match main_align {
-            MainAxisAlignment::Start => (0.0, spacing),
-            MainAxisAlignment::Center => (free_space / 2.0, spacing),
-            MainAxisAlignment::End => (free_space, spacing),
-            MainAxisAlignment::SpaceBetween => {
+            MainAlignment::Start => (0.0, spacing),
+            MainAlignment::Center => (free_space / 2.0, spacing),
+            MainAlignment::End => (free_space, spacing),
+            MainAlignment::SpaceBetween => {
                 if child_count > 1 {
                     (0.0, free_space / (child_count - 1) as f32 + spacing)
                 } else {
                     (0.0, spacing)
                 }
             }
-            MainAxisAlignment::SpaceAround => {
+            MainAlignment::SpaceAround => {
                 let space = free_space / child_count as f32;
                 (space / 2.0, space + spacing)
             }
-            MainAxisAlignment::SpaceEvenly => {
+            MainAlignment::SpaceEvenly => {
                 let space = free_space / (child_count + 1) as f32;
                 (space, space + spacing)
             }
@@ -131,8 +128,8 @@ impl Flex {
         axis: Axis,
     ) -> Size {
         let spacing = self.spacing.get();
-        let main_align = self.main_axis_alignment.get();
-        let cross_align = self.cross_axis_alignment.get();
+        let main_align = self.main_alignment.get();
+        let cross_align = self.cross_alignment.get();
 
         // Get main/cross axis constraints based on direction
         let (main_max, cross_min, cross_max) = match axis {
@@ -162,7 +159,7 @@ impl Flex {
         let fill_count = is_fill.iter().filter(|&&f| f).count();
 
         // For Stretch alignment, use min constraint if set
-        let stretch_cross = if cross_align == CrossAxisAlignment::Stretch && cross_min > 0.0 {
+        let stretch_cross = if cross_align == CrossAlignment::Stretch && cross_min > 0.0 {
             Some(cross_min)
         } else {
             None
@@ -256,20 +253,19 @@ impl Flex {
 
         // For space-based and centered alignments, expand to fill available main axis
         let main_size = match main_align {
-            MainAxisAlignment::SpaceBetween
-            | MainAxisAlignment::SpaceAround
-            | MainAxisAlignment::SpaceEvenly
-            | MainAxisAlignment::Center
-            | MainAxisAlignment::End => main_max,
-            MainAxisAlignment::Start => total_main.max(main_min).min(main_max),
+            MainAlignment::SpaceBetween
+            | MainAlignment::SpaceAround
+            | MainAlignment::SpaceEvenly
+            | MainAlignment::Center
+            | MainAlignment::End => main_max,
+            MainAlignment::Start => total_main.max(main_min).min(main_max),
         };
 
         let cross_size = max_cross.max(cross_constraint_min).min(cross_max);
 
         // For Stretch: if we didn't have a known cross size before, re-layout children
         // with the computed cross size. Fill children get tight main-axis constraints.
-        if cross_align == CrossAxisAlignment::Stretch && stretch_cross.is_none() && cross_size > 0.0
-        {
+        if cross_align == CrossAlignment::Stretch && stretch_cross.is_none() && cross_size > 0.0 {
             self.child_sizes.clear();
             self.child_sizes.resize(children.len(), Size::zero());
             children_main = 0.0;
@@ -321,19 +317,19 @@ impl Flex {
             let child_cross = child_size.cross_axis(axis);
 
             let cross_pos = match cross_align {
-                CrossAxisAlignment::Start => match axis {
+                CrossAlignment::Start => match axis {
                     Axis::Horizontal => origin.1,
                     Axis::Vertical => origin.0,
                 },
-                CrossAxisAlignment::Center => match axis {
+                CrossAlignment::Center => match axis {
                     Axis::Horizontal => origin.1 + (cross_size - child_cross) / 2.0,
                     Axis::Vertical => origin.0 + (cross_size - child_cross) / 2.0,
                 },
-                CrossAxisAlignment::End => match axis {
+                CrossAlignment::End => match axis {
                     Axis::Horizontal => origin.1 + cross_size - child_cross,
                     Axis::Vertical => origin.0 + cross_size - child_cross,
                 },
-                CrossAxisAlignment::Stretch => match axis {
+                CrossAlignment::Stretch => match axis {
                     Axis::Horizontal => origin.1,
                     Axis::Vertical => origin.0,
                 },

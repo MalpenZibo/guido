@@ -196,6 +196,80 @@ impl Padding {
     pub fn vertical(&self) -> f32 {
         self.top + self.bottom
     }
+
+    /// Override the top padding value.
+    pub fn top(mut self, v: f32) -> Self {
+        self.top = v;
+        self
+    }
+
+    /// Override the bottom padding value.
+    pub fn bottom(mut self, v: f32) -> Self {
+        self.bottom = v;
+        self
+    }
+
+    /// Override the left padding value.
+    pub fn left(mut self, v: f32) -> Self {
+        self.left = v;
+        self
+    }
+
+    /// Override the right padding value.
+    pub fn right(mut self, v: f32) -> Self {
+        self.right = v;
+        self
+    }
+}
+
+// From conversions for Padding — enables padding(8.0), padding(8), padding([8.0, 16.0]), etc.
+
+impl From<f32> for Padding {
+    fn from(v: f32) -> Self {
+        Padding::all(v)
+    }
+}
+
+impl From<u16> for Padding {
+    fn from(v: u16) -> Self {
+        Padding::all(f32::from(v))
+    }
+}
+
+impl From<u32> for Padding {
+    fn from(v: u32) -> Self {
+        Padding::all(v as f32)
+    }
+}
+
+impl From<i32> for Padding {
+    fn from(v: i32) -> Self {
+        Padding::all(v as f32)
+    }
+}
+
+/// `[vertical, horizontal]` — CSS-style 2-value shorthand.
+impl From<[f32; 2]> for Padding {
+    fn from(v: [f32; 2]) -> Self {
+        Padding {
+            top: v[0],
+            right: v[1],
+            bottom: v[0],
+            left: v[1],
+        }
+    }
+}
+
+/// `[top, right, bottom, left]` — CSS-style 4-value shorthand.
+impl From<[f32; 4]> for Padding {
+    fn from(v: [f32; 4]) -> Self {
+        Padding {
+            top: v[0],
+            right: v[1],
+            bottom: v[2],
+            left: v[3],
+        }
+    }
 }
 
 impl Default for Padding {
@@ -608,5 +682,56 @@ mod tests {
         assert_eq!(padding.right, 0.0);
         assert_eq!(padding.bottom, 0.0);
         assert_eq!(padding.left, 0.0);
+    }
+
+    #[test]
+    fn test_padding_builder_methods() {
+        let padding = Padding::all(8.0).top(20.0).left(0.0);
+        assert_eq!(padding.top, 20.0);
+        assert_eq!(padding.right, 8.0);
+        assert_eq!(padding.bottom, 8.0);
+        assert_eq!(padding.left, 0.0);
+    }
+
+    #[test]
+    fn test_padding_from_f32() {
+        let padding = Padding::from(10.0);
+        assert_eq!(padding, Padding::all(10.0));
+    }
+
+    #[test]
+    fn test_padding_from_i32() {
+        let padding = Padding::from(10i32);
+        assert_eq!(padding, Padding::all(10.0));
+    }
+
+    #[test]
+    fn test_padding_from_u16() {
+        let padding = Padding::from(10u16);
+        assert_eq!(padding, Padding::all(10.0));
+    }
+
+    #[test]
+    fn test_padding_from_u32() {
+        let padding = Padding::from(10u32);
+        assert_eq!(padding, Padding::all(10.0));
+    }
+
+    #[test]
+    fn test_padding_from_array_2() {
+        let padding = Padding::from([8.0, 16.0]);
+        assert_eq!(padding.top, 8.0);
+        assert_eq!(padding.right, 16.0);
+        assert_eq!(padding.bottom, 8.0);
+        assert_eq!(padding.left, 16.0);
+    }
+
+    #[test]
+    fn test_padding_from_array_4() {
+        let padding = Padding::from([1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(padding.top, 1.0);
+        assert_eq!(padding.right, 2.0);
+        assert_eq!(padding.bottom, 3.0);
+        assert_eq!(padding.left, 4.0);
     }
 }

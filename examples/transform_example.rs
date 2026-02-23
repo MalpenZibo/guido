@@ -27,8 +27,8 @@ fn main() {
                     .layout(
                         Flex::row()
                             .spacing(20.0)
-                            .main_axis_alignment(MainAxisAlignment::Center)
-                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                            .main_alignment(MainAlignment::Center)
+                            .cross_alignment(CrossAlignment::Center),
                     )
                     .padding(16.0)
                     .children([
@@ -43,8 +43,8 @@ fn main() {
                                 container()
                                     .layout(
                                         Flex::column()
-                                            .main_axis_alignment(MainAxisAlignment::Center)
-                                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                                            .main_alignment(MainAlignment::Center)
+                                            .cross_alignment(CrossAlignment::Center),
                                     )
                                     .child(text("45").color(Color::WHITE).font_size(12.0)),
                             ),
@@ -65,8 +65,8 @@ fn main() {
                                 container()
                                     .layout(
                                         Flex::column()
-                                            .main_axis_alignment(MainAxisAlignment::Center)
-                                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                                            .main_alignment(MainAlignment::Center)
+                                            .cross_alignment(CrossAlignment::Center),
                                     )
                                     .child(
                                         text("Click").color(Color::WHITE).font_size(10.0).nowrap(),
@@ -91,8 +91,8 @@ fn main() {
                                 container()
                                     .layout(
                                         Flex::column()
-                                            .main_axis_alignment(MainAxisAlignment::Center)
-                                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                                            .main_alignment(MainAlignment::Center)
+                                            .cross_alignment(CrossAlignment::Center),
                                     )
                                     .child(
                                         text("Scale").color(Color::WHITE).font_size(10.0).nowrap(),
@@ -109,8 +109,8 @@ fn main() {
                                 container()
                                     .layout(
                                         Flex::column()
-                                            .main_axis_alignment(MainAxisAlignment::Center)
-                                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                                            .main_alignment(MainAlignment::Center)
+                                            .cross_alignment(CrossAlignment::Center),
                                     )
                                     .child(text("0.7x").color(Color::WHITE).font_size(12.0)),
                             ),
@@ -125,8 +125,8 @@ fn main() {
                                 container()
                                     .layout(
                                         Flex::column()
-                                            .main_axis_alignment(MainAxisAlignment::Center)
-                                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                                            .main_alignment(MainAlignment::Center)
+                                            .cross_alignment(CrossAlignment::Center),
                                     )
                                     .child(
                                         text("Both").color(Color::WHITE).font_size(10.0).nowrap(),
@@ -144,8 +144,8 @@ fn main() {
                                 container()
                                     .layout(
                                         Flex::column()
-                                            .main_axis_alignment(MainAxisAlignment::Center)
-                                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                                            .main_alignment(MainAlignment::Center)
+                                            .cross_alignment(CrossAlignment::Center),
                                     )
                                     .child(text("TL").color(Color::WHITE).font_size(12.0)),
                             ),
@@ -161,8 +161,8 @@ fn main() {
                                 container()
                                     .layout(
                                         Flex::column()
-                                            .main_axis_alignment(MainAxisAlignment::Center)
-                                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                                            .main_alignment(MainAlignment::Center)
+                                            .cross_alignment(CrossAlignment::Center),
                                     )
                                     .child(text("BR").color(Color::WHITE).font_size(12.0)),
                             ),
@@ -189,8 +189,8 @@ fn main() {
                                     container()
                                         .layout(
                                             Flex::column()
-                                                .main_axis_alignment(MainAxisAlignment::Center)
-                                                .cross_axis_alignment(CrossAxisAlignment::Center),
+                                                .main_alignment(MainAlignment::Center)
+                                                .cross_alignment(CrossAlignment::Center),
                                         )
                                         .child(
                                             text("Cycle")

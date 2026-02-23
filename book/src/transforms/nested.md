@@ -110,7 +110,7 @@ fn nested_transforms_demo() -> impl Widget {
                 .background(Color::rgb(0.2, 0.2, 0.3))
                 .corner_radius(16.0)
                 .rotate(10.0)
-                .layout(Flex::column().spacing(16.0).main_axis_alignment(MainAxisAlignment::Center).cross_axis_alignment(CrossAxisAlignment::Center))
+                .layout(Flex::column().spacing(16.0).main_alignment(MainAlignment::Center).cross_alignment(CrossAlignment::Center))
                 .children([
                     text("Parent (rotated 10°)").color(Color::WHITE).font_size(12.0),
 
@@ -123,7 +123,7 @@ fn nested_transforms_demo() -> impl Widget {
                         .scale(0.9)
                         .hover_state(|s| s.lighter(0.1))
                         .pressed_state(|s| s.ripple())
-                        .layout(Flex::column().main_axis_alignment(MainAxisAlignment::Center).cross_axis_alignment(CrossAxisAlignment::Center))
+                        .layout(Flex::column().main_alignment(MainAlignment::Center).cross_alignment(CrossAlignment::Center))
                         .child(
                             text("Child (scaled 0.9)")
                                 .color(Color::WHITE)

@@ -130,7 +130,7 @@ fn animated_transforms_demo() -> impl Widget {
                 .hover_state(|s| s.lighter(0.1))
                 .pressed_state(|s| s.ripple())
                 .on_click(move || rotation.update(|r| *r += 45.0))
-                .layout(Flex::column().main_axis_alignment(MainAxisAlignment::Center).cross_axis_alignment(CrossAxisAlignment::Center))
+                .layout(Flex::column().main_alignment(MainAlignment::Center).cross_alignment(CrossAlignment::Center))
                 .child(text("Rotate").color(Color::WHITE).font_size(12.0)),
 
             // Spring-based scale
@@ -147,7 +147,7 @@ fn animated_transforms_demo() -> impl Widget {
                     is_scaled.update(|s| *s = !*s);
                     scale.set(if is_scaled.get() { 1.3 } else { 1.0 });
                 })
-                .layout(Flex::column().main_axis_alignment(MainAxisAlignment::Center).cross_axis_alignment(CrossAxisAlignment::Center))
+                .layout(Flex::column().main_alignment(MainAlignment::Center).cross_alignment(CrossAlignment::Center))
                 .child(text("Scale").color(Color::WHITE).font_size(12.0)),
         ])
 }

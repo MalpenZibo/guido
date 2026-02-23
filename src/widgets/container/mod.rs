@@ -274,49 +274,16 @@ impl Container {
         self
     }
 
-    /// Set uniform padding on all sides in logical pixels.
+    /// Set padding in logical pixels.
     ///
-    /// Accepts static values or reactive signals/closures.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// // Static padding
-    /// container().padding(8.0)
-    ///
-    /// // Reactive padding
-    /// let padding = create_signal(8.0);
-    /// container().padding(padding)
-    /// ```
-    pub fn padding(mut self, value: impl IntoMaybeDyn<f32>) -> Self {
-        let value = value.into_maybe_dyn();
-        self.padding = MaybeDyn::Dynamic(Rc::new(move || Padding::all(value.get())));
-        self
-    }
-
-    /// Set separate horizontal and vertical padding in logical pixels.
-    ///
-    /// Horizontal padding applies to left and right, vertical to top and bottom.
-    /// Accepts static values or reactive signals/closures.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// container().padding_xy(16.0, 8.0)  // 16px horizontal, 8px vertical
-    /// ```
-    pub fn padding_xy(
-        mut self,
-        horizontal: impl IntoMaybeDyn<f32>,
-        vertical: impl IntoMaybeDyn<f32>,
-    ) -> Self {
-        let h = horizontal.into_maybe_dyn();
-        let v = vertical.into_maybe_dyn();
-        self.padding = MaybeDyn::Dynamic(Rc::new(move || Padding {
-            left: h.get(),
-            right: h.get(),
-            top: v.get(),
-            bottom: v.get(),
-        }));
+    /// Accepts multiple formats via `From` conversions:
+    /// - `padding(8.0)` or `padding(8)` — uniform on all sides
+    /// - `padding([8.0, 16.0])` — `[vertical, horizontal]` (CSS 2-value shorthand)
+    /// - `padding([1.0, 2.0, 3.0, 4.0])` — `[top, right, bottom, left]` (CSS 4-value)
+    /// - `padding(Padding::all(8.0).top(20.0))` — builder pattern
+    /// - `padding(signal)` or `padding(move || ...)` — reactive
+    pub fn padding(mut self, value: impl IntoMaybeDyn<Padding>) -> Self {
+        self.padding = value.into_maybe_dyn();
         self
     }
 

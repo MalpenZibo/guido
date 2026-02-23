@@ -35,8 +35,8 @@ async fn main() {
             .layout(
                 Flex::column()
                     .spacing(20.0)
-                    .main_axis_alignment(MainAxisAlignment::Center)
-                    .cross_axis_alignment(CrossAxisAlignment::Center),
+                    .main_alignment(MainAlignment::Center)
+                    .cross_alignment(CrossAlignment::Center),
             )
             .padding(30.0)
             .children([
@@ -51,8 +51,8 @@ async fn main() {
                     .layout(
                         Flex::row()
                             .spacing(30.0)
-                            .main_axis_alignment(MainAxisAlignment::Center)
-                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                            .main_alignment(MainAlignment::Center)
+                            .cross_alignment(CrossAlignment::Center),
                     )
                     .children([
                         // Rotation
@@ -63,8 +63,8 @@ async fn main() {
                             .corner_radius(8.0)
                             .layout(
                                 Flex::column()
-                                    .main_axis_alignment(MainAxisAlignment::Center)
-                                    .cross_axis_alignment(CrossAxisAlignment::Center),
+                                    .main_alignment(MainAlignment::Center)
+                                    .cross_alignment(CrossAlignment::Center),
                             )
                             .rotate(15.0)
                             .child(text("Rotate 15°").font_size(13.0).color(Color::WHITE)),
@@ -76,8 +76,8 @@ async fn main() {
                             .corner_radius(8.0)
                             .layout(
                                 Flex::column()
-                                    .main_axis_alignment(MainAxisAlignment::Center)
-                                    .cross_axis_alignment(CrossAxisAlignment::Center),
+                                    .main_alignment(MainAlignment::Center)
+                                    .cross_alignment(CrossAlignment::Center),
                             )
                             .scale(1.2)
                             .child(text("Scale 1.2x").font_size(13.0).color(Color::WHITE)),
@@ -89,8 +89,8 @@ async fn main() {
                             .corner_radius(8.0)
                             .layout(
                                 Flex::column()
-                                    .main_axis_alignment(MainAxisAlignment::Center)
-                                    .cross_axis_alignment(CrossAxisAlignment::Center),
+                                    .main_alignment(MainAlignment::Center)
+                                    .cross_alignment(CrossAlignment::Center),
                             )
                             .translate(10.0, -10.0)
                             .child(text("Translate").font_size(13.0).color(Color::WHITE)),
@@ -102,8 +102,8 @@ async fn main() {
                             .corner_radius(8.0)
                             .layout(
                                 Flex::column()
-                                    .main_axis_alignment(MainAxisAlignment::Center)
-                                    .cross_axis_alignment(CrossAxisAlignment::Center),
+                                    .main_alignment(MainAlignment::Center)
+                                    .cross_alignment(CrossAlignment::Center),
                             )
                             .rotate(-20.0)
                             .scale(0.9)
@@ -114,8 +114,8 @@ async fn main() {
                     .layout(
                         Flex::row()
                             .spacing(30.0)
-                            .main_axis_alignment(MainAxisAlignment::Center)
-                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                            .main_alignment(MainAlignment::Center)
+                            .cross_alignment(CrossAlignment::Center),
                     )
                     .children([
                         // All three: rotation + scale + translation
@@ -126,8 +126,8 @@ async fn main() {
                             .corner_radius(8.0)
                             .layout(
                                 Flex::column()
-                                    .main_axis_alignment(MainAxisAlignment::Center)
-                                    .cross_axis_alignment(CrossAxisAlignment::Center),
+                                    .main_alignment(MainAlignment::Center)
+                                    .cross_alignment(CrossAlignment::Center),
                             )
                             .rotate(10.0)
                             .scale(1.1)
@@ -141,8 +141,8 @@ async fn main() {
                             .corner_radius(8.0)
                             .layout(
                                 Flex::column()
-                                    .main_axis_alignment(MainAxisAlignment::Center)
-                                    .cross_axis_alignment(CrossAxisAlignment::Center),
+                                    .main_alignment(MainAlignment::Center)
+                                    .cross_alignment(CrossAlignment::Center),
                             )
                             .transform_origin(TransformOrigin::TOP_LEFT)
                             .rotate(15.0)
@@ -155,8 +155,8 @@ async fn main() {
                             .corner_radius(8.0)
                             .layout(
                                 Flex::column()
-                                    .main_axis_alignment(MainAxisAlignment::Center)
-                                    .cross_axis_alignment(CrossAxisAlignment::Center),
+                                    .main_alignment(MainAlignment::Center)
+                                    .cross_alignment(CrossAlignment::Center),
                             )
                             .transform_origin(TransformOrigin::BOTTOM_RIGHT)
                             .rotate(15.0)
@@ -173,8 +173,8 @@ async fn main() {
                             .corner_radius(8.0)
                             .layout(
                                 Flex::column()
-                                    .main_axis_alignment(MainAxisAlignment::Center)
-                                    .cross_axis_alignment(CrossAxisAlignment::Center),
+                                    .main_alignment(MainAlignment::Center)
+                                    .cross_alignment(CrossAlignment::Center),
                             )
                             .transform_origin(TransformOrigin::TOP_RIGHT)
                             .scale(1.15)
@@ -186,8 +186,8 @@ async fn main() {
                     .layout(
                         Flex::row()
                             .spacing(30.0)
-                            .main_axis_alignment(MainAxisAlignment::Center)
-                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                            .main_alignment(MainAlignment::Center)
+                            .cross_alignment(CrossAlignment::Center),
                     )
                     .children([
                         // Nested: parent rotated, child has text
@@ -198,8 +198,8 @@ async fn main() {
                             .corner_radius(12.0)
                             .layout(
                                 Flex::column()
-                                    .main_axis_alignment(MainAxisAlignment::Center)
-                                    .cross_axis_alignment(CrossAxisAlignment::Center),
+                                    .main_alignment(MainAlignment::Center)
+                                    .cross_alignment(CrossAlignment::Center),
                             )
                             .rotate(20.0)
                             .child(
@@ -210,8 +210,8 @@ async fn main() {
                                     .corner_radius(6.0)
                                     .layout(
                                         Flex::column()
-                                            .main_axis_alignment(MainAxisAlignment::Center)
-                                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                                            .main_alignment(MainAlignment::Center)
+                                            .cross_alignment(CrossAlignment::Center),
                                     )
                                     .child(text("Nested").font_size(14.0).color(Color::WHITE)),
                             ),
@@ -223,8 +223,8 @@ async fn main() {
                             .corner_radius(12.0)
                             .layout(
                                 Flex::column()
-                                    .main_axis_alignment(MainAxisAlignment::Center)
-                                    .cross_axis_alignment(CrossAxisAlignment::Center),
+                                    .main_alignment(MainAlignment::Center)
+                                    .cross_alignment(CrossAlignment::Center),
                             )
                             .rotate(15.0)
                             .child(
@@ -235,8 +235,8 @@ async fn main() {
                                     .corner_radius(6.0)
                                     .layout(
                                         Flex::column()
-                                            .main_axis_alignment(MainAxisAlignment::Center)
-                                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                                            .main_alignment(MainAlignment::Center)
+                                            .cross_alignment(CrossAlignment::Center),
                                     )
                                     .rotate(15.0)
                                     .child(
@@ -253,8 +253,8 @@ async fn main() {
                             .corner_radius(12.0)
                             .layout(
                                 Flex::column()
-                                    .main_axis_alignment(MainAxisAlignment::Center)
-                                    .cross_axis_alignment(CrossAxisAlignment::Center),
+                                    .main_alignment(MainAlignment::Center)
+                                    .cross_alignment(CrossAlignment::Center),
                             )
                             .scale(1.1)
                             .translate(5.0, 0.0)
@@ -266,8 +266,8 @@ async fn main() {
                                     .corner_radius(6.0)
                                     .layout(
                                         Flex::column()
-                                            .main_axis_alignment(MainAxisAlignment::Center)
-                                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                                            .main_alignment(MainAlignment::Center)
+                                            .cross_alignment(CrossAlignment::Center),
                                     )
                                     .rotate(-10.0)
                                     .child(
@@ -284,8 +284,8 @@ async fn main() {
                             .corner_radius(8.0)
                             .layout(
                                 Flex::column()
-                                    .main_axis_alignment(MainAxisAlignment::Center)
-                                    .cross_axis_alignment(CrossAxisAlignment::Center),
+                                    .main_alignment(MainAlignment::Center)
+                                    .cross_alignment(CrossAlignment::Center),
                             )
                             .rotate(move || angle.get())
                             .child(text("Spinning!").font_size(14.0).color(Color::WHITE)),

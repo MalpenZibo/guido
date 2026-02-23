@@ -147,18 +147,12 @@ container()
 
 ## Padding
 
-### Uniform Padding
-
 ```rust
-container().padding(16.0)  // 16px on all sides
-```
-
-### Directional Padding
-
-```rust
-container()
-    .padding_horizontal(20.0)  // Left and right
-    .padding_vertical(10.0)    // Top and bottom
+container().padding(16.0)                          // 16px on all sides
+container().padding(16)                            // integers work too
+container().padding([8.0, 16.0])                   // [vertical, horizontal]
+container().padding([1.0, 2.0, 3.0, 4.0])         // [top, right, bottom, left]
+container().padding(Padding::all(8.0).top(20.0))   // builder pattern
 ```
 
 ## Sizing
@@ -201,26 +195,26 @@ container()
     .layout(
         Flex::row()
             .spacing(8.0)
-            .main_axis_alignment(MainAxisAlignment::Center)
-            .cross_axis_alignment(CrossAxisAlignment::Center)
+            .main_alignment(MainAlignment::Center)
+            .cross_alignment(CrossAlignment::Center)
     )
 ```
 
 ### Alignment Options
 
 **Main Axis (direction of flow):**
-- `MainAxisAlignment::Start`
-- `MainAxisAlignment::End`
-- `MainAxisAlignment::Center`
-- `MainAxisAlignment::SpaceBetween`
-- `MainAxisAlignment::SpaceAround`
-- `MainAxisAlignment::SpaceEvenly`
+- `MainAlignment::Start`
+- `MainAlignment::End`
+- `MainAlignment::Center`
+- `MainAlignment::SpaceBetween`
+- `MainAlignment::SpaceAround`
+- `MainAlignment::SpaceEvenly`
 
 **Cross Axis (perpendicular to flow):**
-- `CrossAxisAlignment::Start`
-- `CrossAxisAlignment::End`
-- `CrossAxisAlignment::Center`
-- `CrossAxisAlignment::Stretch`
+- `CrossAlignment::Start`
+- `CrossAlignment::End`
+- `CrossAlignment::Center`
+- `CrossAlignment::Stretch`
 
 ## Complete Example
 

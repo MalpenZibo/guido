@@ -16,7 +16,7 @@ fn main() {
                     .layout(
                         Flex::row()
                             .spacing(50.0)
-                            .main_axis_alignment(MainAxisAlignment::Center),
+                            .main_alignment(MainAlignment::Center),
                     )
                     .padding(30.0)
                     .children([

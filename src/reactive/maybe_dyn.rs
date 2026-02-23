@@ -90,6 +90,25 @@ impl IntoMaybeDyn<bool> for bool {
     }
 }
 
+// Integer → f32 conversions: enables spacing(8), width(300), corner_radius(12), etc.
+impl IntoMaybeDyn<f32> for u16 {
+    fn into_maybe_dyn(self) -> MaybeDyn<f32> {
+        MaybeDyn::Static(f32::from(self))
+    }
+}
+
+impl IntoMaybeDyn<f32> for u32 {
+    fn into_maybe_dyn(self) -> MaybeDyn<f32> {
+        MaybeDyn::Static(self as f32)
+    }
+}
+
+impl IntoMaybeDyn<f32> for i32 {
+    fn into_maybe_dyn(self) -> MaybeDyn<f32> {
+        MaybeDyn::Static(self as f32)
+    }
+}
+
 // ============================================================================
 // Closure implementation - works for any Fn() -> T
 // ============================================================================

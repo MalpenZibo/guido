@@ -95,7 +95,7 @@ fn main() {
                         .layout(
                             Flex::row()
                                 .spacing(24.0)
-                                .cross_axis_alignment(CrossAxisAlignment::End),
+                                .cross_alignment(CrossAlignment::End),
                         )
                         .child(labeled(
                             "60x60",

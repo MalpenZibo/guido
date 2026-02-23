@@ -157,7 +157,7 @@ pub enum Axis {
 
 /// Main axis alignment for flex layouts
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MainAxisAlignment {
+pub enum MainAlignment {
     Start,
     Center,
     End,
@@ -168,7 +168,7 @@ pub enum MainAxisAlignment {
 
 /// Cross axis alignment for flex layouts
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CrossAxisAlignment {
+pub enum CrossAlignment {
     Start,
     Center,
     End,
@@ -181,14 +181,14 @@ impl IntoMaybeDyn<Axis> for Axis {
     }
 }
 
-impl IntoMaybeDyn<MainAxisAlignment> for MainAxisAlignment {
-    fn into_maybe_dyn(self) -> MaybeDyn<MainAxisAlignment> {
+impl IntoMaybeDyn<MainAlignment> for MainAlignment {
+    fn into_maybe_dyn(self) -> MaybeDyn<MainAlignment> {
         MaybeDyn::Static(self)
     }
 }
 
-impl IntoMaybeDyn<CrossAxisAlignment> for CrossAxisAlignment {
-    fn into_maybe_dyn(self) -> MaybeDyn<CrossAxisAlignment> {
+impl IntoMaybeDyn<CrossAlignment> for CrossAlignment {
+    fn into_maybe_dyn(self) -> MaybeDyn<CrossAlignment> {
         MaybeDyn::Static(self)
     }
 }

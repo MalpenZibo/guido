@@ -40,6 +40,43 @@ impl IntoMaybeDyn<Padding> for Padding {
     }
 }
 
+// Convenience conversions: padding(8.0), padding(8), padding([8.0, 16.0]), etc.
+impl IntoMaybeDyn<Padding> for f32 {
+    fn into_maybe_dyn(self) -> MaybeDyn<Padding> {
+        MaybeDyn::Static(Padding::from(self))
+    }
+}
+
+impl IntoMaybeDyn<Padding> for i32 {
+    fn into_maybe_dyn(self) -> MaybeDyn<Padding> {
+        MaybeDyn::Static(Padding::from(self))
+    }
+}
+
+impl IntoMaybeDyn<Padding> for u16 {
+    fn into_maybe_dyn(self) -> MaybeDyn<Padding> {
+        MaybeDyn::Static(Padding::from(self))
+    }
+}
+
+impl IntoMaybeDyn<Padding> for u32 {
+    fn into_maybe_dyn(self) -> MaybeDyn<Padding> {
+        MaybeDyn::Static(Padding::from(self))
+    }
+}
+
+impl IntoMaybeDyn<Padding> for [f32; 2] {
+    fn into_maybe_dyn(self) -> MaybeDyn<Padding> {
+        MaybeDyn::Static(Padding::from(self))
+    }
+}
+
+impl IntoMaybeDyn<Padding> for [f32; 4] {
+    fn into_maybe_dyn(self) -> MaybeDyn<Padding> {
+        MaybeDyn::Static(Padding::from(self))
+    }
+}
+
 impl IntoMaybeDyn<Transform> for Transform {
     fn into_maybe_dyn(self) -> MaybeDyn<Transform> {
         MaybeDyn::Static(self)

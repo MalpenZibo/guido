@@ -42,8 +42,8 @@ fn main() {
                     .height(fill())
                     .layout(
                         Flex::row()
-                            .main_axis_alignment(MainAxisAlignment::Center)
-                            .cross_axis_alignment(CrossAxisAlignment::Center),
+                            .main_alignment(MainAlignment::Center)
+                            .cross_alignment(CrossAlignment::Center),
                     )
                     .child(
                         container()

@@ -7,8 +7,8 @@ fn main() {
         .layout(
             Flex::row()
                 .spacing(50.0)
-                .main_axis_alignment(MainAxisAlignment::Center)
-                .cross_axis_alignment(CrossAxisAlignment::Center),
+                .main_alignment(MainAlignment::Center)
+                .cross_alignment(CrossAlignment::Center),
         )
         .padding(50.0)
         .children([
@@ -20,8 +20,8 @@ fn main() {
                 .corner_radius(8.0)
                 .layout(
                     Flex::column()
-                        .main_axis_alignment(MainAxisAlignment::Center)
-                        .cross_axis_alignment(CrossAxisAlignment::Center),
+                        .main_alignment(MainAlignment::Center)
+                        .cross_alignment(CrossAlignment::Center),
                 )
                 .child(text("No Transform").font_size(14.0).color(Color::WHITE)),
             // With rotation - should use texture
@@ -32,8 +32,8 @@ fn main() {
                 .corner_radius(8.0)
                 .layout(
                     Flex::column()
-                        .main_axis_alignment(MainAxisAlignment::Center)
-                        .cross_axis_alignment(CrossAxisAlignment::Center),
+                        .main_alignment(MainAlignment::Center)
+                        .cross_alignment(CrossAlignment::Center),
                 )
                 .rotate(15.0)
                 .child(text("Rotated 15").font_size(14.0).color(Color::WHITE)),
@@ -45,8 +45,8 @@ fn main() {
                 .corner_radius(8.0)
                 .layout(
                     Flex::column()
-                        .main_axis_alignment(MainAxisAlignment::Center)
-                        .cross_axis_alignment(CrossAxisAlignment::Center),
+                        .main_alignment(MainAlignment::Center)
+                        .cross_alignment(CrossAlignment::Center),
                 )
                 .scale(1.2)
                 .child(text("Scale 1.2").font_size(14.0).color(Color::WHITE)),
