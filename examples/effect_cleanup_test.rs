@@ -114,110 +114,113 @@ fn main() {
     log::info!("Child creation is extracted into a function - signals are still owned!");
     log::info!("When a child is removed, its OwnedWidget drops and calls dispose_owner().\n");
 
-    // Signal holding the list of child IDs
-    let children_ids = create_signal(Vec::<u64>::new());
+    App::new().run(|app| {
+        // Signal holding the list of child IDs
+        let children_ids = create_signal(Vec::<u64>::new());
 
-    let view = container()
-        .layout(Flex::column().spacing(12.0))
-        .padding(16.0)
-        .child(
-            // Title and instructions
-            container()
-                .layout(Flex::column().spacing(4.0))
-                .child(text("Effect Cleanup Test (Automatic Ownership)").color(Color::WHITE))
-                .child(
-                    text("Watch the console: each child logs every 2 seconds.")
-                        .color(Color::rgb(0.7, 0.7, 0.7)),
-                )
-                .child(
-                    text("When removed, on_cleanup runs and effect logs STOP.")
-                        .color(Color::rgb(0.7, 0.7, 0.7)),
-                ),
-        )
-        .child(
-            // Control buttons
-            container()
-                .layout(Flex::row().spacing(8.0))
-                .child(
-                    container()
-                        .padding(10.0)
-                        .background(Color::rgb(0.2, 0.5, 0.3))
-                        .corner_radius(6.0)
-                        .hover_state(|s| s.lighter(0.1))
-                        .pressed_state(|s| s.ripple())
-                        .on_click(move || {
-                            let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
-                            log::info!("[Child {}] Adding to list", id);
-                            children_ids.update(|list| list.push(id));
-                        })
-                        .child(text("Add Child").color(Color::WHITE)),
-                )
-                .child(
-                    container()
-                        .padding(10.0)
-                        .background(Color::rgb(0.5, 0.2, 0.2))
-                        .corner_radius(6.0)
-                        .hover_state(|s| s.lighter(0.1))
-                        .pressed_state(|s| s.ripple())
-                        .on_click(move || {
-                            children_ids.update(|list| {
-                                if let Some(id) = list.pop() {
-                                    log::info!(
+        let view = container()
+            .layout(Flex::column().spacing(12.0))
+            .padding(16.0)
+            .child(
+                // Title and instructions
+                container()
+                    .layout(Flex::column().spacing(4.0))
+                    .child(
+                        text("Effect Cleanup Test (Automatic Ownership)").color(Color::WHITE),
+                    )
+                    .child(
+                        text("Watch the console: each child logs every 2 seconds.")
+                            .color(Color::rgb(0.7, 0.7, 0.7)),
+                    )
+                    .child(
+                        text("When removed, on_cleanup runs and effect logs STOP.")
+                            .color(Color::rgb(0.7, 0.7, 0.7)),
+                    ),
+            )
+            .child(
+                // Control buttons
+                container()
+                    .layout(Flex::row().spacing(8.0))
+                    .child(
+                        container()
+                            .padding(10.0)
+                            .background(Color::rgb(0.2, 0.5, 0.3))
+                            .corner_radius(6.0)
+                            .hover_state(|s| s.lighter(0.1))
+                            .pressed_state(|s| s.ripple())
+                            .on_click(move || {
+                                let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+                                log::info!("[Child {}] Adding to list", id);
+                                children_ids.update(|list| list.push(id));
+                            })
+                            .child(text("Add Child").color(Color::WHITE)),
+                    )
+                    .child(
+                        container()
+                            .padding(10.0)
+                            .background(Color::rgb(0.5, 0.2, 0.2))
+                            .corner_radius(6.0)
+                            .hover_state(|s| s.lighter(0.1))
+                            .pressed_state(|s| s.ripple())
+                            .on_click(move || {
+                                children_ids.update(|list| {
+                                    if let Some(id) = list.pop() {
+                                        log::info!(
                                         "[Child {}] Removing from list (automatic cleanup will happen)",
                                         id
                                     );
-                                }
-                            });
-                        })
-                        .child(text("Remove Last").color(Color::WHITE)),
-                )
-                .child(
-                    container()
-                        .padding(10.0)
-                        .background(Color::rgb(0.5, 0.3, 0.2))
-                        .corner_radius(6.0)
-                        .hover_state(|s| s.lighter(0.1))
-                        .pressed_state(|s| s.ripple())
-                        .on_click(move || {
-                            children_ids.update(|list| {
-                                log::info!(
-                                    "Removing all {} children (automatic cleanup for each)",
-                                    list.len()
-                                );
-                                list.clear();
-                            });
-                        })
-                        .child(text("Remove All").color(Color::WHITE)),
-                ),
-        )
-        .child(
-            // Status display
-            text(move || {
-                let count = children_ids.get().len();
-                format!("Active children: {}", count)
-            })
-            .color(Color::WHITE),
-        )
-        .child(
-            // Children container with dynamic children
-            // The closure wrapper ensures create_child_widget runs inside owner scope
-            container()
-                .layout(Flex::column().spacing(8.0))
-                .children(move || {
-                    children_ids
-                        .get()
-                        .into_iter()
-                        .map(|id| (id, move || create_child_widget(id)))
-                }),
-        );
+                                    }
+                                });
+                            })
+                            .child(text("Remove Last").color(Color::WHITE)),
+                    )
+                    .child(
+                        container()
+                            .padding(10.0)
+                            .background(Color::rgb(0.5, 0.3, 0.2))
+                            .corner_radius(6.0)
+                            .hover_state(|s| s.lighter(0.1))
+                            .pressed_state(|s| s.ripple())
+                            .on_click(move || {
+                                children_ids.update(|list| {
+                                    log::info!(
+                                        "Removing all {} children (automatic cleanup for each)",
+                                        list.len()
+                                    );
+                                    list.clear();
+                                });
+                            })
+                            .child(text("Remove All").color(Color::WHITE)),
+                    ),
+            )
+            .child(
+                // Status display
+                text(move || {
+                    let count = children_ids.get().len();
+                    format!("Active children: {}", count)
+                })
+                .color(Color::WHITE),
+            )
+            .child(
+                // Children container with dynamic children
+                // The closure wrapper ensures create_child_widget runs inside owner scope
+                container()
+                    .layout(Flex::column().spacing(8.0))
+                    .children(move || {
+                        children_ids
+                            .get()
+                            .into_iter()
+                            .map(|id| (id, move || create_child_widget(id)))
+                    }),
+            );
 
-    let (app, _) = App::new().add_surface(
-        SurfaceConfig::new()
-            .width(500)
-            .height(400)
-            .anchor(Anchor::TOP | Anchor::LEFT)
-            .background_color(Color::rgb(0.1, 0.1, 0.15)),
-        move || view,
-    );
-    app.run();
+        app.add_surface(
+            SurfaceConfig::new()
+                .width(500)
+                .height(400)
+                .anchor(Anchor::TOP | Anchor::LEFT)
+                .background_color(Color::rgb(0.1, 0.1, 0.15)),
+            move || view,
+        );
+    });
 }

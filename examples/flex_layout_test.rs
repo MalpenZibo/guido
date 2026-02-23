@@ -9,59 +9,60 @@
 use guido::prelude::*;
 
 fn main() {
-    let (app, _) = App::new().add_surface(
-        SurfaceConfig::new()
-            .width(1000)
-            .height(400)
-            .anchor(Anchor::TOP | Anchor::LEFT)
-            .background_color(Color::rgb(0.08, 0.08, 0.1)),
-        || {
-            container()
-                .layout(Flex::column().spacing(8.0))
-                .padding(8.0)
-                // Row tests side by side
-                .child(
-                    container()
-                        .layout(Flex::row().spacing(16.0))
-                        .child(
-                            container()
-                                .layout(Flex::column().spacing(3.0))
-                                .child(section_title("Row - MainAxisAlignment"))
-                                .child(row_main_axis_tests()),
-                        )
-                        .child(
-                            container()
-                                .layout(Flex::column().spacing(3.0))
-                                .child(section_title("Row - CrossAxisAlignment"))
-                                .child(row_cross_axis_tests()),
-                        )
-                        .child(
-                            container()
-                                .layout(Flex::column().spacing(3.0))
-                                .child(section_title("Center Test"))
-                                .child(center_test()),
-                        ),
-                )
-                // Column tests side by side
-                .child(
-                    container()
-                        .layout(Flex::row().spacing(16.0))
-                        .child(
-                            container()
-                                .layout(Flex::column().spacing(3.0))
-                                .child(section_title("Column - MainAxisAlignment"))
-                                .child(column_main_axis_tests()),
-                        )
-                        .child(
-                            container()
-                                .layout(Flex::column().spacing(3.0))
-                                .child(section_title("Column - CrossAxisAlignment"))
-                                .child(column_cross_axis_tests()),
-                        ),
-                )
-        },
-    );
-    app.run();
+    App::new().run(|app| {
+        app.add_surface(
+            SurfaceConfig::new()
+                .width(1000)
+                .height(400)
+                .anchor(Anchor::TOP | Anchor::LEFT)
+                .background_color(Color::rgb(0.08, 0.08, 0.1)),
+            || {
+                container()
+                    .layout(Flex::column().spacing(8.0))
+                    .padding(8.0)
+                    // Row tests side by side
+                    .child(
+                        container()
+                            .layout(Flex::row().spacing(16.0))
+                            .child(
+                                container()
+                                    .layout(Flex::column().spacing(3.0))
+                                    .child(section_title("Row - MainAxisAlignment"))
+                                    .child(row_main_axis_tests()),
+                            )
+                            .child(
+                                container()
+                                    .layout(Flex::column().spacing(3.0))
+                                    .child(section_title("Row - CrossAxisAlignment"))
+                                    .child(row_cross_axis_tests()),
+                            )
+                            .child(
+                                container()
+                                    .layout(Flex::column().spacing(3.0))
+                                    .child(section_title("Center Test"))
+                                    .child(center_test()),
+                            ),
+                    )
+                    // Column tests side by side
+                    .child(
+                        container()
+                            .layout(Flex::row().spacing(16.0))
+                            .child(
+                                container()
+                                    .layout(Flex::column().spacing(3.0))
+                                    .child(section_title("Column - MainAxisAlignment"))
+                                    .child(column_main_axis_tests()),
+                            )
+                            .child(
+                                container()
+                                    .layout(Flex::column().spacing(3.0))
+                                    .child(section_title("Column - CrossAxisAlignment"))
+                                    .child(column_cross_axis_tests()),
+                            ),
+                    )
+            },
+        );
+    });
 }
 
 fn section_title(title: &'static str) -> impl Widget {
