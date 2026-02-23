@@ -197,7 +197,7 @@ fn main() {
                             .main_axis_alignment(MainAxisAlignment::SpaceBetween)
                             .cross_axis_alignment(CrossAxisAlignment::Center)
                     )
-                    .padding_xy(16.0, 0.0)
+                    .padding([0.0, 16.0])
                     .child(text("Status Bar"))
                     .child(text(move || format!("Count: {}", count.get())))
             },
@@ -222,7 +222,7 @@ fn main() {
                     )
                     .child(
                         container()
-                            .padding_xy(16.0, 8.0)
+                            .padding([8.0, 16.0])
                             .background(Color::rgb(0.3, 0.3, 0.4))
                             .corner_radius(8.0)
                             .hover_state(|s| s.lighter(0.1))

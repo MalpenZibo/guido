@@ -30,7 +30,7 @@ fn main() {
                         // The measured module
                         container()
                             .widget_ref(module_ref)
-                            .padding_xy(16.0, 8.0)
+                            .padding([8.0, 16.0])
                             .background(Color::rgb(0.25, 0.25, 0.35))
                             .corner_radius(6.0)
                             .child(text("Measured Module").color(Color::WHITE)),
@@ -38,7 +38,7 @@ fn main() {
                     .child(
                         // Display the bounds reactively
                         container()
-                            .padding_xy(16.0, 8.0)
+                            .padding([8.0, 16.0])
                             .background(Color::rgb(0.15, 0.2, 0.15))
                             .corner_radius(6.0)
                             .child(

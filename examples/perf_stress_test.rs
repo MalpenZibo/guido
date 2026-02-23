@@ -102,7 +102,7 @@ fn create_add_button(
     item_store: Rc<RefCell<Vec<ItemData>>>,
 ) -> Container {
     container()
-        .padding_xy(16.0, 8.0)
+        .padding([8.0, 16.0])
         .background(Color::rgb(0.2, 0.4, 0.6))
         .corner_radius(6.0)
         .hover_state(|s| s.lighter(0.1))
@@ -142,7 +142,7 @@ fn create_toggle_button(enabled: Signal<bool>) -> Container {
     container()
         .width(100.0)
         .height(30.0) // Fixed dimensions make this a relayout boundary
-        .padding_xy(12.0, 6.0)
+        .padding([6.0, 12.0])
         .background(move || {
             if enabled.get() {
                 Color::rgb(0.2, 0.5, 0.3)

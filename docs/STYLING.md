@@ -147,18 +147,12 @@ container()
 
 ## Padding
 
-### Uniform Padding
-
 ```rust
-container().padding(16.0)  // 16px on all sides
-```
-
-### Directional Padding
-
-```rust
-container()
-    .padding_horizontal(20.0)  // Left and right
-    .padding_vertical(10.0)    // Top and bottom
+container().padding(16.0)                          // 16px on all sides
+container().padding(16)                            // integers work too
+container().padding([8.0, 16.0])                   // [vertical, horizontal]
+container().padding([1.0, 2.0, 3.0, 4.0])         // [top, right, bottom, left]
+container().padding(Padding::all(8.0).top(20.0))   // builder pattern
 ```
 
 ## Sizing

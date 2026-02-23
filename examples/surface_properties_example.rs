@@ -169,7 +169,7 @@ fn layer_button(
     current_layer: Signal<&'static str>,
 ) -> Container {
     container()
-        .padding_xy(12.0, 8.0)
+        .padding([8.0, 12.0])
         .background(Color::rgb(0.25, 0.25, 0.35))
         .corner_radius(6.0)
         .hover_state(|s| s.lighter(0.1))
@@ -191,7 +191,7 @@ fn keyboard_button(
     current_keyboard: Signal<&'static str>,
 ) -> Container {
     container()
-        .padding_xy(12.0, 8.0)
+        .padding([8.0, 12.0])
         .background(Color::rgb(0.25, 0.3, 0.35))
         .corner_radius(6.0)
         .hover_state(|s| s.lighter(0.1))
