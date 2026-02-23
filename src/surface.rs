@@ -7,16 +7,16 @@
 //! # Static Surface Definition (at startup)
 //!
 //! ```ignore
-//! App::new()
-//!     .add_surface(
+//! App::new().run(|app| {
+//!     app.add_surface(
 //!         SurfaceConfig::new()
 //!             .height(32)
 //!             .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
 //!             .layer(Layer::Top)
 //!             .namespace("status-bar"),
 //!         move || status_bar_widget()
-//!     )
-//!     .run();
+//!     );
+//! });
 //! ```
 //!
 //! # Dynamic Surface Creation (at runtime)
@@ -304,6 +304,13 @@ fn push_surface_command(cmd: SurfaceCommand) {
     crate::jobs::request_frame();
 }
 
+/// Reset the surface command queue.
+///
+/// Called during `App::drop()` to clear stale surface commands.
+pub(crate) fn reset_surface_commands() {
+    SURFACE_COMMANDS.with(|cmds| cmds.borrow_mut().clear());
+}
+
 /// Drain all pending surface commands. Called by the main event loop.
 pub(crate) fn drain_surface_commands() -> Vec<SurfaceCommand> {
     SURFACE_COMMANDS.with(|cmds| cmds.borrow_mut().drain(..).collect())
@@ -369,8 +376,8 @@ where
 ///
 /// ```ignore
 /// // Store the ID when adding the surface
-/// let (app, status_bar_id) = App::new()
-///     .add_surface(config, move || {
+/// App::new().run(|app| {
+///     let status_bar_id = app.add_surface(config, move || {
 ///         container()
 ///             .on_click(move || {
 ///                 // Get handle and modify properties
@@ -379,7 +386,7 @@ where
 ///             })
 ///             .child(text("Click to promote to overlay"))
 ///     });
-/// app.run();
+/// });
 /// ```
 pub fn surface_handle(id: SurfaceId) -> SurfaceHandle {
     SurfaceHandle { id }
