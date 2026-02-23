@@ -1083,28 +1083,52 @@ impl Widget for Container {
             });
 
         // Calculate current container dimensions
+        // Apply Length.max (from at_most()) early so children constraints and scroll
+        // viewport see the cap. Without this, a scrollable container with at_most(300)
+        // inside another scrollable (which passes max_height=INFINITY) would get
+        // viewport_height=INFINITY, making needs_vertical_scrollbar() always false.
         let current_width = if let Some(ref anim) = self.width_anim {
             if anim.is_initial() {
-                width_length.exact.unwrap_or(constraints.max_width)
+                let w = width_length.exact.unwrap_or(constraints.max_width);
+                if let Some(max) = width_length.max {
+                    w.min(max)
+                } else {
+                    w
+                }
             } else {
                 *anim.current()
             }
         } else if let Some(exact) = width_length.exact {
             exact
         } else {
-            constraints.max_width
+            let w = constraints.max_width;
+            if let Some(max) = width_length.max {
+                w.min(max)
+            } else {
+                w
+            }
         };
 
         let current_height = if let Some(ref anim) = self.height_anim {
             if anim.is_initial() {
-                height_length.exact.unwrap_or(constraints.max_height)
+                let h = height_length.exact.unwrap_or(constraints.max_height);
+                if let Some(max) = height_length.max {
+                    h.min(max)
+                } else {
+                    h
+                }
             } else {
                 *anim.current()
             }
         } else if let Some(exact) = height_length.exact {
             exact
         } else {
-            constraints.max_height
+            let h = constraints.max_height;
+            if let Some(max) = height_length.max {
+                h.min(max)
+            } else {
+                h
+            }
         };
 
         // Calculate undershoot for spring animations
@@ -1367,10 +1391,6 @@ impl Widget for Container {
         if let Some(min) = height_length.min {
             height = height.max(min);
         }
-        if let Some(max) = height_length.max {
-            height = height.min(max);
-        }
-
         if let Some(max) = height_length.max {
             height = height.min(max);
         }
