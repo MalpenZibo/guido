@@ -1,4 +1,5 @@
 pub mod clipboard;
+pub mod context;
 pub mod cursor;
 pub mod effect;
 pub mod focus;
@@ -13,6 +14,9 @@ pub mod storage;
 
 pub(crate) use clipboard::{
     clipboard_copy, clipboard_paste, set_system_clipboard, take_clipboard_change,
+};
+pub use context::{
+    expect_context, has_context, provide_context, provide_signal_context, use_context, with_context,
 };
 pub(crate) use cursor::take_cursor_change;
 pub use cursor::{CursorIcon, set_cursor};
@@ -49,4 +53,5 @@ pub(crate) fn reset_reactive() {
     clipboard::reset_clipboard();
     cursor::reset_cursor();
     focus::reset_focus();
+    context::reset_contexts();
 }
