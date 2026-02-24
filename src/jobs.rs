@@ -26,7 +26,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::sync::{
     Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
 use smithay_client_toolkit::reexports::calloop::ping::Ping;
@@ -244,6 +244,42 @@ fn clear_pending_jobs() {
     });
 }
 
+/// Reason code stored in the atomic exit flag.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExitRequest {
+    /// No exit requested — keep running.
+    Running = 0,
+    /// Clean quit (compositor closed, user requested, etc.).
+    Quit = 1,
+    /// Restart requested (e.g. config change).
+    Restart = 2,
+}
+
+/// Atomic exit flag. Written by `quit_app()` / `restart_app()`, read by the main loop.
+static EXIT_REQUEST: AtomicU8 = AtomicU8::new(ExitRequest::Running as u8);
+
+/// Request application exit with the given reason.
+/// Wakes the event loop so the main loop checks promptly.
+pub(crate) fn set_exit_request(req: ExitRequest) {
+    EXIT_REQUEST.store(req as u8, Ordering::Release);
+    // Wake the event loop so it notices the exit request
+    if let Ok(guard) = WAKEUP_PING.lock()
+        && let Some(ref ping) = *guard
+    {
+        ping.ping();
+    }
+}
+
+/// Read the current exit request (non-destructive — persists until `reset_jobs()`).
+pub(crate) fn get_exit_request() -> ExitRequest {
+    match EXIT_REQUEST.load(Ordering::Acquire) {
+        1 => ExitRequest::Quit,
+        2 => ExitRequest::Restart,
+        _ => ExitRequest::Running,
+    }
+}
+
 /// Global flag to indicate a frame is requested
 static FRAME_REQUESTED: AtomicBool = AtomicBool::new(false);
 
@@ -280,6 +316,7 @@ pub(crate) fn reset_jobs() {
         jobs.borrow_mut().drain_all();
     });
     FRAME_REQUESTED.store(false, Ordering::Relaxed);
+    EXIT_REQUEST.store(ExitRequest::Running as u8, Ordering::Relaxed);
     if let Ok(mut guard) = WAKEUP_PING.lock() {
         *guard = None;
     }
