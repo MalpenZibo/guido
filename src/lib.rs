@@ -99,6 +99,30 @@ pub(crate) fn take_registered_fonts() -> Vec<Arc<Vec<u8>>> {
     CUSTOM_FONTS.with(|fonts| std::mem::take(&mut *fonts.borrow_mut()))
 }
 
+/// The reason the application's main loop exited.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExitReason {
+    /// Normal exit (compositor closed, all surfaces destroyed, etc.)
+    Quit,
+    /// Restart requested (e.g. config change). The caller should re-create `App` and run again.
+    Restart,
+}
+
+/// Request a clean application restart.
+///
+/// The current `App::run()` loop will exit and return `ExitReason::Restart`.
+/// Call this from any thread — it uses an atomic + ping to wake the event loop.
+pub fn restart_app() {
+    jobs::set_exit_request(jobs::ExitRequest::Restart);
+}
+
+/// Request a clean application quit.
+///
+/// The current `App::run()` loop will exit and return `ExitReason::Quit`.
+pub fn quit_app() {
+    jobs::set_exit_request(jobs::ExitRequest::Quit);
+}
+
 pub mod prelude {
     pub use crate::animation::{SpringConfig, TimingFunction, Transition};
     pub use crate::layout::{
@@ -125,7 +149,8 @@ pub mod prelude {
         text, text_input,
     };
     pub use crate::{
-        App, SignalFields, component, default_font_family, load_font, set_default_font_family,
+        App, ExitReason, SignalFields, component, default_font_family, load_font, quit_app,
+        restart_app, set_default_font_family,
     };
 }
 
@@ -133,9 +158,9 @@ use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 
 use crate::{
     jobs::{
-        drain_non_animation_jobs, drain_pending_jobs, handle_animation_jobs, handle_layout_jobs,
-        handle_paint_jobs, handle_reconcile_jobs, handle_unregister_jobs, has_pending_jobs,
-        init_wakeup, take_frame_request,
+        drain_non_animation_jobs, drain_pending_jobs, get_exit_request, handle_animation_jobs,
+        handle_layout_jobs, handle_paint_jobs, handle_reconcile_jobs, handle_unregister_jobs,
+        has_pending_jobs, init_wakeup, take_frame_request,
     },
     tree::{DamageRegion, Tree, WidgetId},
 };
@@ -588,7 +613,7 @@ impl App {
     ///     app.add_surface(config, move || build_ui(count));
     /// });
     /// ```
-    pub fn run(mut self, setup: impl FnOnce(&mut Self)) {
+    pub fn run(mut self, setup: impl FnOnce(&mut Self)) -> ExitReason {
         // Create root owner scope — all signals/effects created in setup are owned
         self.root_owner_id = Some(reactive::create_root_owner());
         setup(&mut self);
@@ -614,7 +639,7 @@ impl App {
         }
 
         if wayland_state.exit {
-            return;
+            return ExitReason::Quit;
         }
 
         // Create shared GPU context
@@ -708,6 +733,13 @@ impl App {
                 .dispatch(timeout, &mut wayland_state)
                 .expect("Failed to dispatch event loop");
 
+            // Check for programmatic exit/restart requests
+            match get_exit_request() {
+                jobs::ExitRequest::Quit => break,
+                jobs::ExitRequest::Restart => return ExitReason::Restart,
+                jobs::ExitRequest::Running => {}
+            }
+
             if wayland_state.exit {
                 break;
             }
@@ -760,6 +792,8 @@ impl App {
             // Flush the connection once for all surfaces
             connection.flush().expect("Failed to flush connection");
         }
+
+        ExitReason::Quit
     }
 }
 
