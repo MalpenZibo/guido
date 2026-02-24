@@ -2,7 +2,7 @@
 members = [".", "guido-macros"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 authors = ["Simone Camito"]
 categories = ["gui", "reactive", "wayland", "leyershell", "wgpu"]
@@ -14,7 +14,7 @@ homepage = "https://malpenzibo.github.io/guido"
 license = "MIT"
 
 [workspace.dependencies]
-guido-macros = { path = "guido-macros", version = "0.3.0" }
+guido-macros = { path = "guido-macros", version = "0.4.0" }
 
 [package]
 name = "guido"
