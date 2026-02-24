@@ -60,6 +60,7 @@
     - [Background Tasks](advanced/background-threads.md)
     - [Widget Ref](advanced/widget-ref.md)
     - [Wayland Layer Shell](advanced/wayland.md)
+    - [App Lifecycle](advanced/app-lifecycle.md)
 
 # Architecture
 

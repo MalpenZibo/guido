@@ -466,7 +466,7 @@ impl SurfaceConfig {
 ```rust
 impl App {
     pub fn new() -> Self;
-    pub fn run(self, setup: impl FnOnce(&mut Self));
+    pub fn run(self, setup: impl FnOnce(&mut Self)) -> ExitReason;
     pub fn add_surface<W, F>(&mut self, config: SurfaceConfig, widget_fn: F) -> SurfaceId
     where
         W: Widget + 'static,

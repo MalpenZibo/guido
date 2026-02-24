@@ -7,7 +7,9 @@ This section covers advanced patterns for building complex Guido applications.
 - [Creating Components](components.md) - Reusable widgets with the `#[component]` macro
 - [Dynamic Children](dynamic-children.md) - Reactive lists and conditional rendering
 - [Background Tasks](background-threads.md) - Integrating async operations
+- [Widget Ref](widget-ref.md) - Querying widget bounds at runtime
 - [Wayland Layer Shell](wayland.md) - Positioning and layer configuration
+- [App Lifecycle](app-lifecycle.md) - Quit, restart, and exit handling
 
 ## When You Need These
 
