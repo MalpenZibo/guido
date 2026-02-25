@@ -224,6 +224,20 @@ let value = count.get();
 text(format!("Count: {}", value))  // Won't update!
 ```
 
+### Use Context for App-Wide State
+
+For values that many widgets across different modules need (config, theme, services), use the [Context API](../advanced/context.md) instead of passing signals through every function:
+
+```rust
+// Setup
+provide_context(Config::load());
+
+// Any widget, any module
+let cfg = expect_context::<Config>();
+```
+
+For mutable shared state, use `provide_signal_context` to combine context with reactivity.
+
 ### Use Memo for Derived State
 
 Instead of manually syncing values:

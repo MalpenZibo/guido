@@ -61,6 +61,7 @@
     - [Widget Ref](advanced/widget-ref.md)
     - [Wayland Layer Shell](advanced/wayland.md)
     - [App Lifecycle](advanced/app-lifecycle.md)
+    - [Context](advanced/context.md)
 
 # Architecture
 

@@ -10,6 +10,7 @@ This section covers advanced patterns for building complex Guido applications.
 - [Widget Ref](widget-ref.md) - Querying widget bounds at runtime
 - [Wayland Layer Shell](wayland.md) - Positioning and layer configuration
 - [App Lifecycle](app-lifecycle.md) - Quit, restart, and exit handling
+- [Context](context.md) - App-wide state without prop drilling
 
 ## When You Need These
 
