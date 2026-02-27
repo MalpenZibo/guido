@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use glyphon::{
-    Attrs, Buffer, Cache, Color as GlyphonColor, FontSystem, Metrics, Resolution, Shaping,
-    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
+    Attrs, Buffer, Cache, Color as GlyphonColor, ColorMode, FontSystem, Metrics, Resolution,
+    Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 use wgpu::{Device, MultisampleState, Queue};
 
@@ -31,7 +31,7 @@ impl TextRenderState {
         }
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
-        let mut atlas = TextAtlas::new(device, queue, &cache, format);
+        let mut atlas = TextAtlas::with_color_mode(device, queue, &cache, format, ColorMode::Web);
         let text_renderer =
             TextRenderer::new(&mut atlas, device, MultisampleState::default(), None);
         let viewport = Viewport::new(device, &cache);
