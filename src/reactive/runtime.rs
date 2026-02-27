@@ -88,13 +88,20 @@ pub fn record_effect_read(signal_id: SignalId) {
     });
 }
 
+/// Return the current write epoch. Captured by `WriteSignal` at creation
+/// time so that writes queued after a restart carry the old epoch.
+pub(crate) fn current_write_epoch() -> u64 {
+    WRITE_EPOCH.load(Ordering::Acquire)
+}
+
 /// Queue a closure for execution on the main thread (next frame).
 /// Used by `WriteSignal::set()`/`update()` from background threads.
 ///
-/// The write is tagged with the current epoch. If the runtime resets before
-/// this write is flushed (e.g. App restart), it will be silently discarded.
-pub fn queue_bg_write(f: impl FnOnce() + Send + 'static) {
-    let epoch = WRITE_EPOCH.load(Ordering::Acquire);
+/// The write is tagged with the caller-supplied epoch (captured when the
+/// `WriteSignal` was created). If the runtime resets before this write is
+/// flushed (e.g. App restart), the epoch will be stale and the write is
+/// silently discarded.
+pub fn queue_bg_write(epoch: u64, f: impl FnOnce() + Send + 'static) {
     if let Ok(mut q) = WRITE_QUEUE.lock() {
         q.push((epoch, Box::new(f)));
     }
