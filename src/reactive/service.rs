@@ -124,13 +124,17 @@ where
     let running = Arc::new(AtomicBool::new(true));
     let running_for_cleanup = running.clone();
 
-    // Register cleanup to stop the task when component unmounts
+    let ctx = ServiceContext { running };
+    let handle = tokio::spawn(f(rx, ctx));
+
+    // Register cleanup to stop the task when component unmounts.
+    // Setting is_running to false allows graceful shutdown, while abort()
+    // cancels the task at its next .await point for fast cleanup — this
+    // prevents stale WriteSignal writes after an App restart.
     on_cleanup(move || {
         running_for_cleanup.store(false, Ordering::SeqCst);
+        handle.abort();
     });
-
-    let ctx = ServiceContext { running };
-    tokio::spawn(f(rx, ctx));
 
     Service { sender: tx }
 }

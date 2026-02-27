@@ -22,6 +22,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use smallvec::SmallVec;
 
@@ -44,9 +45,17 @@ thread_local! {
     static BATCH_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
 
+/// Epoch counter for write filtering. Incremented on each runtime reset (App restart).
+/// Writes tagged with a stale epoch are silently discarded in `flush_bg_writes()`.
+static WRITE_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// A queued background write: (epoch at queue time, closure to execute).
+type EpochWrite = (u64, Box<dyn FnOnce() + Send>);
+
 /// Background write queue: closures that perform signal writes, queued from bg threads.
-/// Each closure calls `set_signal_value` + `notify_signal_change` on the main thread.
-static WRITE_QUEUE: Mutex<Vec<Box<dyn FnOnce() + Send>>> = Mutex::new(Vec::new());
+/// Each entry is tagged with the epoch at queue time. Writes from a previous epoch
+/// are discarded during flush.
+static WRITE_QUEUE: Mutex<Vec<EpochWrite>> = Mutex::new(Vec::new());
 
 pub type SignalId = usize;
 pub type EffectId = usize;
@@ -79,11 +88,22 @@ pub fn record_effect_read(signal_id: SignalId) {
     });
 }
 
+/// Return the current write epoch. Captured by `WriteSignal` at creation
+/// time so that writes queued after a restart carry the old epoch.
+pub(crate) fn current_write_epoch() -> u64 {
+    WRITE_EPOCH.load(Ordering::Acquire)
+}
+
 /// Queue a closure for execution on the main thread (next frame).
 /// Used by `WriteSignal::set()`/`update()` from background threads.
-pub fn queue_bg_write(f: impl FnOnce() + Send + 'static) {
+///
+/// The write is tagged with the caller-supplied epoch (captured when the
+/// `WriteSignal` was created). If the runtime resets before this write is
+/// flushed (e.g. App restart), the epoch will be stale and the write is
+/// silently discarded.
+pub fn queue_bg_write(epoch: u64, f: impl FnOnce() + Send + 'static) {
     if let Ok(mut q) = WRITE_QUEUE.lock() {
-        q.push(Box::new(f));
+        q.push((epoch, Box::new(f)));
     }
     // Wake the event loop so flush_bg_writes() runs on the next frame
     crate::jobs::request_frame();
@@ -91,15 +111,35 @@ pub fn queue_bg_write(f: impl FnOnce() + Send + 'static) {
 
 /// Drain queued background writes and execute them on the main thread.
 /// Called from the main event loop before processing widget jobs.
+///
+/// Writes tagged with a stale epoch (from a previous App run) are silently
+/// discarded. This prevents old service tasks from corrupting the new app's
+/// reactive state after a restart.
 pub fn flush_bg_writes() {
+    let current_epoch = WRITE_EPOCH.load(Ordering::Acquire);
     loop {
-        let writes: Vec<Box<dyn FnOnce() + Send>> = match WRITE_QUEUE.lock() {
+        let writes: Vec<(u64, Box<dyn FnOnce() + Send>)> = match WRITE_QUEUE.lock() {
             Ok(mut q) if !q.is_empty() => q.drain(..).collect(),
             _ => return,
         };
-        log::trace!("flush_bg_writes: processing {} queued writes", writes.len());
-        for write_fn in writes {
-            write_fn();
+        let mut executed = 0usize;
+        let mut stale = 0usize;
+        for (epoch, write_fn) in writes {
+            if epoch == current_epoch {
+                write_fn();
+                executed += 1;
+            } else {
+                stale += 1;
+            }
+        }
+        if stale > 0 {
+            log::debug!(
+                "flush_bg_writes: dropped {} stale writes (old epoch), executed {}",
+                stale,
+                executed
+            );
+        } else if executed > 0 {
+            log::trace!("flush_bg_writes: processed {} queued writes", executed);
         }
     }
 }
@@ -254,10 +294,15 @@ where
 /// Reset all runtime state (effects, tracking, batch depth, write queue).
 ///
 /// Called during `App::drop()` to ensure the next `App` run starts fresh.
+/// Increments the write epoch so that any in-flight background writes from
+/// old service tasks are automatically discarded by `flush_bg_writes()`.
 pub(crate) fn reset_runtime() {
     RUNTIME.with(|rt| *rt.borrow_mut() = Runtime::new());
     EFFECT_TRACKING.with(|et| et.borrow_mut().clear());
     BATCH_DEPTH.with(|bd| bd.set(0));
+    // Increment epoch BEFORE clearing — writes queued between now and the next
+    // flush_bg_writes() will carry the old epoch and be discarded.
+    WRITE_EPOCH.fetch_add(1, Ordering::Release);
     if let Ok(mut q) = WRITE_QUEUE.lock() {
         q.clear();
     }

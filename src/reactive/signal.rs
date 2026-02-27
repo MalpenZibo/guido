@@ -2,7 +2,9 @@ use std::marker::PhantomData;
 
 use super::invalidation::{notify_signal_change, record_signal_read};
 use super::owner::register_signal;
-use super::runtime::{SignalId, queue_bg_write, record_effect_read, try_with_runtime};
+use super::runtime::{
+    SignalId, current_write_epoch, queue_bg_write, record_effect_read, try_with_runtime,
+};
 use super::storage::{
     create_signal_value, get_signal_value, has_signal, set_signal_value, update_signal_value,
     with_signal_value,
@@ -111,6 +113,7 @@ impl<T: Clone + PartialEq + Send + 'static> Signal<T> {
     pub fn writer(&self) -> WriteSignal<T> {
         WriteSignal {
             id: self.id,
+            epoch: current_write_epoch(),
             _marker: PhantomData,
         }
     }
@@ -149,6 +152,9 @@ impl<T: Clone + PartialEq + 'static> Signal<T> {
 /// ```
 pub struct WriteSignal<T> {
     id: SignalId,
+    /// Write epoch captured when the writer was created. Writes queued from
+    /// a stale epoch (after App restart) are silently discarded.
+    epoch: u64,
     _marker: PhantomData<T>,
 }
 
@@ -165,13 +171,15 @@ impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
     /// Sets the signal's value, only triggering updates if the value actually changed.
     ///
     /// If the signal exists in the current thread's storage: applies immediately.
-    /// Otherwise (background threads): queued for next frame.
+    /// Otherwise (background threads): queued for next frame with the epoch
+    /// captured when this writer was created.
     pub fn set(&self, value: T) {
         if has_signal(self.id) {
             write_and_notify(self.id, value);
         } else {
             let id = self.id;
-            queue_bg_write(move || {
+            let epoch = self.epoch;
+            queue_bg_write(epoch, move || {
                 write_and_notify(id, value);
             });
         }
@@ -180,7 +188,8 @@ impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
     /// Updates the signal's value using a closure, only triggering updates if the value changed.
     ///
     /// If the signal exists in the current thread's storage: applies immediately.
-    /// Otherwise (background threads): queued for next frame.
+    /// Otherwise (background threads): queued for next frame with the epoch
+    /// captured when this writer was created.
     pub fn update<F>(&self, f: F)
     where
         F: FnOnce(&mut T) + Send + 'static,
@@ -189,7 +198,8 @@ impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
             update_and_notify(self.id, f);
         } else {
             let id = self.id;
-            queue_bg_write(move || {
+            let epoch = self.epoch;
+            queue_bg_write(epoch, move || {
                 update_and_notify(id, f);
             });
         }

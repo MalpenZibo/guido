@@ -806,13 +806,18 @@ impl Drop for App {
             reactive::dispose_owner(root_id);
         }
 
+        // Clear the tree BEFORE resetting jobs. Dropping widgets triggers
+        // ChildrenSource::drop() which pushes Unregister jobs. If we reset
+        // jobs first, these late Unregister jobs survive into the next App
+        // and destroy the new tree's widgets (which reuse the same IDs).
+        self.tree.clear();
+
         // Reset all thread-local and static state so the next App can start clean.
         reactive::reset_reactive();
         jobs::reset_jobs();
         surface::reset_surface_commands();
         widget_ref::reset_widget_refs();
         FONTS_CONSUMED.with(|f| f.set(false));
-        self.tree.clear();
     }
 }
 
