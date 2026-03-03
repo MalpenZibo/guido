@@ -230,23 +230,7 @@ impl StateStyle {
 pub fn resolve_background(base: Color, override_: &BackgroundOverride) -> Color {
     match override_ {
         BackgroundOverride::Exact(color) => *color,
-        BackgroundOverride::Lighter(amount) => {
-            // Blend toward white
-            Color::rgba(
-                base.r + (1.0 - base.r) * amount,
-                base.g + (1.0 - base.g) * amount,
-                base.b + (1.0 - base.b) * amount,
-                base.a,
-            )
-        }
-        BackgroundOverride::Darker(amount) => {
-            // Blend toward black
-            Color::rgba(
-                base.r * (1.0 - amount),
-                base.g * (1.0 - amount),
-                base.b * (1.0 - amount),
-                base.a,
-            )
-        }
+        BackgroundOverride::Lighter(amount) => base.lighter(*amount),
+        BackgroundOverride::Darker(amount) => base.darker(*amount),
     }
 }
