@@ -31,6 +31,43 @@ impl Color {
     pub const WHITE: Color = Color::rgb(1.0, 1.0, 1.0);
     pub const BLACK: Color = Color::rgb(0.0, 0.0, 0.0);
     pub const TRANSPARENT: Color = Color::rgba(0.0, 0.0, 0.0, 0.0);
+    pub const RED: Color = Color::rgb(1.0, 0.0, 0.0);
+    pub const GREEN: Color = Color::rgb(0.0, 1.0, 0.0);
+    pub const BLUE: Color = Color::rgb(0.0, 0.0, 1.0);
+    pub const YELLOW: Color = Color::rgb(1.0, 1.0, 0.0);
+    pub const CYAN: Color = Color::rgb(0.0, 1.0, 1.0);
+    pub const MAGENTA: Color = Color::rgb(1.0, 0.0, 1.0);
+    pub const GRAY: Color = Color::rgb(0.5, 0.5, 0.5);
+
+    /// Create a color from 8-bit (0-255) RGB values.
+    pub const fn from_rgb8(r: u8, g: u8, b: u8) -> Self {
+        Self {
+            r: r as f32 / 255.0,
+            g: g as f32 / 255.0,
+            b: b as f32 / 255.0,
+            a: 1.0,
+        }
+    }
+
+    /// Create a color from 8-bit (0-255) RGBA values.
+    pub const fn from_rgba8(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self {
+            r: r as f32 / 255.0,
+            g: g as f32 / 255.0,
+            b: b as f32 / 255.0,
+            a: a as f32 / 255.0,
+        }
+    }
+
+    /// Convert to 8-bit RGBA tuple.
+    pub fn to_rgba8(self) -> (u8, u8, u8, u8) {
+        (
+            (self.r * 255.0 + 0.5) as u8,
+            (self.g * 255.0 + 0.5) as u8,
+            (self.b * 255.0 + 0.5) as u8,
+            (self.a * 255.0 + 0.5) as u8,
+        )
+    }
 }
 
 impl Default for Color {
@@ -580,6 +617,54 @@ mod tests {
     fn test_color_default() {
         let color = Color::default();
         assert_eq!(color, Color::TRANSPARENT);
+    }
+
+    #[test]
+    fn test_color_named_constants() {
+        assert_eq!(Color::RED, Color::rgb(1.0, 0.0, 0.0));
+        assert_eq!(Color::GREEN, Color::rgb(0.0, 1.0, 0.0));
+        assert_eq!(Color::BLUE, Color::rgb(0.0, 0.0, 1.0));
+        assert_eq!(Color::YELLOW, Color::rgb(1.0, 1.0, 0.0));
+        assert_eq!(Color::CYAN, Color::rgb(0.0, 1.0, 1.0));
+        assert_eq!(Color::MAGENTA, Color::rgb(1.0, 0.0, 1.0));
+        assert_eq!(Color::GRAY, Color::rgb(0.5, 0.5, 0.5));
+    }
+
+    #[test]
+    fn test_color_from_rgb8() {
+        let color = Color::from_rgb8(255, 128, 0);
+        assert!((color.r - 1.0).abs() < 0.01);
+        assert!((color.g - 0.502).abs() < 0.01);
+        assert!((color.b - 0.0).abs() < 0.01);
+        assert_eq!(color.a, 1.0);
+    }
+
+    #[test]
+    fn test_color_from_rgba8() {
+        let color = Color::from_rgba8(255, 0, 0, 128);
+        assert!((color.r - 1.0).abs() < 0.01);
+        assert!((color.g - 0.0).abs() < 0.01);
+        assert!((color.b - 0.0).abs() < 0.01);
+        assert!((color.a - 0.502).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_color_to_rgba8() {
+        let (r, g, b, a) = Color::rgb(1.0, 0.0, 0.5).to_rgba8();
+        assert_eq!(r, 255);
+        assert_eq!(g, 0);
+        assert_eq!(b, 128);
+        assert_eq!(a, 255);
+    }
+
+    #[test]
+    fn test_color_rgb8_roundtrip() {
+        let original = Color::from_rgb8(100, 200, 50);
+        let (r, g, b, a) = original.to_rgba8();
+        assert_eq!(r, 100);
+        assert_eq!(g, 200);
+        assert_eq!(b, 50);
+        assert_eq!(a, 255);
     }
 
     #[test]
