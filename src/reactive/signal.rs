@@ -204,11 +204,6 @@ impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
             });
         }
     }
-
-    /// Get the current value (useful for read-modify-write patterns on main thread)
-    pub fn get(&self) -> T {
-        get_signal_value(self.id)
-    }
 }
 
 pub fn create_signal<T: Clone + PartialEq + Send + 'static>(value: T) -> Signal<T> {
