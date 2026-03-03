@@ -1,13 +1,13 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{DeriveInput, Fields, ItemStruct, Meta, Type, parse_macro_input};
+use syn::{DeriveInput, Fields, ItemStruct, Meta, Type, TypeBareFn, parse_macro_input};
 
 /// Attribute macro to create a reusable component with builder pattern that automatically implements Widget
 ///
 /// # Attributes on fields
 /// - `#[prop]` - Standard prop, generates builder method accepting `impl IntoMaybeDyn<T>`
 /// - `#[prop(default = "expr")]` - Prop with default value
-/// - `#[prop(callback)]` - Generates callback accepting `impl Fn() + 'static`
+/// - `#[prop(callback)]` - Generates callback accepting `impl Fn() + 'static`. Use `fn(T)` as the field type for typed params (e.g., `on_change: fn(i32)` → `Fn(i32)`)
 /// - `#[prop(children)]` - Marks field for children support
 /// - `#[prop(slot)]` - Named widget slot, generates `RefCell<Option<Box<dyn Widget>>>` with builder and `take_` accessor
 ///
@@ -96,11 +96,23 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             }
         }
 
+        // For callback fields, extract parameter types from `fn(T1, T2, ...)` syntax
+        let callback_params = if is_callback {
+            if let Type::BareFn(TypeBareFn { inputs, .. }) = field_type {
+                inputs.iter().map(|arg| arg.ty.clone()).collect()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
         prop_fields.push(PropField {
             name: field_name.clone(),
             ty: field_type.clone(),
             default_value,
             is_callback,
+            callback_params,
             is_children,
             is_slot,
         });
@@ -112,8 +124,9 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         let ty = &field.ty;
 
         if field.is_callback {
+            let params = &field.callback_params;
             quote! {
-                #name: Option<std::rc::Rc<dyn Fn()>>
+                #name: Option<std::rc::Rc<dyn Fn(#(#params),*)>>
             }
         } else if field.is_children {
             quote! {
@@ -164,8 +177,9 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         let ty = &field.ty;
 
         if field.is_callback {
+            let params = &field.callback_params;
             quote! {
-                #vis fn #name<F: Fn() + 'static>(mut self, f: F) -> Self {
+                #vis fn #name<F: Fn(#(#params),*) + 'static>(mut self, f: F) -> Self {
                     self.#name = Some(std::rc::Rc::new(f));
                     self
                 }
@@ -325,6 +339,9 @@ struct PropField {
     ty: Type,
     default_value: Option<String>,
     is_callback: bool,
+    /// For callbacks: parameter types extracted from `fn(T1, T2, ...)` field type.
+    /// Empty vec means `Fn()` (unit type or no params).
+    callback_params: Vec<Type>,
     is_children: bool,
     is_slot: bool,
 }
