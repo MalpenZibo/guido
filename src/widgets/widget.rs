@@ -31,6 +31,117 @@ impl Color {
     pub const WHITE: Color = Color::rgb(1.0, 1.0, 1.0);
     pub const BLACK: Color = Color::rgb(0.0, 0.0, 0.0);
     pub const TRANSPARENT: Color = Color::rgba(0.0, 0.0, 0.0, 0.0);
+    pub const RED: Color = Color::rgb(1.0, 0.0, 0.0);
+    pub const GREEN: Color = Color::rgb(0.0, 1.0, 0.0);
+    pub const BLUE: Color = Color::rgb(0.0, 0.0, 1.0);
+    pub const YELLOW: Color = Color::rgb(1.0, 1.0, 0.0);
+    pub const CYAN: Color = Color::rgb(0.0, 1.0, 1.0);
+    pub const MAGENTA: Color = Color::rgb(1.0, 0.0, 1.0);
+    pub const GRAY: Color = Color::rgb(0.5, 0.5, 0.5);
+
+    /// Create a color from 8-bit (0-255) RGB values.
+    pub const fn from_rgb8(r: u8, g: u8, b: u8) -> Self {
+        Self {
+            r: r as f32 / 255.0,
+            g: g as f32 / 255.0,
+            b: b as f32 / 255.0,
+            a: 1.0,
+        }
+    }
+
+    /// Create a color from 8-bit (0-255) RGBA values.
+    pub const fn from_rgba8(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self {
+            r: r as f32 / 255.0,
+            g: g as f32 / 255.0,
+            b: b as f32 / 255.0,
+            a: a as f32 / 255.0,
+        }
+    }
+
+    /// Convert to 8-bit RGBA tuple.
+    pub fn to_rgba8(self) -> (u8, u8, u8, u8) {
+        (
+            (self.r * 255.0 + 0.5) as u8,
+            (self.g * 255.0 + 0.5) as u8,
+            (self.b * 255.0 + 0.5) as u8,
+            (self.a * 255.0 + 0.5) as u8,
+        )
+    }
+
+    /// Blend toward white by `amount` (0.0 = no change, 1.0 = fully white).
+    /// Preserves alpha.
+    pub fn lighter(self, amount: f32) -> Self {
+        Self {
+            r: self.r + (1.0 - self.r) * amount,
+            g: self.g + (1.0 - self.g) * amount,
+            b: self.b + (1.0 - self.b) * amount,
+            a: self.a,
+        }
+    }
+
+    /// Blend toward black by `amount` (0.0 = no change, 1.0 = fully black).
+    /// Preserves alpha.
+    pub fn darker(self, amount: f32) -> Self {
+        Self {
+            r: self.r * (1.0 - amount),
+            g: self.g * (1.0 - amount),
+            b: self.b * (1.0 - amount),
+            a: self.a,
+        }
+    }
+
+    /// Linear interpolate with another color by `t` (0.0 = self, 1.0 = other).
+    /// Interpolates all channels including alpha.
+    pub fn mix(self, other: Color, t: f32) -> Self {
+        Self {
+            r: self.r + (other.r - self.r) * t,
+            g: self.g + (other.g - self.g) * t,
+            b: self.b + (other.b - self.b) * t,
+            a: self.a + (other.a - self.a) * t,
+        }
+    }
+
+    /// Invert RGB channels (1.0 - r/g/b). Preserves alpha.
+    pub fn invert(self) -> Self {
+        Self {
+            r: 1.0 - self.r,
+            g: 1.0 - self.g,
+            b: 1.0 - self.b,
+            a: self.a,
+        }
+    }
+
+    /// Relative luminance using Rec. 709 coefficients.
+    /// Returns 0.0 for black, 1.0 for white.
+    pub fn luminance(self) -> f32 {
+        0.2126 * self.r + 0.7152 * self.g + 0.0722 * self.b
+    }
+
+    /// Convert to perceptual grayscale using Rec. 709 weights.
+    /// Preserves alpha.
+    pub fn grayscale(self) -> Self {
+        let l = self.luminance();
+        Self {
+            r: l,
+            g: l,
+            b: l,
+            a: self.a,
+        }
+    }
+
+    /// Return a new color with the given alpha value.
+    pub fn with_alpha(self, alpha: f32) -> Self {
+        Self { a: alpha, ..self }
+    }
+
+    /// Multiply the alpha channel by a factor.
+    pub fn scale_alpha(self, factor: f32) -> Self {
+        Self {
+            a: self.a * factor,
+            ..self
+        }
+    }
 }
 
 impl Default for Color {
@@ -580,6 +691,186 @@ mod tests {
     fn test_color_default() {
         let color = Color::default();
         assert_eq!(color, Color::TRANSPARENT);
+    }
+
+    #[test]
+    fn test_color_named_constants() {
+        assert_eq!(Color::RED, Color::rgb(1.0, 0.0, 0.0));
+        assert_eq!(Color::GREEN, Color::rgb(0.0, 1.0, 0.0));
+        assert_eq!(Color::BLUE, Color::rgb(0.0, 0.0, 1.0));
+        assert_eq!(Color::YELLOW, Color::rgb(1.0, 1.0, 0.0));
+        assert_eq!(Color::CYAN, Color::rgb(0.0, 1.0, 1.0));
+        assert_eq!(Color::MAGENTA, Color::rgb(1.0, 0.0, 1.0));
+        assert_eq!(Color::GRAY, Color::rgb(0.5, 0.5, 0.5));
+    }
+
+    #[test]
+    fn test_color_from_rgb8() {
+        let color = Color::from_rgb8(255, 128, 0);
+        assert!((color.r - 1.0).abs() < 0.01);
+        assert!((color.g - 0.502).abs() < 0.01);
+        assert!((color.b - 0.0).abs() < 0.01);
+        assert_eq!(color.a, 1.0);
+    }
+
+    #[test]
+    fn test_color_from_rgba8() {
+        let color = Color::from_rgba8(255, 0, 0, 128);
+        assert!((color.r - 1.0).abs() < 0.01);
+        assert!((color.g - 0.0).abs() < 0.01);
+        assert!((color.b - 0.0).abs() < 0.01);
+        assert!((color.a - 0.502).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_color_to_rgba8() {
+        let (r, g, b, a) = Color::rgb(1.0, 0.0, 0.5).to_rgba8();
+        assert_eq!(r, 255);
+        assert_eq!(g, 0);
+        assert_eq!(b, 128);
+        assert_eq!(a, 255);
+    }
+
+    #[test]
+    fn test_color_rgb8_roundtrip() {
+        let original = Color::from_rgb8(100, 200, 50);
+        let (r, g, b, a) = original.to_rgba8();
+        assert_eq!(r, 100);
+        assert_eq!(g, 200);
+        assert_eq!(b, 50);
+        assert_eq!(a, 255);
+    }
+
+    #[test]
+    fn test_lighter_no_change() {
+        let c = Color::rgb(0.5, 0.5, 0.5);
+        assert_eq!(c.lighter(0.0), c);
+    }
+
+    #[test]
+    fn test_lighter_full() {
+        let c = Color::rgba(0.2, 0.4, 0.6, 0.8);
+        let result = c.lighter(1.0);
+        assert!((result.r - 1.0).abs() < 1e-6);
+        assert!((result.g - 1.0).abs() < 1e-6);
+        assert!((result.b - 1.0).abs() < 1e-6);
+        assert_eq!(result.a, 0.8); // alpha preserved
+    }
+
+    #[test]
+    fn test_darker_no_change() {
+        let c = Color::rgb(0.5, 0.5, 0.5);
+        assert_eq!(c.darker(0.0), c);
+    }
+
+    #[test]
+    fn test_darker_full() {
+        let c = Color::rgba(0.2, 0.4, 0.6, 0.8);
+        let result = c.darker(1.0);
+        assert!((result.r).abs() < 1e-6);
+        assert!((result.g).abs() < 1e-6);
+        assert!((result.b).abs() < 1e-6);
+        assert_eq!(result.a, 0.8); // alpha preserved
+    }
+
+    #[test]
+    fn test_mix_endpoints() {
+        let a = Color::RED;
+        let b = Color::BLUE;
+        assert_eq!(a.mix(b, 0.0), a);
+        assert_eq!(a.mix(b, 1.0), b);
+    }
+
+    #[test]
+    fn test_mix_midpoint() {
+        let a = Color::rgb(0.0, 0.0, 0.0);
+        let b = Color::rgb(1.0, 1.0, 1.0);
+        let mid = a.mix(b, 0.5);
+        assert!((mid.r - 0.5).abs() < 1e-6);
+        assert!((mid.g - 0.5).abs() < 1e-6);
+        assert!((mid.b - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_invert_white_is_black() {
+        assert_eq!(Color::WHITE.invert(), Color::rgb(0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn test_invert_black_is_white() {
+        assert_eq!(Color::BLACK.invert(), Color::rgb(1.0, 1.0, 1.0));
+    }
+
+    #[test]
+    fn test_invert_roundtrip() {
+        let c = Color::rgb(0.2, 0.5, 0.8);
+        let roundtrip = c.invert().invert();
+        assert!((roundtrip.r - c.r).abs() < 1e-6);
+        assert!((roundtrip.g - c.g).abs() < 1e-6);
+        assert!((roundtrip.b - c.b).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_invert_preserves_alpha() {
+        let c = Color::rgba(0.5, 0.5, 0.5, 0.3);
+        assert_eq!(c.invert().a, 0.3);
+    }
+
+    #[test]
+    fn test_luminance_white() {
+        assert!((Color::WHITE.luminance() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_luminance_black() {
+        assert!(Color::BLACK.luminance().abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_luminance_green_brightest() {
+        // Green has the highest luminance weight (0.7152)
+        assert!(Color::GREEN.luminance() > Color::RED.luminance());
+        assert!(Color::GREEN.luminance() > Color::BLUE.luminance());
+    }
+
+    #[test]
+    fn test_grayscale_white() {
+        assert_eq!(Color::WHITE.grayscale(), Color::WHITE);
+    }
+
+    #[test]
+    fn test_grayscale_black() {
+        assert_eq!(Color::BLACK.grayscale(), Color::BLACK);
+    }
+
+    #[test]
+    fn test_grayscale_preserves_alpha() {
+        let c = Color::rgba(1.0, 0.0, 0.0, 0.5);
+        assert_eq!(c.grayscale().a, 0.5);
+    }
+
+    #[test]
+    fn test_grayscale_uniform_channels() {
+        let g = Color::RED.grayscale();
+        assert_eq!(g.r, g.g);
+        assert_eq!(g.g, g.b);
+    }
+
+    #[test]
+    fn test_with_alpha() {
+        let c = Color::RED.with_alpha(0.5);
+        assert_eq!(c.r, 1.0);
+        assert_eq!(c.g, 0.0);
+        assert_eq!(c.b, 0.0);
+        assert_eq!(c.a, 0.5);
+    }
+
+    #[test]
+    fn test_scale_alpha() {
+        let c = Color::rgba(1.0, 0.0, 0.0, 0.8);
+        let scaled = c.scale_alpha(0.5);
+        assert!((scaled.a - 0.4).abs() < 1e-6);
+        assert_eq!(scaled.r, 1.0); // RGB unchanged
     }
 
     #[test]
