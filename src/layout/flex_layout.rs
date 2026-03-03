@@ -251,14 +251,18 @@ impl Flex {
             Axis::Vertical => (constraints.min_height, constraints.min_width),
         };
 
-        // For space-based and centered alignments, expand to fill available main axis
+        // Space-based alignments expand to fill available main axis so they can
+        // distribute the extra space between/around children.
+        // Start/Center/End only affect child *positioning* — they should not force
+        // the Flex to expand. Centering/end-alignment takes effect when the parent
+        // provides extra space via tight constraints (e.g. an exact or fill width).
         let main_size = match main_align {
             MainAlignment::SpaceBetween
             | MainAlignment::SpaceAround
-            | MainAlignment::SpaceEvenly
+            | MainAlignment::SpaceEvenly => main_max,
+            MainAlignment::Start
             | MainAlignment::Center
-            | MainAlignment::End => main_max,
-            MainAlignment::Start => total_main.max(main_min).min(main_max),
+            | MainAlignment::End => total_main.max(main_min).min(main_max),
         };
 
         let cross_size = max_cross.max(cross_constraint_min).min(cross_max);
