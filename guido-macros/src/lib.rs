@@ -148,6 +148,16 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 .to_compile_error()
                 .into();
             }
+
+            // Validate: callback, children, and slot props cannot have defaults
+            if (is_callback || is_children || is_slot) && default_value.is_some() {
+                return syn::Error::new_spanned(
+                    prop_attr,
+                    "callback, children, and slot props cannot have default values",
+                )
+                .to_compile_error()
+                .into();
+            }
         }
 
         // For callback fields, extract parameter types from `fn(T1, T2, ...)` syntax

@@ -244,6 +244,13 @@ mod tests {
     }
 
     #[test]
+    fn test_closure_lossy_conversion() {
+        // Closure returning i32 used where MaybeDyn<f32> is expected
+        let value: MaybeDyn<f32> = (|| 8i32).into_maybe_dyn();
+        assert_eq!(value.get(), 8.0);
+    }
+
+    #[test]
     fn test_maybe_dyn_into_maybe_dyn() {
         let value1 = MaybeDyn::fixed(7);
         let value2: MaybeDyn<i32> = value1.into_maybe_dyn();
