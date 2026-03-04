@@ -19,9 +19,9 @@ pub struct Transition {
 
 impl Transition {
     /// Create a new transition with the given duration and timing function
-    pub fn new(duration_ms: f32, timing: TimingFunction) -> Self {
+    pub fn new(duration_ms: impl crate::layout::IntoF32, timing: TimingFunction) -> Self {
         Self {
-            duration_ms,
+            duration_ms: duration_ms.into_f32(),
             timing,
             delay_ms: 0.0,
         }
@@ -37,14 +37,14 @@ impl Transition {
     }
 
     /// Set the delay before the animation starts
-    pub fn delay(mut self, delay_ms: f32) -> Self {
-        self.delay_ms = delay_ms;
+    pub fn delay(mut self, delay_ms: impl crate::layout::IntoF32) -> Self {
+        self.delay_ms = delay_ms.into_f32();
         self
     }
 
     /// Set the duration of the animation
-    pub fn duration(mut self, duration_ms: f32) -> Self {
-        self.duration_ms = duration_ms;
+    pub fn duration(mut self, duration_ms: impl crate::layout::IntoF32) -> Self {
+        self.duration_ms = duration_ms.into_f32();
         self
     }
 

@@ -102,8 +102,11 @@ pub struct Border {
 }
 
 impl Border {
-    pub fn new(width: f32, color: Color) -> Self {
-        Self { width, color }
+    pub fn new(width: impl crate::layout::IntoF32, color: Color) -> Self {
+        Self {
+            width: width.into_f32(),
+            color,
+        }
     }
 }
 
