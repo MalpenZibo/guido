@@ -260,9 +260,9 @@ impl Flex {
             MainAlignment::SpaceBetween
             | MainAlignment::SpaceAround
             | MainAlignment::SpaceEvenly => main_max,
-            MainAlignment::Start
-            | MainAlignment::Center
-            | MainAlignment::End => total_main.max(main_min).min(main_max),
+            MainAlignment::Start | MainAlignment::Center | MainAlignment::End => {
+                total_main.max(main_min).min(main_max)
+            }
         };
 
         let cross_size = max_cross.max(cross_constraint_min).min(cross_max);

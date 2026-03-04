@@ -1136,20 +1136,18 @@ impl Widget for Container {
             // Propagate the effective minimum so layouts like Center/End know
             // how much space they actually have to position children within.
             // Sources of minimum: explicit at_least(min) or parent constraints.
-            let effective_min = width_length
-                .min
-                .unwrap_or(0.0)
-                .max(constraints.min_width);
-            (effective_min - effective_h_padding).max(0.0).min(child_max_width)
+            let effective_min = width_length.min.unwrap_or(0.0).max(constraints.min_width);
+            (effective_min - effective_h_padding)
+                .max(0.0)
+                .min(child_max_width)
         };
         let child_min_height = if height_length.exact.is_some() || height_length.fill {
             child_max_height
         } else {
-            let effective_min = height_length
-                .min
-                .unwrap_or(0.0)
-                .max(constraints.min_height);
-            (effective_min - effective_v_padding).max(0.0).min(child_max_height)
+            let effective_min = height_length.min.unwrap_or(0.0).max(constraints.min_height);
+            (effective_min - effective_v_padding)
+                .max(0.0)
+                .min(child_max_height)
         };
 
         // For scrollable containers, use unbounded constraints in scroll direction
