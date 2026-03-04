@@ -69,6 +69,10 @@ Text rendering with:
 - Font size, color, weight styling
 - Text wrapping or `nowrap()` mode
 
+**Type Erasure** (`widgets/widget.rs`)
+- `AnyWidget` type alias (`Box<dyn Widget>`) for type-erased widgets
+- `Widget::into_any()` method for boxing widgets in conditional branches
+
 **Layout System** (`widgets/layout.rs`)
 Pluggable layouts via the `Layout` trait:
 ```rust

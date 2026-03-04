@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use super::effect::create_effect;
-use super::maybe_dyn::{IntoMaybeDyn, MaybeDyn};
+use super::maybe_dyn::{IntoMaybeDyn, MaybeDyn, MemoMarker};
 use super::signal::{Signal, create_signal};
 
 /// Eager computed value that recomputes immediately when dependencies change.
@@ -80,7 +80,7 @@ impl<T: Clone + PartialEq + Send + 'static> Memo<T> {
     }
 }
 
-impl<T: Clone + PartialEq + Send + 'static> IntoMaybeDyn<T> for Memo<T> {
+impl<T: Clone + PartialEq + Send + 'static> IntoMaybeDyn<T, MemoMarker> for Memo<T> {
     fn into_maybe_dyn(self) -> MaybeDyn<T> {
         MaybeDyn::Dynamic(Rc::new(move || self.signal.get()))
     }

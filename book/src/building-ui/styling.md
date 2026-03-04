@@ -67,6 +67,10 @@ container().elevation(16.0)  // Strong
 
 ```rust
 container().padding(16.0)              // All sides
+container().padding(16)                // Integers work too
+container().padding([8.0, 16.0])       // [vertical, horizontal]
+container().padding([8, 16])           // Integer arrays too
+container().padding([1.0, 2.0, 3.0, 4.0])  // [top, right, bottom, left]
 container().padding_horizontal(20.0)   // Left and right
 container().padding_vertical(10.0)     // Top and bottom
 ```
@@ -81,6 +85,14 @@ container()
     .height(50.0)
 ```
 
+Integers work too:
+
+```rust
+container()
+    .width(100)
+    .height(50)
+```
+
 ### Constraints
 
 ```rust
@@ -91,11 +103,13 @@ container()
     .max_height(100.0)
 ```
 
-### At Least
+### At Least / At Most
 
 ```rust
-container().width(at_least(100.0))  // At least 100px
-container().height(at_least(50.0))  // At least 50px
+container().width(at_least(100.0))           // At least 100px
+container().width(at_least(100))             // Integers work too
+container().width(at_most(400))              // At most 400px
+container().width(at_least(100).at_most(400)) // Range
 ```
 
 ## Complete Example

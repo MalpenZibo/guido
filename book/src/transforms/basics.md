@@ -157,6 +157,8 @@ fn transform_demo() -> impl Widget {
 
 ### Container Methods
 
+All transform properties accept static values, signals, or closures. Integers also work (e.g., `.rotate(45)`, `.scale(2)`).
+
 ```rust
 impl Container {
     pub fn translate(self, x: f32, y: f32) -> Self;

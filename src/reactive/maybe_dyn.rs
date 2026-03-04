@@ -38,106 +38,114 @@ impl<T: Clone + 'static> Clone for MaybeDyn<T> {
     }
 }
 
+// ============================================================================
+// Marker types for IntoMaybeDyn disambiguation
+// ============================================================================
+
+#[doc(hidden)]
+pub struct ValueMarker;
+#[doc(hidden)]
+pub struct LossyMarker;
+#[doc(hidden)]
+pub struct ClosureMarker;
+#[doc(hidden)]
+pub struct SignalMarker;
+#[doc(hidden)]
+pub struct MemoMarker;
+#[doc(hidden)]
+pub struct MaybeDynMarker;
+
 /// Trait for types that can be converted into `MaybeDyn<T>`
-pub trait IntoMaybeDyn<T: Clone + 'static> {
+///
+/// The marker generic `M` disambiguates blanket impls so that static values,
+/// closures, signals, memos, and MaybeDyn each use a distinct marker.
+pub trait IntoMaybeDyn<T: Clone + 'static, M = ValueMarker> {
     fn into_maybe_dyn(self) -> MaybeDyn<T>;
 }
 
 // ============================================================================
-// Static value implementations for specific types
-// (We can't use a blanket impl because it would conflict with the closure impl)
+// IntoVal - conversion trait for closure return types
 // ============================================================================
 
-impl IntoMaybeDyn<String> for String {
-    fn into_maybe_dyn(self) -> MaybeDyn<String> {
-        MaybeDyn::Static(self)
+/// Trait that enables closures returning different types to work with `IntoMaybeDyn`.
+///
+/// For example, `|| 8` (returns `i32`) can be used where `MaybeDyn<f32>` is expected,
+/// because `IntoVal<f32>` is implemented for `i32`.
+pub trait IntoVal<T> {
+    fn into_val(self) -> T;
+}
+
+// Identity: any T converts to itself
+impl<T> IntoVal<T> for T {
+    fn into_val(self) -> T {
+        self
     }
 }
 
-impl IntoMaybeDyn<String> for &str {
-    fn into_maybe_dyn(self) -> MaybeDyn<String> {
-        MaybeDyn::Static(self.to_string())
+// Lossy integer → f32 conversions (no std From impl)
+impl IntoVal<f32> for i32 {
+    fn into_val(self) -> f32 {
+        self as f32
     }
 }
 
-impl IntoMaybeDyn<f32> for f32 {
-    fn into_maybe_dyn(self) -> MaybeDyn<f32> {
-        MaybeDyn::Static(self)
+impl IntoVal<f32> for u32 {
+    fn into_val(self) -> f32 {
+        self as f32
     }
 }
 
-impl IntoMaybeDyn<f64> for f64 {
-    fn into_maybe_dyn(self) -> MaybeDyn<f64> {
-        MaybeDyn::Static(self)
+impl IntoVal<f32> for u16 {
+    fn into_val(self) -> f32 {
+        self as f32
     }
 }
 
-impl IntoMaybeDyn<i32> for i32 {
-    fn into_maybe_dyn(self) -> MaybeDyn<i32> {
-        MaybeDyn::Static(self)
+// ============================================================================
+// Blanket IntoMaybeDyn impls with distinct markers
+// ============================================================================
+
+// 1. Static values: any I where Into<T> exists (identity + all From impls)
+impl<T: Clone + 'static, I: Into<T>> IntoMaybeDyn<T, ValueMarker> for I {
+    fn into_maybe_dyn(self) -> MaybeDyn<T> {
+        MaybeDyn::Static(self.into())
     }
 }
 
-impl IntoMaybeDyn<u32> for u32 {
-    fn into_maybe_dyn(self) -> MaybeDyn<u32> {
-        MaybeDyn::Static(self)
-    }
-}
-
-impl IntoMaybeDyn<bool> for bool {
-    fn into_maybe_dyn(self) -> MaybeDyn<bool> {
-        MaybeDyn::Static(self)
-    }
-}
-
-// Integer → f32 conversions: enables spacing(8), width(300), corner_radius(12), etc.
-impl IntoMaybeDyn<f32> for u16 {
-    fn into_maybe_dyn(self) -> MaybeDyn<f32> {
-        MaybeDyn::Static(f32::from(self))
-    }
-}
-
-impl IntoMaybeDyn<f32> for u32 {
+// 2. Lossy i32/u32 → f32 static conversions (no std From, can't use Into blanket)
+impl IntoMaybeDyn<f32, LossyMarker> for i32 {
     fn into_maybe_dyn(self) -> MaybeDyn<f32> {
         MaybeDyn::Static(self as f32)
     }
 }
 
-impl IntoMaybeDyn<f32> for i32 {
+impl IntoMaybeDyn<f32, LossyMarker> for u32 {
     fn into_maybe_dyn(self) -> MaybeDyn<f32> {
         MaybeDyn::Static(self as f32)
     }
 }
 
-// ============================================================================
-// Closure implementation - works for any Fn() -> T
-// ============================================================================
-
-impl<T, F> IntoMaybeDyn<T> for F
+// 3. Closures: Fn() -> R where R: IntoVal<T>
+impl<T, R, F> IntoMaybeDyn<T, ClosureMarker> for F
 where
     T: Clone + 'static,
-    F: Fn() -> T + 'static,
+    R: IntoVal<T> + 'static,
+    F: Fn() -> R + 'static,
 {
     fn into_maybe_dyn(self) -> MaybeDyn<T> {
-        MaybeDyn::Dynamic(Rc::new(self))
+        MaybeDyn::Dynamic(Rc::new(move || self().into_val()))
     }
 }
 
-// ============================================================================
-// Signal implementations
-// ============================================================================
-
-impl<T: Clone + 'static> IntoMaybeDyn<T> for Signal<T> {
+// 4. Signal<T>
+impl<T: Clone + 'static> IntoMaybeDyn<T, SignalMarker> for Signal<T> {
     fn into_maybe_dyn(self) -> MaybeDyn<T> {
         MaybeDyn::Dynamic(Rc::new(move || self.get()))
     }
 }
 
-// ============================================================================
-// Already a MaybeDyn
-// ============================================================================
-
-impl<T: Clone + 'static> IntoMaybeDyn<T> for MaybeDyn<T> {
+// 5. MaybeDyn<T> passthrough
+impl<T: Clone + 'static> IntoMaybeDyn<T, MaybeDynMarker> for MaybeDyn<T> {
     fn into_maybe_dyn(self) -> MaybeDyn<T> {
         self
     }
@@ -233,6 +241,13 @@ mod tests {
         assert_eq!(value.get(), 42);
         signal.set(100);
         assert_eq!(value.get(), 100);
+    }
+
+    #[test]
+    fn test_closure_lossy_conversion() {
+        // Closure returning i32 used where MaybeDyn<f32> is expected
+        let value: MaybeDyn<f32> = (|| 8i32).into_maybe_dyn();
+        assert_eq!(value.get(), 8.0);
     }
 
     #[test]

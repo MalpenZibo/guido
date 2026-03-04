@@ -191,9 +191,10 @@ pub enum MaybeDyn<T> {
 ```
 
 Properties use `impl IntoMaybeDyn<T>` to accept any of:
-- Static value: `T`
+- Static value: `T` (including integers where `f32`/`Length`/`Padding` is expected)
 - Signal: `Signal<T>`
-- Closure: `impl Fn() -> T`
+- Closure: `impl Fn() -> T` (closures can also return integers for `f32` properties)
+- Memo: `Memo<T>`
 
 ## Background Task Updates
 
@@ -429,30 +430,23 @@ Owner scopes are automatically nested. When a parent owner is disposed, children
 
 ### Component Macro Integration
 
-Components created with `#[component]` automatically wrap their `render()` in an owner scope. When the component is dropped, all its reactive resources are cleaned up:
+Components created with `#[component]` automatically wrap their render body in an owner scope. When the component is dropped, all its reactive resources are cleaned up:
 
 ```rust
 #[component]
-pub struct Counter {
-    #[prop]
-    initial: i32,
-}
+pub fn counter(initial: i32) -> impl Widget {
+    // This signal is owned by the component
+    let count = create_signal(initial.get());
 
-impl Counter {
-    fn render(&self) -> impl Widget {
-        // This signal is owned by the component
-        let count = create_signal(self.initial.get());
+    // This effect is also owned
+    create_effect(move || {
+        println!("Count: {}", count.get());
+    });
 
-        // This effect is also owned
-        create_effect(move || {
-            println!("Count: {}", count.get());
-        });
-
-        // When Counter is dropped, signal and effect are disposed
-        container()
-            .on_click(move || count.update(|c| *c += 1))
-            .child(text(move || count.get().to_string()))
-    }
+    // When Counter is dropped, signal and effect are disposed
+    container()
+        .on_click(move || count.update(|c| *c += 1))
+        .child(text(move || count.get().to_string()))
 }
 ```
 

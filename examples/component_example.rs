@@ -2,51 +2,36 @@ use guido::prelude::*;
 
 /// A reusable Button component
 #[component]
-pub struct Button {
-    #[prop]
+pub fn button(
     label: String,
-    #[prop(default = "Color::rgb(0.3, 0.3, 0.4)")]
-    background: Color,
-    #[prop(default = "8.0")]
-    padding: f32,
-    #[prop(callback)]
-    on_click: (),
-}
-
-impl Button {
-    fn render(&self) -> impl Widget + use<> {
-        container()
-            .padding(self.padding.get())
-            .background(self.background.clone())
-            .corner_radius(6.0)
-            .hover_state(|s| s.lighter(0.1))
-            .pressed_state(|s| s.ripple())
-            .on_click_option(self.on_click.clone())
-            .child(text(self.label.clone()).color(Color::WHITE))
-    }
+    #[prop(default = "Color::rgb(0.3, 0.3, 0.4)")] background: Color,
+    #[prop(default = "8.0")] padding: f32,
+    #[prop(callback)] on_click: (),
+) -> impl Widget {
+    container()
+        .padding(padding.get())
+        .background(background.clone())
+        .corner_radius(6.0)
+        .hover_state(|s| s.lighter(0.1))
+        .pressed_state(|s| s.ripple())
+        .on_click_option(on_click.clone())
+        .child(text(label.clone()).color(Color::WHITE))
 }
 
 /// A reusable Card component with children
 #[component]
-pub struct Card {
-    #[prop]
+pub fn card(
     title: String,
-    #[prop(default = "Color::rgb(0.18, 0.18, 0.22)")]
-    background: Color,
-    #[prop(children)]
-    children: (),
-}
-
-impl Card {
-    fn render(&self) -> impl Widget + use<> {
-        container()
-            .padding(16.0)
-            .background(self.background.get())
-            .corner_radius(8.0)
-            .layout(Flex::column().spacing(8.0))
-            .child(text(self.title.clone()).font_size(18.0).color(Color::WHITE))
-            .children_source(self.take_children())
-    }
+    #[prop(default = "Color::rgb(0.18, 0.18, 0.22)")] background: Color,
+    #[prop(children)] children: (),
+) -> impl Widget {
+    container()
+        .padding(16.0)
+        .background(background.get())
+        .corner_radius(8.0)
+        .layout(Flex::column().spacing(8.0))
+        .child(text(title.clone()).font_size(18.0).color(Color::WHITE))
+        .children_source(children)
 }
 
 fn main() {

@@ -1,98 +1,162 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{DeriveInput, Fields, ItemStruct, Meta, Type, TypeBareFn, parse_macro_input};
+use syn::{DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro_input};
 
-/// Attribute macro to create a reusable component with builder pattern that automatically implements Widget
+/// Attribute macro to create a reusable component from a function.
 ///
-/// # Attributes on fields
-/// - `#[prop]` - Standard prop, generates builder method accepting `impl IntoMaybeDyn<T>`
-/// - `#[prop(default = "expr")]` - Prop with default value
-/// - `#[prop(callback)]` - Generates callback accepting `impl Fn() + 'static`. Use `fn(T)` as the field type for typed params (e.g., `on_change: fn(i32)` → `Fn(i32)`)
-/// - `#[prop(children)]` - Marks field for children support
-/// - `#[prop(slot)]` - Named widget slot, generates `RefCell<Option<Box<dyn Widget>>>` with builder and `take_` accessor
+/// The function name becomes the constructor (snake_case), and a PascalCase struct
+/// is generated. Function parameters become props, and the function body becomes
+/// the render method.
+///
+/// # Attributes on parameters
+/// - No attribute — standard prop, `MaybeDyn<T>`, default = `Default::default()`
+/// - `#[prop(default = "expr")]` — standard prop with custom default
+/// - `#[prop(callback)]` — callback prop. Use `()` for `Fn()`, or `fn(T1, T2)` for typed params
+/// - `#[prop(children)]` — children support via `ChildrenSource`
+/// - `#[prop(slot)]` — named widget slot
 ///
 /// # Example
 /// ```ignore
 /// #[component]
-/// pub struct Button {
-///     #[prop]
+/// pub fn button(
 ///     label: String,
+///     #[prop(default = "Color::rgb(0.3, 0.3, 0.4)")]
+///     background: Color,
+///     #[prop(default = "8.0")]
+///     padding: f32,
 ///     #[prop(callback)]
 ///     on_click: (),
-/// }
-///
-/// impl Button {
-///     fn render(&self) -> impl Widget {
-///         container().child(text(self.label.clone()))
-///     }
+/// ) -> impl Widget {
+///     container()
+///         .padding(padding.get())
+///         .background(background.clone())
+///         .on_click_option(on_click.clone())
+///         .child(text(label.clone()).color(Color::WHITE))
 /// }
 /// ```
 #[proc_macro_attribute]
 pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as ItemStruct);
+    let input = parse_macro_input!(input as ItemFn);
 
-    let struct_name = &input.ident;
+    let fn_name = &input.sig.ident;
     let vis = &input.vis;
+    let body = &input.block;
+    let struct_name = format_ident!("{}", to_pascal_case(&fn_name.to_string()));
 
-    // Extract fields
-    let fields = match &input.fields {
-        Fields::Named(fields) => &fields.named,
-        _ => {
-            return syn::Error::new_spanned(
-                &input,
-                "Component can only be used on structs with named fields",
-            )
-            .to_compile_error()
-            .into();
-        }
-    };
-
-    // Parse field information
+    // Extract props from function parameters
     let mut prop_fields = Vec::new();
     let mut has_children = false;
 
-    for field in fields {
-        let field_name = field.ident.as_ref().unwrap();
-        let field_type = &field.ty;
+    for arg in &input.sig.inputs {
+        let syn::FnArg::Typed(pat_type) = arg else {
+            return syn::Error::new_spanned(arg, "Component functions cannot have self parameters")
+                .to_compile_error()
+                .into();
+        };
 
-        // Skip if no #[prop] attribute
-        let prop_attr = field.attrs.iter().find(|attr| attr.path().is_ident("prop"));
+        // Get the parameter name
+        let syn::Pat::Ident(pat_ident) = pat_type.pat.as_ref() else {
+            return syn::Error::new_spanned(
+                &pat_type.pat,
+                "Component parameters must be simple identifiers",
+            )
+            .to_compile_error()
+            .into();
+        };
+        let field_name = &pat_ident.ident;
+        let field_type = &*pat_type.ty;
 
-        if prop_attr.is_none() {
-            continue;
-        }
+        // Check for #[prop(...)] attributes on the parameter
+        let prop_attr = pat_type
+            .attrs
+            .iter()
+            .find(|attr| attr.path().is_ident("prop"));
 
-        let prop_attr = prop_attr.unwrap();
-
-        // Parse attribute arguments
-        let mut default_value: Option<String> = None;
+        let mut default_value: Option<Expr> = None;
         let mut is_callback = false;
         let mut is_children = false;
         let mut is_slot = false;
 
-        if let Meta::List(meta_list) = &prop_attr.meta {
-            let tokens_str = meta_list.tokens.to_string();
+        if let Some(prop_attr) = prop_attr
+            && let Meta::List(meta_list) = &prop_attr.meta
+        {
+            let nested = meta_list
+                .parse_args_with(
+                    syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
+                )
+                .unwrap_or_default();
 
-            if tokens_str.contains("callback") {
-                is_callback = true;
-            }
-
-            if tokens_str.contains("children") {
-                is_children = true;
-                has_children = true;
-            }
-
-            if tokens_str.contains("slot") {
-                is_slot = true;
-            }
-
-            if tokens_str.contains("default") {
-                // Extract default value between quotes
-                if let Some(start) = tokens_str.find('"')
-                    && let Some(end) = tokens_str[start + 1..].find('"')
-                {
-                    default_value = Some(tokens_str[start + 1..start + 1 + end].to_string());
+            for meta in &nested {
+                if meta.path().is_ident("callback") {
+                    is_callback = true;
+                } else if meta.path().is_ident("children") {
+                    is_children = true;
+                    has_children = true;
+                } else if meta.path().is_ident("slot") {
+                    is_slot = true;
+                } else if meta.path().is_ident("default") {
+                    if let Meta::NameValue(nv) = meta {
+                        // If the value is a string literal, parse its contents as an expression.
+                        // This supports `#[prop(default = "Color::RED")]` syntax where the string
+                        // contains arbitrary Rust expressions.
+                        if let Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(lit_str),
+                            ..
+                        }) = &nv.value
+                        {
+                            match lit_str.parse::<Expr>() {
+                                Ok(expr) => default_value = Some(expr),
+                                Err(e) => {
+                                    return syn::Error::new_spanned(
+                                        lit_str,
+                                        format!("failed to parse default value: {e}"),
+                                    )
+                                    .to_compile_error()
+                                    .into();
+                                }
+                            }
+                        } else {
+                            default_value = Some(nv.value.clone());
+                        }
+                    } else {
+                        return syn::Error::new_spanned(meta, "expected `default = <expr>`")
+                            .to_compile_error()
+                            .into();
+                    }
+                } else {
+                    return syn::Error::new_spanned(
+                        meta,
+                        format!(
+                            "unknown prop attribute: `{}`",
+                            meta.path()
+                                .get_ident()
+                                .map_or_else(|| "?".to_string(), |i| i.to_string())
+                        ),
+                    )
+                    .to_compile_error()
+                    .into();
                 }
+            }
+
+            // Validate: at most one of callback, children, slot
+            let special_count = is_callback as u8 + is_children as u8 + is_slot as u8;
+            if special_count > 1 {
+                return syn::Error::new_spanned(
+                    prop_attr,
+                    "conflicting prop attributes: only one of `callback`, `children`, `slot` is allowed",
+                )
+                .to_compile_error()
+                .into();
+            }
+
+            // Validate: callback, children, and slot props cannot have defaults
+            if (is_callback || is_children || is_slot) && default_value.is_some() {
+                return syn::Error::new_spanned(
+                    prop_attr,
+                    "callback, children, and slot props cannot have default values",
+                )
+                .to_compile_error()
+                .into();
             }
         }
 
@@ -160,9 +224,8 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 #name: std::cell::RefCell::new(None)
             }
         } else if let Some(default) = &field.default_value {
-            let default_tokens: proc_macro2::TokenStream = default.parse().unwrap();
             quote! {
-                #name: ::guido::reactive::MaybeDyn::Static(#default_tokens)
+                #name: ::guido::reactive::MaybeDyn::Static(#default)
             }
         } else {
             quote! {
@@ -196,7 +259,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             }
         } else {
             quote! {
-                #vis fn #name(mut self, value: impl ::guido::reactive::IntoMaybeDyn<#ty>) -> Self {
+                #vis fn #name<__M>(mut self, value: impl ::guido::reactive::IntoMaybeDyn<#ty, __M>) -> Self {
                     self.#name = value.into_maybe_dyn();
                     self
                 }
@@ -244,9 +307,24 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         })
         .collect();
 
-    // Create snake_case constructor name
-    let constructor_name =
-        syn::Ident::new(&to_snake_case(&struct_name.to_string()), struct_name.span());
+    // Generate render method body: bind each prop as a local variable, then run the body
+    let prop_bindings = prop_fields.iter().map(|field| {
+        let name = &field.name;
+        if field.is_children {
+            quote! {
+                let #name = self.take_children();
+            }
+        } else if field.is_slot {
+            let take_name = format_ident!("take_{}", name);
+            quote! {
+                let #name = self.#take_name();
+            }
+        } else {
+            quote! {
+                let #name = &self.#name;
+            }
+        }
+    });
 
     let expanded = quote! {
         #vis struct #struct_name {
@@ -269,6 +347,11 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             #children_methods
 
             #(#slot_methods)*
+
+            fn render(&self) -> impl ::guido::widgets::Widget + use<> {
+                #(#prop_bindings)*
+                #body
+            }
 
             fn ensure_built(&self) {
                 if self.__inner.borrow().is_some() {
@@ -295,6 +378,11 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         impl ::guido::widgets::Widget for #struct_name {
+            fn advance_animations(&mut self, tree: &mut ::guido::tree::Tree, id: ::guido::tree::WidgetId) -> bool {
+                self.ensure_built();
+                self.__inner.borrow_mut().as_mut().unwrap().advance_animations(tree, id)
+            }
+
             fn register_children(&mut self, tree: &mut ::guido::tree::Tree, id: ::guido::tree::WidgetId) {
                 self.ensure_built();
                 self.__inner.borrow_mut().as_mut().unwrap().register_children(tree, id)
@@ -303,6 +391,13 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             fn reconcile_children(&mut self, tree: &mut ::guido::tree::Tree, id: ::guido::tree::WidgetId) -> bool {
                 self.ensure_built();
                 self.__inner.borrow_mut().as_mut().unwrap().reconcile_children(tree, id)
+            }
+
+            fn layout_hints(&self) -> ::guido::widgets::LayoutHints {
+                self.ensure_built();
+                self.__inner.borrow().as_ref()
+                    .map(|w| w.layout_hints())
+                    .unwrap_or_default()
             }
 
             fn layout(&mut self, tree: &mut ::guido::tree::Tree, id: ::guido::tree::WidgetId, constraints: ::guido::layout::Constraints) -> ::guido::layout::Size {
@@ -326,7 +421,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             }
         }
 
-        #vis fn #constructor_name() -> #struct_name {
+        #vis fn #fn_name() -> #struct_name {
             #struct_name::new()
         }
     };
@@ -337,7 +432,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
 struct PropField {
     name: syn::Ident,
     ty: Type,
-    default_value: Option<String>,
+    default_value: Option<Expr>,
     is_callback: bool,
     /// For callbacks: parameter types extracted from `fn(T1, T2, ...)` field type.
     /// Empty vec means `Fn()` (unit type or no params).
@@ -346,20 +441,18 @@ struct PropField {
     is_slot: bool,
 }
 
-fn to_snake_case(s: &str) -> String {
+fn to_pascal_case(s: &str) -> String {
     let mut result = String::new();
-    let mut prev_is_lower = false;
+    let mut capitalize_next = true;
 
-    for (i, c) in s.chars().enumerate() {
-        if c.is_uppercase() {
-            if i > 0 && prev_is_lower {
-                result.push('_');
-            }
-            result.push(c.to_lowercase().next().unwrap());
-            prev_is_lower = false;
+    for c in s.chars() {
+        if c == '_' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.push(c.to_uppercase().next().unwrap());
+            capitalize_next = false;
         } else {
             result.push(c);
-            prev_is_lower = c.is_lowercase();
         }
     }
 

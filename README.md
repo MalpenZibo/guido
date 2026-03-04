@@ -27,6 +27,8 @@ Guido is a GPU-accelerated GUI library for building Wayland layer shell applicat
 - **Multi-Surface Apps** - Create multiple layer shell surfaces that share reactive state, with dynamic property modification
 - **Superellipse Corners** - Configurable corner curvature from squircle (iOS-style) to bevel to scoop
 - **SDF Borders** - Crisp anti-aliased borders using signed distance field rendering
+- **Component Macro** - `#[component]` macro for creating reusable widgets with reactive props, callbacks, children, and slots
+- **Type Erasure** - `AnyWidget` and `Widget::into_any()` for conditional widget branches
 - **Composable Widgets** - Build UIs from minimal primitives with pluggable Flex layout
 - **Layer Shell Support** - Native Wayland layer shell integration for status bars and panels
 - **HiDPI Support** - Automatic scaling for high-resolution displays

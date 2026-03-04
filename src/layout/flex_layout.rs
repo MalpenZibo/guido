@@ -71,19 +71,19 @@ impl Flex {
     }
 
     /// Set the spacing between children
-    pub fn spacing(mut self, spacing: impl IntoMaybeDyn<f32>) -> Self {
+    pub fn spacing<M>(mut self, spacing: impl IntoMaybeDyn<f32, M>) -> Self {
         self.spacing = spacing.into_maybe_dyn();
         self
     }
 
     /// Set the main axis alignment
-    pub fn main_alignment(mut self, alignment: impl IntoMaybeDyn<MainAlignment>) -> Self {
+    pub fn main_alignment<M>(mut self, alignment: impl IntoMaybeDyn<MainAlignment, M>) -> Self {
         self.main_alignment = alignment.into_maybe_dyn();
         self
     }
 
     /// Set the cross axis alignment
-    pub fn cross_alignment(mut self, alignment: impl IntoMaybeDyn<CrossAlignment>) -> Self {
+    pub fn cross_alignment<M>(mut self, alignment: impl IntoMaybeDyn<CrossAlignment, M>) -> Self {
         self.cross_alignment = alignment.into_maybe_dyn();
         self
     }
@@ -260,20 +260,27 @@ impl Flex {
             MainAlignment::SpaceBetween
             | MainAlignment::SpaceAround
             | MainAlignment::SpaceEvenly => main_max,
-            MainAlignment::Start
-            | MainAlignment::Center
-            | MainAlignment::End => total_main.max(main_min).min(main_max),
+            MainAlignment::Start | MainAlignment::Center | MainAlignment::End => {
+                total_main.max(main_min).min(main_max)
+            }
         };
 
         let cross_size = max_cross.max(cross_constraint_min).min(cross_max);
 
         // For Stretch: if we didn't have a known cross size before, re-layout children
         // with the computed cross size. Fill children get tight main-axis constraints.
+        //
+        // Skip children that already match cross_size — re-constraining them to their
+        // own size is a no-op for sizing but creates tight constraints that turn them
+        // into relayout boundaries, preventing dynamic content changes from propagating
+        // up to recompute cross_size.
         if cross_align == CrossAlignment::Stretch && stretch_cross.is_none() && cross_size > 0.0 {
-            self.child_sizes.clear();
-            self.child_sizes.resize(children.len(), Size::zero());
             children_main = 0.0;
             for (i, &child_id) in children.iter().enumerate() {
+                if (self.child_sizes[i].cross_axis(axis) - cross_size).abs() < 0.5 {
+                    children_main += self.child_sizes[i].main_axis(axis);
+                    continue;
+                }
                 let main_constraint = if is_fill[i] { per_fill } else { main_max };
                 let stretch_constraints = match axis {
                     Axis::Horizontal => Constraints {

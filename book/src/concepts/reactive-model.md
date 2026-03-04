@@ -112,7 +112,7 @@ pub enum MaybeDyn<T> {
 ```
 
 You don't need to use this directly - the `impl IntoMaybeDyn<T>` trait accepts:
-- Static values: `T`
+- Static values: `T` (including integers where `f32` is expected, e.g., `.width(100)`)
 - Signals: `Signal<T>`
 - Closures: `impl Fn() -> T`
 

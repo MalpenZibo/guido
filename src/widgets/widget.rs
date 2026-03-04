@@ -383,6 +383,30 @@ impl From<[f32; 4]> for Padding {
     }
 }
 
+/// `[vertical, horizontal]` — CSS-style 2-value shorthand (integer).
+impl From<[i32; 2]> for Padding {
+    fn from(v: [i32; 2]) -> Self {
+        Padding {
+            top: v[0] as f32,
+            right: v[1] as f32,
+            bottom: v[0] as f32,
+            left: v[1] as f32,
+        }
+    }
+}
+
+/// `[top, right, bottom, left]` — CSS-style 4-value shorthand (integer).
+impl From<[i32; 4]> for Padding {
+    fn from(v: [i32; 4]) -> Self {
+        Padding {
+            top: v[0] as f32,
+            right: v[1] as f32,
+            bottom: v[2] as f32,
+            left: v[3] as f32,
+        }
+    }
+}
+
 impl Default for Padding {
     fn default() -> Self {
         Self {
@@ -610,7 +634,27 @@ pub trait Widget {
     ///
     /// Default implementation does nothing (leaf widgets have no children).
     fn register_children(&mut self, _tree: &mut Tree, _id: WidgetId) {}
+
+    /// Type-erase this widget into a boxed trait object.
+    ///
+    /// Useful when returning different widget types from conditional branches:
+    /// ```ignore
+    /// if condition {
+    ///     widget_a.into_any()
+    /// } else {
+    ///     widget_b.into_any()
+    /// }
+    /// ```
+    fn into_any(self) -> AnyWidget
+    where
+        Self: Sized + 'static,
+    {
+        Box::new(self)
+    }
 }
+
+/// A type-erased widget. Shorthand for `Box<dyn Widget>`.
+pub type AnyWidget = Box<dyn Widget>;
 
 impl Widget for Box<dyn Widget> {
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {

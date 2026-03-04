@@ -151,7 +151,9 @@ container()
 container().padding(16.0)                          // 16px on all sides
 container().padding(16)                            // integers work too
 container().padding([8.0, 16.0])                   // [vertical, horizontal]
+container().padding([8, 16])                       // integer arrays work too
 container().padding([1.0, 2.0, 3.0, 4.0])         // [top, right, bottom, left]
+container().padding([1, 2, 3, 4])                  // integer 4-value shorthand
 container().padding(Padding::all(8.0).top(20.0))   // builder pattern
 ```
 
@@ -163,6 +165,11 @@ container().padding(Padding::all(8.0).top(20.0))   // builder pattern
 container()
     .width(100.0)
     .height(50.0)
+
+// Integers work too
+container()
+    .width(100)
+    .height(50)
 ```
 
 ### Minimum/Maximum Size

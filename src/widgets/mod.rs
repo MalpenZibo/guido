@@ -19,84 +19,33 @@ pub use state_layer::{BackgroundOverride, RippleConfig, StateStyle};
 pub use text::{Text, text};
 pub use text_input::{Selection, TextInput, text_input};
 pub use widget::{
-    Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding, Rect,
-    ScrollSource, Widget,
+    AnyWidget, Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding,
+    Rect, ScrollSource, Widget,
 };
 
-// IntoMaybeDyn implementations for widget types
-use crate::reactive::{IntoMaybeDyn, MaybeDyn};
-use crate::transform::Transform;
-use crate::transform_origin::TransformOrigin;
+// IntoVal<Padding> impls for closures returning numeric types
+use crate::reactive::IntoVal;
 
-impl IntoMaybeDyn<Color> for Color {
-    fn into_maybe_dyn(self) -> MaybeDyn<Color> {
-        MaybeDyn::Static(self)
+impl IntoVal<Padding> for i32 {
+    fn into_val(self) -> Padding {
+        Padding::from(self)
     }
 }
 
-impl IntoMaybeDyn<Padding> for Padding {
-    fn into_maybe_dyn(self) -> MaybeDyn<Padding> {
-        MaybeDyn::Static(self)
+impl IntoVal<Padding> for u32 {
+    fn into_val(self) -> Padding {
+        Padding::from(self)
     }
 }
 
-// Convenience conversions: padding(8.0), padding(8), padding([8.0, 16.0]), etc.
-impl IntoMaybeDyn<Padding> for f32 {
-    fn into_maybe_dyn(self) -> MaybeDyn<Padding> {
-        MaybeDyn::Static(Padding::from(self))
+impl IntoVal<Padding> for u16 {
+    fn into_val(self) -> Padding {
+        Padding::from(self)
     }
 }
 
-impl IntoMaybeDyn<Padding> for i32 {
-    fn into_maybe_dyn(self) -> MaybeDyn<Padding> {
-        MaybeDyn::Static(Padding::from(self))
-    }
-}
-
-impl IntoMaybeDyn<Padding> for u16 {
-    fn into_maybe_dyn(self) -> MaybeDyn<Padding> {
-        MaybeDyn::Static(Padding::from(self))
-    }
-}
-
-impl IntoMaybeDyn<Padding> for u32 {
-    fn into_maybe_dyn(self) -> MaybeDyn<Padding> {
-        MaybeDyn::Static(Padding::from(self))
-    }
-}
-
-impl IntoMaybeDyn<Padding> for [f32; 2] {
-    fn into_maybe_dyn(self) -> MaybeDyn<Padding> {
-        MaybeDyn::Static(Padding::from(self))
-    }
-}
-
-impl IntoMaybeDyn<Padding> for [f32; 4] {
-    fn into_maybe_dyn(self) -> MaybeDyn<Padding> {
-        MaybeDyn::Static(Padding::from(self))
-    }
-}
-
-impl IntoMaybeDyn<Transform> for Transform {
-    fn into_maybe_dyn(self) -> MaybeDyn<Transform> {
-        MaybeDyn::Static(self)
-    }
-}
-
-impl IntoMaybeDyn<TransformOrigin> for TransformOrigin {
-    fn into_maybe_dyn(self) -> MaybeDyn<TransformOrigin> {
-        MaybeDyn::Static(self)
-    }
-}
-
-impl IntoMaybeDyn<FontFamily> for FontFamily {
-    fn into_maybe_dyn(self) -> MaybeDyn<FontFamily> {
-        MaybeDyn::Static(self)
-    }
-}
-
-impl IntoMaybeDyn<FontWeight> for FontWeight {
-    fn into_maybe_dyn(self) -> MaybeDyn<FontWeight> {
-        MaybeDyn::Static(self)
+impl IntoVal<Padding> for f32 {
+    fn into_val(self) -> Padding {
+        Padding::from(self)
     }
 }
