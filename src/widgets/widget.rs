@@ -634,7 +634,27 @@ pub trait Widget {
     ///
     /// Default implementation does nothing (leaf widgets have no children).
     fn register_children(&mut self, _tree: &mut Tree, _id: WidgetId) {}
+
+    /// Type-erase this widget into a boxed trait object.
+    ///
+    /// Useful when returning different widget types from conditional branches:
+    /// ```ignore
+    /// if condition {
+    ///     widget_a.into_any()
+    /// } else {
+    ///     widget_b.into_any()
+    /// }
+    /// ```
+    fn into_any(self) -> AnyWidget
+    where
+        Self: Sized + 'static,
+    {
+        Box::new(self)
+    }
 }
+
+/// A type-erased widget. Shorthand for `Box<dyn Widget>`.
+pub type AnyWidget = Box<dyn Widget>;
 
 impl Widget for Box<dyn Widget> {
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
