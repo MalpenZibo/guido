@@ -122,6 +122,24 @@ impl From<f32> for Length {
     }
 }
 
+impl From<i32> for Length {
+    fn from(value: i32) -> Self {
+        Length::from(value as f32)
+    }
+}
+
+impl From<u16> for Length {
+    fn from(value: u16) -> Self {
+        Length::from(value as f32)
+    }
+}
+
+impl From<u32> for Length {
+    fn from(value: u32) -> Self {
+        Length::from(value as f32)
+    }
+}
+
 impl IntoMaybeDyn<Length> for Length {
     fn into_maybe_dyn(self) -> MaybeDyn<Length> {
         MaybeDyn::Static(self)
@@ -129,6 +147,24 @@ impl IntoMaybeDyn<Length> for Length {
 }
 
 impl IntoMaybeDyn<Length> for f32 {
+    fn into_maybe_dyn(self) -> MaybeDyn<Length> {
+        MaybeDyn::Static(Length::from(self))
+    }
+}
+
+impl IntoMaybeDyn<Length> for i32 {
+    fn into_maybe_dyn(self) -> MaybeDyn<Length> {
+        MaybeDyn::Static(Length::from(self))
+    }
+}
+
+impl IntoMaybeDyn<Length> for u16 {
+    fn into_maybe_dyn(self) -> MaybeDyn<Length> {
+        MaybeDyn::Static(Length::from(self))
+    }
+}
+
+impl IntoMaybeDyn<Length> for u32 {
     fn into_maybe_dyn(self) -> MaybeDyn<Length> {
         MaybeDyn::Static(Length::from(self))
     }
