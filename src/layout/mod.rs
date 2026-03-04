@@ -20,6 +20,9 @@ use crate::{
 /// // Exact size (most common)
 /// container().width(200.0);
 ///
+/// // Integers also work
+/// container().width(200).height(100);
+///
 /// // Minimum only
 /// container().width(at_least(100.0));
 ///

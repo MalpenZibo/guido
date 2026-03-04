@@ -81,6 +81,14 @@ container()
     .height(50.0)
 ```
 
+Integers work too:
+
+```rust
+container()
+    .width(100)
+    .height(50)
+```
+
 ### Constraints
 
 ```rust
