@@ -23,7 +23,11 @@ pub use cursor::{CursorIcon, set_cursor};
 pub use effect::{Effect, create_effect};
 pub(crate) use focus::{focused_widget, has_focus, release_focus, request_focus};
 pub(crate) use invalidation::with_signal_tracking;
-pub use maybe_dyn::{IntoMaybeDyn, MaybeDyn};
+#[doc(hidden)]
+pub use maybe_dyn::{
+    ClosureMarker, LossyMarker, MaybeDynMarker, MemoMarker, SignalMarker, ValueMarker,
+};
+pub use maybe_dyn::{IntoMaybeDyn, IntoVal, MaybeDyn};
 pub use memo::{Memo, create_memo};
 // Only on_cleanup is public API - with_owner, dispose_owner, and OwnerId are
 // internal and automatically used by the dynamic children system

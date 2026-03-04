@@ -67,30 +67,6 @@ impl From<PathBuf> for ImageSource {
     }
 }
 
-impl IntoMaybeDyn<ImageSource> for ImageSource {
-    fn into_maybe_dyn(self) -> MaybeDyn<ImageSource> {
-        MaybeDyn::Static(self)
-    }
-}
-
-impl IntoMaybeDyn<ImageSource> for &str {
-    fn into_maybe_dyn(self) -> MaybeDyn<ImageSource> {
-        MaybeDyn::Static(ImageSource::from(self))
-    }
-}
-
-impl IntoMaybeDyn<ImageSource> for String {
-    fn into_maybe_dyn(self) -> MaybeDyn<ImageSource> {
-        MaybeDyn::Static(ImageSource::from(self))
-    }
-}
-
-impl IntoMaybeDyn<ImageSource> for PathBuf {
-    fn into_maybe_dyn(self) -> MaybeDyn<ImageSource> {
-        MaybeDyn::Static(ImageSource::from(self))
-    }
-}
-
 /// How the image content should fit within its bounds.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum ContentFit {
@@ -121,7 +97,7 @@ pub struct Image {
 
 impl Image {
     /// Create a new image widget from a source.
-    pub fn new(source: impl IntoMaybeDyn<ImageSource>) -> Self {
+    pub fn new<M>(source: impl IntoMaybeDyn<ImageSource, M>) -> Self {
         Self {
             source: source.into_maybe_dyn(),
             width: None,
@@ -133,13 +109,13 @@ impl Image {
     }
 
     /// Set a fixed width for the image.
-    pub fn width(mut self, width: impl IntoMaybeDyn<f32>) -> Self {
+    pub fn width<M>(mut self, width: impl IntoMaybeDyn<f32, M>) -> Self {
         self.width = Some(width.into_maybe_dyn());
         self
     }
 
     /// Set a fixed height for the image.
-    pub fn height(mut self, height: impl IntoMaybeDyn<f32>) -> Self {
+    pub fn height<M>(mut self, height: impl IntoMaybeDyn<f32, M>) -> Self {
         self.height = Some(height.into_maybe_dyn());
         self
     }
@@ -312,6 +288,6 @@ impl Widget for Image {
 /// // From ImageSource
 /// image(ImageSource::SvgBytes(svg_data.into()))
 /// ```
-pub fn image(source: impl IntoMaybeDyn<ImageSource>) -> Image {
+pub fn image<M>(source: impl IntoMaybeDyn<ImageSource, M>) -> Image {
     Image::new(source)
 }

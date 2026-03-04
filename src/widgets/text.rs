@@ -24,7 +24,7 @@ pub struct Text {
 }
 
 impl Text {
-    pub fn new(content: impl IntoMaybeDyn<String>) -> Self {
+    pub fn new<M>(content: impl IntoMaybeDyn<String, M>) -> Self {
         let content = content.into_maybe_dyn();
         // Don't read content during widget creation - this would register layout dependencies
         // with the wrong widget (the parent container that's currently being laid out).
@@ -44,12 +44,12 @@ impl Text {
         }
     }
 
-    pub fn color(mut self, color: impl IntoMaybeDyn<Color>) -> Self {
+    pub fn color<M>(mut self, color: impl IntoMaybeDyn<Color, M>) -> Self {
         self.color = color.into_maybe_dyn();
         self
     }
 
-    pub fn font_size(mut self, size: impl IntoMaybeDyn<f32>) -> Self {
+    pub fn font_size<M>(mut self, size: impl IntoMaybeDyn<f32, M>) -> Self {
         self.font_size = size.into_maybe_dyn();
         self
     }
@@ -62,7 +62,7 @@ impl Text {
     /// text("Hello").font_family(FontFamily::Monospace)
     /// text("Hello").font_family(FontFamily::Name("Inter".into()))
     /// ```
-    pub fn font_family(mut self, family: impl IntoMaybeDyn<FontFamily>) -> Self {
+    pub fn font_family<M>(mut self, family: impl IntoMaybeDyn<FontFamily, M>) -> Self {
         self.font_family = family.into_maybe_dyn();
         self
     }
@@ -75,7 +75,7 @@ impl Text {
     /// text("Hello").font_weight(FontWeight::BOLD)
     /// text("Hello").font_weight(FontWeight(600))
     /// ```
-    pub fn font_weight(mut self, weight: impl IntoMaybeDyn<FontWeight>) -> Self {
+    pub fn font_weight<M>(mut self, weight: impl IntoMaybeDyn<FontWeight, M>) -> Self {
         self.font_weight = weight.into_maybe_dyn();
         self
     }
@@ -205,6 +205,6 @@ impl Widget for Text {
 /// text(move || format!("Count: {}", count.get()))  // reactive closure
 /// text(my_signal)  // reactive signal
 /// ```
-pub fn text(content: impl IntoMaybeDyn<String>) -> Text {
+pub fn text<M>(content: impl IntoMaybeDyn<String, M>) -> Text {
     Text::new(content)
 }

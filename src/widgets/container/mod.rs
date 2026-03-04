@@ -285,7 +285,7 @@ impl Container {
     /// - `padding([1.0, 2.0, 3.0, 4.0])` — `[top, right, bottom, left]` (CSS 4-value)
     /// - `padding(Padding::all(8.0).top(20.0))` — builder pattern
     /// - `padding(signal)` or `padding(move || ...)` — reactive
-    pub fn padding(mut self, value: impl IntoMaybeDyn<Padding>) -> Self {
+    pub fn padding<M>(mut self, value: impl IntoMaybeDyn<Padding, M>) -> Self {
         self.padding = value.into_maybe_dyn();
         self
     }
@@ -301,7 +301,7 @@ impl Container {
     /// container().background(Color::rgb(0.2, 0.2, 0.3))
     /// container().background(Color::rgba(0.0, 0.0, 0.0, 0.5))  // 50% transparent black
     /// ```
-    pub fn background(mut self, color: impl IntoMaybeDyn<Color>) -> Self {
+    pub fn background<M>(mut self, color: impl IntoMaybeDyn<Color, M>) -> Self {
         self.background = color.into_maybe_dyn();
         self
     }
@@ -318,13 +318,13 @@ impl Container {
     /// container().corner_radius(8.0)                    // Standard rounded corners
     /// container().corner_radius(12.0).squircle()        // iOS-style smooth corners
     /// ```
-    pub fn corner_radius(mut self, radius: impl IntoMaybeDyn<f32>) -> Self {
+    pub fn corner_radius<M>(mut self, radius: impl IntoMaybeDyn<f32, M>) -> Self {
         self.corner_radius = radius.into_maybe_dyn();
         self
     }
 
     /// Set the corner curvature using CSS K-value system
-    pub fn corner_curvature(mut self, curvature: impl IntoMaybeDyn<f32>) -> Self {
+    pub fn corner_curvature<M>(mut self, curvature: impl IntoMaybeDyn<f32, M>) -> Self {
         self.corner_curvature = curvature.into_maybe_dyn();
         self
     }
@@ -348,10 +348,10 @@ impl Container {
     }
 
     /// Set a border with the given width and color
-    pub fn border(
+    pub fn border<M1, M2>(
         mut self,
-        width: impl IntoMaybeDyn<f32>,
-        color: impl IntoMaybeDyn<Color>,
+        width: impl IntoMaybeDyn<f32, M1>,
+        color: impl IntoMaybeDyn<Color, M2>,
     ) -> Self {
         self.border_width = width.into_maybe_dyn();
         self.border_color = color.into_maybe_dyn();
@@ -377,13 +377,13 @@ impl Container {
     }
 
     /// Set the width of the container.
-    pub fn width(mut self, width: impl IntoMaybeDyn<Length>) -> Self {
+    pub fn width<M>(mut self, width: impl IntoMaybeDyn<Length, M>) -> Self {
         self.width = Some(width.into_maybe_dyn());
         self
     }
 
     /// Set the height of the container.
-    pub fn height(mut self, height: impl IntoMaybeDyn<Length>) -> Self {
+    pub fn height<M>(mut self, height: impl IntoMaybeDyn<Length, M>) -> Self {
         self.height = Some(height.into_maybe_dyn());
         self
     }
@@ -398,7 +398,7 @@ impl Container {
     ///
     /// When `visible` is false, the container takes up no space in layout,
     /// does not paint, and ignores all events.
-    pub fn visible(mut self, visible: impl IntoMaybeDyn<bool>) -> Self {
+    pub fn visible<M>(mut self, visible: impl IntoMaybeDyn<bool, M>) -> Self {
         self.visible = visible.into_maybe_dyn();
         self
     }
@@ -467,19 +467,19 @@ impl Container {
         self
     }
 
-    pub fn elevation(mut self, level: impl IntoMaybeDyn<f32>) -> Self {
+    pub fn elevation<M>(mut self, level: impl IntoMaybeDyn<f32, M>) -> Self {
         self.elevation = level.into_maybe_dyn();
         self
     }
 
     /// Set the transform for this container
-    pub fn transform(mut self, t: impl IntoMaybeDyn<Transform>) -> Self {
+    pub fn transform<M>(mut self, t: impl IntoMaybeDyn<Transform, M>) -> Self {
         self.transform = t.into_maybe_dyn();
         self
     }
 
     /// Rotate this container by the given angle in degrees
-    pub fn rotate(mut self, degrees: impl IntoMaybeDyn<f32>) -> Self {
+    pub fn rotate<M>(mut self, degrees: impl IntoMaybeDyn<f32, M>) -> Self {
         let degrees = degrees.into_maybe_dyn();
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
@@ -492,7 +492,7 @@ impl Container {
     }
 
     /// Scale this container uniformly
-    pub fn scale(mut self, s: impl IntoMaybeDyn<f32>) -> Self {
+    pub fn scale<M>(mut self, s: impl IntoMaybeDyn<f32, M>) -> Self {
         let s = s.into_maybe_dyn();
         let prev_transform =
             std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
@@ -503,7 +503,11 @@ impl Container {
     }
 
     /// Scale this container non-uniformly
-    pub fn scale_xy(mut self, sx: impl IntoMaybeDyn<f32>, sy: impl IntoMaybeDyn<f32>) -> Self {
+    pub fn scale_xy<M1, M2>(
+        mut self,
+        sx: impl IntoMaybeDyn<f32, M1>,
+        sy: impl IntoMaybeDyn<f32, M2>,
+    ) -> Self {
         let sx = sx.into_maybe_dyn();
         let sy = sy.into_maybe_dyn();
         let prev_transform =
@@ -517,7 +521,11 @@ impl Container {
     }
 
     /// Translate (move) this container by the given offset
-    pub fn translate(mut self, x: impl IntoMaybeDyn<f32>, y: impl IntoMaybeDyn<f32>) -> Self {
+    pub fn translate<M1, M2>(
+        mut self,
+        x: impl IntoMaybeDyn<f32, M1>,
+        y: impl IntoMaybeDyn<f32, M2>,
+    ) -> Self {
         let x = x.into_maybe_dyn();
         let y = y.into_maybe_dyn();
         let prev_transform =
@@ -531,7 +539,7 @@ impl Container {
     }
 
     /// Set the transform origin (pivot point) for this container.
-    pub fn transform_origin(mut self, origin: impl IntoMaybeDyn<TransformOrigin>) -> Self {
+    pub fn transform_origin<M>(mut self, origin: impl IntoMaybeDyn<TransformOrigin, M>) -> Self {
         self.transform_origin = origin.into_maybe_dyn();
         self
     }

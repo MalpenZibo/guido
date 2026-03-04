@@ -295,25 +295,25 @@ impl TextInput {
     }
 
     /// Set the text color
-    pub fn text_color(mut self, color: impl IntoMaybeDyn<Color>) -> Self {
+    pub fn text_color<M>(mut self, color: impl IntoMaybeDyn<Color, M>) -> Self {
         self.text_color = color.into_maybe_dyn();
         self
     }
 
     /// Set the cursor color
-    pub fn cursor_color(mut self, color: impl IntoMaybeDyn<Color>) -> Self {
+    pub fn cursor_color<M>(mut self, color: impl IntoMaybeDyn<Color, M>) -> Self {
         self.cursor_color = color.into_maybe_dyn();
         self
     }
 
     /// Set the selection highlight color
-    pub fn selection_color(mut self, color: impl IntoMaybeDyn<Color>) -> Self {
+    pub fn selection_color<M>(mut self, color: impl IntoMaybeDyn<Color, M>) -> Self {
         self.selection_color = color.into_maybe_dyn();
         self
     }
 
     /// Set the font size
-    pub fn font_size(mut self, size: impl IntoMaybeDyn<f32>) -> Self {
+    pub fn font_size<M>(mut self, size: impl IntoMaybeDyn<f32, M>) -> Self {
         self.font_size = size.into_maybe_dyn();
         self
     }
@@ -325,7 +325,7 @@ impl TextInput {
     /// ```ignore
     /// text_input(signal).font_family(FontFamily::Monospace)
     /// ```
-    pub fn font_family(mut self, family: impl IntoMaybeDyn<FontFamily>) -> Self {
+    pub fn font_family<M>(mut self, family: impl IntoMaybeDyn<FontFamily, M>) -> Self {
         self.font_family = family.into_maybe_dyn();
         self
     }
@@ -337,7 +337,7 @@ impl TextInput {
     /// ```ignore
     /// text_input(signal).font_weight(FontWeight::BOLD)
     /// ```
-    pub fn font_weight(mut self, weight: impl IntoMaybeDyn<FontWeight>) -> Self {
+    pub fn font_weight<M>(mut self, weight: impl IntoMaybeDyn<FontWeight, M>) -> Self {
         self.font_weight = weight.into_maybe_dyn();
         self
     }

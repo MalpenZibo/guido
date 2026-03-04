@@ -71,19 +71,19 @@ impl Flex {
     }
 
     /// Set the spacing between children
-    pub fn spacing(mut self, spacing: impl IntoMaybeDyn<f32>) -> Self {
+    pub fn spacing<M>(mut self, spacing: impl IntoMaybeDyn<f32, M>) -> Self {
         self.spacing = spacing.into_maybe_dyn();
         self
     }
 
     /// Set the main axis alignment
-    pub fn main_alignment(mut self, alignment: impl IntoMaybeDyn<MainAlignment>) -> Self {
+    pub fn main_alignment<M>(mut self, alignment: impl IntoMaybeDyn<MainAlignment, M>) -> Self {
         self.main_alignment = alignment.into_maybe_dyn();
         self
     }
 
     /// Set the cross axis alignment
-    pub fn cross_alignment(mut self, alignment: impl IntoMaybeDyn<CrossAlignment>) -> Self {
+    pub fn cross_alignment<M>(mut self, alignment: impl IntoMaybeDyn<CrossAlignment, M>) -> Self {
         self.cross_alignment = alignment.into_maybe_dyn();
         self
     }

@@ -203,7 +203,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             }
         } else {
             quote! {
-                #vis fn #name(mut self, value: impl ::guido::reactive::IntoMaybeDyn<#ty>) -> Self {
+                #vis fn #name<__M>(mut self, value: impl ::guido::reactive::IntoMaybeDyn<#ty, __M>) -> Self {
                     self.#name = value.into_maybe_dyn();
                     self
                 }

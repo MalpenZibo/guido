@@ -6,10 +6,7 @@ pub use flex::{Constraints, Size};
 pub use flex_layout::Flex;
 pub use overlay::Overlay;
 
-use crate::{
-    reactive::{IntoMaybeDyn, MaybeDyn},
-    tree::{Tree, WidgetId},
-};
+use crate::tree::{Tree, WidgetId};
 
 /// Trait for types that can be converted to f32 for use in layout dimensions.
 ///
@@ -187,33 +184,30 @@ impl From<u32> for Length {
     }
 }
 
-impl IntoMaybeDyn<Length> for Length {
-    fn into_maybe_dyn(self) -> MaybeDyn<Length> {
-        MaybeDyn::Static(self)
+// IntoVal<Length> impls for closures returning numeric types
+use crate::reactive::IntoVal;
+
+impl IntoVal<Length> for i32 {
+    fn into_val(self) -> Length {
+        Length::from(self)
     }
 }
 
-impl IntoMaybeDyn<Length> for f32 {
-    fn into_maybe_dyn(self) -> MaybeDyn<Length> {
-        MaybeDyn::Static(Length::from(self))
+impl IntoVal<Length> for u32 {
+    fn into_val(self) -> Length {
+        Length::from(self)
     }
 }
 
-impl IntoMaybeDyn<Length> for i32 {
-    fn into_maybe_dyn(self) -> MaybeDyn<Length> {
-        MaybeDyn::Static(Length::from(self))
+impl IntoVal<Length> for u16 {
+    fn into_val(self) -> Length {
+        Length::from(self)
     }
 }
 
-impl IntoMaybeDyn<Length> for u16 {
-    fn into_maybe_dyn(self) -> MaybeDyn<Length> {
-        MaybeDyn::Static(Length::from(self))
-    }
-}
-
-impl IntoMaybeDyn<Length> for u32 {
-    fn into_maybe_dyn(self) -> MaybeDyn<Length> {
-        MaybeDyn::Static(Length::from(self))
+impl IntoVal<Length> for f32 {
+    fn into_val(self) -> Length {
+        Length::from(self)
     }
 }
 
@@ -256,22 +250,4 @@ pub enum CrossAlignment {
     Center,
     End,
     Stretch,
-}
-
-impl IntoMaybeDyn<Axis> for Axis {
-    fn into_maybe_dyn(self) -> MaybeDyn<Axis> {
-        MaybeDyn::Static(self)
-    }
-}
-
-impl IntoMaybeDyn<MainAlignment> for MainAlignment {
-    fn into_maybe_dyn(self) -> MaybeDyn<MainAlignment> {
-        MaybeDyn::Static(self)
-    }
-}
-
-impl IntoMaybeDyn<CrossAlignment> for CrossAlignment {
-    fn into_maybe_dyn(self) -> MaybeDyn<CrossAlignment> {
-        MaybeDyn::Static(self)
-    }
 }
