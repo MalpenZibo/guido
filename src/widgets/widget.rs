@@ -383,6 +383,30 @@ impl From<[f32; 4]> for Padding {
     }
 }
 
+/// `[vertical, horizontal]` — CSS-style 2-value shorthand (integer).
+impl From<[i32; 2]> for Padding {
+    fn from(v: [i32; 2]) -> Self {
+        Padding {
+            top: v[0] as f32,
+            right: v[1] as f32,
+            bottom: v[0] as f32,
+            left: v[1] as f32,
+        }
+    }
+}
+
+/// `[top, right, bottom, left]` — CSS-style 4-value shorthand (integer).
+impl From<[i32; 4]> for Padding {
+    fn from(v: [i32; 4]) -> Self {
+        Padding {
+            top: v[0] as f32,
+            right: v[1] as f32,
+            bottom: v[2] as f32,
+            left: v[3] as f32,
+        }
+    }
+}
+
 impl Default for Padding {
     fn default() -> Self {
         Self {
