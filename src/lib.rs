@@ -90,13 +90,13 @@ pub fn load_font(data: Vec<u8>) {
     });
 }
 
-/// Take all registered custom font data (for loading into FontSystems).
+/// Get all registered custom font data (for loading into FontSystems).
 ///
-/// This drains the storage so the `Arc` pointers are released once all
-/// FontSystems have been initialized. Subsequent calls return an empty vec.
-pub(crate) fn take_registered_fonts() -> Vec<Arc<Vec<u8>>> {
+/// Returns cloned `Arc` pointers so every FontSystem (measurer, renderer)
+/// receives the same set of fonts.
+pub(crate) fn get_registered_fonts() -> Vec<Arc<Vec<u8>>> {
     FONTS_CONSUMED.with(|f| f.set(true));
-    CUSTOM_FONTS.with(|fonts| std::mem::take(&mut *fonts.borrow_mut()))
+    CUSTOM_FONTS.with(|fonts| fonts.borrow().clone())
 }
 
 /// The reason the application's main loop exited.

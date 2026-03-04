@@ -24,7 +24,7 @@ pub struct TextRenderState {
 impl TextRenderState {
     pub fn new(device: &Device, queue: &Queue, format: wgpu::TextureFormat) -> Self {
         let mut font_system = FontSystem::new();
-        for data in crate::take_registered_fonts() {
+        for data in crate::get_registered_fonts() {
             font_system
                 .db_mut()
                 .load_font_source(glyphon::fontdb::Source::Binary(data));

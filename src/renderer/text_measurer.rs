@@ -23,7 +23,7 @@ pub struct TextMeasurer {
 impl TextMeasurer {
     pub fn new() -> Self {
         let mut font_system = FontSystem::new();
-        for data in crate::take_registered_fonts() {
+        for data in crate::get_registered_fonts() {
             font_system
                 .db_mut()
                 .load_font_source(cosmic_text::fontdb::Source::Binary(data));
