@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{DeriveInput, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro_input};
+use syn::{DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro_input};
 
 /// Attribute macro to create a reusable component from a function.
 ///
@@ -72,7 +72,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             .iter()
             .find(|attr| attr.path().is_ident("prop"));
 
-        let mut default_value: Option<String> = None;
+        let mut default_value: Option<Expr> = None;
         let mut is_callback = false;
         let mut is_children = false;
         let mut is_slot = false;
@@ -80,26 +80,73 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         if let Some(prop_attr) = prop_attr
             && let Meta::List(meta_list) = &prop_attr.meta
         {
-            let tokens_str = meta_list.tokens.to_string();
+            let nested = meta_list
+                .parse_args_with(
+                    syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
+                )
+                .unwrap_or_default();
 
-            if tokens_str.contains("callback") {
-                is_callback = true;
+            for meta in &nested {
+                if meta.path().is_ident("callback") {
+                    is_callback = true;
+                } else if meta.path().is_ident("children") {
+                    is_children = true;
+                    has_children = true;
+                } else if meta.path().is_ident("slot") {
+                    is_slot = true;
+                } else if meta.path().is_ident("default") {
+                    if let Meta::NameValue(nv) = meta {
+                        // If the value is a string literal, parse its contents as an expression.
+                        // This supports `#[prop(default = "Color::RED")]` syntax where the string
+                        // contains arbitrary Rust expressions.
+                        if let Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(lit_str),
+                            ..
+                        }) = &nv.value
+                        {
+                            match lit_str.parse::<Expr>() {
+                                Ok(expr) => default_value = Some(expr),
+                                Err(e) => {
+                                    return syn::Error::new_spanned(
+                                        lit_str,
+                                        format!("failed to parse default value: {e}"),
+                                    )
+                                    .to_compile_error()
+                                    .into();
+                                }
+                            }
+                        } else {
+                            default_value = Some(nv.value.clone());
+                        }
+                    } else {
+                        return syn::Error::new_spanned(meta, "expected `default = <expr>`")
+                            .to_compile_error()
+                            .into();
+                    }
+                } else {
+                    return syn::Error::new_spanned(
+                        meta,
+                        format!(
+                            "unknown prop attribute: `{}`",
+                            meta.path()
+                                .get_ident()
+                                .map_or_else(|| "?".to_string(), |i| i.to_string())
+                        ),
+                    )
+                    .to_compile_error()
+                    .into();
+                }
             }
 
-            if tokens_str.contains("children") {
-                is_children = true;
-                has_children = true;
-            }
-
-            if tokens_str.contains("slot") {
-                is_slot = true;
-            }
-
-            if tokens_str.contains("default")
-                && let Some(start) = tokens_str.find('"')
-                && let Some(end) = tokens_str[start + 1..].find('"')
-            {
-                default_value = Some(tokens_str[start + 1..start + 1 + end].to_string());
+            // Validate: at most one of callback, children, slot
+            let special_count = is_callback as u8 + is_children as u8 + is_slot as u8;
+            if special_count > 1 {
+                return syn::Error::new_spanned(
+                    prop_attr,
+                    "conflicting prop attributes: only one of `callback`, `children`, `slot` is allowed",
+                )
+                .to_compile_error()
+                .into();
             }
         }
 
@@ -167,9 +214,8 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 #name: std::cell::RefCell::new(None)
             }
         } else if let Some(default) = &field.default_value {
-            let default_tokens: proc_macro2::TokenStream = default.parse().unwrap();
             quote! {
-                #name: ::guido::reactive::MaybeDyn::Static(#default_tokens)
+                #name: ::guido::reactive::MaybeDyn::Static(#default)
             }
         } else {
             quote! {
@@ -255,8 +301,14 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     let prop_bindings = prop_fields.iter().map(|field| {
         let name = &field.name;
         if field.is_children {
-            // Children are accessed via take_children(), not a local binding
-            quote! {}
+            quote! {
+                let #name = self.take_children();
+            }
+        } else if field.is_slot {
+            let take_name = format_ident!("take_{}", name);
+            quote! {
+                let #name = self.#take_name();
+            }
         } else {
             quote! {
                 let #name = &self.#name;
@@ -370,7 +422,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
 struct PropField {
     name: syn::Ident,
     ty: Type,
-    default_value: Option<String>,
+    default_value: Option<Expr>,
     is_callback: bool,
     /// For callbacks: parameter types extracted from `fn(T1, T2, ...)` field type.
     /// Empty vec means `Fn()` (unit type or no params).
