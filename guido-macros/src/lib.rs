@@ -316,6 +316,11 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         impl ::guido::widgets::Widget for #struct_name {
+            fn advance_animations(&mut self, tree: &mut ::guido::tree::Tree, id: ::guido::tree::WidgetId) -> bool {
+                self.ensure_built();
+                self.__inner.borrow_mut().as_mut().unwrap().advance_animations(tree, id)
+            }
+
             fn register_children(&mut self, tree: &mut ::guido::tree::Tree, id: ::guido::tree::WidgetId) {
                 self.ensure_built();
                 self.__inner.borrow_mut().as_mut().unwrap().register_children(tree, id)
@@ -324,6 +329,13 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             fn reconcile_children(&mut self, tree: &mut ::guido::tree::Tree, id: ::guido::tree::WidgetId) -> bool {
                 self.ensure_built();
                 self.__inner.borrow_mut().as_mut().unwrap().reconcile_children(tree, id)
+            }
+
+            fn layout_hints(&self) -> ::guido::widgets::LayoutHints {
+                self.ensure_built();
+                self.__inner.borrow().as_ref()
+                    .map(|w| w.layout_hints())
+                    .unwrap_or_default()
             }
 
             fn layout(&mut self, tree: &mut ::guido::tree::Tree, id: ::guido::tree::WidgetId, constraints: ::guido::layout::Constraints) -> ::guido::layout::Size {
