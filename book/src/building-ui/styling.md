@@ -67,6 +67,10 @@ container().elevation(16.0)  // Strong
 
 ```rust
 container().padding(16.0)              // All sides
+container().padding(16)                // Integers work too
+container().padding([8.0, 16.0])       // [vertical, horizontal]
+container().padding([8, 16])           // Integer arrays too
+container().padding([1.0, 2.0, 3.0, 4.0])  // [top, right, bottom, left]
 container().padding_horizontal(20.0)   // Left and right
 container().padding_vertical(10.0)     // Top and bottom
 ```

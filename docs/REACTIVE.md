@@ -191,9 +191,10 @@ pub enum MaybeDyn<T> {
 ```
 
 Properties use `impl IntoMaybeDyn<T>` to accept any of:
-- Static value: `T`
+- Static value: `T` (including integers where `f32`/`Length`/`Padding` is expected)
 - Signal: `Signal<T>`
-- Closure: `impl Fn() -> T`
+- Closure: `impl Fn() -> T` (closures can also return integers for `f32` properties)
+- Memo: `Memo<T>`
 
 ## Background Task Updates
 
