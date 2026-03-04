@@ -129,7 +129,7 @@ pub fn card(
         .corner_radius(8.0)
         .layout(Flex::column().spacing(8.0))
         .child(text(title.clone()).font_size(18.0).color(Color::WHITE))
-        .children_source(self.take_children())
+        .children_source(children)
 }
 ```
 
@@ -157,9 +157,9 @@ pub fn center_box(
     container()
         .layout(Flex::row())
         .children(vec![
-            self.take_left(),
-            self.take_center(),
-            self.take_right(),
+            left,
+            center,
+            right,
         ].into_iter().flatten())
 }
 ```
@@ -173,8 +173,8 @@ center_box()
     .right(text("Right"))
 ```
 
-Each slot accepts any `impl Widget + 'static`. Inside the function body, call `self.take_<name>()`
-to consume the slot — it returns `Option<Box<dyn Widget>>`.
+Each slot accepts any `impl Widget + 'static`. Inside the function body, use the parameter name
+directly — it's an `Option<Box<dyn Widget>>` that was automatically consumed from the slot.
 
 ## Reactive Props
 
@@ -228,7 +228,7 @@ pub fn card(
         .corner_radius(8.0)
         .layout(Flex::column().spacing(8.0))
         .child(text(title.clone()).font_size(18.0).color(Color::WHITE))
-        .children_source(self.take_children())
+        .children_source(children)
 }
 
 fn main() {
