@@ -99,11 +99,13 @@ container()
     .max_height(100.0)
 ```
 
-### At Least
+### At Least / At Most
 
 ```rust
-container().width(at_least(100.0))  // At least 100px
-container().height(at_least(50.0))  // At least 50px
+container().width(at_least(100.0))           // At least 100px
+container().width(at_least(100))             // Integers work too
+container().width(at_most(400))              // At most 400px
+container().width(at_least(100).at_most(400)) // Range
 ```
 
 ## Complete Example

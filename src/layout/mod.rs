@@ -11,6 +11,38 @@ use crate::{
     tree::{Tree, WidgetId},
 };
 
+/// Trait for types that can be converted to f32 for use in layout dimensions.
+///
+/// This extends beyond `Into<f32>` to include `i32` and `u32` which don't have
+/// lossless `From<T>` impls for `f32` but are commonly used for pixel values.
+pub trait IntoF32 {
+    fn into_f32(self) -> f32;
+}
+
+impl IntoF32 for f32 {
+    fn into_f32(self) -> f32 {
+        self
+    }
+}
+
+impl IntoF32 for i32 {
+    fn into_f32(self) -> f32 {
+        self as f32
+    }
+}
+
+impl IntoF32 for u16 {
+    fn into_f32(self) -> f32 {
+        self as f32
+    }
+}
+
+impl IntoF32 for u32 {
+    fn into_f32(self) -> f32 {
+        self as f32
+    }
+}
+
 /// A unified sizing type that can specify exact, min, max, or range constraints.
 ///
 /// # Examples
@@ -43,15 +75,25 @@ pub struct Length {
 }
 
 impl Length {
+    /// Create a length with an exact value.
+    pub fn exact(value: impl IntoF32) -> Self {
+        Length {
+            min: None,
+            max: None,
+            exact: Some(value.into_f32()),
+            fill: false,
+        }
+    }
+
     /// Add a minimum constraint to this length.
-    pub fn at_least(mut self, min: f32) -> Self {
-        self.min = Some(min);
+    pub fn at_least(mut self, min: impl IntoF32) -> Self {
+        self.min = Some(min.into_f32());
         self
     }
 
     /// Add a maximum constraint to this length.
-    pub fn at_most(mut self, max: f32) -> Self {
-        self.max = Some(max);
+    pub fn at_most(mut self, max: impl IntoF32) -> Self {
+        self.max = Some(max.into_f32());
         self
     }
 }
@@ -63,11 +105,12 @@ impl Length {
 /// use guido::prelude::*;
 ///
 /// container().width(at_least(100.0));
+/// container().width(at_least(100));
 /// container().width(at_least(50.0).at_most(400.0));
 /// ```
-pub fn at_least(min: f32) -> Length {
+pub fn at_least(min: impl IntoF32) -> Length {
     Length {
-        min: Some(min),
+        min: Some(min.into_f32()),
         max: None,
         exact: None,
         fill: false,
@@ -81,12 +124,13 @@ pub fn at_least(min: f32) -> Length {
 /// use guido::prelude::*;
 ///
 /// container().width(at_most(400.0));
+/// container().width(at_most(400));
 /// container().width(at_most(400.0).at_least(50.0));
 /// ```
-pub fn at_most(max: f32) -> Length {
+pub fn at_most(max: impl IntoF32) -> Length {
     Length {
         min: None,
-        max: Some(max),
+        max: Some(max.into_f32()),
         exact: None,
         fill: false,
     }
