@@ -257,12 +257,12 @@ fn login_form() -> Container {
 text_input(signal: Signal<String>) -> TextInput
 
 impl TextInput {
-    pub fn text_color(self, color: impl IntoMaybeDyn<Color>) -> Self;
-    pub fn cursor_color(self, color: impl IntoMaybeDyn<Color>) -> Self;
-    pub fn selection_color(self, color: impl IntoMaybeDyn<Color>) -> Self;
-    pub fn font_size(self, size: impl IntoMaybeDyn<f32>) -> Self;
-    pub fn font_family(self, family: impl IntoMaybeDyn<FontFamily>) -> Self;
-    pub fn font_weight(self, weight: impl IntoMaybeDyn<FontWeight>) -> Self;
+    pub fn text_color<M>(self, color: impl IntoSignal<Color, M>) -> Self;
+    pub fn cursor_color<M>(self, color: impl IntoSignal<Color, M>) -> Self;
+    pub fn selection_color<M>(self, color: impl IntoSignal<Color, M>) -> Self;
+    pub fn font_size<M>(self, size: impl IntoSignal<f32, M>) -> Self;
+    pub fn font_family<M>(self, family: impl IntoSignal<FontFamily, M>) -> Self;
+    pub fn font_weight<M>(self, weight: impl IntoSignal<FontWeight, M>) -> Self;
     pub fn bold(self) -> Self;      // Shorthand for FontWeight::BOLD
     pub fn mono(self) -> Self;      // Shorthand for FontFamily::Monospace
     pub fn password(self, enabled: bool) -> Self;

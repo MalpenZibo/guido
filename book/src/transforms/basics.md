@@ -162,8 +162,8 @@ All transform properties accept static values, signals, or closures. Integers al
 ```rust
 impl Container {
     pub fn translate(self, x: f32, y: f32) -> Self;
-    pub fn rotate(self, degrees: impl IntoMaybeDyn<f32>) -> Self;
-    pub fn scale(self, factor: impl IntoMaybeDyn<f32>) -> Self;
+    pub fn rotate<M>(self, degrees: impl IntoSignal<f32, M>) -> Self;
+    pub fn scale<M>(self, factor: impl IntoSignal<f32, M>) -> Self;
     pub fn scale_xy(self, sx: f32, sy: f32) -> Self;
     pub fn transform(self, transform: Transform) -> Self;
 }

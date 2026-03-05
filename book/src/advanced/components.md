@@ -56,12 +56,12 @@ pub fn button(
     label: String,
     #[prop(default = "Color::rgb(0.3, 0.3, 0.4)")]
     background: Color,
-    #[prop(default = "8.0")]
-    padding: f32,
+    #[prop(default = "Padding::all(8.0)")]
+    padding: Padding,
 ) -> impl Widget {
     container()
-        .padding(padding.get())
-        .background(background.clone())
+        .padding(padding)
+        .background(background)
         .child(text(label.clone()).color(Color::WHITE))
 }
 ```
@@ -97,19 +97,19 @@ button()
 
 ## Accessing Props
 
-In the function body, each prop is a reference to `&MaybeDyn<T>`. Use `.get()` to extract the current value, or `.clone()` to pass the whole `MaybeDyn<T>` to another widget method (preserving reactivity):
+In the function body, each prop is a `Signal<T>` (which is `Copy`). Pass the signal directly to widget methods — this preserves reactivity so props update automatically when the caller provides reactive values:
 
 ```rust
 #[component]
 pub fn button(
     label: String,
-    #[prop(default = "8.0")] padding: f32,
+    #[prop(default = "Padding::all(8.0)")] padding: Padding,
     #[prop(default = "Color::rgb(0.3, 0.3, 0.4)")] background: Color,
     #[prop(callback)] on_click: (),
 ) -> impl Widget {
     container()
-        .padding(padding.get())           // Extract value from MaybeDyn<f32>
-        .background(background.clone())   // Pass MaybeDyn<Color> (keeps reactivity)
+        .padding(padding)                  // Pass Signal<Padding> directly (Copy, keeps reactivity)
+        .background(background)            // Pass Signal<Color> directly (Copy, keeps reactivity)
         .on_click_option(on_click.clone()) // Clone optional callback
         .child(text(label.clone()))
 }
@@ -203,12 +203,12 @@ use guido::prelude::*;
 pub fn button(
     label: String,
     #[prop(default = "Color::rgb(0.3, 0.3, 0.4)")] background: Color,
-    #[prop(default = "8.0")] padding: f32,
+    #[prop(default = "Padding::all(8.0)")] padding: Padding,
     #[prop(callback)] on_click: (),
 ) -> impl Widget {
     container()
-        .padding(padding.get())
-        .background(background.clone())
+        .padding(padding)
+        .background(background)
         .corner_radius(6.0)
         .hover_state(|s| s.lighter(0.1))
         .pressed_state(|s| s.ripple())
@@ -224,7 +224,7 @@ pub fn card(
 ) -> impl Widget {
     container()
         .padding(16.0)
-        .background(background.get())
+        .background(background)
         .corner_radius(8.0)
         .layout(Flex::column().spacing(8.0))
         .child(text(title.clone()).font_size(18.0).color(Color::WHITE))

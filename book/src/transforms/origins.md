@@ -151,7 +151,7 @@ fn create_rotating_box(origin: TransformOrigin, label: &'static str) -> Containe
 impl Container {
     pub fn transform_origin(
         self,
-        origin: impl IntoMaybeDyn<TransformOrigin>
+        origin: impl IntoSignal<TransformOrigin, M>
     ) -> Self;
 }
 

@@ -177,11 +177,11 @@ impl Transform {
 ```rust
 impl Container {
     pub fn translate(self, x: f32, y: f32) -> Self;
-    pub fn rotate(self, degrees: impl IntoMaybeDyn<f32>) -> Self;
-    pub fn scale(self, factor: impl IntoMaybeDyn<f32>) -> Self;
+    pub fn rotate<M>(self, degrees: impl IntoSignal<f32, M>) -> Self;
+    pub fn scale<M>(self, factor: impl IntoSignal<f32, M>) -> Self;
     pub fn scale_xy(self, sx: f32, sy: f32) -> Self;
     pub fn transform(self, transform: Transform) -> Self;
-    pub fn transform_origin(self, origin: impl IntoMaybeDyn<TransformOrigin>) -> Self;
+    pub fn transform_origin<M>(self, origin: impl IntoSignal<TransformOrigin, M>) -> Self;
     pub fn animate_transform(self, transition: Transition) -> Self;
 }
 ```

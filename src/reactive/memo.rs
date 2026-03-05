@@ -1,7 +1,5 @@
-use std::rc::Rc;
-
 use super::effect::create_effect;
-use super::maybe_dyn::{IntoMaybeDyn, MaybeDyn, MemoMarker};
+use super::into_signal::{IntoSignal, MemoMarker};
 use super::signal::{Signal, create_signal};
 
 /// Eager computed value that recomputes immediately when dependencies change.
@@ -11,7 +9,7 @@ use super::signal::{Signal, create_signal};
 /// differs (`PartialEq`), which prevents unnecessary repaints/relayouts.
 ///
 /// `Memo<T>` is `Copy` (like `Signal<T>`) and can be used directly as a
-/// widget property via `IntoMaybeDyn`.
+/// widget property via `IntoSignal`.
 ///
 /// # Example
 ///
@@ -78,11 +76,16 @@ impl<T: Clone + PartialEq + Send + 'static> Memo<T> {
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         self.signal.with(f)
     }
+
+    /// Extract the inner signal.
+    pub fn into_signal(self) -> Signal<T> {
+        self.signal
+    }
 }
 
-impl<T: Clone + PartialEq + Send + 'static> IntoMaybeDyn<T, MemoMarker> for Memo<T> {
-    fn into_maybe_dyn(self) -> MaybeDyn<T> {
-        MaybeDyn::Dynamic(Rc::new(move || self.signal.get()))
+impl<T: Clone + PartialEq + Send + 'static> IntoSignal<T, MemoMarker> for Memo<T> {
+    fn into_signal(self) -> Signal<T> {
+        self.signal
     }
 }
 
@@ -115,10 +118,10 @@ mod tests {
     }
 
     #[test]
-    fn test_memo_into_maybe_dyn() {
+    fn test_memo_into_signal() {
         let signal = create_signal(7);
         let memo = create_memo(move || signal.get() + 3);
-        let dyn_val: MaybeDyn<i32> = memo.into_maybe_dyn();
-        assert_eq!(dyn_val.get(), 10);
+        let sig: Signal<i32> = memo.into_signal();
+        assert_eq!(sig.get(), 10);
     }
 }

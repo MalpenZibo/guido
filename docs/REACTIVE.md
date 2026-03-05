@@ -179,22 +179,15 @@ container().children(move || {
 
 The key ensures widget state is preserved when items are reordered.
 
-## MaybeDyn Pattern
+## IntoSignal Pattern
 
-The `MaybeDyn<T>` enum allows properties to be either static or dynamic:
+The `IntoSignal<T>` trait allows properties to accept any of:
 
-```rust
-pub enum MaybeDyn<T> {
-    Static(T),
-    Dynamic(Rc<dyn Fn() -> T>),
-}
-```
+- **Static values**: `container().background(Color::RED)` → calls `create_stored()`
+- **Closures**: `container().background(move || if dark { Color::BLACK } else { Color::WHITE })` → calls `create_derived()`
+- **Signals**: `container().background(my_signal)` → passed through directly
 
-Properties use `impl IntoMaybeDyn<T>` to accept any of:
-- Static value: `T` (including integers where `f32`/`Length`/`Padding` is expected)
-- Signal: `Signal<T>`
-- Closure: `impl Fn() -> T` (closures can also return integers for `f32` properties)
-- Memo: `Memo<T>`
+All produce a `Signal<T>` (which is `Copy`). The distinction between `create_stored` (read-only, Clone only) and `create_signal` (read-write, Clone+PartialEq+Send) only matters when you need to call `.set()` or `.writer()`.
 
 ## Background Task Updates
 

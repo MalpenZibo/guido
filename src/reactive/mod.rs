@@ -3,8 +3,8 @@ pub mod context;
 pub mod cursor;
 pub mod effect;
 pub mod focus;
+pub mod into_signal;
 pub mod invalidation;
-pub mod maybe_dyn;
 pub mod memo;
 pub mod owner;
 pub mod runtime;
@@ -22,12 +22,10 @@ pub(crate) use cursor::take_cursor_change;
 pub use cursor::{CursorIcon, set_cursor};
 pub use effect::{Effect, create_effect};
 pub(crate) use focus::{focused_widget, has_focus, release_focus, request_focus};
-pub(crate) use invalidation::with_signal_tracking;
 #[doc(hidden)]
-pub use maybe_dyn::{
-    ClosureMarker, LossyMarker, MaybeDynMarker, MemoMarker, SignalMarker, ValueMarker,
-};
-pub use maybe_dyn::{IntoMaybeDyn, IntoVal, MaybeDyn};
+pub use into_signal::{ClosureMarker, LossyMarker, MemoMarker, SignalMarker, ValueMarker};
+pub use into_signal::{IntoSignal, IntoVal};
+pub(crate) use invalidation::with_signal_tracking;
 pub use memo::{Memo, create_memo};
 // Only on_cleanup is public API - with_owner, dispose_owner, and OwnerId are
 // internal and automatically used by the dynamic children system
@@ -43,7 +41,9 @@ pub mod __internal {
 }
 pub(crate) use runtime::flush_bg_writes;
 pub use service::{Service, ServiceContext, create_service};
-pub use signal::{Signal, WriteSignal, create_signal};
+pub use signal::{
+    OptionSignalExt, Signal, WriteSignal, create_derived, create_signal, create_stored,
+};
 
 /// Reset all reactive system state.
 ///

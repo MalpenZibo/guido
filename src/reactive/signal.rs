@@ -6,20 +6,31 @@ use super::runtime::{
     SignalId, current_write_epoch, queue_bg_write, record_effect_read, try_with_runtime,
 };
 use super::storage::{
-    create_signal_value, get_signal_value, has_signal, set_signal_value, update_signal_value,
+    allocate_signal_slot, compare_and_set_signal_value, compare_and_update_signal_value,
+    create_signal_value, get_signal_value, has_signal, store_derived_closure, try_call_derived,
     with_signal_value,
 };
 
 /// Common read operations for signal types.
 /// Tracks reads for effect dependencies and widget invalidation.
-fn tracked_get<T: Clone + 'static>(id: SignalId) -> T {
+/// For derived signals, calls the closure (which tracks its own reads) and
+/// does NOT self-track to avoid double-tracking.
+fn tracked_get<T: Clone + 'static>(id: SignalId, derived: bool) -> T {
+    if derived && let Some(val) = try_call_derived::<T>(id) {
+        return val;
+    }
     record_effect_read(id);
     record_signal_read(id);
     get_signal_value(id)
 }
 
 /// Common read-with-borrow operation for signal types.
-fn tracked_with<T: 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -> R {
+/// For derived signals, calls the closure and passes the result to `f`.
+fn tracked_with<T: Clone + 'static, R>(id: SignalId, derived: bool, f: impl FnOnce(&T) -> R) -> R {
+    if derived {
+        let val = try_call_derived::<T>(id).unwrap();
+        return f(&val);
+    }
     record_effect_read(id);
     record_signal_read(id);
     with_signal_value(id, f)
@@ -27,9 +38,7 @@ fn tracked_with<T: 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -> R {
 
 /// Perform a signal write with change detection and notification (main thread only).
 fn write_and_notify<T: Clone + PartialEq + 'static>(id: SignalId, value: T) {
-    let changed = with_signal_value(id, |old: &T| *old != value);
-    if changed {
-        set_signal_value(id, value);
+    if compare_and_set_signal_value(id, value) {
         notify_signal_change(id);
         try_with_runtime(|rt| rt.notify_write(id));
     }
@@ -37,10 +46,7 @@ fn write_and_notify<T: Clone + PartialEq + 'static>(id: SignalId, value: T) {
 
 /// Perform a signal update with change detection and notification (main thread only).
 fn update_and_notify<T: Clone + PartialEq + 'static>(id: SignalId, f: impl FnOnce(&mut T)) {
-    let old = get_signal_value::<T>(id);
-    update_signal_value(id, f);
-    let changed = with_signal_value(id, |new: &T| old != *new);
-    if changed {
+    if compare_and_update_signal_value(id, f) {
         notify_signal_change(id);
         try_with_runtime(|rt| rt.notify_write(id));
     }
@@ -60,6 +66,9 @@ fn update_and_notify<T: Clone + PartialEq + 'static>(id: SignalId, f: impl FnOnc
 /// to get a [`WriteSignal<T>`] which is `Send`.
 pub struct Signal<T> {
     id: SignalId,
+    /// True for derived signals (closure-backed). Stored signals skip
+    /// the HashMap lookup in `try_call_derived()` when this is false.
+    derived: bool,
     _marker: PhantomData<T>,
     _not_send: PhantomData<*const ()>, // makes Signal !Send !Sync
 }
@@ -85,22 +94,36 @@ impl<T> Eq for Signal<T> {}
 impl<T: Clone + 'static> Signal<T> {
     /// Get the current value (tracks as dependency for effects)
     pub fn get(&self) -> T {
-        tracked_get(self.id)
+        tracked_get(self.id, self.derived)
     }
 
     /// Get the current value without tracking
     pub fn get_untracked(&self) -> T {
+        if self.derived
+            && let Some(val) = try_call_derived::<T>(self.id)
+        {
+            return val;
+        }
         get_signal_value(self.id)
     }
 
     /// Borrow the value for reading
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        tracked_with(self.id, f)
+        tracked_with(self.id, self.derived, f)
     }
 
     /// Borrow the value without tracking
     pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        if self.derived {
+            let val = try_call_derived::<T>(self.id).unwrap();
+            return f(&val);
+        }
         with_signal_value(self.id, f)
+    }
+
+    /// Check if this signal is derived (backed by a closure, not a stored value).
+    pub fn is_derived(&self) -> bool {
+        self.derived
     }
 }
 
@@ -215,8 +238,105 @@ pub fn create_signal<T: Clone + PartialEq + Send + 'static>(value: T) -> Signal<
     register_signal(id);
     Signal {
         id,
+        derived: false,
         _marker: PhantomData,
         _not_send: PhantomData,
+    }
+}
+
+/// Create a read-only signal from a static value.
+///
+/// Unlike `create_signal`, this only requires `Clone` (no `PartialEq` or `Send`).
+/// The returned `Signal<T>` is `Copy` and can be freely passed into closures.
+/// It cannot be written to — there is no `set()` or `writer()`.
+///
+/// # Example
+///
+/// ```ignore
+/// let color = create_stored(Color::RED);
+/// container().background(color) // Copy, no clone needed
+/// ```
+pub fn create_stored<T: Clone + 'static>(value: T) -> Signal<T> {
+    let id = create_signal_value(value);
+    try_with_runtime(|rt| rt.register_signal(id));
+    register_signal(id);
+    Signal {
+        id,
+        derived: false,
+        _marker: PhantomData,
+        _not_send: PhantomData,
+    }
+}
+
+/// Create a derived signal from a closure.
+///
+/// The closure is called on each `.get()` — there is no caching. The closure's
+/// internal signal reads register dependencies directly with the calling
+/// widget/effect, so there is no double-tracking.
+///
+/// Only requires `T: Clone` (no `PartialEq` or `Send`).
+///
+/// # Example
+///
+/// ```ignore
+/// let count = create_signal(0);
+/// let label = create_derived(move || format!("Count: {}", count.get()));
+/// text(label) // Copy, reactive
+/// ```
+pub fn create_derived<T: Clone + 'static>(f: impl Fn() -> T + 'static) -> Signal<T> {
+    let id = allocate_signal_slot();
+    store_derived_closure::<T>(id, f);
+    try_with_runtime(|rt| rt.register_signal(id));
+    register_signal(id);
+    Signal {
+        id,
+        derived: true,
+        _marker: PhantomData,
+        _not_send: PhantomData,
+    }
+}
+
+/// Extension trait for `Option<Signal<T>>` to support lazy-default widget properties.
+///
+/// Widget properties stored as `Option<Signal<T>>` start as `None` (zero allocation).
+/// A signal is only created when the user sets the property via a builder method.
+/// Read sites use `get_or` / `get_or_else` to provide a default without allocating.
+pub trait OptionSignalExt<T: Clone + 'static> {
+    /// Get the signal's value, or return `default` if no signal exists.
+    fn get_or(&self, default: T) -> T;
+
+    /// Get the signal's value, or compute a default if no signal exists.
+    fn get_or_else(&self, f: impl FnOnce() -> T) -> T;
+
+    /// Return the existing signal, or create a stored signal from `default`
+    /// and write it back into `self` for future use.
+    fn signal_or(&mut self, default: T) -> Signal<T>;
+}
+
+impl<T: Clone + 'static> OptionSignalExt<T> for Option<Signal<T>> {
+    fn get_or(&self, default: T) -> T {
+        match self {
+            Some(s) => s.get(),
+            None => default,
+        }
+    }
+
+    fn get_or_else(&self, f: impl FnOnce() -> T) -> T {
+        match self {
+            Some(s) => s.get(),
+            None => f(),
+        }
+    }
+
+    fn signal_or(&mut self, default: T) -> Signal<T> {
+        match self {
+            Some(s) => *s,
+            None => {
+                let s = create_stored(default);
+                *self = Some(s);
+                s
+            }
+        }
     }
 }
 

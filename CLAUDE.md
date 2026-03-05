@@ -80,7 +80,7 @@ cargo test
 
 **`reactive/`** - Single-threaded reactive system inspired by SolidJS
 - `Signal<T>`: Main-thread reactive values with automatic dependency tracking. `!Send` — use `.writer()` for background thread updates
-- `MaybeDyn<T>`: Enum allowing widget properties to accept either static values or reactive signals/closures (uses `Rc<dyn Fn() -> T>`). `IntoMaybeDyn<T, M>` uses marker-type disambiguation for blanket impls — integers are accepted where `f32`/`Length`/`Padding` is expected
+- `Signal<T>`: Copy type that wraps reactive or static values. Created via `create_signal` (read-write, requires Clone+PartialEq+Send), `create_stored` (read-only, requires Clone), or `create_derived` (closure-backed). `IntoSignal<T, M>` uses marker-type disambiguation for blanket impls — integers are accepted where `f32`/`Length`/`Padding` is expected
 - `Memo<T>`: Eager computed values that recompute when dependencies change, only notify on actual changes (`PartialEq`)
 - `Effect`: Side effects that re-run when tracked signals change
 - `Owner`: Ownership system for automatic resource cleanup (signals, effects, custom callbacks)
@@ -93,7 +93,7 @@ cargo test
 - `Row` / `Column`: Flexbox-style layouts with alignment and spacing
 - `Text`: Text rendering with reactive content and styling
 - `AnyWidget`: Type alias for `Box<dyn Widget>` with `Widget::into_any()` for type erasure
-- All widget properties can be static values or reactive (via `IntoMaybeDyn` trait)
+- All widget properties can be static values or reactive (via `IntoSignal` trait)
 - `#[component]` macro: Creates reusable widgets from functions with reactive props, callbacks, children, and slots
 
 **`renderer/`** - GPU rendering using wgpu

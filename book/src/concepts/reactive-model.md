@@ -100,21 +100,15 @@ text(move || format!("Count: {}", count.get()))
 
 The text automatically updates when `count` changes.
 
-## The MaybeDyn Pattern
+## The IntoSignal Pattern
 
-Under the hood, Guido uses `MaybeDyn<T>` to accept static or dynamic values:
+Under the hood, Guido uses `Signal<T>` to represent all reactive values. The `IntoSignal<T>` trait accepts:
 
-```rust
-pub enum MaybeDyn<T> {
-    Static(T),
-    Dynamic(Rc<dyn Fn() -> T>),
-}
-```
+- **Static values** → creates a read-only stored signal via `create_stored()`
+- **Closures** → creates a derived signal via `create_derived()`
+- **Existing `Signal<T>`** → passed through directly (Signal is Copy)
 
-You don't need to use this directly - the `impl IntoMaybeDyn<T>` trait accepts:
-- Static values: `T` (including integers where `f32` is expected, e.g., `.width(100)`)
-- Signals: `Signal<T>`
-- Closures: `impl Fn() -> T`
+You don't need to create signals manually for widget properties — just pass values, closures, or signals directly.
 
 ## Per-Field Signals
 

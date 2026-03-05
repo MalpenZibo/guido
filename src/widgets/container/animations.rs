@@ -22,7 +22,7 @@ impl<T> AdvanceResult<T> {
 pub struct AnimationState<T: Animatable> {
     /// Current interpolated value
     current: T,
-    /// Target value from MaybeDyn
+    /// Target value from Signal
     target: T,
     /// Value when animation started
     start: T,

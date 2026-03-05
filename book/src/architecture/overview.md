@@ -12,7 +12,7 @@ Single-threaded reactive primitives inspired by SolidJS.
 - `Signal<T>` - Reactive values with automatic dependency tracking
 - `Memo<T>` - Eager derived values that only notify on actual changes
 - `Effect` - Side effects that re-run on changes
-- `MaybeDyn<T>` - Enum for static or dynamic property values
+- `Signal<T>` - Copy wrapper for reactive values
 
 **How It Works:**
 
