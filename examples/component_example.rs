@@ -5,11 +5,11 @@ use guido::prelude::*;
 pub fn button(
     label: String,
     #[prop(default = "Color::rgb(0.3, 0.3, 0.4)")] background: Color,
-    #[prop(default = "8.0")] padding: f32,
+    #[prop(default = "Padding::all(8.0)")] padding: Padding,
     #[prop(callback)] on_click: (),
 ) -> impl Widget {
     container()
-        .padding(padding.get())
+        .padding(padding)
         .background(background)
         .corner_radius(6.0)
         .hover_state(|s| s.lighter(0.1))
@@ -27,7 +27,7 @@ pub fn card(
 ) -> impl Widget {
     container()
         .padding(16.0)
-        .background(background.get())
+        .background(background)
         .corner_radius(8.0)
         .layout(Flex::column().spacing(8.0))
         .child(text(title).font_size(18.0).color(Color::WHITE))
