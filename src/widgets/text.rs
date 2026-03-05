@@ -1,7 +1,7 @@
 use crate::default_font_family;
 use crate::jobs::JobType;
 use crate::layout::{Constraints, Size};
-use crate::reactive::{IntoSignal, Signal, create_stored, with_signal_tracking};
+use crate::reactive::{IntoSignal, OptionSignalExt, Signal, with_signal_tracking};
 use crate::renderer::{PaintContext, measure_text_styled};
 use crate::tree::{Tree, WidgetId};
 
@@ -10,10 +10,10 @@ use super::widget::{Color, EventResponse, Rect, Widget};
 
 pub struct Text {
     content: Signal<String>,
-    color: Signal<Color>,
-    font_size: Signal<f32>,
-    font_family: Signal<FontFamily>,
-    font_weight: Signal<FontWeight>,
+    color: Option<Signal<Color>>,
+    font_size: Option<Signal<f32>>,
+    font_family: Option<Signal<FontFamily>>,
+    font_weight: Option<Signal<FontWeight>>,
     /// If true, text won't wrap and will be clipped by parent container
     nowrap: bool,
     /// Cached values for painting (avoid re-reading signals)
@@ -32,10 +32,10 @@ impl Text {
         let default_family = default_font_family();
         Self {
             content,
-            color: create_stored(Color::WHITE),
-            font_size: create_stored(14.0),
-            font_family: create_stored(default_family.clone()),
-            font_weight: create_stored(FontWeight::NORMAL),
+            color: None,
+            font_size: None,
+            font_family: None,
+            font_weight: None,
             nowrap: false,
             cached_text: String::new(), // Will be set during first layout
             cached_font_size: 14.0,
@@ -45,12 +45,12 @@ impl Text {
     }
 
     pub fn color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.color = color.into_signal();
+        self.color = Some(color.into_signal());
         self
     }
 
     pub fn font_size<M>(mut self, size: impl IntoSignal<f32, M>) -> Self {
-        self.font_size = size.into_signal();
+        self.font_size = Some(size.into_signal());
         self
     }
 
@@ -63,7 +63,7 @@ impl Text {
     /// text("Hello").font_family(FontFamily::Name("Inter".into()))
     /// ```
     pub fn font_family<M>(mut self, family: impl IntoSignal<FontFamily, M>) -> Self {
-        self.font_family = family.into_signal();
+        self.font_family = Some(family.into_signal());
         self
     }
 
@@ -76,7 +76,7 @@ impl Text {
     /// text("Hello").font_weight(FontWeight(600))
     /// ```
     pub fn font_weight<M>(mut self, weight: impl IntoSignal<FontWeight, M>) -> Self {
-        self.font_weight = weight.into_signal();
+        self.font_weight = Some(weight.into_signal());
         self
     }
 
@@ -115,9 +115,9 @@ impl Text {
     fn refresh(&mut self, id: WidgetId) {
         with_signal_tracking(id, JobType::Layout, || {
             self.cached_text = self.content.get();
-            self.cached_font_size = self.font_size.get();
-            self.cached_font_family = self.font_family.get();
-            self.cached_font_weight = self.font_weight.get();
+            self.cached_font_size = self.font_size.get_or(14.0);
+            self.cached_font_family = self.font_family.get_or_else(default_font_family);
+            self.cached_font_weight = self.font_weight.get_or(FontWeight::NORMAL);
         });
     }
 }
@@ -176,7 +176,7 @@ impl Widget for Text {
         let size = tree.cached_size(id).unwrap_or_default();
         let local_bounds = Rect::new(0.0, 0.0, size.width, size.height);
         // Read color with tracking so signal changes trigger repaint
-        let color = with_signal_tracking(id, JobType::Paint, || self.color.get());
+        let color = with_signal_tracking(id, JobType::Paint, || self.color.get_or(Color::WHITE));
         ctx.draw_text_styled(
             &self.cached_text,
             local_bounds,
