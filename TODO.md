@@ -7,7 +7,7 @@ The primary scope is to create wayland widget using the layer shell protocol.
 - **Text**: Display text with reactive content and styling ✓
 - **Container**: Unified widget with pluggable layout system ✓
   - Supports padding, background, gradients, borders, corner radius, shadows ✓
-  - Reactive properties via MaybeDyn ✓
+  - Reactive properties via Signal ✓
   - Event handlers (click, hover, scroll) ✓
   - Ripple effects ✓
   - **Layout Trait**: Pluggable layout system with Flex (row/column) ✓

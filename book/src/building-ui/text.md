@@ -233,13 +233,13 @@ fn article_card(title: &str, author: &str, preview: &str) -> Container {
 All properties accept static values, signals, or closures.
 
 ```rust
-text(content: impl IntoMaybeDyn<String>) -> Text
+text(content: impl IntoSignal<String, M>) -> Text
 
 impl Text {
-    pub fn font_size(self, size: impl IntoMaybeDyn<f32>) -> Self;  // integers work: .font_size(16)
-    pub fn color(self, color: impl IntoMaybeDyn<Color>) -> Self;
-    pub fn font_family(self, family: impl IntoMaybeDyn<FontFamily>) -> Self;
-    pub fn font_weight(self, weight: impl IntoMaybeDyn<FontWeight>) -> Self;
+    pub fn font_size<M>(self, size: impl IntoSignal<f32, M>) -> Self;  // integers work: .font_size(16)
+    pub fn color<M>(self, color: impl IntoSignal<Color, M>) -> Self;
+    pub fn font_family<M>(self, family: impl IntoSignal<FontFamily, M>) -> Self;
+    pub fn font_weight<M>(self, weight: impl IntoSignal<FontWeight, M>) -> Self;
     pub fn bold(self) -> Self;      // Shorthand for FontWeight::BOLD
     pub fn mono(self) -> Self;      // Shorthand for FontFamily::Monospace
     pub fn nowrap(self) -> Self;

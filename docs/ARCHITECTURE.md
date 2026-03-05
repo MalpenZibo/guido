@@ -34,7 +34,7 @@ Single-threaded reactive primitives inspired by SolidJS and Floem.
 - `Signal<T>` - Reactive values with automatic dependency tracking. Signals are `Copy` (backed by thread-local storage), so no cloning needed. `!Send` — use `.writer()` for background thread updates.
 - `Memo<T>` - Eager derived values that recompute when dependencies change, only notify on actual changes (`PartialEq`)
 - `Effect` - Side effects that re-run when tracked signals change
-- `MaybeDyn<T>` - Enum allowing properties to be static or reactive
+- `Signal<T>` - Copy wrapper for reactive values (static, derived, or read-write)
 
 **How it works:**
 ```rust
@@ -393,7 +393,7 @@ The feature has zero overhead when disabled (code is completely compiled out).
 ### New Widget Property
 1. Add field to widget struct
 2. Add builder method returning `Self`
-3. If reactive, use `MaybeDyn<T>` type
+3. If reactive, use `Signal<T>` type (via `IntoSignal<T>` in builder methods)
 4. Handle in `paint()` method
 
 ### New State Layer Override

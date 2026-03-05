@@ -97,7 +97,7 @@ button()
 
 ## Accessing Props
 
-In the function body, each prop is a reference to `&MaybeDyn<T>`. Use `.get()` to extract the current value, or `.clone()` to pass the whole `MaybeDyn<T>` to another widget method (preserving reactivity):
+In the function body, each prop is a `Signal<T>` (which is `Copy`). Use `.get()` to extract the current value, or pass the signal directly to another widget method (preserving reactivity):
 
 ```rust
 #[component]
@@ -108,8 +108,8 @@ pub fn button(
     #[prop(callback)] on_click: (),
 ) -> impl Widget {
     container()
-        .padding(padding.get())           // Extract value from MaybeDyn<f32>
-        .background(background.clone())   // Pass MaybeDyn<Color> (keeps reactivity)
+        .padding(padding.get())           // Extract value from Signal<f32>
+        .background(background)           // Pass Signal<Color> directly (Copy, keeps reactivity)
         .on_click_option(on_click.clone()) // Clone optional callback
         .child(text(label.clone()))
 }
