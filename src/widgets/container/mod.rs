@@ -11,7 +11,7 @@ use std::borrow::Cow;
 use std::rc::Rc;
 
 use crate::advance_anim;
-use crate::animation::Transition;
+use crate::animation::TransitionConfig;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
@@ -538,7 +538,7 @@ impl Container {
     }
 
     /// Enable animation for width changes
-    pub fn animate_width(mut self, transition: Transition) -> Self {
+    pub fn animate_width(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self
             .width
             .as_ref()
@@ -552,7 +552,7 @@ impl Container {
     }
 
     /// Enable animation for height changes
-    pub fn animate_height(mut self, transition: Transition) -> Self {
+    pub fn animate_height(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self
             .height
             .as_ref()
@@ -566,42 +566,42 @@ impl Container {
     }
 
     /// Enable animation for background color changes
-    pub fn animate_background(mut self, transition: Transition) -> Self {
+    pub fn animate_background(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.background.get_or(Color::TRANSPARENT);
         self.background_anim = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for corner radius changes
-    pub fn animate_corner_radius(mut self, transition: Transition) -> Self {
+    pub fn animate_corner_radius(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.corner_radius.get_or(0.0);
         self.corner_radius_anim = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for padding changes
-    pub fn animate_padding(mut self, transition: Transition) -> Self {
+    pub fn animate_padding(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.padding.get_or(Padding::default());
         self.padding_anim = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for border width changes
-    pub fn animate_border_width(mut self, transition: Transition) -> Self {
+    pub fn animate_border_width(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.border_width.get_or(0.0);
         self.border_width_anim = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for border color changes
-    pub fn animate_border_color(mut self, transition: Transition) -> Self {
+    pub fn animate_border_color(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.border_color.get_or(Color::TRANSPARENT);
         self.border_color_anim = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for transform changes
-    pub fn animate_transform(mut self, transition: Transition) -> Self {
+    pub fn animate_transform(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.transform.get_or(Transform::IDENTITY);
         self.transform_anim = Some(AnimationState::new(initial, transition));
         self

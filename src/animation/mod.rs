@@ -53,11 +53,41 @@ impl Transition {
         self.timing = timing;
         self
     }
+
+    /// Use a different transition when the animated value decreases (e.g., closing/shrinking).
+    ///
+    /// For dimensional values like width/height, "reverse" means the value is getting smaller.
+    /// This enables patterns like bouncy spring for open + smooth ease-out for close.
+    pub fn reverse(self, reverse: Transition) -> TransitionConfig {
+        TransitionConfig {
+            forward: self,
+            reverse: Some(reverse),
+        }
+    }
 }
 
 impl Default for Transition {
     /// Default transition uses spring physics with pleasant overshoot
     fn default() -> Self {
         Self::spring(SpringConfig::DEFAULT)
+    }
+}
+
+/// Holds a forward transition and an optional reverse transition.
+///
+/// When both are set, the forward transition is used when the value increases
+/// and the reverse transition when it decreases.
+#[derive(Clone, Debug)]
+pub struct TransitionConfig {
+    pub forward: Transition,
+    pub reverse: Option<Transition>,
+}
+
+impl From<Transition> for TransitionConfig {
+    fn from(t: Transition) -> Self {
+        TransitionConfig {
+            forward: t,
+            reverse: None,
+        }
     }
 }
