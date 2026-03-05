@@ -128,7 +128,7 @@ pub struct ShapeInstance {
 
     // === Clip Region ===
     /// Clip rect in physical pixels [x, y, width, height]
-    /// If width or height <= 0, no clipping is applied
+    /// Negative width/height = no clipping. Zero width/height = clip everything.
     pub clip_rect: [f32; 4],
     /// Clip corner radius in physical pixels
     pub clip_corner_radius: f32,
@@ -168,7 +168,7 @@ impl Default for ShapeInstance {
             shadow_color: [0.0, 0.0, 0.0, 0.0],
             transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0], // identity
             _pad2: [0.0, 0.0],
-            clip_rect: [0.0, 0.0, 0.0, 0.0], // No clipping (width/height = 0)
+            clip_rect: [0.0, 0.0, -1.0, -1.0], // No clipping (negative width/height)
             clip_corner_radius: 0.0,
             clip_curvature: 1.0,
             clip_is_local: 0.0,

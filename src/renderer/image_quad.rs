@@ -564,8 +564,8 @@ impl ImageQuadRenderer {
                 [clip.corner_radius * scale_factor, clip.curvature, 0.0, 0.0],
             )
         } else {
-            // No clipping (width/height = 0 disables clipping in shader)
-            ([0.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0])
+            // No clipping (negative width/height disables clipping in shader)
+            ([0.0, 0.0, -1.0, -1.0], [0.0, 1.0, 0.0, 0.0])
         };
 
         // Transform corners from local to screen coordinates
