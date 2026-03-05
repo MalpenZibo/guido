@@ -296,6 +296,50 @@ pub fn create_derived<T: Clone + 'static>(f: impl Fn() -> T + 'static) -> Signal
     }
 }
 
+/// Extension trait for `Option<Signal<T>>` to support lazy-default widget properties.
+///
+/// Widget properties stored as `Option<Signal<T>>` start as `None` (zero allocation).
+/// A signal is only created when the user sets the property via a builder method.
+/// Read sites use `get_or` / `get_or_else` to provide a default without allocating.
+pub trait OptionSignalExt<T: Clone + 'static> {
+    /// Get the signal's value, or return `default` if no signal exists.
+    fn get_or(&self, default: T) -> T;
+
+    /// Get the signal's value, or compute a default if no signal exists.
+    fn get_or_else(&self, f: impl FnOnce() -> T) -> T;
+
+    /// Return the existing signal, or create a stored signal from `default`
+    /// and write it back into `self` for future use.
+    fn signal_or(&mut self, default: T) -> Signal<T>;
+}
+
+impl<T: Clone + 'static> OptionSignalExt<T> for Option<Signal<T>> {
+    fn get_or(&self, default: T) -> T {
+        match self {
+            Some(s) => s.get(),
+            None => default,
+        }
+    }
+
+    fn get_or_else(&self, f: impl FnOnce() -> T) -> T {
+        match self {
+            Some(s) => s.get(),
+            None => f(),
+        }
+    }
+
+    fn signal_or(&mut self, default: T) -> Signal<T> {
+        match self {
+            Some(s) => *s,
+            None => {
+                let s = create_stored(default);
+                *self = Some(s);
+                s
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
