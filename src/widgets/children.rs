@@ -231,7 +231,6 @@ impl ChildrenSource {
         });
         self.initial_reconcile_done = true;
 
-        // Return true if children count changed
         prev_count != self.merged.len()
     }
 

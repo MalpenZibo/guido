@@ -15,7 +15,7 @@ use crate::default_font_family;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
-    CursorIcon, IntoMaybeDyn, MaybeDyn, Signal, clipboard_copy, clipboard_paste, has_focus,
+    CursorIcon, IntoSignal, Signal, clipboard_copy, clipboard_paste, create_stored, has_focus,
     release_focus, request_focus, set_cursor, with_signal_tracking,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled, measure_text_styled};
@@ -207,12 +207,12 @@ pub struct TextInput {
     measurements_dirty: bool,
 
     // Styling
-    text_color: MaybeDyn<Color>,
-    cursor_color: MaybeDyn<Color>,
-    selection_color: MaybeDyn<Color>,
-    font_size: MaybeDyn<f32>,
-    font_family: MaybeDyn<FontFamily>,
-    font_weight: MaybeDyn<FontWeight>,
+    text_color: Signal<Color>,
+    cursor_color: Signal<Color>,
+    selection_color: Signal<Color>,
+    font_size: Signal<f32>,
+    font_family: Signal<FontFamily>,
+    font_weight: Signal<FontWeight>,
     cached_font_size: f32,
     cached_font_family: FontFamily,
     cached_font_weight: FontWeight,
@@ -268,12 +268,12 @@ impl TextInput {
             cached_text_width: 0.0,
             cached_glyph_positions: Vec::new(),
             measurements_dirty: true,
-            text_color: MaybeDyn::Static(Color::WHITE),
-            cursor_color: MaybeDyn::Static(Color::rgb(0.4, 0.8, 1.0)),
-            selection_color: MaybeDyn::Static(Color::rgba(0.4, 0.6, 1.0, 0.4)),
-            font_size: MaybeDyn::Static(14.0),
-            font_family: MaybeDyn::Static(default_family.clone()),
-            font_weight: MaybeDyn::Static(FontWeight::NORMAL),
+            text_color: create_stored(Color::WHITE),
+            cursor_color: create_stored(Color::rgb(0.4, 0.8, 1.0)),
+            selection_color: create_stored(Color::rgba(0.4, 0.6, 1.0, 0.4)),
+            font_size: create_stored(14.0),
+            font_family: create_stored(default_family.clone()),
+            font_weight: create_stored(FontWeight::NORMAL),
             cached_font_size: 14.0,
             cached_font_family: default_family,
             cached_font_weight: FontWeight::NORMAL,
@@ -295,26 +295,26 @@ impl TextInput {
     }
 
     /// Set the text color
-    pub fn text_color<M>(mut self, color: impl IntoMaybeDyn<Color, M>) -> Self {
-        self.text_color = color.into_maybe_dyn();
+    pub fn text_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.text_color = color.into_signal();
         self
     }
 
     /// Set the cursor color
-    pub fn cursor_color<M>(mut self, color: impl IntoMaybeDyn<Color, M>) -> Self {
-        self.cursor_color = color.into_maybe_dyn();
+    pub fn cursor_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.cursor_color = color.into_signal();
         self
     }
 
     /// Set the selection highlight color
-    pub fn selection_color<M>(mut self, color: impl IntoMaybeDyn<Color, M>) -> Self {
-        self.selection_color = color.into_maybe_dyn();
+    pub fn selection_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.selection_color = color.into_signal();
         self
     }
 
     /// Set the font size
-    pub fn font_size<M>(mut self, size: impl IntoMaybeDyn<f32, M>) -> Self {
-        self.font_size = size.into_maybe_dyn();
+    pub fn font_size<M>(mut self, size: impl IntoSignal<f32, M>) -> Self {
+        self.font_size = size.into_signal();
         self
     }
 
@@ -325,8 +325,8 @@ impl TextInput {
     /// ```ignore
     /// text_input(signal).font_family(FontFamily::Monospace)
     /// ```
-    pub fn font_family<M>(mut self, family: impl IntoMaybeDyn<FontFamily, M>) -> Self {
-        self.font_family = family.into_maybe_dyn();
+    pub fn font_family<M>(mut self, family: impl IntoSignal<FontFamily, M>) -> Self {
+        self.font_family = family.into_signal();
         self
     }
 
@@ -337,8 +337,8 @@ impl TextInput {
     /// ```ignore
     /// text_input(signal).font_weight(FontWeight::BOLD)
     /// ```
-    pub fn font_weight<M>(mut self, weight: impl IntoMaybeDyn<FontWeight, M>) -> Self {
-        self.font_weight = weight.into_maybe_dyn();
+    pub fn font_weight<M>(mut self, weight: impl IntoSignal<FontWeight, M>) -> Self {
+        self.font_weight = weight.into_signal();
         self
     }
 

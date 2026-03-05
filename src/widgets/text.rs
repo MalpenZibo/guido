@@ -1,7 +1,7 @@
 use crate::default_font_family;
 use crate::jobs::JobType;
 use crate::layout::{Constraints, Size};
-use crate::reactive::{IntoMaybeDyn, MaybeDyn, with_signal_tracking};
+use crate::reactive::{IntoSignal, Signal, create_stored, with_signal_tracking};
 use crate::renderer::{PaintContext, measure_text_styled};
 use crate::tree::{Tree, WidgetId};
 
@@ -9,11 +9,11 @@ use super::font::{FontFamily, FontWeight};
 use super::widget::{Color, EventResponse, Rect, Widget};
 
 pub struct Text {
-    content: MaybeDyn<String>,
-    color: MaybeDyn<Color>,
-    font_size: MaybeDyn<f32>,
-    font_family: MaybeDyn<FontFamily>,
-    font_weight: MaybeDyn<FontWeight>,
+    content: Signal<String>,
+    color: Signal<Color>,
+    font_size: Signal<f32>,
+    font_family: Signal<FontFamily>,
+    font_weight: Signal<FontWeight>,
     /// If true, text won't wrap and will be clipped by parent container
     nowrap: bool,
     /// Cached values for painting (avoid re-reading signals)
@@ -24,18 +24,18 @@ pub struct Text {
 }
 
 impl Text {
-    pub fn new<M>(content: impl IntoMaybeDyn<String, M>) -> Self {
-        let content = content.into_maybe_dyn();
+    pub fn new<M>(content: impl IntoSignal<String, M>) -> Self {
+        let content = content.into_signal();
         // Don't read content during widget creation - this would register layout dependencies
         // with the wrong widget (the parent container that's currently being laid out).
         // The cached_text will be populated during the first layout via refresh().
         let default_family = default_font_family();
         Self {
             content,
-            color: MaybeDyn::Static(Color::WHITE),
-            font_size: MaybeDyn::Static(14.0),
-            font_family: MaybeDyn::Static(default_family.clone()),
-            font_weight: MaybeDyn::Static(FontWeight::NORMAL),
+            color: create_stored(Color::WHITE),
+            font_size: create_stored(14.0),
+            font_family: create_stored(default_family.clone()),
+            font_weight: create_stored(FontWeight::NORMAL),
             nowrap: false,
             cached_text: String::new(), // Will be set during first layout
             cached_font_size: 14.0,
@@ -44,13 +44,13 @@ impl Text {
         }
     }
 
-    pub fn color<M>(mut self, color: impl IntoMaybeDyn<Color, M>) -> Self {
-        self.color = color.into_maybe_dyn();
+    pub fn color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.color = color.into_signal();
         self
     }
 
-    pub fn font_size<M>(mut self, size: impl IntoMaybeDyn<f32, M>) -> Self {
-        self.font_size = size.into_maybe_dyn();
+    pub fn font_size<M>(mut self, size: impl IntoSignal<f32, M>) -> Self {
+        self.font_size = size.into_signal();
         self
     }
 
@@ -62,8 +62,8 @@ impl Text {
     /// text("Hello").font_family(FontFamily::Monospace)
     /// text("Hello").font_family(FontFamily::Name("Inter".into()))
     /// ```
-    pub fn font_family<M>(mut self, family: impl IntoMaybeDyn<FontFamily, M>) -> Self {
-        self.font_family = family.into_maybe_dyn();
+    pub fn font_family<M>(mut self, family: impl IntoSignal<FontFamily, M>) -> Self {
+        self.font_family = family.into_signal();
         self
     }
 
@@ -75,8 +75,8 @@ impl Text {
     /// text("Hello").font_weight(FontWeight::BOLD)
     /// text("Hello").font_weight(FontWeight(600))
     /// ```
-    pub fn font_weight<M>(mut self, weight: impl IntoMaybeDyn<FontWeight, M>) -> Self {
-        self.font_weight = weight.into_maybe_dyn();
+    pub fn font_weight<M>(mut self, weight: impl IntoSignal<FontWeight, M>) -> Self {
+        self.font_weight = weight.into_signal();
         self
     }
 
@@ -205,6 +205,6 @@ impl Widget for Text {
 /// text(move || format!("Count: {}", count.get()))  // reactive closure
 /// text(my_signal)  // reactive signal
 /// ```
-pub fn text<M>(content: impl IntoMaybeDyn<String, M>) -> Text {
+pub fn text<M>(content: impl IntoSignal<String, M>) -> Text {
     Text::new(content)
 }

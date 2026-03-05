@@ -30,16 +30,16 @@
 
 use super::{Axis, Constraints, CrossAlignment, Layout, MainAlignment, Size};
 use crate::{
-    reactive::{IntoMaybeDyn, MaybeDyn},
+    reactive::{IntoSignal, Signal, create_stored},
     tree::{Tree, WidgetId},
 };
 
 /// Flex layout for rows and columns
 pub struct Flex {
-    direction: MaybeDyn<Axis>,
-    spacing: MaybeDyn<f32>,
-    main_alignment: MaybeDyn<MainAlignment>,
-    cross_alignment: MaybeDyn<CrossAlignment>,
+    direction: Signal<Axis>,
+    spacing: Signal<f32>,
+    main_alignment: Signal<MainAlignment>,
+    cross_alignment: Signal<CrossAlignment>,
 
     child_sizes: Vec<Size>,
 }
@@ -52,10 +52,10 @@ impl Flex {
     /// - `cross_alignment`: `Stretch` (CSS `align-items: stretch`)
     pub fn new(direction: Axis) -> Self {
         Self {
-            direction: MaybeDyn::Static(direction),
-            spacing: MaybeDyn::Static(0.0),
-            main_alignment: MaybeDyn::Static(MainAlignment::Start),
-            cross_alignment: MaybeDyn::Static(CrossAlignment::Stretch),
+            direction: create_stored(direction),
+            spacing: create_stored(0.0),
+            main_alignment: create_stored(MainAlignment::Start),
+            cross_alignment: create_stored(CrossAlignment::Stretch),
             child_sizes: Vec::with_capacity(8),
         }
     }
@@ -71,20 +71,20 @@ impl Flex {
     }
 
     /// Set the spacing between children
-    pub fn spacing<M>(mut self, spacing: impl IntoMaybeDyn<f32, M>) -> Self {
-        self.spacing = spacing.into_maybe_dyn();
+    pub fn spacing<M>(mut self, spacing: impl IntoSignal<f32, M>) -> Self {
+        self.spacing = spacing.into_signal();
         self
     }
 
     /// Set the main axis alignment
-    pub fn main_alignment<M>(mut self, alignment: impl IntoMaybeDyn<MainAlignment, M>) -> Self {
-        self.main_alignment = alignment.into_maybe_dyn();
+    pub fn main_alignment<M>(mut self, alignment: impl IntoSignal<MainAlignment, M>) -> Self {
+        self.main_alignment = alignment.into_signal();
         self
     }
 
     /// Set the cross axis alignment
-    pub fn cross_alignment<M>(mut self, alignment: impl IntoMaybeDyn<CrossAlignment, M>) -> Self {
-        self.cross_alignment = alignment.into_maybe_dyn();
+    pub fn cross_alignment<M>(mut self, alignment: impl IntoSignal<CrossAlignment, M>) -> Self {
+        self.cross_alignment = alignment.into_signal();
         self
     }
 

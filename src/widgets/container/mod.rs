@@ -14,7 +14,7 @@ use crate::advance_anim;
 use crate::animation::Transition;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
-use crate::reactive::{IntoMaybeDyn, MaybeDyn, focused_widget, with_signal_tracking};
+use crate::reactive::{IntoSignal, Signal, create_derived, create_stored, focused_widget, with_signal_tracking};
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
@@ -126,20 +126,20 @@ pub struct Container {
     pub(super) children_source: ChildrenSource,
 
     // Styling properties
-    pub(super) padding: MaybeDyn<Padding>,
-    pub(super) background: MaybeDyn<Color>,
+    pub(super) padding: Signal<Padding>,
+    pub(super) background: Signal<Color>,
     pub(super) gradient: Option<LinearGradient>,
-    pub(super) corner_radius: MaybeDyn<f32>,
-    pub(super) corner_curvature: MaybeDyn<f32>,
-    pub(super) border_width: MaybeDyn<f32>,
-    pub(super) border_color: MaybeDyn<Color>,
-    pub(super) elevation: MaybeDyn<f32>,
-    pub(super) width: Option<MaybeDyn<Length>>,
-    pub(super) height: Option<MaybeDyn<Length>>,
+    pub(super) corner_radius: Signal<f32>,
+    pub(super) corner_curvature: Signal<f32>,
+    pub(super) border_width: Signal<f32>,
+    pub(super) border_color: Signal<Color>,
+    pub(super) elevation: Signal<f32>,
+    pub(super) width: Option<Signal<Length>>,
+    pub(super) height: Option<Signal<Length>>,
     pub(super) overflow: Overflow,
-    pub(super) visible: MaybeDyn<bool>,
-    pub(super) transform: MaybeDyn<Transform>,
-    pub(super) transform_origin: MaybeDyn<TransformOrigin>,
+    pub(super) visible: Signal<bool>,
+    pub(super) transform: Signal<Transform>,
+    pub(super) transform_origin: Signal<TransformOrigin>,
 
     // Event callbacks
     pub(super) on_click: Option<ClickCallback>,
@@ -197,20 +197,20 @@ impl Container {
         Self {
             layout: Box::new(Flex::column()),
             children_source,
-            padding: MaybeDyn::Static(Padding::default()),
-            background: MaybeDyn::Static(Color::TRANSPARENT),
+            padding: create_stored(Padding::default()),
+            background: create_stored(Color::TRANSPARENT),
             gradient: None,
-            corner_radius: MaybeDyn::Static(0.0),
-            corner_curvature: MaybeDyn::Static(1.0),
-            border_width: MaybeDyn::Static(0.0),
-            border_color: MaybeDyn::Static(Color::TRANSPARENT),
-            elevation: MaybeDyn::Static(0.0),
+            corner_radius: create_stored(0.0),
+            corner_curvature: create_stored(1.0),
+            border_width: create_stored(0.0),
+            border_color: create_stored(Color::TRANSPARENT),
+            elevation: create_stored(0.0),
             width: None,
             height: None,
             overflow: Overflow::Visible,
-            visible: MaybeDyn::Static(true),
-            transform: MaybeDyn::Static(Transform::IDENTITY),
-            transform_origin: MaybeDyn::Static(TransformOrigin::CENTER),
+            visible: create_stored(true),
+            transform: create_stored(Transform::IDENTITY),
+            transform_origin: create_stored(TransformOrigin::CENTER),
             on_click: None,
             on_hover: None,
             on_scroll: None,
@@ -285,8 +285,8 @@ impl Container {
     /// - `padding([1.0, 2.0, 3.0, 4.0])` — `[top, right, bottom, left]` (CSS 4-value)
     /// - `padding(Padding::all(8.0).top(20.0))` — builder pattern
     /// - `padding(signal)` or `padding(move || ...)` — reactive
-    pub fn padding<M>(mut self, value: impl IntoMaybeDyn<Padding, M>) -> Self {
-        self.padding = value.into_maybe_dyn();
+    pub fn padding<M>(mut self, value: impl IntoSignal<Padding, M>) -> Self {
+        self.padding = value.into_signal();
         self
     }
 
@@ -301,8 +301,8 @@ impl Container {
     /// container().background(Color::rgb(0.2, 0.2, 0.3))
     /// container().background(Color::rgba(0.0, 0.0, 0.0, 0.5))  // 50% transparent black
     /// ```
-    pub fn background<M>(mut self, color: impl IntoMaybeDyn<Color, M>) -> Self {
-        self.background = color.into_maybe_dyn();
+    pub fn background<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.background = color.into_signal();
         self
     }
 
@@ -318,43 +318,43 @@ impl Container {
     /// container().corner_radius(8.0)                    // Standard rounded corners
     /// container().corner_radius(12.0).squircle()        // iOS-style smooth corners
     /// ```
-    pub fn corner_radius<M>(mut self, radius: impl IntoMaybeDyn<f32, M>) -> Self {
-        self.corner_radius = radius.into_maybe_dyn();
+    pub fn corner_radius<M>(mut self, radius: impl IntoSignal<f32, M>) -> Self {
+        self.corner_radius = radius.into_signal();
         self
     }
 
     /// Set the corner curvature using CSS K-value system
-    pub fn corner_curvature<M>(mut self, curvature: impl IntoMaybeDyn<f32, M>) -> Self {
-        self.corner_curvature = curvature.into_maybe_dyn();
+    pub fn corner_curvature<M>(mut self, curvature: impl IntoSignal<f32, M>) -> Self {
+        self.corner_curvature = curvature.into_signal();
         self
     }
 
     /// Convenience: Set squircle/iOS-style corners
     pub fn squircle(mut self) -> Self {
-        self.corner_curvature = MaybeDyn::Static(2.0);
+        self.corner_curvature = create_stored(2.0);
         self
     }
 
     /// Convenience: Set concave/scooped corners
     pub fn scoop(mut self) -> Self {
-        self.corner_curvature = MaybeDyn::Static(-1.0);
+        self.corner_curvature = create_stored(-1.0);
         self
     }
 
     /// Convenience: Set beveled corners
     pub fn bevel(mut self) -> Self {
-        self.corner_curvature = MaybeDyn::Static(0.0);
+        self.corner_curvature = create_stored(0.0);
         self
     }
 
     /// Set a border with the given width and color
     pub fn border<M1, M2>(
         mut self,
-        width: impl IntoMaybeDyn<f32, M1>,
-        color: impl IntoMaybeDyn<Color, M2>,
+        width: impl IntoSignal<f32, M1>,
+        color: impl IntoSignal<Color, M2>,
     ) -> Self {
-        self.border_width = width.into_maybe_dyn();
-        self.border_color = color.into_maybe_dyn();
+        self.border_width = width.into_signal();
+        self.border_color = color.into_signal();
         self
     }
 
@@ -377,14 +377,14 @@ impl Container {
     }
 
     /// Set the width of the container.
-    pub fn width<M>(mut self, width: impl IntoMaybeDyn<Length, M>) -> Self {
-        self.width = Some(width.into_maybe_dyn());
+    pub fn width<M>(mut self, width: impl IntoSignal<Length, M>) -> Self {
+        self.width = Some(width.into_signal());
         self
     }
 
     /// Set the height of the container.
-    pub fn height<M>(mut self, height: impl IntoMaybeDyn<Length, M>) -> Self {
-        self.height = Some(height.into_maybe_dyn());
+    pub fn height<M>(mut self, height: impl IntoSignal<Length, M>) -> Self {
+        self.height = Some(height.into_signal());
         self
     }
 
@@ -398,8 +398,8 @@ impl Container {
     ///
     /// When `visible` is false, the container takes up no space in layout,
     /// does not paint, and ignores all events.
-    pub fn visible<M>(mut self, visible: impl IntoMaybeDyn<bool, M>) -> Self {
-        self.visible = visible.into_maybe_dyn();
+    pub fn visible<M>(mut self, visible: impl IntoSignal<bool, M>) -> Self {
+        self.visible = visible.into_signal();
         self
     }
 
@@ -467,80 +467,73 @@ impl Container {
         self
     }
 
-    pub fn elevation<M>(mut self, level: impl IntoMaybeDyn<f32, M>) -> Self {
-        self.elevation = level.into_maybe_dyn();
+    pub fn elevation<M>(mut self, level: impl IntoSignal<f32, M>) -> Self {
+        self.elevation = level.into_signal();
         self
     }
 
     /// Set the transform for this container
-    pub fn transform<M>(mut self, t: impl IntoMaybeDyn<Transform, M>) -> Self {
-        self.transform = t.into_maybe_dyn();
+    pub fn transform<M>(mut self, t: impl IntoSignal<Transform, M>) -> Self {
+        self.transform = t.into_signal();
         self
     }
 
     /// Rotate this container by the given angle in degrees
-    pub fn rotate<M>(mut self, degrees: impl IntoMaybeDyn<f32, M>) -> Self {
-        let degrees = degrees.into_maybe_dyn();
-        let prev_transform =
-            std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic(Rc::new(move || {
-            prev_transform
-                .get()
+    pub fn rotate<M>(mut self, degrees: impl IntoSignal<f32, M>) -> Self {
+        let degrees = degrees.into_signal();
+        let prev = self.transform; // Copy!
+        self.transform = create_derived(move || {
+            prev.get()
                 .then(&Transform::rotate_degrees(degrees.get()))
-        }));
+        });
         self
     }
 
     /// Scale this container uniformly
-    pub fn scale<M>(mut self, s: impl IntoMaybeDyn<f32, M>) -> Self {
-        let s = s.into_maybe_dyn();
-        let prev_transform =
-            std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic(Rc::new(move || {
-            prev_transform.get().then(&Transform::scale(s.get()))
-        }));
+    pub fn scale<M>(mut self, s: impl IntoSignal<f32, M>) -> Self {
+        let s = s.into_signal();
+        let prev = self.transform; // Copy!
+        self.transform = create_derived(move || {
+            prev.get().then(&Transform::scale(s.get()))
+        });
         self
     }
 
     /// Scale this container non-uniformly
     pub fn scale_xy<M1, M2>(
         mut self,
-        sx: impl IntoMaybeDyn<f32, M1>,
-        sy: impl IntoMaybeDyn<f32, M2>,
+        sx: impl IntoSignal<f32, M1>,
+        sy: impl IntoSignal<f32, M2>,
     ) -> Self {
-        let sx = sx.into_maybe_dyn();
-        let sy = sy.into_maybe_dyn();
-        let prev_transform =
-            std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic(Rc::new(move || {
-            prev_transform
-                .get()
+        let sx = sx.into_signal();
+        let sy = sy.into_signal();
+        let prev = self.transform; // Copy!
+        self.transform = create_derived(move || {
+            prev.get()
                 .then(&Transform::scale_xy(sx.get(), sy.get()))
-        }));
+        });
         self
     }
 
     /// Translate (move) this container by the given offset
     pub fn translate<M1, M2>(
         mut self,
-        x: impl IntoMaybeDyn<f32, M1>,
-        y: impl IntoMaybeDyn<f32, M2>,
+        x: impl IntoSignal<f32, M1>,
+        y: impl IntoSignal<f32, M2>,
     ) -> Self {
-        let x = x.into_maybe_dyn();
-        let y = y.into_maybe_dyn();
-        let prev_transform =
-            std::mem::replace(&mut self.transform, MaybeDyn::Static(Transform::IDENTITY));
-        self.transform = MaybeDyn::Dynamic(Rc::new(move || {
-            prev_transform
-                .get()
+        let x = x.into_signal();
+        let y = y.into_signal();
+        let prev = self.transform; // Copy!
+        self.transform = create_derived(move || {
+            prev.get()
                 .then(&Transform::translate(x.get(), y.get()))
-        }));
+        });
         self
     }
 
     /// Set the transform origin (pivot point) for this container.
-    pub fn transform_origin<M>(mut self, origin: impl IntoMaybeDyn<TransformOrigin, M>) -> Self {
-        self.transform_origin = origin.into_maybe_dyn();
+    pub fn transform_origin<M>(mut self, origin: impl IntoSignal<TransformOrigin, M>) -> Self {
+        self.transform_origin = origin.into_signal();
         self
     }
 

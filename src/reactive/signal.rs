@@ -6,20 +6,32 @@ use super::runtime::{
     SignalId, current_write_epoch, queue_bg_write, record_effect_read, try_with_runtime,
 };
 use super::storage::{
-    create_signal_value, get_signal_value, has_signal, set_signal_value, update_signal_value,
+    allocate_signal_slot, create_signal_value, get_signal_value, has_signal, is_derived,
+    set_signal_value, store_derived_closure, try_call_derived, update_signal_value,
     with_signal_value,
 };
 
 /// Common read operations for signal types.
 /// Tracks reads for effect dependencies and widget invalidation.
+/// For derived signals, calls the closure (which tracks its own reads) and
+/// does NOT self-track to avoid double-tracking.
 fn tracked_get<T: Clone + 'static>(id: SignalId) -> T {
+    if let Some(val) = try_call_derived::<T>(id) {
+        // Derived: closure's internal signal reads handle tracking
+        return val;
+    }
     record_effect_read(id);
     record_signal_read(id);
     get_signal_value(id)
 }
 
 /// Common read-with-borrow operation for signal types.
-fn tracked_with<T: 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -> R {
+/// For derived signals, calls the closure and passes the result to `f`.
+fn tracked_with<T: Clone + 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -> R {
+    if is_derived(id) {
+        let val = try_call_derived::<T>(id).unwrap();
+        return f(&val);
+    }
     record_effect_read(id);
     record_signal_read(id);
     with_signal_value(id, f)
@@ -90,6 +102,9 @@ impl<T: Clone + 'static> Signal<T> {
 
     /// Get the current value without tracking
     pub fn get_untracked(&self) -> T {
+        if let Some(val) = try_call_derived::<T>(self.id) {
+            return val;
+        }
         get_signal_value(self.id)
     }
 
@@ -100,7 +115,16 @@ impl<T: Clone + 'static> Signal<T> {
 
     /// Borrow the value without tracking
     pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        if is_derived(self.id) {
+            let val = try_call_derived::<T>(self.id).unwrap();
+            return f(&val);
+        }
         with_signal_value(self.id, f)
+    }
+
+    /// Check if this signal is derived (backed by a closure, not a stored value).
+    pub fn is_derived(&self) -> bool {
+        is_derived(self.id)
     }
 }
 
@@ -212,6 +236,56 @@ pub fn create_signal<T: Clone + PartialEq + Send + 'static>(value: T) -> Signal<
     // Register with thread-local runtime for subscriber tracking
     try_with_runtime(|rt| rt.register_signal(id));
     // Register with current owner for automatic cleanup
+    register_signal(id);
+    Signal {
+        id,
+        _marker: PhantomData,
+        _not_send: PhantomData,
+    }
+}
+
+/// Create a read-only signal from a static value.
+///
+/// Unlike `create_signal`, this only requires `Clone` (no `PartialEq` or `Send`).
+/// The returned `Signal<T>` is `Copy` and can be freely passed into closures.
+/// It cannot be written to — there is no `set()` or `writer()`.
+///
+/// # Example
+///
+/// ```ignore
+/// let color = create_stored(Color::RED);
+/// container().background(color) // Copy, no clone needed
+/// ```
+pub fn create_stored<T: Clone + 'static>(value: T) -> Signal<T> {
+    let id = create_signal_value(value);
+    try_with_runtime(|rt| rt.register_signal(id));
+    register_signal(id);
+    Signal {
+        id,
+        _marker: PhantomData,
+        _not_send: PhantomData,
+    }
+}
+
+/// Create a derived signal from a closure.
+///
+/// The closure is called on each `.get()` — there is no caching. The closure's
+/// internal signal reads register dependencies directly with the calling
+/// widget/effect, so there is no double-tracking.
+///
+/// Only requires `T: Clone` (no `PartialEq` or `Send`).
+///
+/// # Example
+///
+/// ```ignore
+/// let count = create_signal(0);
+/// let label = create_derived(move || format!("Count: {}", count.get()));
+/// text(label) // Copy, reactive
+/// ```
+pub fn create_derived<T: Clone + 'static>(f: impl Fn() -> T + 'static) -> Signal<T> {
+    let id = allocate_signal_slot();
+    store_derived_closure::<T>(id, f);
+    try_with_runtime(|rt| rt.register_signal(id));
     register_signal(id);
     Signal {
         id,

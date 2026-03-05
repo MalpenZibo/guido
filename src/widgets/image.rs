@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::jobs::JobType;
 use crate::layout::{Constraints, Size};
-use crate::reactive::{IntoMaybeDyn, MaybeDyn, with_signal_tracking};
+use crate::reactive::{IntoSignal, Signal, with_signal_tracking};
 use crate::renderer::PaintContext;
 use crate::tree::{Tree, WidgetId};
 
@@ -85,9 +85,9 @@ pub enum ContentFit {
 
 /// Image widget for displaying raster and SVG images.
 pub struct Image {
-    source: MaybeDyn<ImageSource>,
-    width: Option<MaybeDyn<f32>>,
-    height: Option<MaybeDyn<f32>>,
+    source: Signal<ImageSource>,
+    width: Option<Signal<f32>>,
+    height: Option<Signal<f32>>,
     content_fit: ContentFit,
     /// Cached intrinsic size from the image source
     intrinsic_size: Option<(u32, u32)>,
@@ -97,9 +97,9 @@ pub struct Image {
 
 impl Image {
     /// Create a new image widget from a source.
-    pub fn new<M>(source: impl IntoMaybeDyn<ImageSource, M>) -> Self {
+    pub fn new<M>(source: impl IntoSignal<ImageSource, M>) -> Self {
         Self {
-            source: source.into_maybe_dyn(),
+            source: source.into_signal(),
             width: None,
             height: None,
             content_fit: ContentFit::default(),
@@ -109,14 +109,14 @@ impl Image {
     }
 
     /// Set a fixed width for the image.
-    pub fn width<M>(mut self, width: impl IntoMaybeDyn<f32, M>) -> Self {
-        self.width = Some(width.into_maybe_dyn());
+    pub fn width<M>(mut self, width: impl IntoSignal<f32, M>) -> Self {
+        self.width = Some(width.into_signal());
         self
     }
 
     /// Set a fixed height for the image.
-    pub fn height<M>(mut self, height: impl IntoMaybeDyn<f32, M>) -> Self {
-        self.height = Some(height.into_maybe_dyn());
+    pub fn height<M>(mut self, height: impl IntoSignal<f32, M>) -> Self {
+        self.height = Some(height.into_signal());
         self
     }
 
@@ -215,8 +215,8 @@ impl Widget for Image {
             with_signal_tracking(id, JobType::Layout, || {
                 (
                     self.source.get(),
-                    self.width.as_ref().map(|w| w.get()),
-                    self.height.as_ref().map(|h| h.get()),
+                    self.width.map(|w| w.get()),
+                    self.height.map(|h| h.get()),
                 )
             });
 
@@ -288,6 +288,6 @@ impl Widget for Image {
 /// // From ImageSource
 /// image(ImageSource::SvgBytes(svg_data.into()))
 /// ```
-pub fn image<M>(source: impl IntoMaybeDyn<ImageSource, M>) -> Image {
+pub fn image<M>(source: impl IntoSignal<ImageSource, M>) -> Image {
     Image::new(source)
 }

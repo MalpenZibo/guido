@@ -9,7 +9,7 @@ use syn::{DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro
 /// the render method.
 ///
 /// # Attributes on parameters
-/// - No attribute — standard prop, `MaybeDyn<T>`, default = `Default::default()`
+/// - No attribute — standard prop, `Signal<T>`, default = `create_stored(Default::default())`
 /// - `#[prop(default = "expr")]` — standard prop with custom default
 /// - `#[prop(callback)]` — callback prop. Use `()` for `Fn()`, or `fn(T1, T2)` for typed params
 /// - `#[prop(children)]` — children support via `ChildrenSource`
@@ -28,10 +28,10 @@ use syn::{DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro
 ///     on_click: (),
 /// ) -> impl Widget {
 ///     container()
-///         .padding(padding.get())
-///         .background(background.clone())
+///         .padding(padding) // Signal<f32> is Copy, no clone needed
+///         .background(background) // Signal<Color> is Copy
 ///         .on_click_option(on_click.clone())
-///         .child(text(label.clone()).color(Color::WHITE))
+///         .child(text(label).color(Color::WHITE))
 /// }
 /// ```
 #[proc_macro_attribute]
@@ -202,7 +202,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             }
         } else {
             quote! {
-                #name: ::guido::reactive::MaybeDyn<#ty>
+                #name: ::guido::reactive::Signal<#ty>
             }
         }
     });
@@ -225,11 +225,11 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             }
         } else if let Some(default) = &field.default_value {
             quote! {
-                #name: ::guido::reactive::MaybeDyn::Static(#default)
+                #name: ::guido::reactive::create_stored(#default)
             }
         } else {
             quote! {
-                #name: ::guido::reactive::MaybeDyn::Static(Default::default())
+                #name: ::guido::reactive::create_stored(Default::default())
             }
         }
     });
@@ -259,8 +259,8 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             }
         } else {
             quote! {
-                #vis fn #name<__M>(mut self, value: impl ::guido::reactive::IntoMaybeDyn<#ty, __M>) -> Self {
-                    self.#name = value.into_maybe_dyn();
+                #vis fn #name<__M>(mut self, value: impl ::guido::reactive::IntoSignal<#ty, __M>) -> Self {
+                    self.#name = value.into_signal();
                     self
                 }
             }
@@ -319,9 +319,15 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             quote! {
                 let #name = self.#take_name();
             }
-        } else {
+        } else if field.is_callback {
+            // Callbacks are Option<Rc<...>> — not Copy, need reference
             quote! {
                 let #name = &self.#name;
+            }
+        } else {
+            // Signal<T> is Copy — just copy it
+            quote! {
+                let #name = self.#name;
             }
         }
     });
