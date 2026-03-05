@@ -10,12 +10,12 @@ pub fn button(
 ) -> impl Widget {
     container()
         .padding(padding.get())
-        .background(background.clone())
+        .background(background)
         .corner_radius(6.0)
         .hover_state(|s| s.lighter(0.1))
         .pressed_state(|s| s.ripple())
         .on_click_option(on_click.clone())
-        .child(text(label.clone()).color(Color::WHITE))
+        .child(text(label).color(Color::WHITE))
 }
 
 /// A reusable Card component with children
@@ -30,7 +30,7 @@ pub fn card(
         .background(background.get())
         .corner_radius(8.0)
         .layout(Flex::column().spacing(8.0))
-        .child(text(title.clone()).font_size(18.0).color(Color::WHITE))
+        .child(text(title).font_size(18.0).color(Color::WHITE))
         .children_source(children)
 }
 
