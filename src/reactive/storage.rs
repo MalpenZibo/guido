@@ -1,7 +1,7 @@
 //! Thread-local storage for signal values.
 //!
 //! Signal values are stored in a thread-local `RefCell`-protected vector,
-//! using `Box<dyn Any>` to erase `RefCell<T>` for each signal. This eliminates
+//! using `Rc<dyn Any>` to erase `RefCell<T>` for each signal. This eliminates
 //! all locking overhead since signals are only accessed from the main thread.
 //!
 //! ## Thread Safety
@@ -132,10 +132,7 @@ pub fn allocate_signal_slot() -> SignalId {
 }
 
 /// Store a derived closure for the given signal ID.
-pub fn store_derived_closure<T: Clone + 'static>(
-    id: SignalId,
-    closure: impl Fn() -> T + 'static,
-) {
+pub fn store_derived_closure<T: Clone + 'static>(id: SignalId, closure: impl Fn() -> T + 'static) {
     STORAGE.with(|storage| {
         let mut storage = storage.borrow_mut();
         let boxed: Box<dyn Fn() -> T> = Box::new(closure);
@@ -150,21 +147,18 @@ pub fn store_derived_closure<T: Clone + 'static>(
 /// before calling the closure (which will read other signals from storage).
 pub fn try_call_derived<T: Clone + 'static>(id: SignalId) -> Option<T> {
     // Phase 1: briefly borrow storage to Rc::clone the closure handle
-    let closure_rc: Option<Rc<dyn Any>> = STORAGE.with(|storage| {
-        storage.borrow().derived.get(&id).map(Rc::clone)
-    });
+    let closure_rc: Option<Rc<dyn Any>> =
+        STORAGE.with(|storage| storage.borrow().derived.get(&id).map(Rc::clone));
 
     // Phase 2: storage borrow released — call the closure
     closure_rc.map(|rc| {
-        let closure = rc
-            .downcast_ref::<Box<dyn Fn() -> T>>()
-            .unwrap_or_else(|| {
-                panic!(
-                    "Derived signal {} type mismatch: closure return type does not match {}",
-                    id,
-                    std::any::type_name::<T>()
-                )
-            });
+        let closure = rc.downcast_ref::<Box<dyn Fn() -> T>>().unwrap_or_else(|| {
+            panic!(
+                "Derived signal {} type mismatch: closure return type does not match {}",
+                id,
+                std::any::type_name::<T>()
+            )
+        });
         closure()
     })
 }
@@ -209,6 +203,37 @@ pub fn update_signal_value<T: 'static, R>(id: SignalId, f: impl FnOnce(&mut T) -
 /// Borrow a signal's value for reading
 pub fn with_signal_value<T: 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -> R {
     with_signal_cell(id, "borrow", |cell: &RefCell<T>| f(&cell.borrow()))
+}
+
+/// Compare and set: if the new value differs from the current value, replace it.
+/// Returns `true` if the value was changed.
+///
+/// This performs the comparison and write in a single `with_signal_cell` call,
+/// avoiding the overhead of two separate storage accesses.
+pub fn compare_and_set_signal_value<T: PartialEq + 'static>(id: SignalId, value: T) -> bool {
+    with_signal_cell(id, "write", |cell: &RefCell<T>| {
+        let mut current = cell.borrow_mut();
+        if *current != value {
+            *current = value;
+            true
+        } else {
+            false
+        }
+    })
+}
+
+/// Compare and update: clone the old value, apply the closure, compare, and return
+/// whether the value changed. All in a single `with_signal_cell` call.
+pub fn compare_and_update_signal_value<T: Clone + PartialEq + 'static>(
+    id: SignalId,
+    f: impl FnOnce(&mut T),
+) -> bool {
+    with_signal_cell(id, "update", |cell: &RefCell<T>| {
+        let mut current = cell.borrow_mut();
+        let old = current.clone();
+        f(&mut current);
+        old != *current
+    })
 }
 
 /// Reset all signal storage.

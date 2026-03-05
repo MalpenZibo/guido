@@ -6,9 +6,9 @@ use super::runtime::{
     SignalId, current_write_epoch, queue_bg_write, record_effect_read, try_with_runtime,
 };
 use super::storage::{
-    allocate_signal_slot, create_signal_value, get_signal_value, has_signal, is_derived,
-    set_signal_value, store_derived_closure, try_call_derived, update_signal_value,
-    with_signal_value,
+    allocate_signal_slot, compare_and_set_signal_value, compare_and_update_signal_value,
+    create_signal_value, get_signal_value, has_signal, is_derived, store_derived_closure,
+    try_call_derived, with_signal_value,
 };
 
 /// Common read operations for signal types.
@@ -39,9 +39,7 @@ fn tracked_with<T: Clone + 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) ->
 
 /// Perform a signal write with change detection and notification (main thread only).
 fn write_and_notify<T: Clone + PartialEq + 'static>(id: SignalId, value: T) {
-    let changed = with_signal_value(id, |old: &T| *old != value);
-    if changed {
-        set_signal_value(id, value);
+    if compare_and_set_signal_value(id, value) {
         notify_signal_change(id);
         try_with_runtime(|rt| rt.notify_write(id));
     }
@@ -49,10 +47,7 @@ fn write_and_notify<T: Clone + PartialEq + 'static>(id: SignalId, value: T) {
 
 /// Perform a signal update with change detection and notification (main thread only).
 fn update_and_notify<T: Clone + PartialEq + 'static>(id: SignalId, f: impl FnOnce(&mut T)) {
-    let old = get_signal_value::<T>(id);
-    update_signal_value(id, f);
-    let changed = with_signal_value(id, |new: &T| old != *new);
-    if changed {
+    if compare_and_update_signal_value(id, f) {
         notify_signal_change(id);
         try_with_runtime(|rt| rt.notify_write(id));
     }
