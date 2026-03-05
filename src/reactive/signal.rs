@@ -7,17 +7,16 @@ use super::runtime::{
 };
 use super::storage::{
     allocate_signal_slot, compare_and_set_signal_value, compare_and_update_signal_value,
-    create_signal_value, get_signal_value, has_signal, is_derived, store_derived_closure,
-    try_call_derived, with_signal_value,
+    create_signal_value, get_signal_value, has_signal, store_derived_closure, try_call_derived,
+    with_signal_value,
 };
 
 /// Common read operations for signal types.
 /// Tracks reads for effect dependencies and widget invalidation.
 /// For derived signals, calls the closure (which tracks its own reads) and
 /// does NOT self-track to avoid double-tracking.
-fn tracked_get<T: Clone + 'static>(id: SignalId) -> T {
-    if let Some(val) = try_call_derived::<T>(id) {
-        // Derived: closure's internal signal reads handle tracking
+fn tracked_get<T: Clone + 'static>(id: SignalId, derived: bool) -> T {
+    if derived && let Some(val) = try_call_derived::<T>(id) {
         return val;
     }
     record_effect_read(id);
@@ -27,8 +26,8 @@ fn tracked_get<T: Clone + 'static>(id: SignalId) -> T {
 
 /// Common read-with-borrow operation for signal types.
 /// For derived signals, calls the closure and passes the result to `f`.
-fn tracked_with<T: Clone + 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -> R {
-    if is_derived(id) {
+fn tracked_with<T: Clone + 'static, R>(id: SignalId, derived: bool, f: impl FnOnce(&T) -> R) -> R {
+    if derived {
         let val = try_call_derived::<T>(id).unwrap();
         return f(&val);
     }
@@ -67,6 +66,9 @@ fn update_and_notify<T: Clone + PartialEq + 'static>(id: SignalId, f: impl FnOnc
 /// to get a [`WriteSignal<T>`] which is `Send`.
 pub struct Signal<T> {
     id: SignalId,
+    /// True for derived signals (closure-backed). Stored signals skip
+    /// the HashMap lookup in `try_call_derived()` when this is false.
+    derived: bool,
     _marker: PhantomData<T>,
     _not_send: PhantomData<*const ()>, // makes Signal !Send !Sync
 }
@@ -92,12 +94,14 @@ impl<T> Eq for Signal<T> {}
 impl<T: Clone + 'static> Signal<T> {
     /// Get the current value (tracks as dependency for effects)
     pub fn get(&self) -> T {
-        tracked_get(self.id)
+        tracked_get(self.id, self.derived)
     }
 
     /// Get the current value without tracking
     pub fn get_untracked(&self) -> T {
-        if let Some(val) = try_call_derived::<T>(self.id) {
+        if self.derived
+            && let Some(val) = try_call_derived::<T>(self.id)
+        {
             return val;
         }
         get_signal_value(self.id)
@@ -105,12 +109,12 @@ impl<T: Clone + 'static> Signal<T> {
 
     /// Borrow the value for reading
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        tracked_with(self.id, f)
+        tracked_with(self.id, self.derived, f)
     }
 
     /// Borrow the value without tracking
     pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        if is_derived(self.id) {
+        if self.derived {
             let val = try_call_derived::<T>(self.id).unwrap();
             return f(&val);
         }
@@ -119,7 +123,7 @@ impl<T: Clone + 'static> Signal<T> {
 
     /// Check if this signal is derived (backed by a closure, not a stored value).
     pub fn is_derived(&self) -> bool {
-        is_derived(self.id)
+        self.derived
     }
 }
 
@@ -234,6 +238,7 @@ pub fn create_signal<T: Clone + PartialEq + Send + 'static>(value: T) -> Signal<
     register_signal(id);
     Signal {
         id,
+        derived: false,
         _marker: PhantomData,
         _not_send: PhantomData,
     }
@@ -257,6 +262,7 @@ pub fn create_stored<T: Clone + 'static>(value: T) -> Signal<T> {
     register_signal(id);
     Signal {
         id,
+        derived: false,
         _marker: PhantomData,
         _not_send: PhantomData,
     }
@@ -284,6 +290,7 @@ pub fn create_derived<T: Clone + 'static>(f: impl Fn() -> T + 'static) -> Signal
     register_signal(id);
     Signal {
         id,
+        derived: true,
         _marker: PhantomData,
         _not_send: PhantomData,
     }
