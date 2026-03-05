@@ -30,16 +30,16 @@
 
 use super::{Axis, Constraints, CrossAlignment, Layout, MainAlignment, Size};
 use crate::{
-    reactive::{IntoSignal, Signal, create_stored},
+    reactive::{IntoSignal, OptionSignalExt, Signal, create_stored},
     tree::{Tree, WidgetId},
 };
 
 /// Flex layout for rows and columns
 pub struct Flex {
     direction: Signal<Axis>,
-    spacing: Signal<f32>,
-    main_alignment: Signal<MainAlignment>,
-    cross_alignment: Signal<CrossAlignment>,
+    spacing: Option<Signal<f32>>,
+    main_alignment: Option<Signal<MainAlignment>>,
+    cross_alignment: Option<Signal<CrossAlignment>>,
 
     child_sizes: Vec<Size>,
 }
@@ -53,9 +53,9 @@ impl Flex {
     pub fn new(direction: Axis) -> Self {
         Self {
             direction: create_stored(direction),
-            spacing: create_stored(0.0),
-            main_alignment: create_stored(MainAlignment::Start),
-            cross_alignment: create_stored(CrossAlignment::Stretch),
+            spacing: None,
+            main_alignment: None,
+            cross_alignment: None,
             child_sizes: Vec::with_capacity(8),
         }
     }
@@ -72,19 +72,19 @@ impl Flex {
 
     /// Set the spacing between children
     pub fn spacing<M>(mut self, spacing: impl IntoSignal<f32, M>) -> Self {
-        self.spacing = spacing.into_signal();
+        self.spacing = Some(spacing.into_signal());
         self
     }
 
     /// Set the main axis alignment
     pub fn main_alignment<M>(mut self, alignment: impl IntoSignal<MainAlignment, M>) -> Self {
-        self.main_alignment = alignment.into_signal();
+        self.main_alignment = Some(alignment.into_signal());
         self
     }
 
     /// Set the cross axis alignment
     pub fn cross_alignment<M>(mut self, alignment: impl IntoSignal<CrossAlignment, M>) -> Self {
-        self.cross_alignment = alignment.into_signal();
+        self.cross_alignment = Some(alignment.into_signal());
         self
     }
 
@@ -127,9 +127,9 @@ impl Flex {
         origin: (f32, f32),
         axis: Axis,
     ) -> Size {
-        let spacing = self.spacing.get();
-        let main_align = self.main_alignment.get();
-        let cross_align = self.cross_alignment.get();
+        let spacing = self.spacing.get_or(0.0);
+        let main_align = self.main_alignment.get_or(MainAlignment::Start);
+        let cross_align = self.cross_alignment.get_or(CrossAlignment::Stretch);
 
         // Get main/cross axis constraints based on direction
         let (main_max, cross_min, cross_max) = match axis {
