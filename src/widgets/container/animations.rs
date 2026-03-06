@@ -91,8 +91,10 @@ impl<T: Animatable> AnimationState<T> {
             self.reverse_transition.is_some() && T::is_reverse(&self.current, &new_target);
 
         // Check if active transition is spring before mutating other fields
-        let is_spring =
-            matches!(self.active_transition().timing, crate::animation::TimingFunction::Spring(_));
+        let is_spring = matches!(
+            self.active_transition().timing,
+            crate::animation::TimingFunction::Spring(_)
+        );
 
         self.start = self.current;
         self.target = new_target;

@@ -243,26 +243,10 @@ impl Flex {
         // Compute total main-axis usage
         let mut children_main: f32 = self.child_sizes.iter().map(|s| s.main_axis(axis)).sum();
 
-        let total_main = children_main + total_spacing;
-
         // Calculate final dimensions
         let (main_min, cross_constraint_min) = match axis {
             Axis::Horizontal => (constraints.min_width, constraints.min_height),
             Axis::Vertical => (constraints.min_height, constraints.min_width),
-        };
-
-        // Space-based alignments expand to fill available main axis so they can
-        // distribute the extra space between/around children.
-        // Start/Center/End only affect child *positioning* — they should not force
-        // the Flex to expand. Centering/end-alignment takes effect when the parent
-        // provides extra space via tight constraints (e.g. an exact or fill width).
-        let main_size = match main_align {
-            MainAlignment::SpaceBetween
-            | MainAlignment::SpaceAround
-            | MainAlignment::SpaceEvenly => main_max,
-            MainAlignment::Start | MainAlignment::Center | MainAlignment::End => {
-                total_main.max(main_min).min(main_max)
-            }
         };
 
         let cross_size = max_cross.max(cross_constraint_min).min(cross_max);
@@ -305,6 +289,28 @@ impl Flex {
             }
         }
 
+        // Collapse spacing around zero-sized children: a child with zero
+        // main-axis size should not contribute a gap on either side.
+        let visible_count = self
+            .child_sizes
+            .iter()
+            .filter(|s| s.main_axis(axis) > 0.5)
+            .count();
+        let visible_spacing = if visible_count > 1 {
+            spacing * (visible_count - 1) as f32
+        } else {
+            0.0
+        };
+        let visible_total_main = children_main + visible_spacing;
+        let main_size = match main_align {
+            MainAlignment::SpaceBetween
+            | MainAlignment::SpaceAround
+            | MainAlignment::SpaceEvenly => main_max,
+            MainAlignment::Start | MainAlignment::Center | MainAlignment::End => {
+                visible_total_main.max(main_min).min(main_max)
+            }
+        };
+
         let (width, height) = match axis {
             Axis::Horizontal => (main_size, cross_size),
             Axis::Vertical => (cross_size, main_size),
@@ -312,20 +318,26 @@ impl Flex {
         let size = Size::new(width, height);
 
         // Position children
-        let free_space = (main_size - children_main - total_spacing).max(0.0);
+        let free_space = (main_size - children_main - visible_spacing).max(0.0);
 
         let (initial_offset, between_spacing) =
-            self.calc_main_axis_spacing(main_align, spacing, free_space, children.len());
+            self.calc_main_axis_spacing(main_align, spacing, free_space, visible_count);
 
         let mut main_pos = match axis {
             Axis::Horizontal => origin.0,
             Axis::Vertical => origin.1,
         } + initial_offset;
 
+        let mut prev_nonzero = false;
         for (i, &child_id) in children.iter().enumerate() {
             let child_size = self.child_sizes[i];
             let child_main = child_size.main_axis(axis);
             let child_cross = child_size.cross_axis(axis);
+
+            // Add spacing only between consecutive non-zero-sized children
+            if prev_nonzero && child_main > 0.5 {
+                main_pos += between_spacing;
+            }
 
             let cross_pos = match cross_align {
                 CrossAlignment::Start => match axis {
@@ -352,7 +364,11 @@ impl Flex {
             };
 
             tree.set_origin(child_id, x, y);
-            main_pos += child_main + between_spacing;
+            main_pos += child_main;
+
+            if child_main > 0.5 {
+                prev_nonzero = true;
+            }
         }
 
         size

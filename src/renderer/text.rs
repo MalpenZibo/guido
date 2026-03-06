@@ -66,19 +66,28 @@ impl TextRenderState {
         let mut culled_indices = HashSet::new();
 
         for (idx, entry) in texts.iter().enumerate() {
+            // Skip text invisible due to zero scale — avoids all rendering work
+            if !entry.transform.is_identity() && !entry.transform.is_translation_only() {
+                let (sx, sy) = (entry.transform.data[0], entry.transform.data[5]);
+                if sx.abs() < 1e-3 || sy.abs() < 1e-3 {
+                    culled_indices.insert(idx);
+                    continue;
+                }
+            }
+
             // Skip text that is completely outside its clip region (culling optimization)
             // Check this FIRST so culled texts don't get rendered via texture path either
             if let Some(clip) = &entry.clip_rect {
-                // Get text position (applying translation if any)
-                let (tx, ty) = if entry.transform.is_identity() {
-                    (0.0, 0.0)
-                } else {
-                    (entry.transform.tx(), entry.transform.ty())
-                };
-                let text_left = entry.rect.x + tx;
-                let text_top = entry.rect.y + ty;
-                let text_right = text_left + entry.rect.width;
-                let text_bottom = text_top + entry.rect.height;
+                // Get text bounding box in world space (same coordinate system as clip rect)
+                let (p1x, p1y) = entry.transform.transform_point(entry.rect.x, entry.rect.y);
+                let (p2x, p2y) = entry.transform.transform_point(
+                    entry.rect.x + entry.rect.width,
+                    entry.rect.y + entry.rect.height,
+                );
+                let text_left = p1x.min(p2x);
+                let text_top = p1y.min(p2y);
+                let text_right = p1x.max(p2x);
+                let text_bottom = p1y.max(p2y);
 
                 let clip_right = clip.x + clip.width;
                 let clip_bottom = clip.y + clip.height;
@@ -98,8 +107,9 @@ impl TextRenderState {
                 }
             }
 
-            // Check if text has a transform that affects rendering
-            if entry.transform.has_rotation_or_scale() {
+            // Route all non-translation transforms (rotation, scale) to TextQuadRenderer.
+            // This keeps the glyphon atlas stable — only identity/translation text goes through it.
+            if !entry.transform.is_identity() && !entry.transform.is_translation_only() {
                 transformed_indices.push(idx);
                 continue; // Skip transformed text in direct rendering
             }
@@ -150,16 +160,15 @@ impl TextRenderState {
             .iter()
             .zip(self.buffers.iter())
             .map(|(entry, buffer)| {
-                // Apply translation from transform (if any) to position
-                let (tx, ty) = if entry.transform.is_identity() {
-                    (0.0, 0.0)
-                } else {
-                    (entry.transform.tx(), entry.transform.ty())
-                };
+                // Position text in world space using the full transform.
+                // This is consistent with the clip rect (also in world space via
+                // transform_clip_to_world), so TextBounds clipping works correctly.
+                let (screen_x, screen_y) =
+                    entry.transform.transform_point(entry.rect.x, entry.rect.y);
 
                 // Scale positions for HiDPI rendering
-                let scaled_left = (entry.rect.x + tx) * scale_factor;
-                let scaled_top = (entry.rect.y + ty) * scale_factor;
+                let scaled_left = screen_x * scale_factor;
+                let scaled_top = screen_y * scale_factor;
 
                 // Use clip rect if provided, otherwise use full screen
                 // Clip bounds stay in screen space - don't apply transform translation
