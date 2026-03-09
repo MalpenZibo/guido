@@ -11,7 +11,7 @@ use std::borrow::Cow;
 use std::rc::Rc;
 
 use crate::advance_anim;
-use crate::animation::Transition;
+use crate::animation::TransitionConfig;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
@@ -538,7 +538,7 @@ impl Container {
     }
 
     /// Enable animation for width changes
-    pub fn animate_width(mut self, transition: Transition) -> Self {
+    pub fn animate_width(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self
             .width
             .as_ref()
@@ -552,7 +552,7 @@ impl Container {
     }
 
     /// Enable animation for height changes
-    pub fn animate_height(mut self, transition: Transition) -> Self {
+    pub fn animate_height(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self
             .height
             .as_ref()
@@ -566,42 +566,42 @@ impl Container {
     }
 
     /// Enable animation for background color changes
-    pub fn animate_background(mut self, transition: Transition) -> Self {
+    pub fn animate_background(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.background.get_or(Color::TRANSPARENT);
         self.background_anim = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for corner radius changes
-    pub fn animate_corner_radius(mut self, transition: Transition) -> Self {
+    pub fn animate_corner_radius(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.corner_radius.get_or(0.0);
         self.corner_radius_anim = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for padding changes
-    pub fn animate_padding(mut self, transition: Transition) -> Self {
+    pub fn animate_padding(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.padding.get_or(Padding::default());
         self.padding_anim = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for border width changes
-    pub fn animate_border_width(mut self, transition: Transition) -> Self {
+    pub fn animate_border_width(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.border_width.get_or(0.0);
         self.border_width_anim = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for border color changes
-    pub fn animate_border_color(mut self, transition: Transition) -> Self {
+    pub fn animate_border_color(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.border_color.get_or(Color::TRANSPARENT);
         self.border_color_anim = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for transform changes
-    pub fn animate_transform(mut self, transition: Transition) -> Self {
+    pub fn animate_transform(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.transform.get_or(Transform::IDENTITY);
         self.transform_anim = Some(AnimationState::new(initial, transition));
         self
@@ -1055,21 +1055,17 @@ impl Widget for Container {
                 )
             });
 
-        // Calculate current container dimensions
-        // Apply Length.max (from at_most()) early so children constraints and scroll
-        // viewport see the cap. Without this, a scrollable container with at_most(300)
-        // inside another scrollable (which passes max_height=INFINITY) would get
-        // viewport_height=INFINITY, making needs_vertical_scrollbar() always false.
-        let current_width = if let Some(ref anim) = self.width_anim {
-            if anim.is_initial() {
-                let w = width_length.exact.unwrap_or(constraints.max_width);
-                if let Some(max) = width_length.max {
-                    w.min(max)
-                } else {
-                    w
-                }
-            } else {
+        // Calculate dimensions for child layout constraints.
+        // When a layout animation is active and the width/height is exact, use
+        // the animated current value so children are positioned within the actual
+        // visible bounds (e.g., Center alignment tracks the animating size).
+        // For non-exact (shrink-to-fit) widths, use the signal value to avoid a
+        // circular dependency: animated width → constrains children → target = clamped.
+        let child_layout_width = if let Some(ref anim) = self.width_anim {
+            if !anim.is_initial() && width_length.exact.is_some() {
                 *anim.current()
+            } else {
+                width_length.exact.unwrap_or(constraints.max_width)
             }
         } else if let Some(exact) = width_length.exact {
             exact
@@ -1082,16 +1078,11 @@ impl Widget for Container {
             }
         };
 
-        let current_height = if let Some(ref anim) = self.height_anim {
-            if anim.is_initial() {
-                let h = height_length.exact.unwrap_or(constraints.max_height);
-                if let Some(max) = height_length.max {
-                    h.min(max)
-                } else {
-                    h
-                }
-            } else {
+        let child_layout_height = if let Some(ref anim) = self.height_anim {
+            if !anim.is_initial() && height_length.exact.is_some() {
                 *anim.current()
+            } else {
+                height_length.exact.unwrap_or(constraints.max_height)
             }
         } else if let Some(exact) = height_length.exact {
             exact
@@ -1104,24 +1095,9 @@ impl Widget for Container {
             }
         };
 
-        // Calculate undershoot for spring animations
-        let width_undershoot = if let Some(ref anim) = self.width_anim {
-            (*anim.target() - *anim.current()).max(0.0)
-        } else {
-            0.0
-        };
-
-        let height_undershoot = if let Some(ref anim) = self.height_anim {
-            (*anim.target() - *anim.current()).max(0.0)
-        } else {
-            0.0
-        };
-
-        // Child constraints with effective padding
-        let effective_h_padding = (padding.horizontal() - width_undershoot).max(0.0);
-        let effective_v_padding = (padding.vertical() - height_undershoot).max(0.0);
-        let mut child_max_width = (current_width - effective_h_padding).max(0.0);
-        let mut child_max_height = (current_height - effective_v_padding).max(0.0);
+        // Child constraints with padding
+        let mut child_max_width = (child_layout_width - padding.horizontal()).max(0.0);
+        let mut child_max_height = (child_layout_height - padding.vertical()).max(0.0);
 
         // Reserve gutter space for scrollbars
         if self.scrollbar_config.reserve_gutter
@@ -1143,7 +1119,7 @@ impl Widget for Container {
             // how much space they actually have to position children within.
             // Sources of minimum: explicit at_least(min) or parent constraints.
             let effective_min = width_length.min.unwrap_or(0.0).max(constraints.min_width);
-            (effective_min - effective_h_padding)
+            (effective_min - padding.horizontal())
                 .max(0.0)
                 .min(child_max_width)
         };
@@ -1151,7 +1127,7 @@ impl Widget for Container {
             child_max_height
         } else {
             let effective_min = height_length.min.unwrap_or(0.0).max(constraints.min_height);
-            (effective_min - effective_v_padding)
+            (effective_min - padding.vertical())
                 .max(0.0)
                 .min(child_max_height)
         };
@@ -1210,12 +1186,29 @@ impl Widget for Container {
             Size::zero()
         };
 
-        // Update scroll state
+        // Update scroll state — viewport uses the animated (visible) size, not the
+        // unconstrained child layout size, so scrollbars reflect the actual visible area.
         if scroll_axis != ScrollAxis::None {
             self.scroll_state.content_width = content_size.width + padding.horizontal();
             self.scroll_state.content_height = content_size.height + padding.vertical();
-            self.scroll_state.viewport_width = child_max_width;
-            self.scroll_state.viewport_height = child_max_height;
+            self.scroll_state.viewport_width = if let Some(ref anim) = self.width_anim {
+                if !anim.is_initial() {
+                    (*anim.current() - padding.horizontal()).max(0.0)
+                } else {
+                    child_max_width
+                }
+            } else {
+                child_max_width
+            };
+            self.scroll_state.viewport_height = if let Some(ref anim) = self.height_anim {
+                if !anim.is_initial() {
+                    (*anim.current() - padding.vertical()).max(0.0)
+                } else {
+                    child_max_height
+                }
+            } else {
+                child_max_height
+            };
             self.scroll_state.clamp_offsets();
         }
 
@@ -1230,17 +1223,17 @@ impl Widget for Container {
                 let min_w = width_length.min.unwrap_or(0.0);
                 content_width.max(min_w)
             };
-            if (effective_target - *anim.target()).abs() > 0.001 {
-                if anim.is_initial() {
-                    anim.set_immediate(effective_target);
-                } else {
-                    anim.animate_to(effective_target);
-                    // Width affects layout, so use RequiredJob::Layout
-                    request_job(id, JobRequest::Animation(RequiredJob::Layout));
-                    // Parent must reposition siblings as this child's width changes
-                    if let Some(parent_id) = tree.get_parent(id) {
-                        request_job(parent_id, JobRequest::Layout);
-                    }
+            if anim.is_initial() {
+                // Always mark as initialized on first layout so subsequent
+                // changes animate rather than snap.
+                anim.set_immediate(effective_target);
+            } else if (effective_target - *anim.target()).abs() > 0.001 {
+                anim.animate_to(effective_target);
+                // Width affects layout, so use RequiredJob::Layout
+                request_job(id, JobRequest::Animation(RequiredJob::Layout));
+                // Parent must reposition siblings as this child's width changes
+                if let Some(parent_id) = tree.get_parent(id) {
+                    request_job(parent_id, JobRequest::Layout);
                 }
             }
         }
@@ -1252,17 +1245,15 @@ impl Widget for Container {
                 let min_h = height_length.min.unwrap_or(0.0);
                 content_height.max(min_h)
             };
-            if (effective_target - *anim.target()).abs() > 0.001 {
-                if anim.is_initial() {
-                    anim.set_immediate(effective_target);
-                } else {
-                    anim.animate_to(effective_target);
-                    // Height affects layout, so use RequiredJob::Layout
-                    request_job(id, JobRequest::Animation(RequiredJob::Layout));
-                    // Parent must reposition siblings as this child's height changes
-                    if let Some(parent_id) = tree.get_parent(id) {
-                        request_job(parent_id, JobRequest::Layout);
-                    }
+            if anim.is_initial() {
+                anim.set_immediate(effective_target);
+            } else if (effective_target - *anim.target()).abs() > 0.001 {
+                anim.animate_to(effective_target);
+                // Height affects layout, so use RequiredJob::Layout
+                request_job(id, JobRequest::Animation(RequiredJob::Layout));
+                // Parent must reposition siblings as this child's height changes
+                if let Some(parent_id) = tree.get_parent(id) {
+                    request_job(parent_id, JobRequest::Layout);
                 }
             }
         }
@@ -1507,13 +1498,24 @@ impl Widget for Container {
             local_event.clone()
         };
 
+        // When overflow is hidden, children outside the container's bounds are
+        // clipped and invisible. Skip dispatching pointer events to them so that
+        // invisible children (e.g. inside a 0-height collapsed submenu) cannot
+        // steal clicks from siblings positioned below.
+        let skip_child_dispatch = self.overflow == Overflow::Hidden
+            && local_event
+                .coords()
+                .is_some_and(|(x, y)| !bounds.contains(x, y));
+
         // Let children handle first (layout already reconciled)
-        for &child_id in self.children_source.get() {
-            if let Some(response) = tree.with_widget_mut(child_id, |child, child_id, tree| {
-                child.event(tree, child_id, &child_event)
-            }) && response == EventResponse::Handled
-            {
-                return EventResponse::Handled;
+        if !skip_child_dispatch {
+            for &child_id in self.children_source.get() {
+                if let Some(response) = tree.with_widget_mut(child_id, |child, child_id, tree| {
+                    child.event(tree, child_id, &child_event)
+                }) && response == EventResponse::Handled
+                {
+                    return EventResponse::Handled;
+                }
             }
         }
 
@@ -1790,10 +1792,9 @@ impl Widget for Container {
         // Determine if we need to clip children
         let is_scrollable = self.scroll_axis != ScrollAxis::None;
 
-        // Set clip region for scrollable containers
+        // Set clip region for scrollable or overflow:hidden containers
         // This clips all children to the container bounds
-        if is_scrollable {
-            // Clip to container bounds (local coordinates)
+        if is_scrollable || self.overflow == Overflow::Hidden {
             ctx.set_clip(local_bounds, corner_radius, corner_curvature);
         }
 
@@ -1810,6 +1811,13 @@ impl Widget for Container {
         } else {
             ctx.cull_rect()
         };
+
+        // Skip painting children when the container has zero area — nothing
+        // can be visible and attempting to render (especially text) wastes
+        // atlas space and GPU work.
+        if bounds.width < 0.5 || bounds.height < 0.5 {
+            return;
+        }
 
         // Draw children - each gets its own node with position transform
         for &child_id in self.children_source.get() {

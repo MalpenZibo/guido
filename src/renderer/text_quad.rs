@@ -234,9 +234,10 @@ impl TextQuadRenderer {
         entry: &TextEntry,
         scale_factor: f32,
     ) -> PreparedTextQuad {
-        // Extract scale from transform for crisp rendering
-        let transform_scale = entry.transform.extract_scale();
-        let effective_scale = scale_factor * transform_scale * QUALITY_MULTIPLIER;
+        // Rasterize at fixed resolution: scale_factor * QUALITY_MULTIPLIER.
+        // The transform's scale/rotation is applied via GPU quad vertices, not baked into the texture.
+        // This prevents atlas churn during scale animations (each frame would otherwise create new entries).
+        let effective_scale = scale_factor * QUALITY_MULTIPLIER;
 
         // Scale font size for crisp rendering
         let scaled_font_size = entry.font_size * effective_scale;
@@ -388,17 +389,18 @@ impl TextQuadRenderer {
         // to get screen coordinates. The world_transform already includes everything:
         // parent translations, rotations, scales, and center_at adjustments.
         //
-        // IMPORTANT: The texture was rendered at (transform_scale * QUALITY_MULTIPLIER) resolution.
-        // We need to compute display dimensions WITHOUT transform_scale, because the world_transform
-        // will apply the scaling. If we included transform_scale here, we'd get double-scaling.
+        // The texture was rendered at (scale_factor * QUALITY_MULTIPLIER) resolution.
+        // We divide by QUALITY_MULTIPLIER to get logical-pixel dimensions, then the
+        // world_transform applies scaling/rotation via transform_point() on quad corners.
 
-        // Calculate display size: divide by both QUALITY_MULTIPLIER and transform_scale
-        // This gives us the "pre-transform" size that the world_transform will then scale
-        let total_scale = QUALITY_MULTIPLIER * transform_scale;
+        // Calculate display size: divide by QUALITY_MULTIPLIER only.
+        // The texture is rendered at (scale_factor * QUALITY_MULTIPLIER) resolution.
+        // The transform's scale is applied by transform_point() on quad corners, not here.
+        let total_scale = QUALITY_MULTIPLIER;
         let display_width = tex_width as f32 / total_scale;
         let display_height = tex_height as f32 / total_scale;
 
-        // Padding in logical pixels (also needs to account for transform_scale)
+        // Padding in logical pixels
         let display_padding = padding / total_scale;
 
         // Get the local rect corners with padding adjustment
@@ -439,8 +441,8 @@ impl TextQuadRenderer {
                 [0.0, 1.0, 0.0, 0.0], // No corner radius for text clip (uses rect from TextEntry)
             )
         } else {
-            // No clipping (width/height = 0 disables clipping in shader)
-            ([0.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0])
+            // No clipping (negative width/height disables clipping in shader)
+            ([0.0, 0.0, -1.0, -1.0], [0.0, 1.0, 0.0, 0.0])
         };
 
         // Convert to NDC and create vertices with clip data

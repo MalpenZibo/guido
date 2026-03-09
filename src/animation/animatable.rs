@@ -7,11 +7,25 @@ pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
     /// t = 0.0 returns `from`, t = 1.0 returns `to`
     /// t can exceed [0, 1] range for overshoot effects
     fn lerp(from: &Self, to: &Self, t: f32) -> Self;
+
+    /// Whether transitioning from `from` to `to` is a "reverse" direction.
+    /// Used to select the `.reverse()` transition when configured.
+    /// - `f32`: value decreasing
+    /// - `Transform`: scale decreasing
+    /// - `Color`: alpha decreasing, then luminance decreasing
+    /// - `Padding`: total padding decreasing
+    fn is_reverse(_from: &Self, _to: &Self) -> bool {
+        false
+    }
 }
 
 impl Animatable for f32 {
     fn lerp(from: &Self, to: &Self, t: f32) -> Self {
         from + (to - from) * t
+    }
+
+    fn is_reverse(from: &Self, to: &Self) -> bool {
+        to < from
     }
 }
 
@@ -24,6 +38,14 @@ impl Animatable for Color {
             a: from.a + (to.a - from.a) * t,
         }
     }
+
+    fn is_reverse(from: &Self, to: &Self) -> bool {
+        // Reverse when fading out (alpha decreasing),
+        // or when darkening (luminance decreasing) at same alpha
+        let to_lum = to.r * 0.299 + to.g * 0.587 + to.b * 0.114;
+        let from_lum = from.r * 0.299 + from.g * 0.587 + from.b * 0.114;
+        (to.a, to_lum) < (from.a, from_lum)
+    }
 }
 
 impl Animatable for Padding {
@@ -35,6 +57,12 @@ impl Animatable for Padding {
             bottom: from.bottom + (to.bottom - from.bottom) * t,
         }
     }
+
+    fn is_reverse(from: &Self, to: &Self) -> bool {
+        let to_total = to.left + to.right + to.top + to.bottom;
+        let from_total = from.left + from.right + from.top + from.bottom;
+        to_total < from_total
+    }
 }
 
 impl Animatable for Transform {
@@ -44,6 +72,10 @@ impl Animatable for Transform {
             *val = from.data[i] + (to.data[i] - from.data[i]) * t;
         }
         Transform { data }
+    }
+
+    fn is_reverse(from: &Self, to: &Self) -> bool {
+        to.extract_scale() < from.extract_scale()
     }
 }
 

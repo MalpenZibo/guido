@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use crate::animation::{Animatable, SpringState, Transition};
+use crate::animation::{Animatable, SpringState, Transition, TransitionConfig};
 
 /// Result of advancing an animation, indicating whether the value changed
 #[derive(Debug, Clone, PartialEq)]
@@ -30,8 +30,12 @@ pub struct AnimationState<T: Animatable> {
     progress: f32,
     /// Time when animation started
     start_time: Instant,
-    /// Transition configuration
+    /// Forward transition (used when value increases or no reverse is set)
     transition: Transition,
+    /// Optional reverse transition (used when value decreases)
+    reverse_transition: Option<Transition>,
+    /// Whether the current animation is using the reverse transition
+    using_reverse: bool,
     /// Spring state (for spring timing functions)
     spring_state: Option<SpringState>,
     /// Whether the animation has been initialized with its first real value
@@ -41,9 +45,10 @@ pub struct AnimationState<T: Animatable> {
 }
 
 impl<T: Animatable> AnimationState<T> {
-    pub fn new(initial_value: T, transition: Transition) -> Self {
+    pub fn new(initial_value: T, config: impl Into<TransitionConfig>) -> Self {
+        let config = config.into();
         let spring_state = if matches!(
-            transition.timing,
+            config.forward.timing,
             crate::animation::TimingFunction::Spring(_)
         ) {
             Some(SpringState::new())
@@ -56,10 +61,21 @@ impl<T: Animatable> AnimationState<T> {
             start: initial_value,
             progress: 1.0, // Start completed
             start_time: Instant::now(),
-            transition,
+            transition: config.forward,
+            reverse_transition: config.reverse,
+            using_reverse: false,
             spring_state,
             initialized: false, // Not yet initialized with real content-based value
             prev_value: None,
+        }
+    }
+
+    /// Get the currently active transition (forward or reverse).
+    fn active_transition(&self) -> &Transition {
+        if self.using_reverse {
+            self.reverse_transition.as_ref().unwrap_or(&self.transition)
+        } else {
+            &self.transition
         }
     }
 
@@ -70,14 +86,25 @@ impl<T: Animatable> AnimationState<T> {
             return;
         }
 
+        // Detect direction and select transition
+        self.using_reverse =
+            self.reverse_transition.is_some() && T::is_reverse(&self.current, &new_target);
+
+        // Check if active transition is spring before mutating other fields
+        let is_spring = matches!(
+            self.active_transition().timing,
+            crate::animation::TimingFunction::Spring(_)
+        );
+
         self.start = self.current;
         self.target = new_target;
         self.progress = 0.0;
         self.start_time = Instant::now();
-        // Reset spring state for new animation
-        if self.spring_state.is_some() {
-            self.spring_state = Some(SpringState::new());
-        }
+        self.spring_state = if is_spring {
+            Some(SpringState::new())
+        } else {
+            None
+        };
     }
 
     /// Advance the animation and return whether the value changed
@@ -86,8 +113,19 @@ impl<T: Animatable> AnimationState<T> {
             return AdvanceResult::NoChange;
         }
 
+        // Extract scalar transition values upfront to avoid borrow conflicts
+        // with self.spring_state. Copy SpringConfig (which is Copy) instead of
+        // cloning the entire TimingFunction (which may contain an Arc).
+        let active = self.active_transition();
+        let delay_ms = active.delay_ms;
+        let duration_ms = active.duration_ms;
+        let spring_config = match active.timing {
+            crate::animation::TimingFunction::Spring(config) => Some(config),
+            _ => None,
+        };
+
         let elapsed = self.start_time.elapsed().as_secs_f32() * 1000.0; // Convert to ms
-        let adjusted_elapsed = (elapsed - self.transition.delay_ms).max(0.0);
+        let adjusted_elapsed = (elapsed - delay_ms).max(0.0);
 
         if adjusted_elapsed <= 0.0 {
             // Still in delay period
@@ -99,16 +137,17 @@ impl<T: Animatable> AnimationState<T> {
             // For spring animations: use real elapsed time in seconds (not normalized)
             // This allows the spring to continue oscillating until it naturally settles
             let elapsed_secs = adjusted_elapsed / 1000.0;
-            if let crate::animation::TimingFunction::Spring(ref config) = self.transition.timing {
+            if let Some(ref config) = spring_config {
                 spring_state.step(elapsed_secs, config)
             } else {
                 // Fallback: shouldn't happen, but use normalized time
-                adjusted_elapsed / self.transition.duration_ms
+                adjusted_elapsed / duration_ms
             }
         } else {
             // For non-spring animations: use normalized time 0..1
-            let t = (adjusted_elapsed / self.transition.duration_ms).min(1.0);
-            self.transition.timing.evaluate(t)
+            let t = (adjusted_elapsed / duration_ms).min(1.0);
+            // Safe to borrow self again — spring_state mutable borrow ended above
+            self.active_transition().timing.evaluate(t)
         };
 
         // Interpolate
@@ -125,7 +164,7 @@ impl<T: Animatable> AnimationState<T> {
             }
         } else {
             // For non-spring animations, use time-based progress
-            let t = (adjusted_elapsed / self.transition.duration_ms).min(1.0);
+            let t = (adjusted_elapsed / duration_ms).min(1.0);
             self.progress = t;
         }
 

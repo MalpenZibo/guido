@@ -67,8 +67,8 @@ fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radius: f32) -> f32 {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var color = textureSample(t_texture, s_sampler, in.uv);
 
-    // Apply clipping if enabled (width and height > 0)
-    if (in.clip_rect.z > 0.0 && in.clip_rect.w > 0.0) {
+    // Apply clipping if enabled (negative width/height = no clip sentinel)
+    if (in.clip_rect.z >= 0.0 && in.clip_rect.w >= 0.0) {
         let clip_dist = rounded_rect_sdf(
             in.screen_pos,
             in.clip_rect,

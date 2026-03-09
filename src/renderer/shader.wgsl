@@ -357,8 +357,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // === Apply clipping ===
-    // Check if clipping is enabled (width and height > 0)
-    if (in.clip_rect.z > 0.0 && in.clip_rect.w > 0.0) {
+    // Check if clipping is enabled (negative width/height = no clip sentinel)
+    if (in.clip_rect.z >= 0.0 && in.clip_rect.w >= 0.0) {
         // Use frag_pos for local clips (overlay clips on transformed containers),
         // world_pos for world clips (regular clipping)
         let clip_pos = select(in.world_pos, in.frag_pos, in.clip_params.z > 0.5);
