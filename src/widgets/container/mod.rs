@@ -1191,24 +1191,8 @@ impl Widget for Container {
         if scroll_axis != ScrollAxis::None {
             self.scroll_state.content_width = content_size.width + padding.horizontal();
             self.scroll_state.content_height = content_size.height + padding.vertical();
-            self.scroll_state.viewport_width = if let Some(ref anim) = self.width_anim {
-                if !anim.is_initial() {
-                    (*anim.current() - padding.horizontal()).max(0.0)
-                } else {
-                    child_max_width
-                }
-            } else {
-                child_max_width
-            };
-            self.scroll_state.viewport_height = if let Some(ref anim) = self.height_anim {
-                if !anim.is_initial() {
-                    (*anim.current() - padding.vertical()).max(0.0)
-                } else {
-                    child_max_height
-                }
-            } else {
-                child_max_height
-            };
+            self.scroll_state.viewport_width = child_max_width;
+            self.scroll_state.viewport_height = child_max_height;
             self.scroll_state.clamp_offsets();
         }
 
@@ -1502,7 +1486,8 @@ impl Widget for Container {
         // clipped and invisible. Skip dispatching pointer events to them so that
         // invisible children (e.g. inside a 0-height collapsed submenu) cannot
         // steal clicks from siblings positioned below.
-        let skip_child_dispatch = self.overflow == Overflow::Hidden
+        let skip_child_dispatch = (self.overflow == Overflow::Hidden
+            || self.scroll_axis != ScrollAxis::None)
             && local_event
                 .coords()
                 .is_some_and(|(x, y)| !bounds.contains(x, y));

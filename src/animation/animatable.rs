@@ -42,9 +42,7 @@ impl Animatable for Color {
     fn is_reverse(from: &Self, to: &Self) -> bool {
         // Reverse when fading out (alpha decreasing),
         // or when darkening (luminance decreasing) at same alpha
-        let to_lum = to.r * 0.299 + to.g * 0.587 + to.b * 0.114;
-        let from_lum = from.r * 0.299 + from.g * 0.587 + from.b * 0.114;
-        (to.a, to_lum) < (from.a, from_lum)
+        (to.a, to.luminance()) < (from.a, from.luminance())
     }
 }
 

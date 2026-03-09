@@ -14,6 +14,7 @@ use wgpu::{
 };
 
 use super::commands::DrawCommand;
+use super::gpu::NO_CLIP_RECT;
 use super::constants::{IMAGE_HASH_SAMPLE_SIZE, SVG_QUALITY_MULTIPLIER};
 use super::flatten::FlattenedCommand;
 use super::textured_vertex::{TexturedVertex, to_ndc};
@@ -564,8 +565,8 @@ impl ImageQuadRenderer {
                 [clip.corner_radius * scale_factor, clip.curvature, 0.0, 0.0],
             )
         } else {
-            // No clipping (negative width/height disables clipping in shader)
-            ([0.0, 0.0, -1.0, -1.0], [0.0, 1.0, 0.0, 0.0])
+            // No clipping
+            (NO_CLIP_RECT, [0.0, 1.0, 0.0, 0.0])
         };
 
         // Transform corners from local to screen coordinates
