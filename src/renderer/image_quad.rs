@@ -14,9 +14,9 @@ use wgpu::{
 };
 
 use super::commands::DrawCommand;
-use super::gpu::NO_CLIP_RECT;
 use super::constants::{IMAGE_HASH_SAMPLE_SIZE, SVG_QUALITY_MULTIPLIER};
 use super::flatten::FlattenedCommand;
+use super::gpu::NO_CLIP_RECT;
 use super::textured_vertex::{TexturedVertex, to_ndc};
 use crate::widgets::Rect;
 use crate::widgets::image::{ContentFit, ImageSource};
