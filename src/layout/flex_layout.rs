@@ -34,6 +34,10 @@ use crate::{
     tree::{Tree, WidgetId},
 };
 
+/// Children with main-axis size below this threshold are treated as invisible
+/// for spacing purposes (no gap is added on either side).
+const MIN_VISIBLE_SIZE: f32 = 0.5;
+
 /// Flex layout for rows and columns
 pub struct Flex {
     direction: Signal<Axis>,
@@ -294,7 +298,7 @@ impl Flex {
         let visible_count = self
             .child_sizes
             .iter()
-            .filter(|s| s.main_axis(axis) > 0.5)
+            .filter(|s| s.main_axis(axis) > MIN_VISIBLE_SIZE)
             .count();
         let visible_spacing = if visible_count > 1 {
             spacing * (visible_count - 1) as f32
@@ -335,7 +339,7 @@ impl Flex {
             let child_cross = child_size.cross_axis(axis);
 
             // Add spacing only between consecutive non-zero-sized children
-            if prev_nonzero && child_main > 0.5 {
+            if prev_nonzero && child_main > MIN_VISIBLE_SIZE {
                 main_pos += between_spacing;
             }
 
@@ -366,7 +370,7 @@ impl Flex {
             tree.set_origin(child_id, x, y);
             main_pos += child_main;
 
-            if child_main > 0.5 {
+            if child_main > MIN_VISIBLE_SIZE {
                 prev_nonzero = true;
             }
         }

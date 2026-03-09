@@ -113,11 +113,16 @@ impl<T: Animatable> AnimationState<T> {
             return AdvanceResult::NoChange;
         }
 
-        // Extract active transition values upfront to avoid borrow conflicts
+        // Extract scalar transition values upfront to avoid borrow conflicts
+        // with self.spring_state. Copy SpringConfig (which is Copy) instead of
+        // cloning the entire TimingFunction (which may contain an Arc).
         let active = self.active_transition();
         let delay_ms = active.delay_ms;
         let duration_ms = active.duration_ms;
-        let timing = active.timing.clone();
+        let spring_config = match active.timing {
+            crate::animation::TimingFunction::Spring(config) => Some(config),
+            _ => None,
+        };
 
         let elapsed = self.start_time.elapsed().as_secs_f32() * 1000.0; // Convert to ms
         let adjusted_elapsed = (elapsed - delay_ms).max(0.0);
@@ -132,7 +137,7 @@ impl<T: Animatable> AnimationState<T> {
             // For spring animations: use real elapsed time in seconds (not normalized)
             // This allows the spring to continue oscillating until it naturally settles
             let elapsed_secs = adjusted_elapsed / 1000.0;
-            if let crate::animation::TimingFunction::Spring(ref config) = timing {
+            if let Some(ref config) = spring_config {
                 spring_state.step(elapsed_secs, config)
             } else {
                 // Fallback: shouldn't happen, but use normalized time
@@ -141,7 +146,8 @@ impl<T: Animatable> AnimationState<T> {
         } else {
             // For non-spring animations: use normalized time 0..1
             let t = (adjusted_elapsed / duration_ms).min(1.0);
-            timing.evaluate(t)
+            // Safe to borrow self again — spring_state mutable borrow ended above
+            self.active_transition().timing.evaluate(t)
         };
 
         // Interpolate
