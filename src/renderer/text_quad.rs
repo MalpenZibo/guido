@@ -21,6 +21,7 @@ use wgpu::{
 };
 
 use super::constants::{TEXT_BUFFER_MARGIN_MULTIPLIER, TEXT_TEXTURE_PADDING};
+use super::gpu::NO_CLIP_RECT;
 use super::textured_vertex::{TexturedVertex, to_ndc};
 use super::types::TextEntry;
 use crate::widgets::font::FontWeight;
@@ -441,8 +442,8 @@ impl TextQuadRenderer {
                 [0.0, 1.0, 0.0, 0.0], // No corner radius for text clip (uses rect from TextEntry)
             )
         } else {
-            // No clipping (negative width/height disables clipping in shader)
-            ([0.0, 0.0, -1.0, -1.0], [0.0, 1.0, 0.0, 0.0])
+            // No clipping
+            (NO_CLIP_RECT, [0.0, 1.0, 0.0, 0.0])
         };
 
         // Convert to NDC and create vertices with clip data

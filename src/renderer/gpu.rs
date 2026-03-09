@@ -6,6 +6,9 @@
 
 use wgpu::{VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode};
 
+/// Clip rect sentinel: negative width/height disables clipping in the shader.
+pub const NO_CLIP_RECT: [f32; 4] = [0.0, 0.0, -1.0, -1.0];
+
 /// Uniform buffer data passed to the shader.
 ///
 /// Contains screen-wide information needed for coordinate conversion.
@@ -168,7 +171,7 @@ impl Default for ShapeInstance {
             shadow_color: [0.0, 0.0, 0.0, 0.0],
             transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0], // identity
             _pad2: [0.0, 0.0],
-            clip_rect: [0.0, 0.0, -1.0, -1.0], // No clipping (negative width/height)
+            clip_rect: NO_CLIP_RECT,
             clip_corner_radius: 0.0,
             clip_curvature: 1.0,
             clip_is_local: 0.0,
