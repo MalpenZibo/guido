@@ -123,6 +123,36 @@ pub enum Overflow {
     Hidden,
 }
 
+/// Scroll state and configuration, boxed to avoid bloating Container.
+/// Only allocated when `.scrollable()` is called.
+pub(super) struct ScrollData {
+    pub(super) scrollbar_visibility: ScrollbarVisibility,
+    pub(super) scrollbar_config: ScrollbarConfig,
+    pub(super) scroll_state: ScrollState,
+    pub(super) v_scrollbar_track_id: Option<WidgetId>,
+    pub(super) v_scrollbar_handle_id: Option<WidgetId>,
+    pub(super) v_scrollbar_scale_anim: Option<AnimationState<f32>>,
+    pub(super) h_scrollbar_track_id: Option<WidgetId>,
+    pub(super) h_scrollbar_handle_id: Option<WidgetId>,
+    pub(super) h_scrollbar_scale_anim: Option<AnimationState<f32>>,
+}
+
+impl Default for ScrollData {
+    fn default() -> Self {
+        Self {
+            scrollbar_visibility: ScrollbarVisibility::Always,
+            scrollbar_config: ScrollbarConfig::default(),
+            scroll_state: ScrollState::default(),
+            v_scrollbar_track_id: None,
+            v_scrollbar_handle_id: None,
+            v_scrollbar_scale_anim: None,
+            h_scrollbar_track_id: None,
+            h_scrollbar_handle_id: None,
+            h_scrollbar_scale_anim: None,
+        }
+    }
+}
+
 pub struct Container {
     // Layout and children
     pub(super) layout: Box<dyn Layout>,
@@ -176,19 +206,7 @@ pub struct Container {
 
     // Scroll configuration
     pub(super) scroll_axis: ScrollAxis,
-    pub(super) scrollbar_visibility: ScrollbarVisibility,
-    pub(super) scrollbar_config: ScrollbarConfig,
-    pub(super) scroll_state: ScrollState,
-
-    // Vertical scrollbar widget IDs (registered in Tree)
-    pub(super) v_scrollbar_track_id: Option<WidgetId>,
-    pub(super) v_scrollbar_handle_id: Option<WidgetId>,
-    pub(super) v_scrollbar_scale_anim: Option<AnimationState<f32>>,
-
-    // Horizontal scrollbar widget IDs (registered in Tree)
-    pub(super) h_scrollbar_track_id: Option<WidgetId>,
-    pub(super) h_scrollbar_handle_id: Option<WidgetId>,
-    pub(super) h_scrollbar_scale_anim: Option<AnimationState<f32>>,
+    pub(super) scroll_data: Option<Box<ScrollData>>,
 
     // Ripple animation state
     pub(super) ripple: RippleState,
@@ -235,17 +253,26 @@ impl Container {
             pressed_state: None,
             focused_state: None,
             scroll_axis: ScrollAxis::None,
-            scrollbar_visibility: ScrollbarVisibility::Always,
-            scrollbar_config: ScrollbarConfig::default(),
-            scroll_state: ScrollState::default(),
-            v_scrollbar_track_id: None,
-            v_scrollbar_handle_id: None,
-            v_scrollbar_scale_anim: None,
-            h_scrollbar_track_id: None,
-            h_scrollbar_handle_id: None,
-            h_scrollbar_scale_anim: None,
+            scroll_data: None,
             ripple: RippleState::new(),
         }
+    }
+
+    /// Get scroll data (panics if not scrollable — only call when scroll_axis != None)
+    fn scroll(&self) -> &ScrollData {
+        self.scroll_data.as_deref().expect("scroll_data not set")
+    }
+
+    /// Get mutable scroll data (panics if not scrollable)
+    fn scroll_mut(&mut self) -> &mut ScrollData {
+        self.scroll_data
+            .as_deref_mut()
+            .expect("scroll_data not set")
+    }
+
+    /// Get or create scroll data
+    fn scroll_or_init(&mut self) -> &mut ScrollData {
+        self.scroll_data.get_or_insert_with(Box::default)
     }
 
     /// Set the layout strategy for this container
@@ -409,12 +436,15 @@ impl Container {
     /// Enable scrolling on this container.
     pub fn scrollable(mut self, axis: ScrollAxis) -> Self {
         self.scroll_axis = axis;
+        if axis != ScrollAxis::None {
+            self.scroll_data = Some(Box::default());
+        }
         self
     }
 
     /// Configure scrollbar visibility.
     pub fn scrollbar_visibility(mut self, visibility: ScrollbarVisibility) -> Self {
-        self.scrollbar_visibility = visibility;
+        self.scroll_or_init().scrollbar_visibility = visibility;
         self
     }
 
@@ -424,7 +454,7 @@ impl Container {
         F: FnOnce(ScrollbarBuilder) -> ScrollbarBuilder,
     {
         let builder = f(ScrollbarBuilder::default());
-        self.scrollbar_config = builder.build();
+        self.scroll_or_init().scrollbar_config = builder.build();
         self
     }
 
@@ -948,15 +978,17 @@ impl Widget for Container {
         }
 
         // Advance kinetic scroll animation
-        let has_scroll_velocity =
-            self.scroll_state.velocity_x.abs() > 0.5 || self.scroll_state.velocity_y.abs() > 0.5;
-        if has_scroll_velocity {
-            let scroll_animating = self.scroll_state.advance_momentum();
-            if scroll_animating {
-                // Kinetic scroll is paint-only, request animation continuation with paint
-                request_job(id, JobRequest::Animation(RequiredJob::Paint));
+        if let Some(ref mut sd) = self.scroll_data {
+            let has_scroll_velocity =
+                sd.scroll_state.velocity_x.abs() > 0.5 || sd.scroll_state.velocity_y.abs() > 0.5;
+            if has_scroll_velocity {
+                let scroll_animating = sd.scroll_state.advance_momentum();
+                if scroll_animating {
+                    // Kinetic scroll is paint-only, request animation continuation with paint
+                    request_job(id, JobRequest::Animation(RequiredJob::Paint));
+                }
+                any_animating = any_animating || scroll_animating;
             }
-            any_animating = any_animating || scroll_animating;
         }
 
         // Update scrollbar handle positions based on current scroll offset
@@ -1100,10 +1132,11 @@ impl Widget for Container {
         let mut child_max_height = (child_layout_height - padding.vertical()).max(0.0);
 
         // Reserve gutter space for scrollbars
-        if self.scrollbar_config.reserve_gutter
-            && self.scrollbar_visibility != ScrollbarVisibility::Hidden
+        if let Some(ref sd) = self.scroll_data
+            && sd.scrollbar_config.reserve_gutter
+            && sd.scrollbar_visibility != ScrollbarVisibility::Hidden
         {
-            let gutter = self.scrollbar_config.width + self.scrollbar_config.margin * 2.0;
+            let gutter = sd.scrollbar_config.width + sd.scrollbar_config.margin * 2.0;
             if self.scroll_axis.allows_vertical() {
                 child_max_width = (child_max_width - gutter).max(0.0);
             }
@@ -1183,11 +1216,12 @@ impl Widget for Container {
 
         // Update scroll state with the viewport dimensions available for children.
         if scroll_axis != ScrollAxis::None {
-            self.scroll_state.content_width = content_size.width + padding.horizontal();
-            self.scroll_state.content_height = content_size.height + padding.vertical();
-            self.scroll_state.viewport_width = child_max_width;
-            self.scroll_state.viewport_height = child_max_height;
-            self.scroll_state.clamp_offsets();
+            let sd = self.scroll_mut();
+            sd.scroll_state.content_width = content_size.width + padding.horizontal();
+            sd.scroll_state.content_height = content_size.height + padding.vertical();
+            sd.scroll_state.viewport_width = child_max_width;
+            sd.scroll_state.viewport_height = child_max_height;
+            sd.scroll_state.clamp_offsets();
         }
 
         let content_width = content_size.width + padding.horizontal();
@@ -1464,9 +1498,10 @@ impl Widget for Container {
 
             // For scrollable containers, also add scroll offset
             let (child_x, child_y) = if self.scroll_axis != ScrollAxis::None {
+                let sd = self.scroll();
                 (
-                    local_x + self.scroll_state.offset_x,
-                    local_y + self.scroll_state.offset_y,
+                    local_x + sd.scroll_state.offset_x,
+                    local_y + sd.scroll_state.offset_y,
                 )
             } else {
                 (local_x, local_y)
@@ -1624,8 +1659,9 @@ impl Widget for Container {
                         let consumed = self.apply_scroll(*delta_x, *delta_y, *source);
                         if consumed {
                             // Kinetic scrolling needs Animation + Paint if has velocity
-                            let has_velocity = self.scroll_state.velocity_x.abs() > 0.5
-                                || self.scroll_state.velocity_y.abs() > 0.5;
+                            let sd = self.scroll();
+                            let has_velocity = sd.scroll_state.velocity_x.abs() > 0.5
+                                || sd.scroll_state.velocity_y.abs() > 0.5;
                             if has_velocity {
                                 request_job(id, JobRequest::Animation(RequiredJob::Paint));
                             } else {
@@ -1781,9 +1817,10 @@ impl Widget for Container {
         // For scrollable containers: viewport mapped to layout space (before scroll transform).
         // For non-scrollable containers: inherited from parent via PaintContext.
         let effective_cull_rect = if is_scrollable {
+            let sd = self.scroll();
             Some(Rect::new(
-                self.scroll_state.offset_x,
-                self.scroll_state.offset_y,
+                sd.scroll_state.offset_x,
+                sd.scroll_state.offset_y,
                 local_bounds.width,
                 local_bounds.height,
             ))
@@ -1812,9 +1849,10 @@ impl Widget for Container {
 
             // Child's position transform (may include scroll offset)
             let child_position = if is_scrollable {
+                let sd = self.scroll();
                 Transform::translate(
-                    child_offset_x - self.scroll_state.offset_x,
-                    child_offset_y - self.scroll_state.offset_y,
+                    child_offset_x - sd.scroll_state.offset_x,
+                    child_offset_y - sd.scroll_state.offset_y,
                 )
             } else {
                 Transform::translate(child_offset_x, child_offset_y)
