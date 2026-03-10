@@ -2,6 +2,8 @@
 
 use std::rc::Rc;
 
+use smallvec::SmallVec;
+
 use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
 use crate::widgets::Rect;
@@ -68,14 +70,16 @@ pub struct RenderNode {
     /// Draw commands for this node (shapes, text, etc.).
     /// These are in LOCAL coordinates - world transform applied during flatten.
     /// Wrapped in Rc so flatten can share them via Rc::clone() instead of deep-cloning.
-    pub commands: Vec<Rc<DrawCommand>>,
+    /// SmallVec: most nodes have 1-2 commands (background + border).
+    pub commands: SmallVec<[Rc<DrawCommand>; 2]>,
 
     /// Child nodes (nested widgets)
     pub children: Vec<RenderNode>,
 
     /// Overlay commands - drawn AFTER all children (for ripples, effects).
     /// These are also in local coordinates.
-    pub overlay_commands: Vec<Rc<DrawCommand>>,
+    /// SmallVec: most nodes have 0-1 overlay commands (ripple only).
+    pub overlay_commands: SmallVec<[Rc<DrawCommand>; 1]>,
 
     /// Optional clip region that applies to this node and children.
     /// The clip rect is in local coordinates (0,0 = node origin).
@@ -104,9 +108,9 @@ impl RenderNode {
             parent_position: Transform::IDENTITY,
             transform_origin: TransformOrigin::CENTER,
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
-            commands: Vec::new(),
+            commands: SmallVec::new(),
             children: Vec::new(),
-            overlay_commands: Vec::new(),
+            overlay_commands: SmallVec::new(),
             clip: None,
             overlay_clip: None,
             repainted: true,
