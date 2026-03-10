@@ -1170,11 +1170,6 @@ impl Widget for Container {
         // Reconcile and get children IDs
         let children = self.children_source.reconcile_and_get(tree);
 
-        // Update parent tracking for all children in the tree
-        for &child_id in children.iter() {
-            tree.set_parent(child_id, id);
-        }
-
         let content_size = if !children.is_empty() {
             self.layout.layout(
                 tree,
@@ -1186,8 +1181,7 @@ impl Widget for Container {
             Size::zero()
         };
 
-        // Update scroll state — viewport uses the animated (visible) size, not the
-        // unconstrained child layout size, so scrollbars reflect the actual visible area.
+        // Update scroll state with the viewport dimensions available for children.
         if scroll_axis != ScrollAxis::None {
             self.scroll_state.content_width = content_size.width + padding.horizontal();
             self.scroll_state.content_height = content_size.height + padding.vertical();
