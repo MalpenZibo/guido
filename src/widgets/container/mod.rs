@@ -123,6 +123,20 @@ pub enum Overflow {
     Hidden,
 }
 
+/// Boxed animation states. Only allocated when `.transition()` or
+/// `.animate_*()` is called, saving ~400 bytes per non-animated Container.
+#[derive(Default)]
+pub(super) struct ContainerAnims {
+    pub(super) width: Option<AnimationState<f32>>,
+    pub(super) height: Option<AnimationState<f32>>,
+    pub(super) background: Option<AnimationState<Color>>,
+    pub(super) corner_radius: Option<AnimationState<f32>>,
+    pub(super) padding: Option<AnimationState<Padding>>,
+    pub(super) border_width: Option<AnimationState<f32>>,
+    pub(super) border_color: Option<AnimationState<Color>>,
+    pub(super) transform: Option<AnimationState<Transform>>,
+}
+
 /// Scroll state and configuration, boxed to avoid bloating Container.
 /// Only allocated when `.scrollable()` is called.
 pub(super) struct ScrollData {
@@ -189,15 +203,8 @@ pub struct Container {
     pub(super) is_hovered: bool,
     pub(super) is_pressed: bool,
 
-    // Animation state
-    pub(super) width_anim: Option<AnimationState<f32>>,
-    pub(super) height_anim: Option<AnimationState<f32>>,
-    pub(super) background_anim: Option<AnimationState<Color>>,
-    pub(super) corner_radius_anim: Option<AnimationState<f32>>,
-    pub(super) padding_anim: Option<AnimationState<Padding>>,
-    pub(super) border_width_anim: Option<AnimationState<f32>>,
-    pub(super) border_color_anim: Option<AnimationState<Color>>,
-    pub(super) transform_anim: Option<AnimationState<Transform>>,
+    // Animation state (boxed to save ~400 bytes per non-animated container)
+    pub(super) anims: Option<Box<ContainerAnims>>,
 
     // State layer styles (hover/pressed/focused overrides)
     pub(super) hover_state: Option<StateStyle>,
@@ -241,14 +248,7 @@ impl Container {
             widget_ref: None,
             is_hovered: false,
             is_pressed: false,
-            width_anim: None,
-            height_anim: None,
-            background_anim: None,
-            corner_radius_anim: None,
-            padding_anim: None,
-            border_width_anim: None,
-            border_color_anim: None,
-            transform_anim: None,
+            anims: None,
             hover_state: None,
             pressed_state: None,
             focused_state: None,
@@ -273,6 +273,11 @@ impl Container {
     /// Get or create scroll data
     fn scroll_or_init(&mut self) -> &mut ScrollData {
         self.scroll_data.get_or_insert_with(Box::default)
+    }
+
+    /// Get or create animation states box
+    fn anims_mut(&mut self) -> &mut ContainerAnims {
+        self.anims.get_or_insert_with(Box::default)
     }
 
     /// Set the layout strategy for this container
@@ -577,7 +582,7 @@ impl Container {
                 len.exact.or(len.min).unwrap_or(0.0)
             })
             .unwrap_or(0.0);
-        self.width_anim = Some(AnimationState::new(initial, transition));
+        self.anims_mut().width = Some(AnimationState::new(initial, transition));
         self
     }
 
@@ -591,49 +596,49 @@ impl Container {
                 len.exact.or(len.min).unwrap_or(0.0)
             })
             .unwrap_or(0.0);
-        self.height_anim = Some(AnimationState::new(initial, transition));
+        self.anims_mut().height = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for background color changes
     pub fn animate_background(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.background.get_or(Color::TRANSPARENT);
-        self.background_anim = Some(AnimationState::new(initial, transition));
+        self.anims_mut().background = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for corner radius changes
     pub fn animate_corner_radius(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.corner_radius.get_or(0.0);
-        self.corner_radius_anim = Some(AnimationState::new(initial, transition));
+        self.anims_mut().corner_radius = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for padding changes
     pub fn animate_padding(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.padding.get_or(Padding::default());
-        self.padding_anim = Some(AnimationState::new(initial, transition));
+        self.anims_mut().padding = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for border width changes
     pub fn animate_border_width(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.border_width.get_or(0.0);
-        self.border_width_anim = Some(AnimationState::new(initial, transition));
+        self.anims_mut().border_width = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for border color changes
     pub fn animate_border_color(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.border_color.get_or(Color::TRANSPARENT);
-        self.border_color_anim = Some(AnimationState::new(initial, transition));
+        self.anims_mut().border_color = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for transform changes
     pub fn animate_transform(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.transform.get_or(Transform::IDENTITY);
-        self.transform_anim = Some(AnimationState::new(initial, transition));
+        self.anims_mut().transform = Some(AnimationState::new(initial, transition));
         self
     }
 
@@ -704,9 +709,11 @@ impl Container {
     fn is_relayout_boundary_for(&self, constraints: Constraints) -> bool {
         // A widget with an active layout-affecting animation is NOT a boundary,
         // because its size changes each frame and the parent must reposition siblings.
-        let has_active_layout_anim = self.width_anim.as_ref().is_some_and(|a| a.is_animating())
-            || self.height_anim.as_ref().is_some_and(|a| a.is_animating())
-            || self.padding_anim.as_ref().is_some_and(|a| a.is_animating());
+        let has_active_layout_anim = self.anims.as_ref().is_some_and(|a| {
+            a.width.as_ref().is_some_and(|x| x.is_animating())
+                || a.height.as_ref().is_some_and(|x| x.is_animating())
+                || a.padding.as_ref().is_some_and(|x| x.is_animating())
+        });
         if has_active_layout_anim {
             return false;
         }
@@ -812,52 +819,59 @@ impl Container {
 
     /// Get current padding (animated or static)
     fn animated_padding(&self) -> Padding {
-        get_animated_value(&self.padding_anim, || {
+        get_animated_value(self.anims.as_ref().and_then(|a| a.padding.as_ref()), || {
             self.padding.get_or(Padding::default())
         })
     }
 
     /// Get current background color (animated or effective target)
     fn animated_background(&self, tree: &Tree) -> Color {
-        get_animated_value(&self.background_anim, || {
-            self.effective_background_target(tree)
-        })
+        get_animated_value(
+            self.anims.as_ref().and_then(|a| a.background.as_ref()),
+            || self.effective_background_target(tree),
+        )
     }
 
     /// Get current corner radius (animated or effective target)
     fn animated_corner_radius(&self, tree: &Tree) -> f32 {
-        get_animated_value(&self.corner_radius_anim, || {
-            self.effective_corner_radius_target(tree)
-        })
+        get_animated_value(
+            self.anims.as_ref().and_then(|a| a.corner_radius.as_ref()),
+            || self.effective_corner_radius_target(tree),
+        )
     }
 
     /// Get current border width (animated or effective target)
     fn animated_border_width(&self, tree: &Tree) -> f32 {
-        get_animated_value(&self.border_width_anim, || {
-            self.effective_border_width_target(tree)
-        })
+        get_animated_value(
+            self.anims.as_ref().and_then(|a| a.border_width.as_ref()),
+            || self.effective_border_width_target(tree),
+        )
     }
 
     /// Get current border color (animated or effective target)
     fn animated_border_color(&self, tree: &Tree) -> Color {
-        get_animated_value(&self.border_color_anim, || {
-            self.effective_border_color_target(tree)
-        })
+        get_animated_value(
+            self.anims.as_ref().and_then(|a| a.border_color.as_ref()),
+            || self.effective_border_color_target(tree),
+        )
     }
 
     /// Get current transform (animated or effective target)
     fn animated_transform(&self, tree: &Tree) -> Transform {
-        get_animated_value(&self.transform_anim, || {
-            self.effective_transform_target(tree)
-        })
+        get_animated_value(
+            self.anims.as_ref().and_then(|a| a.transform.as_ref()),
+            || self.effective_transform_target(tree),
+        )
     }
 
     /// Check if any state layer properties have animations enabled
     fn has_animated_state_properties(&self) -> bool {
-        self.background_anim.is_some()
-            || self.corner_radius_anim.is_some()
-            || self.border_color_anim.is_some()
-            || self.transform_anim.is_some()
+        self.anims.as_ref().is_some_and(|a| {
+            a.background.is_some()
+                || a.corner_radius.is_some()
+                || a.border_color.is_some()
+                || a.transform.is_some()
+        })
     }
 
     /// Request repaint for state changes (hover/press), with Animation job if needed
@@ -909,60 +923,48 @@ impl Widget for Container {
         // Use advance_animations_self for this widget's animations
         let mut any_animating = false;
 
-        // Layout-affecting animations: width, height, padding
-        advance_anim!(self, width_anim, id, any_animating, layout);
-        advance_anim!(self, height_anim, id, any_animating, layout);
-        advance_anim!(
-            self,
-            padding_anim,
-            self.padding.get_or(Padding::default()),
-            id,
-            any_animating,
-            layout
-        );
-
-        // Paint-only animations: border_width, background, corner_radius, border_color, transform
+        // Compute targets before borrowing anims mutably
+        let padding_target = self.padding.get_or(Padding::default());
         let border_width_target = self.effective_border_width_target(tree);
-        advance_anim!(
-            self,
-            border_width_anim,
-            border_width_target,
-            id,
-            any_animating,
-            paint
-        );
         let bg_target = self.effective_background_target(tree);
-        advance_anim!(self, background_anim, bg_target, id, any_animating, paint);
-
         let corner_radius_target = self.effective_corner_radius_target(tree);
-        advance_anim!(
-            self,
-            corner_radius_anim,
-            corner_radius_target,
-            id,
-            any_animating,
-            paint
-        );
-
         let border_color_target = self.effective_border_color_target(tree);
-        advance_anim!(
-            self,
-            border_color_anim,
-            border_color_target,
-            id,
-            any_animating,
-            paint
-        );
-
         let transform_target = self.effective_transform_target(tree);
-        advance_anim!(
-            self,
-            transform_anim,
-            transform_target,
-            id,
-            any_animating,
-            paint
-        );
+
+        if let Some(ref mut anims) = self.anims {
+            // Layout-affecting animations: width, height, padding
+            advance_anim!(anims, width, id, any_animating, layout);
+            advance_anim!(anims, height, id, any_animating, layout);
+            advance_anim!(anims, padding, padding_target, id, any_animating, layout);
+
+            // Paint-only animations: border_width, background, corner_radius, border_color, transform
+            advance_anim!(
+                anims,
+                border_width,
+                border_width_target,
+                id,
+                any_animating,
+                paint
+            );
+            advance_anim!(anims, background, bg_target, id, any_animating, paint);
+            advance_anim!(
+                anims,
+                corner_radius,
+                corner_radius_target,
+                id,
+                any_animating,
+                paint
+            );
+            advance_anim!(
+                anims,
+                border_color,
+                border_color_target,
+                id,
+                any_animating,
+                paint
+            );
+            advance_anim!(anims, transform, transform_target, id, any_animating, paint);
+        }
 
         // Advance ripple animation
         if self.ripple.is_active()
@@ -1093,39 +1095,41 @@ impl Widget for Container {
         // visible bounds (e.g., Center alignment tracks the animating size).
         // For non-exact (shrink-to-fit) widths, use the signal value to avoid a
         // circular dependency: animated width → constrains children → target = clamped.
-        let child_layout_width = if let Some(ref anim) = self.width_anim {
-            if !anim.is_initial() && width_length.exact.is_some() {
-                *anim.current()
+        let child_layout_width =
+            if let Some(anim) = self.anims.as_ref().and_then(|a| a.width.as_ref()) {
+                if !anim.is_initial() && width_length.exact.is_some() {
+                    *anim.current()
+                } else {
+                    width_length.exact.unwrap_or(constraints.max_width)
+                }
+            } else if let Some(exact) = width_length.exact {
+                exact
             } else {
-                width_length.exact.unwrap_or(constraints.max_width)
-            }
-        } else if let Some(exact) = width_length.exact {
-            exact
-        } else {
-            let w = constraints.max_width;
-            if let Some(max) = width_length.max {
-                w.min(max)
-            } else {
-                w
-            }
-        };
+                let w = constraints.max_width;
+                if let Some(max) = width_length.max {
+                    w.min(max)
+                } else {
+                    w
+                }
+            };
 
-        let child_layout_height = if let Some(ref anim) = self.height_anim {
-            if !anim.is_initial() && height_length.exact.is_some() {
-                *anim.current()
+        let child_layout_height =
+            if let Some(anim) = self.anims.as_ref().and_then(|a| a.height.as_ref()) {
+                if !anim.is_initial() && height_length.exact.is_some() {
+                    *anim.current()
+                } else {
+                    height_length.exact.unwrap_or(constraints.max_height)
+                }
+            } else if let Some(exact) = height_length.exact {
+                exact
             } else {
-                height_length.exact.unwrap_or(constraints.max_height)
-            }
-        } else if let Some(exact) = height_length.exact {
-            exact
-        } else {
-            let h = constraints.max_height;
-            if let Some(max) = height_length.max {
-                h.min(max)
-            } else {
-                h
-            }
-        };
+                let h = constraints.max_height;
+                if let Some(max) = height_length.max {
+                    h.min(max)
+                } else {
+                    h
+                }
+            };
 
         // Child constraints with padding
         let mut child_max_width = (child_layout_width - padding.horizontal()).max(0.0);
@@ -1228,44 +1232,46 @@ impl Widget for Container {
         let content_height = content_size.height + padding.vertical();
 
         // Update animation targets
-        if let Some(ref mut anim) = self.width_anim {
-            let effective_target = if let Some(exact) = width_length.exact {
-                exact
-            } else {
-                let min_w = width_length.min.unwrap_or(0.0);
-                content_width.max(min_w)
-            };
-            if anim.is_initial() {
-                // Always mark as initialized on first layout so subsequent
-                // changes animate rather than snap.
-                anim.set_immediate(effective_target);
-            } else if (effective_target - *anim.target()).abs() > 0.001 {
-                anim.animate_to(effective_target);
-                // Width affects layout, so use RequiredJob::Layout
-                request_job(id, JobRequest::Animation(RequiredJob::Layout));
-                // Parent must reposition siblings as this child's width changes
-                if let Some(parent_id) = tree.get_parent(id) {
-                    request_job(parent_id, JobRequest::Layout);
+        if let Some(ref mut anims) = self.anims {
+            if let Some(ref mut anim) = anims.width {
+                let effective_target = if let Some(exact) = width_length.exact {
+                    exact
+                } else {
+                    let min_w = width_length.min.unwrap_or(0.0);
+                    content_width.max(min_w)
+                };
+                if anim.is_initial() {
+                    // Always mark as initialized on first layout so subsequent
+                    // changes animate rather than snap.
+                    anim.set_immediate(effective_target);
+                } else if (effective_target - *anim.target()).abs() > 0.001 {
+                    anim.animate_to(effective_target);
+                    // Width affects layout, so use RequiredJob::Layout
+                    request_job(id, JobRequest::Animation(RequiredJob::Layout));
+                    // Parent must reposition siblings as this child's width changes
+                    if let Some(parent_id) = tree.get_parent(id) {
+                        request_job(parent_id, JobRequest::Layout);
+                    }
                 }
             }
-        }
 
-        if let Some(ref mut anim) = self.height_anim {
-            let effective_target = if let Some(exact) = height_length.exact {
-                exact
-            } else {
-                let min_h = height_length.min.unwrap_or(0.0);
-                content_height.max(min_h)
-            };
-            if anim.is_initial() {
-                anim.set_immediate(effective_target);
-            } else if (effective_target - *anim.target()).abs() > 0.001 {
-                anim.animate_to(effective_target);
-                // Height affects layout, so use RequiredJob::Layout
-                request_job(id, JobRequest::Animation(RequiredJob::Layout));
-                // Parent must reposition siblings as this child's height changes
-                if let Some(parent_id) = tree.get_parent(id) {
-                    request_job(parent_id, JobRequest::Layout);
+            if let Some(ref mut anim) = anims.height {
+                let effective_target = if let Some(exact) = height_length.exact {
+                    exact
+                } else {
+                    let min_h = height_length.min.unwrap_or(0.0);
+                    content_height.max(min_h)
+                };
+                if anim.is_initial() {
+                    anim.set_immediate(effective_target);
+                } else if (effective_target - *anim.target()).abs() > 0.001 {
+                    anim.animate_to(effective_target);
+                    // Height affects layout, so use RequiredJob::Layout
+                    request_job(id, JobRequest::Animation(RequiredJob::Layout));
+                    // Parent must reposition siblings as this child's height changes
+                    if let Some(parent_id) = tree.get_parent(id) {
+                        request_job(parent_id, JobRequest::Layout);
+                    }
                 }
             }
         }
@@ -1274,18 +1280,25 @@ impl Widget for Container {
         // from the correct signal value rather than a stale construction-time value)
         // Compute targets first to avoid borrow conflicts with &mut anim + &self
         let bg_init = self
-            .background_anim
+            .anims
             .as_ref()
+            .and_then(|a| a.background.as_ref())
             .is_some_and(|a| a.is_initial());
         let cr_init = self
-            .corner_radius_anim
+            .anims
             .as_ref()
+            .and_then(|a| a.corner_radius.as_ref())
             .is_some_and(|a| a.is_initial());
         let bc_init = self
-            .border_color_anim
+            .anims
             .as_ref()
+            .and_then(|a| a.border_color.as_ref())
             .is_some_and(|a| a.is_initial());
-        let tf_init = self.transform_anim.as_ref().is_some_and(|a| a.is_initial());
+        let tf_init = self
+            .anims
+            .as_ref()
+            .and_then(|a| a.transform.as_ref())
+            .is_some_and(|a| a.is_initial());
         if bg_init || cr_init || bc_init || tf_init {
             let bg_target = if bg_init {
                 Some(self.effective_background_target(tree))
@@ -1307,23 +1320,33 @@ impl Widget for Container {
             } else {
                 None
             };
-            if let (Some(anim), Some(target)) = (&mut self.background_anim, bg_target) {
-                anim.set_immediate(target);
-            }
-            if let (Some(anim), Some(target)) = (&mut self.corner_radius_anim, cr_target) {
-                anim.set_immediate(target);
-            }
-            if let (Some(anim), Some(target)) = (&mut self.border_color_anim, bc_target) {
-                anim.set_immediate(target);
-            }
-            if let (Some(anim), Some(target)) = (&mut self.transform_anim, tf_target) {
-                anim.set_immediate(target);
+            if let Some(ref mut anims) = self.anims {
+                if let (Some(anim), Some(target)) = (&mut anims.background, bg_target) {
+                    anim.set_immediate(target);
+                }
+                if let (Some(anim), Some(target)) = (&mut anims.corner_radius, cr_target) {
+                    anim.set_immediate(target);
+                }
+                if let (Some(anim), Some(target)) = (&mut anims.border_color, bc_target) {
+                    anim.set_immediate(target);
+                }
+                if let (Some(anim), Some(target)) = (&mut anims.transform, tf_target) {
+                    anim.set_immediate(target);
+                }
             }
         }
 
         // Determine shrink behavior
-        let width_animating = self.width_anim.as_ref().is_some_and(|a| a.is_animating());
-        let height_animating = self.height_anim.as_ref().is_some_and(|a| a.is_animating());
+        let width_animating = self
+            .anims
+            .as_ref()
+            .and_then(|a| a.width.as_ref())
+            .is_some_and(|a| a.is_animating());
+        let height_animating = self
+            .anims
+            .as_ref()
+            .and_then(|a| a.height.as_ref())
+            .is_some_and(|a| a.is_animating());
         let has_exact_width = width_length.exact.is_some();
         let has_exact_height = height_length.exact.is_some();
         let allow_shrink_width = self.overflow == Overflow::Hidden
@@ -1336,7 +1359,7 @@ impl Widget for Container {
             || self.scroll_axis.allows_vertical();
 
         // Calculate final dimensions
-        let mut width = if let Some(ref anim) = self.width_anim {
+        let mut width = if let Some(anim) = self.anims.as_ref().and_then(|a| a.width.as_ref()) {
             if allow_shrink_width {
                 *anim.current()
             } else {
@@ -1358,7 +1381,7 @@ impl Widget for Container {
             width = width.min(max);
         }
 
-        let mut height = if let Some(ref anim) = self.height_anim {
+        let mut height = if let Some(anim) = self.anims.as_ref().and_then(|a| a.height.as_ref()) {
             if allow_shrink_height {
                 *anim.current()
             } else {
@@ -1380,10 +1403,12 @@ impl Widget for Container {
             height = height.min(max);
         }
 
-        if !allow_shrink_width && self.width_anim.is_none() && !has_exact_width {
+        let has_width_anim = self.anims.as_ref().is_some_and(|a| a.width.is_some());
+        let has_height_anim = self.anims.as_ref().is_some_and(|a| a.height.is_some());
+        if !allow_shrink_width && !has_width_anim && !has_exact_width {
             width = width.max(content_width);
         }
-        if !allow_shrink_height && self.height_anim.is_none() && !has_exact_height {
+        if !allow_shrink_height && !has_height_anim && !has_exact_height {
             height = height.max(content_height);
         }
 

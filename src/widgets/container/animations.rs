@@ -278,10 +278,13 @@ macro_rules! advance_anim {
 /// Helper to get an animated value or a fallback
 #[inline]
 pub fn get_animated_value<T: Animatable + Copy>(
-    anim: &Option<AnimationState<T>>,
+    anim: Option<&AnimationState<T>>,
     fallback: impl FnOnce() -> T,
 ) -> T {
-    anim.as_ref().map(|a| *a.current()).unwrap_or_else(fallback)
+    match anim {
+        Some(a) => *a.current(),
+        None => fallback(),
+    }
 }
 
 #[cfg(test)]
@@ -353,17 +356,14 @@ mod tests {
         let transition = Transition::new(300.0, TimingFunction::Linear);
         let mut state = AnimationState::new(42.0f32, transition);
         state.set_immediate(42.0);
-        let opt = Some(state);
 
-        let value = get_animated_value(&opt, || 0.0);
+        let value = get_animated_value(Some(&state), || 0.0);
         assert_eq!(value, 42.0);
     }
 
     #[test]
     fn test_get_animated_value_with_none() {
-        let opt: Option<AnimationState<f32>> = None;
-
-        let value = get_animated_value(&opt, || 99.0);
+        let value = get_animated_value::<f32>(None, || 99.0);
         assert_eq!(value, 99.0);
     }
 }
