@@ -1463,7 +1463,7 @@ impl Widget for Container {
 
         // Register widget ref so update_widget_refs() can refresh bounds
         if let Some(ref wr) = self.widget_ref {
-            register_widget_ref(id, wr.rect());
+            register_widget_ref(id, wr.rw_signal());
         }
 
         size

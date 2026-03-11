@@ -71,11 +71,11 @@ For mutable shared state, store a `Signal<T>` as context. This is the most power
 
 ### provide_signal_context
 
-Creates a signal and provides it as context in one step:
+Creates an `RwSignal` and provides it as context in one step:
 
 ```rust
 App::new().run(|app| {
-    // Creates Signal<Theme> and stores it as context
+    // Creates RwSignal<Theme> and stores it as context
     let theme = provide_signal_context(Theme::default());
 
     app.add_surface(config, || build_ui());
@@ -86,7 +86,7 @@ App::new().run(|app| {
 
 ```rust
 fn themed_box() -> Container {
-    let theme = expect_context::<Signal<Theme>>();
+    let theme = expect_context::<RwSignal<Theme>>();
 
     container()
         .background(move || theme.get().bg_color)
@@ -163,5 +163,5 @@ pub fn has_context<T: 'static>() -> bool;
 // Create signal + provide as context
 pub fn provide_signal_context<T: Clone + PartialEq + Send + 'static>(
     value: T
-) -> Signal<T>;
+) -> RwSignal<T>;
 ```

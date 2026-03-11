@@ -2,14 +2,14 @@
 
 Guido uses a fine-grained reactive system inspired by SolidJS. This enables efficient updates where only the affected parts of the UI change.
 
-## Signals
+## RwSignal (Read-Write)
 
-Signals are reactive values that notify dependents when they change:
+`create_signal()` returns an `RwSignal<T>` — a read-write reactive value (8 bytes, `Copy`):
 
 ```rust
 use guido::prelude::*;
 
-let count = create_signal(0);
+let count = create_signal(0); // RwSignal<i32>
 
 // Read the current value
 let value = count.get();
@@ -23,9 +23,29 @@ count.update(|c| *c += 1);
 
 ### Key Properties
 
-- **Copy** - Signals implement `Copy`, so you can use them in multiple closures without cloning
+- **Copy** - `RwSignal` implements `Copy`, so you can use it in multiple closures without cloning
 - **Background updates** - Use `.writer()` to get a `WriteSignal<T>` for background task updates
 - **Automatic tracking** - Dependencies are tracked when reading inside reactive contexts
+- **Converts to Signal** - Call `.read_only()` or `.into()` to get a read-only `Signal<T>`
+
+## Signal (Read-Only)
+
+`Signal<T>` is a read-only reactive value (16 bytes, `Copy`). It cannot be written to — calling `.set()` is a compile-time error. There are two ways to create one:
+
+```rust
+// Stored: wraps a static value
+let name = create_stored("hello".to_string()); // Signal<String>
+
+// Derived: closure-backed, re-evaluates on each read
+let doubled = create_derived(move || count.get() * 2); // Signal<i32>
+```
+
+You can also convert an `RwSignal` to a `Signal`:
+
+```rust
+let count = create_signal(0);
+let read_only: Signal<i32> = count.read_only(); // or count.into()
+```
 
 ## Memos
 
@@ -102,11 +122,12 @@ The text automatically updates when `count` changes.
 
 ## The IntoSignal Pattern
 
-Under the hood, Guido uses `Signal<T>` to represent all reactive values. The `IntoSignal<T>` trait accepts:
+Widget properties accept `Signal<T>` via the `IntoSignal<T>` trait. Both `RwSignal<T>` and `Signal<T>` work, along with raw values and closures:
 
-- **Static values** → creates a read-only stored signal via `create_stored()`
-- **Closures** → creates a derived signal via `create_derived()`
-- **Existing `Signal<T>`** → passed through directly (Signal is Copy)
+- **Static values** → creates a stored `Signal<T>` via `create_stored()`
+- **Closures** → creates a derived `Signal<T>` via `create_derived()`
+- **`Signal<T>`** → passed through directly
+- **`RwSignal<T>`** → automatically converted to `Signal<T>`
 
 You don't need to create signals manually for widget properties — just pass values, closures, or signals directly.
 
@@ -252,9 +273,24 @@ let doubled = create_memo(move || count.get() * 2);
 ### Signal Creation
 
 ```rust
-pub fn create_signal<T: Clone + 'static>(value: T) -> Signal<T>;
+pub fn create_signal<T: Clone + PartialEq + Send + 'static>(value: T) -> RwSignal<T>;
+pub fn create_stored<T: Clone + 'static>(value: T) -> Signal<T>;
+pub fn create_derived<T: Clone + 'static>(f: impl Fn() -> T + 'static) -> Signal<T>;
 pub fn create_memo<T: Clone + PartialEq + 'static>(f: impl Fn() -> T + 'static) -> Memo<T>;
 pub fn create_effect(f: impl Fn() + 'static);
+```
+
+### RwSignal Methods
+
+```rust
+impl<T: Clone> RwSignal<T> {
+    pub fn get(&self) -> T;           // Read with tracking
+    pub fn get_untracked(&self) -> T; // Read without tracking
+    pub fn set(&self, value: T);      // Set new value
+    pub fn update(&self, f: impl FnOnce(&mut T)); // Update in place
+    pub fn writer(&self) -> WriteSignal<T>; // Get Send handle for background threads
+    pub fn read_only(&self) -> Signal<T>;   // Convert to read-only Signal
+}
 ```
 
 ### Signal Methods
@@ -265,9 +301,7 @@ impl<T: Clone> Signal<T> {
     pub fn get_untracked(&self) -> T; // Read without tracking
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R; // Borrow with tracking
     pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R; // Borrow without tracking
-    pub fn set(&self, value: T);      // Set new value
-    pub fn update(&self, f: impl FnOnce(&mut T)); // Update in place
-    pub fn writer(&self) -> WriteSignal<T>; // Get Send handle for background threads
+    // No set/update/writer — Signal is read-only
 }
 ```
 

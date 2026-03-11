@@ -50,18 +50,13 @@ thread_local! {
     static STORAGE: RefCell<SignalStorage> = RefCell::new(SignalStorage::new());
 }
 
-/// Get a reference to the signal's RefCell, handling errors consistently.
+/// Briefly borrow storage to Rc::clone a signal's value handle.
 ///
-/// Leptos-style: briefly borrow storage to Rc::clone the handle (O(1)),
-/// release the storage borrow, then work with the value through the Rc.
-/// This prevents re-entrant borrow panics when user callbacks create new signals.
-fn with_signal_cell<T: 'static, R>(
-    id: SignalId,
-    operation: &str,
-    f: impl FnOnce(&RefCell<T>) -> R,
-) -> R {
-    // Phase 1: briefly borrow storage to clone the Rc handle
-    let rc = STORAGE.with(|storage| {
+/// Leptos-style: clone the Rc (O(1)), release the storage borrow, then let
+/// the caller work with the value. Prevents re-entrant borrow panics when
+/// user callbacks create new signals.
+fn clone_slot_rc(id: SignalId, operation: &str) -> Rc<dyn Any> {
+    STORAGE.with(|storage| {
         let storage = storage.borrow();
         let slot = storage
             .values
@@ -82,8 +77,16 @@ fn with_signal_cell<T: 'static, R>(
                 )
             });
         Rc::clone(slot)
-    });
-    // Phase 2: storage borrow released — work with value through the Rc
+    })
+}
+
+/// Get a reference to the signal's RefCell, handling errors consistently.
+fn with_signal_cell<T: 'static, R>(
+    id: SignalId,
+    operation: &str,
+    f: impl FnOnce(&RefCell<T>) -> R,
+) -> R {
+    let rc = clone_slot_rc(id, operation);
     let cell = rc.downcast_ref::<RefCell<T>>().unwrap_or_else(|| {
         panic!(
             "Signal {} type mismatch: stored type does not match requested type {}",
@@ -94,41 +97,42 @@ fn with_signal_cell<T: 'static, R>(
     f(cell)
 }
 
-/// Create a new signal and return its ID.
-/// Reuses IDs from disposed signals when available to prevent unbounded growth.
-pub fn create_signal_value<T: 'static>(value: T) -> SignalId {
+/// Allocate a slot and store the given value. Reuses IDs from disposed signals.
+fn alloc_slot(value: Rc<dyn Any>) -> SignalId {
     STORAGE.with(|storage| {
         let mut storage = storage.borrow_mut();
-        let boxed: Rc<dyn Any> = Rc::new(RefCell::new(value));
-        // Reuse a freed slot if available
         if let Some(id) = storage.free_ids.pop() {
-            storage.values[id] = Some(boxed);
+            storage.values[id] = Some(value);
             return id;
         }
-        // Otherwise allocate new
         let id = storage.next_id;
         storage.next_id += 1;
-        storage.values.push(Some(boxed));
+        storage.values.push(Some(value));
         id
     })
+}
+
+/// Create a new mutable signal value (`Rc<RefCell<T>>`) and return its ID.
+pub fn create_signal_value<T: 'static>(value: T) -> SignalId {
+    alloc_slot(Rc::new(RefCell::new(value)))
+}
+
+/// Create a new immutable stored value (`Rc<T>`, no RefCell) and return its ID.
+///
+/// This is the cheap path for `create_stored()`: no RefCell wrapping, and the
+/// caller skips runtime registration and dependency tracking. Saves per-signal:
+/// - 8 bytes (no RefCell borrow flag)
+/// - One `Vec::push` in runtime's `signal_subscribers`
+/// - `record_effect_read()` + `record_signal_read()` on every `.get()` call
+pub fn create_stored_value<T: 'static>(value: T) -> SignalId {
+    alloc_slot(Rc::new(value))
 }
 
 /// Allocate a signal ID slot without storing a value.
 /// Used by `create_derived` — the ID exists in the runtime/owner system,
 /// but reads go through the derived closure map instead.
 pub fn allocate_signal_slot() -> SignalId {
-    STORAGE.with(|storage| {
-        let mut storage = storage.borrow_mut();
-        if let Some(id) = storage.free_ids.pop() {
-            // Mark slot as occupied (None means disposed, Some means alive)
-            storage.values[id] = Some(Rc::new(()));
-            return id;
-        }
-        let id = storage.next_id;
-        storage.next_id += 1;
-        storage.values.push(Some(Rc::new(())));
-        id
-    })
+    alloc_slot(Rc::new(()))
 }
 
 /// Store a derived closure for the given signal ID.
@@ -163,11 +167,6 @@ pub fn try_call_derived<T: Clone + 'static>(id: SignalId) -> Option<T> {
     })
 }
 
-/// Check if a signal has a derived closure.
-pub fn is_derived(id: SignalId) -> bool {
-    STORAGE.with(|storage| storage.borrow().derived.contains_key(&id))
-}
-
 /// Dispose a signal, marking it as unavailable and adding its ID to the free list.
 ///
 /// After disposal, any attempt to read or write the signal will panic
@@ -183,7 +182,35 @@ pub fn dispose_signal(id: SignalId) {
     });
 }
 
-/// Get a signal's value (clones it)
+/// Get a stored (immutable) value by cloning it.
+///
+/// Reads `Rc<T>` directly — no RefCell borrow needed since the value is immutable.
+/// Used by `Signal::get()` for `SignalKind::Stored` signals.
+pub fn get_stored_value<T: Clone + 'static>(id: SignalId) -> T {
+    with_stored_ref(id, |v: &T| v.clone())
+}
+
+/// Borrow a stored (immutable) value for reading.
+///
+/// Reads `Rc<T>` directly — no RefCell borrow needed.
+pub fn with_stored_value<T: 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -> R {
+    with_stored_ref(id, f)
+}
+
+/// Borrow the Rc<T> for a stored (immutable) signal and apply `f`.
+fn with_stored_ref<T: 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -> R {
+    let rc = clone_slot_rc(id, "read");
+    let val = rc.downcast_ref::<T>().unwrap_or_else(|| {
+        panic!(
+            "Signal {} type mismatch: stored type does not match requested type {}",
+            id,
+            std::any::type_name::<T>()
+        )
+    });
+    f(val)
+}
+
+/// Get a mutable signal's value (clones it)
 pub fn get_signal_value<T: Clone + 'static>(id: SignalId) -> T {
     with_signal_cell(id, "read", |cell: &RefCell<T>| cell.borrow().clone())
 }

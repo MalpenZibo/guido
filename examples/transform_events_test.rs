@@ -109,7 +109,7 @@ fn main() {
     });
 }
 
-fn make_box(label: &'static str, base_color: Color, click_count: Signal<i32>) -> Container {
+fn make_box(label: &'static str, base_color: Color, click_count: RwSignal<i32>) -> Container {
     container()
         .width(70.0)
         .height(70.0)

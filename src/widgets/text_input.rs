@@ -15,8 +15,8 @@ use crate::default_font_family;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
-    CursorIcon, IntoSignal, OptionSignalExt, Signal, clipboard_copy, clipboard_paste, has_focus,
-    release_focus, request_focus, set_cursor, with_signal_tracking,
+    CursorIcon, IntoSignal, OptionSignalExt, RwSignal, Signal, clipboard_copy, clipboard_paste,
+    has_focus, release_focus, request_focus, set_cursor, with_signal_tracking,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled, measure_text_styled};
 use crate::tree::{Tree, WidgetId};
@@ -191,7 +191,7 @@ impl Selection {
 pub struct TextInput {
     // Content (actual value, never masked)
     /// Signal for two-way binding
-    value: Signal<String>,
+    value: RwSignal<String>,
     cached_value: String,
     cached_char_count: usize,
     cached_display_text: String,
@@ -253,7 +253,7 @@ pub struct TextInput {
 impl TextInput {
     /// Create a TextInput with a Signal for two-way binding.
     /// Changes made in the TextInput will be written back to the signal.
-    pub fn new(signal: Signal<String>) -> Self {
+    pub fn new(signal: RwSignal<String>) -> Self {
         // Use get_untracked() to avoid registering layout dependencies during widget creation.
         // Layout dependencies should only be registered during the widget's own layout phase.
         let cached_value = signal.get_untracked();
@@ -1207,6 +1207,6 @@ impl Widget for TextInput {
 /// let username = create_signal(String::new());
 /// text_input(username)
 /// ```
-pub fn text_input(signal: Signal<String>) -> TextInput {
+pub fn text_input(signal: RwSignal<String>) -> TextInput {
     TextInput::new(signal)
 }

@@ -131,7 +131,7 @@ pub mod prelude {
     };
     pub use crate::platform::{Anchor, KeyboardInteractivity, Layer};
     pub use crate::reactive::{
-        CursorIcon, Memo, OptionSignalExt, Service, Signal, WriteSignal, create_derived,
+        CursorIcon, Memo, OptionSignalExt, RwSignal, Service, Signal, WriteSignal, create_derived,
         create_effect, create_memo, create_service, create_signal, create_stored, expect_context,
         has_context, on_cleanup, provide_context, provide_signal_context, set_cursor, use_context,
         with_context,

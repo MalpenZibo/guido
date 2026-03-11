@@ -79,8 +79,8 @@ cargo test
 ### Core Modules
 
 **`reactive/`** - Single-threaded reactive system inspired by SolidJS
-- `Signal<T>`: Main-thread reactive values with automatic dependency tracking. `!Send` — use `.writer()` for background thread updates
-- `Signal<T>`: Copy type that wraps reactive or static values. Created via `create_signal` (read-write, requires Clone+PartialEq+Send), `create_stored` (read-only, requires Clone), or `create_derived` (closure-backed). `IntoSignal<T, M>` uses marker-type disambiguation for blanket impls — integers are accepted where `f32`/`Length`/`Padding` is expected
+- `RwSignal<T>`: Read-write reactive signal (8 bytes). Created via `create_signal` (requires Clone+PartialEq+Send). Has `.get()`, `.set()`, `.update()`, `.writer()`. Converts to `Signal<T>` via `.read_only()` or `.into()`
+- `Signal<T>`: Read-only reactive signal (16 bytes). Created via `create_stored` (static, requires Clone) or `create_derived` (closure-backed). Has `.get()`, `.with()` — no mutation methods. Widget props accept `Signal<T>` via `IntoSignal<T, M>` (marker-type disambiguation — integers accepted where `f32`/`Length`/`Padding` expected)
 - `Memo<T>`: Eager computed values that recompute when dependencies change, only notify on actual changes (`PartialEq`)
 - `Effect`: Side effects that re-run when tracked signals change
 - `Owner`: Ownership system for automatic resource cleanup (signals, effects, custom callbacks)
@@ -131,7 +131,7 @@ The reactive system allows widget properties to be either static or dynamic:
 // Static value
 container().background(Color::rgb(0.2, 0.2, 0.3))
 
-// Reactive signal
+// Reactive signal (RwSignal auto-converts to Signal via IntoSignal)
 let color = create_signal(Color::rgb(0.2, 0.2, 0.3));
 container().background(color)
 
@@ -145,7 +145,7 @@ container().background(move || {
 })
 ```
 
-Signals are main-thread only. Background threads use `.writer()` to get a `WriteSignal<T>` that queues writes for the next frame. The main render loop re-layouts and re-paints each frame, reading current signal values.
+Both `Signal<T>` and `RwSignal<T>` are main-thread only (`!Send`). Background threads use `rw_signal.writer()` to get a `WriteSignal<T>` that queues writes for the next frame. The main render loop re-layouts and re-paints each frame, reading current signal values.
 
 ### Widget Trait
 

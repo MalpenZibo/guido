@@ -9,10 +9,10 @@ This page details Guido's module structure and key types.
 Single-threaded reactive primitives inspired by SolidJS.
 
 **Key Types:**
-- `Signal<T>` - Reactive values with automatic dependency tracking
+- `RwSignal<T>` - Read-write reactive values (8 bytes, `Copy`). Created via `create_signal()`. Supports `.get()`, `.set()`, `.update()`, `.writer()`
+- `Signal<T>` - Read-only reactive values (16 bytes, `Copy`). Created via `create_stored()`, `create_derived()`, or `RwSignal::read_only()`. Supports `.get()`, `.with()` — no `.set()`
 - `Memo<T>` - Eager derived values that only notify on actual changes
 - `Effect` - Side effects that re-run on changes
-- `Signal<T>` - Copy wrapper for reactive values
 
 **How It Works:**
 

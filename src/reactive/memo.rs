@@ -1,6 +1,6 @@
 use super::effect::create_effect;
 use super::into_signal::{IntoSignal, MemoMarker};
-use super::signal::{Signal, create_signal};
+use super::signal::{RwSignal, Signal, create_signal};
 
 /// Eager computed value that recomputes immediately when dependencies change.
 ///
@@ -22,7 +22,7 @@ use super::signal::{Signal, create_signal};
 /// })
 /// ```
 pub struct Memo<T: Clone + PartialEq + Send + 'static> {
-    signal: Signal<T>,
+    signal: RwSignal<T>,
 }
 
 // Manually implement Clone and Copy to avoid unnecessary bounds on T
@@ -77,15 +77,15 @@ impl<T: Clone + PartialEq + Send + 'static> Memo<T> {
         self.signal.with(f)
     }
 
-    /// Extract the inner signal.
+    /// Extract as a read-only signal.
     pub fn into_signal(self) -> Signal<T> {
-        self.signal
+        self.signal.read_only()
     }
 }
 
 impl<T: Clone + PartialEq + Send + 'static> IntoSignal<T, MemoMarker> for Memo<T> {
     fn into_signal(self) -> Signal<T> {
-        self.signal
+        self.signal.read_only()
     }
 }
 

@@ -34,7 +34,7 @@ fn main() {
 }
 
 /// Card demonstrating width animation with spring physics
-fn create_width_animation_card(expanded: Signal<bool>) -> Container {
+fn create_width_animation_card(expanded: RwSignal<bool>) -> Container {
     container()
         .width(move || at_least(if expanded.get() { 600.0 } else { 50.0 }))
         .animate_width(Transition::spring(SpringConfig::DEFAULT))
