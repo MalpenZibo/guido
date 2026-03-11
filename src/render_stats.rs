@@ -11,6 +11,7 @@
 //! - Paint child cache hits/misses
 //! - Flatten cache hits/misses
 //! - Damage region distribution
+//! - Per-phase timing (paint, flatten, GPU render, cache)
 
 /// Reasons why a layout was executed (can be multiple).
 /// Note: Animations and property changes flow through the reactive system via mark_needs_layout(),
@@ -19,6 +20,23 @@
 pub struct LayoutReasons {
     pub constraints_changed: bool,
     pub reactive_changed: bool,
+}
+
+/// Render pipeline phase for timing measurements.
+#[derive(Debug, Clone, Copy)]
+pub enum Phase {
+    Paint,
+    Flatten,
+    GpuRender,
+    CachePaintResults,
+}
+
+/// Per-phase timing statistics (microseconds).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct PhaseTiming {
+    pub avg_us: f64,
+    pub min_us: f64,
+    pub max_us: f64,
 }
 
 /// Snapshot of accumulated render statistics.
@@ -39,17 +57,87 @@ pub struct StatsSnapshot {
     pub damage_none: u64,
     pub damage_partial: u64,
     pub damage_full: u64,
+    // Timing
+    pub paint_timing: PhaseTiming,
+    pub flatten_timing: PhaseTiming,
+    pub gpu_render_timing: PhaseTiming,
+    pub cache_paint_timing: PhaseTiming,
+    // Scroll
+    pub scroll_children_total: u64,
+    pub scroll_children_iterated: u64,
+}
+
+/// Zero-cost timing macro. Wraps a block with `Instant::now()` / `.elapsed()`
+/// when `render-stats` is enabled; expands to just the body when disabled.
+#[cfg(feature = "render-stats")]
+#[macro_export]
+macro_rules! time_phase {
+    ($phase:expr, $body:expr) => {{
+        let _t = std::time::Instant::now();
+        let result = $body;
+        $crate::render_stats::record_phase_duration($phase, _t.elapsed());
+        result
+    }};
+}
+
+#[cfg(not(feature = "render-stats"))]
+#[macro_export]
+macro_rules! time_phase {
+    ($phase:expr, $body:expr) => {
+        $body
+    };
 }
 
 #[cfg(feature = "render-stats")]
 mod inner {
-    use super::LayoutReasons;
+    use super::{LayoutReasons, Phase, PhaseTiming};
     use crate::tree::DamageRegion;
     use std::cell::RefCell;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     thread_local! {
         static STATS: RefCell<RenderStats> = RefCell::new(RenderStats::new());
+    }
+
+    /// Per-phase duration accumulator.
+    struct PhaseAccum {
+        total: Duration,
+        min: Duration,
+        max: Duration,
+        count: u64,
+    }
+
+    impl PhaseAccum {
+        fn new() -> Self {
+            Self {
+                total: Duration::ZERO,
+                min: Duration::MAX,
+                max: Duration::ZERO,
+                count: 0,
+            }
+        }
+
+        fn record(&mut self, d: Duration) {
+            self.total += d;
+            self.min = self.min.min(d);
+            self.max = self.max.max(d);
+            self.count += 1;
+        }
+
+        fn to_timing(&self) -> PhaseTiming {
+            if self.count == 0 {
+                return PhaseTiming::default();
+            }
+            PhaseTiming {
+                avg_us: self.total.as_micros() as f64 / self.count as f64,
+                min_us: self.min.as_micros() as f64,
+                max_us: self.max.as_micros() as f64,
+            }
+        }
+
+        fn reset(&mut self) {
+            *self = Self::new();
+        }
     }
 
     struct RenderStats {
@@ -73,7 +161,15 @@ mod inner {
         damage_none: u64,
         damage_partial: u64,
         damage_full: u64,
-        // Timing
+        // Phase timing
+        paint_phase: PhaseAccum,
+        flatten_phase: PhaseAccum,
+        gpu_render_phase: PhaseAccum,
+        cache_paint_phase: PhaseAccum,
+        // Scroll
+        scroll_children_total: u64,
+        scroll_children_iterated: u64,
+        // Report timing
         last_print: Instant,
     }
 
@@ -95,6 +191,12 @@ mod inner {
                 damage_none: 0,
                 damage_partial: 0,
                 damage_full: 0,
+                paint_phase: PhaseAccum::new(),
+                flatten_phase: PhaseAccum::new(),
+                gpu_render_phase: PhaseAccum::new(),
+                cache_paint_phase: PhaseAccum::new(),
+                scroll_children_total: 0,
+                scroll_children_iterated: 0,
                 last_print: Instant::now(),
             }
         }
@@ -115,6 +217,12 @@ mod inner {
             self.damage_none = 0;
             self.damage_partial = 0;
             self.damage_full = 0;
+            self.paint_phase.reset();
+            self.flatten_phase.reset();
+            self.gpu_render_phase.reset();
+            self.cache_paint_phase.reset();
+            self.scroll_children_total = 0;
+            self.scroll_children_iterated = 0;
             self.last_print = Instant::now();
         }
     }
@@ -201,6 +309,30 @@ mod inner {
         });
     }
 
+    /// Record a render pipeline phase duration.
+    #[inline]
+    pub fn record_phase_duration(phase: Phase, duration: Duration) {
+        STATS.with(|s| {
+            let mut stats = s.borrow_mut();
+            match phase {
+                Phase::Paint => stats.paint_phase.record(duration),
+                Phase::Flatten => stats.flatten_phase.record(duration),
+                Phase::GpuRender => stats.gpu_render_phase.record(duration),
+                Phase::CachePaintResults => stats.cache_paint_phase.record(duration),
+            }
+        });
+    }
+
+    /// Record scroll paint iteration stats.
+    #[inline]
+    pub fn record_scroll_paint_range(total_children: u64, iterated: u64) {
+        STATS.with(|s| {
+            let mut stats = s.borrow_mut();
+            stats.scroll_children_total += total_children;
+            stats.scroll_children_iterated += iterated;
+        });
+    }
+
     /// Return a snapshot of the current stats (for testing).
     pub fn get_stats() -> super::StatsSnapshot {
         STATS.with(|s| {
@@ -221,6 +353,12 @@ mod inner {
                 damage_none: stats.damage_none,
                 damage_partial: stats.damage_partial,
                 damage_full: stats.damage_full,
+                paint_timing: stats.paint_phase.to_timing(),
+                flatten_timing: stats.flatten_phase.to_timing(),
+                gpu_render_timing: stats.gpu_render_phase.to_timing(),
+                cache_paint_timing: stats.cache_paint_phase.to_timing(),
+                scroll_children_total: stats.scroll_children_total,
+                scroll_children_iterated: stats.scroll_children_iterated,
             }
         })
     }
@@ -307,6 +445,27 @@ mod inner {
                     stats.damage_none, stats.damage_partial, stats.damage_full
                 );
 
+                // Timing output
+                let pt = stats.paint_phase.to_timing();
+                let ft = stats.flatten_phase.to_timing();
+                let gt = stats.gpu_render_phase.to_timing();
+                let ct = stats.cache_paint_phase.to_timing();
+                eprintln!(
+                    "  timing (avg/min/max us): paint={:.0}/{:.0}/{:.0} flatten={:.0}/{:.0}/{:.0} gpu={:.0}/{:.0}/{:.0} cache={:.0}/{:.0}/{:.0}",
+                    pt.avg_us, pt.min_us, pt.max_us,
+                    ft.avg_us, ft.min_us, ft.max_us,
+                    gt.avg_us, gt.min_us, gt.max_us,
+                    ct.avg_us, ct.min_us, ct.max_us,
+                );
+
+                // Scroll stats (only if scroll activity occurred)
+                if stats.scroll_children_total > 0 {
+                    eprintln!(
+                        "  scroll: total_children={} iterated={}",
+                        stats.scroll_children_total, stats.scroll_children_iterated
+                    );
+                }
+
                 stats.reset();
             }
         });
@@ -363,6 +522,14 @@ pub fn record_flatten_cached() {}
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]
 pub fn record_flatten_full() {}
+
+#[cfg(not(feature = "render-stats"))]
+#[inline(always)]
+pub fn record_phase_duration(_phase: Phase, _duration: std::time::Duration) {}
+
+#[cfg(not(feature = "render-stats"))]
+#[inline(always)]
+pub fn record_scroll_paint_range(_total_children: u64, _iterated: u64) {}
 
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]
@@ -550,5 +717,33 @@ mod tests {
         assert_eq!(s.damage_none, 0);
         assert_eq!(s.damage_partial, 0);
         assert_eq!(s.damage_full, 0);
+    }
+
+    #[test]
+    fn test_phase_duration_recording() {
+        setup();
+        use std::time::Duration;
+
+        record_phase_duration(Phase::Paint, Duration::from_micros(100));
+        record_phase_duration(Phase::Paint, Duration::from_micros(200));
+        record_phase_duration(Phase::Paint, Duration::from_micros(150));
+
+        record_phase_duration(Phase::Flatten, Duration::from_micros(50));
+
+        let s = get_stats();
+        assert!((s.paint_timing.avg_us - 150.0).abs() < 1.0);
+        assert!((s.paint_timing.min_us - 100.0).abs() < 1.0);
+        assert!((s.paint_timing.max_us - 200.0).abs() < 1.0);
+        assert!((s.flatten_timing.avg_us - 50.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_scroll_paint_range() {
+        setup();
+        record_scroll_paint_range(10000, 52);
+        record_scroll_paint_range(10000, 48);
+        let s = get_stats();
+        assert_eq!(s.scroll_children_total, 20000);
+        assert_eq!(s.scroll_children_iterated, 100);
     }
 }
