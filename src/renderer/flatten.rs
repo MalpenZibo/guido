@@ -60,11 +60,99 @@ pub struct FlattenedCommand {
 /// Flatten a render tree into a list of commands ready for GPU submission.
 ///
 /// This walks the tree depth-first, computing world transforms as it goes.
-/// Commands are sorted by layer for correct render order.
-pub fn flatten_tree(tree: &mut RenderTree) -> Vec<FlattenedCommand> {
+/// Commands are bucketed by layer for correct render order.
+pub fn flatten_tree(tree: &mut RenderTree) -> (Vec<FlattenedCommand>, LayerBoundaries) {
     let mut commands = Vec::new();
-    flatten_tree_into(tree, &mut commands);
-    commands
+    let boundaries = flatten_tree_into(tree, &mut commands);
+    (commands, boundaries)
+}
+
+/// Layered command buffers that avoid post-flatten sorting.
+///
+/// Commands are emitted directly into per-layer buckets during flattening,
+/// then concatenated in layer order. This replaces the O(n log n) sort with O(n) append.
+struct LayeredCommands {
+    shapes: Vec<FlattenedCommand>,
+    images: Vec<FlattenedCommand>,
+    text: Vec<FlattenedCommand>,
+    overlay: Vec<FlattenedCommand>,
+}
+
+impl LayeredCommands {
+    fn new() -> Self {
+        Self {
+            shapes: Vec::new(),
+            images: Vec::new(),
+            text: Vec::new(),
+            overlay: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, cmd: FlattenedCommand) {
+        match cmd.layer {
+            RenderLayer::Shapes => self.shapes.push(cmd),
+            RenderLayer::Images => self.images.push(cmd),
+            RenderLayer::Text => self.text.push(cmd),
+            RenderLayer::Overlay => self.overlay.push(cmd),
+        }
+    }
+
+    /// Take a snapshot of current lengths across all layer buckets.
+    /// Used with `commands_since()` to capture everything added by a subtree.
+    fn snapshot(&self) -> LayerSnapshot {
+        LayerSnapshot {
+            shapes: self.shapes.len(),
+            images: self.images.len(),
+            text: self.text.len(),
+            overlay: self.overlay.len(),
+        }
+    }
+
+    /// Collect all commands added since a snapshot (across all layers).
+    /// Used to populate `CachedFlatten` which stores a flat mixed-layer Vec.
+    fn commands_since(&self, snap: &LayerSnapshot) -> Vec<FlattenedCommand> {
+        let mut result = Vec::new();
+        result.extend_from_slice(&self.shapes[snap.shapes..]);
+        result.extend_from_slice(&self.images[snap.images..]);
+        result.extend_from_slice(&self.text[snap.text..]);
+        result.extend_from_slice(&self.overlay[snap.overlay..]);
+        result
+    }
+
+    /// Drain all layers into the output buffer in correct render order.
+    /// Returns the boundary offsets: (images_start, text_start, overlay_start).
+    fn drain_into(self, out: &mut Vec<FlattenedCommand>) -> LayerBoundaries {
+        let images_start = self.shapes.len();
+        let text_start = images_start + self.images.len();
+        let overlay_start = text_start + self.text.len();
+
+        out.extend(self.shapes);
+        out.extend(self.images);
+        out.extend(self.text);
+        out.extend(self.overlay);
+
+        LayerBoundaries {
+            images_start,
+            text_start,
+            overlay_start,
+        }
+    }
+}
+
+/// Snapshot of `LayeredCommands` lengths for capturing subtree output.
+struct LayerSnapshot {
+    shapes: usize,
+    images: usize,
+    text: usize,
+    overlay: usize,
+}
+
+/// Pre-computed layer boundary offsets, eliminating the need for `partition_point` calls.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LayerBoundaries {
+    pub images_start: usize,
+    pub text_start: usize,
+    pub overlay_start: usize,
 }
 
 /// Flatten a render tree into an existing buffer (clears and reuses capacity).
@@ -74,15 +162,21 @@ pub fn flatten_tree(tree: &mut RenderTree) -> Vec<FlattenedCommand> {
 ///
 /// Takes `&mut RenderTree` so that flatten results can be cached on nodes
 /// for incremental reuse in subsequent frames.
-pub fn flatten_tree_into(tree: &mut RenderTree, commands: &mut Vec<FlattenedCommand>) {
+///
+/// Returns `LayerBoundaries` with pre-computed offsets for each render layer,
+/// replacing the previous `partition_point` lookups in the renderer.
+pub fn flatten_tree_into(
+    tree: &mut RenderTree,
+    commands: &mut Vec<FlattenedCommand>,
+) -> LayerBoundaries {
     commands.clear();
 
+    let mut layered = LayeredCommands::new();
     for root in &mut tree.roots {
-        flatten_node(root, Transform::IDENTITY, None, None, commands);
+        flatten_node(root, Transform::IDENTITY, None, None, &mut layered);
     }
 
-    // Sort by layer for correct render order
-    commands.sort_by_key(|c| c.layer);
+    layered.drain_into(commands)
 }
 
 /// Recursively flatten a node and its children.
@@ -95,7 +189,7 @@ fn flatten_node(
     parent_world_transform: Transform,
     parent_world_origin: Option<(f32, f32)>,
     parent_clip: Option<&WorldClip>,
-    out: &mut Vec<FlattenedCommand>,
+    out: &mut LayeredCommands,
 ) {
     // Compute this node's world transform
     let (origin_x, origin_y) = node.transform_origin.resolve(node.bounds);
@@ -139,7 +233,16 @@ fn flatten_node(
     }
 
     // Full flatten — existing logic
-    let start_idx = out.len();
+    // Track if we should cache this node's flatten output.
+    // Snapshot captures lengths across all layer buckets so we can collect
+    // everything added by this subtree (including children) for caching.
+    let should_cache =
+        node.clip.is_none() && parent_clip.is_none() && world_transform.is_translation_only();
+    let snap = if should_cache {
+        Some(out.snapshot())
+    } else {
+        None
+    };
 
     // Compute world transform origin (for shapes that need it)
     let world_origin = if !node.local_transform.is_identity() {
@@ -221,11 +324,11 @@ fn flatten_node(
     }
 
     // Cache flatten results for next frame, but only when reuse is possible.
-    // The cache reuse path requires no clips and translation-only transforms,
-    // so skip caching for nodes that would never hit it.
-    if node.clip.is_none() && parent_clip.is_none() && world_transform.is_translation_only() {
+    // The snapshot captures everything added since the start of this node
+    // (including all children), matching the original `out[start_idx..]` behavior.
+    if let Some(snap) = snap {
         node.cached_flatten = Some(Box::new(CachedFlatten {
-            commands: out[start_idx..].to_vec(),
+            commands: out.commands_since(&snap),
             world_transform,
         }));
     } else {

@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 use glyphon::{
     Attrs, Buffer, Cache, Color as GlyphonColor, ColorMode, FontSystem, Metrics, Resolution,
@@ -10,6 +11,23 @@ use crate::widgets::font::FontWeight;
 
 use super::types::TextEntry;
 
+/// Compute a cache key for a text buffer based on content and styling.
+/// Two entries with the same key produce identical glyphon Buffers.
+fn text_buffer_key(entry: &TextEntry, scale_factor: f32) -> u64 {
+    let mut hasher = std::hash::DefaultHasher::new();
+    entry.text.hash(&mut hasher);
+    (entry.font_size * scale_factor).to_bits().hash(&mut hasher);
+    entry.font_weight.hash(&mut hasher);
+    entry.font_family.hash(&mut hasher);
+    ((entry.rect.width.max(200.0)) * scale_factor)
+        .to_bits()
+        .hash(&mut hasher);
+    ((entry.rect.height.max(50.0)) * scale_factor)
+        .to_bits()
+        .hash(&mut hasher);
+    hasher.finish()
+}
+
 pub struct TextRenderState {
     font_system: FontSystem,
     swash_cache: SwashCache,
@@ -19,6 +37,12 @@ pub struct TextRenderState {
     text_renderer: TextRenderer,
     buffers: Vec<Buffer>,
     viewport: Viewport,
+    /// Cache of shaped text buffers from the previous frame, keyed by content+style hash.
+    /// Avoids expensive Unicode analysis and glyph shaping for unchanged text.
+    buffer_cache: HashMap<u64, Buffer>,
+    /// Keys for current frame's buffers (parallel to `self.buffers`), used to
+    /// repopulate `buffer_cache` at the start of the next frame.
+    frame_keys: Vec<u64>,
 }
 
 impl TextRenderState {
@@ -44,6 +68,8 @@ impl TextRenderState {
             text_renderer,
             buffers: Vec::new(),
             viewport,
+            buffer_cache: HashMap::new(),
+            frame_keys: Vec::new(),
         }
     }
 
@@ -58,7 +84,10 @@ impl TextRenderState {
         screen_height: u32,
         scale_factor: f32,
     ) -> Vec<usize> {
-        self.buffers.clear();
+        // Move last frame's buffers into cache for reuse
+        for (key, buffer) in self.frame_keys.drain(..).zip(self.buffers.drain(..)) {
+            self.buffer_cache.insert(key, buffer);
+        }
 
         // Collect indices of texts that have non-trivial transforms (for texture-based rendering)
         let mut transformed_indices = Vec::new();
@@ -114,37 +143,45 @@ impl TextRenderState {
                 continue; // Skip transformed text in direct rendering
             }
 
-            // Scale the font size for HiDPI rendering
-            let scaled_font_size = entry.font_size * scale_factor;
-
-            let mut buffer = Buffer::new(
-                &mut self.font_system,
-                Metrics::new(scaled_font_size, scaled_font_size * 1.2),
-            );
-            // Give more space for the text buffer, scaled
-            buffer.set_size(
-                &mut self.font_system,
-                Some((entry.rect.width.max(200.0)) * scale_factor),
-                Some((entry.rect.height.max(50.0)) * scale_factor),
-            );
-            // Use entry's font properties, defaulting to NORMAL weight if default (0)
-            let weight = if entry.font_weight == FontWeight::default() {
-                FontWeight::NORMAL
+            // Check buffer cache before expensive text shaping
+            let key = text_buffer_key(entry, scale_factor);
+            let buffer = if let Some(cached) = self.buffer_cache.remove(&key) {
+                cached
             } else {
-                entry.font_weight
+                // Cache miss — create and shape a new buffer
+                let scaled_font_size = entry.font_size * scale_factor;
+                let mut buffer = Buffer::new(
+                    &mut self.font_system,
+                    Metrics::new(scaled_font_size, scaled_font_size * 1.2),
+                );
+                buffer.set_size(
+                    &mut self.font_system,
+                    Some((entry.rect.width.max(200.0)) * scale_factor),
+                    Some((entry.rect.height.max(50.0)) * scale_factor),
+                );
+                let weight = if entry.font_weight == FontWeight::default() {
+                    FontWeight::NORMAL
+                } else {
+                    entry.font_weight
+                };
+                buffer.set_text(
+                    &mut self.font_system,
+                    &entry.text,
+                    &Attrs::new()
+                        .family(entry.font_family.to_cosmic())
+                        .weight(weight.to_cosmic()),
+                    Shaping::Advanced,
+                    None,
+                );
+                buffer.shape_until_scroll(&mut self.font_system, true);
+                buffer
             };
-            buffer.set_text(
-                &mut self.font_system,
-                &entry.text,
-                &Attrs::new()
-                    .family(entry.font_family.to_cosmic())
-                    .weight(weight.to_cosmic()),
-                Shaping::Advanced,
-                None,
-            );
-            buffer.shape_until_scroll(&mut self.font_system, true);
+            self.frame_keys.push(key);
             self.buffers.push(buffer);
         }
+
+        // Evict unused cache entries (anything still in buffer_cache was not used this frame)
+        self.buffer_cache.clear();
 
         // Filter to only non-transformed, non-culled texts for TextArea creation
         // Use HashSet for O(1) lookup instead of Vec::contains which is O(n)

@@ -160,9 +160,8 @@ use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 
 use crate::{
     jobs::{
-        drain_non_animation_jobs, drain_pending_jobs, get_exit_request, handle_animation_jobs,
-        handle_layout_jobs, handle_paint_jobs, handle_reconcile_jobs, handle_unregister_jobs,
-        has_pending_jobs, init_wakeup, take_frame_request,
+        drain_non_animation_jobs, drain_pending_jobs, get_exit_request, has_pending_jobs,
+        init_wakeup, process_jobs, take_frame_request,
     },
     tree::{DamageRegion, Tree, WidgetId},
 };
@@ -378,16 +377,14 @@ fn render_surface(
     // picks up continuation jobs and re-advances. This is practically harmless —
     // advance() is time-based (computes nearly the same value), and follow-up
     // jobs are deduped by the JobQueue HashSet.
-    let mut jobs = drain_pending_jobs();
-    handle_unregister_jobs(&jobs, tree);
-    handle_animation_jobs(&jobs, tree);
-    handle_reconcile_jobs(&jobs, tree, layout_roots);
+    let jobs = drain_pending_jobs();
+    process_jobs(&jobs, tree, layout_roots);
 
-    // Merge follow-up jobs from animation advances and reconciliation
-    jobs.extend(drain_non_animation_jobs());
-
-    handle_paint_jobs(&jobs, tree);
-    handle_layout_jobs(&jobs, tree, layout_roots);
+    // Process follow-up jobs from animation advances and reconciliation
+    let followup = drain_non_animation_jobs();
+    if !followup.is_empty() {
+        process_jobs(&followup, tree, layout_roots);
+    }
 
     // Check render conditions
     let fully_initialized = first_frame_presented && scale_factor_received;
@@ -468,13 +465,16 @@ fn render_surface(
         surface.render_tree.add_root(root);
 
         // Flatten tree into reused buffer
+        let layer_boundaries;
         time_phase!(render_stats::Phase::Flatten, {
-            flatten_tree_into(&mut surface.render_tree, &mut surface.flattened_commands);
+            layer_boundaries =
+                flatten_tree_into(&mut surface.render_tree, &mut surface.flattened_commands);
         });
         time_phase!(render_stats::Phase::GpuRender, {
             renderer.render(
                 wgpu_surface,
                 &surface.flattened_commands,
+                layer_boundaries,
                 surface.config.background_color,
             );
         });

@@ -11,7 +11,7 @@ use wgpu::{
 };
 
 use super::commands::DrawCommand;
-use super::flatten::{FlattenedCommand, RenderLayer};
+use super::flatten::FlattenedCommand;
 use super::gpu::{QUAD_INDICES, QUAD_VERTICES, QuadVertex, ShaderUniforms, ShapeInstance};
 use super::gpu_context::SurfaceState;
 use super::image_quad::{ImageQuadRenderer, PreparedImageQuad};
@@ -253,6 +253,7 @@ impl Renderer {
         &mut self,
         surface: &mut SurfaceState,
         commands: &[FlattenedCommand],
+        boundaries: super::flatten::LayerBoundaries,
         clear_color: Color,
     ) {
         let output = match surface.surface.get_current_texture() {
@@ -281,11 +282,11 @@ impl Renderer {
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
-        // Commands are sorted by layer (Shapes < Images < Text < Overlay).
-        // Use partition_point to find layer boundaries as slice ranges — no allocations.
-        let images_start = commands.partition_point(|c| c.layer < RenderLayer::Images);
-        let text_start = commands.partition_point(|c| c.layer < RenderLayer::Text);
-        let overlay_start = commands.partition_point(|c| c.layer < RenderLayer::Overlay);
+        // Commands are pre-sorted by layer via LayeredCommands bucketing.
+        // Use pre-computed boundaries instead of partition_point scans.
+        let images_start = boundaries.images_start;
+        let text_start = boundaries.text_start;
+        let overlay_start = boundaries.overlay_start;
 
         let shape_commands = &commands[..images_start];
         let image_commands = &commands[images_start..text_start];
