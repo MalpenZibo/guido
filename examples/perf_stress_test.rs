@@ -16,8 +16,8 @@ use std::rc::Rc;
 const INITIAL_ITEM_COUNT: usize = 10000;
 
 struct ItemData {
-    enabled: Signal<bool>,
-    input_value: Signal<String>,
+    enabled: RwSignal<bool>,
+    input_value: RwSignal<String>,
 }
 
 fn main() {
@@ -33,7 +33,7 @@ fn main() {
         ));
 
         // Signal that tracks the list of item IDs (u64 is Send)
-        let item_ids: Signal<Vec<u64>> = create_signal((0..INITIAL_ITEM_COUNT as u64).collect());
+        let item_ids: RwSignal<Vec<u64>> = create_signal((0..INITIAL_ITEM_COUNT as u64).collect());
 
         let store_for_children = item_store.clone();
         let dyn_container_view =
@@ -96,7 +96,7 @@ fn get_item_description(id: usize) -> String {
 }
 
 fn create_add_button(
-    item_ids: Signal<Vec<u64>>,
+    item_ids: RwSignal<Vec<u64>>,
     item_store: Rc<RefCell<Vec<ItemData>>>,
 ) -> Container {
     container()
@@ -116,7 +116,11 @@ fn create_add_button(
         .child(text("Add Item").color(Color::WHITE).font_size(14.0))
 }
 
-fn create_item_row(enabled: Signal<bool>, input_value: Signal<String>, index: usize) -> Container {
+fn create_item_row(
+    enabled: RwSignal<bool>,
+    input_value: RwSignal<String>,
+    index: usize,
+) -> Container {
     let name = get_item_name(index);
     let description = get_item_description(index);
 
@@ -135,7 +139,7 @@ fn create_item_row(enabled: Signal<bool>, input_value: Signal<String>, index: us
     // .child(create_status_indicator(enabled))
 }
 
-fn create_toggle_button(enabled: Signal<bool>) -> Container {
+fn create_toggle_button(enabled: RwSignal<bool>) -> Container {
     container()
         .width(100.0)
         .height(30.0) // Fixed dimensions make this a relayout boundary
@@ -169,7 +173,7 @@ fn create_toggle_button(enabled: Signal<bool>) -> Container {
 fn create_info_section(
     name: String,
     description: String,
-    input_value: Signal<String>,
+    input_value: RwSignal<String>,
 ) -> Container {
     container()
         .width(at_least(200.0))
@@ -187,7 +191,7 @@ fn create_info_section(
         )
 }
 
-fn create_text_input_field(input_value: Signal<String>) -> Container {
+fn create_text_input_field(input_value: RwSignal<String>) -> Container {
     container()
         .width(200.0)
         .padding(8.0)

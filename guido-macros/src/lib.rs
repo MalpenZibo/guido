@@ -541,7 +541,7 @@ pub fn derive_signal_fields(input: TokenStream) -> TokenStream {
         .iter()
         .zip(field_types.iter())
         .map(|(name, ty)| {
-            quote! { pub #name: ::guido::reactive::signal::Signal<#ty> }
+            quote! { pub #name: ::guido::reactive::signal::RwSignal<#ty> }
         });
 
     // Generate {Name}Writers struct fields

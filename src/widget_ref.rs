@@ -7,7 +7,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::reactive::{Signal, create_signal};
+use crate::reactive::{RwSignal, Signal, create_signal};
 use crate::tree::{Tree, WidgetId};
 use crate::widgets::Rect;
 
@@ -17,12 +17,17 @@ use crate::widgets::Rect;
 /// `.widget_ref(r)` and read bounds reactively via `.rect().get()`.
 #[derive(Clone, Copy)]
 pub struct WidgetRef {
-    signal: Signal<Rect>,
+    signal: RwSignal<Rect>,
 }
 
 impl WidgetRef {
-    /// The reactive signal holding this widget's surface-relative bounds.
+    /// The reactive signal holding this widget's surface-relative bounds (read-only).
     pub fn rect(&self) -> Signal<Rect> {
+        self.signal.read_only()
+    }
+
+    /// Internal: get the read-write signal for updating bounds after layout.
+    pub(crate) fn rw_signal(&self) -> RwSignal<Rect> {
         self.signal
     }
 }
@@ -35,11 +40,11 @@ pub fn create_widget_ref() -> WidgetRef {
 }
 
 // ---------------------------------------------------------------------------
-// Thread-local registry: WidgetId → Signal<Rect>
+// Thread-local registry: WidgetId → RwSignal<Rect>
 // ---------------------------------------------------------------------------
 
 thread_local! {
-    static WIDGET_REF_REGISTRY: RefCell<HashMap<WidgetId, Signal<Rect>>> =
+    static WIDGET_REF_REGISTRY: RefCell<HashMap<WidgetId, RwSignal<Rect>>> =
         RefCell::new(HashMap::new());
 }
 
@@ -47,7 +52,7 @@ thread_local! {
 ///
 /// Called from `Container::layout` each time a container with a `WidgetRef`
 /// is laid out. Idempotent — HashMap insert overwrites.
-pub(crate) fn register_widget_ref(id: WidgetId, signal: Signal<Rect>) {
+pub(crate) fn register_widget_ref(id: WidgetId, signal: RwSignal<Rect>) {
     WIDGET_REF_REGISTRY.with(|reg| {
         reg.borrow_mut().insert(id, signal);
     });

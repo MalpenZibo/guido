@@ -165,8 +165,8 @@ fn main() {
 fn layer_button(
     label: &'static str,
     layer: Layer,
-    surface_id_signal: Signal<Option<SurfaceId>>,
-    current_layer: Signal<&'static str>,
+    surface_id_signal: RwSignal<Option<SurfaceId>>,
+    current_layer: RwSignal<&'static str>,
 ) -> Container {
     container()
         .padding([8.0, 12.0])
@@ -187,8 +187,8 @@ fn layer_button(
 fn keyboard_button(
     label: &'static str,
     mode: KeyboardInteractivity,
-    surface_id_signal: Signal<Option<SurfaceId>>,
-    current_keyboard: Signal<&'static str>,
+    surface_id_signal: RwSignal<Option<SurfaceId>>,
+    current_keyboard: RwSignal<&'static str>,
 ) -> Container {
     container()
         .padding([8.0, 12.0])

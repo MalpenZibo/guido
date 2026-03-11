@@ -64,7 +64,7 @@ fn make_box(
     label: &'static str,
     corner_radius: f32,
     base_color: Color,
-    click_count: Signal<i32>,
+    click_count: RwSignal<i32>,
 ) -> Container {
     container()
         .width(100.0)

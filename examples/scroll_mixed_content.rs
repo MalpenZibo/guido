@@ -16,7 +16,7 @@ fn main() {
         let bio = create_signal(String::new());
 
         // Helper to create a form field
-        fn form_field(label: &'static str, input_signal: Signal<String>) -> Container {
+        fn form_field(label: &'static str, input_signal: RwSignal<String>) -> Container {
             container()
                 .layout(Flex::column().spacing(4.0))
                 .child(text(label).color(Color::rgb(0.7, 0.7, 0.8)).font_size(12.0))

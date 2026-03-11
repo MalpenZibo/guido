@@ -27,7 +27,7 @@
 use std::any::{Any, TypeId};
 use std::cell::RefCell;
 
-use super::signal::{Signal, create_signal};
+use super::signal::{RwSignal, create_signal};
 
 thread_local! {
     static CONTEXTS: RefCell<Vec<(TypeId, Box<dyn Any>)>> = const { RefCell::new(Vec::new()) };
@@ -179,7 +179,7 @@ pub fn has_context<T: 'static>() -> bool {
 /// let theme = expect_context::<Signal<Theme>>();
 /// container().background(move || theme.get().bg_color)
 /// ```
-pub fn provide_signal_context<T: Clone + PartialEq + Send + 'static>(value: T) -> Signal<T> {
+pub fn provide_signal_context<T: Clone + PartialEq + Send + 'static>(value: T) -> RwSignal<T> {
     let signal = create_signal(value);
     provide_context(signal);
     signal
@@ -289,8 +289,8 @@ mod tests {
         let signal = provide_signal_context(100i32);
         assert_eq!(signal.get(), 100);
 
-        // Retrieve via use_context
-        let retrieved = use_context::<Signal<i32>>().unwrap();
+        // Retrieve via use_context (stored as RwSignal)
+        let retrieved = use_context::<RwSignal<i32>>().unwrap();
         assert_eq!(retrieved.get(), 100);
 
         // Signal set propagates

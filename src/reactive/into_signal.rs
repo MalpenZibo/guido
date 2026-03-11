@@ -1,4 +1,4 @@
-use super::signal::{Signal, create_derived, create_stored};
+use super::signal::{RwSignal, Signal, create_derived, create_stored};
 
 // ============================================================================
 // Marker types for IntoSignal disambiguation
@@ -12,6 +12,8 @@ pub struct LossyMarker;
 pub struct ClosureMarker;
 #[doc(hidden)]
 pub struct SignalMarker;
+#[doc(hidden)]
+pub struct RwSignalMarker;
 #[doc(hidden)]
 pub struct MemoMarker;
 
@@ -104,6 +106,13 @@ impl<T: Clone + 'static> IntoSignal<T, SignalMarker> for Signal<T> {
     }
 }
 
+// 5. RwSignal<T> → Signal<T> via read_only()
+impl<T: Clone + 'static> IntoSignal<T, RwSignalMarker> for RwSignal<T> {
+    fn into_signal(self) -> Signal<T> {
+        self.read_only()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,12 +154,19 @@ mod tests {
 
     #[test]
     fn test_signal_into_signal() {
-        let signal = create_signal(42);
-        let sig: Signal<i32> = signal.into_signal();
+        let rw = create_signal(42);
+        let sig: Signal<i32> = rw.into_signal();
 
         assert_eq!(sig.get(), 42);
-        signal.set(100);
+        rw.set(100);
         assert_eq!(sig.get(), 100);
+    }
+
+    #[test]
+    fn test_rw_signal_into_signal() {
+        let rw = create_signal(42);
+        let sig: Signal<i32> = rw.into_signal();
+        assert_eq!(sig.get(), 42);
     }
 
     #[test]
