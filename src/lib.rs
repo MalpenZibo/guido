@@ -160,9 +160,8 @@ use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 
 use crate::{
     jobs::{
-        drain_non_animation_jobs, drain_pending_jobs, get_exit_request, handle_animation_jobs,
-        handle_layout_jobs, handle_paint_jobs, handle_reconcile_jobs, handle_unregister_jobs,
-        has_pending_jobs, init_wakeup, take_frame_request,
+        drain_non_animation_jobs, drain_pending_jobs, get_exit_request, has_pending_jobs,
+        init_wakeup, process_jobs, take_frame_request,
     },
     tree::{DamageRegion, Tree, WidgetId},
 };
@@ -378,16 +377,14 @@ fn render_surface(
     // picks up continuation jobs and re-advances. This is practically harmless —
     // advance() is time-based (computes nearly the same value), and follow-up
     // jobs are deduped by the JobQueue HashSet.
-    let mut jobs = drain_pending_jobs();
-    handle_unregister_jobs(&jobs, tree);
-    handle_animation_jobs(&jobs, tree);
-    handle_reconcile_jobs(&jobs, tree, layout_roots);
+    let jobs = drain_pending_jobs();
+    process_jobs(&jobs, tree, layout_roots);
 
-    // Merge follow-up jobs from animation advances and reconciliation
-    jobs.extend(drain_non_animation_jobs());
-
-    handle_paint_jobs(&jobs, tree);
-    handle_layout_jobs(&jobs, tree, layout_roots);
+    // Process follow-up jobs from animation advances and reconciliation
+    let followup = drain_non_animation_jobs();
+    if !followup.is_empty() {
+        process_jobs(&followup, tree, layout_roots);
+    }
 
     // Check render conditions
     let fully_initialized = first_frame_presented && scale_factor_received;
@@ -453,9 +450,11 @@ fn render_surface(
         surface.root_node.clear();
         surface.root_node.bounds = widgets::Rect::new(0.0, 0.0, width as f32, height as f32);
 
-        tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
-            let mut ctx = PaintContext::new(&mut surface.root_node);
-            widget.paint(tree, id, &mut ctx);
+        time_phase!(render_stats::Phase::Paint, {
+            tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
+                let mut ctx = PaintContext::new(&mut surface.root_node);
+                widget.paint(tree, id, &mut ctx);
+            });
         });
 
         // Take ownership of root node temporarily, add to tree, then restore
@@ -466,12 +465,19 @@ fn render_surface(
         surface.render_tree.add_root(root);
 
         // Flatten tree into reused buffer
-        flatten_tree_into(&mut surface.render_tree, &mut surface.flattened_commands);
-        renderer.render(
-            wgpu_surface,
-            &surface.flattened_commands,
-            surface.config.background_color,
-        );
+        let layer_boundaries;
+        time_phase!(render_stats::Phase::Flatten, {
+            layer_boundaries =
+                flatten_tree_into(&mut surface.render_tree, &mut surface.flattened_commands);
+        });
+        time_phase!(render_stats::Phase::GpuRender, {
+            renderer.render(
+                wgpu_surface,
+                &surface.flattened_commands,
+                layer_boundaries,
+                surface.config.background_color,
+            );
+        });
 
         // Restore root_node for next frame (take it back from render_tree)
         if let Some(root) = surface.render_tree.roots.pop() {
@@ -480,7 +486,9 @@ fn render_surface(
 
         // Cache paint results AFTER flatten so cached_flatten data is preserved.
         // This enables incremental flatten for paint-cached nodes on subsequent frames.
-        cache_paint_results(tree, &surface.root_node);
+        time_phase!(render_stats::Phase::CachePaintResults, {
+            cache_paint_results(tree, &surface.root_node);
+        });
 
         // Report damage region to Wayland compositor
         let damage = tree.take_damage();

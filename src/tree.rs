@@ -429,13 +429,14 @@ impl Tree {
     }
 
     fn mark_subtree_needs_paint_inner(&mut self, widget_id: WidgetId) {
-        let Some(dense_idx) = self.get_dense_index(widget_id) else {
-            return;
-        };
-        self.dense[dense_idx].needs_paint = true;
-        let children = self.dense[dense_idx].children.clone();
-        for child_id in children {
-            self.mark_subtree_needs_paint_inner(child_id);
+        // Iterative DFS to avoid cloning children SmallVecs for borrow checker
+        let mut stack = vec![widget_id];
+        while let Some(id) = stack.pop() {
+            let Some(dense_idx) = self.get_dense_index(id) else {
+                continue;
+            };
+            self.dense[dense_idx].needs_paint = true;
+            stack.extend_from_slice(&self.dense[dense_idx].children);
         }
     }
 

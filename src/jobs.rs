@@ -29,6 +29,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
+use smallvec::SmallVec;
 use smithay_client_toolkit::reexports::calloop::ping::Ping;
 
 use crate::reactive::invalidation::clear_widget_subscribers;
@@ -186,47 +187,57 @@ pub fn drain_non_animation_jobs() -> Vec<Job> {
     PENDING_JOBS.with(|jobs| jobs.borrow_mut().drain_non_animation())
 }
 
-pub fn handle_unregister_jobs(jobs: &[Job], tree: &mut Tree) {
-    for job in jobs.iter().filter(|j| j.job_type == JobType::Unregister) {
-        clear_widget_subscribers(job.widget_id);
-        tree.unregister(job.widget_id);
-    }
-}
+/// Process all jobs in a single pass, partitioned by type.
+///
+/// Order is preserved: Unregister → Animation → Reconcile → Paint → Layout.
+/// Uses two passes (partition then process) instead of 5 separate filter scans.
+pub fn process_jobs(jobs: &[Job], tree: &mut Tree, layout_roots: &mut Vec<WidgetId>) {
+    // Single pass: partition into type buckets
+    let mut unregister = SmallVec::<[WidgetId; 4]>::new();
+    let mut animation = SmallVec::<[WidgetId; 8]>::new();
+    let mut reconcile = SmallVec::<[WidgetId; 4]>::new();
+    let mut paint = SmallVec::<[WidgetId; 8]>::new();
+    let mut layout = SmallVec::<[WidgetId; 8]>::new();
 
-pub fn handle_reconcile_jobs(jobs: &[Job], tree: &mut Tree, layout_roots: &mut Vec<WidgetId>) {
-    for job in jobs.iter().filter(|j| j.job_type == JobType::Reconcile) {
-        tree.with_widget_mut(job.widget_id, |widget, id, tree| {
-            widget.reconcile_children(tree, id);
+    for job in jobs {
+        match job.job_type {
+            JobType::Unregister => unregister.push(job.widget_id),
+            JobType::Animation => animation.push(job.widget_id),
+            JobType::Reconcile => reconcile.push(job.widget_id),
+            JobType::Paint => paint.push(job.widget_id),
+            JobType::Layout => layout.push(job.widget_id),
+        }
+    }
+
+    // Process in required order
+    for id in unregister {
+        clear_widget_subscribers(id);
+        tree.unregister(id);
+    }
+    for id in animation {
+        tree.with_widget_mut(id, |widget, wid, tree| {
+            widget.advance_animations(tree, wid);
         });
-        if let Some(root) = tree.mark_needs_layout(job.widget_id)
+    }
+    for id in reconcile {
+        tree.with_widget_mut(id, |widget, wid, tree| {
+            widget.reconcile_children(tree, wid);
+        });
+        if let Some(root) = tree.mark_needs_layout(id)
             && !layout_roots.contains(&root)
         {
             layout_roots.push(root);
         }
     }
-}
-
-pub fn handle_layout_jobs(jobs: &[Job], tree: &mut Tree, layout_roots: &mut Vec<WidgetId>) {
-    for job in jobs.iter().filter(|j| j.job_type == JobType::Layout) {
-        if let Some(root) = tree.mark_needs_layout(job.widget_id)
+    for id in paint {
+        tree.mark_needs_paint(id);
+    }
+    for id in layout {
+        if let Some(root) = tree.mark_needs_layout(id)
             && !layout_roots.contains(&root)
         {
             layout_roots.push(root);
         }
-    }
-}
-
-pub fn handle_paint_jobs(jobs: &[Job], tree: &mut Tree) {
-    for job in jobs.iter().filter(|j| j.job_type == JobType::Paint) {
-        tree.mark_needs_paint(job.widget_id);
-    }
-}
-
-pub fn handle_animation_jobs(jobs: &[Job], tree: &mut Tree) {
-    for job in jobs.iter().filter(|j| j.job_type == JobType::Animation) {
-        tree.with_widget_mut(job.widget_id, |widget, id, tree| {
-            widget.advance_animations(tree, id);
-        });
     }
 }
 
