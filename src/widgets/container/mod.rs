@@ -137,6 +137,42 @@ pub(super) struct ContainerAnims {
     pub(super) transform: Option<AnimationState<Transform>>,
 }
 
+/// Interaction state (callbacks, hover/press tracking, state styles, ripple).
+/// Only allocated when `.on_click()`, `.hover_state()`, `.pressed_state()`, etc. are called.
+pub(super) struct InteractionState {
+    pub(super) on_click: Option<ClickCallback>,
+    pub(super) on_hover: Option<HoverCallback>,
+    pub(super) on_scroll: Option<ScrollCallback>,
+    pub(super) on_pointer_move: Option<PointerMoveCallback>,
+    pub(super) on_mouse_down: Option<MouseDownCallback>,
+    pub(super) on_mouse_up: Option<MouseUpCallback>,
+    pub(super) is_hovered: bool,
+    pub(super) is_pressed: bool,
+    pub(super) hover_state: Option<StateStyle>,
+    pub(super) pressed_state: Option<StateStyle>,
+    pub(super) focused_state: Option<StateStyle>,
+    pub(super) ripple: RippleState,
+}
+
+impl Default for InteractionState {
+    fn default() -> Self {
+        Self {
+            on_click: None,
+            on_hover: None,
+            on_scroll: None,
+            on_pointer_move: None,
+            on_mouse_down: None,
+            on_mouse_up: None,
+            is_hovered: false,
+            is_pressed: false,
+            hover_state: None,
+            pressed_state: None,
+            focused_state: None,
+            ripple: RippleState::new(),
+        }
+    }
+}
+
 /// Scroll state and configuration, boxed to avoid bloating Container.
 /// Only allocated when `.scrollable()` is called.
 pub(super) struct ScrollData {
@@ -188,35 +224,19 @@ pub struct Container {
     pub(super) transform: Option<Signal<Transform>>,
     pub(super) transform_origin: Option<Signal<TransformOrigin>>,
 
-    // Event callbacks
-    pub(super) on_click: Option<ClickCallback>,
-    pub(super) on_hover: Option<HoverCallback>,
-    pub(super) on_scroll: Option<ScrollCallback>,
-    pub(super) on_pointer_move: Option<PointerMoveCallback>,
-    pub(super) on_mouse_down: Option<MouseDownCallback>,
-    pub(super) on_mouse_up: Option<MouseUpCallback>,
+    // Interaction state (callbacks, hover/press, state styles, ripple)
+    // Only allocated when interaction features are used
+    pub(super) interaction: Option<Box<InteractionState>>,
 
     // Widget ref for reactive bounds tracking
     pub(super) widget_ref: Option<WidgetRef>,
 
-    // Internal state for event handling
-    pub(super) is_hovered: bool,
-    pub(super) is_pressed: bool,
-
     // Animation state (boxed to save ~400 bytes per non-animated container)
     pub(super) anims: Option<Box<ContainerAnims>>,
-
-    // State layer styles (hover/pressed/focused overrides)
-    pub(super) hover_state: Option<StateStyle>,
-    pub(super) pressed_state: Option<StateStyle>,
-    pub(super) focused_state: Option<StateStyle>,
 
     // Scroll configuration
     pub(super) scroll_axis: ScrollAxis,
     pub(super) scroll_data: Option<Box<ScrollData>>,
-
-    // Ripple animation state
-    pub(super) ripple: RippleState,
 }
 
 impl Container {
@@ -239,22 +259,11 @@ impl Container {
             visible: None,
             transform: None,
             transform_origin: None,
-            on_click: None,
-            on_hover: None,
-            on_scroll: None,
-            on_pointer_move: None,
-            on_mouse_down: None,
-            on_mouse_up: None,
+            interaction: None,
             widget_ref: None,
-            is_hovered: false,
-            is_pressed: false,
             anims: None,
-            hover_state: None,
-            pressed_state: None,
-            focused_state: None,
             scroll_axis: ScrollAxis::None,
             scroll_data: None,
-            ripple: RippleState::new(),
         }
     }
 
@@ -278,6 +287,11 @@ impl Container {
     /// Get or create animation states box
     fn anims_mut(&mut self) -> &mut ContainerAnims {
         self.anims.get_or_insert_with(Box::default)
+    }
+
+    /// Get or create interaction state
+    fn interact_mut(&mut self) -> &mut InteractionState {
+        self.interaction.get_or_insert_with(Box::default)
     }
 
     /// Set the layout strategy for this container
@@ -464,38 +478,40 @@ impl Container {
     }
 
     pub fn on_click<F: Fn() + 'static>(mut self, callback: F) -> Self {
-        self.on_click = Some(Rc::new(callback));
+        self.interact_mut().on_click = Some(Rc::new(callback));
         self
     }
 
     /// Accept an optional click callback (useful for components)
     pub fn on_click_option(mut self, callback: Option<ClickCallback>) -> Self {
-        self.on_click = callback;
+        if let Some(cb) = callback {
+            self.interact_mut().on_click = Some(cb);
+        }
         self
     }
 
     pub fn on_hover<F: Fn(bool) + 'static>(mut self, callback: F) -> Self {
-        self.on_hover = Some(Rc::new(callback));
+        self.interact_mut().on_hover = Some(Rc::new(callback));
         self
     }
 
     pub fn on_scroll<F: Fn(f32, f32, ScrollSource) + 'static>(mut self, callback: F) -> Self {
-        self.on_scroll = Some(Rc::new(callback));
+        self.interact_mut().on_scroll = Some(Rc::new(callback));
         self
     }
 
     pub fn on_pointer_move<F: Fn(f32, f32) + 'static>(mut self, callback: F) -> Self {
-        self.on_pointer_move = Some(Rc::new(callback));
+        self.interact_mut().on_pointer_move = Some(Rc::new(callback));
         self
     }
 
     pub fn on_mouse_down<F: Fn(f32, f32) + 'static>(mut self, callback: F) -> Self {
-        self.on_mouse_down = Some(Rc::new(callback));
+        self.interact_mut().on_mouse_down = Some(Rc::new(callback));
         self
     }
 
     pub fn on_mouse_up<F: Fn(f32, f32) + 'static>(mut self, callback: F) -> Self {
-        self.on_mouse_up = Some(Rc::new(callback));
+        self.interact_mut().on_mouse_up = Some(Rc::new(callback));
         self
     }
 
@@ -647,7 +663,7 @@ impl Container {
     where
         F: FnOnce(StateStyle) -> StateStyle,
     {
-        self.hover_state = Some(f(StateStyle::new()));
+        self.interact_mut().hover_state = Some(f(StateStyle::new()));
         self
     }
 
@@ -656,7 +672,7 @@ impl Container {
     where
         F: FnOnce(StateStyle) -> StateStyle,
     {
-        self.pressed_state = Some(f(StateStyle::new()));
+        self.interact_mut().pressed_state = Some(f(StateStyle::new()));
         self
     }
 
@@ -675,7 +691,7 @@ impl Container {
     where
         F: FnOnce(StateStyle) -> StateStyle,
     {
-        self.focused_state = Some(f(StateStyle::new()));
+        self.interact_mut().focused_state = Some(f(StateStyle::new()));
         self
     }
 
@@ -740,22 +756,25 @@ impl Container {
         base: T,
         extractor: impl Fn(&StateStyle) -> Option<T>,
     ) -> T {
-        if self.is_pressed
-            && let Some(ref state) = self.pressed_state
+        let Some(ref ix) = self.interaction else {
+            return base;
+        };
+        if ix.is_pressed
+            && let Some(ref state) = ix.pressed_state
             && let Some(value) = extractor(state)
         {
             return value;
         }
         // Check focused state
-        if self.focused_state.is_some()
+        if ix.focused_state.is_some()
             && self.has_child_focus(tree)
-            && let Some(ref state) = self.focused_state
+            && let Some(ref state) = ix.focused_state
             && let Some(value) = extractor(state)
         {
             return value;
         }
-        if self.is_hovered
-            && let Some(ref state) = self.hover_state
+        if ix.is_hovered
+            && let Some(ref state) = ix.hover_state
             && let Some(value) = extractor(state)
         {
             return value;
@@ -967,11 +986,12 @@ impl Widget for Container {
         }
 
         // Advance ripple animation
-        if self.ripple.is_active()
-            && let Some(ref state) = self.pressed_state
+        if let Some(ref mut ix) = self.interaction
+            && ix.ripple.is_active()
+            && let Some(ref state) = ix.pressed_state
             && let Some(ref config) = state.ripple
         {
-            let ripple_animating = self.ripple.advance(config);
+            let ripple_animating = ix.ripple.advance(config);
             if ripple_animating {
                 // Ripple is paint-only, request animation continuation with paint
                 request_job(id, JobRequest::Animation(RequiredJob::Paint));
@@ -1480,38 +1500,54 @@ impl Widget for Container {
         // Pre-dispatch: update hover state and fire pointer move callback
         // before children get the event. This ensures parent hover tracking
         // works even when a child container handles the MouseMove/MouseEnter.
-        match local_event.as_ref() {
-            Event::MouseEnter { x, y } => {
-                if bounds.contains_rounded(*x, *y, corner_radius) && !self.is_hovered {
-                    self.is_hovered = true;
-                    if self.hover_state.is_some() {
-                        self.request_state_change_repaint(id);
-                    }
-                    if let Some(ref callback) = self.on_hover {
-                        callback(true);
+        if let Some(ref mut ix) = self.interaction {
+            // Cache this before borrowing ix mutably to avoid borrow conflicts
+            let has_animated = self.anims.as_ref().is_some_and(|a| {
+                a.background.is_some()
+                    || a.corner_radius.is_some()
+                    || a.border_color.is_some()
+                    || a.transform.is_some()
+            });
+            let request_repaint = |id: WidgetId| {
+                if has_animated {
+                    request_job(id, JobRequest::Animation(RequiredJob::Paint));
+                } else {
+                    request_job(id, JobRequest::Paint);
+                }
+            };
+            match local_event.as_ref() {
+                Event::MouseEnter { x, y } => {
+                    if bounds.contains_rounded(*x, *y, corner_radius) && !ix.is_hovered {
+                        ix.is_hovered = true;
+                        if ix.hover_state.is_some() {
+                            request_repaint(id);
+                        }
+                        if let Some(ref callback) = ix.on_hover {
+                            callback(true);
+                        }
                     }
                 }
-            }
-            Event::MouseMove { x, y } => {
-                if let Some(ref callback) = self.on_pointer_move
-                    && (bounds.contains_rounded(*x, *y, corner_radius) || self.is_pressed)
-                {
-                    callback(*x - bounds.x, *y - bounds.y);
-                }
+                Event::MouseMove { x, y } => {
+                    if let Some(ref callback) = ix.on_pointer_move
+                        && (bounds.contains_rounded(*x, *y, corner_radius) || ix.is_pressed)
+                    {
+                        callback(*x - bounds.x, *y - bounds.y);
+                    }
 
-                let was_hovered = self.is_hovered;
-                self.is_hovered = bounds.contains_rounded(*x, *y, corner_radius);
+                    let was_hovered = ix.is_hovered;
+                    ix.is_hovered = bounds.contains_rounded(*x, *y, corner_radius);
 
-                if was_hovered != self.is_hovered {
-                    if self.hover_state.is_some() {
-                        self.request_state_change_repaint(id);
-                    }
-                    if let Some(ref callback) = self.on_hover {
-                        callback(self.is_hovered);
+                    if was_hovered != ix.is_hovered {
+                        if ix.hover_state.is_some() {
+                            request_repaint(id);
+                        }
+                        if let Some(ref callback) = ix.on_hover {
+                            callback(ix.is_hovered);
+                        }
                     }
                 }
+                _ => {}
             }
-            _ => {}
         }
 
         // Transform event coordinates to local space (relative to container origin)
@@ -1565,12 +1601,15 @@ impl Widget for Container {
             // sibling containers from tracking their own hover state.
             Event::MouseEnter { .. } | Event::MouseMove { .. } => {}
             Event::MouseDown { x, y, button } => {
-                if bounds.contains_rounded(*x, *y, corner_radius) && *button == MouseButton::Left {
-                    let was_pressed = self.is_pressed;
-                    self.is_pressed = true;
+                if bounds.contains_rounded(*x, *y, corner_radius)
+                    && *button == MouseButton::Left
+                    && let Some(ref mut ix) = self.interaction
+                {
+                    let was_pressed = ix.is_pressed;
+                    ix.is_pressed = true;
 
                     // Start ripple animation if configured
-                    let has_ripple = self
+                    let has_ripple = ix
                         .pressed_state
                         .as_ref()
                         .is_some_and(|s| s.ripple.is_some());
@@ -1587,30 +1626,37 @@ impl Widget for Container {
                         } else {
                             (screen_x - bounds.x, screen_y - bounds.y)
                         };
-                        self.ripple.start(local_x, local_y);
+                        ix.ripple.start(local_x, local_y);
                         // Ripple animation needs Animation + Paint
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
-                    if !was_pressed && self.pressed_state.is_some() {
+                    if !was_pressed && ix.pressed_state.is_some() {
                         self.request_state_change_repaint(id);
                     }
-                    if let Some(ref callback) = self.on_mouse_down {
+                    if let Some(ref ix) = self.interaction
+                        && let Some(ref callback) = ix.on_mouse_down
+                    {
                         callback(*x - bounds.x, *y - bounds.y);
                         return EventResponse::Handled;
                     }
-                    if self.on_click.is_some() || self.on_mouse_up.is_some() {
+                    if let Some(ref ix) = self.interaction
+                        && (ix.on_click.is_some() || ix.on_mouse_up.is_some())
+                    {
                         return EventResponse::Handled;
                     }
                 }
             }
             Event::MouseUp { x, y, button } => {
-                if self.is_pressed && *button == MouseButton::Left {
-                    let was_pressed = self.is_pressed;
-                    self.is_pressed = false;
+                if let Some(ref mut ix) = self.interaction
+                    && ix.is_pressed
+                    && *button == MouseButton::Left
+                {
+                    let was_pressed = ix.is_pressed;
+                    ix.is_pressed = false;
 
                     // Start ripple fade animation
-                    if self.ripple.is_active() {
+                    if ix.ripple.is_active() {
                         // Convert screen coords to local coords accounting for transform
                         let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
                         let (local_x, local_y) = if !transform.is_identity() {
@@ -1623,21 +1669,24 @@ impl Widget for Container {
                         } else {
                             (screen_x - bounds.x, screen_y - bounds.y)
                         };
-                        self.ripple.start_fade(local_x, local_y);
+                        ix.ripple.start_fade(local_x, local_y);
                         // Ripple fade animation needs Animation + Paint
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
-                    if was_pressed && self.pressed_state.is_some() {
+                    if was_pressed && ix.pressed_state.is_some() {
                         self.request_state_change_repaint(id);
                     }
                     let mut handled = false;
-                    if let Some(ref callback) = self.on_mouse_up {
+                    if let Some(ref ix) = self.interaction
+                        && let Some(ref callback) = ix.on_mouse_up
+                    {
                         callback(*x - bounds.x, *y - bounds.y);
                         handled = true;
                     }
-                    if bounds.contains_rounded(*x, *y, corner_radius)
-                        && let Some(ref callback) = self.on_click
+                    if let Some(ref ix) = self.interaction
+                        && bounds.contains_rounded(*x, *y, corner_radius)
+                        && let Some(ref callback) = ix.on_click
                     {
                         callback();
                         return EventResponse::Handled;
@@ -1648,28 +1697,29 @@ impl Widget for Container {
                 }
             }
             Event::MouseLeave => {
-                let was_hovered = self.is_hovered;
-                let was_pressed = self.is_pressed;
-                if self.is_hovered {
-                    self.is_hovered = false;
-                    if let Some(ref callback) = self.on_hover {
-                        callback(false);
+                if let Some(ref mut ix) = self.interaction {
+                    let was_hovered = ix.is_hovered;
+                    let was_pressed = ix.is_pressed;
+                    if ix.is_hovered {
+                        ix.is_hovered = false;
+                        if let Some(ref callback) = ix.on_hover {
+                            callback(false);
+                        }
                     }
-                }
-                self.is_pressed = false;
+                    ix.is_pressed = false;
 
-                // Start ripple fade to center
-                if self.ripple.is_active() {
-                    self.ripple
-                        .start_fade_to_center(bounds.width, bounds.height);
-                    // Ripple fade animation needs Animation + Paint
-                    request_job(id, JobRequest::Animation(RequiredJob::Paint));
-                }
+                    // Start ripple fade to center
+                    if ix.ripple.is_active() {
+                        ix.ripple.start_fade_to_center(bounds.width, bounds.height);
+                        // Ripple fade animation needs Animation + Paint
+                        request_job(id, JobRequest::Animation(RequiredJob::Paint));
+                    }
 
-                if (was_hovered && self.hover_state.is_some())
-                    || (was_pressed && self.pressed_state.is_some())
-                {
-                    self.request_state_change_repaint(id);
+                    if (was_hovered && ix.hover_state.is_some())
+                        || (was_pressed && ix.pressed_state.is_some())
+                    {
+                        self.request_state_change_repaint(id);
+                    }
                 }
             }
             Event::Scroll {
@@ -1696,7 +1746,9 @@ impl Widget for Container {
                         }
                     }
 
-                    if let Some(ref callback) = self.on_scroll {
+                    if let Some(ref ix) = self.interaction
+                        && let Some(ref callback) = ix.on_scroll
+                    {
                         callback(*delta_x, *delta_y, *source);
                         return EventResponse::Handled;
                     }
@@ -1948,10 +2000,11 @@ impl Widget for Container {
         }
 
         // Draw ripple effect as overlay (ripple.center is already in local coordinates)
-        if let Some((local_cx, local_cy)) = self.ripple.center
-            && let Some(ref pressed_state) = self.pressed_state
+        if let Some(ref ix) = self.interaction
+            && let Some((local_cx, local_cy)) = ix.ripple.center
+            && let Some(ref pressed_state) = ix.pressed_state
             && let Some(ref ripple_config) = pressed_state.ripple
-            && self.ripple.opacity > 0.0
+            && ix.ripple.opacity > 0.0
         {
             // Set overlay clip to container bounds with rounded corners
             // This clips the ripple without affecting children
@@ -1960,13 +2013,13 @@ impl Widget for Container {
             let max_dist_x = local_cx.max(bounds.width - local_cx);
             let max_dist_y = local_cy.max(bounds.height - local_cy);
             let max_radius = (max_dist_x * max_dist_x + max_dist_y * max_dist_y).sqrt();
-            let current_radius = max_radius * self.ripple.progress;
+            let current_radius = max_radius * ix.ripple.progress;
 
             let ripple_color = Color::rgba(
                 ripple_config.color.r,
                 ripple_config.color.g,
                 ripple_config.color.b,
-                ripple_config.color.a * self.ripple.opacity,
+                ripple_config.color.a * ix.ripple.opacity,
             );
 
             ctx.draw_overlay_circle(local_cx, local_cy, current_radius, ripple_color);
