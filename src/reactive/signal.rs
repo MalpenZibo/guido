@@ -7,33 +7,68 @@ use super::runtime::{
 };
 use super::storage::{
     allocate_signal_slot, compare_and_set_signal_value, compare_and_update_signal_value,
-    create_signal_value, get_signal_value, has_signal, store_derived_closure, try_call_derived,
-    with_signal_value,
+    create_signal_value, create_stored_value, get_signal_value, get_stored_value, has_signal,
+    store_derived_closure, try_call_derived, with_signal_value, with_stored_value,
 };
 
+/// Internal discriminant for the three signal kinds.
+/// Same size as `bool` (1 byte) so `Signal<T>` stays at 16 bytes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum SignalKind {
+    /// Immutable stored value (`Rc<T>`, no RefCell, no tracking).
+    Stored = 0,
+    /// Reactive read-write value (`Rc<RefCell<T>>`, tracked).
+    Mutable = 1,
+    /// Closure-backed derived signal (HashMap lookup).
+    Derived = 2,
+}
+
 /// Common read operations for signal types.
-/// Tracks reads for effect dependencies and widget invalidation.
-/// For derived signals, calls the closure (which tracks its own reads) and
-/// does NOT self-track to avoid double-tracking.
-fn tracked_get<T: Clone + 'static>(id: SignalId, derived: bool) -> T {
-    if derived && let Some(val) = try_call_derived::<T>(id) {
-        return val;
+/// - Stored: no tracking (value never changes), reads `Rc<T>` directly
+/// - Mutable: full effect + widget tracking, reads `Rc<RefCell<T>>`
+/// - Derived: calls the closure (which tracks its own reads internally)
+fn tracked_get<T: Clone + 'static>(id: SignalId, kind: SignalKind) -> T {
+    match kind {
+        SignalKind::Stored => get_stored_value(id),
+        SignalKind::Derived => {
+            if let Some(val) = try_call_derived::<T>(id) {
+                return val;
+            }
+            // Fallback (shouldn't happen for properly constructed derived signals)
+            record_effect_read(id);
+            record_signal_read(id);
+            get_signal_value(id)
+        }
+        SignalKind::Mutable => {
+            record_effect_read(id);
+            record_signal_read(id);
+            get_signal_value(id)
+        }
     }
-    record_effect_read(id);
-    record_signal_read(id);
-    get_signal_value(id)
 }
 
 /// Common read-with-borrow operation for signal types.
-/// For derived signals, calls the closure and passes the result to `f`.
-fn tracked_with<T: Clone + 'static, R>(id: SignalId, derived: bool, f: impl FnOnce(&T) -> R) -> R {
-    if derived {
-        let val = try_call_derived::<T>(id).unwrap();
-        return f(&val);
+/// - Stored: no tracking, borrows `Rc<T>` directly
+/// - Mutable: full tracking, borrows through `Rc<RefCell<T>>`
+/// - Derived: calls the closure and passes the result to `f`
+fn tracked_with<T: Clone + 'static, R>(
+    id: SignalId,
+    kind: SignalKind,
+    f: impl FnOnce(&T) -> R,
+) -> R {
+    match kind {
+        SignalKind::Stored => with_stored_value(id, f),
+        SignalKind::Derived => {
+            let val = try_call_derived::<T>(id).unwrap();
+            f(&val)
+        }
+        SignalKind::Mutable => {
+            record_effect_read(id);
+            record_signal_read(id);
+            with_signal_value(id, f)
+        }
     }
-    record_effect_read(id);
-    record_signal_read(id);
-    with_signal_value(id, f)
 }
 
 /// Perform a signal write with change detection and notification (main thread only).
@@ -66,9 +101,9 @@ fn update_and_notify<T: Clone + PartialEq + 'static>(id: SignalId, f: impl FnOnc
 /// to get a [`WriteSignal<T>`] which is `Send`.
 pub struct Signal<T> {
     id: SignalId,
-    /// True for derived signals (closure-backed). Stored signals skip
-    /// the HashMap lookup in `try_call_derived()` when this is false.
-    derived: bool,
+    /// Discriminant for the three signal kinds (Stored, Mutable, Derived).
+    /// Same size as the old `derived: bool` — Signal<T> stays at 16 bytes.
+    kind: SignalKind,
     _marker: PhantomData<T>,
     _not_send: PhantomData<*const ()>, // makes Signal !Send !Sync
 }
@@ -94,36 +129,38 @@ impl<T> Eq for Signal<T> {}
 impl<T: Clone + 'static> Signal<T> {
     /// Get the current value (tracks as dependency for effects)
     pub fn get(&self) -> T {
-        tracked_get(self.id, self.derived)
+        tracked_get(self.id, self.kind)
     }
 
     /// Get the current value without tracking
     pub fn get_untracked(&self) -> T {
-        if self.derived
-            && let Some(val) = try_call_derived::<T>(self.id)
-        {
-            return val;
+        match self.kind {
+            SignalKind::Stored => get_stored_value(self.id),
+            SignalKind::Derived => try_call_derived::<T>(self.id).unwrap(),
+            SignalKind::Mutable => get_signal_value(self.id),
         }
-        get_signal_value(self.id)
     }
 
     /// Borrow the value for reading
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        tracked_with(self.id, self.derived, f)
+        tracked_with(self.id, self.kind, f)
     }
 
     /// Borrow the value without tracking
     pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        if self.derived {
-            let val = try_call_derived::<T>(self.id).unwrap();
-            return f(&val);
+        match self.kind {
+            SignalKind::Stored => with_stored_value(self.id, f),
+            SignalKind::Derived => {
+                let val = try_call_derived::<T>(self.id).unwrap();
+                f(&val)
+            }
+            SignalKind::Mutable => with_signal_value(self.id, f),
         }
-        with_signal_value(self.id, f)
     }
 
     /// Check if this signal is derived (backed by a closure, not a stored value).
     pub fn is_derived(&self) -> bool {
-        self.derived
+        self.kind == SignalKind::Derived
     }
 }
 
@@ -230,7 +267,7 @@ impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
 }
 
 pub fn create_signal<T: Clone + PartialEq + Send + 'static>(value: T) -> Signal<T> {
-    // Create value in thread-local storage
+    // Create value in thread-local storage (Rc<RefCell<T>> for read-write access)
     let id = create_signal_value(value);
     // Register with thread-local runtime for subscriber tracking
     try_with_runtime(|rt| rt.register_signal(id));
@@ -238,7 +275,7 @@ pub fn create_signal<T: Clone + PartialEq + Send + 'static>(value: T) -> Signal<
     register_signal(id);
     Signal {
         id,
-        derived: false,
+        kind: SignalKind::Mutable,
         _marker: PhantomData,
         _not_send: PhantomData,
     }
@@ -257,12 +294,14 @@ pub fn create_signal<T: Clone + PartialEq + Send + 'static>(value: T) -> Signal<
 /// container().background(color) // Copy, no clone needed
 /// ```
 pub fn create_stored<T: Clone + 'static>(value: T) -> Signal<T> {
-    let id = create_signal_value(value);
-    try_with_runtime(|rt| rt.register_signal(id));
+    // Store as Rc<T> (no RefCell) — value is immutable, no tracking needed.
+    let id = create_stored_value(value);
+    // Skip runtime registration — value never changes, no subscribers needed.
+    // Still register with owner for slot cleanup when owner is disposed.
     register_signal(id);
     Signal {
         id,
-        derived: false,
+        kind: SignalKind::Stored,
         _marker: PhantomData,
         _not_send: PhantomData,
     }
@@ -290,7 +329,7 @@ pub fn create_derived<T: Clone + 'static>(f: impl Fn() -> T + 'static) -> Signal
     register_signal(id);
     Signal {
         id,
-        derived: true,
+        kind: SignalKind::Derived,
         _marker: PhantomData,
         _not_send: PhantomData,
     }
