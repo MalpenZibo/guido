@@ -1910,8 +1910,57 @@ impl Widget for Container {
             return;
         }
 
-        // Draw children - each gets its own node with position transform
-        for &child_id in self.children_source.get() {
+        // Draw children - each gets its own node with position transform.
+        //
+        // For scrollable containers with a single-axis layout, use binary search
+        // to find the visible range (O(log n)) instead of iterating all children (O(n)).
+        let all_children = self.children_source.get();
+        let visible_children: &[WidgetId] = if is_scrollable {
+            let sd = self.scroll();
+            match self.scroll_axis {
+                ScrollAxis::Vertical => {
+                    let vp_top = sd.scroll_state.offset_y;
+                    let vp_bottom = vp_top + local_bounds.height;
+                    let first = all_children.partition_point(|&cid| {
+                        tree.get_bounds(cid)
+                            .is_some_and(|b| b.y + b.height <= vp_top)
+                    });
+                    let last = all_children.partition_point(|&cid| {
+                        tree.get_bounds(cid).is_some_and(|b| b.y < vp_bottom)
+                    });
+                    let start = first.saturating_sub(1);
+                    let end = (last + 1).min(all_children.len());
+                    crate::render_stats::record_scroll_paint_range(
+                        all_children.len() as u64,
+                        (end - start) as u64,
+                    );
+                    &all_children[start..end]
+                }
+                ScrollAxis::Horizontal => {
+                    let vp_left = sd.scroll_state.offset_x;
+                    let vp_right = vp_left + local_bounds.width;
+                    let first = all_children.partition_point(|&cid| {
+                        tree.get_bounds(cid)
+                            .is_some_and(|b| b.x + b.width <= vp_left)
+                    });
+                    let last = all_children.partition_point(|&cid| {
+                        tree.get_bounds(cid).is_some_and(|b| b.x < vp_right)
+                    });
+                    let start = first.saturating_sub(1);
+                    let end = (last + 1).min(all_children.len());
+                    crate::render_stats::record_scroll_paint_range(
+                        all_children.len() as u64,
+                        (end - start) as u64,
+                    );
+                    &all_children[start..end]
+                }
+                _ => all_children, // Both/None: fall back to full iteration
+            }
+        } else {
+            all_children
+        };
+
+        for &child_id in visible_children {
             // Get child bounds from Tree - these are in LOCAL coordinates (relative to parent)
             let child_bounds = tree
                 .get_bounds(child_id)
@@ -1950,9 +1999,23 @@ impl Widget for Container {
             }
 
             // Try cached paint for clean children.
-            // For scrollable containers, skip cached paint for direct children so their
-            // paint method runs and can cull grandchildren using the propagated cull_rect.
-            if !is_scrollable
+            // For scrollable containers, allow cache reuse when the child is fully
+            // within the viewport — cull_rect propagation is unnecessary since all
+            // grandchildren are visible. Only partially visible edge items need full
+            // repaint for proper cull_rect propagation.
+            let can_use_cache = if is_scrollable {
+                if let Some(ref cull) = effective_cull_rect {
+                    child_offset_y >= cull.y
+                        && child_offset_y + child_bounds.height <= cull.y + cull.height
+                        && child_offset_x >= cull.x
+                        && child_offset_x + child_bounds.width <= cull.x + cull.width
+                } else {
+                    false
+                }
+            } else {
+                true
+            };
+            if can_use_cache
                 && !tree.needs_paint(child_id)
                 && let Some(cached) = tree.cached_paint(child_id)
             {
@@ -1971,7 +2034,7 @@ impl Widget for Container {
                 continue;
             }
 
-            // Full paint (child is dirty, no cache, or scrollable container child)
+            // Full paint (child is dirty, no cache, or partially visible scrollable child)
             let mut child_ctx = ctx.add_child(child_id.as_u64(), child_local);
             child_ctx.set_transform(child_position);
 
