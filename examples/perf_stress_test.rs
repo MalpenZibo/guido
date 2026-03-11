@@ -13,10 +13,9 @@ use guido::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-const INITIAL_ITEM_COUNT: usize = 1000;
+const INITIAL_ITEM_COUNT: usize = 10000;
 
 struct ItemData {
-    id: u64,
     enabled: Signal<bool>,
     input_value: Signal<String>,
 }
@@ -26,8 +25,7 @@ fn main() {
         // Store item data in a Rc<RefCell<Vec>> since Signal requires Send and ItemData contains !Send signals
         let item_store: Rc<RefCell<Vec<ItemData>>> = Rc::new(RefCell::new(
             (0..INITIAL_ITEM_COUNT)
-                .map(|i| ItemData {
-                    id: i as u64,
+                .map(|_| ItemData {
                     enabled: create_signal(false),
                     input_value: create_signal(String::new()),
                 })
@@ -47,7 +45,7 @@ fn main() {
                     let ids = item_ids.get();
                     ids.iter()
                         .filter_map(|&id| {
-                            store.iter().find(|item| item.id == id).map(|item| {
+                            store.get(id as usize).map(|item| {
                                 let enabled = item.enabled;
                                 let input_value = item.input_value;
                                 (id, move || {
@@ -110,7 +108,6 @@ fn create_add_button(
         .on_click(move || {
             let id = item_store.borrow().len() as u64;
             item_store.borrow_mut().push(ItemData {
-                id,
                 enabled: create_signal(false),
                 input_value: create_signal(String::new()),
             });

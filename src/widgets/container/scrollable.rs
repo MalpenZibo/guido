@@ -16,45 +16,45 @@ impl Container {
     /// Scrollbar containers are registered in Tree as real widgets.
     pub(super) fn ensure_scrollbar_containers(&mut self, tree: &mut Tree, id: WidgetId) {
         if self.scroll_axis == ScrollAxis::None
-            || self.scrollbar_visibility == ScrollbarVisibility::Hidden
+            || self.scroll().scrollbar_visibility == ScrollbarVisibility::Hidden
         {
             return;
         }
 
         // Create vertical scrollbar containers if needed
-        if self.scroll_axis.allows_vertical() && self.v_scrollbar_track_id.is_none() {
+        if self.scroll_axis.allows_vertical() && self.scroll().v_scrollbar_track_id.is_none() {
             let (track, handle, scale_anim) =
-                Self::create_scrollbar_components(&self.scrollbar_config);
+                Self::create_scrollbar_components(&self.scroll().scrollbar_config);
 
             // Register track in Tree
             let track_id = tree.register(Box::new(track));
             tree.set_parent(track_id, id);
-            self.v_scrollbar_track_id = Some(track_id);
+            self.scroll_mut().v_scrollbar_track_id = Some(track_id);
 
             // Register handle in Tree
             let handle_id = tree.register(Box::new(handle));
             tree.set_parent(handle_id, id);
-            self.v_scrollbar_handle_id = Some(handle_id);
+            self.scroll_mut().v_scrollbar_handle_id = Some(handle_id);
 
-            self.v_scrollbar_scale_anim = Some(scale_anim);
+            self.scroll_mut().v_scrollbar_scale_anim = Some(scale_anim);
         }
 
         // Create horizontal scrollbar containers if needed
-        if self.scroll_axis.allows_horizontal() && self.h_scrollbar_track_id.is_none() {
+        if self.scroll_axis.allows_horizontal() && self.scroll().h_scrollbar_track_id.is_none() {
             let (track, handle, scale_anim) =
-                Self::create_scrollbar_components(&self.scrollbar_config);
+                Self::create_scrollbar_components(&self.scroll().scrollbar_config);
 
             // Register track in Tree
             let track_id = tree.register(Box::new(track));
             tree.set_parent(track_id, id);
-            self.h_scrollbar_track_id = Some(track_id);
+            self.scroll_mut().h_scrollbar_track_id = Some(track_id);
 
             // Register handle in Tree
             let handle_id = tree.register(Box::new(handle));
             tree.set_parent(handle_id, id);
-            self.h_scrollbar_handle_id = Some(handle_id);
+            self.scroll_mut().h_scrollbar_handle_id = Some(handle_id);
 
-            self.h_scrollbar_scale_anim = Some(scale_anim);
+            self.scroll_mut().h_scrollbar_scale_anim = Some(scale_anim);
         }
     }
 
@@ -106,14 +106,15 @@ impl Container {
         size: crate::layout::Size,
     ) {
         if self.scroll_axis == ScrollAxis::None
-            || self.scrollbar_visibility == ScrollbarVisibility::Hidden
+            || self.scroll().scrollbar_visibility == ScrollbarVisibility::Hidden
         {
             return;
         }
 
-        let scale_factor = self.scrollbar_config.hover_width / self.scrollbar_config.width;
-        let needs_vertical = self.scroll_state.needs_vertical_scrollbar();
-        let needs_horizontal = self.scroll_state.needs_horizontal_scrollbar();
+        let sd = self.scroll();
+        let scale_factor = sd.scrollbar_config.hover_width / sd.scrollbar_config.width;
+        let needs_vertical = sd.scroll_state.needs_vertical_scrollbar();
+        let needs_horizontal = sd.scroll_state.needs_horizontal_scrollbar();
 
         // Use LOCAL bounds (0,0 origin) for scrollbar positioning.
         // Scrollbars are positioned relative to container origin, and paint
@@ -154,35 +155,37 @@ impl Container {
         needs_other_scrollbar: bool,
         local_bounds: Rect,
     ) {
-        let track_rect = self.scroll_state.scrollbar_track_rect(
+        let sd = self.scroll();
+        let track_rect = sd.scroll_state.scrollbar_track_rect(
             axis,
             local_bounds,
-            &self.scrollbar_config,
+            &sd.scrollbar_config,
             needs_other_scrollbar,
         );
-        let handle_rect = self.scroll_state.scrollbar_handle_rect(
+        let handle_rect = sd.scroll_state.scrollbar_handle_rect(
             axis,
             local_bounds,
-            &self.scrollbar_config,
+            &sd.scrollbar_config,
             needs_other_scrollbar,
         );
 
         // Update scale animation target based on hover state
-        let is_hovered = self.scroll_state.is_track_hovered(axis)
-            || self.scroll_state.is_handle_hovered(axis)
-            || self.scroll_state.is_dragging(axis);
+        let is_hovered = sd.scroll_state.is_track_hovered(axis)
+            || sd.scroll_state.is_handle_hovered(axis)
+            || sd.scroll_state.is_dragging(axis);
         let target_scale = if is_hovered { scale_factor } else { 1.0 };
 
+        let sd = self.scroll_mut();
         let (scale_anim, track_id, handle_id) = match axis {
             ScrollbarAxis::Vertical => (
-                &mut self.v_scrollbar_scale_anim,
-                self.v_scrollbar_track_id,
-                self.v_scrollbar_handle_id,
+                &mut sd.v_scrollbar_scale_anim,
+                sd.v_scrollbar_track_id,
+                sd.v_scrollbar_handle_id,
             ),
             ScrollbarAxis::Horizontal => (
-                &mut self.h_scrollbar_scale_anim,
-                self.h_scrollbar_track_id,
-                self.h_scrollbar_handle_id,
+                &mut sd.h_scrollbar_scale_anim,
+                sd.h_scrollbar_track_id,
+                sd.h_scrollbar_handle_id,
             ),
         };
 
@@ -229,14 +232,15 @@ impl Container {
     /// may not run during hover events.
     pub(super) fn advance_scrollbar_scale_animations_internal(&mut self, id: WidgetId) -> bool {
         if self.scroll_axis == ScrollAxis::None
-            || self.scrollbar_visibility == ScrollbarVisibility::Hidden
+            || self.scroll().scrollbar_visibility == ScrollbarVisibility::Hidden
         {
             return false;
         }
 
-        let scale_factor = self.scrollbar_config.hover_width / self.scrollbar_config.width;
-        let needs_vertical = self.scroll_state.needs_vertical_scrollbar();
-        let needs_horizontal = self.scroll_state.needs_horizontal_scrollbar();
+        let sd = self.scroll();
+        let scale_factor = sd.scrollbar_config.hover_width / sd.scrollbar_config.width;
+        let needs_vertical = sd.scroll_state.needs_vertical_scrollbar();
+        let needs_horizontal = sd.scroll_state.needs_horizontal_scrollbar();
         let mut any_animating = false;
 
         // Advance vertical scrollbar scale animation
@@ -261,14 +265,16 @@ impl Container {
         id: WidgetId,
     ) -> bool {
         // Determine target scale based on hover state
-        let is_hovered = self.scroll_state.is_track_hovered(axis)
-            || self.scroll_state.is_handle_hovered(axis)
-            || self.scroll_state.is_dragging(axis);
+        let sd = self.scroll();
+        let is_hovered = sd.scroll_state.is_track_hovered(axis)
+            || sd.scroll_state.is_handle_hovered(axis)
+            || sd.scroll_state.is_dragging(axis);
         let target_scale = if is_hovered { scale_factor } else { 1.0 };
 
+        let sd = self.scroll_mut();
         let scale_anim = match axis {
-            ScrollbarAxis::Vertical => &mut self.v_scrollbar_scale_anim,
-            ScrollbarAxis::Horizontal => &mut self.h_scrollbar_scale_anim,
+            ScrollbarAxis::Vertical => &mut sd.v_scrollbar_scale_anim,
+            ScrollbarAxis::Horizontal => &mut sd.h_scrollbar_scale_anim,
         };
 
         // Advance the animation and request continuation if still animating.
@@ -295,13 +301,14 @@ impl Container {
     /// even when layout doesn't run (scroll is paint-only).
     pub(super) fn update_scrollbar_handle_positions(&mut self, tree: &mut Tree, id: WidgetId) {
         if self.scroll_axis == ScrollAxis::None
-            || self.scrollbar_visibility == ScrollbarVisibility::Hidden
+            || self.scroll().scrollbar_visibility == ScrollbarVisibility::Hidden
         {
             return;
         }
 
-        let needs_vertical = self.scroll_state.needs_vertical_scrollbar();
-        let needs_horizontal = self.scroll_state.needs_horizontal_scrollbar();
+        let sd = self.scroll();
+        let needs_vertical = sd.scroll_state.needs_vertical_scrollbar();
+        let needs_horizontal = sd.scroll_state.needs_horizontal_scrollbar();
 
         // Get bounds from Tree (single source of truth)
         let bounds = tree.get_bounds(id).unwrap_or_default();
@@ -312,12 +319,13 @@ impl Container {
         // Update vertical scrollbar handle position
         if self.scroll_axis.allows_vertical()
             && needs_vertical
-            && let Some(handle_id) = self.v_scrollbar_handle_id
+            && let Some(handle_id) = self.scroll().v_scrollbar_handle_id
         {
-            let handle_rect = self.scroll_state.scrollbar_handle_rect(
+            let sd = self.scroll();
+            let handle_rect = sd.scroll_state.scrollbar_handle_rect(
                 ScrollbarAxis::Vertical,
                 local_bounds,
-                &self.scrollbar_config,
+                &sd.scrollbar_config,
                 needs_horizontal,
             );
             tree.set_origin(handle_id, handle_rect.x, handle_rect.y);
@@ -326,12 +334,13 @@ impl Container {
         // Update horizontal scrollbar handle position
         if self.scroll_axis.allows_horizontal()
             && needs_horizontal
-            && let Some(handle_id) = self.h_scrollbar_handle_id
+            && let Some(handle_id) = self.scroll().h_scrollbar_handle_id
         {
-            let handle_rect = self.scroll_state.scrollbar_handle_rect(
+            let sd = self.scroll();
+            let handle_rect = sd.scroll_state.scrollbar_handle_rect(
                 ScrollbarAxis::Horizontal,
                 local_bounds,
-                &self.scrollbar_config,
+                &sd.scrollbar_config,
                 needs_vertical,
             );
             tree.set_origin(handle_id, handle_rect.x, handle_rect.y);
@@ -350,30 +359,32 @@ impl Container {
     ) {
         use crate::transform::Transform;
 
-        if self.scrollbar_visibility == ScrollbarVisibility::Hidden {
+        let sd = self.scroll();
+
+        if sd.scrollbar_visibility == ScrollbarVisibility::Hidden {
             return;
         }
 
         // Get current scale for vertical scrollbar
-        let v_scale = self
+        let v_scale = sd
             .v_scrollbar_scale_anim
             .as_ref()
             .map(|a| *a.current())
             .unwrap_or(1.0);
 
         // Get current scale for horizontal scrollbar
-        let h_scale = self
+        let h_scale = sd
             .h_scrollbar_scale_anim
             .as_ref()
             .map(|a| *a.current())
             .unwrap_or(1.0);
 
         // Vertical scrollbar
-        if self.scroll_axis.allows_vertical() && self.scroll_state.needs_vertical_scrollbar() {
+        if self.scroll_axis.allows_vertical() && sd.scroll_state.needs_vertical_scrollbar() {
             // Vertical scrollbar scales horizontally (expands width on hover)
             let scale_transform = Transform::scale_xy(v_scale, 1.0);
 
-            if let Some(track_id) = self.v_scrollbar_track_id
+            if let Some(track_id) = sd.v_scrollbar_track_id
                 && let Some(track_bounds) = tree.get_bounds(track_id)
             {
                 // Scrollbar bounds are already in local coordinates (relative to 0,0)
@@ -394,7 +405,7 @@ impl Container {
                     widget.paint(tree, track_id, &mut track_ctx);
                 });
             }
-            if let Some(handle_id) = self.v_scrollbar_handle_id
+            if let Some(handle_id) = sd.v_scrollbar_handle_id
                 && let Some(handle_bounds) = tree.get_bounds(handle_id)
             {
                 let handle_local = Rect::new(0.0, 0.0, handle_bounds.width, handle_bounds.height);
@@ -416,11 +427,11 @@ impl Container {
         }
 
         // Horizontal scrollbar
-        if self.scroll_axis.allows_horizontal() && self.scroll_state.needs_horizontal_scrollbar() {
+        if self.scroll_axis.allows_horizontal() && sd.scroll_state.needs_horizontal_scrollbar() {
             // Horizontal scrollbar scales vertically (expands height on hover)
             let scale_transform = Transform::scale_xy(1.0, h_scale);
 
-            if let Some(track_id) = self.h_scrollbar_track_id
+            if let Some(track_id) = sd.h_scrollbar_track_id
                 && let Some(track_bounds) = tree.get_bounds(track_id)
             {
                 let track_local = Rect::new(0.0, 0.0, track_bounds.width, track_bounds.height);
@@ -439,7 +450,7 @@ impl Container {
                     widget.paint(tree, track_id, &mut track_ctx);
                 });
             }
-            if let Some(handle_id) = self.h_scrollbar_handle_id
+            if let Some(handle_id) = sd.h_scrollbar_handle_id
                 && let Some(handle_bounds) = tree.get_bounds(handle_id)
             {
                 let handle_local = Rect::new(0.0, 0.0, handle_bounds.width, handle_bounds.height);
@@ -470,7 +481,7 @@ impl Container {
         event: &Event,
     ) -> Option<EventResponse> {
         if self.scroll_axis == ScrollAxis::None
-            || self.scrollbar_visibility == ScrollbarVisibility::Hidden
+            || self.scroll().scrollbar_visibility == ScrollbarVisibility::Hidden
         {
             return None;
         }
@@ -479,7 +490,7 @@ impl Container {
             Event::MouseDown { x, y, button } if *button == MouseButton::Left => {
                 // Check vertical scrollbar
                 if self.scroll_axis.allows_vertical()
-                    && self.scroll_state.needs_vertical_scrollbar()
+                    && self.scroll().scroll_state.needs_vertical_scrollbar()
                     && let Some(response) = self.handle_scrollbar_click(
                         tree,
                         id,
@@ -495,7 +506,7 @@ impl Container {
 
                 // Check horizontal scrollbar
                 if self.scroll_axis.allows_horizontal()
-                    && self.scroll_state.needs_horizontal_scrollbar()
+                    && self.scroll().scroll_state.needs_horizontal_scrollbar()
                     && let Some(response) = self.handle_scrollbar_click(
                         tree,
                         id,
@@ -512,7 +523,7 @@ impl Container {
 
             Event::MouseMove { x, y } => {
                 // Handle dragging
-                if self.scroll_state.scrollbar_dragging {
+                if self.scroll().scroll_state.scrollbar_dragging {
                     return Some(self.handle_scrollbar_drag(
                         id,
                         bounds,
@@ -520,7 +531,7 @@ impl Container {
                         *y,
                     ));
                 }
-                if self.scroll_state.h_scrollbar_dragging {
+                if self.scroll().scroll_state.h_scrollbar_dragging {
                     return Some(self.handle_scrollbar_drag(
                         id,
                         bounds,
@@ -533,7 +544,7 @@ impl Container {
                 let mut needs_repaint = false;
 
                 if self.scroll_axis.allows_vertical()
-                    && self.scroll_state.needs_vertical_scrollbar()
+                    && self.scroll().scroll_state.needs_vertical_scrollbar()
                 {
                     needs_repaint |= self.update_scrollbar_hover(
                         tree,
@@ -547,7 +558,7 @@ impl Container {
                 }
 
                 if self.scroll_axis.allows_horizontal()
-                    && self.scroll_state.needs_horizontal_scrollbar()
+                    && self.scroll().scroll_state.needs_horizontal_scrollbar()
                 {
                     needs_repaint |= self.update_scrollbar_hover(
                         tree,
@@ -566,9 +577,9 @@ impl Container {
             }
 
             Event::MouseUp { button, .. } if *button == MouseButton::Left => {
-                if self.scroll_state.scrollbar_dragging {
-                    self.scroll_state.scrollbar_dragging = false;
-                    if let Some(handle_id) = self.v_scrollbar_handle_id {
+                if self.scroll().scroll_state.scrollbar_dragging {
+                    self.scroll_mut().scroll_state.scrollbar_dragging = false;
+                    if let Some(handle_id) = self.scroll().v_scrollbar_handle_id {
                         tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
                             widget.event(tree, widget_id, event);
                         });
@@ -576,9 +587,9 @@ impl Container {
                     request_job(id, JobRequest::Paint);
                     return Some(EventResponse::Handled);
                 }
-                if self.scroll_state.h_scrollbar_dragging {
-                    self.scroll_state.h_scrollbar_dragging = false;
-                    if let Some(handle_id) = self.h_scrollbar_handle_id {
+                if self.scroll().scroll_state.h_scrollbar_dragging {
+                    self.scroll_mut().scroll_state.h_scrollbar_dragging = false;
+                    if let Some(handle_id) = self.scroll().h_scrollbar_handle_id {
                         tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
                             widget.event(tree, widget_id, event);
                         });
@@ -590,15 +601,17 @@ impl Container {
 
             Event::MouseLeave => {
                 // Clear scrollbar hover state
-                if self.scroll_state.scrollbar_hovered || self.scroll_state.h_scrollbar_hovered {
-                    self.scroll_state.scrollbar_hovered = false;
-                    self.scroll_state.h_scrollbar_hovered = false;
-                    if let Some(handle_id) = self.v_scrollbar_handle_id {
+                let sd = self.scroll();
+                if sd.scroll_state.scrollbar_hovered || sd.scroll_state.h_scrollbar_hovered {
+                    let sd = self.scroll_mut();
+                    sd.scroll_state.scrollbar_hovered = false;
+                    sd.scroll_state.h_scrollbar_hovered = false;
+                    if let Some(handle_id) = self.scroll().v_scrollbar_handle_id {
                         tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
                             widget.event(tree, widget_id, event);
                         });
                     }
-                    if let Some(handle_id) = self.h_scrollbar_handle_id {
+                    if let Some(handle_id) = self.scroll().h_scrollbar_handle_id {
                         tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
                             widget.event(tree, widget_id, event);
                         });
@@ -606,9 +619,11 @@ impl Container {
                     request_job(id, JobRequest::Paint);
                 }
                 // Stop dragging
-                if self.scroll_state.scrollbar_dragging || self.scroll_state.h_scrollbar_dragging {
-                    self.scroll_state.scrollbar_dragging = false;
-                    self.scroll_state.h_scrollbar_dragging = false;
+                let sd = self.scroll();
+                if sd.scroll_state.scrollbar_dragging || sd.scroll_state.h_scrollbar_dragging {
+                    let sd = self.scroll_mut();
+                    sd.scroll_state.scrollbar_dragging = false;
+                    sd.scroll_state.h_scrollbar_dragging = false;
                     request_job(id, JobRequest::Paint);
                 }
             }
@@ -630,33 +645,34 @@ impl Container {
         y: f32,
         event: &Event,
     ) -> Option<EventResponse> {
+        let sd = self.scroll();
         let needs_other = match axis {
-            ScrollbarAxis::Vertical => self.scroll_state.needs_horizontal_scrollbar(),
-            ScrollbarAxis::Horizontal => self.scroll_state.needs_vertical_scrollbar(),
+            ScrollbarAxis::Vertical => sd.scroll_state.needs_horizontal_scrollbar(),
+            ScrollbarAxis::Horizontal => sd.scroll_state.needs_vertical_scrollbar(),
         };
-        let handle_rect = self.scroll_state.scrollbar_handle_rect(
-            axis,
-            bounds,
-            &self.scrollbar_config,
-            needs_other,
-        );
+        let handle_rect =
+            sd.scroll_state
+                .scrollbar_handle_rect(axis, bounds, &sd.scrollbar_config, needs_other);
         let hit_area =
-            self.scroll_state
-                .scrollbar_hit_area(axis, bounds, &self.scrollbar_config, needs_other);
+            sd.scroll_state
+                .scrollbar_hit_area(axis, bounds, &sd.scrollbar_config, needs_other);
 
         if handle_rect.contains(x, y) {
             // Start dragging handle
-            self.scroll_state.set_dragging(axis, true);
+            self.scroll_mut().scroll_state.set_dragging(axis, true);
+            let sd = self.scroll();
             let (pos, offset) = match axis {
-                ScrollbarAxis::Vertical => (y, self.scroll_state.offset_y),
-                ScrollbarAxis::Horizontal => (x, self.scroll_state.offset_x),
+                ScrollbarAxis::Vertical => (y, sd.scroll_state.offset_y),
+                ScrollbarAxis::Horizontal => (x, sd.scroll_state.offset_x),
             };
-            self.scroll_state.set_drag_start(axis, pos, offset);
+            self.scroll_mut()
+                .scroll_state
+                .set_drag_start(axis, pos, offset);
 
             // Forward event to handle container for pressed state
             let handle_id = match axis {
-                ScrollbarAxis::Vertical => self.v_scrollbar_handle_id,
-                ScrollbarAxis::Horizontal => self.h_scrollbar_handle_id,
+                ScrollbarAxis::Vertical => self.scroll().v_scrollbar_handle_id,
+                ScrollbarAxis::Horizontal => self.scroll().h_scrollbar_handle_id,
             };
             if let Some(handle_id) = handle_id {
                 tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
@@ -668,18 +684,19 @@ impl Container {
             return Some(EventResponse::Handled);
         } else if hit_area.contains(x, y) {
             // Click on track - jump to position
-            let track_rect = self.scroll_state.scrollbar_track_rect(
+            let sd = self.scroll();
+            let track_rect = sd.scroll_state.scrollbar_track_rect(
                 axis,
                 bounds,
-                &self.scrollbar_config,
+                &sd.scrollbar_config,
                 needs_other,
             );
             let (track_size, handle_size, click_pos) = match axis {
                 ScrollbarAxis::Vertical => {
-                    let handle_size = self.scroll_state.scrollbar_handle_size(
+                    let handle_size = sd.scroll_state.scrollbar_handle_size(
                         axis,
                         track_rect.height,
-                        &self.scrollbar_config,
+                        &sd.scrollbar_config,
                     );
                     (
                         track_rect.height,
@@ -688,10 +705,10 @@ impl Container {
                     )
                 }
                 ScrollbarAxis::Horizontal => {
-                    let handle_size = self.scroll_state.scrollbar_handle_size(
+                    let handle_size = sd.scroll_state.scrollbar_handle_size(
                         axis,
                         track_rect.width,
-                        &self.scrollbar_config,
+                        &sd.scrollbar_config,
                     );
                     (
                         track_rect.width,
@@ -703,8 +720,9 @@ impl Container {
             let available = track_size - handle_size;
             if available > 0.0 {
                 let ratio = (click_pos / available).clamp(0.0, 1.0);
-                let offset = ratio * self.scroll_state.max_scroll(axis);
-                self.scroll_state.set_offset(axis, offset);
+                let sd = self.scroll_mut();
+                let offset = ratio * sd.scroll_state.max_scroll(axis);
+                sd.scroll_state.set_offset(axis, offset);
                 request_job(id, JobRequest::Paint);
             }
             return Some(EventResponse::Handled);
@@ -720,32 +738,30 @@ impl Container {
         axis: ScrollbarAxis,
         pos: f32,
     ) -> EventResponse {
+        let sd = self.scroll();
         let needs_other = match axis {
-            ScrollbarAxis::Vertical => self.scroll_state.needs_horizontal_scrollbar(),
-            ScrollbarAxis::Horizontal => self.scroll_state.needs_vertical_scrollbar(),
+            ScrollbarAxis::Vertical => sd.scroll_state.needs_horizontal_scrollbar(),
+            ScrollbarAxis::Horizontal => sd.scroll_state.needs_vertical_scrollbar(),
         };
-        let track = self.scroll_state.scrollbar_track_rect(
-            axis,
-            bounds,
-            &self.scrollbar_config,
-            needs_other,
-        );
+        let track =
+            sd.scroll_state
+                .scrollbar_track_rect(axis, bounds, &sd.scrollbar_config, needs_other);
         let track_size = match axis {
             ScrollbarAxis::Vertical => track.height,
             ScrollbarAxis::Horizontal => track.width,
         };
         let handle_size =
-            self.scroll_state
-                .scrollbar_handle_size(axis, track_size, &self.scrollbar_config);
+            sd.scroll_state
+                .scrollbar_handle_size(axis, track_size, &sd.scrollbar_config);
         let available = track_size - handle_size;
 
         if available > 0.0 {
-            let (drag_start, start_offset) = self.scroll_state.drag_start(axis);
+            let (drag_start, start_offset) = sd.scroll_state.drag_start(axis);
             let delta = pos - drag_start;
-            let scroll_delta = (delta / available) * self.scroll_state.max_scroll(axis);
-            let new_offset =
-                (start_offset + scroll_delta).clamp(0.0, self.scroll_state.max_scroll(axis));
-            self.scroll_state.set_offset(axis, new_offset);
+            let max_scroll = sd.scroll_state.max_scroll(axis);
+            let scroll_delta = (delta / available) * max_scroll;
+            let new_offset = (start_offset + scroll_delta).clamp(0.0, max_scroll);
+            self.scroll_mut().scroll_state.set_offset(axis, new_offset);
             // Scrollbar dragging needs Animation + Paint for smooth updates
             request_job(id, JobRequest::Animation(RequiredJob::Paint));
         }
@@ -764,34 +780,36 @@ impl Container {
         y: f32,
         _event: &Event,
     ) -> bool {
+        let sd = self.scroll();
         let needs_other = match axis {
-            ScrollbarAxis::Vertical => self.scroll_state.needs_horizontal_scrollbar(),
-            ScrollbarAxis::Horizontal => self.scroll_state.needs_vertical_scrollbar(),
+            ScrollbarAxis::Vertical => sd.scroll_state.needs_horizontal_scrollbar(),
+            ScrollbarAxis::Horizontal => sd.scroll_state.needs_vertical_scrollbar(),
         };
         let hit_area =
-            self.scroll_state
-                .scrollbar_hit_area(axis, bounds, &self.scrollbar_config, needs_other);
-        let handle_rect = self.scroll_state.scrollbar_handle_rect(
-            axis,
-            bounds,
-            &self.scrollbar_config,
-            needs_other,
-        );
+            sd.scroll_state
+                .scrollbar_hit_area(axis, bounds, &sd.scrollbar_config, needs_other);
+        let handle_rect =
+            sd.scroll_state
+                .scrollbar_handle_rect(axis, bounds, &sd.scrollbar_config, needs_other);
 
         let mut needs_repaint = false;
 
         // Track area hover (for expansion effect)
-        let was_track_hovered = self.scroll_state.is_track_hovered(axis);
+        let was_track_hovered = self.scroll().scroll_state.is_track_hovered(axis);
         let is_track_hovered = hit_area.contains(x, y);
-        self.scroll_state.set_track_hovered(axis, is_track_hovered);
+        self.scroll_mut()
+            .scroll_state
+            .set_track_hovered(axis, is_track_hovered);
         if was_track_hovered != is_track_hovered {
             needs_repaint = true;
         }
 
         // Handle hover (for color change)
-        let was_hovered = self.scroll_state.is_handle_hovered(axis);
+        let was_hovered = self.scroll().scroll_state.is_handle_hovered(axis);
         let is_hovered = handle_rect.contains(x, y);
-        self.scroll_state.set_handle_hovered(axis, is_hovered);
+        self.scroll_mut()
+            .scroll_state
+            .set_handle_hovered(axis, is_hovered);
         if was_hovered != is_hovered {
             needs_repaint = true;
         }
@@ -800,8 +818,8 @@ impl Container {
         // We can't forward raw MouseMove events because the Container's bounds check would fail
         // (coordinates are in parent space, not local to the handle widget).
         let handle_id = match axis {
-            ScrollbarAxis::Vertical => self.v_scrollbar_handle_id,
-            ScrollbarAxis::Horizontal => self.h_scrollbar_handle_id,
+            ScrollbarAxis::Vertical => self.scroll().v_scrollbar_handle_id,
+            ScrollbarAxis::Horizontal => self.scroll().h_scrollbar_handle_id,
         };
         if let Some(handle_id) = handle_id {
             if is_hovered && !was_hovered {
@@ -836,45 +854,52 @@ impl Container {
         delta_y: f32,
         source: ScrollSource,
     ) -> bool {
-        let old_x = self.scroll_state.offset_x;
-        let old_y = self.scroll_state.offset_y;
+        let sd = self.scroll_mut();
+        let old_x = sd.scroll_state.offset_x;
+        let old_y = sd.scroll_state.offset_y;
 
         match self.scroll_axis {
             ScrollAxis::Vertical => {
-                self.scroll_state.offset_y = (self.scroll_state.offset_y + delta_y)
-                    .clamp(0.0, self.scroll_state.max_scroll_y());
+                let sd = self.scroll_mut();
+                sd.scroll_state.offset_y =
+                    (sd.scroll_state.offset_y + delta_y).clamp(0.0, sd.scroll_state.max_scroll_y());
             }
             ScrollAxis::Horizontal => {
-                self.scroll_state.offset_x = (self.scroll_state.offset_x + delta_x)
-                    .clamp(0.0, self.scroll_state.max_scroll_x());
+                let sd = self.scroll_mut();
+                sd.scroll_state.offset_x =
+                    (sd.scroll_state.offset_x + delta_x).clamp(0.0, sd.scroll_state.max_scroll_x());
             }
             ScrollAxis::Both => {
-                self.scroll_state.offset_x = (self.scroll_state.offset_x + delta_x)
-                    .clamp(0.0, self.scroll_state.max_scroll_x());
-                self.scroll_state.offset_y = (self.scroll_state.offset_y + delta_y)
-                    .clamp(0.0, self.scroll_state.max_scroll_y());
+                let sd = self.scroll_mut();
+                sd.scroll_state.offset_x =
+                    (sd.scroll_state.offset_x + delta_x).clamp(0.0, sd.scroll_state.max_scroll_x());
+                sd.scroll_state.offset_y =
+                    (sd.scroll_state.offset_y + delta_y).clamp(0.0, sd.scroll_state.max_scroll_y());
             }
             ScrollAxis::None => return false,
         }
 
         // Track velocity for kinetic scrolling (touchpad/finger input only)
         if source == ScrollSource::Finger {
-            match self.scroll_axis {
+            let axis = self.scroll_axis;
+            let sd = self.scroll_mut();
+            match axis {
                 ScrollAxis::Vertical => {
-                    self.scroll_state.velocity_y = delta_y;
+                    sd.scroll_state.velocity_y = delta_y;
                 }
                 ScrollAxis::Horizontal => {
-                    self.scroll_state.velocity_x = delta_x;
+                    sd.scroll_state.velocity_x = delta_x;
                 }
                 ScrollAxis::Both => {
-                    self.scroll_state.velocity_x = delta_x;
-                    self.scroll_state.velocity_y = delta_y;
+                    sd.scroll_state.velocity_x = delta_x;
+                    sd.scroll_state.velocity_y = delta_y;
                 }
                 ScrollAxis::None => {}
             }
-            self.scroll_state.last_scroll_time = Some(std::time::Instant::now());
+            sd.scroll_state.last_scroll_time = Some(std::time::Instant::now());
         }
 
-        old_x != self.scroll_state.offset_x || old_y != self.scroll_state.offset_y
+        let sd = self.scroll();
+        old_x != sd.scroll_state.offset_x || old_y != sd.scroll_state.offset_y
     }
 }

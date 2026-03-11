@@ -123,6 +123,86 @@ pub enum Overflow {
     Hidden,
 }
 
+/// Boxed animation states. Only allocated when `.transition()` or
+/// `.animate_*()` is called, saving ~400 bytes per non-animated Container.
+#[derive(Default)]
+pub(super) struct ContainerAnims {
+    pub(super) width: Option<AnimationState<f32>>,
+    pub(super) height: Option<AnimationState<f32>>,
+    pub(super) background: Option<AnimationState<Color>>,
+    pub(super) corner_radius: Option<AnimationState<f32>>,
+    pub(super) padding: Option<AnimationState<Padding>>,
+    pub(super) border_width: Option<AnimationState<f32>>,
+    pub(super) border_color: Option<AnimationState<Color>>,
+    pub(super) transform: Option<AnimationState<Transform>>,
+}
+
+/// Interaction state (callbacks, hover/press tracking, state styles, ripple).
+/// Only allocated when `.on_click()`, `.hover_state()`, `.pressed_state()`, etc. are called.
+pub(super) struct InteractionState {
+    pub(super) on_click: Option<ClickCallback>,
+    pub(super) on_hover: Option<HoverCallback>,
+    pub(super) on_scroll: Option<ScrollCallback>,
+    pub(super) on_pointer_move: Option<PointerMoveCallback>,
+    pub(super) on_mouse_down: Option<MouseDownCallback>,
+    pub(super) on_mouse_up: Option<MouseUpCallback>,
+    pub(super) is_hovered: bool,
+    pub(super) is_pressed: bool,
+    pub(super) hover_state: Option<StateStyle>,
+    pub(super) pressed_state: Option<StateStyle>,
+    pub(super) focused_state: Option<StateStyle>,
+    pub(super) ripple: RippleState,
+}
+
+impl Default for InteractionState {
+    fn default() -> Self {
+        Self {
+            on_click: None,
+            on_hover: None,
+            on_scroll: None,
+            on_pointer_move: None,
+            on_mouse_down: None,
+            on_mouse_up: None,
+            is_hovered: false,
+            is_pressed: false,
+            hover_state: None,
+            pressed_state: None,
+            focused_state: None,
+            ripple: RippleState::new(),
+        }
+    }
+}
+
+/// Scroll state and configuration, boxed to avoid bloating Container.
+/// Only allocated when `.scrollable()` is called.
+pub(super) struct ScrollData {
+    pub(super) scrollbar_visibility: ScrollbarVisibility,
+    pub(super) scrollbar_config: ScrollbarConfig,
+    pub(super) scroll_state: ScrollState,
+    pub(super) v_scrollbar_track_id: Option<WidgetId>,
+    pub(super) v_scrollbar_handle_id: Option<WidgetId>,
+    pub(super) v_scrollbar_scale_anim: Option<AnimationState<f32>>,
+    pub(super) h_scrollbar_track_id: Option<WidgetId>,
+    pub(super) h_scrollbar_handle_id: Option<WidgetId>,
+    pub(super) h_scrollbar_scale_anim: Option<AnimationState<f32>>,
+}
+
+impl Default for ScrollData {
+    fn default() -> Self {
+        Self {
+            scrollbar_visibility: ScrollbarVisibility::Always,
+            scrollbar_config: ScrollbarConfig::default(),
+            scroll_state: ScrollState::default(),
+            v_scrollbar_track_id: None,
+            v_scrollbar_handle_id: None,
+            v_scrollbar_scale_anim: None,
+            h_scrollbar_track_id: None,
+            h_scrollbar_handle_id: None,
+            h_scrollbar_scale_anim: None,
+        }
+    }
+}
+
 pub struct Container {
     // Layout and children
     pub(super) layout: Box<dyn Layout>,
@@ -144,54 +224,19 @@ pub struct Container {
     pub(super) transform: Option<Signal<Transform>>,
     pub(super) transform_origin: Option<Signal<TransformOrigin>>,
 
-    // Event callbacks
-    pub(super) on_click: Option<ClickCallback>,
-    pub(super) on_hover: Option<HoverCallback>,
-    pub(super) on_scroll: Option<ScrollCallback>,
-    pub(super) on_pointer_move: Option<PointerMoveCallback>,
-    pub(super) on_mouse_down: Option<MouseDownCallback>,
-    pub(super) on_mouse_up: Option<MouseUpCallback>,
+    // Interaction state (callbacks, hover/press, state styles, ripple)
+    // Only allocated when interaction features are used
+    pub(super) interaction: Option<Box<InteractionState>>,
 
     // Widget ref for reactive bounds tracking
     pub(super) widget_ref: Option<WidgetRef>,
 
-    // Internal state for event handling
-    pub(super) is_hovered: bool,
-    pub(super) is_pressed: bool,
-
-    // Animation state
-    pub(super) width_anim: Option<AnimationState<f32>>,
-    pub(super) height_anim: Option<AnimationState<f32>>,
-    pub(super) background_anim: Option<AnimationState<Color>>,
-    pub(super) corner_radius_anim: Option<AnimationState<f32>>,
-    pub(super) padding_anim: Option<AnimationState<Padding>>,
-    pub(super) border_width_anim: Option<AnimationState<f32>>,
-    pub(super) border_color_anim: Option<AnimationState<Color>>,
-    pub(super) transform_anim: Option<AnimationState<Transform>>,
-
-    // State layer styles (hover/pressed/focused overrides)
-    pub(super) hover_state: Option<StateStyle>,
-    pub(super) pressed_state: Option<StateStyle>,
-    pub(super) focused_state: Option<StateStyle>,
+    // Animation state (boxed to save ~400 bytes per non-animated container)
+    pub(super) anims: Option<Box<ContainerAnims>>,
 
     // Scroll configuration
     pub(super) scroll_axis: ScrollAxis,
-    pub(super) scrollbar_visibility: ScrollbarVisibility,
-    pub(super) scrollbar_config: ScrollbarConfig,
-    pub(super) scroll_state: ScrollState,
-
-    // Vertical scrollbar widget IDs (registered in Tree)
-    pub(super) v_scrollbar_track_id: Option<WidgetId>,
-    pub(super) v_scrollbar_handle_id: Option<WidgetId>,
-    pub(super) v_scrollbar_scale_anim: Option<AnimationState<f32>>,
-
-    // Horizontal scrollbar widget IDs (registered in Tree)
-    pub(super) h_scrollbar_track_id: Option<WidgetId>,
-    pub(super) h_scrollbar_handle_id: Option<WidgetId>,
-    pub(super) h_scrollbar_scale_anim: Option<AnimationState<f32>>,
-
-    // Ripple animation state
-    pub(super) ripple: RippleState,
+    pub(super) scroll_data: Option<Box<ScrollData>>,
 }
 
 impl Container {
@@ -214,38 +259,39 @@ impl Container {
             visible: None,
             transform: None,
             transform_origin: None,
-            on_click: None,
-            on_hover: None,
-            on_scroll: None,
-            on_pointer_move: None,
-            on_mouse_down: None,
-            on_mouse_up: None,
+            interaction: None,
             widget_ref: None,
-            is_hovered: false,
-            is_pressed: false,
-            width_anim: None,
-            height_anim: None,
-            background_anim: None,
-            corner_radius_anim: None,
-            padding_anim: None,
-            border_width_anim: None,
-            border_color_anim: None,
-            transform_anim: None,
-            hover_state: None,
-            pressed_state: None,
-            focused_state: None,
+            anims: None,
             scroll_axis: ScrollAxis::None,
-            scrollbar_visibility: ScrollbarVisibility::Always,
-            scrollbar_config: ScrollbarConfig::default(),
-            scroll_state: ScrollState::default(),
-            v_scrollbar_track_id: None,
-            v_scrollbar_handle_id: None,
-            v_scrollbar_scale_anim: None,
-            h_scrollbar_track_id: None,
-            h_scrollbar_handle_id: None,
-            h_scrollbar_scale_anim: None,
-            ripple: RippleState::new(),
+            scroll_data: None,
         }
+    }
+
+    /// Get scroll data (panics if not scrollable — only call when scroll_axis != None)
+    fn scroll(&self) -> &ScrollData {
+        self.scroll_data.as_deref().expect("scroll_data not set")
+    }
+
+    /// Get mutable scroll data (panics if not scrollable)
+    fn scroll_mut(&mut self) -> &mut ScrollData {
+        self.scroll_data
+            .as_deref_mut()
+            .expect("scroll_data not set")
+    }
+
+    /// Get or create scroll data
+    fn scroll_or_init(&mut self) -> &mut ScrollData {
+        self.scroll_data.get_or_insert_with(Box::default)
+    }
+
+    /// Get or create animation states box
+    fn anims_mut(&mut self) -> &mut ContainerAnims {
+        self.anims.get_or_insert_with(Box::default)
+    }
+
+    /// Get or create interaction state
+    fn interact_mut(&mut self) -> &mut InteractionState {
+        self.interaction.get_or_insert_with(Box::default)
     }
 
     /// Set the layout strategy for this container
@@ -409,12 +455,15 @@ impl Container {
     /// Enable scrolling on this container.
     pub fn scrollable(mut self, axis: ScrollAxis) -> Self {
         self.scroll_axis = axis;
+        if axis != ScrollAxis::None {
+            self.scroll_data = Some(Box::default());
+        }
         self
     }
 
     /// Configure scrollbar visibility.
     pub fn scrollbar_visibility(mut self, visibility: ScrollbarVisibility) -> Self {
-        self.scrollbar_visibility = visibility;
+        self.scroll_or_init().scrollbar_visibility = visibility;
         self
     }
 
@@ -424,43 +473,45 @@ impl Container {
         F: FnOnce(ScrollbarBuilder) -> ScrollbarBuilder,
     {
         let builder = f(ScrollbarBuilder::default());
-        self.scrollbar_config = builder.build();
+        self.scroll_or_init().scrollbar_config = builder.build();
         self
     }
 
     pub fn on_click<F: Fn() + 'static>(mut self, callback: F) -> Self {
-        self.on_click = Some(Rc::new(callback));
+        self.interact_mut().on_click = Some(Rc::new(callback));
         self
     }
 
     /// Accept an optional click callback (useful for components)
     pub fn on_click_option(mut self, callback: Option<ClickCallback>) -> Self {
-        self.on_click = callback;
+        if callback.is_some() || self.interaction.is_some() {
+            self.interact_mut().on_click = callback;
+        }
         self
     }
 
     pub fn on_hover<F: Fn(bool) + 'static>(mut self, callback: F) -> Self {
-        self.on_hover = Some(Rc::new(callback));
+        self.interact_mut().on_hover = Some(Rc::new(callback));
         self
     }
 
     pub fn on_scroll<F: Fn(f32, f32, ScrollSource) + 'static>(mut self, callback: F) -> Self {
-        self.on_scroll = Some(Rc::new(callback));
+        self.interact_mut().on_scroll = Some(Rc::new(callback));
         self
     }
 
     pub fn on_pointer_move<F: Fn(f32, f32) + 'static>(mut self, callback: F) -> Self {
-        self.on_pointer_move = Some(Rc::new(callback));
+        self.interact_mut().on_pointer_move = Some(Rc::new(callback));
         self
     }
 
     pub fn on_mouse_down<F: Fn(f32, f32) + 'static>(mut self, callback: F) -> Self {
-        self.on_mouse_down = Some(Rc::new(callback));
+        self.interact_mut().on_mouse_down = Some(Rc::new(callback));
         self
     }
 
     pub fn on_mouse_up<F: Fn(f32, f32) + 'static>(mut self, callback: F) -> Self {
-        self.on_mouse_up = Some(Rc::new(callback));
+        self.interact_mut().on_mouse_up = Some(Rc::new(callback));
         self
     }
 
@@ -547,7 +598,7 @@ impl Container {
                 len.exact.or(len.min).unwrap_or(0.0)
             })
             .unwrap_or(0.0);
-        self.width_anim = Some(AnimationState::new(initial, transition));
+        self.anims_mut().width = Some(AnimationState::new(initial, transition));
         self
     }
 
@@ -561,49 +612,49 @@ impl Container {
                 len.exact.or(len.min).unwrap_or(0.0)
             })
             .unwrap_or(0.0);
-        self.height_anim = Some(AnimationState::new(initial, transition));
+        self.anims_mut().height = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for background color changes
     pub fn animate_background(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.background.get_or(Color::TRANSPARENT);
-        self.background_anim = Some(AnimationState::new(initial, transition));
+        self.anims_mut().background = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for corner radius changes
     pub fn animate_corner_radius(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.corner_radius.get_or(0.0);
-        self.corner_radius_anim = Some(AnimationState::new(initial, transition));
+        self.anims_mut().corner_radius = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for padding changes
     pub fn animate_padding(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.padding.get_or(Padding::default());
-        self.padding_anim = Some(AnimationState::new(initial, transition));
+        self.anims_mut().padding = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for border width changes
     pub fn animate_border_width(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.border_width.get_or(0.0);
-        self.border_width_anim = Some(AnimationState::new(initial, transition));
+        self.anims_mut().border_width = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for border color changes
     pub fn animate_border_color(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.border_color.get_or(Color::TRANSPARENT);
-        self.border_color_anim = Some(AnimationState::new(initial, transition));
+        self.anims_mut().border_color = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for transform changes
     pub fn animate_transform(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.transform.get_or(Transform::IDENTITY);
-        self.transform_anim = Some(AnimationState::new(initial, transition));
+        self.anims_mut().transform = Some(AnimationState::new(initial, transition));
         self
     }
 
@@ -612,7 +663,7 @@ impl Container {
     where
         F: FnOnce(StateStyle) -> StateStyle,
     {
-        self.hover_state = Some(f(StateStyle::new()));
+        self.interact_mut().hover_state = Some(f(StateStyle::new()));
         self
     }
 
@@ -621,7 +672,7 @@ impl Container {
     where
         F: FnOnce(StateStyle) -> StateStyle,
     {
-        self.pressed_state = Some(f(StateStyle::new()));
+        self.interact_mut().pressed_state = Some(f(StateStyle::new()));
         self
     }
 
@@ -640,7 +691,7 @@ impl Container {
     where
         F: FnOnce(StateStyle) -> StateStyle,
     {
-        self.focused_state = Some(f(StateStyle::new()));
+        self.interact_mut().focused_state = Some(f(StateStyle::new()));
         self
     }
 
@@ -674,9 +725,11 @@ impl Container {
     fn is_relayout_boundary_for(&self, constraints: Constraints) -> bool {
         // A widget with an active layout-affecting animation is NOT a boundary,
         // because its size changes each frame and the parent must reposition siblings.
-        let has_active_layout_anim = self.width_anim.as_ref().is_some_and(|a| a.is_animating())
-            || self.height_anim.as_ref().is_some_and(|a| a.is_animating())
-            || self.padding_anim.as_ref().is_some_and(|a| a.is_animating());
+        let has_active_layout_anim = self.anims.as_ref().is_some_and(|a| {
+            a.width.as_ref().is_some_and(|x| x.is_animating())
+                || a.height.as_ref().is_some_and(|x| x.is_animating())
+                || a.padding.as_ref().is_some_and(|x| x.is_animating())
+        });
         if has_active_layout_anim {
             return false;
         }
@@ -703,22 +756,25 @@ impl Container {
         base: T,
         extractor: impl Fn(&StateStyle) -> Option<T>,
     ) -> T {
-        if self.is_pressed
-            && let Some(ref state) = self.pressed_state
+        let Some(ref ix) = self.interaction else {
+            return base;
+        };
+        if ix.is_pressed
+            && let Some(ref state) = ix.pressed_state
             && let Some(value) = extractor(state)
         {
             return value;
         }
         // Check focused state
-        if self.focused_state.is_some()
+        if ix.focused_state.is_some()
             && self.has_child_focus(tree)
-            && let Some(ref state) = self.focused_state
+            && let Some(ref state) = ix.focused_state
             && let Some(value) = extractor(state)
         {
             return value;
         }
-        if self.is_hovered
-            && let Some(ref state) = self.hover_state
+        if ix.is_hovered
+            && let Some(ref state) = ix.hover_state
             && let Some(value) = extractor(state)
         {
             return value;
@@ -782,52 +838,59 @@ impl Container {
 
     /// Get current padding (animated or static)
     fn animated_padding(&self) -> Padding {
-        get_animated_value(&self.padding_anim, || {
+        get_animated_value(self.anims.as_ref().and_then(|a| a.padding.as_ref()), || {
             self.padding.get_or(Padding::default())
         })
     }
 
     /// Get current background color (animated or effective target)
     fn animated_background(&self, tree: &Tree) -> Color {
-        get_animated_value(&self.background_anim, || {
-            self.effective_background_target(tree)
-        })
+        get_animated_value(
+            self.anims.as_ref().and_then(|a| a.background.as_ref()),
+            || self.effective_background_target(tree),
+        )
     }
 
     /// Get current corner radius (animated or effective target)
     fn animated_corner_radius(&self, tree: &Tree) -> f32 {
-        get_animated_value(&self.corner_radius_anim, || {
-            self.effective_corner_radius_target(tree)
-        })
+        get_animated_value(
+            self.anims.as_ref().and_then(|a| a.corner_radius.as_ref()),
+            || self.effective_corner_radius_target(tree),
+        )
     }
 
     /// Get current border width (animated or effective target)
     fn animated_border_width(&self, tree: &Tree) -> f32 {
-        get_animated_value(&self.border_width_anim, || {
-            self.effective_border_width_target(tree)
-        })
+        get_animated_value(
+            self.anims.as_ref().and_then(|a| a.border_width.as_ref()),
+            || self.effective_border_width_target(tree),
+        )
     }
 
     /// Get current border color (animated or effective target)
     fn animated_border_color(&self, tree: &Tree) -> Color {
-        get_animated_value(&self.border_color_anim, || {
-            self.effective_border_color_target(tree)
-        })
+        get_animated_value(
+            self.anims.as_ref().and_then(|a| a.border_color.as_ref()),
+            || self.effective_border_color_target(tree),
+        )
     }
 
     /// Get current transform (animated or effective target)
     fn animated_transform(&self, tree: &Tree) -> Transform {
-        get_animated_value(&self.transform_anim, || {
-            self.effective_transform_target(tree)
-        })
+        get_animated_value(
+            self.anims.as_ref().and_then(|a| a.transform.as_ref()),
+            || self.effective_transform_target(tree),
+        )
     }
 
     /// Check if any state layer properties have animations enabled
     fn has_animated_state_properties(&self) -> bool {
-        self.background_anim.is_some()
-            || self.corner_radius_anim.is_some()
-            || self.border_color_anim.is_some()
-            || self.transform_anim.is_some()
+        self.anims.as_ref().is_some_and(|a| {
+            a.background.is_some()
+                || a.corner_radius.is_some()
+                || a.border_color.is_some()
+                || a.transform.is_some()
+        })
     }
 
     /// Request repaint for state changes (hover/press), with Animation job if needed
@@ -879,67 +942,60 @@ impl Widget for Container {
         // Use advance_animations_self for this widget's animations
         let mut any_animating = false;
 
-        // Layout-affecting animations: width, height, padding
-        advance_anim!(self, width_anim, id, any_animating, layout);
-        advance_anim!(self, height_anim, id, any_animating, layout);
-        advance_anim!(
-            self,
-            padding_anim,
-            self.padding.get_or(Padding::default()),
-            id,
-            any_animating,
-            layout
-        );
+        #[allow(clippy::unnecessary_unwrap)]
+        // Intentional: compute targets with &self before &mut borrow
+        if self.anims.is_some() {
+            // Compute targets before borrowing anims mutably (&self methods conflict
+            // with &mut self.anims). Skipped entirely for the majority of non-animated
+            // containers since self.anims is None.
+            let padding_target = self.padding.get_or(Padding::default());
+            let border_width_target = self.effective_border_width_target(tree);
+            let bg_target = self.effective_background_target(tree);
+            let corner_radius_target = self.effective_corner_radius_target(tree);
+            let border_color_target = self.effective_border_color_target(tree);
+            let transform_target = self.effective_transform_target(tree);
+            let anims = self.anims.as_mut().unwrap();
+            // Layout-affecting animations: width, height, padding
+            advance_anim!(anims, width, id, any_animating, layout);
+            advance_anim!(anims, height, id, any_animating, layout);
+            advance_anim!(anims, padding, padding_target, id, any_animating, layout);
 
-        // Paint-only animations: border_width, background, corner_radius, border_color, transform
-        let border_width_target = self.effective_border_width_target(tree);
-        advance_anim!(
-            self,
-            border_width_anim,
-            border_width_target,
-            id,
-            any_animating,
-            paint
-        );
-        let bg_target = self.effective_background_target(tree);
-        advance_anim!(self, background_anim, bg_target, id, any_animating, paint);
-
-        let corner_radius_target = self.effective_corner_radius_target(tree);
-        advance_anim!(
-            self,
-            corner_radius_anim,
-            corner_radius_target,
-            id,
-            any_animating,
-            paint
-        );
-
-        let border_color_target = self.effective_border_color_target(tree);
-        advance_anim!(
-            self,
-            border_color_anim,
-            border_color_target,
-            id,
-            any_animating,
-            paint
-        );
-
-        let transform_target = self.effective_transform_target(tree);
-        advance_anim!(
-            self,
-            transform_anim,
-            transform_target,
-            id,
-            any_animating,
-            paint
-        );
+            // Paint-only animations: border_width, background, corner_radius, border_color, transform
+            advance_anim!(
+                anims,
+                border_width,
+                border_width_target,
+                id,
+                any_animating,
+                paint
+            );
+            advance_anim!(anims, background, bg_target, id, any_animating, paint);
+            advance_anim!(
+                anims,
+                corner_radius,
+                corner_radius_target,
+                id,
+                any_animating,
+                paint
+            );
+            advance_anim!(
+                anims,
+                border_color,
+                border_color_target,
+                id,
+                any_animating,
+                paint
+            );
+            advance_anim!(anims, transform, transform_target, id, any_animating, paint);
+        }
 
         // Advance ripple animation
-        if self.ripple.is_active()
-            && let Some(ref state) = self.pressed_state
+        if let Some(ref mut ix) = self.interaction
+            && ix.ripple.is_active()
+            && let Some(ref state) = ix.pressed_state
             && let Some(ref config) = state.ripple
         {
-            let ripple_animating = self.ripple.advance(config);
+            let ripple_animating = ix.ripple.advance(config);
             if ripple_animating {
                 // Ripple is paint-only, request animation continuation with paint
                 request_job(id, JobRequest::Animation(RequiredJob::Paint));
@@ -948,15 +1004,17 @@ impl Widget for Container {
         }
 
         // Advance kinetic scroll animation
-        let has_scroll_velocity =
-            self.scroll_state.velocity_x.abs() > 0.5 || self.scroll_state.velocity_y.abs() > 0.5;
-        if has_scroll_velocity {
-            let scroll_animating = self.scroll_state.advance_momentum();
-            if scroll_animating {
-                // Kinetic scroll is paint-only, request animation continuation with paint
-                request_job(id, JobRequest::Animation(RequiredJob::Paint));
+        if let Some(ref mut sd) = self.scroll_data {
+            let has_scroll_velocity =
+                sd.scroll_state.velocity_x.abs() > 0.5 || sd.scroll_state.velocity_y.abs() > 0.5;
+            if has_scroll_velocity {
+                let scroll_animating = sd.scroll_state.advance_momentum();
+                if scroll_animating {
+                    // Kinetic scroll is paint-only, request animation continuation with paint
+                    request_job(id, JobRequest::Animation(RequiredJob::Paint));
+                }
+                any_animating = any_animating || scroll_animating;
             }
-            any_animating = any_animating || scroll_animating;
         }
 
         // Update scrollbar handle positions based on current scroll offset
@@ -1061,49 +1119,52 @@ impl Widget for Container {
         // visible bounds (e.g., Center alignment tracks the animating size).
         // For non-exact (shrink-to-fit) widths, use the signal value to avoid a
         // circular dependency: animated width → constrains children → target = clamped.
-        let child_layout_width = if let Some(ref anim) = self.width_anim {
-            if !anim.is_initial() && width_length.exact.is_some() {
-                *anim.current()
+        let child_layout_width =
+            if let Some(anim) = self.anims.as_ref().and_then(|a| a.width.as_ref()) {
+                if !anim.is_initial() && width_length.exact.is_some() {
+                    *anim.current()
+                } else {
+                    width_length.exact.unwrap_or(constraints.max_width)
+                }
+            } else if let Some(exact) = width_length.exact {
+                exact
             } else {
-                width_length.exact.unwrap_or(constraints.max_width)
-            }
-        } else if let Some(exact) = width_length.exact {
-            exact
-        } else {
-            let w = constraints.max_width;
-            if let Some(max) = width_length.max {
-                w.min(max)
-            } else {
-                w
-            }
-        };
+                let w = constraints.max_width;
+                if let Some(max) = width_length.max {
+                    w.min(max)
+                } else {
+                    w
+                }
+            };
 
-        let child_layout_height = if let Some(ref anim) = self.height_anim {
-            if !anim.is_initial() && height_length.exact.is_some() {
-                *anim.current()
+        let child_layout_height =
+            if let Some(anim) = self.anims.as_ref().and_then(|a| a.height.as_ref()) {
+                if !anim.is_initial() && height_length.exact.is_some() {
+                    *anim.current()
+                } else {
+                    height_length.exact.unwrap_or(constraints.max_height)
+                }
+            } else if let Some(exact) = height_length.exact {
+                exact
             } else {
-                height_length.exact.unwrap_or(constraints.max_height)
-            }
-        } else if let Some(exact) = height_length.exact {
-            exact
-        } else {
-            let h = constraints.max_height;
-            if let Some(max) = height_length.max {
-                h.min(max)
-            } else {
-                h
-            }
-        };
+                let h = constraints.max_height;
+                if let Some(max) = height_length.max {
+                    h.min(max)
+                } else {
+                    h
+                }
+            };
 
         // Child constraints with padding
         let mut child_max_width = (child_layout_width - padding.horizontal()).max(0.0);
         let mut child_max_height = (child_layout_height - padding.vertical()).max(0.0);
 
         // Reserve gutter space for scrollbars
-        if self.scrollbar_config.reserve_gutter
-            && self.scrollbar_visibility != ScrollbarVisibility::Hidden
+        if let Some(ref sd) = self.scroll_data
+            && sd.scrollbar_config.reserve_gutter
+            && sd.scrollbar_visibility != ScrollbarVisibility::Hidden
         {
-            let gutter = self.scrollbar_config.width + self.scrollbar_config.margin * 2.0;
+            let gutter = sd.scrollbar_config.width + sd.scrollbar_config.margin * 2.0;
             if self.scroll_axis.allows_vertical() {
                 child_max_width = (child_max_width - gutter).max(0.0);
             }
@@ -1170,11 +1231,6 @@ impl Widget for Container {
         // Reconcile and get children IDs
         let children = self.children_source.reconcile_and_get(tree);
 
-        // Update parent tracking for all children in the tree
-        for &child_id in children.iter() {
-            tree.set_parent(child_id, id);
-        }
-
         let content_size = if !children.is_empty() {
             self.layout.layout(
                 tree,
@@ -1186,58 +1242,60 @@ impl Widget for Container {
             Size::zero()
         };
 
-        // Update scroll state — viewport uses the animated (visible) size, not the
-        // unconstrained child layout size, so scrollbars reflect the actual visible area.
+        // Update scroll state with the viewport dimensions available for children.
         if scroll_axis != ScrollAxis::None {
-            self.scroll_state.content_width = content_size.width + padding.horizontal();
-            self.scroll_state.content_height = content_size.height + padding.vertical();
-            self.scroll_state.viewport_width = child_max_width;
-            self.scroll_state.viewport_height = child_max_height;
-            self.scroll_state.clamp_offsets();
+            let sd = self.scroll_mut();
+            sd.scroll_state.content_width = content_size.width + padding.horizontal();
+            sd.scroll_state.content_height = content_size.height + padding.vertical();
+            sd.scroll_state.viewport_width = child_max_width;
+            sd.scroll_state.viewport_height = child_max_height;
+            sd.scroll_state.clamp_offsets();
         }
 
         let content_width = content_size.width + padding.horizontal();
         let content_height = content_size.height + padding.vertical();
 
         // Update animation targets
-        if let Some(ref mut anim) = self.width_anim {
-            let effective_target = if let Some(exact) = width_length.exact {
-                exact
-            } else {
-                let min_w = width_length.min.unwrap_or(0.0);
-                content_width.max(min_w)
-            };
-            if anim.is_initial() {
-                // Always mark as initialized on first layout so subsequent
-                // changes animate rather than snap.
-                anim.set_immediate(effective_target);
-            } else if (effective_target - *anim.target()).abs() > 0.001 {
-                anim.animate_to(effective_target);
-                // Width affects layout, so use RequiredJob::Layout
-                request_job(id, JobRequest::Animation(RequiredJob::Layout));
-                // Parent must reposition siblings as this child's width changes
-                if let Some(parent_id) = tree.get_parent(id) {
-                    request_job(parent_id, JobRequest::Layout);
+        if let Some(ref mut anims) = self.anims {
+            if let Some(ref mut anim) = anims.width {
+                let effective_target = if let Some(exact) = width_length.exact {
+                    exact
+                } else {
+                    let min_w = width_length.min.unwrap_or(0.0);
+                    content_width.max(min_w)
+                };
+                if anim.is_initial() {
+                    // Always mark as initialized on first layout so subsequent
+                    // changes animate rather than snap.
+                    anim.set_immediate(effective_target);
+                } else if (effective_target - *anim.target()).abs() > 0.001 {
+                    anim.animate_to(effective_target);
+                    // Width affects layout, so use RequiredJob::Layout
+                    request_job(id, JobRequest::Animation(RequiredJob::Layout));
+                    // Parent must reposition siblings as this child's width changes
+                    if let Some(parent_id) = tree.get_parent(id) {
+                        request_job(parent_id, JobRequest::Layout);
+                    }
                 }
             }
-        }
 
-        if let Some(ref mut anim) = self.height_anim {
-            let effective_target = if let Some(exact) = height_length.exact {
-                exact
-            } else {
-                let min_h = height_length.min.unwrap_or(0.0);
-                content_height.max(min_h)
-            };
-            if anim.is_initial() {
-                anim.set_immediate(effective_target);
-            } else if (effective_target - *anim.target()).abs() > 0.001 {
-                anim.animate_to(effective_target);
-                // Height affects layout, so use RequiredJob::Layout
-                request_job(id, JobRequest::Animation(RequiredJob::Layout));
-                // Parent must reposition siblings as this child's height changes
-                if let Some(parent_id) = tree.get_parent(id) {
-                    request_job(parent_id, JobRequest::Layout);
+            if let Some(ref mut anim) = anims.height {
+                let effective_target = if let Some(exact) = height_length.exact {
+                    exact
+                } else {
+                    let min_h = height_length.min.unwrap_or(0.0);
+                    content_height.max(min_h)
+                };
+                if anim.is_initial() {
+                    anim.set_immediate(effective_target);
+                } else if (effective_target - *anim.target()).abs() > 0.001 {
+                    anim.animate_to(effective_target);
+                    // Height affects layout, so use RequiredJob::Layout
+                    request_job(id, JobRequest::Animation(RequiredJob::Layout));
+                    // Parent must reposition siblings as this child's height changes
+                    if let Some(parent_id) = tree.get_parent(id) {
+                        request_job(parent_id, JobRequest::Layout);
+                    }
                 }
             }
         }
@@ -1246,18 +1304,25 @@ impl Widget for Container {
         // from the correct signal value rather than a stale construction-time value)
         // Compute targets first to avoid borrow conflicts with &mut anim + &self
         let bg_init = self
-            .background_anim
+            .anims
             .as_ref()
+            .and_then(|a| a.background.as_ref())
             .is_some_and(|a| a.is_initial());
         let cr_init = self
-            .corner_radius_anim
+            .anims
             .as_ref()
+            .and_then(|a| a.corner_radius.as_ref())
             .is_some_and(|a| a.is_initial());
         let bc_init = self
-            .border_color_anim
+            .anims
             .as_ref()
+            .and_then(|a| a.border_color.as_ref())
             .is_some_and(|a| a.is_initial());
-        let tf_init = self.transform_anim.as_ref().is_some_and(|a| a.is_initial());
+        let tf_init = self
+            .anims
+            .as_ref()
+            .and_then(|a| a.transform.as_ref())
+            .is_some_and(|a| a.is_initial());
         if bg_init || cr_init || bc_init || tf_init {
             let bg_target = if bg_init {
                 Some(self.effective_background_target(tree))
@@ -1279,23 +1344,33 @@ impl Widget for Container {
             } else {
                 None
             };
-            if let (Some(anim), Some(target)) = (&mut self.background_anim, bg_target) {
-                anim.set_immediate(target);
-            }
-            if let (Some(anim), Some(target)) = (&mut self.corner_radius_anim, cr_target) {
-                anim.set_immediate(target);
-            }
-            if let (Some(anim), Some(target)) = (&mut self.border_color_anim, bc_target) {
-                anim.set_immediate(target);
-            }
-            if let (Some(anim), Some(target)) = (&mut self.transform_anim, tf_target) {
-                anim.set_immediate(target);
+            if let Some(ref mut anims) = self.anims {
+                if let (Some(anim), Some(target)) = (&mut anims.background, bg_target) {
+                    anim.set_immediate(target);
+                }
+                if let (Some(anim), Some(target)) = (&mut anims.corner_radius, cr_target) {
+                    anim.set_immediate(target);
+                }
+                if let (Some(anim), Some(target)) = (&mut anims.border_color, bc_target) {
+                    anim.set_immediate(target);
+                }
+                if let (Some(anim), Some(target)) = (&mut anims.transform, tf_target) {
+                    anim.set_immediate(target);
+                }
             }
         }
 
         // Determine shrink behavior
-        let width_animating = self.width_anim.as_ref().is_some_and(|a| a.is_animating());
-        let height_animating = self.height_anim.as_ref().is_some_and(|a| a.is_animating());
+        let width_animating = self
+            .anims
+            .as_ref()
+            .and_then(|a| a.width.as_ref())
+            .is_some_and(|a| a.is_animating());
+        let height_animating = self
+            .anims
+            .as_ref()
+            .and_then(|a| a.height.as_ref())
+            .is_some_and(|a| a.is_animating());
         let has_exact_width = width_length.exact.is_some();
         let has_exact_height = height_length.exact.is_some();
         let allow_shrink_width = self.overflow == Overflow::Hidden
@@ -1308,7 +1383,7 @@ impl Widget for Container {
             || self.scroll_axis.allows_vertical();
 
         // Calculate final dimensions
-        let mut width = if let Some(ref anim) = self.width_anim {
+        let mut width = if let Some(anim) = self.anims.as_ref().and_then(|a| a.width.as_ref()) {
             if allow_shrink_width {
                 *anim.current()
             } else {
@@ -1330,7 +1405,7 @@ impl Widget for Container {
             width = width.min(max);
         }
 
-        let mut height = if let Some(ref anim) = self.height_anim {
+        let mut height = if let Some(anim) = self.anims.as_ref().and_then(|a| a.height.as_ref()) {
             if allow_shrink_height {
                 *anim.current()
             } else {
@@ -1352,10 +1427,12 @@ impl Widget for Container {
             height = height.min(max);
         }
 
-        if !allow_shrink_width && self.width_anim.is_none() && !has_exact_width {
+        let has_width_anim = self.anims.as_ref().is_some_and(|a| a.width.is_some());
+        let has_height_anim = self.anims.as_ref().is_some_and(|a| a.height.is_some());
+        if !allow_shrink_width && !has_width_anim && !has_exact_width {
             width = width.max(content_width);
         }
-        if !allow_shrink_height && self.height_anim.is_none() && !has_exact_height {
+        if !allow_shrink_height && !has_height_anim && !has_exact_height {
             height = height.max(content_height);
         }
 
@@ -1427,38 +1504,48 @@ impl Widget for Container {
         // Pre-dispatch: update hover state and fire pointer move callback
         // before children get the event. This ensures parent hover tracking
         // works even when a child container handles the MouseMove/MouseEnter.
-        match local_event.as_ref() {
-            Event::MouseEnter { x, y } => {
-                if bounds.contains_rounded(*x, *y, corner_radius) && !self.is_hovered {
-                    self.is_hovered = true;
-                    if self.hover_state.is_some() {
-                        self.request_state_change_repaint(id);
-                    }
-                    if let Some(ref callback) = self.on_hover {
-                        callback(true);
+        let has_animated = self.has_animated_state_properties();
+        if let Some(ref mut ix) = self.interaction {
+            let request_repaint = |id: WidgetId| {
+                if has_animated {
+                    request_job(id, JobRequest::Animation(RequiredJob::Paint));
+                } else {
+                    request_job(id, JobRequest::Paint);
+                }
+            };
+            match local_event.as_ref() {
+                Event::MouseEnter { x, y } => {
+                    if bounds.contains_rounded(*x, *y, corner_radius) && !ix.is_hovered {
+                        ix.is_hovered = true;
+                        if ix.hover_state.is_some() {
+                            request_repaint(id);
+                        }
+                        if let Some(ref callback) = ix.on_hover {
+                            callback(true);
+                        }
                     }
                 }
-            }
-            Event::MouseMove { x, y } => {
-                if let Some(ref callback) = self.on_pointer_move
-                    && (bounds.contains_rounded(*x, *y, corner_radius) || self.is_pressed)
-                {
-                    callback(*x - bounds.x, *y - bounds.y);
-                }
+                Event::MouseMove { x, y } => {
+                    if let Some(ref callback) = ix.on_pointer_move
+                        && (bounds.contains_rounded(*x, *y, corner_radius) || ix.is_pressed)
+                    {
+                        callback(*x - bounds.x, *y - bounds.y);
+                    }
 
-                let was_hovered = self.is_hovered;
-                self.is_hovered = bounds.contains_rounded(*x, *y, corner_radius);
+                    let was_hovered = ix.is_hovered;
+                    ix.is_hovered = bounds.contains_rounded(*x, *y, corner_radius);
 
-                if was_hovered != self.is_hovered {
-                    if self.hover_state.is_some() {
-                        self.request_state_change_repaint(id);
-                    }
-                    if let Some(ref callback) = self.on_hover {
-                        callback(self.is_hovered);
+                    if was_hovered != ix.is_hovered {
+                        if ix.hover_state.is_some() {
+                            request_repaint(id);
+                        }
+                        if let Some(ref callback) = ix.on_hover {
+                            callback(ix.is_hovered);
+                        }
                     }
                 }
+                _ => {}
             }
-            _ => {}
         }
 
         // Transform event coordinates to local space (relative to container origin)
@@ -1470,9 +1557,10 @@ impl Widget for Container {
 
             // For scrollable containers, also add scroll offset
             let (child_x, child_y) = if self.scroll_axis != ScrollAxis::None {
+                let sd = self.scroll();
                 (
-                    local_x + self.scroll_state.offset_x,
-                    local_y + self.scroll_state.offset_y,
+                    local_x + sd.scroll_state.offset_x,
+                    local_y + sd.scroll_state.offset_y,
                 )
             } else {
                 (local_x, local_y)
@@ -1511,12 +1599,15 @@ impl Widget for Container {
             // sibling containers from tracking their own hover state.
             Event::MouseEnter { .. } | Event::MouseMove { .. } => {}
             Event::MouseDown { x, y, button } => {
-                if bounds.contains_rounded(*x, *y, corner_radius) && *button == MouseButton::Left {
-                    let was_pressed = self.is_pressed;
-                    self.is_pressed = true;
+                if bounds.contains_rounded(*x, *y, corner_radius)
+                    && *button == MouseButton::Left
+                    && let Some(ref mut ix) = self.interaction
+                {
+                    let was_pressed = ix.is_pressed;
+                    ix.is_pressed = true;
 
                     // Start ripple animation if configured
-                    let has_ripple = self
+                    let has_ripple = ix
                         .pressed_state
                         .as_ref()
                         .is_some_and(|s| s.ripple.is_some());
@@ -1533,30 +1624,37 @@ impl Widget for Container {
                         } else {
                             (screen_x - bounds.x, screen_y - bounds.y)
                         };
-                        self.ripple.start(local_x, local_y);
+                        ix.ripple.start(local_x, local_y);
                         // Ripple animation needs Animation + Paint
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
-                    if !was_pressed && self.pressed_state.is_some() {
+                    if !was_pressed && ix.pressed_state.is_some() {
                         self.request_state_change_repaint(id);
                     }
-                    if let Some(ref callback) = self.on_mouse_down {
+                    if let Some(ref ix) = self.interaction
+                        && let Some(ref callback) = ix.on_mouse_down
+                    {
                         callback(*x - bounds.x, *y - bounds.y);
                         return EventResponse::Handled;
                     }
-                    if self.on_click.is_some() || self.on_mouse_up.is_some() {
+                    if let Some(ref ix) = self.interaction
+                        && (ix.on_click.is_some() || ix.on_mouse_up.is_some())
+                    {
                         return EventResponse::Handled;
                     }
                 }
             }
             Event::MouseUp { x, y, button } => {
-                if self.is_pressed && *button == MouseButton::Left {
-                    let was_pressed = self.is_pressed;
-                    self.is_pressed = false;
+                if let Some(ref mut ix) = self.interaction
+                    && ix.is_pressed
+                    && *button == MouseButton::Left
+                {
+                    let was_pressed = ix.is_pressed;
+                    ix.is_pressed = false;
 
                     // Start ripple fade animation
-                    if self.ripple.is_active() {
+                    if ix.ripple.is_active() {
                         // Convert screen coords to local coords accounting for transform
                         let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
                         let (local_x, local_y) = if !transform.is_identity() {
@@ -1569,21 +1667,24 @@ impl Widget for Container {
                         } else {
                             (screen_x - bounds.x, screen_y - bounds.y)
                         };
-                        self.ripple.start_fade(local_x, local_y);
+                        ix.ripple.start_fade(local_x, local_y);
                         // Ripple fade animation needs Animation + Paint
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
-                    if was_pressed && self.pressed_state.is_some() {
+                    if was_pressed && ix.pressed_state.is_some() {
                         self.request_state_change_repaint(id);
                     }
                     let mut handled = false;
-                    if let Some(ref callback) = self.on_mouse_up {
+                    if let Some(ref ix) = self.interaction
+                        && let Some(ref callback) = ix.on_mouse_up
+                    {
                         callback(*x - bounds.x, *y - bounds.y);
                         handled = true;
                     }
-                    if bounds.contains_rounded(*x, *y, corner_radius)
-                        && let Some(ref callback) = self.on_click
+                    if let Some(ref ix) = self.interaction
+                        && bounds.contains_rounded(*x, *y, corner_radius)
+                        && let Some(ref callback) = ix.on_click
                     {
                         callback();
                         return EventResponse::Handled;
@@ -1594,28 +1695,29 @@ impl Widget for Container {
                 }
             }
             Event::MouseLeave => {
-                let was_hovered = self.is_hovered;
-                let was_pressed = self.is_pressed;
-                if self.is_hovered {
-                    self.is_hovered = false;
-                    if let Some(ref callback) = self.on_hover {
-                        callback(false);
+                if let Some(ref mut ix) = self.interaction {
+                    let was_hovered = ix.is_hovered;
+                    let was_pressed = ix.is_pressed;
+                    if ix.is_hovered {
+                        ix.is_hovered = false;
+                        if let Some(ref callback) = ix.on_hover {
+                            callback(false);
+                        }
                     }
-                }
-                self.is_pressed = false;
+                    ix.is_pressed = false;
 
-                // Start ripple fade to center
-                if self.ripple.is_active() {
-                    self.ripple
-                        .start_fade_to_center(bounds.width, bounds.height);
-                    // Ripple fade animation needs Animation + Paint
-                    request_job(id, JobRequest::Animation(RequiredJob::Paint));
-                }
+                    // Start ripple fade to center
+                    if ix.ripple.is_active() {
+                        ix.ripple.start_fade_to_center(bounds.width, bounds.height);
+                        // Ripple fade animation needs Animation + Paint
+                        request_job(id, JobRequest::Animation(RequiredJob::Paint));
+                    }
 
-                if (was_hovered && self.hover_state.is_some())
-                    || (was_pressed && self.pressed_state.is_some())
-                {
-                    self.request_state_change_repaint(id);
+                    if (was_hovered && ix.hover_state.is_some())
+                        || (was_pressed && ix.pressed_state.is_some())
+                    {
+                        self.request_state_change_repaint(id);
+                    }
                 }
             }
             Event::Scroll {
@@ -1630,8 +1732,9 @@ impl Widget for Container {
                         let consumed = self.apply_scroll(*delta_x, *delta_y, *source);
                         if consumed {
                             // Kinetic scrolling needs Animation + Paint if has velocity
-                            let has_velocity = self.scroll_state.velocity_x.abs() > 0.5
-                                || self.scroll_state.velocity_y.abs() > 0.5;
+                            let sd = self.scroll();
+                            let has_velocity = sd.scroll_state.velocity_x.abs() > 0.5
+                                || sd.scroll_state.velocity_y.abs() > 0.5;
                             if has_velocity {
                                 request_job(id, JobRequest::Animation(RequiredJob::Paint));
                             } else {
@@ -1641,7 +1744,9 @@ impl Widget for Container {
                         }
                     }
 
-                    if let Some(ref callback) = self.on_scroll {
+                    if let Some(ref ix) = self.interaction
+                        && let Some(ref callback) = ix.on_scroll
+                    {
                         callback(*delta_x, *delta_y, *source);
                         return EventResponse::Handled;
                     }
@@ -1787,9 +1892,10 @@ impl Widget for Container {
         // For scrollable containers: viewport mapped to layout space (before scroll transform).
         // For non-scrollable containers: inherited from parent via PaintContext.
         let effective_cull_rect = if is_scrollable {
+            let sd = self.scroll();
             Some(Rect::new(
-                self.scroll_state.offset_x,
-                self.scroll_state.offset_y,
+                sd.scroll_state.offset_x,
+                sd.scroll_state.offset_y,
                 local_bounds.width,
                 local_bounds.height,
             ))
@@ -1818,9 +1924,10 @@ impl Widget for Container {
 
             // Child's position transform (may include scroll offset)
             let child_position = if is_scrollable {
+                let sd = self.scroll();
                 Transform::translate(
-                    child_offset_x - self.scroll_state.offset_x,
-                    child_offset_y - self.scroll_state.offset_y,
+                    child_offset_x - sd.scroll_state.offset_x,
+                    child_offset_y - sd.scroll_state.offset_y,
                 )
             } else {
                 Transform::translate(child_offset_x, child_offset_y)
@@ -1891,10 +1998,11 @@ impl Widget for Container {
         }
 
         // Draw ripple effect as overlay (ripple.center is already in local coordinates)
-        if let Some((local_cx, local_cy)) = self.ripple.center
-            && let Some(ref pressed_state) = self.pressed_state
+        if let Some(ref ix) = self.interaction
+            && let Some((local_cx, local_cy)) = ix.ripple.center
+            && let Some(ref pressed_state) = ix.pressed_state
             && let Some(ref ripple_config) = pressed_state.ripple
-            && self.ripple.opacity > 0.0
+            && ix.ripple.opacity > 0.0
         {
             // Set overlay clip to container bounds with rounded corners
             // This clips the ripple without affecting children
@@ -1903,13 +2011,13 @@ impl Widget for Container {
             let max_dist_x = local_cx.max(bounds.width - local_cx);
             let max_dist_y = local_cy.max(bounds.height - local_cy);
             let max_radius = (max_dist_x * max_dist_x + max_dist_y * max_dist_y).sqrt();
-            let current_radius = max_radius * self.ripple.progress;
+            let current_radius = max_radius * ix.ripple.progress;
 
             let ripple_color = Color::rgba(
                 ripple_config.color.r,
                 ripple_config.color.g,
                 ripple_config.color.b,
-                ripple_config.color.a * self.ripple.opacity,
+                ripple_config.color.a * ix.ripple.opacity,
             );
 
             ctx.draw_overlay_circle(local_cx, local_cy, current_radius, ripple_color);

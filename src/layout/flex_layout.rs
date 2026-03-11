@@ -46,6 +46,7 @@ pub struct Flex {
     cross_alignment: Option<Signal<CrossAlignment>>,
 
     child_sizes: Vec<Size>,
+    fill_indices: Vec<usize>,
 }
 
 impl Flex {
@@ -61,6 +62,7 @@ impl Flex {
             main_alignment: None,
             cross_alignment: None,
             child_sizes: Vec::with_capacity(8),
+            fill_indices: Vec::new(),
         }
     }
 
@@ -149,19 +151,6 @@ impl Flex {
             ),
         };
 
-        // Pre-scan fill flags via layout_hints() before any layout
-        let is_fill: Vec<bool> = children
-            .iter()
-            .map(|&id| {
-                tree.with_widget(id, |w| match axis {
-                    Axis::Horizontal => w.layout_hints().fill_width,
-                    Axis::Vertical => w.layout_hints().fill_height,
-                })
-                .unwrap_or(false)
-            })
-            .collect();
-        let fill_count = is_fill.iter().filter(|&&f| f).count();
-
         // For Stretch alignment, use min constraint if set
         let stretch_cross = if cross_align == CrossAlignment::Stretch && cross_min > 0.0 {
             Some(cross_min)
@@ -188,16 +177,24 @@ impl Flex {
         self.child_sizes.clear();
         self.child_sizes.resize(children.len(), Size::zero());
 
-        // Pass 1: layout non-fill children to measure their main-axis contribution
+        // Pass 1: layout non-fill children and collect fill child indices
         let mut non_fill_main = 0.0f32;
         let mut max_cross = 0.0f32;
+        self.fill_indices.clear();
 
         for (i, &child_id) in children.iter().enumerate() {
-            if !is_fill[i]
-                && let Some(size) = tree.with_widget_mut(child_id, |widget, id, tree| {
-                    widget.layout(tree, id, child_constraints)
+            let is_fill = tree
+                .with_widget(child_id, |w| match axis {
+                    Axis::Horizontal => w.layout_hints().fill_width,
+                    Axis::Vertical => w.layout_hints().fill_height,
                 })
-            {
+                .unwrap_or(false);
+
+            if is_fill {
+                self.fill_indices.push(i);
+            } else if let Some(size) = tree.with_widget_mut(child_id, |widget, id, tree| {
+                widget.layout(tree, id, child_constraints)
+            }) {
                 non_fill_main += size.main_axis(axis);
                 max_cross = max_cross.max(size.cross_axis(axis));
                 self.child_sizes[i] = size;
@@ -210,15 +207,15 @@ impl Flex {
         } else {
             0.0
         };
-        let per_fill = if fill_count > 0 {
+        let per_fill = if !self.fill_indices.is_empty() {
             let remaining = (main_max - non_fill_main - total_spacing).max(0.0);
-            remaining / fill_count as f32
+            remaining / self.fill_indices.len() as f32
         } else {
             0.0
         };
 
         // Pass 2: layout fill children with tight main-axis constraints
-        if fill_count > 0 {
+        if !self.fill_indices.is_empty() {
             let fill_constraints = match axis {
                 Axis::Horizontal => Constraints {
                     min_width: per_fill,
@@ -232,12 +229,11 @@ impl Flex {
                 },
             };
 
-            for (i, &child_id) in children.iter().enumerate() {
-                if is_fill[i]
-                    && let Some(size) = tree.with_widget_mut(child_id, |widget, id, tree| {
-                        widget.layout(tree, id, fill_constraints)
-                    })
-                {
+            for &i in &self.fill_indices {
+                let child_id = children[i];
+                if let Some(size) = tree.with_widget_mut(child_id, |widget, id, tree| {
+                    widget.layout(tree, id, fill_constraints)
+                }) {
                     max_cross = max_cross.max(size.cross_axis(axis));
                     self.child_sizes[i] = size;
                 }
@@ -269,17 +265,18 @@ impl Flex {
                     children_main += self.child_sizes[i].main_axis(axis);
                     continue;
                 }
-                let main_constraint = if is_fill[i] { per_fill } else { main_max };
+                let child_is_fill = self.fill_indices.binary_search(&i).is_ok();
+                let main_constraint = if child_is_fill { per_fill } else { main_max };
                 let stretch_constraints = match axis {
                     Axis::Horizontal => Constraints {
-                        min_width: if is_fill[i] { per_fill } else { 0.0 },
+                        min_width: if child_is_fill { per_fill } else { 0.0 },
                         min_height: cross_size,
                         max_width: main_constraint,
                         max_height: cross_size,
                     },
                     Axis::Vertical => Constraints {
                         min_width: cross_size,
-                        min_height: if is_fill[i] { per_fill } else { 0.0 },
+                        min_height: if child_is_fill { per_fill } else { 0.0 },
                         max_width: cross_size,
                         max_height: main_constraint,
                     },
