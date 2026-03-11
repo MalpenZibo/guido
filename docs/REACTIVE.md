@@ -11,7 +11,7 @@ Signals are reactive values that notify dependents when they change:
 ```rust
 use guido::prelude::*;
 
-let count = create_signal(0);
+let count = create_signal(0);  // Returns RwSignal<T> (read-write)
 
 // Read the current value
 let value = count.get();
@@ -23,9 +23,13 @@ count.set(5);
 count.update(|c| *c += 1);
 ```
 
+**Key types:**
+- `RwSignal<T>` (8 bytes) — read-write signal returned by `create_signal()`. Supports `.get()`, `.set()`, `.update()`, `.writer()`
+- `Signal<T>` (16 bytes) — read-only signal. Created via `create_stored()` (static), `create_derived()` (closure-backed), or by coercing an `RwSignal<T>`
+
 **Key properties:**
-- Signals are `Copy` - no cloning needed
-- Main-thread only reads/writes — use `.writer()` to get a `WriteSignal<T>` for background thread updates
+- Both `Signal<T>` and `RwSignal<T>` are `Copy` — no cloning needed
+- Main-thread only reads/writes — use `.writer()` on `RwSignal<T>` to get a `WriteSignal<T>` for background thread updates
 - Automatic dependency tracking
 
 ### Memos
@@ -185,13 +189,13 @@ The `IntoSignal<T>` trait allows properties to accept any of:
 
 - **Static values**: `container().background(Color::RED)` → calls `create_stored()`
 - **Closures**: `container().background(move || if dark { Color::BLACK } else { Color::WHITE })` → calls `create_derived()`
-- **Signals**: `container().background(my_signal)` → passed through directly
+- **Signals**: `container().background(my_signal)` → passed through directly (accepts both `Signal<T>` and `RwSignal<T>`)
 
-All produce a `Signal<T>` (which is `Copy`). The distinction between `create_stored` (read-only, Clone only) and `create_signal` (read-write, Clone+PartialEq+Send) only matters when you need to call `.set()` or `.writer()`.
+All produce a `Signal<T>` (which is `Copy`). `create_signal` returns `RwSignal<T>` (read-write, Clone+PartialEq+Send) which has `.set()`, `.update()`, and `.writer()`. `Signal<T>` is read-only — use it when you only need to read values.
 
 ## Background Task Updates
 
-`Signal<T>` is `!Send` — it can only be read and written on the main thread. To update a signal from a background task, use `.writer()` to obtain a `WriteSignal<T>`, which is `Send`. Writes from `WriteSignal` are queued and applied on the next frame.
+`RwSignal<T>` is `!Send` — it can only be read and written on the main thread. To update a signal from a background task, use `.writer()` on `RwSignal<T>` to obtain a `WriteSignal<T>`, which is `Send`. Writes from `WriteSignal` are queued and applied on the next frame.
 
 Use `create_service` to spawn an async background service that is automatically cleaned up when the component unmounts:
 
@@ -209,7 +213,7 @@ let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
 });
 ```
 
-**Note:** Capturing `data` (a `Signal`) directly in a service closure will **not compile** because `Signal` is `!Send`. Always use `.writer()` to get a `WriteSignal` for background tasks.
+**Note:** Capturing `data` (an `RwSignal`) directly in a service closure will **not compile** because `RwSignal` is `!Send`. Always use `.writer()` to get a `WriteSignal` for background tasks.
 
 For bidirectional communication (sending commands to the service):
 
@@ -249,15 +253,23 @@ Signals are lightweight handles that index into thread-local storage:
 
 ```rust
 #[derive(Clone, Copy)]
+pub struct RwSignal<T> {
+    id: SignalId,       // 8 bytes — read-write handle
+}
+
+#[derive(Clone, Copy)]
 pub struct Signal<T> {
     id: SignalId,
+    kind: SignalKind,   // 16 bytes — read-only, supports stored/mutable/derived
 }
 ```
 
 The actual value is stored in `thread_local! { RefCell<SignalStorage> }`, accessed by `id`. This design allows:
-- Signals to be `Copy`
+- Both types to be `Copy`
 - Zero-lock access on the main thread (thread-local `RefCell` only)
 - Automatic dependency tracking via thread-local runtime
+
+`RwSignal<T>` is the compact read-write handle (8 bytes). `Signal<T>` is the read-only wrapper (16 bytes) that also supports static (`create_stored`) and derived (`create_derived`) values via its `SignalKind` discriminant.
 
 `WriteSignal<T>` is a separate `Send` handle that queues writes through a thread-safe channel, which the main thread drains each frame:
 
@@ -472,12 +484,12 @@ This behavior helps catch bugs where signals are used after their owner has been
 ### Signal Creation
 
 ```rust
-pub fn create_signal<T: Clone + PartialEq + Send + 'static>(value: T) -> Signal<T>;
+pub fn create_signal<T: Clone + PartialEq + Send + 'static>(value: T) -> RwSignal<T>;
 pub fn create_memo<T: Clone + PartialEq + 'static>(f: impl Fn() -> T + 'static) -> Memo<T>;
 pub fn create_effect(f: impl Fn() + 'static);
 ```
 
-`create_signal` requires `Send` because `WriteSignal<T>` must be able to queue values from background threads.
+`create_signal` returns `RwSignal<T>` (8 bytes, read-write). It requires `Send` because `WriteSignal<T>` must be able to queue values from background threads.
 
 ### Cleanup Functions
 
@@ -490,10 +502,10 @@ pub fn on_cleanup(f: impl FnOnce() + 'static);
 
 **Note:** `with_owner` and `dispose_owner` are internal functions used by the framework. User code should rely on automatic ownership via dynamic children and the `#[component]` macro.
 
-### Signal Methods (main-thread only)
+### RwSignal Methods (main-thread only)
 
 ```rust
-impl<T: Clone> Signal<T> {
+impl<T: Clone> RwSignal<T> {
     pub fn get(&self) -> T;                // Read with tracking
     pub fn get_untracked(&self) -> T;      // Read without tracking
     pub fn set(&self, value: T);           // Set immediately
@@ -502,7 +514,18 @@ impl<T: Clone> Signal<T> {
 }
 ```
 
-`Signal<T>` is `!Send` — all methods above must be called on the main thread.
+`RwSignal<T>` is `!Send` — all methods above must be called on the main thread.
+
+### Signal Methods (read-only, main-thread only)
+
+```rust
+impl<T: Clone> Signal<T> {
+    pub fn get(&self) -> T;                // Read with tracking
+    pub fn get_untracked(&self) -> T;      // Read without tracking
+}
+```
+
+`Signal<T>` is read-only — no `.set()`, `.update()`, or `.writer()` methods.
 
 ### WriteSignal Methods (Send — background threads)
 

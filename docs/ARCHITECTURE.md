@@ -31,14 +31,15 @@ This document provides an overview of Guido's architecture for developers workin
 Single-threaded reactive primitives inspired by SolidJS and Floem.
 
 **Key Types:**
-- `Signal<T>` - Reactive values with automatic dependency tracking. Signals are `Copy` (backed by thread-local storage), so no cloning needed. `!Send` — use `.writer()` for background thread updates.
+- `RwSignal<T>` (8 bytes) - Read-write reactive values returned by `create_signal()`. Supports `.get()`, `.set()`, `.update()`, `.writer()`. `Copy`, `!Send`.
+- `Signal<T>` (16 bytes) - Read-only reactive wrapper. Created via `create_stored()` (static), `create_derived()` (closure-backed), or by coercing an `RwSignal<T>`. `Copy`, read-only (`.get()` only).
 - `Memo<T>` - Eager derived values that recompute when dependencies change, only notify on actual changes (`PartialEq`)
 - `Effect` - Side effects that re-run when tracked signals change
-- `Signal<T>` - Copy wrapper for reactive values (static, derived, or read-write)
+- `WriteSignal<T>` - `Send` handle for background thread updates, obtained via `RwSignal::writer()`
 
 **How it works:**
 ```rust
-let count = create_signal(0);           // Create a signal
+let count = create_signal(0);           // Returns RwSignal<T> (read-write)
 let doubled = create_memo(move ||      // Create derived value
     count.get() * 2
 );
