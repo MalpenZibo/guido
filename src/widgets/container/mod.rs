@@ -484,8 +484,8 @@ impl Container {
 
     /// Accept an optional click callback (useful for components)
     pub fn on_click_option(mut self, callback: Option<ClickCallback>) -> Self {
-        if let Some(cb) = callback {
-            self.interact_mut().on_click = Some(cb);
+        if callback.is_some() || self.interaction.is_some() {
+            self.interact_mut().on_click = callback;
         }
         self
     }
@@ -942,15 +942,19 @@ impl Widget for Container {
         // Use advance_animations_self for this widget's animations
         let mut any_animating = false;
 
-        // Compute targets before borrowing anims mutably
-        let padding_target = self.padding.get_or(Padding::default());
-        let border_width_target = self.effective_border_width_target(tree);
-        let bg_target = self.effective_background_target(tree);
-        let corner_radius_target = self.effective_corner_radius_target(tree);
-        let border_color_target = self.effective_border_color_target(tree);
-        let transform_target = self.effective_transform_target(tree);
-
-        if let Some(ref mut anims) = self.anims {
+        #[allow(clippy::unnecessary_unwrap)]
+        // Intentional: compute targets with &self before &mut borrow
+        if self.anims.is_some() {
+            // Compute targets before borrowing anims mutably (&self methods conflict
+            // with &mut self.anims). Skipped entirely for the majority of non-animated
+            // containers since self.anims is None.
+            let padding_target = self.padding.get_or(Padding::default());
+            let border_width_target = self.effective_border_width_target(tree);
+            let bg_target = self.effective_background_target(tree);
+            let corner_radius_target = self.effective_corner_radius_target(tree);
+            let border_color_target = self.effective_border_color_target(tree);
+            let transform_target = self.effective_transform_target(tree);
+            let anims = self.anims.as_mut().unwrap();
             // Layout-affecting animations: width, height, padding
             advance_anim!(anims, width, id, any_animating, layout);
             advance_anim!(anims, height, id, any_animating, layout);
@@ -1500,14 +1504,8 @@ impl Widget for Container {
         // Pre-dispatch: update hover state and fire pointer move callback
         // before children get the event. This ensures parent hover tracking
         // works even when a child container handles the MouseMove/MouseEnter.
+        let has_animated = self.has_animated_state_properties();
         if let Some(ref mut ix) = self.interaction {
-            // Cache this before borrowing ix mutably to avoid borrow conflicts
-            let has_animated = self.anims.as_ref().is_some_and(|a| {
-                a.background.is_some()
-                    || a.corner_radius.is_some()
-                    || a.border_color.is_some()
-                    || a.transform.is_some()
-            });
             let request_repaint = |id: WidgetId| {
                 if has_animated {
                     request_job(id, JobRequest::Animation(RequiredJob::Paint));

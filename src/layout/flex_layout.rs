@@ -265,7 +265,7 @@ impl Flex {
                     children_main += self.child_sizes[i].main_axis(axis);
                     continue;
                 }
-                let child_is_fill = self.fill_indices.contains(&i);
+                let child_is_fill = self.fill_indices.binary_search(&i).is_ok();
                 let main_constraint = if child_is_fill { per_fill } else { main_max };
                 let stretch_constraints = match axis {
                     Axis::Horizontal => Constraints {
