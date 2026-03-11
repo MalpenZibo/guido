@@ -31,15 +31,7 @@ pub(crate) enum SignalKind {
 fn tracked_get<T: Clone + 'static>(id: SignalId, kind: SignalKind) -> T {
     match kind {
         SignalKind::Stored => get_stored_value(id),
-        SignalKind::Derived => {
-            if let Some(val) = try_call_derived::<T>(id) {
-                return val;
-            }
-            // Fallback (shouldn't happen for properly constructed derived signals)
-            record_effect_read(id);
-            record_signal_read(id);
-            get_signal_value(id)
-        }
+        SignalKind::Derived => try_call_derived::<T>(id).expect("derived closure missing"),
         SignalKind::Mutable => {
             record_effect_read(id);
             record_signal_read(id);
@@ -87,25 +79,25 @@ fn update_and_notify<T: Clone + PartialEq + 'static>(id: SignalId, f: impl FnOnc
     }
 }
 
-/// A reactive signal that can be read and written on the main thread.
+/// A read-only reactive signal.
 ///
-/// Signals are the core primitive of the reactive system. When a signal's
-/// value changes, any effects that depend on it will be re-run.
+/// `Signal<T>` provides read access to reactive values. It is returned by
+/// [`create_stored`] (static values) and [`create_derived`] (closure-backed).
+/// Widget properties accept `Signal<T>` via the [`IntoSignal`] trait.
 ///
-/// Signals are Copy - they can be freely passed into closures without cloning.
+/// To create a read-write signal, use [`create_signal`] which returns [`RwSignal<T>`].
+///
+/// Signals are `Copy` — they can be freely passed into closures without cloning.
 ///
 /// # Thread Safety
 ///
-/// `Signal<T>` is `!Send` — it can only be used on the main thread where it
-/// was created. To write from a background thread, use [`Signal::writer()`]
-/// to get a [`WriteSignal<T>`] which is `Send`.
+/// `Signal<T>` is `!Send` — it can only be used on the main thread.
 pub struct Signal<T> {
     id: SignalId,
     /// Discriminant for the three signal kinds (Stored, Mutable, Derived).
-    /// Same size as the old `derived: bool` — Signal<T> stays at 16 bytes.
     kind: SignalKind,
     _marker: PhantomData<T>,
-    _not_send: PhantomData<*const ()>, // makes Signal !Send !Sync
+    _not_send: PhantomData<*const ()>,
 }
 
 // Manually implement Clone and Copy to avoid unnecessary bounds on T
@@ -157,14 +149,87 @@ impl<T: Clone + 'static> Signal<T> {
             SignalKind::Mutable => with_signal_value(self.id, f),
         }
     }
+}
 
-    /// Check if this signal is derived (backed by a closure, not a stored value).
-    pub fn is_derived(&self) -> bool {
-        self.kind == SignalKind::Derived
+/// A read-write reactive signal.
+///
+/// Created by [`create_signal`]. Provides both read and write access.
+/// Can be converted to a read-only [`Signal<T>`] via [`read_only()`](RwSignal::read_only)
+/// or the [`From`] impl. Widget properties accept `RwSignal<T>` via [`IntoSignal`].
+///
+/// `RwSignal<T>` is `Copy` (8 bytes — just a signal ID).
+///
+/// # Thread Safety
+///
+/// `RwSignal<T>` is `!Send`. Use [`.writer()`](RwSignal::writer) to get a
+/// [`WriteSignal<T>`] which is `Send` for background thread writes.
+pub struct RwSignal<T> {
+    id: SignalId,
+    _marker: PhantomData<T>,
+    _not_send: PhantomData<*const ()>,
+}
+
+impl<T> Clone for RwSignal<T> {
+    fn clone(&self) -> Self {
+        *self
     }
 }
 
-impl<T: Clone + PartialEq + Send + 'static> Signal<T> {
+impl<T> Copy for RwSignal<T> {}
+
+impl<T> PartialEq for RwSignal<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl<T> Eq for RwSignal<T> {}
+
+impl<T: Clone + 'static> RwSignal<T> {
+    /// Get the current value (tracks as dependency for effects)
+    pub fn get(&self) -> T {
+        tracked_get(self.id, SignalKind::Mutable)
+    }
+
+    /// Get the current value without tracking
+    pub fn get_untracked(&self) -> T {
+        get_signal_value(self.id)
+    }
+
+    /// Borrow the value for reading
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        tracked_with(self.id, SignalKind::Mutable, f)
+    }
+
+    /// Borrow the value without tracking
+    pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        with_signal_value(self.id, f)
+    }
+
+    /// Convert to a read-only [`Signal<T>`].
+    pub fn read_only(self) -> Signal<T> {
+        Signal {
+            id: self.id,
+            kind: SignalKind::Mutable,
+            _marker: PhantomData,
+            _not_send: PhantomData,
+        }
+    }
+}
+
+impl<T: Clone + PartialEq + 'static> RwSignal<T> {
+    /// Set a new value (notifies subscribers if changed)
+    pub fn set(&self, value: T) {
+        write_and_notify(self.id, value);
+    }
+
+    /// Update the value using a closure
+    pub fn update<F: FnOnce(&mut T)>(&self, f: F) {
+        update_and_notify(self.id, f);
+    }
+}
+
+impl<T: Clone + PartialEq + Send + 'static> RwSignal<T> {
     /// Get a `WriteSignal<T>` for writing from background threads.
     ///
     /// `WriteSignal<T>` is `Send` and can be captured in `create_service` closures.
@@ -179,15 +244,9 @@ impl<T: Clone + PartialEq + Send + 'static> Signal<T> {
     }
 }
 
-impl<T: Clone + PartialEq + 'static> Signal<T> {
-    /// Set a new value (notifies subscribers if changed)
-    pub fn set(&self, value: T) {
-        write_and_notify(self.id, value);
-    }
-
-    /// Update the value using a closure
-    pub fn update<F: FnOnce(&mut T)>(&self, f: F) {
-        update_and_notify(self.id, f);
+impl<T: Clone + 'static> From<RwSignal<T>> for Signal<T> {
+    fn from(rw: RwSignal<T>) -> Self {
+        rw.read_only()
     }
 }
 
@@ -266,16 +325,25 @@ impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
     }
 }
 
-pub fn create_signal<T: Clone + PartialEq + Send + 'static>(value: T) -> Signal<T> {
-    // Create value in thread-local storage (Rc<RefCell<T>> for read-write access)
+/// Create a read-write reactive signal.
+///
+/// Returns an [`RwSignal<T>`] that supports both reading and writing.
+/// Converts to [`Signal<T>`] (read-only) via `.read_only()` or `Into`.
+///
+/// # Example
+///
+/// ```ignore
+/// let count = create_signal(0);
+/// count.set(1);           // write
+/// count.get();            // read
+/// container().padding(count) // auto-converts to Signal<T> via IntoSignal
+/// ```
+pub fn create_signal<T: Clone + PartialEq + Send + 'static>(value: T) -> RwSignal<T> {
     let id = create_signal_value(value);
-    // Register with thread-local runtime for subscriber tracking
     try_with_runtime(|rt| rt.register_signal(id));
-    // Register with current owner for automatic cleanup
     register_signal(id);
-    Signal {
+    RwSignal {
         id,
-        kind: SignalKind::Mutable,
         _marker: PhantomData,
         _not_send: PhantomData,
     }
@@ -294,10 +362,7 @@ pub fn create_signal<T: Clone + PartialEq + Send + 'static>(value: T) -> Signal<
 /// container().background(color) // Copy, no clone needed
 /// ```
 pub fn create_stored<T: Clone + 'static>(value: T) -> Signal<T> {
-    // Store as Rc<T> (no RefCell) — value is immutable, no tracking needed.
     let id = create_stored_value(value);
-    // Skip runtime registration — value never changes, no subscribers needed.
-    // Still register with owner for slot cleanup when owner is disposed.
     register_signal(id);
     Signal {
         id,
@@ -453,12 +518,26 @@ mod tests {
     }
 
     #[test]
-    fn test_signal_is_copy() {
+    fn test_rw_signal_is_copy() {
         let signal = create_signal(42);
         let _copy1 = signal;
         let _copy2 = signal;
-        // If Signal wasn't Copy, this wouldn't compile
         assert_eq!(signal.get(), 42);
+    }
+
+    #[test]
+    fn test_rw_signal_to_signal() {
+        let rw = create_signal(42);
+        let read_only: Signal<i32> = rw.into();
+        assert_eq!(read_only.get(), 42);
+        rw.set(100);
+        assert_eq!(read_only.get(), 100);
+    }
+
+    #[test]
+    fn test_rw_signal_size() {
+        assert_eq!(std::mem::size_of::<RwSignal<i32>>(), 8);
+        assert_eq!(std::mem::size_of::<Signal<i32>>(), 16);
     }
 
     // ================================================================
