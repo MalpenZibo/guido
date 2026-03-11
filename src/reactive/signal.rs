@@ -11,6 +11,24 @@ use super::storage::{
     store_derived_closure, try_call_derived, with_signal_value, with_stored_value,
 };
 
+/// Implement Clone (via Copy), Copy, PartialEq (by SignalId), and Eq for a signal type.
+macro_rules! impl_signal_id_traits {
+    ($ty:ident) => {
+        impl<T> Clone for $ty<T> {
+            fn clone(&self) -> Self {
+                *self
+            }
+        }
+        impl<T> Copy for $ty<T> {}
+        impl<T> PartialEq for $ty<T> {
+            fn eq(&self, other: &Self) -> bool {
+                self.id == other.id
+            }
+        }
+        impl<T> Eq for $ty<T> {}
+    };
+}
+
 /// Internal discriminant for the three signal kinds.
 /// Same size as `bool` (1 byte) so `Signal<T>` stays at 16 bytes.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -28,6 +46,7 @@ pub(crate) enum SignalKind {
 /// - Stored: no tracking (value never changes), reads `Rc<T>` directly
 /// - Mutable: full effect + widget tracking, reads `Rc<RefCell<T>>`
 /// - Derived: calls the closure (which tracks its own reads internally)
+#[inline]
 fn tracked_get<T: Clone + 'static>(id: SignalId, kind: SignalKind) -> T {
     match kind {
         SignalKind::Stored => get_stored_value(id),
@@ -44,6 +63,7 @@ fn tracked_get<T: Clone + 'static>(id: SignalId, kind: SignalKind) -> T {
 /// - Stored: no tracking, borrows `Rc<T>` directly
 /// - Mutable: full tracking, borrows through `Rc<RefCell<T>>`
 /// - Derived: calls the closure and passes the result to `f`
+#[inline]
 fn tracked_with<T: Clone + 'static, R>(
     id: SignalId,
     kind: SignalKind,
@@ -100,23 +120,7 @@ pub struct Signal<T> {
     _not_send: PhantomData<*const ()>,
 }
 
-// Manually implement Clone and Copy to avoid unnecessary bounds on T
-impl<T> Clone for Signal<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> Copy for Signal<T> {}
-
-// Implement PartialEq by comparing SignalId.
-impl<T> PartialEq for Signal<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-impl<T> Eq for Signal<T> {}
+impl_signal_id_traits!(Signal);
 
 impl<T: Clone + 'static> Signal<T> {
     /// Get the current value (tracks as dependency for effects)
@@ -169,39 +173,33 @@ pub struct RwSignal<T> {
     _not_send: PhantomData<*const ()>,
 }
 
-impl<T> Clone for RwSignal<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> Copy for RwSignal<T> {}
-
-impl<T> PartialEq for RwSignal<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-impl<T> Eq for RwSignal<T> {}
+impl_signal_id_traits!(RwSignal);
 
 impl<T: Clone + 'static> RwSignal<T> {
     /// Get the current value (tracks as dependency for effects)
+    #[inline]
     pub fn get(&self) -> T {
-        tracked_get(self.id, SignalKind::Mutable)
+        record_effect_read(self.id);
+        record_signal_read(self.id);
+        get_signal_value(self.id)
     }
 
     /// Get the current value without tracking
+    #[inline]
     pub fn get_untracked(&self) -> T {
         get_signal_value(self.id)
     }
 
     /// Borrow the value for reading
+    #[inline]
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        tracked_with(self.id, SignalKind::Mutable, f)
+        record_effect_read(self.id);
+        record_signal_read(self.id);
+        with_signal_value(self.id, f)
     }
 
     /// Borrow the value without tracking
+    #[inline]
     pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         with_signal_value(self.id, f)
     }
@@ -277,13 +275,11 @@ pub struct WriteSignal<T> {
     _marker: PhantomData<T>,
 }
 
-// Manually implement Clone and Copy to avoid unnecessary bounds on T
 impl<T> Clone for WriteSignal<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
-
 impl<T> Copy for WriteSignal<T> {}
 
 impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
