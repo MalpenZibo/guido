@@ -600,30 +600,32 @@ impl Container {
             }
 
             Event::MouseLeave => {
-                // Clear scrollbar hover state
-                let sd = self.scroll();
-                if sd.scroll_state.scrollbar_hovered || sd.scroll_state.h_scrollbar_hovered {
-                    let sd = self.scroll_mut();
-                    sd.scroll_state.scrollbar_hovered = false;
-                    sd.scroll_state.h_scrollbar_hovered = false;
-                    if let Some(handle_id) = self.scroll().v_scrollbar_handle_id {
+                // Clear hover and drag state in one pass
+                let sd = self.scroll_mut();
+                let had_hover =
+                    sd.scroll_state.scrollbar_hovered || sd.scroll_state.h_scrollbar_hovered;
+                let had_drag =
+                    sd.scroll_state.scrollbar_dragging || sd.scroll_state.h_scrollbar_dragging;
+                sd.scroll_state.scrollbar_hovered = false;
+                sd.scroll_state.h_scrollbar_hovered = false;
+                sd.scroll_state.scrollbar_dragging = false;
+                sd.scroll_state.h_scrollbar_dragging = false;
+                let v_handle = sd.v_scrollbar_handle_id;
+                let h_handle = sd.h_scrollbar_handle_id;
+
+                if had_hover {
+                    if let Some(handle_id) = v_handle {
                         tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
                             widget.event(tree, widget_id, event);
                         });
                     }
-                    if let Some(handle_id) = self.scroll().h_scrollbar_handle_id {
+                    if let Some(handle_id) = h_handle {
                         tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
                             widget.event(tree, widget_id, event);
                         });
                     }
-                    request_job(id, JobRequest::Paint);
                 }
-                // Stop dragging
-                let sd = self.scroll();
-                if sd.scroll_state.scrollbar_dragging || sd.scroll_state.h_scrollbar_dragging {
-                    let sd = self.scroll_mut();
-                    sd.scroll_state.scrollbar_dragging = false;
-                    sd.scroll_state.h_scrollbar_dragging = false;
+                if had_hover || had_drag {
                     request_job(id, JobRequest::Paint);
                 }
             }
@@ -659,20 +661,18 @@ impl Container {
 
         if handle_rect.contains(x, y) {
             // Start dragging handle
-            self.scroll_mut().scroll_state.set_dragging(axis, true);
-            let sd = self.scroll();
+            let sd = self.scroll_mut();
+            sd.scroll_state.set_dragging(axis, true);
             let (pos, offset) = match axis {
                 ScrollbarAxis::Vertical => (y, sd.scroll_state.offset_y),
                 ScrollbarAxis::Horizontal => (x, sd.scroll_state.offset_x),
             };
-            self.scroll_mut()
-                .scroll_state
-                .set_drag_start(axis, pos, offset);
+            sd.scroll_state.set_drag_start(axis, pos, offset);
 
             // Forward event to handle container for pressed state
             let handle_id = match axis {
-                ScrollbarAxis::Vertical => self.scroll().v_scrollbar_handle_id,
-                ScrollbarAxis::Horizontal => self.scroll().h_scrollbar_handle_id,
+                ScrollbarAxis::Vertical => sd.v_scrollbar_handle_id,
+                ScrollbarAxis::Horizontal => sd.h_scrollbar_handle_id,
             };
             if let Some(handle_id) = handle_id {
                 tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
@@ -793,23 +793,18 @@ impl Container {
                 .scrollbar_handle_rect(axis, bounds, &sd.scrollbar_config, needs_other);
 
         let mut needs_repaint = false;
-
-        // Track area hover (for expansion effect)
-        let was_track_hovered = self.scroll().scroll_state.is_track_hovered(axis);
         let is_track_hovered = hit_area.contains(x, y);
-        self.scroll_mut()
-            .scroll_state
-            .set_track_hovered(axis, is_track_hovered);
+        let is_hovered = handle_rect.contains(x, y);
+
+        // Update track and handle hover state in one borrow
+        let sd = self.scroll_mut();
+        let was_track_hovered = sd.scroll_state.is_track_hovered(axis);
+        sd.scroll_state.set_track_hovered(axis, is_track_hovered);
         if was_track_hovered != is_track_hovered {
             needs_repaint = true;
         }
-
-        // Handle hover (for color change)
-        let was_hovered = self.scroll().scroll_state.is_handle_hovered(axis);
-        let is_hovered = handle_rect.contains(x, y);
-        self.scroll_mut()
-            .scroll_state
-            .set_handle_hovered(axis, is_hovered);
+        let was_hovered = sd.scroll_state.is_handle_hovered(axis);
+        sd.scroll_state.set_handle_hovered(axis, is_hovered);
         if was_hovered != is_hovered {
             needs_repaint = true;
         }
@@ -818,8 +813,8 @@ impl Container {
         // We can't forward raw MouseMove events because the Container's bounds check would fail
         // (coordinates are in parent space, not local to the handle widget).
         let handle_id = match axis {
-            ScrollbarAxis::Vertical => self.scroll().v_scrollbar_handle_id,
-            ScrollbarAxis::Horizontal => self.scroll().h_scrollbar_handle_id,
+            ScrollbarAxis::Vertical => sd.v_scrollbar_handle_id,
+            ScrollbarAxis::Horizontal => sd.h_scrollbar_handle_id,
         };
         if let Some(handle_id) = handle_id {
             if is_hovered && !was_hovered {
@@ -854,23 +849,21 @@ impl Container {
         delta_y: f32,
         source: ScrollSource,
     ) -> bool {
+        let axis = self.scroll_axis;
         let sd = self.scroll_mut();
         let old_x = sd.scroll_state.offset_x;
         let old_y = sd.scroll_state.offset_y;
 
-        match self.scroll_axis {
+        match axis {
             ScrollAxis::Vertical => {
-                let sd = self.scroll_mut();
                 sd.scroll_state.offset_y =
                     (sd.scroll_state.offset_y + delta_y).clamp(0.0, sd.scroll_state.max_scroll_y());
             }
             ScrollAxis::Horizontal => {
-                let sd = self.scroll_mut();
                 sd.scroll_state.offset_x =
                     (sd.scroll_state.offset_x + delta_x).clamp(0.0, sd.scroll_state.max_scroll_x());
             }
             ScrollAxis::Both => {
-                let sd = self.scroll_mut();
                 sd.scroll_state.offset_x =
                     (sd.scroll_state.offset_x + delta_x).clamp(0.0, sd.scroll_state.max_scroll_x());
                 sd.scroll_state.offset_y =
@@ -879,17 +872,10 @@ impl Container {
             ScrollAxis::None => return false,
         }
 
-        // Track velocity for kinetic scrolling (touchpad/finger input only)
         if source == ScrollSource::Finger {
-            let axis = self.scroll_axis;
-            let sd = self.scroll_mut();
             match axis {
-                ScrollAxis::Vertical => {
-                    sd.scroll_state.velocity_y = delta_y;
-                }
-                ScrollAxis::Horizontal => {
-                    sd.scroll_state.velocity_x = delta_x;
-                }
+                ScrollAxis::Vertical => sd.scroll_state.velocity_y = delta_y,
+                ScrollAxis::Horizontal => sd.scroll_state.velocity_x = delta_x,
                 ScrollAxis::Both => {
                     sd.scroll_state.velocity_x = delta_x;
                     sd.scroll_state.velocity_y = delta_y;
@@ -899,7 +885,6 @@ impl Container {
             sd.scroll_state.last_scroll_time = Some(std::time::Instant::now());
         }
 
-        let sd = self.scroll();
         old_x != sd.scroll_state.offset_x || old_y != sd.scroll_state.offset_y
     }
 }
