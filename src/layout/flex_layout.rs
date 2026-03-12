@@ -260,12 +260,21 @@ impl Flex {
         // up to recompute cross_size.
         if cross_align == CrossAlignment::Stretch && stretch_cross.is_none() && cross_size > 0.0 {
             children_main = 0.0;
+            let mut fill_cursor = 0;
             for (i, &child_id) in children.iter().enumerate() {
                 if (self.child_sizes[i].cross_axis(axis) - cross_size).abs() < 0.5 {
                     children_main += self.child_sizes[i].main_axis(axis);
+                    if fill_cursor < self.fill_indices.len() && self.fill_indices[fill_cursor] == i
+                    {
+                        fill_cursor += 1;
+                    }
                     continue;
                 }
-                let child_is_fill = self.fill_indices.binary_search(&i).is_ok();
+                let child_is_fill =
+                    fill_cursor < self.fill_indices.len() && self.fill_indices[fill_cursor] == i;
+                if child_is_fill {
+                    fill_cursor += 1;
+                }
                 let main_constraint = if child_is_fill { per_fill } else { main_max };
                 let stretch_constraints = match axis {
                     Axis::Horizontal => Constraints {

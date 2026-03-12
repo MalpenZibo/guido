@@ -94,6 +94,12 @@ pub struct RenderNode {
     /// The flattener uses this to decide whether to reuse cached flatten output.
     pub repainted: bool,
 
+    /// Whether some children were skipped (culled by cull_rect) during paint.
+    /// Partial nodes should not be cached because their paint is incomplete —
+    /// reusing them later (when fully visible) would permanently hide the
+    /// culled children.
+    pub partial: bool,
+
     /// Cached flattened commands from a previous flatten pass.
     /// Boxed to reduce inline RenderNode size (CachedFlatten contains Vec + Transform).
     pub cached_flatten: Option<Box<CachedFlatten>>,
@@ -114,6 +120,7 @@ impl RenderNode {
             clip: None,
             overlay_clip: None,
             repainted: true,
+            partial: false,
             cached_flatten: None,
         }
     }
@@ -137,6 +144,7 @@ impl RenderNode {
         self.clip = None;
         self.overlay_clip = None;
         self.repainted = true;
+        self.partial = false;
         self.cached_flatten = None;
     }
 }

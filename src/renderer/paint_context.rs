@@ -82,6 +82,12 @@ impl<'a> PaintContext<'a> {
         self.cull_rect = Some(rect);
     }
 
+    /// Mark this node's paint as partial (some children were culled by cull_rect).
+    /// Partial nodes are not cached to prevent reusing incomplete paint results.
+    pub fn mark_partial(&mut self) {
+        self.node.partial = true;
+    }
+
     // -------------------------------------------------------------------------
     // Node Properties
     // -------------------------------------------------------------------------

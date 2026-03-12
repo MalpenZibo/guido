@@ -247,7 +247,15 @@ fn cache_paint_results(tree: &mut Tree, node: &renderer::RenderNode) {
     if node.repainted {
         let widget_id = WidgetId::from_u64(node.id);
         if tree.contains(widget_id) {
-            tree.cache_paint(widget_id, node.clone());
+            if !node.partial {
+                // Complete paint — safe to cache for future reuse.
+                tree.cache_paint(widget_id, node.clone());
+            }
+            // else: partial paint (children culled by cull_rect) — don't cache.
+            // Keep the previous complete cache (if any) so it can be reused
+            // when the widget becomes fully visible. If there's no previous
+            // cache, the widget will get a full paint next frame anyway
+            // (cached_paint returns None → falls through to full paint).
             tree.clear_needs_paint(widget_id);
         }
     }
