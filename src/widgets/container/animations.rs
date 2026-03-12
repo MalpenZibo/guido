@@ -151,13 +151,18 @@ impl<T: Animatable> AnimationState<T> {
         };
 
         // Interpolate
-        let new_value = T::lerp(&self.start, &self.target, eased_t);
+        let mut new_value = T::lerp(&self.start, &self.target, eased_t);
 
         // Update progress
         if let Some(ref state) = self.spring_state {
             // For spring animations, only mark complete when spring has settled
             if state.is_settled(0.01) {
                 self.progress = 1.0;
+                // Snap to exact target to avoid floating-point drift.
+                // The spring settles within 0.01 of the target, but downstream
+                // checks (e.g. Transform::is_translation_only) use much tighter
+                // tolerances (1e-6), so the lerped value must be exact.
+                new_value = self.target;
             } else {
                 // Keep progress < 1.0 to continue animating
                 self.progress = 0.5;

@@ -1994,6 +1994,11 @@ impl Widget for Container {
                 );
                 if !cull_rect.intersects(&child_rect) {
                     crate::render_stats::record_paint_child_culled();
+                    // Mark this node's paint as partial so it won't be cached.
+                    // Without this, the incomplete paint (missing culled children)
+                    // could be reused later when the node is fully visible,
+                    // permanently hiding the culled children.
+                    ctx.mark_partial();
                     continue;
                 }
             }
