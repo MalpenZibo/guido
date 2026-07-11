@@ -236,7 +236,7 @@ All properties accept static values, signals, or closures.
 text(content: impl IntoSignal<String, M>) -> Text
 
 impl Text {
-    pub fn font_size<M>(self, size: impl IntoSignal<f32, M>) -> Self;  // integers work: .font_size(16)
+    pub fn font_size<M>(self, size: impl IntoSignal<f32, M>) -> Self;  // numbers work: .font_size(16) or .font_size(16.5)
     pub fn color<M>(self, color: impl IntoSignal<Color, M>) -> Self;
     pub fn font_family<M>(self, family: impl IntoSignal<FontFamily, M>) -> Self;
     pub fn font_weight<M>(self, weight: impl IntoSignal<FontWeight, M>) -> Self;
