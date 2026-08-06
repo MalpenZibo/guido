@@ -97,7 +97,7 @@ impl TextRenderState {
         for (idx, entry) in texts.iter().enumerate() {
             // Skip text invisible due to zero scale — avoids all rendering work
             if !entry.transform.is_identity() && !entry.transform.is_translation_only() {
-                let (sx, sy) = (entry.transform.data[0], entry.transform.data[5]);
+                let (sx, sy) = (entry.transform.a(), entry.transform.d());
                 if sx.abs() < 1e-3 || sy.abs() < 1e-3 {
                     culled_indices.insert(idx);
                     continue;
