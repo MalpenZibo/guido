@@ -22,6 +22,11 @@ use smithay_client_toolkit::{
         },
         Capability, SeatHandler, SeatState,
     },
+    delegate_session_lock,
+    session_lock::{
+        SessionLock, SessionLockHandler, SessionLockState, SessionLockSurface,
+        SessionLockSurfaceConfigure,
+    },
     shell::{
         WaylandSurface,
         wlr_layer::{
@@ -60,10 +65,28 @@ use crate::widgets::{Event, Key, Modifiers, MouseButton, Rect, ScrollSource};
 /// Pixels per line for discrete scroll (mouse wheel)
 const SCROLL_PIXELS_PER_LINE: f32 = 40.0;
 
+/// The shell role of a surface: an ordinary layer-shell surface or an
+/// ext-session-lock-v1 lock surface. Both share the same widget tree, GPU
+/// and input pipeline; only creation, configure, and shell requests differ.
+pub enum SurfaceRole {
+    Layer(LayerSurface),
+    /// Kept alive here — dropping it destroys the protocol object.
+    Lock(SessionLockSurface),
+}
+
+/// Events from the session-lock protocol, drained by the main loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockEvent {
+    /// The compositor granted the lock; lock surfaces may be created.
+    Locked,
+    /// The lock ended: denied outright, or unlocked/aborted later.
+    Finished,
+}
+
 /// Per-surface state for multi-surface support.
 pub struct WaylandSurfaceState {
-    /// The layer surface protocol object
-    pub layer_surface: LayerSurface,
+    /// The shell role (layer surface or session-lock surface)
+    pub role: SurfaceRole,
     /// The underlying wl_surface
     pub wl_surface: wl_surface::WlSurface,
     /// Whether the surface has been configured
@@ -96,13 +119,13 @@ pub struct WaylandSurfaceState {
 impl WaylandSurfaceState {
     /// Create a new surface state.
     pub fn new(
-        layer_surface: LayerSurface,
+        role: SurfaceRole,
         wl_surface: wl_surface::WlSurface,
         width: u32,
         height: u32,
     ) -> Self {
         Self {
-            layer_surface,
+            role,
             wl_surface,
             configured: false,
             width,
@@ -155,6 +178,15 @@ pub struct WaylandState {
     bg_effect_manager: Option<ExtBackgroundEffectManagerV1>,
     /// Whether the compositor currently advertises the Blur capability.
     bg_effect_supports_blur: bool,
+
+    // Session lock (ext-session-lock-v1)
+    session_lock_state: SessionLockState,
+    /// The active lock grant. Written when `start_session_lock` succeeds so a
+    /// synchronous double-lock check can reject a second call; cleared by
+    /// `finished` or `unlock_session`.
+    active_lock: Option<SessionLock>,
+    /// Lock lifecycle events, drained by the main loop.
+    lock_events: Vec<LockEvent>,
 
     // Pointer state
     pointer: Option<wl_pointer::WlPointer>,
@@ -251,6 +283,7 @@ pub fn create_wayland_app() -> Result<
     })?;
     let output_state = OutputState::new(&globals, &qh);
     let seat_state = SeatState::new(&globals, &qh);
+    let session_lock_state = SessionLockState::new(&globals, &qh);
 
     // Initialize data device manager for clipboard support
     let data_device_manager = DataDeviceManagerState::bind(&globals, &qh).ok();
@@ -285,6 +318,9 @@ pub fn create_wayland_app() -> Result<
         next_output_id: 0,
         bg_effect_manager,
         bg_effect_supports_blur: false,
+        session_lock_state,
+        active_lock: None,
+        lock_events: Vec::new(),
         pointer: None,
         pointer_x: 0.0,
         pointer_y: 0.0,
@@ -374,6 +410,82 @@ impl WaylandState {
                 }
             );
         }
+    }
+
+    /// Request a session lock from the compositor.
+    ///
+    /// Returns false when a lock is already active or the compositor lacks
+    /// ext-session-lock-v1. The grant (or denial) arrives asynchronously as
+    /// a [`LockEvent`].
+    pub fn start_session_lock(&mut self, qh: &QueueHandle<Self>) -> bool {
+        if self.active_lock.is_some() {
+            log::warn!("Session lock requested while a lock is already active");
+            return false;
+        }
+        match self.session_lock_state.lock(qh) {
+            Ok(lock) => {
+                self.active_lock = Some(lock);
+                log::info!("Session lock requested");
+                true
+            }
+            Err(e) => {
+                log::error!("Compositor does not support ext-session-lock-v1: {e}");
+                false
+            }
+        }
+    }
+
+    /// Unlock the session (no-op when not locked).
+    pub fn unlock_session(&mut self) {
+        if let Some(lock) = self.active_lock.take() {
+            lock.unlock();
+            log::info!("Session unlocked");
+        }
+    }
+
+    /// Whether a session lock is currently held and granted.
+    pub fn is_session_locked(&self) -> bool {
+        self.active_lock.as_ref().is_some_and(|l| l.is_locked())
+    }
+
+    /// Create a lock surface for `output` with a specific SurfaceId.
+    ///
+    /// The surface starts at 0×0 — its real size arrives with the first
+    /// lock-surface configure. Returns false without an active lock or when
+    /// the output disconnected.
+    pub fn create_lock_surface_with_id(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        id: SurfaceId,
+        output: OutputId,
+    ) -> bool {
+        let Some(lock) = self.active_lock.clone() else {
+            log::warn!("Cannot create lock surface without an active session lock");
+            return false;
+        };
+        let Some(wl_output) = self.wl_output_for(output) else {
+            log::warn!(
+                "Cannot create lock surface: output {:?} is not connected",
+                output
+            );
+            return false;
+        };
+
+        let wl_surface = self.compositor_state.create_surface(qh);
+        let lock_surface = lock.create_lock_surface(wl_surface.clone(), &wl_output, qh);
+
+        self.surface_lookup.insert(wl_surface.id(), id);
+        let surface_state =
+            WaylandSurfaceState::new(SurfaceRole::Lock(lock_surface), wl_surface, 0, 0);
+        self.surfaces.insert(id, surface_state);
+
+        log::info!("Created lock surface {:?} on output {:?}", id, output);
+        true
+    }
+
+    /// Drain pending session-lock lifecycle events.
+    pub fn take_lock_events(&mut self) -> Vec<LockEvent> {
+        std::mem::take(&mut self.lock_events)
     }
 
     /// Push a surface's blur region to the compositor if it changed.
@@ -539,8 +651,12 @@ impl WaylandState {
         self.surface_lookup.insert(object_id, id);
 
         // Create and store surface state
-        let surface_state =
-            WaylandSurfaceState::new(layer_surface, wl_surface, config.width, config.height);
+        let surface_state = WaylandSurfaceState::new(
+            SurfaceRole::Layer(layer_surface),
+            wl_surface,
+            config.width,
+            config.height,
+        );
         self.surfaces.insert(id, surface_state);
 
         log::info!(
@@ -583,13 +699,24 @@ impl WaylandState {
     }
 
     /// Helper to modify a surface's layer shell properties and commit.
+    /// No-ops (with a warning) on session-lock surfaces, which have none.
     fn with_layer_surface<F>(&mut self, id: SurfaceId, f: F)
     where
         F: FnOnce(&LayerSurface),
     {
         if let Some(surface_state) = self.surfaces.get_mut(&id) {
-            f(&surface_state.layer_surface);
-            surface_state.wl_surface.commit();
+            match &surface_state.role {
+                SurfaceRole::Layer(layer_surface) => {
+                    f(layer_surface);
+                    surface_state.wl_surface.commit();
+                }
+                SurfaceRole::Lock(_) => {
+                    log::warn!(
+                        "Ignoring layer-shell property change on lock surface {:?}",
+                        id
+                    );
+                }
+            }
         }
     }
 
@@ -1494,6 +1621,63 @@ fn keysym_to_key(keysym: Keysym, utf8: Option<&str>, is_press: bool) -> Option<K
 
     None
 }
+
+impl SessionLockHandler for WaylandState {
+    fn locked(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _session_lock: SessionLock) {
+        log::info!("Session lock granted by compositor");
+        self.lock_events.push(LockEvent::Locked);
+        crate::jobs::request_frame();
+    }
+
+    fn finished(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _session_lock: SessionLock,
+    ) {
+        log::info!("Session lock finished (denied or ended)");
+        self.active_lock = None;
+        self.lock_events.push(LockEvent::Finished);
+        crate::jobs::request_frame();
+    }
+
+    fn configure(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        surface: SessionLockSurface,
+        configure: SessionLockSurfaceConfigure,
+        _serial: u32,
+    ) {
+        // Route to the matching surface state, mirroring the layer-shell
+        // configure path so the same render machinery applies. sctk has
+        // already acked the configure.
+        let surface_id = self.surface_lookup.get(&surface.wl_surface().id()).copied();
+        if let Some(id) = surface_id
+            && let Some(surface_state) = self.surfaces.get_mut(&id)
+        {
+            let (width, height) = configure.new_size;
+            log::info!(
+                "Lock surface {:?} configure: {}x{} (current {}x{})",
+                id,
+                width,
+                height,
+                surface_state.width,
+                surface_state.height
+            );
+            if width > 0 {
+                surface_state.width = width;
+            }
+            if height > 0 {
+                surface_state.height = height;
+            }
+            surface_state.configured = true;
+            crate::jobs::request_frame();
+        }
+    }
+}
+
+delegate_session_lock!(WaylandState);
 
 impl Dispatch<ExtBackgroundEffectManagerV1, ()> for WaylandState {
     fn event(
