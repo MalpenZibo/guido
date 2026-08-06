@@ -27,6 +27,14 @@ pub(crate) enum IngressMessage {
     /// write queue and is drained at the loop's flush point). The message
     /// only guarantees the loop wakes up to run that flush.
     BgWritesQueued,
+    /// Prefetched clipboard/primary-selection content from a reader thread.
+    /// Applied by the channel callback (generation-checked against the
+    /// current offer in `WaylandState::apply_clipboard_update`).
+    ClipboardUpdate {
+        kind: crate::platform::wayland::SelectionKind,
+        generation: u64,
+        content: Option<String>,
+    },
 }
 
 static INGRESS_SENDER: Mutex<Option<Sender<IngressMessage>>> = Mutex::new(None);

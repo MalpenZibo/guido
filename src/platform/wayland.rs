@@ -62,7 +62,6 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::unix::io::OwnedFd;
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::blur::BlurRect;
@@ -236,10 +235,8 @@ pub struct WaylandState {
     primary_source: Option<PrimarySelectionSource>,
 
     // Async clipboard prefetch: whenever a selection offer changes, a reader
-    // thread fetches its content and sends it here. Generation counters drop
-    // results made stale by a newer offer.
-    clipboard_updates_tx: mpsc::Sender<ClipboardUpdate>,
-    clipboard_updates_rx: mpsc::Receiver<ClipboardUpdate>,
+    // thread fetches its content and delivers it through the calloop ingress
+    // channel. Generation counters drop results made stale by a newer offer.
     selection_generation: u64,
     primary_generation: u64,
     /// Serial of the most recent input event, needed to claim selections.
@@ -253,12 +250,6 @@ pub enum SelectionKind {
     Clipboard,
     /// The primary selection (select-to-copy / middle-click paste).
     Primary,
-}
-
-struct ClipboardUpdate {
-    kind: SelectionKind,
-    generation: u64,
-    content: Option<String>,
 }
 
 /// Why the platform layer could not start or continue.
@@ -356,8 +347,6 @@ pub fn create_wayland_app() -> Result<
         log::info!("ext-background-effect-v1 not available - background blur will not work");
     }
 
-    let (clipboard_updates_tx, clipboard_updates_rx) = mpsc::channel();
-
     let state = WaylandState {
         registry_state: RegistryState::new(&globals),
         compositor_state,
@@ -397,8 +386,6 @@ pub fn create_wayland_app() -> Result<
         primary_selection_device: None,
         primary_content: None,
         primary_source: None,
-        clipboard_updates_tx,
-        clipboard_updates_rx,
         selection_generation: 0,
         primary_generation: 0,
         latest_input_serial: 0,
@@ -913,40 +900,36 @@ impl WaylandState {
         self.primary_source = Some(source);
     }
 
-    /// Drain prefetched clipboard/primary contents, newest generation per
-    /// kind (stale reads from superseded offers are dropped).
-    pub fn drain_clipboard_updates(&mut self) -> Vec<(SelectionKind, Option<String>)> {
-        let mut latest_clipboard: Option<ClipboardUpdate> = None;
-        let mut latest_primary: Option<ClipboardUpdate> = None;
-        while let Ok(update) = self.clipboard_updates_rx.try_recv() {
-            let slot = match update.kind {
-                SelectionKind::Clipboard => &mut latest_clipboard,
-                SelectionKind::Primary => &mut latest_primary,
-            };
-            if slot
-                .as_ref()
-                .is_none_or(|s| update.generation >= s.generation)
-            {
-                *slot = Some(update);
-            }
+    /// Apply a prefetched clipboard/primary content update (from the loop's
+    /// ingress channel callback). Reads made stale by a newer offer are
+    /// dropped via the generation check.
+    pub(crate) fn apply_clipboard_update(
+        &mut self,
+        kind: SelectionKind,
+        generation: u64,
+        content: Option<String>,
+    ) {
+        let current = match kind {
+            SelectionKind::Clipboard => self.selection_generation,
+            SelectionKind::Primary => self.primary_generation,
+        };
+        if generation != current {
+            log::debug!("Dropping stale {kind:?} content (gen {generation} != {current})");
+            return;
         }
-        // Drop reads that are older than the newest offer we've seen.
-        let mut out = Vec::new();
-        if let Some(update) = latest_clipboard
-            && update.generation == self.selection_generation
-        {
-            out.push((SelectionKind::Clipboard, update.content));
+        match kind {
+            SelectionKind::Clipboard => match content {
+                Some(text) => crate::reactive::set_system_clipboard(text),
+                None => crate::reactive::clear_system_clipboard(),
+            },
+            SelectionKind::Primary => crate::reactive::set_system_primary(content),
         }
-        if let Some(update) = latest_primary
-            && update.generation == self.primary_generation
-        {
-            out.push((SelectionKind::Primary, update.content));
-        }
-        out
     }
 
     /// Start an async prefetch of an offer's content on a reader thread.
-    /// `receive` turns a chosen mime type into a read pipe.
+    /// `receive` turns a chosen mime type into a read pipe. The result comes
+    /// back through the calloop ingress channel — the message itself wakes
+    /// the loop, no hand-rolled wakeup involved.
     fn prefetch_selection<R>(&mut self, kind: SelectionKind, mimes: Vec<String>, receive: R)
     where
         R: FnOnce(&str) -> Option<ReadPipe>,
@@ -961,7 +944,6 @@ impl WaylandState {
                 self.primary_generation
             }
         };
-        let tx = self.clipboard_updates_tx.clone();
 
         // Preferred mime order; take the first one offered.
         const PREFERRED: [&str; 5] = [
@@ -977,13 +959,15 @@ impl WaylandState {
             .copied();
 
         let Some(pipe) = mime.and_then(receive) else {
-            // Nothing readable as text — treat as cleared.
-            let _ = tx.send(ClipboardUpdate {
-                kind,
-                generation,
-                content: None,
-            });
-            crate::jobs::request_frame();
+            // Nothing readable as text — treat as cleared. We're on the main
+            // thread (called from a selection handler), so apply directly.
+            self.apply_clipboard_update(kind, generation, None);
+            return;
+        };
+
+        let Some(sender) = crate::ingress::sender() else {
+            // No running event loop to deliver the result to.
+            log::warn!("Selection prefetch skipped: no event loop running");
             return;
         };
 
@@ -991,13 +975,11 @@ impl WaylandState {
             .name("guido-clipboard-read".into())
             .spawn(move || {
                 let content = read_pipe_with_deadline(pipe, Duration::from_secs(3));
-                let _ = tx.send(ClipboardUpdate {
+                let _ = sender.send(crate::ingress::IngressMessage::ClipboardUpdate {
                     kind,
                     generation,
                     content,
                 });
-                // Wake the event loop so the main thread applies the update
-                crate::jobs::request_frame();
             })
         {
             log::warn!("Failed to spawn clipboard reader thread: {e}");
@@ -2090,12 +2072,10 @@ impl DataDeviceHandler for WaylandState {
             .and_then(|device| device.data().selection_offer());
         match offer {
             None => {
+                // Selection cleared — main thread, apply directly.
                 self.selection_generation += 1;
-                let _ = self.clipboard_updates_tx.send(ClipboardUpdate {
-                    kind: SelectionKind::Clipboard,
-                    generation: self.selection_generation,
-                    content: None,
-                });
+                let generation = self.selection_generation;
+                self.apply_clipboard_update(SelectionKind::Clipboard, generation, None);
             }
             Some(offer) => {
                 let mimes = offer.with_mime_types(|t| t.to_vec());
@@ -2126,12 +2106,10 @@ impl PrimarySelectionDeviceHandler for WaylandState {
             .and_then(|data| data.selection_offer());
         match offer {
             None => {
+                // Primary selection cleared — main thread, apply directly.
                 self.primary_generation += 1;
-                let _ = self.clipboard_updates_tx.send(ClipboardUpdate {
-                    kind: SelectionKind::Primary,
-                    generation: self.primary_generation,
-                    content: None,
-                });
+                let generation = self.primary_generation;
+                self.apply_clipboard_update(SelectionKind::Primary, generation, None);
             }
             Some(offer) => {
                 let mimes = offer.with_mime_types(|t| t.to_vec());

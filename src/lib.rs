@@ -809,13 +809,19 @@ impl App {
         let (ingress_tx, ingress_channel) = calloop_channel::channel();
         ingress::install_ingress(ingress_tx);
         loop_handle
-            .insert_source(ingress_channel, |event, _, _wayland_state| {
+            .insert_source(ingress_channel, |event, _, wayland_state| {
                 if let calloop_channel::Event::Msg(message) = event {
                     match message {
                         // Doorbell only: the write payloads live in the
                         // reactive write queue, drained at the flush point
                         // later this same iteration.
                         ingress::IngressMessage::BgWritesQueued => {}
+                        // Prefetched selection content from a reader thread
+                        ingress::IngressMessage::ClipboardUpdate {
+                            kind,
+                            generation,
+                            content,
+                        } => wayland_state.apply_clipboard_update(kind, generation, content),
                     }
                 }
             })
@@ -909,19 +915,6 @@ impl App {
                     wgpu_surface.queue.clone(),
                     wgpu_surface.config.format,
                 ));
-            }
-
-            // Apply prefetched clipboard/primary contents from reader threads
-            for (kind, content) in wayland_state.drain_clipboard_updates() {
-                match kind {
-                    platform::wayland::SelectionKind::Clipboard => match content {
-                        Some(text) => reactive::set_system_clipboard(text),
-                        None => reactive::clear_system_clipboard(),
-                    },
-                    platform::wayland::SelectionKind::Primary => {
-                        reactive::set_system_primary(content)
-                    }
-                }
             }
 
             // Flush background-thread signal writes once per frame (queued via WriteSignal).
