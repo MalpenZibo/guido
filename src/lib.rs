@@ -667,8 +667,6 @@ impl App {
             panic!("No surfaces defined. Use add_surface() to add at least one surface.");
         }
 
-        let _ = env_logger::try_init();
-
         let (connection, mut event_queue, mut wayland_state, qh) = create_wayland_app();
 
         // Create surfaces from add_surface() calls

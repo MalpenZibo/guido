@@ -412,7 +412,23 @@ impl ImageQuadRenderer {
         })
     }
 
+    /// Fallback when the `svg` feature is disabled: SVG sources fail to
+    /// decode with a warning instead of failing to compile.
+    #[cfg(not(feature = "svg"))]
+    fn load_svg(
+        &self,
+        _device: &Device,
+        _queue: &Queue,
+        _format: &TextureFormat,
+        _bytes: &[u8],
+        _scale: f32,
+    ) -> Option<CachedTexture> {
+        log::warn!("SVG image used but the `svg` feature is disabled");
+        None
+    }
+
     /// Load and rasterize an SVG.
+    #[cfg(feature = "svg")]
     fn load_svg(
         &self,
         device: &Device,

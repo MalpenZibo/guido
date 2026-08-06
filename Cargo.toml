@@ -28,8 +28,15 @@ homepage.workspace = true
 license.workspace = true
 
 [features]
-default = []
+default = ["svg"]
 render-stats = []
+# SVG rendering via resvg (pulls a second text-shaping stack + software
+# rasterizer). Without it, ImageSource::Svg* sources fail to decode with a
+# warning instead of failing to compile.
+svg = ["dep:resvg"]
+# Additional raster decoders beyond the png/jpeg defaults
+webp = ["image/webp"]
+gif = ["image/gif"]
 
 [dependencies]
 guido-macros = { workspace = true }
@@ -40,11 +47,10 @@ cosmic-text = "0.17"
 smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop", "xkbcommon"] }
 wayland-backend = { version = "0.3", features = ["client_system"] }
 raw-window-handle = "0.6"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
-resvg = "0.46"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+resvg = { version = "0.46", optional = true }
 pollster = "0.4"
 log = "0.4"
-env_logger = "0.11"
 bitflags = "2.4"
 libc = "0.2"
 tokio = { version = "1", features = ["sync", "rt", "time"] }
