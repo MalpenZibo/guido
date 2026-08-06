@@ -453,6 +453,50 @@ text(move || match surface_output(my_surface_id) {
 For a surface spanning multiple outputs, this reports the one entered
 most recently.
 
+## Input Regions
+
+By default the whole surface accepts pointer and touch input. An input
+region limits input to a set of rectangles (logical surface
+coordinates) — everything outside them lets clicks pass through to the
+windows below. This is how transparent overlays avoid stealing clicks:
+
+```rust
+// Only the given rectangle is clickable:
+SurfaceConfig::new()
+    .background_color(Color::TRANSPARENT)
+    .input_region([Rect::new(16.0, 20.0, 200.0, 40.0)])
+
+// Fully click-through (e.g. a HUD or wallpaper widget):
+SurfaceConfig::new().click_through()
+```
+
+At runtime, use the handle — `None` restores full-surface input, an
+empty list is fully click-through:
+
+```rust
+surface_handle(id).set_input_region(Some(vec![rect]));
+surface_handle(id).set_input_region(None);
+```
+
+The idiomatic pattern glues the region to a widget's bounds with a
+`WidgetRef`, so it follows layout changes automatically (full version
+in `examples/input_region.rs`):
+
+```rust
+let pill_ref = create_widget_ref();
+// ...build the surface with .click_through() and .widget_ref(pill_ref)...
+
+create_effect(move || {
+    let rect = pill_ref.rect().get();
+    if rect.width > 0.0 {
+        surface_handle(id).set_input_region(Some(vec![rect]));
+    }
+});
+```
+
+Note: keyboard focus is unaffected — use `keyboard_interactivity` for
+that. Rectangles are rounded outward to whole pixels.
+
 ## Complete Examples
 
 ### Status Bar
@@ -563,6 +607,8 @@ impl SurfaceConfig {
     pub fn background_color(self, color: Color) -> Self;
     pub fn margin(self, top: i32, right: i32, bottom: i32, left: i32) -> Self;
     pub fn output(self, output: OutputId) -> Self;
+    pub fn input_region(self, rects: impl Into<Vec<Rect>>) -> Self;
+    pub fn click_through(self) -> Self;
 }
 ```
 
@@ -625,5 +671,6 @@ impl SurfaceHandle {
     pub fn set_size(&self, width: u32, height: u32);
     pub fn set_exclusive_zone(&self, zone: i32);
     pub fn set_margin(&self, top: i32, right: i32, bottom: i32, left: i32);
+    pub fn set_input_region(&self, rects: Option<Vec<Rect>>);
 }
 ```
