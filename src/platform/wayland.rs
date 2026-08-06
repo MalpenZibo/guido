@@ -21,8 +21,9 @@ use smithay_client_toolkit::{
             cursor_shape::CursorShapeManager, PointerEvent, PointerEventKind, PointerHandler,
         },
         Capability, SeatHandler, SeatState,
+        touch::TouchHandler,
     },
-    delegate_session_lock,
+    delegate_session_lock, delegate_touch,
     session_lock::{
         SessionLock, SessionLockHandler, SessionLockState, SessionLockSurface,
         SessionLockSurfaceConfigure,
@@ -40,6 +41,7 @@ use smithay_client_toolkit::reexports::client::{
     protocol::{
         wl_data_device::WlDataDevice, wl_data_device_manager::DndAction,
         wl_data_source::WlDataSource, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface,
+        wl_touch,
     },
     Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum, delegate_noop,
 };
@@ -195,6 +197,15 @@ pub struct WaylandState {
     pointer_over_surface: bool,
     pointer_enter_serial: u32,
 
+    // Touch state
+    touch: Option<wl_touch::WlTouch>,
+    /// Fingers currently down: id → (surface, x, y).
+    touch_fingers: HashMap<i32, (SurfaceId, f32, f32)>,
+    /// The finger driving pointer emulation (the first one down). Widgets
+    /// only understand pointer events, so the primary finger synthesizes
+    /// MouseMove/MouseDown/MouseUp — a tap becomes a click.
+    primary_finger: Option<i32>,
+
     // Cursor shape
     cursor_shape_manager: Option<CursorShapeManager>,
 
@@ -326,6 +337,9 @@ pub fn create_wayland_app() -> Result<
         pointer_y: 0.0,
         pointer_over_surface: false,
         pointer_enter_serial: 0,
+        touch: None,
+        touch_fingers: HashMap::new(),
+        primary_finger: None,
         cursor_shape_manager,
         keyboard: None,
         modifiers: Modifiers::default(),
@@ -1214,6 +1228,17 @@ impl SeatHandler for WaylandState {
             }
         }
 
+        // Handle touch capability
+        if capability == Capability::Touch && self.touch.is_none() {
+            log::info!("Touch capability available, creating touch");
+            match self.seat_state.get_touch(qh, &seat) {
+                Ok(touch) => self.touch = Some(touch),
+                Err(e) => {
+                    log::warn!("Failed to get touch: {e}");
+                }
+            }
+        }
+
         // Handle keyboard capability
         if capability == Capability::Keyboard && self.keyboard.is_none() {
             log::info!("Keyboard capability available, creating keyboard");
@@ -1256,9 +1281,146 @@ impl SeatHandler for WaylandState {
                 keyboard.release();
             }
         }
+        if capability == Capability::Touch {
+            log::info!("Touch capability removed");
+            if let Some(touch) = self.touch.take() {
+                touch.release();
+            }
+            self.touch_fingers.clear();
+            self.primary_finger = None;
+        }
     }
 
     fn remove_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _seat: wl_seat::WlSeat) {
+    }
+}
+
+impl TouchHandler for WaylandState {
+    fn down(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _serial: u32,
+        _time: u32,
+        surface: wl_surface::WlSurface,
+        id: i32,
+        position: (f64, f64),
+    ) {
+        let Some(surface_id) = self.surface_lookup.get(&surface.id()).copied() else {
+            return;
+        };
+        let (x, y) = (position.0 as f32, position.1 as f32);
+        self.touch_fingers.insert(id, (surface_id, x, y));
+
+        // The first finger down drives pointer emulation: move + press so
+        // hover and pressed state layers respond, and a tap becomes a click.
+        if self.primary_finger.is_none() {
+            self.primary_finger = Some(id);
+            if let Some(surface_state) = self.surfaces.get_mut(&surface_id) {
+                surface_state.pending_events.push(Event::MouseMove { x, y });
+                surface_state.pending_events.push(Event::MouseDown {
+                    x,
+                    y,
+                    button: MouseButton::Left,
+                });
+            }
+        }
+    }
+
+    fn up(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _serial: u32,
+        _time: u32,
+        id: i32,
+    ) {
+        let Some((surface_id, x, y)) = self.touch_fingers.remove(&id) else {
+            return;
+        };
+        if self.primary_finger == Some(id) {
+            self.primary_finger = None;
+            if let Some(surface_state) = self.surfaces.get_mut(&surface_id) {
+                surface_state.pending_events.push(Event::MouseUp {
+                    x,
+                    y,
+                    button: MouseButton::Left,
+                });
+                // Unlike a real pointer, nothing hovers after lifting the
+                // finger — clear hover state.
+                surface_state.pending_events.push(Event::MouseLeave);
+            }
+        }
+    }
+
+    fn motion(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _time: u32,
+        id: i32,
+        position: (f64, f64),
+    ) {
+        let Some(finger) = self.touch_fingers.get_mut(&id) else {
+            return;
+        };
+        let (x, y) = (position.0 as f32, position.1 as f32);
+        finger.1 = x;
+        finger.2 = y;
+        let surface_id = finger.0;
+
+        if self.primary_finger == Some(id)
+            && let Some(surface_state) = self.surfaces.get_mut(&surface_id)
+        {
+            // Coalesce runs of MouseMove like the pointer path does.
+            let events = &mut surface_state.pending_events;
+            if let Some(last @ Event::MouseMove { .. }) = events.last_mut() {
+                *last = Event::MouseMove { x, y };
+            } else {
+                events.push(Event::MouseMove { x, y });
+            }
+        }
+    }
+
+    fn shape(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _id: i32,
+        _major: f64,
+        _minor: f64,
+    ) {
+    }
+
+    fn orientation(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _touch: &wl_touch::WlTouch,
+        _id: i32,
+        _orientation: f64,
+    ) {
+    }
+
+    fn cancel(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &wl_touch::WlTouch) {
+        // The compositor took over the gesture: release the synthesized
+        // press and clear hover so no widget is stuck pressed.
+        if let Some(id) = self.primary_finger.take()
+            && let Some((surface_id, x, y)) = self.touch_fingers.get(&id).copied()
+            && let Some(surface_state) = self.surfaces.get_mut(&surface_id)
+        {
+            surface_state.pending_events.push(Event::MouseUp {
+                x,
+                y,
+                button: MouseButton::Left,
+            });
+            surface_state.pending_events.push(Event::MouseLeave);
+        }
+        self.touch_fingers.clear();
     }
 }
 
@@ -1870,6 +2032,7 @@ delegate_output!(WaylandState);
 delegate_layer!(WaylandState);
 delegate_seat!(WaylandState);
 delegate_pointer!(WaylandState);
+delegate_touch!(WaylandState);
 delegate_keyboard!(WaylandState);
 delegate_data_device!(WaylandState);
 delegate_registry!(WaylandState);
