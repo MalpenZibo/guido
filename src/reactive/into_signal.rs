@@ -213,6 +213,12 @@ mod tests {
     }
 
     #[test]
+    fn test_closure_f64_conversion() {
+        let sig: Signal<f32> = (|| 8.5).into_signal();
+        assert_eq!(sig.get(), 8.5);
+    }
+
+    #[test]
     fn test_stored_is_copy() {
         let sig = create_stored(42);
         let sig2 = sig; // Copy
