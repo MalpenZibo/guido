@@ -28,7 +28,7 @@ homepage.workspace = true
 license.workspace = true
 
 [features]
-default = ["svg"]
+default = ["svg", "webp"]
 render-stats = []
 # SVG rendering via resvg (pulls a second text-shaping stack + software
 # rasterizer). Without it, ImageSource::Svg* sources fail to decode with a

@@ -334,17 +334,38 @@ impl ImageQuadRenderer {
 
         match source {
             ImageSource::Path(path) => {
-                let img = image::open(path).ok()?;
+                // Decode failures must be loud: a missing decoder feature
+                // (e.g. `webp` disabled) or a bad file otherwise degrades to
+                // a silently empty box.
+                let img = match image::open(path) {
+                    Ok(img) => img,
+                    Err(e) => {
+                        log::warn!("Failed to decode image {}: {e}", path.display());
+                        return None;
+                    }
+                };
                 let rgba = img.to_rgba8();
                 self.upload_raster(device, queue, &format, &rgba)
             }
             ImageSource::Bytes(bytes) => {
-                let img = image::load_from_memory(bytes).ok()?;
+                let img = match image::load_from_memory(bytes) {
+                    Ok(img) => img,
+                    Err(e) => {
+                        log::warn!("Failed to decode in-memory image: {e}");
+                        return None;
+                    }
+                };
                 let rgba = img.to_rgba8();
                 self.upload_raster(device, queue, &format, &rgba)
             }
             ImageSource::SvgPath(path) => {
-                let data = std::fs::read(path).ok()?;
+                let data = match std::fs::read(path) {
+                    Ok(data) => data,
+                    Err(e) => {
+                        log::warn!("Failed to read SVG {}: {e}", path.display());
+                        return None;
+                    }
+                };
                 self.load_svg(device, queue, &format, &data, render_scale)
             }
             ImageSource::SvgBytes(bytes) => {
