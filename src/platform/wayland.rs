@@ -22,9 +22,12 @@ use smithay_client_toolkit::{
         },
         Capability, SeatHandler, SeatState,
     },
-    shell::wlr_layer::{
-        Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
-        LayerSurfaceConfigure,
+    shell::{
+        WaylandSurface,
+        wlr_layer::{
+            Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
+            LayerSurfaceConfigure,
+        },
     },
 };
 use smithay_client_toolkit::reexports::client::{
@@ -146,20 +149,73 @@ pub struct WaylandState {
     selection_offer: Option<SelectionOffer>,
 }
 
-pub fn create_wayland_app() -> (
-    Connection,
-    EventQueue<WaylandState>,
-    WaylandState,
-    QueueHandle<WaylandState>,
-) {
-    let connection = Connection::connect_to_env().expect("Failed to connect to Wayland");
-    let (globals, event_queue) =
-        registry_queue_init::<WaylandState>(&connection).expect("Failed to initialize registry");
+/// Why the platform layer could not start or continue.
+///
+/// These are ordinary environmental conditions (no Wayland session, a
+/// compositor without layer-shell such as GNOME, a dropped connection) —
+/// they are reported instead of panicking the process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlatformError {
+    /// Could not connect to a Wayland display (no session / wrong env).
+    Connect,
+    /// Wayland registry initialization failed.
+    Registry,
+    /// The compositor does not advertise `wl_compositor`.
+    MissingCompositor,
+    /// The compositor does not support `zwlr_layer_shell_v1` (e.g. GNOME).
+    MissingLayerShell,
+    /// The Wayland connection failed while the app was running.
+    ConnectionLost,
+}
+
+impl std::fmt::Display for PlatformError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Connect => write!(f, "failed to connect to a Wayland display"),
+            Self::Registry => write!(f, "failed to initialize the Wayland registry"),
+            Self::MissingCompositor => write!(f, "compositor does not advertise wl_compositor"),
+            Self::MissingLayerShell => {
+                write!(
+                    f,
+                    "compositor does not support zwlr_layer_shell_v1 (layer shell)"
+                )
+            }
+            Self::ConnectionLost => write!(f, "Wayland connection lost"),
+        }
+    }
+}
+
+impl std::error::Error for PlatformError {}
+
+#[allow(clippy::type_complexity)]
+pub fn create_wayland_app() -> Result<
+    (
+        Connection,
+        EventQueue<WaylandState>,
+        WaylandState,
+        QueueHandle<WaylandState>,
+    ),
+    PlatformError,
+> {
+    let connection = Connection::connect_to_env().map_err(|e| {
+        log::error!("Failed to connect to Wayland: {e}");
+        PlatformError::Connect
+    })?;
+    let (globals, event_queue) = registry_queue_init::<WaylandState>(&connection).map_err(|e| {
+        log::error!("Failed to initialize Wayland registry: {e}");
+        PlatformError::Registry
+    })?;
     let qh = event_queue.handle();
 
     let compositor_state =
-        CompositorState::bind(&globals, &qh).expect("wl_compositor not available");
-    let layer_shell = LayerShell::bind(&globals, &qh).expect("layer_shell not available");
+        CompositorState::bind(&globals, &qh).map_err(|_| PlatformError::MissingCompositor)?;
+    let layer_shell = LayerShell::bind(&globals, &qh).map_err(|_| {
+        log::error!(
+            "This compositor does not support the layer shell protocol; \
+             guido surfaces cannot be created"
+        );
+        PlatformError::MissingLayerShell
+    })?;
     let output_state = OutputState::new(&globals, &qh);
     let seat_state = SeatState::new(&globals, &qh);
 
@@ -204,7 +260,7 @@ pub fn create_wayland_app() -> (
         selection_offer: None,
     };
 
-    (connection, event_queue, state, qh)
+    Ok((connection, event_queue, state, qh))
 }
 
 impl WaylandState {
@@ -685,21 +741,17 @@ impl OutputHandler for WaylandState {
 
 impl LayerShellHandler for WaylandState {
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
-        // Find which surface was closed
-        let closed_id = self
-            .surfaces
-            .iter()
-            .find(|(_, state)| &state.layer_surface == layer)
-            .map(|(id, _)| *id);
+        // O(1) lookup via the wl_surface object id
+        let closed_id = self.surface_lookup.get(&layer.wl_surface().id()).copied();
 
         if let Some(id) = closed_id {
             log::info!("Surface {:?} closed by compositor", id);
-            self.destroy_surface(id);
-
-            // If no surfaces left, exit
-            if self.surfaces.is_empty() {
-                self.exit = true;
-            }
+            // Route through the normal close command so the managed surface
+            // is fully cleaned up (widgets, reactive owner, wgpu surface —
+            // dropped BEFORE the wl_surface it borrows). Previously only the
+            // Wayland-side state was removed, leaking the widget tree and
+            // leaving a zombie surface iterated every frame.
+            crate::surface::push_surface_command(crate::surface::SurfaceCommand::Close(id));
         }
     }
 
@@ -711,12 +763,8 @@ impl LayerShellHandler for WaylandState {
         configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
-        // Find which surface this configure is for
-        let surface_id = self
-            .surfaces
-            .iter()
-            .find(|(_, state)| &state.layer_surface == layer)
-            .map(|(id, _)| *id);
+        // O(1) lookup via the wl_surface object id (fires on every resize)
+        let surface_id = self.surface_lookup.get(&layer.wl_surface().id()).copied();
 
         if let Some(id) = surface_id
             && let Some(surface_state) = self.surfaces.get_mut(&id)
@@ -762,20 +810,27 @@ impl SeatHandler for WaylandState {
         // Handle pointer capability
         if capability == Capability::Pointer && self.pointer.is_none() {
             log::info!("Pointer capability available, creating pointer");
-            let pointer = self
-                .seat_state
-                .get_pointer(qh, &seat)
-                .expect("Failed to get pointer");
-            self.pointer = Some(pointer);
+            match self.seat_state.get_pointer(qh, &seat) {
+                Ok(pointer) => self.pointer = Some(pointer),
+                Err(e) => {
+                    // A capability race at seat init is not fatal — the app
+                    // just runs without pointer input until the seat updates
+                    log::warn!("Failed to get pointer: {e}");
+                    return;
+                }
+            }
         }
 
         // Handle keyboard capability
         if capability == Capability::Keyboard && self.keyboard.is_none() {
             log::info!("Keyboard capability available, creating keyboard");
-            let keyboard = self
-                .seat_state
-                .get_keyboard(qh, &seat, None)
-                .expect("Failed to get keyboard");
+            let keyboard = match self.seat_state.get_keyboard(qh, &seat, None) {
+                Ok(keyboard) => keyboard,
+                Err(e) => {
+                    log::warn!("Failed to get keyboard: {e}");
+                    return;
+                }
+            };
             self.keyboard = Some(keyboard);
 
             // Create data device for clipboard when we have a seat
@@ -1266,12 +1321,22 @@ impl DataSourceHandler for WaylandState {
     ) {
         log::debug!("Clipboard send request for mime type: {}", mime);
 
-        // Write clipboard content to the file descriptor
+        // Write clipboard content on a short-lived thread: a payload larger
+        // than the pipe buffer with a slow reader would otherwise block the
+        // UI thread indefinitely inside write_all.
         if let Some(ref content) = self.clipboard_content {
+            let content = content.clone();
             let owned_fd = OwnedFd::from(fd);
-            let mut file = File::from(owned_fd);
-            if let Err(e) = file.write_all(content.as_bytes()) {
-                log::warn!("Failed to write clipboard content: {}", e);
+            if let Err(e) = std::thread::Builder::new()
+                .name("guido-clipboard-send".into())
+                .spawn(move || {
+                    let mut file = File::from(owned_fd);
+                    if let Err(e) = file.write_all(content.as_bytes()) {
+                        log::warn!("Failed to write clipboard content: {}", e);
+                    }
+                })
+            {
+                log::warn!("Failed to spawn clipboard writer thread: {e}");
             }
         }
     }

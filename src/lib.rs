@@ -106,6 +106,10 @@ pub enum ExitReason {
     Quit,
     /// Restart requested (e.g. config change). The caller should re-create `App` and run again.
     Restart,
+    /// The platform layer failed (no Wayland session, compositor without
+    /// layer-shell support, connection lost). Previously these ordinary
+    /// environmental conditions aborted the process with a panic.
+    Error(platform::PlatformError),
 }
 
 /// Request a clean application restart.
@@ -202,8 +206,12 @@ fn process_surface_commands(
             }
             SurfaceCommand::Close(id) => {
                 log::info!("Closing dynamic surface {:?}", id);
-                wayland_state.destroy_surface(id);
+                // Drop the managed surface FIRST: its wgpu Surface<'static>
+                // borrows the wl_surface through erased raw pointers, so the
+                // GPU surface must die before the Wayland surface it points
+                // at (previously a use-after-free during swapchain teardown).
                 surface_manager.remove(id);
+                wayland_state.destroy_surface(id);
 
                 // If no surfaces left, exit
                 if surface_manager.is_empty() {
@@ -667,7 +675,13 @@ impl App {
             panic!("No surfaces defined. Use add_surface() to add at least one surface.");
         }
 
-        let (connection, mut event_queue, mut wayland_state, qh) = create_wayland_app();
+        let (connection, mut event_queue, mut wayland_state, qh) = match create_wayland_app() {
+            Ok(app) => app,
+            Err(e) => {
+                log::error!("Cannot start: {e}");
+                return ExitReason::Error(e);
+            }
+        };
 
         // Create surfaces from add_surface() calls
         for def in &self.surface_definitions {
@@ -676,9 +690,10 @@ impl App {
 
         // Wait for all surfaces to configure
         while !wayland_state.all_surfaces_configured() && !wayland_state.exit {
-            event_queue
-                .blocking_dispatch(&mut wayland_state)
-                .expect("Failed to dispatch events");
+            if let Err(e) = event_queue.blocking_dispatch(&mut wayland_state) {
+                log::error!("Wayland dispatch failed during configure: {e}");
+                return ExitReason::Error(platform::PlatformError::ConnectionLost);
+            }
         }
 
         if wayland_state.exit {
@@ -772,9 +787,12 @@ impl App {
                 None // Block indefinitely until event
             };
 
-            event_loop
-                .dispatch(timeout, &mut wayland_state)
-                .expect("Failed to dispatch event loop");
+            if let Err(e) = event_loop.dispatch(timeout, &mut wayland_state) {
+                // The connection died (compositor exited, protocol error).
+                // Exit cleanly instead of panicking the process.
+                log::error!("Event loop dispatch failed: {e}");
+                return ExitReason::Error(platform::PlatformError::ConnectionLost);
+            }
 
             // Check for programmatic exit/restart requests
             match get_exit_request() {
@@ -833,7 +851,10 @@ impl App {
             }
 
             // Flush the connection once for all surfaces
-            connection.flush().expect("Failed to flush connection");
+            if let Err(e) = connection.flush() {
+                log::error!("Wayland connection flush failed: {e}");
+                return ExitReason::Error(platform::PlatformError::ConnectionLost);
+            }
         }
 
         ExitReason::Quit
