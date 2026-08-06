@@ -18,7 +18,7 @@ use crate::reactive::{
     CursorIcon, IntoSignal, OptionSignalExt, RwSignal, Signal, clipboard_copy, clipboard_paste,
     has_focus, release_focus, request_focus, set_cursor, with_signal_tracking,
 };
-use crate::renderer::{PaintContext, char_index_from_x_styled, measure_text_styled};
+use crate::renderer::{PaintContext, char_index_from_x_styled};
 use crate::tree::{Tree, WidgetId};
 
 use super::font::{FontFamily, FontWeight};
@@ -408,32 +408,22 @@ impl TextInput {
         let font_family = &self.cached_font_family;
         let font_weight = self.cached_font_weight;
 
-        // Build cumulative position array: positions[i] = width of text[0..i]
-        // Length is char_count + 1 to include position 0 and position at end
-        let char_count = self.cached_char_count;
-        self.cached_glyph_positions.clear();
-        self.cached_glyph_positions.reserve(char_count + 1);
-        self.cached_glyph_positions.push(0.0); // Position at index 0
-
-        // Measure width at each character boundary
-        for (i, (byte_idx, _)) in display.char_indices().enumerate() {
-            // Width up to this character
-            let prefix = &display[..byte_idx];
-            let width = if prefix.is_empty() {
-                0.0
-            } else {
-                measure_text_styled(prefix, font_size, None, font_family, font_weight).width
-            };
-            // Update position for this index (already have 0 at index 0)
-            if i > 0 {
-                self.cached_glyph_positions.push(width);
-            }
-        }
-
-        // Add final position (total width)
-        self.cached_text_width =
-            measure_text_styled(display, font_size, None, font_family, font_weight).width;
-        self.cached_glyph_positions.push(self.cached_text_width);
+        // Build cumulative position array (positions[i] = x of the boundary
+        // before character i) by shaping the text ONCE. The previous
+        // implementation measured every prefix — O(n) shaping passes of
+        // O(n) text per keystroke — and flooded the measurement cache with
+        // one entry per prefix.
+        self.cached_glyph_positions = crate::renderer::measure_char_positions_styled(
+            display,
+            font_size,
+            font_family,
+            font_weight,
+        );
+        self.cached_text_width = self
+            .cached_glyph_positions
+            .last()
+            .copied()
+            .unwrap_or_default();
 
         self.measurements_dirty = false;
     }
