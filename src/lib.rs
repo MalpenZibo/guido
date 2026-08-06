@@ -26,7 +26,7 @@ use layout::Constraints;
 use platform::create_wayland_app;
 use reactive::owner::with_owner;
 use reactive::{OwnerId, set_system_clipboard, take_clipboard_change, take_cursor_change};
-use renderer::{GpuContext, PaintContext, Renderer, flatten_tree_into};
+use renderer::{GpuContext, PaintContext, Renderer, flatten_root_into};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, drain_surface_commands};
 use surface_manager::{ManagedSurface, SurfaceManager};
 use widgets::Widget;
@@ -241,27 +241,47 @@ fn process_surface_commands(
 }
 
 /// Walk the render tree after painting and cache each node's output.
-/// Skips cache-reused nodes (repainted == false) since their tree cache is already valid.
-/// Also clears needs_paint flags for freshly painted widgets.
-fn cache_paint_results(tree: &mut Tree, node: &renderer::RenderNode) {
-    if node.repainted {
-        let widget_id = WidgetId::from_u64(node.id);
-        if tree.contains(widget_id) {
-            if !node.partial {
-                // Complete paint — safe to cache for future reuse.
-                tree.cache_paint(widget_id, node.clone());
-            }
-            // else: partial paint (children culled by cull_rect) — don't cache.
-            // Keep the previous complete cache (if any) so it can be reused
-            // when the widget becomes fully visible. If there's no previous
-            // cache, the widget will get a full paint next frame anyway
-            // (cached_paint returns None → falls through to full paint).
-            tree.clear_needs_paint(widget_id);
-        }
+///
+/// Caching is an `Rc::clone` of the node already sitting in the frame's
+/// render tree — O(1) per node instead of the previous deep subtree clone.
+///
+/// Returns whether the subtree is partial (this node or any descendant had
+/// children culled by cull_rect). Partial-ness propagates UP: an ancestor
+/// whose subtree embeds an incomplete paint must not be cached either, or a
+/// later cache reuse would permanently hide the culled grandchildren.
+///
+/// Also clears needs_paint flags and the per-frame `repainted` marker for
+/// freshly painted widgets (skipping already-clean subtrees entirely).
+fn cache_paint_results(tree: &mut Tree, node: &std::rc::Rc<renderer::RenderNode>) -> bool {
+    if !node.repainted.get() {
+        // Reused from cache: its subtree is by construction complete and its
+        // cache entries are already valid — nothing to do below it.
+        return false;
     }
+
+    let mut subtree_partial = node.partial;
     for child in &node.children {
-        cache_paint_results(tree, child);
+        subtree_partial |= cache_paint_results(tree, child);
     }
+
+    let widget_id = WidgetId::from_u64(node.id);
+    if tree.contains(widget_id) {
+        if !subtree_partial {
+            // Complete paint — safe to cache for future reuse.
+            tree.cache_paint(widget_id, std::rc::Rc::clone(node));
+        }
+        // else: partial subtree — don't cache. Keep the previous complete
+        // cache (if any) so it can be reused when the widget becomes fully
+        // visible. If there's no previous cache, the widget will get a full
+        // paint next frame anyway (cached_paint None → full paint).
+        tree.clear_needs_paint(widget_id);
+    }
+    // Mark as cached/clean for the flattener and future walks. The cache
+    // entry shares this Cell, so reused nodes come out with the flag
+    // already cleared.
+    node.repainted.set(false);
+
+    subtree_partial
 }
 
 /// Render a single surface using the hierarchical renderer.
@@ -453,8 +473,7 @@ fn render_surface(
             return;
         }
 
-        // Clear and reuse render tree (preserves capacity)
-        surface.render_tree.clear();
+        // Clear and reuse the root node (preserves capacity)
         surface.root_node.clear();
         surface.root_node.bounds = widgets::Rect::new(0.0, 0.0, width as f32, height as f32);
 
@@ -465,18 +484,11 @@ fn render_surface(
             });
         });
 
-        // Take ownership of root node temporarily, add to tree, then restore
-        let root = std::mem::replace(
-            &mut surface.root_node,
-            renderer::RenderNode::new(surface.widget_id.as_u64()),
-        );
-        surface.render_tree.add_root(root);
-
         // Flatten tree into reused buffer
         let layer_boundaries;
         time_phase!(render_stats::Phase::Flatten, {
             layer_boundaries =
-                flatten_tree_into(&mut surface.render_tree, &mut surface.flattened_commands);
+                flatten_root_into(&surface.root_node, &mut surface.flattened_commands);
         });
         time_phase!(render_stats::Phase::GpuRender, {
             renderer.render(
@@ -487,15 +499,15 @@ fn render_surface(
             );
         });
 
-        // Restore root_node for next frame (take it back from render_tree)
-        if let Some(root) = surface.render_tree.roots.pop() {
-            surface.root_node = root;
-        }
-
         // Cache paint results AFTER flatten so cached_flatten data is preserved.
-        // This enables incremental flatten for paint-cached nodes on subsequent frames.
+        // This enables incremental flatten for paint-cached nodes on subsequent
+        // frames. The surface root itself is never cache-reused (it always
+        // repaints), so only its children are cached.
         time_phase!(render_stats::Phase::CachePaintResults, {
-            cache_paint_results(tree, &surface.root_node);
+            for child in &surface.root_node.children {
+                cache_paint_results(tree, child);
+            }
+            tree.clear_needs_paint(surface.widget_id);
         });
 
         // Report damage region to Wayland compositor

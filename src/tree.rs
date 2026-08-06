@@ -114,7 +114,7 @@ struct Node {
     /// Back-pointer to sparse array index (for swap-remove fixup)
     sparse_index: u32,
     /// Cached paint output from last frame
-    cached_paint: Option<crate::renderer::RenderNode>,
+    cached_paint: Option<std::rc::Rc<crate::renderer::RenderNode>>,
 }
 
 /// Central tree for widget storage using arena-based sparse-set architecture.
@@ -550,15 +550,16 @@ impl Tree {
         ))
     }
 
-    /// Cache a widget's paint output.
-    pub fn cache_paint(&mut self, id: WidgetId, node: crate::renderer::RenderNode) {
+    /// Cache a widget's paint output. The node is Rc-shared with the frame's
+    /// render tree, so this is a refcount bump, not a deep clone.
+    pub fn cache_paint(&mut self, id: WidgetId, node: std::rc::Rc<crate::renderer::RenderNode>) {
         if let Some(idx) = self.get_dense_index(id) {
             self.dense[idx].cached_paint = Some(node);
         }
     }
 
     /// Get a widget's cached paint output.
-    pub fn cached_paint(&self, id: WidgetId) -> Option<&crate::renderer::RenderNode> {
+    pub fn cached_paint(&self, id: WidgetId) -> Option<&std::rc::Rc<crate::renderer::RenderNode>> {
         self.get_dense_index(id)
             .and_then(|idx| self.dense[idx].cached_paint.as_ref())
     }

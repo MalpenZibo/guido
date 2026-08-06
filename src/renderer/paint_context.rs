@@ -391,17 +391,24 @@ impl<'a> PaintContext<'a> {
     /// The child will inherit transforms from this node automatically
     /// during tree flattening.
     pub fn add_child(&mut self, id: NodeId, bounds: Rect) -> PaintContext<'_> {
-        self.node.children.push(RenderNode::with_bounds(id, bounds));
-        let child = self
-            .node
+        self.node
             .children
-            .last_mut()
-            .expect("child was just pushed");
+            .push(Rc::new(RenderNode::with_bounds(id, bounds)));
+        let child = Rc::get_mut(
+            self.node
+                .children
+                .last_mut()
+                .expect("child was just pushed"),
+        )
+        .expect("freshly created child Rc is unique");
         PaintContext::new(child)
     }
 
-    /// Add a child node with a pre-built node.
-    pub fn add_child_node(&mut self, node: RenderNode) {
+    /// Add a pre-built child node.
+    ///
+    /// Used by the paint cache: reusing a clean child is `Rc::clone` of its
+    /// cached node (or a shallow header clone when its position changed).
+    pub fn add_child_rc(&mut self, node: Rc<RenderNode>) {
         self.node.children.push(node);
     }
 
