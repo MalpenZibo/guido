@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use super::invalidation::{notify_signal_change, record_signal_read};
 use super::owner::register_signal;
 use super::runtime::{
-    SignalId, current_write_epoch, queue_bg_write, record_effect_read, try_with_runtime,
+    SignalId, current_write_epoch, notify_write, queue_bg_write, record_effect_read, with_runtime,
 };
 use super::storage::{
     allocate_signal_slot, compare_and_set_signal_value, compare_and_update_signal_value,
@@ -87,7 +87,7 @@ fn tracked_with<T: Clone + 'static, R>(
 fn write_and_notify<T: Clone + PartialEq + 'static>(id: SignalId, value: T) {
     if compare_and_set_signal_value(id, value) {
         notify_signal_change(id);
-        try_with_runtime(|rt| rt.notify_write(id));
+        notify_write(id);
     }
 }
 
@@ -95,7 +95,7 @@ fn write_and_notify<T: Clone + PartialEq + 'static>(id: SignalId, value: T) {
 fn update_and_notify<T: Clone + PartialEq + 'static>(id: SignalId, f: impl FnOnce(&mut T)) {
     if compare_and_update_signal_value(id, f) {
         notify_signal_change(id);
-        try_with_runtime(|rt| rt.notify_write(id));
+        notify_write(id);
     }
 }
 
@@ -349,7 +349,9 @@ impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
 /// ```
 pub fn create_signal<T: Clone + PartialEq + Send + 'static>(value: T) -> RwSignal<T> {
     let id = create_signal_value(value);
-    try_with_runtime(|rt| rt.register_signal(id));
+    // Safe even inside effect callbacks: the runtime borrow is never held
+    // across user code anymore.
+    with_runtime(|rt| rt.register_signal(id));
     register_signal(id);
     RwSignal {
         id,
@@ -399,7 +401,7 @@ pub fn create_stored<T: Clone + 'static>(value: T) -> Signal<T> {
 pub fn create_derived<T: Clone + 'static>(f: impl Fn() -> T + 'static) -> Signal<T> {
     let id = allocate_signal_slot();
     store_derived_closure::<T>(id, f);
-    try_with_runtime(|rt| rt.register_signal(id));
+    with_runtime(|rt| rt.register_signal(id));
     register_signal(id);
     Signal {
         id,
