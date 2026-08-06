@@ -79,11 +79,15 @@ impl WidgetId {
     }
 }
 
-/// Entry in the sparse map, pointing to a dense array slot.
-struct SparseEntry {
-    /// Index into the dense array
-    dense_index: usize,
-    /// Generation of this entry (for validation)
+/// Slot in the sparse map, pointing to a dense array slot.
+///
+/// The generation survives vacancy: it is bumped when the slot is reused,
+/// so a stale `WidgetId` can never alias a widget that later recycled the
+/// same index.
+struct SparseSlot {
+    /// Index into the dense array; `None` while the slot is vacant
+    dense_index: Option<usize>,
+    /// Generation of this slot (for validation)
     generation: u32,
 }
 
@@ -122,7 +126,7 @@ pub struct Tree {
     /// Dense array of nodes (widgets + metadata)
     dense: Vec<Node>,
     /// Sparse map from index to dense position + generation
-    sparse: Vec<Option<SparseEntry>>,
+    sparse: Vec<SparseSlot>,
     /// Free list of reusable sparse indices
     free_indices: Vec<u32>,
     /// Accumulated damage region for the current frame
@@ -147,16 +151,17 @@ impl Tree {
     pub fn register(&mut self, widget: Box<dyn Widget>) -> WidgetId {
         // Allocate a sparse index (reuse from free list or allocate new)
         let (sparse_index, generation) = if let Some(idx) = self.free_indices.pop() {
-            // Reuse a freed slot - increment generation
-            let old_gen = self.sparse[idx as usize]
-                .as_ref()
-                .map(|e| e.generation)
-                .unwrap_or(0);
-            (idx, old_gen.wrapping_add(1))
+            // Reuse a freed slot - increment the surviving generation so
+            // stale IDs from the previous occupant can never match
+            let generation = self.sparse[idx as usize].generation.wrapping_add(1);
+            (idx, generation)
         } else {
             // Allocate new slot
             let idx = self.sparse.len() as u32;
-            self.sparse.push(None);
+            self.sparse.push(SparseSlot {
+                dense_index: None,
+                generation: 0,
+            });
             (idx, 0)
         };
 
@@ -181,10 +186,10 @@ impl Tree {
         });
 
         // Update sparse map
-        self.sparse[sparse_index as usize] = Some(SparseEntry {
-            dense_index,
+        self.sparse[sparse_index as usize] = SparseSlot {
+            dense_index: Some(dense_index),
             generation,
-        });
+        };
 
         id
     }
@@ -217,13 +222,11 @@ impl Tree {
         // Fix up the moved node's sparse entry (if we didn't remove the last element)
         if dense_index != last_dense_index && !self.dense.is_empty() {
             let moved_sparse_idx = self.dense[dense_index].sparse_index;
-            if let Some(ref mut entry) = self.sparse[moved_sparse_idx as usize] {
-                entry.dense_index = dense_index;
-            }
+            self.sparse[moved_sparse_idx as usize].dense_index = Some(dense_index);
         }
 
-        // Invalidate the sparse entry (keep generation for next allocation)
-        self.sparse[id.index as usize] = None;
+        // Vacate the sparse slot, keeping its generation for the next allocation
+        self.sparse[id.index as usize].dense_index = None;
         self.free_indices.push(id.index);
 
         // Now drop the removed widget (may trigger recursive unregisters)
@@ -234,9 +237,8 @@ impl Tree {
     fn get_dense_index(&self, id: WidgetId) -> Option<usize> {
         self.sparse
             .get(id.index as usize)
-            .and_then(|e| e.as_ref())
-            .filter(|e| e.generation == id.generation)
-            .map(|e| e.dense_index)
+            .filter(|slot| slot.generation == id.generation)
+            .and_then(|slot| slot.dense_index)
     }
 
     /// Access a widget via a closure.
@@ -629,6 +631,36 @@ mod tests {
         // They should have the same index but different generations
         assert_eq!(id1.index, id2.index);
         assert_ne!(id1.generation, id2.generation);
+    }
+
+    /// Regression test: the generation must keep advancing across repeated
+    /// recycles of the same slot. The old implementation read the generation
+    /// from a sparse entry that `unregister` had already cleared, so every
+    /// reuse produced generation 1 and a stale ID from cycle N aliased the
+    /// live widget of cycle N+2.
+    #[test]
+    fn test_tree_generation_advances_across_recycles() {
+        let mut tree = Tree::new();
+
+        let mut previous_ids = Vec::new();
+        let mut current = tree.register(Box::new(MockWidget::new()));
+
+        for _ in 0..5 {
+            tree.unregister(current);
+            let next = tree.register(Box::new(MockWidget::new()));
+            assert_eq!(next.index, current.index, "slot should be recycled");
+            previous_ids.push(current);
+            current = next;
+
+            // No previously issued ID may resolve to the new widget
+            for stale in &previous_ids {
+                assert!(
+                    !tree.contains(*stale),
+                    "stale id {stale:?} aliases live widget {current:?}"
+                );
+            }
+            assert!(tree.contains(current));
+        }
     }
 
     #[test]
