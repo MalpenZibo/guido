@@ -161,7 +161,10 @@ Layer shell protocol implementation for desktop widgets.
 - Layer shell positioning (Top, Bottom, Overlay, Background)
 - Anchor edges (TOP, BOTTOM, LEFT, RIGHT combinations)
 - Keyboard interactivity modes (None, OnDemand, Exclusive)
-- Exclusive zones for panels
+- Exclusive zones and margins for panels
+- Reactive output (monitor) enumeration via `outputs()`, per-output surface
+  pinning via `SurfaceConfig::output`, per-surface output tracking via
+  `surface_output()` (see `src/outputs.rs`)
 - Event loop via calloop
 - Dynamic surface property modification via `SurfaceHandle`
 
