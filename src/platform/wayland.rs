@@ -3,7 +3,7 @@ use raw_window_handle::{
     RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle, WindowHandle,
 };
 use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState},
+    compositor::{CompositorHandler, CompositorState, Region},
     data_device_manager::{
         data_device::{DataDevice, DataDeviceHandler},
         data_offer::{DataOfferHandler, SelectionOffer},
@@ -50,7 +50,7 @@ use std::os::unix::io::OwnedFd;
 use crate::outputs::{self, OutputId, OutputInfo};
 use crate::reactive::CursorIcon;
 use crate::surface::SurfaceId;
-use crate::widgets::{Event, Key, Modifiers, MouseButton, ScrollSource};
+use crate::widgets::{Event, Key, Modifiers, MouseButton, Rect, ScrollSource};
 
 /// Pixels per line for discrete scroll (mouse wheel)
 const SCROLL_PIXELS_PER_LINE: f32 = 40.0;
@@ -298,6 +298,56 @@ impl WaylandState {
             .find(|o| self.output_ids.get(&o.id()) == Some(&id))
     }
 
+    /// Build a wl_region from logical-coordinate rects, rounded outward so a
+    /// fractional widget bound never loses its edge pixels.
+    fn build_region(&self, rects: &[Rect]) -> Option<Region> {
+        let region = Region::new(&self.compositor_state)
+            .map_err(|e| log::warn!("Failed to create wl_region: {e}"))
+            .ok()?;
+        for r in rects {
+            let x = r.x.floor() as i32;
+            let y = r.y.floor() as i32;
+            let width = (r.x + r.width).ceil() as i32 - x;
+            let height = (r.y + r.height).ceil() as i32 - y;
+            region.add(x, y, width, height);
+        }
+        Some(region)
+    }
+
+    /// Apply an input region to a wl_surface. `None` restores the default
+    /// (the whole surface accepts input); an empty slice is fully
+    /// click-through.
+    ///
+    /// The `Region` is dropped (and the wl_region destroyed) right away:
+    /// the protocol copies the region state at `set_input_region` time.
+    fn apply_input_region(&self, wl_surface: &wl_surface::WlSurface, rects: Option<&[Rect]>) {
+        match rects {
+            None => wl_surface.set_input_region(None),
+            Some(rects) => {
+                let Some(region) = self.build_region(rects) else {
+                    return;
+                };
+                wl_surface.set_input_region(Some(region.wl_region()));
+            }
+        }
+    }
+
+    /// Set the input region for a surface at runtime.
+    pub fn set_surface_input_region(&mut self, id: SurfaceId, rects: Option<&[Rect]>) {
+        if let Some(surface_state) = self.surfaces.get(&id) {
+            self.apply_input_region(&surface_state.wl_surface, rects);
+            surface_state.wl_surface.commit();
+            log::info!(
+                "Surface {:?} input region set to {}",
+                id,
+                match rects {
+                    None => "full surface".to_string(),
+                    Some(r) => format!("{} rect(s)", r.len()),
+                }
+            );
+        }
+    }
+
     /// Rebuild the reactive output list from current compositor state.
     fn sync_outputs(&mut self) {
         let wl_outputs: Vec<wl_output::WlOutput> = self.output_state.outputs().collect();
@@ -380,6 +430,10 @@ impl WaylandState {
         let (top, right, bottom, left) = config.margin;
         if (top, right, bottom, left) != (0, 0, 0, 0) {
             layer_surface.set_margin(top, right, bottom, left);
+        }
+
+        if let Some(rects) = &config.input_region {
+            self.apply_input_region(&wl_surface, Some(rects));
         }
 
         wl_surface.commit();
