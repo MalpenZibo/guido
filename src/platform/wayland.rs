@@ -47,6 +47,7 @@ use std::io::{Read, Write};
 use std::os::fd::AsFd;
 use std::os::unix::io::OwnedFd;
 
+use crate::outputs::{self, OutputId, OutputInfo};
 use crate::reactive::CursorIcon;
 use crate::surface::SurfaceId;
 use crate::widgets::{Event, Key, Modifiers, MouseButton, ScrollSource};
@@ -127,6 +128,13 @@ pub struct WaylandState {
     pub current_pointer_surface: Option<SurfaceId>,
     /// Which surface currently has keyboard focus
     pub current_keyboard_surface: Option<SurfaceId>,
+
+    // Output tracking
+    /// Stable OutputId for each wl_output global. Ids are never reused: a
+    /// reconnected monitor gets a fresh id.
+    output_ids: HashMap<ObjectId, OutputId>,
+    /// Next OutputId to allocate.
+    next_output_id: u32,
 
     // Pointer state
     pointer: Option<wl_pointer::WlPointer>,
@@ -247,6 +255,8 @@ pub fn create_wayland_app() -> Result<
         surface_lookup: HashMap::new(),
         current_pointer_surface: None,
         current_keyboard_surface: None,
+        output_ids: HashMap::new(),
+        next_output_id: 0,
         pointer: None,
         pointer_x: 0.0,
         pointer_y: 0.0,
@@ -269,6 +279,49 @@ pub fn create_wayland_app() -> Result<
 }
 
 impl WaylandState {
+    /// Get (or allocate) the stable OutputId for a wl_output.
+    fn ensure_output_id(&mut self, output: &wl_output::WlOutput) -> OutputId {
+        let object_id = output.id();
+        if let Some(id) = self.output_ids.get(&object_id) {
+            return *id;
+        }
+        let id = OutputId::from_raw(self.next_output_id);
+        self.next_output_id += 1;
+        self.output_ids.insert(object_id, id);
+        id
+    }
+
+    /// Find the wl_output for a stable OutputId, if still connected.
+    fn wl_output_for(&self, id: OutputId) -> Option<wl_output::WlOutput> {
+        self.output_state
+            .outputs()
+            .find(|o| self.output_ids.get(&o.id()) == Some(&id))
+    }
+
+    /// Rebuild the reactive output list from current compositor state.
+    fn sync_outputs(&mut self) {
+        let wl_outputs: Vec<wl_output::WlOutput> = self.output_state.outputs().collect();
+        let mut list: Vec<OutputInfo> = wl_outputs
+            .iter()
+            .filter_map(|o| {
+                let id = self.ensure_output_id(o);
+                let info = self.output_state.info(o)?;
+                Some(OutputInfo {
+                    id,
+                    name: info.name,
+                    description: info.description,
+                    make: info.make,
+                    model: info.model,
+                    scale_factor: info.scale_factor,
+                    logical_size: info.logical_size,
+                    logical_position: info.logical_position,
+                })
+            })
+            .collect();
+        list.sort_by_key(|o| o.id);
+        outputs::sync_outputs(list);
+    }
+
     /// Create a layer surface with a specific SurfaceId.
     pub fn create_surface_with_id(
         &mut self,
@@ -276,13 +329,28 @@ impl WaylandState {
         id: SurfaceId,
         config: &crate::surface::SurfaceConfig,
     ) {
+        // Resolve the requested output; fall back to letting the compositor
+        // choose if it was disconnected in the meantime.
+        let target_output = config.output.and_then(|oid| {
+            let found = self.wl_output_for(oid);
+            if found.is_none() {
+                log::warn!(
+                    "Surface {:?} requested output {:?} which is not connected; \
+                     letting the compositor choose",
+                    id,
+                    oid
+                );
+            }
+            found
+        });
+
         let wl_surface = self.compositor_state.create_surface(qh);
         let layer_surface = self.layer_shell.create_layer_surface(
             qh,
             wl_surface.clone(),
             config.layer,
             Some(config.namespace.clone()),
-            None,
+            target_output.as_ref(),
         );
 
         layer_surface.set_anchor(config.anchor);
@@ -308,6 +376,11 @@ impl WaylandState {
         // Set exclusive zone: None means use height, Some(0) means no exclusive zone
         let zone = config.exclusive_zone.unwrap_or(config.height as i32);
         layer_surface.set_exclusive_zone(zone);
+
+        let (top, right, bottom, left) = config.margin;
+        if (top, right, bottom, left) != (0, 0, 0, 0) {
+            layer_surface.set_margin(top, right, bottom, left);
+        }
 
         wl_surface.commit();
 
@@ -345,6 +418,9 @@ impl WaylandState {
             if self.current_keyboard_surface == Some(id) {
                 self.current_keyboard_surface = None;
             }
+
+            // Drop reactive output tracking for the closed surface
+            outputs::surface_closed(id);
 
             // The LayerSurface and WlSurface will be destroyed when dropped
             log::info!("Destroyed surface {:?}", id);
@@ -679,18 +755,29 @@ impl CompositorHandler for WaylandState {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
-        _output: &wl_output::WlOutput,
+        surface: &wl_surface::WlSurface,
+        output: &wl_output::WlOutput,
     ) {
+        if let Some(surface_id) = self.surface_lookup.get(&surface.id()).copied() {
+            let output_id = self.ensure_output_id(output);
+            log::debug!("Surface {:?} entered output {:?}", surface_id, output_id);
+            outputs::surface_entered_output(surface_id, output_id);
+        }
     }
 
     fn surface_leave(
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
-        _output: &wl_output::WlOutput,
+        surface: &wl_surface::WlSurface,
+        output: &wl_output::WlOutput,
     ) {
+        if let Some(surface_id) = self.surface_lookup.get(&surface.id()).copied()
+            && let Some(output_id) = self.output_ids.get(&output.id()).copied()
+        {
+            log::debug!("Surface {:?} left output {:?}", surface_id, output_id);
+            outputs::surface_left_output(surface_id, output_id);
+        }
     }
 
     fn frame(
@@ -729,8 +816,15 @@ impl OutputHandler for WaylandState {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
+        output: wl_output::WlOutput,
     ) {
+        let id = self.ensure_output_id(&output);
+        log::info!(
+            "Output {:?} connected: {:?}",
+            id,
+            self.output_state.info(&output).and_then(|i| i.name)
+        );
+        self.sync_outputs();
     }
 
     fn update_output(
@@ -739,14 +833,20 @@ impl OutputHandler for WaylandState {
         _qh: &QueueHandle<Self>,
         _output: wl_output::WlOutput,
     ) {
+        self.sync_outputs();
     }
 
     fn output_destroyed(
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
+        output: wl_output::WlOutput,
     ) {
+        if let Some(id) = self.output_ids.remove(&output.id()) {
+            log::info!("Output {:?} disconnected", id);
+            outputs::output_removed(id);
+        }
+        self.sync_outputs();
     }
 }
 

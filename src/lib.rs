@@ -3,6 +3,7 @@ pub mod image_metadata;
 mod ingress;
 mod jobs;
 pub mod layout;
+pub mod outputs;
 pub mod reactive;
 pub mod render_stats;
 pub mod surface;
@@ -135,6 +136,7 @@ pub mod prelude {
         Axis, Constraints, CrossAlignment, Flex, IntoF32, Length, MainAlignment, Overlay, Size,
         at_least, at_most, fill,
     };
+    pub use crate::outputs::{OutputId, OutputInfo, outputs, surface_output};
     pub use crate::platform::{Anchor, KeyboardInteractivity, Layer};
     pub use crate::reactive::{
         CursorIcon, Memo, OptionSignalExt, RwSignal, Service, Signal, WriteSignal, create_derived,
@@ -697,7 +699,14 @@ impl App {
         setup(&mut self);
 
         if self.surface_definitions.is_empty() {
-            panic!("No surfaces defined. Use add_surface() to add at least one surface.");
+            // Not an error: outputs-driven apps start with zero surfaces and
+            // spawn one per monitor from an effect once the compositor
+            // reports its outputs. An app that never spawns anything will
+            // just idle in the event loop.
+            log::info!(
+                "No static surfaces defined; waiting for dynamic surfaces \
+                 (spawn_surface, e.g. from an outputs() effect)"
+            );
         }
 
         let (connection, mut event_queue, mut wayland_state, qh) = match create_wayland_app() {
@@ -769,8 +778,6 @@ impl App {
 
             surface_manager.add(managed);
         }
-
-        let mut renderer = renderer.expect("At least one surface should exist");
 
         // Create calloop event loop for event-driven execution
         let mut event_loop: EventLoop<platform::WaylandState> =
@@ -874,6 +881,19 @@ impl App {
                 &mut self.tree,
             );
 
+            // Lazily create the shared renderer once the first surface has a
+            // GPU state (apps may start with zero surfaces and spawn them
+            // dynamically, e.g. one bar per output).
+            if renderer.is_none()
+                && let Some(wgpu_surface) = surface_manager.first_gpu_surface()
+            {
+                renderer = Some(Renderer::new(
+                    wgpu_surface.device.clone(),
+                    wgpu_surface.queue.clone(),
+                    wgpu_surface.config.format,
+                ));
+            }
+
             // Flush background-thread signal writes once per frame (queued via WriteSignal).
             // Must run before take_frame_request() so that signal changes from bg writes
             // are processed into jobs before we check the frame request flag.
@@ -882,23 +902,26 @@ impl App {
             // Check frame request once for all surfaces (not per-surface)
             let frame_requested = take_frame_request();
 
-            // Render each surface
-            let surface_ids: Vec<SurfaceId> = surface_manager.ids().collect();
-            for id in surface_ids {
-                let Some(surface) = surface_manager.get_mut(id) else {
-                    continue;
-                };
-                render_surface(
-                    id,
-                    surface,
-                    &mut wayland_state,
-                    &mut renderer,
-                    &connection,
-                    &qh,
-                    &mut self.tree,
-                    &mut self.layout_roots,
-                    frame_requested,
-                );
+            // Render each surface (no renderer yet means no surface has a
+            // GPU state — nothing can be rendered this iteration)
+            if let Some(renderer) = renderer.as_mut() {
+                let surface_ids: Vec<SurfaceId> = surface_manager.ids().collect();
+                for id in surface_ids {
+                    let Some(surface) = surface_manager.get_mut(id) else {
+                        continue;
+                    };
+                    render_surface(
+                        id,
+                        surface,
+                        &mut wayland_state,
+                        renderer,
+                        &connection,
+                        &qh,
+                        &mut self.tree,
+                        &mut self.layout_roots,
+                        frame_requested,
+                    );
+                }
             }
 
             // Flush the connection once for all surfaces
@@ -932,6 +955,7 @@ impl Drop for App {
         ingress::reset_ingress();
         surface::reset_surface_commands();
         widget_ref::reset_widget_refs();
+        outputs::reset_outputs();
         FONTS_CONSUMED.with(|f| f.set(false));
     }
 }
