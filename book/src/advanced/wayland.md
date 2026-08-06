@@ -497,6 +497,35 @@ create_effect(move || {
 Note: keyboard focus is unaffected — use `keyboard_interactivity` for
 that. Rectangles are rounded outward to whole pixels.
 
+## Background Blur
+
+Containers can ask the compositor to blur whatever is behind the
+surface (`ext-background-effect-v1`), shaped by their bounds and corner
+radius. Pair it with a translucent background so the blurred content
+shows through:
+
+```rust
+container()
+    .background(Color::rgba(0.12, 0.12, 0.18, 0.55))
+    .corner_radius(16.0)
+    .background_blur()
+    .child(text("Frosted glass"))
+```
+
+The blur region follows the container automatically: layout moves,
+resizes, and (animated) corner radius changes are picked up each frame.
+Rounded corners are tessellated into small rectangles because
+`wl_region` has no notion of curves.
+
+On compositors without the protocol or its blur capability this
+renders a plain translucent container — no error, no fallback blur.
+Surfaces that never use `background_blur()` are left untouched, so
+compositor-side blur rules (e.g. blur by namespace) keep working; once
+a surface has used blur, an empty region ("blur nothing") is reported
+instead of withdrawing, to keep the region authoritative.
+
+See `examples/blur_example.rs`.
+
 ## Complete Examples
 
 ### Status Bar

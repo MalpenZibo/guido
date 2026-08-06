@@ -65,6 +65,21 @@ container()
 
 See [Building UI](../building-ui/README.md) for complete styling reference.
 
+### Background Blur
+
+On Wayland compositors that support `ext-background-effect-v1`, a
+container can blur whatever is behind the surface, shaped by its bounds
+and corner radius:
+
+```rust
+container()
+    .background(Color::rgba(0.12, 0.12, 0.18, 0.55)) // translucent
+    .corner_radius(16.0)
+    .background_blur()
+```
+
+See [Wayland Layer Shell — Background Blur](../advanced/wayland.md#background-blur).
+
 ## Layout
 
 Control how children are arranged:
