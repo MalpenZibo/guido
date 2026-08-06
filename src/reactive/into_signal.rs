@@ -151,6 +151,25 @@ mod tests {
     }
 
     #[test]
+    fn test_into_signal_for_f64_literal() {
+        let sig: Signal<f32> = 2.5.into_signal();
+        assert_eq!(sig.get(), 2.5);
+    }
+
+    #[test]
+    fn test_into_signal_for_f64_runtime_value() {
+        let value: f64 = 2.5;
+        let sig: Signal<f32> = value.into_signal();
+        assert_eq!(sig.get(), 2.5);
+    }
+
+    #[test]
+    fn test_into_signal_f64_narrows_to_f32() {
+        let sig: Signal<f32> = 0.1_f64.into_signal();
+        assert_eq!(sig.get(), 0.1_f32);
+    }
+
+    #[test]
     fn test_into_signal_for_bool() {
         let sig: Signal<bool> = true.into_signal();
         assert!(sig.get());
@@ -191,6 +210,12 @@ mod tests {
         // Closure returning i32 used where Signal<f32> is expected
         let sig: Signal<f32> = (|| 8i32).into_signal();
         assert_eq!(sig.get(), 8.0);
+    }
+
+    #[test]
+    fn test_closure_f64_conversion() {
+        let sig: Signal<f32> = (|| 8.5).into_signal();
+        assert_eq!(sig.get(), 8.5);
     }
 
     #[test]

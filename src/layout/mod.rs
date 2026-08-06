@@ -228,6 +228,12 @@ impl IntoVal<Length> for f32 {
     }
 }
 
+impl IntoVal<Length> for f64 {
+    fn into_val(self) -> Length {
+        Length::from(self as f32)
+    }
+}
+
 /// Trait for layout strategies that position multiple children
 pub trait Layout {
     /// Perform layout on children and return the total size.

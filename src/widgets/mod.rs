@@ -49,3 +49,9 @@ impl IntoVal<Padding> for f32 {
         Padding::from(self)
     }
 }
+
+impl IntoVal<Padding> for f64 {
+    fn into_val(self) -> Padding {
+        Padding::from(self as f32)
+    }
+}
