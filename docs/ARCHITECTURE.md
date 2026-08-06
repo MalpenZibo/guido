@@ -243,6 +243,38 @@ The jobs system connects reactive signals to widget invalidation.
 - Main loop drains jobs and processes by type in order
 - Animation jobs run after paint to advance state for next frame
 
+## Event Loop Wakeup Contract
+
+The main loop blocks in `calloop::EventLoop::dispatch` when idle. Anything
+that queues work for the loop must guarantee a wakeup that survives until
+its consumer runs. Two mechanisms exist, and which one to use depends on
+the producer's thread:
+
+**Background threads → calloop ingress channel (`src/ingress.rs`).**
+Cross-thread producers (services via `WriteSignal`, reader threads) send an
+`IngressMessage` through a calloop channel registered as an event source.
+calloop guarantees a send wakes the next dispatch — the message's existence
+*is* the wakeup, so a lost-wakeup is impossible by construction. Messages
+either carry their payload or act as doorbells for data queued elsewhere
+(e.g. `BgWritesQueued` for the reactive write queue, drained at the loop's
+flush point). Never call `jobs::request_frame()` directly from a background
+thread as the *only* wakeup for queued work.
+
+**Main thread → `jobs::request_frame()`.**
+The frame-request ping is coalesced per loop iteration through a dedicated
+`PING_SENT` flag cleared once per wakeup (`mark_loop_awake`, right after
+dispatch returns). It is intentionally NOT coalesced via `FRAME_REQUESTED`:
+that flag is consumed mid-iteration by `take_frame_request()`, and gating
+the ping on it once lost wakeups entirely (a request landing while the flag
+was set sent no ping and was then absorbed by the take — the loop blocked
+with work queued until an unrelated Wayland event arrived). Additionally,
+the loop refuses to block indefinitely while `FRAME_REQUESTED` is still set
+at iteration start (`frame_request_pending`).
+
+When adding a new deferred-work queue, either drain it in the loop after
+the flush point AND wake through one of the two mechanisms above, or make
+it a calloop source of its own.
+
 ## Widget Trait
 
 All widgets implement this trait:

@@ -159,8 +159,10 @@ pub fn queue_bg_write(epoch: u64, f: impl FnOnce() + Send + 'static) {
     if let Ok(mut q) = WRITE_QUEUE.lock() {
         q.push((epoch, Box::new(f)));
     }
-    // Wake the event loop so flush_bg_writes() runs on the next frame
-    crate::jobs::request_frame();
+    // Wake the event loop so flush_bg_writes() runs on the next frame.
+    // Routed through the calloop ingress channel: its readiness guarantees
+    // the loop wakes no matter where in its iteration the write landed.
+    crate::ingress::notify(crate::ingress::IngressMessage::BgWritesQueued);
 }
 
 /// Drain queued background writes and execute them on the main thread.

@@ -1,5 +1,6 @@
 pub mod animation;
 pub mod image_metadata;
+mod ingress;
 mod jobs;
 pub mod layout;
 pub mod reactive;
@@ -34,6 +35,7 @@ use widgets::font::FontFamily;
 
 // Calloop imports for event-driven main loop (via smithay-client-toolkit re-exports)
 use smithay_client_toolkit::reexports::calloop::EventLoop;
+use smithay_client_toolkit::reexports::calloop::channel as calloop_channel;
 use smithay_client_toolkit::reexports::calloop::ping::make_ping;
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 
@@ -786,6 +788,24 @@ impl App {
             })
             .expect("Failed to insert ping source");
 
+        // Cross-thread ingress channel: background threads send messages
+        // here instead of hand-rolling wakeups. calloop guarantees a send
+        // wakes the next dispatch — see the ingress module.
+        let (ingress_tx, ingress_channel) = calloop_channel::channel();
+        ingress::install_ingress(ingress_tx);
+        loop_handle
+            .insert_source(ingress_channel, |event, _, _wayland_state| {
+                if let calloop_channel::Event::Msg(message) = event {
+                    match message {
+                        // Doorbell only: the write payloads live in the
+                        // reactive write queue, drained at the flush point
+                        // later this same iteration.
+                        ingress::IngressMessage::BgWritesQueued => {}
+                    }
+                }
+            })
+            .expect("Failed to insert ingress channel");
+
         // Insert Wayland source - this handles all Wayland protocol events
         WaylandSource::new(connection.clone(), event_queue)
             .insert(loop_handle.clone())
@@ -909,6 +929,7 @@ impl Drop for App {
         // Reset all thread-local and static state so the next App can start clean.
         reactive::reset_reactive();
         jobs::reset_jobs();
+        ingress::reset_ingress();
         surface::reset_surface_commands();
         widget_ref::reset_widget_refs();
         FONTS_CONSUMED.with(|f| f.set(false));
