@@ -231,6 +231,9 @@ pub struct Container {
     // Widget ref for reactive bounds tracking
     pub(super) widget_ref: Option<WidgetRef>,
 
+    // Compositor-side background blur (ext-background-effect-v1)
+    pub(super) background_blur: bool,
+
     // Animation state (boxed to save ~400 bytes per non-animated container)
     pub(super) anims: Option<Box<ContainerAnims>>,
 
@@ -261,6 +264,7 @@ impl Container {
             transform_origin: None,
             interaction: None,
             widget_ref: None,
+            background_blur: false,
             anims: None,
             scroll_axis: ScrollAxis::None,
             scroll_data: None,
@@ -375,6 +379,26 @@ impl Container {
     /// Set the corner curvature using CSS K-value system
     pub fn corner_curvature<M>(mut self, curvature: impl IntoSignal<f32, M>) -> Self {
         self.corner_curvature = Some(curvature.into_signal());
+        self
+    }
+
+    /// Blur the compositor background behind this container
+    /// (`ext-background-effect-v1`), shaped by its bounds and corner radius.
+    ///
+    /// Pair it with a translucent [`background()`](Self::background) so the
+    /// blurred content shows through. No-ops when the compositor doesn't
+    /// support the protocol.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// container()
+    ///     .background(Color::rgba(0.1, 0.1, 0.15, 0.6))
+    ///     .corner_radius(16.0)
+    ///     .background_blur()
+    /// ```
+    pub fn background_blur(mut self) -> Self {
+        self.background_blur = true;
         self
     }
 
@@ -1822,6 +1846,12 @@ impl Widget for Container {
                     let _ = s.get();
                 }
             });
+        }
+
+        // Publish the blur region: bounds are read fresh from the tree at
+        // frame sync, so only the (possibly animated) radius is recorded.
+        if self.background_blur {
+            crate::blur::register_blur(id, corner_radius);
         }
 
         let shadow = elevation_to_shadow(elevation_level);

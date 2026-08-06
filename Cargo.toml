@@ -46,6 +46,8 @@ glyphon = "0.10"
 cosmic-text = "0.17"
 smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop", "xkbcommon"] }
 wayland-backend = { version = "0.3", features = ["client_system"] }
+# Staging protocols not wrapped by sctk (ext-background-effect-v1 for blur)
+wayland-protocols = { version = "0.32.12", features = ["client", "staging"] }
 raw-window-handle = "0.6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 resvg = { version = "0.46", optional = true }
