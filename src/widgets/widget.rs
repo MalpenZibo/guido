@@ -341,6 +341,14 @@ impl From<f32> for Padding {
     }
 }
 
+/// Bare float literals default to f64; accepting them avoids the deprecated
+/// f32 inference fallback.
+impl From<f64> for Padding {
+    fn from(v: f64) -> Self {
+        Padding::all(v as f32)
+    }
+}
+
 impl From<u16> for Padding {
     fn from(v: u16) -> Self {
         Padding::all(f32::from(v))
