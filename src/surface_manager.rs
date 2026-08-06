@@ -171,6 +171,14 @@ impl SurfaceManager {
         self.surfaces.is_empty()
     }
 
+    /// First initialized wgpu surface, if any.
+    ///
+    /// Used to create the shared `Renderer` lazily: apps may start with zero
+    /// surfaces and spawn them dynamically (e.g. one bar per output).
+    pub fn first_gpu_surface(&self) -> Option<&SurfaceState> {
+        self.surfaces.values().find_map(|s| s.wgpu_surface.as_ref())
+    }
+
     /// Initialize GPU for surfaces that need it.
     ///
     /// This iterates over all surfaces and initializes GPU for any
