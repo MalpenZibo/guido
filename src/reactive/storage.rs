@@ -25,22 +25,28 @@ use super::runtime::SignalId;
 
 type SignalValue = Rc<dyn Any>;
 
+/// Storage slot for one signal. The generation survives disposal so recycled
+/// indices can be told apart from their previous occupants — a stale
+/// `SignalId` fails the generation check instead of silently aliasing.
+struct Slot {
+    value: Option<SignalValue>,
+    generation: u32,
+}
+
 struct SignalStorage {
-    values: Vec<Option<SignalValue>>,
-    /// Free list of reusable signal IDs (from disposed signals).
-    free_ids: Vec<SignalId>,
-    next_id: SignalId,
+    slots: Vec<Slot>,
+    /// Vacant slot indices available for reuse.
+    free_indices: Vec<u32>,
     /// Derived closures keyed by SignalId. When a signal has a derived closure,
-    /// `.get()` calls the closure instead of reading from `values`.
+    /// `.get()` calls the closure instead of reading from `slots`.
     derived: HashMap<SignalId, Rc<dyn Any>>,
 }
 
 impl SignalStorage {
     fn new() -> Self {
         Self {
-            values: Vec::new(),
-            free_ids: Vec::new(),
-            next_id: 0,
+            slots: Vec::new(),
+            free_indices: Vec::new(),
             derived: HashMap::new(),
         }
     }
@@ -58,25 +64,30 @@ thread_local! {
 fn clone_slot_rc(id: SignalId, operation: &str) -> Rc<dyn Any> {
     STORAGE.with(|storage| {
         let storage = storage.borrow();
-        let slot = storage
-            .values
-            .get(id)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Invalid signal ID {}: out of bounds (max ID is {})",
-                    id,
-                    storage.values.len().saturating_sub(1)
-                )
-            })
-            .as_ref()
-            .unwrap_or_else(|| {
-                panic!(
-                    "Signal {} was disposed - cannot {} after owner cleanup. \
-                     This usually means the signal's owner was disposed while you still hold a reference to the signal.",
-                    id, operation
-                )
-            });
-        Rc::clone(slot)
+        let slot = storage.slots.get(id.index()).unwrap_or_else(|| {
+            panic!(
+                "Invalid signal ID {}: out of bounds (storage has {} slots)",
+                id,
+                storage.slots.len()
+            )
+        });
+        // A generation mismatch means the slot was recycled: the signal this
+        // handle referred to is gone, same as the vacant-slot case below.
+        if slot.generation != id.generation() {
+            panic!(
+                "Signal {} was disposed - cannot {} after owner cleanup. \
+                 This usually means the signal's owner was disposed while you still hold a reference to the signal.",
+                id, operation
+            );
+        }
+        let value = slot.value.as_ref().unwrap_or_else(|| {
+            panic!(
+                "Signal {} was disposed - cannot {} after owner cleanup. \
+                 This usually means the signal's owner was disposed while you still hold a reference to the signal.",
+                id, operation
+            )
+        });
+        Rc::clone(value)
     })
 }
 
@@ -97,18 +108,23 @@ fn with_signal_cell<T: 'static, R>(
     f(cell)
 }
 
-/// Allocate a slot and store the given value. Reuses IDs from disposed signals.
+/// Allocate a slot and store the given value. Reuses slot indices from
+/// disposed signals, bumping the generation so stale handles stay invalid.
 fn alloc_slot(value: Rc<dyn Any>) -> SignalId {
     STORAGE.with(|storage| {
         let mut storage = storage.borrow_mut();
-        if let Some(id) = storage.free_ids.pop() {
-            storage.values[id] = Some(value);
-            return id;
+        if let Some(index) = storage.free_indices.pop() {
+            let slot = &mut storage.slots[index as usize];
+            slot.generation = slot.generation.wrapping_add(1);
+            slot.value = Some(value);
+            return SignalId::new(index, slot.generation);
         }
-        let id = storage.next_id;
-        storage.next_id += 1;
-        storage.values.push(Some(value));
-        id
+        let index = storage.slots.len() as u32;
+        storage.slots.push(Slot {
+            value: Some(value),
+            generation: 0,
+        });
+        SignalId::new(index, 0)
     })
 }
 
@@ -174,10 +190,16 @@ pub fn try_call_derived<T: Clone + 'static>(id: SignalId) -> Option<T> {
 pub fn dispose_signal(id: SignalId) {
     STORAGE.with(|storage| {
         let mut storage = storage.borrow_mut();
-        if id < storage.values.len() {
-            storage.values[id] = None;
+        let Some(slot) = storage
+            .slots
+            .get_mut(id.index())
+            .filter(|slot| slot.generation == id.generation())
+        else {
+            return; // Stale id: slot already recycled, nothing to dispose
+        };
+        if slot.value.take().is_some() {
             storage.derived.remove(&id);
-            storage.free_ids.push(id);
+            storage.free_indices.push(id.index() as u32);
         }
     });
 }
@@ -276,6 +298,11 @@ pub(crate) fn reset_storage() {
 pub fn has_signal(id: SignalId) -> bool {
     STORAGE.with(|storage| {
         let storage = storage.borrow();
-        storage.values.get(id).and_then(|v| v.as_ref()).is_some()
+        storage
+            .slots
+            .get(id.index())
+            .filter(|slot| slot.generation == id.generation())
+            .and_then(|slot| slot.value.as_ref())
+            .is_some()
     })
 }

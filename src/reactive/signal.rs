@@ -295,7 +295,15 @@ impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
             let id = self.id;
             let epoch = self.epoch;
             queue_bg_write(epoch, move || {
-                write_and_notify(id, value);
+                // The signal may have been disposed between queueing and this
+                // flush (e.g. a service outliving a removed dynamic child).
+                // That race is inherent to background writers, so drop the
+                // write instead of panicking the main loop.
+                if has_signal(id) {
+                    write_and_notify(id, value);
+                } else {
+                    log::debug!("dropping background write to disposed signal {id}");
+                }
             });
         }
     }
@@ -315,7 +323,12 @@ impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
             let id = self.id;
             let epoch = self.epoch;
             queue_bg_write(epoch, move || {
-                update_and_notify(id, f);
+                // See `set()`: disposal can race a queued write; drop it.
+                if has_signal(id) {
+                    update_and_notify(id, f);
+                } else {
+                    log::debug!("dropping background update to disposed signal {id}");
+                }
             });
         }
     }
@@ -532,8 +545,36 @@ mod tests {
 
     #[test]
     fn test_rw_signal_size() {
+        // SignalId is two u32s (index + generation), so alignment is 4:
+        // RwSignal is exactly the id, Signal adds the 1-byte kind + padding.
         assert_eq!(std::mem::size_of::<RwSignal<i32>>(), 8);
-        assert_eq!(std::mem::size_of::<Signal<i32>>(), 16);
+        assert_eq!(std::mem::size_of::<Signal<i32>>(), 12);
+    }
+
+    /// Regression test: a signal handle that outlives its owner must stay
+    /// invalid even after the storage slot is recycled by a same-typed
+    /// signal. With non-generational ids the stale handle silently read and
+    /// wrote the new signal's value.
+    #[test]
+    fn test_stale_handle_does_not_alias_recycled_slot() {
+        use super::super::owner::{dispose_owner, with_owner};
+
+        let (stale, owner_id) = with_owner(|| create_signal(1_i32));
+        dispose_owner(owner_id);
+
+        // Recycles the freed slot with the same value type
+        let fresh = create_signal(2_i32);
+        assert_eq!(
+            stale.id.index(),
+            fresh.id.index(),
+            "slot should be recycled"
+        );
+        assert_ne!(stale.id.generation(), fresh.id.generation());
+
+        // The stale handle must not resolve to the new signal
+        assert!(!has_signal(stale.id));
+        assert!(has_signal(fresh.id));
+        assert_eq!(fresh.get(), 2);
     }
 
     // ================================================================

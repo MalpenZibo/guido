@@ -57,8 +57,61 @@ type EpochWrite = (u64, Box<dyn FnOnce() + Send>);
 /// are discarded during flush.
 static WRITE_QUEUE: Mutex<Vec<EpochWrite>> = Mutex::new(Vec::new());
 
-pub type SignalId = usize;
-pub type EffectId = usize;
+/// Unique identifier for a signal.
+///
+/// Generational: storage recycles slot indices and bumps the generation on
+/// every reuse. Signal handles are `Copy` and freely captured in closures, so
+/// without the generation a stale handle would silently read/write whatever
+/// unrelated signal later recycled the same slot. With it, stale handles are
+/// reliably detected forever.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct SignalId {
+    index: u32,
+    generation: u32,
+}
+
+impl SignalId {
+    pub(crate) fn new(index: u32, generation: u32) -> Self {
+        Self { index, generation }
+    }
+
+    /// Slot index for direct Vec indexing in storage and subscriber registries.
+    #[inline]
+    pub(crate) fn index(self) -> usize {
+        self.index as usize
+    }
+
+    #[inline]
+    pub(crate) fn generation(self) -> u32 {
+        self.generation
+    }
+}
+
+impl std::fmt::Display for SignalId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}v{}", self.index, self.generation)
+    }
+}
+
+/// Unique identifier for an effect. Generational, like [`SignalId`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct EffectId {
+    index: u32,
+    generation: u32,
+}
+
+impl EffectId {
+    #[inline]
+    fn index(self) -> usize {
+        self.index as usize
+    }
+}
+
+impl std::fmt::Display for EffectId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}v{}", self.index, self.generation)
+    }
+}
 
 /// Insert into a Vec only if not already present (dedup).
 fn vec_insert<T: PartialEq>(vec: &mut Vec<T>, value: T) {
@@ -144,21 +197,29 @@ pub fn flush_bg_writes() {
     }
 }
 
+/// Storage slot for one effect. The generation survives disposal so recycled
+/// indices can be told apart from their previous occupants.
+#[derive(Default)]
+struct EffectSlot {
+    callback: Option<Box<dyn FnMut()>>,
+    /// Signals this effect reads. Vec with dedup — most effects depend on
+    /// 1–3 signals, making linear scan faster than HashSet.
+    dependencies: Vec<SignalId>,
+    generation: u32,
+}
+
 #[derive(Default)]
 pub struct Runtime {
     current_effect: Option<EffectId>,
     /// Pending effects to run. Uses Vec with dedup — most frames have 0–5 pending effects.
     pending_effects: Vec<EffectId>,
-    effect_callbacks: Vec<Option<Box<dyn FnMut()>>>,
-    /// Per-effect dependencies (which signals it reads). Vec with dedup — most effects
-    /// depend on 1–3 signals, making linear scan faster than HashSet.
-    effect_dependencies: Vec<Vec<SignalId>>,
-    /// Per-signal subscribers (which effects track it). Vec with dedup — most signals
-    /// have 1–5 subscribers.
+    /// Effect slots, indexed by `EffectId::index`.
+    effects: Vec<EffectSlot>,
+    /// Vacant effect slot indices available for reuse.
+    free_effect_indices: Vec<u32>,
+    /// Per-signal subscribers (which effects track it), indexed by
+    /// `SignalId::index`. Vec with dedup — most signals have 1–5 subscribers.
     signal_subscribers: Vec<Vec<EffectId>>,
-    next_effect_id: EffectId,
-    /// Free list of reusable effect IDs (from disposed effects).
-    free_effect_ids: Vec<EffectId>,
 }
 
 impl Runtime {
@@ -166,38 +227,75 @@ impl Runtime {
         Self::default()
     }
 
+    /// Get a generation-validated mutable reference to an effect slot.
+    /// Returns `None` for stale ids (slot recycled since the id was issued).
+    fn effect_slot_mut(&mut self, id: EffectId) -> Option<&mut EffectSlot> {
+        self.effects
+            .get_mut(id.index())
+            .filter(|slot| slot.generation == id.generation)
+    }
+
     /// Register a signal for subscriber tracking (called when signal is created)
     pub fn register_signal(&mut self, id: SignalId) {
         // Ensure we have space for subscribers
-        while self.signal_subscribers.len() <= id {
+        while self.signal_subscribers.len() <= id.index() {
             self.signal_subscribers.push(Vec::new());
+        }
+        // A signal index only recycles after the previous occupant was
+        // disposed, so any leftover subscribers at this index are stale.
+        self.signal_subscribers[id.index()].clear();
+    }
+
+    /// Remove all effect subscriptions for a signal being disposed, both from
+    /// the signal's subscriber list and from each subscriber's dependency list.
+    /// Without this, an effect could stay subscribed to a recycled slot index
+    /// and get spuriously re-run by an unrelated future signal.
+    pub fn dispose_signal_subscriptions(&mut self, id: SignalId) {
+        let Some(subs) = self.signal_subscribers.get_mut(id.index()) else {
+            return;
+        };
+        for effect_id in std::mem::take(subs) {
+            if let Some(slot) = self.effect_slot_mut(effect_id) {
+                vec_remove(&mut slot.dependencies, &id);
+            }
         }
     }
 
     pub fn allocate_effect(&mut self, callback: Box<dyn FnMut()>) -> EffectId {
-        // Reuse a freed slot if available
-        if let Some(id) = self.free_effect_ids.pop() {
-            self.effect_callbacks[id] = Some(callback);
-            self.effect_dependencies[id].clear();
-            return id;
+        // Reuse a freed slot if available, bumping its generation so stale
+        // ids for the previous occupant can never act on this effect
+        if let Some(index) = self.free_effect_indices.pop() {
+            let slot = &mut self.effects[index as usize];
+            slot.generation = slot.generation.wrapping_add(1);
+            slot.callback = Some(callback);
+            slot.dependencies.clear();
+            return EffectId {
+                index,
+                generation: slot.generation,
+            };
         }
         // Otherwise allocate new
-        let id = self.next_effect_id;
-        self.next_effect_id += 1;
-        self.effect_callbacks.push(Some(callback));
-        self.effect_dependencies.push(Vec::new());
-        id
+        let index = self.effects.len() as u32;
+        self.effects.push(EffectSlot {
+            callback: Some(callback),
+            dependencies: Vec::new(),
+            generation: 0,
+        });
+        EffectId {
+            index,
+            generation: 0,
+        }
     }
 
     pub fn notify_write(&mut self, signal_id: SignalId) {
         // Check if this signal exists in our runtime (it might not if called from another thread)
-        if signal_id >= self.signal_subscribers.len() {
+        if signal_id.index() >= self.signal_subscribers.len() {
             return;
         }
 
         // Iterate subscribers by index — avoids temporary Vec allocation
-        for i in 0..self.signal_subscribers[signal_id].len() {
-            let effect_id = self.signal_subscribers[signal_id][i];
+        for i in 0..self.signal_subscribers[signal_id.index()].len() {
+            let effect_id = self.signal_subscribers[signal_id.index()][i];
             vec_insert(&mut self.pending_effects, effect_id);
         }
 
@@ -209,10 +307,17 @@ impl Runtime {
     }
 
     pub fn run_effect(&mut self, effect_id: EffectId) {
+        // Stale id (effect disposed, slot possibly recycled): nothing to run
+        let Some(slot) = self.effect_slot_mut(effect_id) else {
+            return;
+        };
+
         // Clear old dependencies
-        let old_deps = std::mem::take(&mut self.effect_dependencies[effect_id]);
+        let old_deps = std::mem::take(&mut slot.dependencies);
         for signal_id in old_deps {
-            vec_remove(&mut self.signal_subscribers[signal_id], &effect_id);
+            if let Some(subs) = self.signal_subscribers.get_mut(signal_id.index()) {
+                vec_remove(subs, &effect_id);
+            }
         }
 
         // Push tracking context (signal reads are buffered here since
@@ -225,7 +330,10 @@ impl Runtime {
         let prev_effect = self.current_effect;
         self.current_effect = Some(effect_id);
 
-        if let Some(callback) = self.effect_callbacks[effect_id].as_mut() {
+        if let Some(callback) = self
+            .effect_slot_mut(effect_id)
+            .and_then(|slot| slot.callback.as_mut())
+        {
             suspend_widget_tracking(callback);
         }
 
@@ -234,11 +342,18 @@ impl Runtime {
         // Pop tracking context and register buffered reads as dependencies
         let reads = EFFECT_TRACKING.with(|stack| stack.borrow_mut().pop());
         if let Some((_eid, signal_ids)) = reads {
+            // The callback may have disposed its own effect (owner disposal
+            // from within); re-validate before touching the slot.
+            if self.effect_slot_mut(effect_id).is_none() {
+                return;
+            }
             for signal_id in signal_ids {
-                if signal_id < self.signal_subscribers.len() {
-                    vec_insert(&mut self.signal_subscribers[signal_id], effect_id);
+                if signal_id.index() < self.signal_subscribers.len() {
+                    vec_insert(&mut self.signal_subscribers[signal_id.index()], effect_id);
+                    if let Some(slot) = self.effect_slot_mut(effect_id) {
+                        vec_insert(&mut slot.dependencies, signal_id);
+                    }
                 }
-                vec_insert(&mut self.effect_dependencies[effect_id], signal_id);
             }
         }
     }
@@ -256,16 +371,22 @@ impl Runtime {
     }
 
     pub fn dispose_effect(&mut self, effect_id: EffectId) {
-        // Clear dependencies
-        let deps = std::mem::take(&mut self.effect_dependencies[effect_id]);
+        // Stale id: the slot was already recycled, nothing to dispose
+        let Some(slot) = self.effect_slot_mut(effect_id) else {
+            return;
+        };
+        if slot.callback.is_none() {
+            return; // Already disposed (slot not yet recycled)
+        }
+        slot.callback = None;
+        let deps = std::mem::take(&mut slot.dependencies);
         for signal_id in deps {
-            if signal_id < self.signal_subscribers.len() {
-                vec_remove(&mut self.signal_subscribers[signal_id], &effect_id);
+            if let Some(subs) = self.signal_subscribers.get_mut(signal_id.index()) {
+                vec_remove(subs, &effect_id);
             }
         }
-        self.effect_callbacks[effect_id] = None;
         vec_remove(&mut self.pending_effects, &effect_id);
-        self.free_effect_ids.push(effect_id);
+        self.free_effect_indices.push(effect_id.index);
     }
 }
 

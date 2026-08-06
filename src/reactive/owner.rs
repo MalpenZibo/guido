@@ -282,9 +282,11 @@ pub fn dispose_owner(id: OwnerId) {
         with_runtime(|rt| rt.dispose_effect(effect_id));
     }
 
-    // Dispose signals (clear subscribers first to prevent stale notifications)
+    // Dispose signals (clear widget and effect subscriptions first to
+    // prevent stale notifications from a future occupant of the slot)
     for signal_id in owner.signals {
         clear_signal_subscribers(signal_id);
+        with_runtime(|rt| rt.dispose_signal_subscriptions(signal_id));
         dispose_signal(signal_id);
     }
 }
