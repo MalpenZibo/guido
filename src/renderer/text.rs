@@ -37,9 +37,13 @@ pub struct TextRenderState {
     text_renderer: TextRenderer,
     buffers: Vec<Buffer>,
     viewport: Viewport,
-    /// Cache of shaped text buffers from the previous frame, keyed by content+style hash.
-    /// Avoids expensive Unicode analysis and glyph shaping for unchanged text.
-    buffer_cache: HashMap<u64, Buffer>,
+    /// Cache of shaped text buffers from the previous frame, keyed by
+    /// content+style hash. Avoids expensive Unicode analysis and glyph
+    /// shaping for unchanged text. Multi-valued: the same label can appear
+    /// several times in a frame (e.g. repeated list items) — with a
+    /// single-entry cache the first occurrence consumed the only buffer and
+    /// every duplicate re-shaped from scratch, every frame, forever.
+    buffer_cache: HashMap<u64, Vec<Buffer>>,
     /// Keys for current frame's buffers (parallel to `self.buffers`), used to
     /// repopulate `buffer_cache` at the start of the next frame.
     frame_keys: Vec<u64>,
@@ -86,7 +90,7 @@ impl TextRenderState {
     ) -> Vec<usize> {
         // Move last frame's buffers into cache for reuse
         for (key, buffer) in self.frame_keys.drain(..).zip(self.buffers.drain(..)) {
-            self.buffer_cache.insert(key, buffer);
+            self.buffer_cache.entry(key).or_default().push(buffer);
         }
 
         // Collect indices of texts that have non-trivial transforms (for texture-based rendering)
@@ -97,7 +101,7 @@ impl TextRenderState {
         for (idx, entry) in texts.iter().enumerate() {
             // Skip text invisible due to zero scale — avoids all rendering work
             if !entry.transform.is_identity() && !entry.transform.is_translation_only() {
-                let (sx, sy) = (entry.transform.data[0], entry.transform.data[5]);
+                let (sx, sy) = (entry.transform.a(), entry.transform.d());
                 if sx.abs() < 1e-3 || sy.abs() < 1e-3 {
                     culled_indices.insert(idx);
                     continue;
@@ -145,7 +149,11 @@ impl TextRenderState {
 
             // Check buffer cache before expensive text shaping
             let key = text_buffer_key(entry, scale_factor);
-            let buffer = if let Some(cached) = self.buffer_cache.remove(&key) {
+            let cached = self
+                .buffer_cache
+                .get_mut(&key)
+                .and_then(|buffers| buffers.pop());
+            let buffer = if let Some(cached) = cached {
                 cached
             } else {
                 // Cache miss — create and shape a new buffer

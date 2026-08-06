@@ -204,14 +204,11 @@ impl ShapeInstance {
     /// Set transform from a Transform struct, scaling translation by scale_factor.
     pub fn with_transform(mut self, transform: &crate::transform::Transform, scale: f32) -> Self {
         if !transform.is_identity() {
-            self.transform = [
-                transform.data[0],         // a
-                transform.data[1],         // b
-                transform.data[3] * scale, // tx (scaled)
-                transform.data[4],         // c
-                transform.data[5],         // d
-                transform.data[7] * scale, // ty (scaled)
-            ];
+            // Transform stores exactly the affine layout the shader expects
+            // ([a, b, tx, c, d, ty]); only the translation needs scaling.
+            self.transform = transform.data;
+            self.transform[2] *= scale;
+            self.transform[5] *= scale;
         }
         self
     }

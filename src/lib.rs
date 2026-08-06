@@ -26,7 +26,7 @@ use layout::Constraints;
 use platform::create_wayland_app;
 use reactive::owner::with_owner;
 use reactive::{OwnerId, set_system_clipboard, take_clipboard_change, take_cursor_change};
-use renderer::{GpuContext, PaintContext, Renderer, flatten_tree_into};
+use renderer::{GpuContext, PaintContext, Renderer, flatten_root_into};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, drain_surface_commands};
 use surface_manager::{ManagedSurface, SurfaceManager};
 use widgets::Widget;
@@ -106,6 +106,10 @@ pub enum ExitReason {
     Quit,
     /// Restart requested (e.g. config change). The caller should re-create `App` and run again.
     Restart,
+    /// The platform layer failed (no Wayland session, compositor without
+    /// layer-shell support, connection lost). Previously these ordinary
+    /// environmental conditions aborted the process with a panic.
+    Error(platform::PlatformError),
 }
 
 /// Request a clean application restart.
@@ -202,8 +206,12 @@ fn process_surface_commands(
             }
             SurfaceCommand::Close(id) => {
                 log::info!("Closing dynamic surface {:?}", id);
-                wayland_state.destroy_surface(id);
+                // Drop the managed surface FIRST: its wgpu Surface<'static>
+                // borrows the wl_surface through erased raw pointers, so the
+                // GPU surface must die before the Wayland surface it points
+                // at (previously a use-after-free during swapchain teardown).
                 surface_manager.remove(id);
+                wayland_state.destroy_surface(id);
 
                 // If no surfaces left, exit
                 if surface_manager.is_empty() {
@@ -241,27 +249,47 @@ fn process_surface_commands(
 }
 
 /// Walk the render tree after painting and cache each node's output.
-/// Skips cache-reused nodes (repainted == false) since their tree cache is already valid.
-/// Also clears needs_paint flags for freshly painted widgets.
-fn cache_paint_results(tree: &mut Tree, node: &renderer::RenderNode) {
-    if node.repainted {
-        let widget_id = WidgetId::from_u64(node.id);
-        if tree.contains(widget_id) {
-            if !node.partial {
-                // Complete paint — safe to cache for future reuse.
-                tree.cache_paint(widget_id, node.clone());
-            }
-            // else: partial paint (children culled by cull_rect) — don't cache.
-            // Keep the previous complete cache (if any) so it can be reused
-            // when the widget becomes fully visible. If there's no previous
-            // cache, the widget will get a full paint next frame anyway
-            // (cached_paint returns None → falls through to full paint).
-            tree.clear_needs_paint(widget_id);
-        }
+///
+/// Caching is an `Rc::clone` of the node already sitting in the frame's
+/// render tree — O(1) per node instead of the previous deep subtree clone.
+///
+/// Returns whether the subtree is partial (this node or any descendant had
+/// children culled by cull_rect). Partial-ness propagates UP: an ancestor
+/// whose subtree embeds an incomplete paint must not be cached either, or a
+/// later cache reuse would permanently hide the culled grandchildren.
+///
+/// Also clears needs_paint flags and the per-frame `repainted` marker for
+/// freshly painted widgets (skipping already-clean subtrees entirely).
+fn cache_paint_results(tree: &mut Tree, node: &std::rc::Rc<renderer::RenderNode>) -> bool {
+    if !node.repainted.get() {
+        // Reused from cache: its subtree is by construction complete and its
+        // cache entries are already valid — nothing to do below it.
+        return false;
     }
+
+    let mut subtree_partial = node.partial;
     for child in &node.children {
-        cache_paint_results(tree, child);
+        subtree_partial |= cache_paint_results(tree, child);
     }
+
+    let widget_id = WidgetId::from_u64(node.id);
+    if tree.contains(widget_id) {
+        if !subtree_partial {
+            // Complete paint — safe to cache for future reuse.
+            tree.cache_paint(widget_id, std::rc::Rc::clone(node));
+        }
+        // else: partial subtree — don't cache. Keep the previous complete
+        // cache (if any) so it can be reused when the widget becomes fully
+        // visible. If there's no previous cache, the widget will get a full
+        // paint next frame anyway (cached_paint None → full paint).
+        tree.clear_needs_paint(widget_id);
+    }
+    // Mark as cached/clean for the flattener and future walks. The cache
+    // entry shares this Cell, so reused nodes come out with the flag
+    // already cleared.
+    node.repainted.set(false);
+
+    subtree_partial
 }
 
 /// Render a single surface using the hierarchical renderer.
@@ -294,6 +322,7 @@ fn render_surface(
     let height = wayland_surface.height;
     let first_frame_presented = wayland_surface.first_frame_presented;
     let scale_factor_received = wayland_surface.scale_factor_received;
+    let frame_callback_pending = wayland_surface.frame_callback_pending;
     let wl_surface = wayland_surface.wl_surface.clone();
 
     // Skip if GPU not ready (will be initialized next frame)
@@ -366,6 +395,21 @@ fn render_surface(
         surface.previous_scale_factor = scale_factor;
     }
 
+    // Frame pacing: while a wl_surface.frame callback is in flight the
+    // compositor hasn't shown the previous frame — rendering another one
+    // would only queue behind it (previously this was "throttled" by
+    // blocking the whole event loop on the Fifo swapchain). Return BEFORE
+    // draining jobs: animation continuations must stay queued, otherwise
+    // each loop iteration would advance them, re-ping the wakeup, and spin
+    // the loop flat-out between frame callbacks. Input events (dispatched
+    // above) are not delayed. Init and resizes bypass the gate.
+    let fully_initialized = first_frame_presented && scale_factor_received;
+    let force_render_surface = !fully_initialized;
+    if frame_callback_pending && !force_render_surface && !needs_resize && !scale_changed {
+        render_stats::record_frame_skipped();
+        return;
+    }
+
     // Process ALL pending jobs BEFORE paint.
     // This includes Animation jobs which were previously deferred to end-of-frame.
     // Processing animations here ensures hover/pressed state changes update animation
@@ -387,16 +431,16 @@ fn render_surface(
     // jobs are deduped by the JobQueue HashSet.
     let jobs = drain_pending_jobs();
     process_jobs(&jobs, tree, layout_roots);
+    jobs::recycle_job_buffer(jobs);
 
     // Process follow-up jobs from animation advances and reconciliation
     let followup = drain_non_animation_jobs();
     if !followup.is_empty() {
         process_jobs(&followup, tree, layout_roots);
     }
+    jobs::recycle_job_buffer(followup);
 
     // Check render conditions
-    let fully_initialized = first_frame_presented && scale_factor_received;
-    let force_render_surface = !fully_initialized;
     let has_pending_layouts = !layout_roots.is_empty();
 
     // Only render if something changed (or during initialization)
@@ -453,8 +497,7 @@ fn render_surface(
             return;
         }
 
-        // Clear and reuse render tree (preserves capacity)
-        surface.render_tree.clear();
+        // Clear and reuse the root node (preserves capacity)
         surface.root_node.clear();
         surface.root_node.bounds = widgets::Rect::new(0.0, 0.0, width as f32, height as f32);
 
@@ -465,45 +508,27 @@ fn render_surface(
             });
         });
 
-        // Take ownership of root node temporarily, add to tree, then restore
-        let root = std::mem::replace(
-            &mut surface.root_node,
-            renderer::RenderNode::new(surface.widget_id.as_u64()),
-        );
-        surface.render_tree.add_root(root);
-
         // Flatten tree into reused buffer
         let layer_boundaries;
         time_phase!(render_stats::Phase::Flatten, {
             layer_boundaries =
-                flatten_tree_into(&mut surface.render_tree, &mut surface.flattened_commands);
-        });
-        time_phase!(render_stats::Phase::GpuRender, {
-            renderer.render(
-                wgpu_surface,
-                &surface.flattened_commands,
-                layer_boundaries,
-                surface.config.background_color,
-            );
+                flatten_root_into(&surface.root_node, &mut surface.flattened_commands);
         });
 
-        // Restore root_node for next frame (take it back from render_tree)
-        if let Some(root) = surface.render_tree.roots.pop() {
-            surface.root_node = root;
-        }
+        // Re-arm the frame callback BEFORE presenting so the request rides
+        // the same commit as the buffer (present() commits internally). The
+        // callback's arrival is the signal that this surface may render its
+        // next frame. Previously the callback was requested exactly once at
+        // startup and never again — the only pacing was the event loop
+        // blocking inside the Fifo swapchain.
+        wl_surface.frame(qh, wl_surface.clone());
 
-        // Cache paint results AFTER flatten so cached_flatten data is preserved.
-        // This enables incremental flatten for paint-cached nodes on subsequent frames.
-        time_phase!(render_stats::Phase::CachePaintResults, {
-            cache_paint_results(tree, &surface.root_node);
-        });
-
-        // Report damage region to Wayland compositor
-        let damage = tree.take_damage();
-
-        // Track render stats (when compiled with --features render-stats)
-        render_stats::record_frame_painted();
-        render_stats::end_frame(&damage);
+        // Report damage BEFORE presenting: presenting attaches the buffer and
+        // commits the wl_surface (inside wgpu/the driver's Wayland path), so
+        // pending damage set now is part of that commit. The previous code
+        // damaged + committed AFTER present, attaching the damage to an empty
+        // second commit the compositor could not use.
+        let damage = tree.take_damage(surface.widget_id);
         match damage {
             DamageRegion::None => {
                 // Shouldn't happen since we're rendering, but report full damage to be safe
@@ -523,12 +548,45 @@ fn render_surface(
             }
         }
 
-        // Commit surface
-        wl_surface.commit();
+        let presented;
+        time_phase!(render_stats::Phase::GpuRender, {
+            presented = renderer.render(
+                wgpu_surface,
+                &surface.flattened_commands,
+                layer_boundaries,
+                surface.config.background_color,
+            );
+        });
 
-        // Request frame callback if not yet initialized
-        if !first_frame_presented {
-            wl_surface.frame(qh, wl_surface.clone());
+        if !presented {
+            // Nothing reached the screen (lost/outdated swapchain — common
+            // right after a resize). Keep all dirty flags so the content is
+            // repainted next frame instead of staying stale, restore full
+            // damage, and request that frame.
+            tree.set_full_damage(surface.widget_id);
+            jobs::request_frame();
+            return;
+        }
+
+        // Cache paint results AFTER flatten so cached_flatten data is preserved.
+        // This enables incremental flatten for paint-cached nodes on subsequent
+        // frames. The surface root itself is never cache-reused (it always
+        // repaints), so only its children are cached.
+        time_phase!(render_stats::Phase::CachePaintResults, {
+            for child in &surface.root_node.children {
+                cache_paint_results(tree, child);
+            }
+            tree.clear_needs_paint(surface.widget_id);
+        });
+
+        // Track render stats (when compiled with --features render-stats)
+        render_stats::record_frame_painted();
+        render_stats::end_frame(&damage);
+
+        // The frame callback requested before present is now committed;
+        // rendering for this surface is gated until it fires.
+        if let Some(ws) = wayland_state.get_surface_mut(id) {
+            ws.frame_callback_pending = true;
         }
     }
 }
@@ -640,9 +698,13 @@ impl App {
             panic!("No surfaces defined. Use add_surface() to add at least one surface.");
         }
 
-        let _ = env_logger::try_init();
-
-        let (connection, mut event_queue, mut wayland_state, qh) = create_wayland_app();
+        let (connection, mut event_queue, mut wayland_state, qh) = match create_wayland_app() {
+            Ok(app) => app,
+            Err(e) => {
+                log::error!("Cannot start: {e}");
+                return ExitReason::Error(e);
+            }
+        };
 
         // Create surfaces from add_surface() calls
         for def in &self.surface_definitions {
@@ -651,9 +713,10 @@ impl App {
 
         // Wait for all surfaces to configure
         while !wayland_state.all_surfaces_configured() && !wayland_state.exit {
-            event_queue
-                .blocking_dispatch(&mut wayland_state)
-                .expect("Failed to dispatch events");
+            if let Err(e) = event_queue.blocking_dispatch(&mut wayland_state) {
+                log::error!("Wayland dispatch failed during configure: {e}");
+                return ExitReason::Error(platform::PlatformError::ConnectionLost);
+            }
         }
 
         if wayland_state.exit {
@@ -747,9 +810,12 @@ impl App {
                 None // Block indefinitely until event
             };
 
-            event_loop
-                .dispatch(timeout, &mut wayland_state)
-                .expect("Failed to dispatch event loop");
+            if let Err(e) = event_loop.dispatch(timeout, &mut wayland_state) {
+                // The connection died (compositor exited, protocol error).
+                // Exit cleanly instead of panicking the process.
+                log::error!("Event loop dispatch failed: {e}");
+                return ExitReason::Error(platform::PlatformError::ConnectionLost);
+            }
 
             // Check for programmatic exit/restart requests
             match get_exit_request() {
@@ -808,7 +874,10 @@ impl App {
             }
 
             // Flush the connection once for all surfaces
-            connection.flush().expect("Failed to flush connection");
+            if let Err(e) = connection.flush() {
+                log::error!("Wayland connection flush failed: {e}");
+                return ExitReason::Error(platform::PlatformError::ConnectionLost);
+            }
         }
 
         ExitReason::Quit

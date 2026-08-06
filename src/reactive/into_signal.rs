@@ -44,6 +44,15 @@ impl<T> IntoVal<T> for T {
     }
 }
 
+// Lossy f64 → f32: bare float literals in closures default to f64, and
+// accepting them avoids the deprecated f32 inference fallback
+// (rust-lang/rust#154024)
+impl IntoVal<f32> for f64 {
+    fn into_val(self) -> f32 {
+        self as f32
+    }
+}
+
 // Lossy integer → f32 conversions (no std From impl)
 impl IntoVal<f32> for i32 {
     fn into_val(self) -> f32 {
@@ -74,7 +83,15 @@ impl<T: Clone + 'static, I: Into<T>> IntoSignal<T, ValueMarker> for I {
     }
 }
 
-// 2. Lossy i32/u32 → f32 static conversions (no std From, can't use Into blanket)
+// 2. Lossy f64/i32/u32 → f32 static conversions (no std From, can't use the
+// Into blanket). f64 matters most: bare float literals default to f64, so
+// accepting them avoids the deprecated f32 inference fallback.
+impl IntoSignal<f32, LossyMarker> for f64 {
+    fn into_signal(self) -> Signal<f32> {
+        create_stored(self as f32)
+    }
+}
+
 impl IntoSignal<f32, LossyMarker> for i32 {
     fn into_signal(self) -> Signal<f32> {
         create_stored(self as f32)

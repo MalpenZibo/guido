@@ -22,6 +22,15 @@ impl IntoF32 for f32 {
     }
 }
 
+/// Accepting f64 keeps bare float literals (which default to f64) working
+/// without relying on the deprecated f32 inference fallback
+/// (rust-lang/rust#154024).
+impl IntoF32 for f64 {
+    fn into_f32(self) -> f32 {
+        self as f32
+    }
+}
+
 impl IntoF32 for i32 {
     fn into_f32(self) -> f32 {
         self as f32
@@ -163,6 +172,14 @@ impl From<f32> for Length {
             exact: Some(value),
             fill: false,
         }
+    }
+}
+
+/// f64 converts to exact sizing — bare float literals default to f64, and
+/// accepting them avoids the deprecated f32 inference fallback.
+impl From<f64> for Length {
+    fn from(value: f64) -> Self {
+        Length::from(value as f32)
     }
 }
 

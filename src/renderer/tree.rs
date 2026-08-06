@@ -1,5 +1,6 @@
 //! Render tree data structures.
 
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use smallvec::SmallVec;
@@ -48,6 +49,20 @@ pub struct CachedFlatten {
 /// - Draw commands for this node
 /// - Child nodes (nested widgets)
 /// - Overlay commands rendered after children
+///
+/// # Sharing model
+///
+/// Children are `Rc`-shared. The paint cache (`Tree::cache_paint`) stores an
+/// `Rc` to the same node that sits in the frame's render tree, so caching a
+/// subtree is a refcount bump and "cloning" a cached node copies only the
+/// node header (child `Rc`s and `Rc<DrawCommand>`s are bumped, never deep-
+/// copied). This is what makes per-frame paint caching O(n) instead of
+/// O(n·depth).
+///
+/// Because cached nodes are shared, the per-frame flags use interior
+/// mutability: `repainted` is a `Cell` (flipped to false once the node's
+/// output has been cached) and `cached_flatten` is a `RefCell` (written
+/// during flatten, which otherwise only needs `&RenderNode`).
 #[derive(Debug, Clone)]
 pub struct RenderNode {
     /// Unique identifier for this node (matches widget ID)
@@ -73,8 +88,8 @@ pub struct RenderNode {
     /// SmallVec: most nodes have 1-2 commands (background + border).
     pub commands: SmallVec<[Rc<DrawCommand>; 2]>,
 
-    /// Child nodes (nested widgets)
-    pub children: Vec<RenderNode>,
+    /// Child nodes (nested widgets), Rc-shared with the paint cache.
+    pub children: Vec<Rc<RenderNode>>,
 
     /// Overlay commands - drawn AFTER all children (for ripples, effects).
     /// These are also in local coordinates.
@@ -90,19 +105,24 @@ pub struct RenderNode {
     /// without affecting child content.
     pub overlay_clip: Option<ClipRegion>,
 
-    /// Whether this node was freshly painted (true) or reused from cache (false).
-    /// The flattener uses this to decide whether to reuse cached flatten output.
-    pub repainted: bool,
+    /// Whether this node was freshly painted this frame (true) or reused
+    /// from cache (false). The flattener uses this to decide whether to
+    /// reuse cached flatten output. Cleared by `cache_paint_results` after
+    /// the node's output has been cached — which is why it is a `Cell`:
+    /// by then the node is already Rc-shared with the paint cache.
+    pub repainted: Cell<bool>,
 
     /// Whether some children were skipped (culled by cull_rect) during paint.
-    /// Partial nodes should not be cached because their paint is incomplete —
-    /// reusing them later (when fully visible) would permanently hide the
-    /// culled children.
+    /// Partial subtrees are not cached (see `cache_paint_results`, which
+    /// propagates partial-ness to ancestors) because their paint is
+    /// incomplete — reusing them later would permanently hide the culled
+    /// children.
     pub partial: bool,
 
-    /// Cached flattened commands from a previous flatten pass.
-    /// Boxed to reduce inline RenderNode size (CachedFlatten contains Vec + Transform).
-    pub cached_flatten: Option<Box<CachedFlatten>>,
+    /// Cached flattened commands from a previous flatten pass, shared via Rc
+    /// so shallow node clones inherit it for free. Interior-mutable because
+    /// flatten writes it while the tree is Rc-shared.
+    pub cached_flatten: RefCell<Option<Rc<CachedFlatten>>>,
 }
 
 impl RenderNode {
@@ -119,9 +139,9 @@ impl RenderNode {
             overlay_commands: SmallVec::new(),
             clip: None,
             overlay_clip: None,
-            repainted: true,
+            repainted: Cell::new(true),
             partial: false,
-            cached_flatten: None,
+            cached_flatten: RefCell::new(None),
         }
     }
 
@@ -143,39 +163,8 @@ impl RenderNode {
         self.overlay_commands.clear();
         self.clip = None;
         self.overlay_clip = None;
-        self.repainted = true;
+        self.repainted.set(true);
         self.partial = false;
-        self.cached_flatten = None;
-    }
-}
-
-/// The complete render tree for a frame.
-///
-/// Contains root nodes (one per surface or top-level widget).
-#[derive(Debug, Default)]
-pub struct RenderTree {
-    /// Root nodes
-    pub roots: Vec<RenderNode>,
-}
-
-impl RenderTree {
-    /// Create a new empty render tree.
-    pub fn new() -> Self {
-        Self { roots: Vec::new() }
-    }
-
-    /// Add a root node to the tree.
-    pub fn add_root(&mut self, node: RenderNode) {
-        self.roots.push(node);
-    }
-
-    /// Clear the tree for reuse (preserves capacity).
-    pub fn clear(&mut self) {
-        self.roots.clear();
-    }
-
-    /// Check if the tree is empty.
-    pub fn is_empty(&self) -> bool {
-        self.roots.is_empty()
+        *self.cached_flatten.borrow_mut() = None;
     }
 }

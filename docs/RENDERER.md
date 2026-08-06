@@ -20,30 +20,40 @@ Each widget creates a `RenderNode` containing its visual output:
 
 ```rust
 pub struct RenderNode {
-    pub id: NodeId,                             // Unique identifier (matches widget ID)
-    pub bounds: Rect,                           // Local bounds for transform origin
-    pub local_transform: Transform,             // Transform relative to parent
-    pub parent_position: Transform,             // Position set by parent (for cache reuse)
-    pub transform_origin: TransformOrigin,      // Pivot point for transforms
-    pub commands: Vec<DrawCommand>,             // Draw commands (shapes, text, images)
-    pub children: Vec<RenderNode>,              // Child nodes
-    pub overlay_commands: Vec<DrawCommand>,     // Commands drawn after children
-    pub clip: Option<ClipRegion>,               // Clips this node and children
-    pub overlay_clip: Option<ClipRegion>,       // Clips only overlay commands
-    pub repainted: bool,                        // true = freshly painted, false = cache reused
-    pub cached_flatten: Option<CachedFlatten>,  // Cached flatten output for incremental reuse
+    pub id: NodeId,                          // Unique identifier (matches widget ID)
+    pub bounds: Rect,                        // Local bounds for transform origin
+    pub local_transform: Transform,          // Transform relative to parent
+    pub parent_position: Transform,          // Position set by parent (for cache reuse)
+    pub transform_origin: TransformOrigin,   // Pivot point for transforms
+    pub commands: SmallVec<[Rc<DrawCommand>; 2]>,        // Draw commands (shapes, text, images)
+    pub children: Vec<Rc<RenderNode>>,       // Child nodes, Rc-shared with the paint cache
+    pub overlay_commands: SmallVec<[Rc<DrawCommand>; 1]>, // Commands drawn after children
+    pub clip: Option<ClipRegion>,            // Clips this node and children
+    pub overlay_clip: Option<ClipRegion>,    // Clips only overlay commands
+    pub repainted: Cell<bool>,               // true = freshly painted this frame
+    pub partial: bool,                       // Some children were culled (do not cache)
+    pub cached_flatten: RefCell<Option<Rc<CachedFlatten>>>, // Cached flatten output
 }
 ```
 
-### RenderTree
+### Sharing Model
 
-The complete render tree for a frame:
+Children are `Rc`-shared. The paint cache (`Tree::cache_paint`) stores an `Rc`
+to the same node that sits in the frame's render tree:
 
-```rust
-pub struct RenderTree {
-    pub roots: Vec<RenderNode>,  // Root nodes (one per surface)
-}
-```
+- **Caching** a painted subtree is a refcount bump, not a deep clone.
+- **Reusing** a clean child whose position didn't change is `Rc::clone` —
+  zero copies. If it moved, only the node header is cloned (children and
+  commands stay shared).
+- The per-frame flags use interior mutability (`Cell` / `RefCell`) because
+  cached nodes are shared: `repainted` is cleared once the node's output has
+  been cached, and flatten writes `cached_flatten` through a `&RenderNode`.
+- `partial` propagates to ancestors during the cache walk: a subtree that
+  embeds a partially-painted node (culled children) is never cached, so a
+  later cache reuse cannot resurrect an incomplete paint.
+
+Each surface owns a single root `RenderNode` (`ManagedSurface::root_node`),
+cleared and rebuilt from dirty widgets every rendered frame.
 
 ### Local Coordinate System
 
@@ -149,7 +159,7 @@ ctx.draw_overlay_rounded_rect(rect, color, radius);
 
 ## Tree Flattening
 
-The `flatten_tree()` function converts the hierarchical `RenderTree` into a flat list of `FlattenedCommand`s ready for GPU submission.
+The `flatten_root_into()` function converts the hierarchical render tree into a flat list of `FlattenedCommand`s ready for GPU submission, reusing the output buffer's capacity across frames.
 
 ### World Transform Computation
 
@@ -180,7 +190,7 @@ The output of tree flattening:
 
 ```rust
 pub struct FlattenedCommand {
-    pub command: DrawCommand,
+    pub command: Rc<DrawCommand>,   // Shared with the render node — no deep clone
     pub world_transform: Transform,
     pub world_transform_origin: Option<(f32, f32)>,
     pub layer: RenderLayer,
@@ -205,7 +215,8 @@ cached and current world transforms are translation-only, the flattener reuses c
 commands with a (dx, dy) offset instead of recursing into children. After a full flatten,
 results are cached back onto the node for next frame.
 
-`flatten_tree_into()` takes `&mut RenderTree` to enable this caching.
+The cache lives in `RefCell<Option<Rc<CachedFlatten>>>` on the node, so flatten
+only needs `&RenderNode` and shallow node clones share the cached output.
 
 ## GPU Rendering Pipeline
 
@@ -300,7 +311,7 @@ fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
 
 | File | Purpose |
 |------|---------|
-| `src/renderer/tree.rs` | RenderNode, RenderTree, ClipRegion |
+| `src/renderer/tree.rs` | RenderNode, ClipRegion, CachedFlatten |
 | `src/renderer/paint_context.rs` | PaintContext API |
 | `src/renderer/commands.rs` | DrawCommand enum |
 | `src/renderer/flatten.rs` | Tree flattening with transform inheritance |

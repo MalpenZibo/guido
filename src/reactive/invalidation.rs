@@ -20,11 +20,12 @@
 //! subscribers. The jobs system deduplicates these and wakes the event loop.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use crate::jobs::{JobRequest, JobType, request_job};
+use crate::reactive::runtime::SignalId;
 use crate::tree::WidgetId;
 
 /// Context for tracking signal reads and associating them with a widget
@@ -50,11 +51,14 @@ where
             job_type,
         });
     });
-    let result = f();
-    TRACKING_CONTEXT.with(|ctx| {
-        ctx.borrow_mut().pop();
+    // Pop on unwind too: a leaked frame would silently attribute every
+    // later signal read in the app to this widget.
+    let _guard = crate::reactive::guard::defer(|| {
+        TRACKING_CONTEXT.with(|ctx| {
+            ctx.borrow_mut().pop();
+        });
     });
-    result
+    f()
 }
 
 /// Suspend widget-level signal tracking during the given closure.
@@ -68,17 +72,18 @@ pub fn suspend_widget_tracking<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    TRACKING_CONTEXT.with(|ctx| {
-        let saved: Vec<_> = ctx.borrow_mut().drain(..).collect();
-        let result = f();
-        *ctx.borrow_mut() = saved;
-        result
-    })
+    let saved: Vec<_> = TRACKING_CONTEXT.with(|ctx| ctx.borrow_mut().drain(..).collect());
+    // Restore on unwind too: losing the saved stack would permanently
+    // disable widget invalidation for every context that was active.
+    let _guard = crate::reactive::guard::defer(move || {
+        TRACKING_CONTEXT.with(|ctx| *ctx.borrow_mut() = saved);
+    });
+    f()
 }
 
 /// Record that a signal was read. Called from Signal::get().
 /// If tracking is active, registers the current widget as a subscriber.
-pub fn record_signal_read(signal_id: usize) {
+pub fn record_signal_read(signal_id: SignalId) {
     TRACKING_CONTEXT.with(|ctx| {
         if let Some(tracking) = ctx.borrow().last() {
             register_subscriber(tracking.widget_id, signal_id, tracking.job_type);
@@ -101,28 +106,58 @@ struct Subscriber {
 type SubscriberList = SmallVec<[Subscriber; 2]>;
 
 /// Most widgets subscribe to 2-6 signals (background, padding, etc.).
-type SignalList = SmallVec<[usize; 4]>;
+type SignalList = SmallVec<[SignalId; 4]>;
 
 struct SubscriberRegistry {
-    /// Forward index: signal_id → subscribers. Direct Vec indexing (signal IDs are dense).
+    /// Forward index: signal index → subscribers. Direct Vec indexing
+    /// (signal slot indices are dense; disposal clears the entry, so a
+    /// recycled index always starts with an empty list).
     signal_to_widgets: Vec<SubscriberList>,
     /// Reverse index: widget_id → subscribed signal IDs. For O(1) widget cleanup.
-    widget_to_signals: HashMap<WidgetId, SignalList>,
+    widget_to_signals: FxHashMap<WidgetId, SignalList>,
+    /// All live (signal index, subscriber) pairs. This is the hot-path
+    /// dedup: widgets re-read their signals every frame, and without this
+    /// set each re-read paid a linear scan over the signal's subscriber
+    /// list — O(N²) per frame for a signal read by N widgets (e.g. a theme
+    /// color). With it, an already-registered read is one hash lookup.
+    active: FxHashSet<(usize, Subscriber)>,
 }
 
 impl SubscriberRegistry {
     fn new() -> Self {
         Self {
             signal_to_widgets: Vec::new(),
-            widget_to_signals: HashMap::new(),
+            widget_to_signals: FxHashMap::default(),
+            active: FxHashSet::default(),
         }
     }
 
     /// Ensure the forward index has capacity for the given signal ID.
-    fn ensure_signal_capacity(&mut self, signal_id: usize) {
-        if signal_id >= self.signal_to_widgets.len() {
+    fn ensure_signal_capacity(&mut self, signal_id: SignalId) {
+        if signal_id.index() >= self.signal_to_widgets.len() {
             self.signal_to_widgets
-                .resize_with(signal_id + 1, SmallVec::new);
+                .resize_with(signal_id.index() + 1, SmallVec::new);
+        }
+    }
+
+    /// Remove a subscriber pair from the `active` set for every job type.
+    /// Used by widget cleanup, which knows the widget but not which job
+    /// types it registered with.
+    fn deactivate_widget_signal(&mut self, signal_index: usize, widget_id: WidgetId) {
+        for job_type in [
+            JobType::Layout,
+            JobType::Paint,
+            JobType::Reconcile,
+            JobType::Unregister,
+            JobType::Animation,
+        ] {
+            self.active.remove(&(
+                signal_index,
+                Subscriber {
+                    widget_id,
+                    job_type,
+                },
+            ));
         }
     }
 }
@@ -133,23 +168,28 @@ thread_local! {
     static REGISTRY: RefCell<SubscriberRegistry> = RefCell::new(SubscriberRegistry::new());
 }
 
-/// Register a widget as a subscriber for a signal with a specific job type
-pub fn register_subscriber(widget_id: WidgetId, signal_id: usize, job_type: JobType) {
+/// Register a widget as a subscriber for a signal with a specific job type.
+///
+/// Called on every tracked signal read, so the already-registered case (the
+/// overwhelming majority — widgets re-read their signals every frame) is a
+/// single hash-set lookup.
+pub fn register_subscriber(widget_id: WidgetId, signal_id: SignalId, job_type: JobType) {
     REGISTRY.with(|reg| {
         let mut reg = reg.borrow_mut();
-        reg.ensure_signal_capacity(signal_id);
 
         let sub = Subscriber {
             widget_id,
             job_type,
         };
-
-        let subs = &mut reg.signal_to_widgets[signal_id];
-        if !subs.contains(&sub) {
-            subs.push(sub);
+        if !reg.active.insert((signal_id.index(), sub)) {
+            return; // Already subscribed — the hot path
         }
 
-        // Update reverse index
+        reg.ensure_signal_capacity(signal_id);
+        reg.signal_to_widgets[signal_id.index()].push(sub);
+
+        // Update reverse index (deduped: the same widget/signal pair can
+        // arrive with several job types, but only one entry is needed)
         let signals = reg.widget_to_signals.entry(widget_id).or_default();
         if !signals.contains(&signal_id) {
             signals.push(signal_id);
@@ -157,39 +197,39 @@ pub fn register_subscriber(widget_id: WidgetId, signal_id: usize, job_type: JobT
     });
 }
 
-/// Notify all subscribers of a signal change by creating jobs
-pub fn notify_signal_change(signal_id: usize) {
-    // Collect subscribers while holding the borrow, then release before calling request_job
-    // (which may trigger further signal reads/writes)
-    let subscribers: SmallVec<[Subscriber; 4]> = REGISTRY.with(|reg| {
+/// Notify all subscribers of a signal change by creating jobs.
+///
+/// Iterates under the registry borrow: `request_job` only touches the job
+/// queue and frame-request state, never the registry, so no re-entrant
+/// borrow is possible and no snapshot allocation is needed.
+pub fn notify_signal_change(signal_id: SignalId) {
+    REGISTRY.with(|reg| {
         let reg = reg.borrow();
-        if signal_id < reg.signal_to_widgets.len() {
-            reg.signal_to_widgets[signal_id].iter().copied().collect()
-        } else {
-            SmallVec::new()
+        let Some(subs) = reg.signal_to_widgets.get(signal_id.index()) else {
+            return;
+        };
+        for sub in subs {
+            let request = match sub.job_type {
+                JobType::Layout => JobRequest::Layout,
+                JobType::Paint => JobRequest::Paint,
+                JobType::Reconcile => JobRequest::Reconcile,
+                JobType::Unregister => JobRequest::Unregister,
+                JobType::Animation => JobRequest::Animation(crate::jobs::RequiredJob::None),
+            };
+            request_job(sub.widget_id, request);
         }
     });
-
-    for sub in &subscribers {
-        let request = match sub.job_type {
-            JobType::Layout => JobRequest::Layout,
-            JobType::Paint => JobRequest::Paint,
-            JobType::Reconcile => JobRequest::Reconcile,
-            JobType::Unregister => JobRequest::Unregister,
-            JobType::Animation => JobRequest::Animation(crate::jobs::RequiredJob::None),
-        };
-        request_job(sub.widget_id, request);
-    }
 }
 
 /// Clear signal subscribers for a specific signal (when signal is disposed)
-pub fn clear_signal_subscribers(signal_id: usize) {
+pub fn clear_signal_subscribers(signal_id: SignalId) {
     REGISTRY.with(|reg| {
         let mut reg = reg.borrow_mut();
-        if signal_id < reg.signal_to_widgets.len() {
+        if signal_id.index() < reg.signal_to_widgets.len() {
             // Remove this signal from the reverse index of each subscriber
-            let subs = std::mem::take(&mut reg.signal_to_widgets[signal_id]);
+            let subs = std::mem::take(&mut reg.signal_to_widgets[signal_id.index()]);
             for sub in &subs {
+                reg.active.remove(&(signal_id.index(), *sub));
                 if let Some(signals) = reg.widget_to_signals.get_mut(&sub.widget_id) {
                     signals.retain(|&mut s| s != signal_id);
                     if signals.is_empty() {
@@ -210,8 +250,9 @@ pub fn clear_widget_subscribers(widget_id: WidgetId) {
         // Use reverse index: only touch the signals this widget actually subscribes to
         if let Some(signal_ids) = reg.widget_to_signals.remove(&widget_id) {
             for signal_id in signal_ids {
-                if signal_id < reg.signal_to_widgets.len() {
-                    reg.signal_to_widgets[signal_id].retain(|s| s.widget_id != widget_id);
+                reg.deactivate_widget_signal(signal_id.index(), widget_id);
+                if let Some(subs) = reg.signal_to_widgets.get_mut(signal_id.index()) {
+                    subs.retain(|s| s.widget_id != widget_id);
                 }
             }
         }
@@ -247,13 +288,17 @@ mod tests {
         WidgetId::from_u64(n)
     }
 
+    fn signal_id(n: u32) -> SignalId {
+        SignalId::new(n, 0)
+    }
+
     #[test]
     fn test_clear_signal_subscribers_removes_entry() {
         let wid = widget_id(100);
-        register_subscriber(wid, 42, JobType::Paint);
+        register_subscriber(wid, signal_id(42), JobType::Paint);
         assert!(subscriber_count() > 0);
 
-        clear_signal_subscribers(42);
+        clear_signal_subscribers(signal_id(42));
 
         // Signal 42 should have no subscribers
         REGISTRY.with(|reg| {
@@ -268,10 +313,10 @@ mod tests {
         let other = widget_id(201);
 
         // Widget 200 subscribes to signals 10 and 11
-        register_subscriber(wid, 10, JobType::Paint);
-        register_subscriber(wid, 11, JobType::Layout);
+        register_subscriber(wid, signal_id(10), JobType::Paint);
+        register_subscriber(wid, signal_id(11), JobType::Layout);
         // Widget 201 subscribes to signal 10
-        register_subscriber(other, 10, JobType::Paint);
+        register_subscriber(other, signal_id(10), JobType::Paint);
 
         clear_widget_subscribers(wid);
 
@@ -289,15 +334,15 @@ mod tests {
     #[test]
     fn test_with_signal_tracking_registers_subscriber() {
         let wid = widget_id(300);
-        let signal_id = 99;
+        let sid = signal_id(99);
 
         with_signal_tracking(wid, JobType::Paint, || {
-            record_signal_read(signal_id);
+            record_signal_read(sid);
         });
 
         REGISTRY.with(|reg| {
             let reg = reg.borrow();
-            let s = &reg.signal_to_widgets[signal_id];
+            let s = &reg.signal_to_widgets[sid.index()];
             assert!(s.contains(&Subscriber {
                 widget_id: wid,
                 job_type: JobType::Paint,
@@ -305,20 +350,20 @@ mod tests {
         });
 
         // Clean up
-        clear_signal_subscribers(signal_id);
+        clear_signal_subscribers(sid);
     }
 
     #[test]
     fn test_reverse_index_consistency() {
         let wid = widget_id(400);
-        register_subscriber(wid, 50, JobType::Paint);
-        register_subscriber(wid, 51, JobType::Layout);
+        register_subscriber(wid, signal_id(50), JobType::Paint);
+        register_subscriber(wid, signal_id(51), JobType::Layout);
 
         REGISTRY.with(|reg| {
             let reg = reg.borrow();
             let signals = reg.widget_to_signals.get(&wid).unwrap();
-            assert!(signals.contains(&50));
-            assert!(signals.contains(&51));
+            assert!(signals.contains(&signal_id(50)));
+            assert!(signals.contains(&signal_id(51)));
         });
 
         clear_widget_subscribers(wid);

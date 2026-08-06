@@ -42,10 +42,21 @@ use super::runtime::{EffectId, SignalId, with_runtime};
 use super::storage::dispose_signal;
 
 /// Unique identifier for an owner in the owner arena.
-pub type OwnerId = usize;
+///
+/// Generational: the arena recycles slot indices and bumps the generation on
+/// every reuse, so a stale `OwnerId` held after disposal can never dispose or
+/// mutate an unrelated owner that later occupied the same slot.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct OwnerId {
+    index: u32,
+    generation: u32,
+}
 
 /// An owner that manages the lifecycle of reactive primitives.
 struct Owner {
+    /// The owner this one was created under, if any. Used to prune this
+    /// owner from the parent's `children` list on disposal.
+    parent: Option<OwnerId>,
     signals: Vec<SignalId>,
     effects: Vec<EffectId>,
     cleanups: Vec<Box<dyn FnOnce()>>,
@@ -53,8 +64,9 @@ struct Owner {
 }
 
 impl Owner {
-    fn new() -> Self {
+    fn new(parent: Option<OwnerId>) -> Self {
         Self {
+            parent,
             signals: Vec::new(),
             effects: Vec::new(),
             cleanups: Vec::new(),
@@ -63,37 +75,74 @@ impl Owner {
     }
 }
 
-/// Arena-based storage for owners.
+/// Slot in the owner arena. The generation survives vacancy so recycled
+/// indices can be distinguished from their previous occupants.
+struct OwnerSlot {
+    owner: Option<Owner>,
+    generation: u32,
+}
+
+/// Arena-based storage for owners with slot recycling.
 struct OwnerArena {
-    owners: Vec<Option<Owner>>,
+    slots: Vec<OwnerSlot>,
+    /// Vacant slot indices available for reuse.
+    free_indices: Vec<u32>,
     /// Reverse mapping from effect ID to owner ID for O(1) lookup.
     /// This avoids linear search through all owners when checking if an effect is owned.
     effect_owners: HashMap<EffectId, OwnerId>,
-    next_id: OwnerId,
 }
 
 impl OwnerArena {
     fn new() -> Self {
         Self {
-            owners: Vec::new(),
+            slots: Vec::new(),
+            free_indices: Vec::new(),
             effect_owners: HashMap::new(),
-            next_id: 0,
         }
     }
 
-    fn allocate(&mut self) -> OwnerId {
-        let id = self.next_id;
-        self.next_id += 1;
-        self.owners.push(Some(Owner::new()));
-        id
+    fn allocate(&mut self, parent: Option<OwnerId>) -> OwnerId {
+        let owner = Owner::new(parent);
+        if let Some(index) = self.free_indices.pop() {
+            let slot = &mut self.slots[index as usize];
+            slot.generation = slot.generation.wrapping_add(1);
+            slot.owner = Some(owner);
+            OwnerId {
+                index,
+                generation: slot.generation,
+            }
+        } else {
+            let index = self.slots.len() as u32;
+            self.slots.push(OwnerSlot {
+                owner: Some(owner),
+                generation: 0,
+            });
+            OwnerId {
+                index,
+                generation: 0,
+            }
+        }
     }
 
     fn get_mut(&mut self, id: OwnerId) -> Option<&mut Owner> {
-        self.owners.get_mut(id).and_then(|o| o.as_mut())
+        self.slots
+            .get_mut(id.index as usize)
+            .filter(|slot| slot.generation == id.generation)
+            .and_then(|slot| slot.owner.as_mut())
     }
 
     fn take(&mut self, id: OwnerId) -> Option<Owner> {
-        self.owners.get_mut(id).and_then(|o| o.take())
+        let slot = self
+            .slots
+            .get_mut(id.index as usize)
+            .filter(|slot| slot.generation == id.generation)?;
+        let owner = slot.owner.take();
+        if owner.is_some() {
+            // Recycle the slot. Any still-live OwnerId for it is now stale
+            // and will fail the generation check above.
+            self.free_indices.push(id.index);
+        }
+        owner
     }
 }
 
@@ -108,7 +157,7 @@ thread_local! {
 /// primitives created during setup. The root owner owns everything — when
 /// disposed, all signals, effects, and cleanup callbacks cascade.
 pub(crate) fn create_root_owner() -> OwnerId {
-    let id = OWNERS.with(|owners| owners.borrow_mut().allocate());
+    let id = OWNERS.with(|owners| owners.borrow_mut().allocate(None));
     CURRENT_OWNER.with(|current| *current.borrow_mut() = Some(id));
     id
 }
@@ -137,12 +186,13 @@ pub(crate) fn reset_owners() {
 /// Use `on_cleanup` for registering cleanup callbacks in user code.
 pub fn with_owner<T>(f: impl FnOnce() -> T) -> (T, OwnerId) {
     // Allocate new owner and register as child of current owner (if any)
+    let parent_id = CURRENT_OWNER.with(|current| *current.borrow());
     let owner_id = OWNERS.with(|owners| {
         let mut owners = owners.borrow_mut();
-        let id = owners.allocate();
+        let id = owners.allocate(parent_id);
 
         // Register as child of current owner
-        if let Some(parent_id) = CURRENT_OWNER.with(|current| *current.borrow())
+        if let Some(parent_id) = parent_id
             && let Some(parent_owner) = owners.get_mut(parent_id)
         {
             parent_owner.children.push(id);
@@ -158,13 +208,17 @@ pub fn with_owner<T>(f: impl FnOnce() -> T) -> (T, OwnerId) {
         prev
     });
 
+    // Restore on unwind too: a leaked owner scope would silently re-parent
+    // every reactive resource created afterwards.
+    let guard = crate::reactive::guard::defer(move || {
+        CURRENT_OWNER.with(|current| {
+            *current.borrow_mut() = prev_owner;
+        });
+    });
+
     // Execute the closure
     let result = f();
-
-    // Restore previous owner
-    CURRENT_OWNER.with(|current| {
-        *current.borrow_mut() = prev_owner;
-    });
+    drop(guard);
 
     (result, owner_id)
 }
@@ -190,8 +244,23 @@ pub fn current_owner() -> Option<OwnerId> {
 /// **Note:** This function is not part of the public API and may change.
 /// Cleanup is automatic when using dynamic children or components.
 pub fn dispose_owner(id: OwnerId) {
-    // Take the owner out of the arena
-    let owner = OWNERS.with(|owners| owners.borrow_mut().take(id));
+    // Take the owner out of the arena and prune it from its parent's
+    // children list. Without the pruning, long-lived parents (most notably
+    // the root owner) accumulate one dead child entry for every owner ever
+    // created under them. During recursive disposal the parent has already
+    // been taken from the arena, so `get_mut` fails and the prune is skipped.
+    let owner = OWNERS.with(|owners| {
+        let mut arena = owners.borrow_mut();
+        let owner = arena.take(id)?;
+        if let Some(parent_id) = owner.parent
+            && let Some(parent) = arena.get_mut(parent_id)
+            && let Some(pos) = parent.children.iter().position(|c| *c == id)
+        {
+            // Sibling disposal order is unspecified, so swap_remove is fine.
+            parent.children.swap_remove(pos);
+        }
+        Some(owner)
+    });
 
     let Some(owner) = owner else {
         return; // Already disposed
@@ -217,9 +286,11 @@ pub fn dispose_owner(id: OwnerId) {
         with_runtime(|rt| rt.dispose_effect(effect_id));
     }
 
-    // Dispose signals (clear subscribers first to prevent stale notifications)
+    // Dispose signals (clear widget and effect subscriptions first to
+    // prevent stale notifications from a future occupant of the slot)
     for signal_id in owner.signals {
         clear_signal_subscribers(signal_id);
+        with_runtime(|rt| rt.dispose_signal_subscriptions(signal_id));
         dispose_signal(signal_id);
     }
 }
@@ -307,7 +378,58 @@ mod tests {
     fn test_with_owner_basic() {
         let (value, owner_id) = with_owner(|| 42);
         assert_eq!(value, 42);
-        assert!(owner_id < 100); // Just check it's a reasonable ID
+        dispose_owner(owner_id);
+    }
+
+    /// A disposed owner's slot is recycled with a bumped generation, so a
+    /// stale OwnerId must never resolve to (or dispose) the new occupant.
+    #[test]
+    fn test_stale_owner_id_cannot_alias_recycled_slot() {
+        let (_, first) = with_owner(|| ());
+        dispose_owner(first);
+
+        // Reuses the freed slot
+        let disposed = std::rc::Rc::new(std::cell::Cell::new(false));
+        let flag = disposed.clone();
+        let (_, second) = with_owner(move || {
+            on_cleanup(move || flag.set(true));
+        });
+        assert_eq!(first.index, second.index, "slot should be recycled");
+        assert_ne!(first.generation, second.generation);
+
+        // Disposing via the stale ID must be a no-op
+        dispose_owner(first);
+        assert!(!disposed.get(), "stale OwnerId disposed the new owner");
+
+        dispose_owner(second);
+        assert!(disposed.get());
+    }
+
+    /// Disposing a child owner must remove it from the parent's children
+    /// list; otherwise long-lived parents grow without bound.
+    #[test]
+    fn test_dispose_prunes_parent_children_list() {
+        let (child_ids, parent_id) = with_owner(|| {
+            (0..4)
+                .map(|_| with_owner(|| ()).1)
+                .collect::<Vec<OwnerId>>()
+        });
+
+        for child in &child_ids {
+            dispose_owner(*child);
+        }
+
+        OWNERS.with(|owners| {
+            let mut arena = owners.borrow_mut();
+            let parent = arena.get_mut(parent_id).expect("parent still live");
+            assert!(
+                parent.children.is_empty(),
+                "disposed children not pruned: {:?}",
+                parent.children
+            );
+        });
+
+        dispose_owner(parent_id);
     }
 
     #[test]

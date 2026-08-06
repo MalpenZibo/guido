@@ -57,12 +57,19 @@ where
     // whenever any dependency changes. Signal::set() uses PartialEq to
     // skip notification when the value hasn't changed.
     //
-    // The effect is registered with the current owner via register_effect().
-    // Effect::Drop checks effect_has_owner() and skips disposal for owned
-    // effects, so the underscore-prefixed binding is safe here.
-    let _effect = create_effect(move || {
+    // Lifetime: when a current owner exists, the effect is registered with
+    // it and Effect::drop skips disposal (the owner cleans up). Without an
+    // owner (memo created outside App::run or any with_owner scope), the
+    // effect must be detached — otherwise dropping the binding would
+    // dispose it immediately and the memo would silently stop updating.
+    let effect = create_effect(move || {
         signal.set(f());
     });
+    if super::owner::current_owner().is_some() {
+        drop(effect); // owned: Drop skips disposal, owner controls cleanup
+    } else {
+        effect.detach();
+    }
     Memo { signal }
 }
 
@@ -123,5 +130,43 @@ mod tests {
         let memo = create_memo(move || signal.get() + 3);
         let sig: Signal<i32> = memo.into_signal();
         assert_eq!(sig.get(), 10);
+    }
+
+    /// Regression test: effects depending on a memo must re-run when the
+    /// memo recomputes. A memo is "set a signal inside an effect", which was
+    /// silently dropped while the runtime borrow was held across callbacks.
+    #[test]
+    fn test_effect_depending_on_memo_reruns() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let count = create_signal(1);
+        let doubled = create_memo(move || count.get() * 2);
+
+        let observed = Rc::new(Cell::new(0));
+        let observed_c = observed.clone();
+        crate::reactive::create_effect(move || {
+            observed_c.set(doubled.get());
+        })
+        .detach();
+
+        assert_eq!(observed.get(), 2);
+
+        count.set(5);
+        assert_eq!(observed.get(), 10, "memo change must propagate to effects");
+    }
+
+    /// Memo-of-memo chains must propagate through both levels.
+    #[test]
+    fn test_memo_chains() {
+        let base = create_signal(1);
+        let doubled = create_memo(move || base.get() * 2);
+        let quadrupled = create_memo(move || doubled.get() * 2);
+
+        assert_eq!(quadrupled.get(), 4);
+
+        base.set(3);
+        assert_eq!(doubled.get(), 6);
+        assert_eq!(quadrupled.get(), 12, "second-level memo must recompute");
     }
 }

@@ -1,6 +1,6 @@
 # App Lifecycle
 
-Guido applications can programmatically quit or restart. `App::run()` returns an `ExitReason` so the caller knows why the loop exited.
+Guido applications can programmatically quit or restart. `App::run()` returns an `ExitReason` so the caller knows why the loop exited: `Quit`, `Restart`, or `Error(PlatformError)` when the platform layer fails (no Wayland session, a compositor without layer-shell support such as GNOME, or a lost connection) — these conditions are reported instead of panicking.
 
 ## Quitting
 

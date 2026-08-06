@@ -28,14 +28,28 @@ pub fn get_intrinsic_size(source: &ImageSource) -> Option<(u32, u32)> {
 }
 
 /// Get SVG dimensions from a file path.
+#[cfg(feature = "svg")]
 fn get_svg_size_from_file(path: &Path) -> Option<(u32, u32)> {
     let data = std::fs::read(path).ok()?;
     get_svg_size_from_bytes(&data)
 }
 
 /// Get SVG dimensions from raw bytes.
+#[cfg(feature = "svg")]
 fn get_svg_size_from_bytes(bytes: &[u8]) -> Option<(u32, u32)> {
     let tree = resvg::usvg::Tree::from_data(bytes, &resvg::usvg::Options::default()).ok()?;
     let size = tree.size();
     Some((size.width() as u32, size.height() as u32))
+}
+
+#[cfg(not(feature = "svg"))]
+fn get_svg_size_from_file(_path: &Path) -> Option<(u32, u32)> {
+    log::warn!("SVG image used but the `svg` feature is disabled");
+    None
+}
+
+#[cfg(not(feature = "svg"))]
+fn get_svg_size_from_bytes(_bytes: &[u8]) -> Option<(u32, u32)> {
+    log::warn!("SVG image used but the `svg` feature is disabled");
+    None
 }

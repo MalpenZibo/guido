@@ -21,6 +21,7 @@
 //! interacting with the runtime directly.
 
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -57,8 +58,61 @@ type EpochWrite = (u64, Box<dyn FnOnce() + Send>);
 /// are discarded during flush.
 static WRITE_QUEUE: Mutex<Vec<EpochWrite>> = Mutex::new(Vec::new());
 
-pub type SignalId = usize;
-pub type EffectId = usize;
+/// Unique identifier for a signal.
+///
+/// Generational: storage recycles slot indices and bumps the generation on
+/// every reuse. Signal handles are `Copy` and freely captured in closures, so
+/// without the generation a stale handle would silently read/write whatever
+/// unrelated signal later recycled the same slot. With it, stale handles are
+/// reliably detected forever.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct SignalId {
+    index: u32,
+    generation: u32,
+}
+
+impl SignalId {
+    pub(crate) fn new(index: u32, generation: u32) -> Self {
+        Self { index, generation }
+    }
+
+    /// Slot index for direct Vec indexing in storage and subscriber registries.
+    #[inline]
+    pub(crate) fn index(self) -> usize {
+        self.index as usize
+    }
+
+    #[inline]
+    pub(crate) fn generation(self) -> u32 {
+        self.generation
+    }
+}
+
+impl std::fmt::Display for SignalId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}v{}", self.index, self.generation)
+    }
+}
+
+/// Unique identifier for an effect. Generational, like [`SignalId`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct EffectId {
+    index: u32,
+    generation: u32,
+}
+
+impl EffectId {
+    #[inline]
+    fn index(self) -> usize {
+        self.index as usize
+    }
+}
+
+impl std::fmt::Display for EffectId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}v{}", self.index, self.generation)
+    }
+}
 
 /// Insert into a Vec only if not already present (dedup).
 fn vec_insert<T: PartialEq>(vec: &mut Vec<T>, value: T) {
@@ -144,21 +198,49 @@ pub fn flush_bg_writes() {
     }
 }
 
+/// Lifecycle state of an effect slot.
+///
+/// `Running` exists because effect callbacks execute *outside* the runtime
+/// borrow (see [`run_effect_by_id`]): the callback is taken out of the slot
+/// while it runs, and disposal during execution must be remembered so
+/// [`Runtime::finish_effect`] can drop the callback instead of restoring it.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum EffectState {
+    /// No live effect in this slot (never used, or disposed).
+    #[default]
+    Vacant,
+    /// Live effect, callback stored in the slot.
+    Idle,
+    /// Live effect, callback currently executing (taken out of the slot).
+    Running,
+    /// Disposed while its callback was executing; finalized in `finish_effect`.
+    DisposedWhileRunning,
+}
+
+/// Storage slot for one effect. The generation survives disposal so recycled
+/// indices can be told apart from their previous occupants.
+#[derive(Default)]
+struct EffectSlot {
+    callback: Option<Box<dyn FnMut()>>,
+    /// Signals this effect reads. Vec with dedup — most effects depend on
+    /// 1–3 signals, making linear scan faster than HashSet.
+    dependencies: Vec<SignalId>,
+    generation: u32,
+    state: EffectState,
+}
+
 #[derive(Default)]
 pub struct Runtime {
-    current_effect: Option<EffectId>,
-    /// Pending effects to run. Uses Vec with dedup — most frames have 0–5 pending effects.
-    pending_effects: Vec<EffectId>,
-    effect_callbacks: Vec<Option<Box<dyn FnMut()>>>,
-    /// Per-effect dependencies (which signals it reads). Vec with dedup — most effects
-    /// depend on 1–3 signals, making linear scan faster than HashSet.
-    effect_dependencies: Vec<Vec<SignalId>>,
-    /// Per-signal subscribers (which effects track it). Vec with dedup — most signals
-    /// have 1–5 subscribers.
+    /// Pending effects to run, in notification order. Deduplicated —
+    /// most frames have 0–5 pending effects.
+    pending_effects: VecDeque<EffectId>,
+    /// Effect slots, indexed by `EffectId::index`.
+    effects: Vec<EffectSlot>,
+    /// Vacant effect slot indices available for reuse.
+    free_effect_indices: Vec<u32>,
+    /// Per-signal subscribers (which effects track it), indexed by
+    /// `SignalId::index`. Vec with dedup — most signals have 1–5 subscribers.
     signal_subscribers: Vec<Vec<EffectId>>,
-    next_effect_id: EffectId,
-    /// Free list of reusable effect IDs (from disposed effects).
-    free_effect_ids: Vec<EffectId>,
 }
 
 impl Runtime {
@@ -166,106 +248,265 @@ impl Runtime {
         Self::default()
     }
 
+    /// Get a generation-validated mutable reference to an effect slot.
+    /// Returns `None` for stale ids (slot recycled since the id was issued).
+    fn effect_slot_mut(&mut self, id: EffectId) -> Option<&mut EffectSlot> {
+        self.effects
+            .get_mut(id.index())
+            .filter(|slot| slot.generation == id.generation)
+    }
+
     /// Register a signal for subscriber tracking (called when signal is created)
     pub fn register_signal(&mut self, id: SignalId) {
         // Ensure we have space for subscribers
-        while self.signal_subscribers.len() <= id {
+        while self.signal_subscribers.len() <= id.index() {
             self.signal_subscribers.push(Vec::new());
         }
+        // A signal index only recycles after the previous occupant was
+        // disposed, so any leftover subscribers at this index are stale.
+        self.signal_subscribers[id.index()].clear();
     }
 
-    pub fn allocate_effect(&mut self, callback: Box<dyn FnMut()>) -> EffectId {
-        // Reuse a freed slot if available
-        if let Some(id) = self.free_effect_ids.pop() {
-            self.effect_callbacks[id] = Some(callback);
-            self.effect_dependencies[id].clear();
-            return id;
-        }
-        // Otherwise allocate new
-        let id = self.next_effect_id;
-        self.next_effect_id += 1;
-        self.effect_callbacks.push(Some(callback));
-        self.effect_dependencies.push(Vec::new());
-        id
-    }
-
-    pub fn notify_write(&mut self, signal_id: SignalId) {
-        // Check if this signal exists in our runtime (it might not if called from another thread)
-        if signal_id >= self.signal_subscribers.len() {
+    /// Remove all effect subscriptions for a signal being disposed, both from
+    /// the signal's subscriber list and from each subscriber's dependency list.
+    /// Without this, an effect could stay subscribed to a recycled slot index
+    /// and get spuriously re-run by an unrelated future signal.
+    pub fn dispose_signal_subscriptions(&mut self, id: SignalId) {
+        let Some(subs) = self.signal_subscribers.get_mut(id.index()) else {
             return;
-        }
-
-        // Iterate subscribers by index — avoids temporary Vec allocation
-        for i in 0..self.signal_subscribers[signal_id].len() {
-            let effect_id = self.signal_subscribers[signal_id][i];
-            vec_insert(&mut self.pending_effects, effect_id);
-        }
-
-        // When inside a batch(), defer effect execution until the batch completes
-        let batching = BATCH_DEPTH.with(|d| d.get() > 0);
-        if !batching {
-            self.flush_effects();
-        }
-    }
-
-    pub fn run_effect(&mut self, effect_id: EffectId) {
-        // Clear old dependencies
-        let old_deps = std::mem::take(&mut self.effect_dependencies[effect_id]);
-        for signal_id in old_deps {
-            vec_remove(&mut self.signal_subscribers[signal_id], &effect_id);
-        }
-
-        // Push tracking context (signal reads are buffered here since
-        // the Runtime RefCell is already borrowed during callback execution)
-        EFFECT_TRACKING.with(|stack| {
-            stack.borrow_mut().push((effect_id, EffectReads::new()));
-        });
-
-        // Run effect
-        let prev_effect = self.current_effect;
-        self.current_effect = Some(effect_id);
-
-        if let Some(callback) = self.effect_callbacks[effect_id].as_mut() {
-            suspend_widget_tracking(callback);
-        }
-
-        self.current_effect = prev_effect;
-
-        // Pop tracking context and register buffered reads as dependencies
-        let reads = EFFECT_TRACKING.with(|stack| stack.borrow_mut().pop());
-        if let Some((_eid, signal_ids)) = reads {
-            for signal_id in signal_ids {
-                if signal_id < self.signal_subscribers.len() {
-                    vec_insert(&mut self.signal_subscribers[signal_id], effect_id);
-                }
-                vec_insert(&mut self.effect_dependencies[effect_id], signal_id);
+        };
+        for effect_id in std::mem::take(subs) {
+            if let Some(slot) = self.effect_slot_mut(effect_id) {
+                vec_remove(&mut slot.dependencies, &id);
             }
         }
     }
 
-    pub fn flush_effects(&mut self) {
-        // Use swap + drain to preserve Vec capacity across frames.
-        // mem::take would replace with a 0-capacity Vec, forcing re-allocation next frame.
-        let mut to_run = Vec::new();
-        while !self.pending_effects.is_empty() {
-            std::mem::swap(&mut to_run, &mut self.pending_effects);
-            for effect_id in to_run.drain(..) {
-                self.run_effect(effect_id);
+    pub fn allocate_effect(&mut self, callback: Box<dyn FnMut()>) -> EffectId {
+        // Reuse a freed slot if available, bumping its generation so stale
+        // ids for the previous occupant can never act on this effect
+        if let Some(index) = self.free_effect_indices.pop() {
+            let slot = &mut self.effects[index as usize];
+            slot.generation = slot.generation.wrapping_add(1);
+            slot.callback = Some(callback);
+            slot.dependencies.clear();
+            slot.state = EffectState::Idle;
+            return EffectId {
+                index,
+                generation: slot.generation,
+            };
+        }
+        // Otherwise allocate new
+        let index = self.effects.len() as u32;
+        self.effects.push(EffectSlot {
+            callback: Some(callback),
+            dependencies: Vec::new(),
+            generation: 0,
+            state: EffectState::Idle,
+        });
+        EffectId {
+            index,
+            generation: 0,
+        }
+    }
+
+    /// Queue all effects subscribed to a signal. Does NOT run them — the
+    /// caller decides when to flush (immediately, or at batch end).
+    fn enqueue_subscribers(&mut self, signal_id: SignalId) {
+        let Some(subs) = self.signal_subscribers.get(signal_id.index()) else {
+            return;
+        };
+        for i in 0..subs.len() {
+            let effect_id = self.signal_subscribers[signal_id.index()][i];
+            if !self.pending_effects.contains(&effect_id) {
+                self.pending_effects.push_back(effect_id);
+            }
+        }
+    }
+
+    /// Pop the next pending effect, if any.
+    fn pop_pending_effect(&mut self) -> Option<EffectId> {
+        self.pending_effects.pop_front()
+    }
+
+    /// Phase 1 of effect execution (under the runtime borrow): validate the
+    /// id, clear old dependencies, and hand the callback out so it can run
+    /// WITHOUT the runtime borrowed. Returns `None` for stale/disposed ids
+    /// or if the effect is already running (re-entrant trigger).
+    fn begin_effect(&mut self, effect_id: EffectId) -> Option<Box<dyn FnMut()>> {
+        let slot = self.effect_slot_mut(effect_id)?;
+        if slot.state != EffectState::Idle {
+            return None;
+        }
+        let callback = slot.callback.take()?;
+        slot.state = EffectState::Running;
+
+        // Clear old dependencies; they are re-established from this run's reads
+        let old_deps = std::mem::take(&mut slot.dependencies);
+        for signal_id in old_deps {
+            if let Some(subs) = self.signal_subscribers.get_mut(signal_id.index()) {
+                vec_remove(subs, &effect_id);
+            }
+        }
+        Some(callback)
+    }
+
+    /// Phase 3 of effect execution (under the runtime borrow): restore the
+    /// callback and register the reads buffered during the run as
+    /// dependencies. If the effect was disposed while running, finalize the
+    /// disposal instead.
+    fn finish_effect(
+        &mut self,
+        effect_id: EffectId,
+        callback: Box<dyn FnMut()>,
+        reads: EffectReads,
+    ) {
+        let Some(slot) = self.effect_slot_mut(effect_id) else {
+            return; // Cannot happen (slot recycles only after free), but stay safe
+        };
+        match slot.state {
+            EffectState::Running => {
+                slot.callback = Some(callback);
+                slot.state = EffectState::Idle;
+                for signal_id in reads {
+                    if signal_id.index() < self.signal_subscribers.len() {
+                        vec_insert(&mut self.signal_subscribers[signal_id.index()], effect_id);
+                        if let Some(slot) = self.effect_slot_mut(effect_id) {
+                            vec_insert(&mut slot.dependencies, signal_id);
+                        }
+                    }
+                }
+            }
+            EffectState::DisposedWhileRunning => {
+                // The callback disposed its own effect (owner disposal from
+                // within). Drop the callback and complete the disposal.
+                drop(callback);
+                slot.state = EffectState::Vacant;
+                self.free_effect_indices.push(effect_id.index);
+            }
+            EffectState::Vacant | EffectState::Idle => {
+                // Unreachable by construction; drop the callback defensively.
+                drop(callback);
             }
         }
     }
 
     pub fn dispose_effect(&mut self, effect_id: EffectId) {
-        // Clear dependencies
-        let deps = std::mem::take(&mut self.effect_dependencies[effect_id]);
-        for signal_id in deps {
-            if signal_id < self.signal_subscribers.len() {
-                vec_remove(&mut self.signal_subscribers[signal_id], &effect_id);
+        // Stale id: the slot was already recycled, nothing to dispose
+        let Some(slot) = self.effect_slot_mut(effect_id) else {
+            return;
+        };
+        match slot.state {
+            EffectState::Idle => {
+                slot.callback = None;
+                slot.state = EffectState::Vacant;
+                let deps = std::mem::take(&mut slot.dependencies);
+                for signal_id in deps {
+                    if let Some(subs) = self.signal_subscribers.get_mut(signal_id.index()) {
+                        vec_remove(subs, &effect_id);
+                    }
+                }
+                if let Some(pos) = self.pending_effects.iter().position(|e| *e == effect_id) {
+                    self.pending_effects.remove(pos);
+                }
+                self.free_effect_indices.push(effect_id.index);
+            }
+            EffectState::Running => {
+                // The callback is currently executing outside the borrow.
+                // Mark for finalization in finish_effect (which pushes the
+                // free-list entry); clear what can be cleared now.
+                slot.state = EffectState::DisposedWhileRunning;
+                let deps = std::mem::take(&mut slot.dependencies);
+                for signal_id in deps {
+                    if let Some(subs) = self.signal_subscribers.get_mut(signal_id.index()) {
+                        vec_remove(subs, &effect_id);
+                    }
+                }
+                if let Some(pos) = self.pending_effects.iter().position(|e| *e == effect_id) {
+                    self.pending_effects.remove(pos);
+                }
+            }
+            EffectState::Vacant | EffectState::DisposedWhileRunning => {
+                // Already disposed
             }
         }
-        self.effect_callbacks[effect_id] = None;
-        vec_remove(&mut self.pending_effects, &effect_id);
-        self.free_effect_ids.push(effect_id);
+    }
+}
+
+thread_local! {
+    /// Reentrancy guard for [`flush_pending_effects`]: when a write happens
+    /// inside an effect, the nested flush is skipped and the outermost flush
+    /// loop picks up the newly queued effects. This bounds stack depth for
+    /// effect chains (they become loop iterations, not recursion).
+    static FLUSHING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Run one effect: take its callback out of the runtime, execute it with NO
+/// runtime borrow held (so writes and signal creation inside the callback
+/// work), then restore it and register the tracked reads.
+pub(crate) fn run_effect_by_id(effect_id: EffectId) {
+    // Phase 1 (borrow): take the callback out
+    let Some(mut callback) = with_runtime(|rt| rt.begin_effect(effect_id)) else {
+        return;
+    };
+
+    // Phase 2 (no borrow): run the callback with read-tracking buffered.
+    // A panicking callback must still reach phase 3: without it the slot
+    // would be stuck in Running with its callback lost, and the tracking
+    // frame would leak. Catch, restore state, then propagate the panic.
+    EFFECT_TRACKING.with(|stack| {
+        stack.borrow_mut().push((effect_id, EffectReads::new()));
+    });
+    let panic_payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        suspend_widget_tracking(&mut *callback);
+    }))
+    .err();
+    let reads = EFFECT_TRACKING
+        .with(|stack| stack.borrow_mut().pop())
+        .map(|(_eid, reads)| reads)
+        .unwrap_or_default();
+
+    // Phase 3 (borrow): restore the callback and register dependencies
+    // (possibly partial if the callback panicked mid-run)
+    with_runtime(|rt| rt.finish_effect(effect_id, callback, reads));
+
+    if let Some(payload) = panic_payload {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+/// Drain the pending-effect queue, running each effect. No-op when already
+/// flushing higher up the stack (the outer loop drains everything).
+pub(crate) fn flush_pending_effects() {
+    if FLUSHING.with(|f| f.replace(true)) {
+        return;
+    }
+    // Reset the flag even if an effect callback panics; otherwise every
+    // future flush would silently no-op and all effects would stop running.
+    struct FlushGuard;
+    impl Drop for FlushGuard {
+        fn drop(&mut self) {
+            FLUSHING.with(|f| f.set(false));
+        }
+    }
+    let _guard = FlushGuard;
+
+    while let Some(effect_id) = with_runtime(|rt| rt.pop_pending_effect()) {
+        run_effect_by_id(effect_id);
+    }
+}
+
+/// Notify subscribers that a signal changed. Effects run immediately unless
+/// inside a `batch()` (deferred to batch end) or already inside an effect
+/// flush (picked up by the outer loop).
+///
+/// Safe to call from anywhere on the main thread, including from within
+/// effect callbacks — the runtime borrow is never held across user code.
+pub(crate) fn notify_write(signal_id: SignalId) {
+    with_runtime(|rt| rt.enqueue_subscribers(signal_id));
+    let batching = BATCH_DEPTH.with(|d| d.get() > 0);
+    if !batching {
+        flush_pending_effects();
     }
 }
 
@@ -274,21 +515,6 @@ where
     F: FnOnce(&mut Runtime) -> R,
 {
     RUNTIME.with(|rt| f(&mut rt.borrow_mut()))
-}
-
-/// Try to access the runtime. This is safe to call from any thread.
-/// On the main thread, runs the callback. On other threads, does nothing.
-/// This enables signals to be updated from background threads without panicking.
-pub fn try_with_runtime<F>(f: F)
-where
-    F: FnOnce(&mut Runtime),
-{
-    RUNTIME.with(|rt| {
-        if let Ok(mut runtime) = rt.try_borrow_mut() {
-            f(&mut runtime);
-        }
-        // If borrow fails (already borrowed), skip - this can happen during effect execution
-    });
 }
 
 /// Reset all runtime state (effects, tracking, batch depth, write queue).
@@ -300,6 +526,7 @@ pub(crate) fn reset_runtime() {
     RUNTIME.with(|rt| *rt.borrow_mut() = Runtime::new());
     EFFECT_TRACKING.with(|et| et.borrow_mut().clear());
     BATCH_DEPTH.with(|bd| bd.set(0));
+    FLUSHING.with(|f| f.set(false));
     // Increment epoch BEFORE clearing — writes queued between now and the next
     // flush_bg_writes() will carry the old epoch and be discarded.
     WRITE_EPOCH.fetch_add(1, Ordering::Release);
@@ -315,13 +542,74 @@ pub(crate) fn reset_runtime() {
 /// jobs) is NOT batched — widgets still get per-field jobs immediately.
 pub fn batch<R>(f: impl FnOnce() -> R) -> R {
     BATCH_DEPTH.with(|d| d.set(d.get() + 1));
-    let result = f();
-    BATCH_DEPTH.with(|d| {
-        let new = d.get() - 1;
-        d.set(new);
-        if new == 0 {
-            try_with_runtime(|rt| rt.flush_effects());
-        }
+    // Restore the depth even if `f` panics: a caught panic must not leave
+    // BATCH_DEPTH stuck > 0 (which would stop every effect in the app from
+    // ever flushing again). Effects queued by the failed batch stay pending
+    // and run on the next notify — we deliberately don't flush during unwind.
+    let guard = super::guard::defer(|| {
+        BATCH_DEPTH.with(|d| d.set(d.get() - 1));
     });
+    let result = f();
+    drop(guard);
+    if BATCH_DEPTH.with(|d| d.get()) == 0 {
+        flush_pending_effects();
+    }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reactive::{create_effect, create_signal};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    /// A panic caught inside batch() must not leave BATCH_DEPTH stuck > 0 —
+    /// that would silently stop every effect in the app from ever flushing.
+    #[test]
+    fn test_caught_panic_in_batch_does_not_wedge_effects() {
+        let sig = create_signal(0);
+        let observed = Rc::new(Cell::new(0));
+        let o = observed.clone();
+        create_effect(move || o.set(sig.get())).detach();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            batch(|| {
+                sig.set(1);
+                panic!("boom");
+            })
+        }));
+        assert!(result.is_err());
+        assert_eq!(BATCH_DEPTH.with(|d| d.get()), 0, "batch depth must unwind");
+
+        // Effects must still flush on the next write
+        sig.set(2);
+        assert_eq!(observed.get(), 2);
+    }
+
+    /// A panicking effect callback must be restored into its slot so the
+    /// effect stays alive, and the flush machinery must stay usable.
+    #[test]
+    fn test_panicking_effect_survives_and_reruns() {
+        let sig = create_signal(0);
+        let observed = Rc::new(Cell::new(0));
+        let o = observed.clone();
+        create_effect(move || {
+            let v = sig.get();
+            o.set(v);
+            if v == 1 {
+                panic!("effect panic");
+            }
+        })
+        .detach();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sig.set(1)));
+        assert!(result.is_err(), "panic must propagate out of set()");
+        assert_eq!(observed.get(), 1);
+        assert!(!FLUSHING.with(|f| f.get()), "flush guard must have reset");
+
+        // The effect must still be alive, tracked, and re-runnable
+        sig.set(2);
+        assert_eq!(observed.get(), 2);
+    }
 }

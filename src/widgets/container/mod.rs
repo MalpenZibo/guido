@@ -1514,15 +1514,15 @@ impl Widget for Container {
                 }
             };
             match local_event.as_ref() {
-                Event::MouseEnter { x, y } => {
-                    if bounds.contains_rounded(*x, *y, corner_radius) && !ix.is_hovered {
-                        ix.is_hovered = true;
-                        if ix.hover_state.is_some() {
-                            request_repaint(id);
-                        }
-                        if let Some(ref callback) = ix.on_hover {
-                            callback(true);
-                        }
+                Event::MouseEnter { x, y }
+                    if bounds.contains_rounded(*x, *y, corner_radius) && !ix.is_hovered =>
+                {
+                    ix.is_hovered = true;
+                    if ix.hover_state.is_some() {
+                        request_repaint(id);
+                    }
+                    if let Some(ref callback) = ix.on_hover {
+                        callback(true);
                     }
                 }
                 Event::MouseMove { x, y } => {
@@ -2024,17 +2024,25 @@ impl Widget for Container {
                 && !tree.needs_paint(child_id)
                 && let Some(cached) = tree.cached_paint(child_id)
             {
-                let mut reused = cached.clone();
-                // Decompose: extract user transform, recompose with new position
-                let user_part = cached
-                    .parent_position
-                    .inverse()
-                    .then(&cached.local_transform);
-                reused.local_transform = child_position.then(&user_part);
-                reused.parent_position = child_position;
-                reused.bounds = child_local;
-                reused.repainted = false;
-                ctx.add_child_node(reused);
+                if cached.parent_position == child_position && cached.bounds == child_local {
+                    // Position unchanged: reuse the cached node wholesale.
+                    // Zero copies — the render tree and the cache share it.
+                    ctx.add_child_rc(std::rc::Rc::clone(cached));
+                } else {
+                    // Position changed: shallow header clone (children and
+                    // commands are Rc-shared, so this copies no subtree).
+                    // Decompose: extract user transform, recompose with new position.
+                    let mut reused = (**cached).clone();
+                    let user_part = cached
+                        .parent_position
+                        .inverse()
+                        .then(&cached.local_transform);
+                    reused.local_transform = child_position.then(&user_part);
+                    reused.parent_position = child_position;
+                    reused.bounds = child_local;
+                    reused.repainted.set(false);
+                    ctx.add_child_rc(std::rc::Rc::new(reused));
+                }
                 crate::render_stats::record_paint_child_cached();
                 continue;
             }

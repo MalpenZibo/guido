@@ -1,23 +1,56 @@
 use crate::layout::Size;
 use crate::widgets::font::{FontFamily, FontWeight};
 use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping};
+use rustc_hash::FxHashMap;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 /// Cache key for measurement results.
-/// Uses f32::to_bits() for hashable floats.
-#[derive(Hash, Eq, PartialEq, Clone)]
+///
+/// The text and font family are folded into a 64-bit hash (plus the text
+/// length as a discriminator) instead of storing owned Strings: the previous
+/// key allocated a String on every lookup, hit or miss, and cursor
+/// positioning performs many lookups per keystroke.
+#[derive(Hash, Eq, PartialEq, Clone, Copy)]
 struct MeasureCacheKey {
-    text: String,
+    /// FxHash of (text, font_family)
+    content_hash: u64,
+    /// Text byte length — cheap extra collision discriminator
+    text_len: u32,
     font_size_bits: u32,
-    font_family: FontFamily,
     font_weight: FontWeight,
     max_width_bits: Option<u32>,
 }
 
+impl MeasureCacheKey {
+    fn new(
+        text: &str,
+        font_size: f32,
+        max_width: Option<f32>,
+        font_family: &FontFamily,
+        font_weight: FontWeight,
+    ) -> Self {
+        let mut hasher = rustc_hash::FxHasher::default();
+        text.hash(&mut hasher);
+        font_family.hash(&mut hasher);
+        Self {
+            content_hash: hasher.finish(),
+            text_len: text.len() as u32,
+            font_size_bits: font_size.to_bits(),
+            font_weight,
+            max_width_bits: max_width.map(|w| w.to_bits()),
+        }
+    }
+}
+
+/// Wholesale-eviction bound for the measurement cache. Entries are tiny
+/// (~40 bytes), but the cache previously grew without bound for the process
+/// lifetime (e.g. one entry per text-input prefix ever measured).
+const MEASURE_CACHE_CAP: usize = 8192;
+
 pub struct TextMeasurer {
     font_system: FontSystem,
-    measure_cache: HashMap<MeasureCacheKey, Size>,
+    measure_cache: FxHashMap<MeasureCacheKey, Size>,
 }
 
 impl TextMeasurer {
@@ -30,7 +63,7 @@ impl TextMeasurer {
         }
         Self {
             font_system,
-            measure_cache: HashMap::new(),
+            measure_cache: FxHashMap::default(),
         }
     }
 
@@ -52,21 +85,53 @@ impl TextMeasurer {
         font_family: &FontFamily,
         font_weight: FontWeight,
     ) -> Size {
-        // Build cache key
-        let cache_key = MeasureCacheKey {
-            text: text.to_string(),
-            font_size_bits: font_size.to_bits(),
-            font_family: font_family.clone(),
-            font_weight,
-            max_width_bits: max_width.map(|w| w.to_bits()),
-        };
+        let cache_key = MeasureCacheKey::new(text, font_size, max_width, font_family, font_weight);
 
-        // Check cache first
+        // Check cache first (no allocation on this path)
         if let Some(&cached_size) = self.measure_cache.get(&cache_key) {
             return cached_size;
         }
 
-        // Measure text
+        let size = {
+            let buffer = self.shape(text, font_size, max_width, font_family, font_weight);
+
+            let mut width = 0.0f32;
+            let mut height = 0.0f32;
+            for run in buffer.layout_runs() {
+                width = width.max(run.line_w);
+                height += run.line_height;
+            }
+
+            // Ensure minimum height for empty text
+            if height == 0.0 {
+                height = font_size * 1.2;
+            }
+
+            Size::new(width, height)
+        };
+
+        // Cache the result, with wholesale eviction at the cap
+        if self.measure_cache.len() >= MEASURE_CACHE_CAP {
+            self.measure_cache.clear();
+        }
+        self.measure_cache.insert(cache_key, size);
+
+        size
+    }
+
+    /// Shape text into a fresh buffer.
+    ///
+    /// Uses `Shaping::Advanced`, matching the renderer — measurement with
+    /// `Shaping::Basic` could disagree with rendered glyphs for ligatures
+    /// and complex scripts, making layout diverge from pixels.
+    fn shape(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        max_width: Option<f32>,
+        font_family: &FontFamily,
+        font_weight: FontWeight,
+    ) -> Buffer {
         let metrics = Metrics::new(font_size, font_size * 1.2);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
 
@@ -77,29 +142,72 @@ impl TextMeasurer {
             &Attrs::new()
                 .family(font_family.to_cosmic())
                 .weight(font_weight.to_cosmic()),
-            Shaping::Basic,
+            Shaping::Advanced,
             None,
         );
         buffer.shape_until_scroll(&mut self.font_system, true);
+        buffer
+    }
 
-        let mut width = 0.0f32;
-        let mut height = 0.0f32;
+    /// Compute the cumulative x position of every character boundary by
+    /// shaping the text ONCE.
+    ///
+    /// Returns `char_count + 1` positions: `positions[i]` is the x offset of
+    /// the boundary before character `i`, and the last entry is the total
+    /// width. Characters swallowed into a ligature/cluster snap to the
+    /// cluster start. Assumes single-line LTR text (the text-input model).
+    ///
+    /// Text inputs previously rebuilt their cursor-position table by
+    /// measuring every prefix of the text — O(n) shaping passes of O(n)
+    /// text per keystroke.
+    pub fn char_positions_styled(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        font_family: &FontFamily,
+        font_weight: FontWeight,
+    ) -> Vec<f32> {
+        let char_count = text.chars().count();
+        let mut positions = vec![0.0f32; char_count + 1];
+        if text.is_empty() {
+            return positions;
+        }
+
+        // Map byte offsets to character indices for glyph lookup
+        let mut char_index_at_byte = vec![usize::MAX; text.len() + 1];
+        for (char_idx, (byte_idx, _)) in text.char_indices().enumerate() {
+            char_index_at_byte[byte_idx] = char_idx;
+        }
+        char_index_at_byte[text.len()] = char_count;
+
+        let buffer = self.shape(text, font_size, None, font_family, font_weight);
+
+        let mut total_width = 0.0f32;
+        let mut any_glyphs = false;
         for run in buffer.layout_runs() {
-            width = width.max(run.line_w);
-            height += run.line_height;
+            for glyph in run.glyphs {
+                if let Some(&char_idx) = char_index_at_byte.get(glyph.start)
+                    && char_idx != usize::MAX
+                {
+                    positions[char_idx] = glyph.x;
+                    any_glyphs = true;
+                }
+            }
+            total_width = total_width.max(run.line_w);
+        }
+        positions[char_count] = total_width;
+
+        // Forward-fill boundaries that got no glyph (cluster continuations):
+        // they sit at the position of the cluster they belong to.
+        if any_glyphs {
+            for i in 1..char_count {
+                if positions[i] == 0.0 && positions[i - 1] > 0.0 {
+                    positions[i] = positions[i - 1];
+                }
+            }
         }
 
-        // Ensure minimum height for empty text
-        if height == 0.0 {
-            height = font_size * 1.2;
-        }
-
-        let size = Size::new(width, height);
-
-        // Cache the result
-        self.measure_cache.insert(cache_key, size);
-
-        size
+        positions
     }
 
     /// Measure text width up to a specific character index.
@@ -238,6 +346,18 @@ pub fn measure_text_to_char_styled(
     TEXT_MEASURER.with_borrow_mut(|m| {
         m.measure_to_char_styled(text, font_size, char_index, font_family, font_weight)
     })
+}
+
+/// Compute cumulative x positions of every character boundary in one
+/// shaping pass (for text-input cursor positioning).
+pub fn measure_char_positions_styled(
+    text: &str,
+    font_size: f32,
+    font_family: &FontFamily,
+    font_weight: FontWeight,
+) -> Vec<f32> {
+    TEXT_MEASURER
+        .with_borrow_mut(|m| m.char_positions_styled(text, font_size, font_family, font_weight))
 }
 
 /// Find the character index from an x-coordinate (for click-to-position)

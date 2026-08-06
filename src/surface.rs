@@ -297,7 +297,7 @@ thread_local! {
 }
 
 /// Push a surface command to the thread-local queue.
-fn push_surface_command(cmd: SurfaceCommand) {
+pub(crate) fn push_surface_command(cmd: SurfaceCommand) {
     SURFACE_COMMANDS.with(|cmds| {
         cmds.borrow_mut().push(cmd);
     });

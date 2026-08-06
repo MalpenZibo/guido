@@ -65,7 +65,7 @@ impl Animatable for Padding {
 
 impl Animatable for Transform {
     fn lerp(from: &Self, to: &Self, t: f32) -> Self {
-        let mut data = [0.0f32; 16];
+        let mut data = [0.0f32; 6];
         for (i, val) in data.iter_mut().enumerate() {
             *val = from.data[i] + (to.data[i] - from.data[i]) * t;
         }

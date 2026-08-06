@@ -125,7 +125,7 @@ where
     let running_for_cleanup = running.clone();
 
     let ctx = ServiceContext { running };
-    let handle = tokio::spawn(f(rx, ctx));
+    let handle = service_runtime().spawn(f(rx, ctx));
 
     // Register cleanup to stop the task when component unmounts.
     // Setting is_running to false allows graceful shutdown, while abort()
@@ -139,12 +139,73 @@ where
     Service { sender: tx }
 }
 
+/// Get a runtime handle for spawning service tasks.
+///
+/// If the caller already runs inside a tokio runtime (e.g. `#[tokio::main]`),
+/// that runtime is used. Otherwise a small background runtime is created
+/// lazily on a dedicated thread — previously `create_service` simply called
+/// `tokio::spawn` and panicked in the documented plain-`fn main()` setup.
+fn service_runtime() -> tokio::runtime::Handle {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        return handle;
+    }
+
+    static HANDLE: std::sync::OnceLock<tokio::runtime::Handle> = std::sync::OnceLock::new();
+    HANDLE
+        .get_or_init(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("failed to build guido service runtime");
+            let handle = runtime.handle().clone();
+            std::thread::Builder::new()
+                .name("guido-services".into())
+                .spawn(move || {
+                    // Drive the runtime forever; tasks spawned through the
+                    // handle run on this thread.
+                    runtime.block_on(std::future::pending::<()>());
+                })
+                .expect("failed to spawn guido service thread");
+            handle
+        })
+        .clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::reactive::owner::{dispose_owner, with_owner};
     use std::sync::atomic::AtomicI32;
     use std::time::Duration;
+
+    /// Regression test: create_service must work WITHOUT an ambient tokio
+    /// runtime (plain `fn main()`, the documented default setup). It
+    /// previously called tokio::spawn directly and panicked.
+    #[test]
+    fn test_service_without_ambient_runtime() {
+        let received = Arc::new(AtomicI32::new(0));
+        let received_clone = received.clone();
+
+        let (service, owner_id) = with_owner(|| {
+            create_service::<i32, _, _>(move |mut rx, _ctx| async move {
+                while let Some(v) = rx.recv().await {
+                    received_clone.fetch_add(v, Ordering::SeqCst);
+                }
+            })
+        });
+
+        service.send(5);
+
+        // The task runs on the lazily-created background thread
+        let mut waited = 0;
+        while received.load(Ordering::SeqCst) == 0 && waited < 2000 {
+            std::thread::sleep(Duration::from_millis(10));
+            waited += 10;
+        }
+        assert_eq!(received.load(Ordering::SeqCst), 5);
+
+        dispose_owner(owner_id);
+    }
 
     #[tokio::test]
     async fn test_service_stops_on_cleanup() {

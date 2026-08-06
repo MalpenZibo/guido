@@ -1,22 +1,27 @@
-/// A 4x4 transformation matrix stored in row-major order.
+/// A 2D affine transformation.
 ///
-/// Used for 2D transformations (translate, rotate, scale) that compose
-/// parent→child and are passed to the GPU shader.
+/// Stored as 6 floats in the layout `[a, b, tx, c, d, ty]`, representing:
+///
+/// ```text
+/// | a  b  tx |   (x maps to a*x + b*y + tx)
+/// | c  d  ty |   (y maps to c*x + d*y + ty)
+/// ```
+///
+/// This is exactly the data the GPU shader consumes. The previous
+/// implementation stored a full 4×4 matrix (64 bytes) of which 8 of the 16
+/// floats were structurally constant; the affine form is 24 bytes, composes
+/// with 6 multiplies per output element instead of a 4×4 multiply, and cuts
+/// the size of every render node and flattened command that embeds one.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Transform {
-    /// Matrix data in row-major order: [row0, row1, row2, row3]
-    pub data: [f32; 16],
+    /// Affine coefficients: `[a, b, tx, c, d, ty]`
+    pub data: [f32; 6],
 }
 
 impl Transform {
-    /// Identity matrix (no transformation)
+    /// Identity transform (no transformation)
     pub const IDENTITY: Self = Self {
-        data: [
-            1.0, 0.0, 0.0, 0.0, // row 0
-            0.0, 1.0, 0.0, 0.0, // row 1
-            0.0, 0.0, 1.0, 0.0, // row 2
-            0.0, 0.0, 0.0, 1.0, // row 3
-        ],
+        data: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
     };
 
     /// Create an identity transform
@@ -27,12 +32,7 @@ impl Transform {
     /// Create a translation transform
     pub fn translate(x: f32, y: f32) -> Self {
         Self {
-            data: [
-                1.0, 0.0, 0.0, x, // row 0
-                0.0, 1.0, 0.0, y, // row 1
-                0.0, 0.0, 1.0, 0.0, // row 2
-                0.0, 0.0, 0.0, 1.0, // row 3
-            ],
+            data: [1.0, 0.0, x, 0.0, 1.0, y],
         }
     }
 
@@ -41,12 +41,7 @@ impl Transform {
         let cos = angle_radians.cos();
         let sin = angle_radians.sin();
         Self {
-            data: [
-                cos, -sin, 0.0, 0.0, // row 0
-                sin, cos, 0.0, 0.0, // row 1
-                0.0, 0.0, 1.0, 0.0, // row 2
-                0.0, 0.0, 0.0, 1.0, // row 3
-            ],
+            data: [cos, -sin, 0.0, sin, cos, 0.0],
         }
     }
 
@@ -63,13 +58,32 @@ impl Transform {
     /// Create a non-uniform scale transform
     pub fn scale_xy(sx: f32, sy: f32) -> Self {
         Self {
-            data: [
-                sx, 0.0, 0.0, 0.0, // row 0
-                0.0, sy, 0.0, 0.0, // row 1
-                0.0, 0.0, 1.0, 0.0, // row 2
-                0.0, 0.0, 0.0, 1.0, // row 3
-            ],
+            data: [sx, 0.0, 0.0, 0.0, sy, 0.0],
         }
+    }
+
+    /// The `a` (x-from-x) coefficient.
+    #[inline]
+    pub fn a(&self) -> f32 {
+        self.data[0]
+    }
+
+    /// The `b` (x-from-y) coefficient.
+    #[inline]
+    pub fn b(&self) -> f32 {
+        self.data[1]
+    }
+
+    /// The `c` (y-from-x) coefficient.
+    #[inline]
+    pub fn c(&self) -> f32 {
+        self.data[3]
+    }
+
+    /// The `d` (y-from-y) coefficient.
+    #[inline]
+    pub fn d(&self) -> f32 {
+        self.data[4]
     }
 
     /// Create a transform that applies this transform centered around a point.
@@ -79,55 +93,43 @@ impl Transform {
     ///
     /// Useful for rotating or scaling around a specific point rather than the origin.
     pub fn center_at(self, cx: f32, cy: f32) -> Self {
-        let to_origin = Self::translate(-cx, -cy);
-        let from_origin = Self::translate(cx, cy);
-        from_origin.then(&self).then(&to_origin)
+        // Directly fold the two translations into the affine form instead of
+        // composing three transforms: only the translation column changes.
+        let [a, b, tx, c, d, ty] = self.data;
+        Self {
+            data: [
+                a,
+                b,
+                tx + cx - (a * cx + b * cy),
+                c,
+                d,
+                ty + cy - (c * cx + d * cy),
+            ],
+        }
     }
 
     /// Compose this transform with another: self * other
     /// Applies `other` first, then `self`.
     pub fn then(&self, other: &Transform) -> Transform {
-        let a = &self.data;
-        let b = &other.data;
-
-        // Matrix multiplication: result[i][j] = sum(a[i][k] * b[k][j])
-        // Row-major indexing: element at row i, col j is at index i*4 + j
-        let mut result = [0.0f32; 16];
-
-        for i in 0..4 {
-            for j in 0..4 {
-                let mut sum = 0.0;
-                for k in 0..4 {
-                    sum += a[i * 4 + k] * b[k * 4 + j];
-                }
-                result[i * 4 + j] = sum;
-            }
+        let [a1, b1, tx1, c1, d1, ty1] = self.data;
+        let [a2, b2, tx2, c2, d2, ty2] = other.data;
+        Transform {
+            data: [
+                a1 * a2 + b1 * c2,
+                a1 * b2 + b1 * d2,
+                a1 * tx2 + b1 * ty2 + tx1,
+                c1 * a2 + d1 * c2,
+                c1 * b2 + d1 * d2,
+                c1 * tx2 + d1 * ty2 + ty1,
+            ],
         }
-
-        Transform { data: result }
     }
 
     /// Compute the inverse of this transform.
-    /// For affine 2D transforms (translate, rotate, scale), this uses a simplified inverse.
+    ///
+    /// Returns the identity for degenerate (zero-determinant) transforms.
     pub fn inverse(&self) -> Transform {
-        // For a 2D affine transform, the matrix has the form:
-        // | a  b  0  tx |
-        // | c  d  0  ty |
-        // | 0  0  1  0  |
-        // | 0  0  0  1  |
-        //
-        // The inverse is:
-        // | d/det  -b/det  0  (-d*tx + b*ty)/det |
-        // | -c/det  a/det  0  (c*tx - a*ty)/det  |
-        // | 0       0      1  0                   |
-        // | 0       0      0  1                   |
-
-        let a = self.data[0];
-        let b = self.data[1];
-        let c = self.data[4];
-        let d = self.data[5];
-        let tx = self.data[3];
-        let ty = self.data[7];
+        let [a, b, tx, c, d, ty] = self.data;
 
         let det = a * d - b * c;
 
@@ -142,44 +144,23 @@ impl Transform {
             data: [
                 d * inv_det,
                 -b * inv_det,
-                0.0,
                 (-d * tx + b * ty) * inv_det,
                 -c * inv_det,
                 a * inv_det,
-                0.0,
                 (c * tx - a * ty) * inv_det,
-                0.0,
-                0.0,
-                1.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
             ],
         }
     }
 
-    /// Transform a 2D point by this matrix
+    /// Transform a 2D point by this transform
+    #[inline]
     pub fn transform_point(&self, x: f32, y: f32) -> (f32, f32) {
-        // Homogeneous coordinates: (x, y, 0, 1)
-        // Result: (a*x + b*y + tx, c*x + d*y + ty)
-        let new_x = self.data[0] * x + self.data[1] * y + self.data[3];
-        let new_y = self.data[4] * x + self.data[5] * y + self.data[7];
-        (new_x, new_y)
-    }
-
-    /// Get the rows of the matrix for passing to the shader
-    pub fn rows(&self) -> [[f32; 4]; 4] {
-        [
-            [self.data[0], self.data[1], self.data[2], self.data[3]],
-            [self.data[4], self.data[5], self.data[6], self.data[7]],
-            [self.data[8], self.data[9], self.data[10], self.data[11]],
-            [self.data[12], self.data[13], self.data[14], self.data[15]],
-        ]
+        let [a, b, tx, c, d, ty] = self.data;
+        (a * x + b * y + tx, c * x + d * y + ty)
     }
 
     /// Check if this is the identity transform
+    #[inline]
     pub fn is_identity(&self) -> bool {
         *self == Self::IDENTITY
     }
@@ -187,40 +168,40 @@ impl Transform {
     /// Check if this transform contains rotation.
     /// Rotation is present when the off-diagonal elements (b, c) are non-zero.
     pub fn has_rotation(&self) -> bool {
-        // Matrix layout:
-        // | a  b  0  tx |  indices: [0, 1, 2, 3]
-        // | c  d  0  ty |  indices: [4, 5, 6, 7]
-        // b is at index 1, c is at index 4
-        self.data[1].abs() > 1e-6 || self.data[4].abs() > 1e-6
+        self.b().abs() > 1e-6 || self.c().abs() > 1e-6
     }
 
     /// Get the X translation component
+    #[inline]
     pub fn tx(&self) -> f32 {
-        self.data[3]
+        self.data[2]
     }
 
     /// Get the Y translation component
+    #[inline]
     pub fn ty(&self) -> f32 {
-        self.data[7]
+        self.data[5]
     }
 
     /// Set the X translation component
+    #[inline]
     pub fn set_tx(&mut self, val: f32) {
-        self.data[3] = val;
+        self.data[2] = val;
     }
 
     /// Set the Y translation component
+    #[inline]
     pub fn set_ty(&mut self, val: f32) {
-        self.data[7] = val;
+        self.data[5] = val;
     }
 
     /// Scale the translation components by a factor (useful for HiDPI scaling)
     pub fn scale_translation(&mut self, factor: f32) {
-        self.data[3] *= factor;
-        self.data[7] *= factor;
+        self.data[2] *= factor;
+        self.data[5] *= factor;
     }
 
-    /// Extract the X and Y scale components from the transform matrix.
+    /// Extract the X and Y scale components from the transform.
     ///
     /// For transforms that contain rotation and/or scale:
     /// - sx = sqrt(a² + b²)
@@ -228,10 +209,7 @@ impl Transform {
     ///
     /// Returns `(scale_x, scale_y)` as a tuple.
     pub fn extract_scale_components(&self) -> (f32, f32) {
-        let a = self.data[0];
-        let b = self.data[1];
-        let c = self.data[4];
-        let d = self.data[5];
+        let (a, b, c, d) = (self.a(), self.b(), self.c(), self.d());
         ((a * a + b * b).sqrt(), (c * c + d * d).sqrt())
     }
 
@@ -252,49 +230,21 @@ impl Transform {
     /// Useful for render-to-texture workflows where text is pre-scaled.
     pub fn without_scale(&self) -> Transform {
         let (sx, sy) = self.extract_scale_components();
-        let tx = self.data[3];
-        let ty = self.data[7];
+        let [a, b, tx, c, d, ty] = self.data;
 
         // Avoid division by zero
         if sx < 1e-10 || sy < 1e-10 {
             return Transform::translate(tx, ty);
         }
 
-        let a = self.data[0];
-        let b = self.data[1];
-        let c = self.data[4];
-        let d = self.data[5];
-
-        // Normalize the rotation component
         Transform {
-            data: [
-                a / sx,
-                b / sx,
-                0.0,
-                tx,
-                c / sy,
-                d / sy,
-                0.0,
-                ty,
-                0.0,
-                0.0,
-                1.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-            ],
+            data: [a / sx, b / sx, tx, c / sy, d / sy, ty],
         }
     }
 
     /// Check if this transform contains only translation (no rotation or scale).
     pub fn is_translation_only(&self) -> bool {
-        let a = self.data[0];
-        let b = self.data[1];
-        let c = self.data[4];
-        let d = self.data[5];
-
+        let (a, b, c, d) = (self.a(), self.b(), self.c(), self.d());
         // For pure translation: a=1, b=0, c=0, d=1
         (a - 1.0).abs() < 1e-6 && b.abs() < 1e-6 && c.abs() < 1e-6 && (d - 1.0).abs() < 1e-6
     }
@@ -316,31 +266,10 @@ impl Transform {
             return Transform::IDENTITY;
         }
 
-        let a = self.data[0];
-        let b = self.data[1];
-        let c = self.data[4];
-        let d = self.data[5];
+        let [a, b, _tx, c, d, _ty] = self.data;
 
-        // Extract normalized rotation (no translation)
         Transform {
-            data: [
-                a / sx,
-                b / sx,
-                0.0,
-                0.0, // No translation
-                c / sy,
-                d / sy,
-                0.0,
-                0.0, // No translation
-                0.0,
-                0.0,
-                1.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-            ],
+            data: [a / sx, b / sx, 0.0, c / sy, d / sy, 0.0],
         }
     }
 }
@@ -451,16 +380,6 @@ mod tests {
     }
 
     #[test]
-    fn test_rows() {
-        let t = Transform::translate(1.0, 2.0);
-        let rows = t.rows();
-        assert_eq!(rows[0], [1.0, 0.0, 0.0, 1.0]);
-        assert_eq!(rows[1], [0.0, 1.0, 0.0, 2.0]);
-        assert_eq!(rows[2], [0.0, 0.0, 1.0, 0.0]);
-        assert_eq!(rows[3], [0.0, 0.0, 0.0, 1.0]);
-    }
-
-    #[test]
     fn test_center_at_rotation() {
         // Rotate 90 degrees around point (10, 10)
         let t = Transform::rotate_degrees(90.0).center_at(10.0, 10.0);
@@ -509,6 +428,23 @@ mod tests {
         let (x, y) = t.transform_point(50.0, 75.0);
         assert!(approx_eq(x, 50.0));
         assert!(approx_eq(y, 75.0));
+    }
+
+    /// center_at must agree with the composed definition:
+    /// translate(cx, cy) * self * translate(-cx, -cy)
+    #[test]
+    fn test_center_at_matches_composed_form() {
+        let t = Transform::rotate_degrees(30.0).then(&Transform::scale_xy(2.0, 0.5));
+        let (cx, cy) = (17.0, -4.0);
+
+        let direct = t.center_at(cx, cy);
+        let composed = Transform::translate(cx, cy)
+            .then(&t)
+            .then(&Transform::translate(-cx, -cy));
+
+        for (a, b) in direct.data.iter().zip(composed.data.iter()) {
+            assert!(approx_eq(*a, *b), "{direct:?} != {composed:?}");
+        }
     }
 
     #[test]

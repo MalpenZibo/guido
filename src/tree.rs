@@ -79,11 +79,15 @@ impl WidgetId {
     }
 }
 
-/// Entry in the sparse map, pointing to a dense array slot.
-struct SparseEntry {
-    /// Index into the dense array
-    dense_index: usize,
-    /// Generation of this entry (for validation)
+/// Slot in the sparse map, pointing to a dense array slot.
+///
+/// The generation survives vacancy: it is bumped when the slot is reused,
+/// so a stale `WidgetId` can never alias a widget that later recycled the
+/// same index.
+struct SparseSlot {
+    /// Index into the dense array; `None` while the slot is vacant
+    dense_index: Option<usize>,
+    /// Generation of this slot (for validation)
     generation: u32,
 }
 
@@ -110,7 +114,7 @@ struct Node {
     /// Back-pointer to sparse array index (for swap-remove fixup)
     sparse_index: u32,
     /// Cached paint output from last frame
-    cached_paint: Option<crate::renderer::RenderNode>,
+    cached_paint: Option<std::rc::Rc<crate::renderer::RenderNode>>,
 }
 
 /// Central tree for widget storage using arena-based sparse-set architecture.
@@ -122,11 +126,13 @@ pub struct Tree {
     /// Dense array of nodes (widgets + metadata)
     dense: Vec<Node>,
     /// Sparse map from index to dense position + generation
-    sparse: Vec<Option<SparseEntry>>,
+    sparse: Vec<SparseSlot>,
     /// Free list of reusable sparse indices
     free_indices: Vec<u32>,
-    /// Accumulated damage region for the current frame
-    damage: DamageRegion,
+    /// Accumulated damage region for the current frame, keyed by the
+    /// surface's root widget. Per-surface so that one surface's render
+    /// cannot consume (or misreport) damage accumulated by another.
+    damage: std::collections::HashMap<WidgetId, DamageRegion>,
 }
 
 impl Tree {
@@ -136,7 +142,7 @@ impl Tree {
             dense: Vec::new(),
             sparse: Vec::new(),
             free_indices: Vec::new(),
-            damage: DamageRegion::None,
+            damage: std::collections::HashMap::new(),
         }
     }
 
@@ -147,16 +153,17 @@ impl Tree {
     pub fn register(&mut self, widget: Box<dyn Widget>) -> WidgetId {
         // Allocate a sparse index (reuse from free list or allocate new)
         let (sparse_index, generation) = if let Some(idx) = self.free_indices.pop() {
-            // Reuse a freed slot - increment generation
-            let old_gen = self.sparse[idx as usize]
-                .as_ref()
-                .map(|e| e.generation)
-                .unwrap_or(0);
-            (idx, old_gen.wrapping_add(1))
+            // Reuse a freed slot - increment the surviving generation so
+            // stale IDs from the previous occupant can never match
+            let generation = self.sparse[idx as usize].generation.wrapping_add(1);
+            (idx, generation)
         } else {
             // Allocate new slot
             let idx = self.sparse.len() as u32;
-            self.sparse.push(None);
+            self.sparse.push(SparseSlot {
+                dense_index: None,
+                generation: 0,
+            });
             (idx, 0)
         };
 
@@ -181,10 +188,10 @@ impl Tree {
         });
 
         // Update sparse map
-        self.sparse[sparse_index as usize] = Some(SparseEntry {
-            dense_index,
+        self.sparse[sparse_index as usize] = SparseSlot {
+            dense_index: Some(dense_index),
             generation,
-        });
+        };
 
         id
     }
@@ -217,13 +224,11 @@ impl Tree {
         // Fix up the moved node's sparse entry (if we didn't remove the last element)
         if dense_index != last_dense_index && !self.dense.is_empty() {
             let moved_sparse_idx = self.dense[dense_index].sparse_index;
-            if let Some(ref mut entry) = self.sparse[moved_sparse_idx as usize] {
-                entry.dense_index = dense_index;
-            }
+            self.sparse[moved_sparse_idx as usize].dense_index = Some(dense_index);
         }
 
-        // Invalidate the sparse entry (keep generation for next allocation)
-        self.sparse[id.index as usize] = None;
+        // Vacate the sparse slot, keeping its generation for the next allocation
+        self.sparse[id.index as usize].dense_index = None;
         self.free_indices.push(id.index);
 
         // Now drop the removed widget (may trigger recursive unregisters)
@@ -234,9 +239,8 @@ impl Tree {
     fn get_dense_index(&self, id: WidgetId) -> Option<usize> {
         self.sparse
             .get(id.index as usize)
-            .and_then(|e| e.as_ref())
-            .filter(|e| e.generation == id.generation)
-            .map(|e| e.dense_index)
+            .filter(|slot| slot.generation == id.generation)
+            .and_then(|slot| slot.dense_index)
     }
 
     /// Access a widget via a closure.
@@ -385,9 +389,10 @@ impl Tree {
     /// Also accumulates the widget's surface-relative bounds into the
     /// damage region for Wayland damage reporting.
     pub fn mark_needs_paint(&mut self, widget_id: WidgetId) {
-        // Accumulate damage for the actual dirty widget (before propagation)
-        if let Some(bounds) = self.get_surface_relative_bounds(widget_id) {
-            self.expand_damage_rect(bounds);
+        // Accumulate damage for the actual dirty widget (before propagation),
+        // attributed to the widget's surface root
+        if let Some((root, bounds)) = self.surface_relative_bounds_and_root(widget_id) {
+            self.expand_damage_rect(root, bounds);
         }
 
         let mut current = widget_id;
@@ -422,9 +427,12 @@ impl Tree {
 
     /// Mark a widget and all its descendants as needing paint.
     ///
-    /// Sets full damage since the entire subtree is being repainted.
+    /// Sets full damage for the widget's surface since the entire subtree
+    /// is being repainted.
     pub fn mark_subtree_needs_paint(&mut self, widget_id: WidgetId) {
-        self.damage = DamageRegion::Full;
+        if let Some(root) = self.surface_root_of(widget_id) {
+            self.damage.insert(root, DamageRegion::Full);
+        }
         self.mark_subtree_needs_paint_inner(widget_id);
     }
 
@@ -447,6 +455,13 @@ impl Tree {
     /// Get the surface-relative bounds of a widget by walking up the parent chain
     /// and summing origins.
     pub fn get_surface_relative_bounds(&self, id: WidgetId) -> Option<Rect> {
+        self.surface_relative_bounds_and_root(id)
+            .map(|(_, bounds)| bounds)
+    }
+
+    /// Walk to the surface root, returning it together with the widget's
+    /// surface-relative bounds (origins summed along the chain).
+    fn surface_relative_bounds_and_root(&self, id: WidgetId) -> Option<(WidgetId, Rect)> {
         let idx = self.get_dense_index(id)?;
         let size = self.dense[idx].cached_size?;
         let mut x = 0.0f32;
@@ -461,12 +476,25 @@ impl Tree {
                 None => break,
             }
         }
-        Some(Rect::new(x, y, size.width, size.height))
+        Some((current, Rect::new(x, y, size.width, size.height)))
     }
 
-    /// Union a rect into the accumulated damage region.
-    fn expand_damage_rect(&mut self, rect: Rect) {
-        self.damage = match &self.damage {
+    /// Find the surface root (topmost ancestor) of a widget.
+    fn surface_root_of(&self, id: WidgetId) -> Option<WidgetId> {
+        let mut current = id;
+        loop {
+            let dense_idx = self.get_dense_index(current)?;
+            match self.dense[dense_idx].parent {
+                Some(parent) => current = parent,
+                None => return Some(current),
+            }
+        }
+    }
+
+    /// Union a rect into the damage region of the given surface root.
+    fn expand_damage_rect(&mut self, root: WidgetId, rect: Rect) {
+        let entry = self.damage.entry(root).or_insert(DamageRegion::None);
+        *entry = match entry {
             DamageRegion::None => DamageRegion::Partial(rect),
             DamageRegion::Partial(existing) => {
                 let min_x = existing.x.min(rect.x);
@@ -479,14 +507,15 @@ impl Tree {
         };
     }
 
-    /// Set full-surface damage (e.g., on resize or initialization).
-    pub fn set_full_damage(&mut self) {
-        self.damage = DamageRegion::Full;
+    /// Set full-surface damage for a surface root (e.g., on resize,
+    /// initialization, or a failed present that must be retried).
+    pub fn set_full_damage(&mut self, root: WidgetId) {
+        self.damage.insert(root, DamageRegion::Full);
     }
 
-    /// Take the accumulated damage region, resetting it to None.
-    pub fn take_damage(&mut self) -> DamageRegion {
-        std::mem::replace(&mut self.damage, DamageRegion::None)
+    /// Take the accumulated damage region for a surface root, resetting it.
+    pub fn take_damage(&mut self, root: WidgetId) -> DamageRegion {
+        self.damage.remove(&root).unwrap_or(DamageRegion::None)
     }
 
     /// Set whether a widget is a relayout boundary.
@@ -548,15 +577,16 @@ impl Tree {
         ))
     }
 
-    /// Cache a widget's paint output.
-    pub fn cache_paint(&mut self, id: WidgetId, node: crate::renderer::RenderNode) {
+    /// Cache a widget's paint output. The node is Rc-shared with the frame's
+    /// render tree, so this is a refcount bump, not a deep clone.
+    pub fn cache_paint(&mut self, id: WidgetId, node: std::rc::Rc<crate::renderer::RenderNode>) {
         if let Some(idx) = self.get_dense_index(id) {
             self.dense[idx].cached_paint = Some(node);
         }
     }
 
     /// Get a widget's cached paint output.
-    pub fn cached_paint(&self, id: WidgetId) -> Option<&crate::renderer::RenderNode> {
+    pub fn cached_paint(&self, id: WidgetId) -> Option<&std::rc::Rc<crate::renderer::RenderNode>> {
         self.get_dense_index(id)
             .and_then(|idx| self.dense[idx].cached_paint.as_ref())
     }
@@ -566,6 +596,7 @@ impl Tree {
         self.dense.clear();
         self.sparse.clear();
         self.free_indices.clear();
+        self.damage.clear();
     }
 
     /// Get the number of registered widgets.
@@ -629,6 +660,36 @@ mod tests {
         // They should have the same index but different generations
         assert_eq!(id1.index, id2.index);
         assert_ne!(id1.generation, id2.generation);
+    }
+
+    /// Regression test: the generation must keep advancing across repeated
+    /// recycles of the same slot. The old implementation read the generation
+    /// from a sparse entry that `unregister` had already cleared, so every
+    /// reuse produced generation 1 and a stale ID from cycle N aliased the
+    /// live widget of cycle N+2.
+    #[test]
+    fn test_tree_generation_advances_across_recycles() {
+        let mut tree = Tree::new();
+
+        let mut previous_ids = Vec::new();
+        let mut current = tree.register(Box::new(MockWidget::new()));
+
+        for _ in 0..5 {
+            tree.unregister(current);
+            let next = tree.register(Box::new(MockWidget::new()));
+            assert_eq!(next.index, current.index, "slot should be recycled");
+            previous_ids.push(current);
+            current = next;
+
+            // No previously issued ID may resolve to the new widget
+            for stale in &previous_ids {
+                assert!(
+                    !tree.contains(*stale),
+                    "stale id {stale:?} aliases live widget {current:?}"
+                );
+            }
+            assert!(tree.contains(current));
+        }
     }
 
     #[test]

@@ -6,7 +6,7 @@ use crate::transform::Transform;
 use crate::widgets::Rect;
 
 use super::commands::DrawCommand;
-use super::tree::{CachedFlatten, ClipRegion, RenderNode, RenderTree};
+use super::tree::{CachedFlatten, ClipRegion, RenderNode};
 
 /// Render layer for draw command ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -55,16 +55,6 @@ pub struct FlattenedCommand {
     /// Whether the clip is in local coordinates (use frag_pos in shader instead of world_pos).
     /// This is true for overlay clips on transformed containers.
     pub clip_is_local: bool,
-}
-
-/// Flatten a render tree into a list of commands ready for GPU submission.
-///
-/// This walks the tree depth-first, computing world transforms as it goes.
-/// Commands are bucketed by layer for correct render order.
-pub fn flatten_tree(tree: &mut RenderTree) -> (Vec<FlattenedCommand>, LayerBoundaries) {
-    let mut commands = Vec::new();
-    let boundaries = flatten_tree_into(tree, &mut commands);
-    (commands, boundaries)
 }
 
 /// Layered command buffers that avoid post-flatten sorting.
@@ -157,24 +147,19 @@ pub struct LayerBoundaries {
 
 /// Flatten a render tree into an existing buffer (clears and reuses capacity).
 ///
-/// This is more efficient than `flatten_tree` when called repeatedly,
-/// as it avoids reallocating the output vector each frame.
-///
-/// Takes `&mut RenderTree` so that flatten results can be cached on nodes
-/// for incremental reuse in subsequent frames.
+/// Flatten results are cached on nodes (via interior mutability) for
+/// incremental reuse in subsequent frames.
 ///
 /// Returns `LayerBoundaries` with pre-computed offsets for each render layer,
 /// replacing the previous `partition_point` lookups in the renderer.
-pub fn flatten_tree_into(
-    tree: &mut RenderTree,
+pub fn flatten_root_into(
+    root: &RenderNode,
     commands: &mut Vec<FlattenedCommand>,
 ) -> LayerBoundaries {
     commands.clear();
 
     let mut layered = LayeredCommands::new();
-    for root in &mut tree.roots {
-        flatten_node(root, Transform::IDENTITY, None, None, &mut layered);
-    }
+    flatten_node(root, Transform::IDENTITY, None, None, &mut layered);
 
     layered.drain_into(commands)
 }
@@ -185,7 +170,7 @@ pub fn flatten_tree_into(
 /// reuse the cached commands with a translation offset instead of
 /// re-flattening the entire subtree.
 fn flatten_node(
-    node: &mut RenderNode,
+    node: &RenderNode,
     parent_world_transform: Transform,
     parent_world_origin: Option<(f32, f32)>,
     parent_clip: Option<&WorldClip>,
@@ -202,11 +187,16 @@ fn flatten_node(
     };
     let world_transform = parent_world_transform.then(&local_centered);
 
-    // Try cached flatten for clean subtrees (translation-only optimization)
-    if !node.repainted
-        && parent_clip.is_none()
+    // Try cached flatten for clean subtrees (translation-only optimization).
+    // Clone the Rc out of the RefCell so the borrow isn't held while pushing.
+    let cached_flatten = if !node.repainted.get() {
+        node.cached_flatten.borrow().clone()
+    } else {
+        None
+    };
+    if parent_clip.is_none()
         && node.clip.is_none()
-        && let Some(ref cached) = node.cached_flatten
+        && let Some(cached) = cached_flatten
         && cached.world_transform.is_translation_only()
         && world_transform.is_translation_only()
     {
@@ -284,7 +274,7 @@ fn flatten_node(
     }
 
     // Recurse to children with effective clip
-    for child in &mut node.children {
+    for child in &node.children {
         flatten_node(
             child,
             world_transform,
@@ -326,14 +316,12 @@ fn flatten_node(
     // Cache flatten results for next frame, but only when reuse is possible.
     // The snapshot captures everything added since the start of this node
     // (including all children), matching the original `out[start_idx..]` behavior.
-    if let Some(snap) = snap {
-        node.cached_flatten = Some(Box::new(CachedFlatten {
+    *node.cached_flatten.borrow_mut() = snap.map(|snap| {
+        Rc::new(CachedFlatten {
             commands: out.commands_since(&snap),
             world_transform,
-        }));
-    } else {
-        node.cached_flatten = None;
-    }
+        })
+    });
     crate::render_stats::record_flatten_full();
 }
 

@@ -18,7 +18,7 @@ use crate::reactive::{
     CursorIcon, IntoSignal, OptionSignalExt, RwSignal, Signal, clipboard_copy, clipboard_paste,
     has_focus, release_focus, request_focus, set_cursor, with_signal_tracking,
 };
-use crate::renderer::{PaintContext, char_index_from_x_styled, measure_text_styled};
+use crate::renderer::{PaintContext, char_index_from_x_styled};
 use crate::tree::{Tree, WidgetId};
 
 use super::font::{FontFamily, FontWeight};
@@ -408,32 +408,22 @@ impl TextInput {
         let font_family = &self.cached_font_family;
         let font_weight = self.cached_font_weight;
 
-        // Build cumulative position array: positions[i] = width of text[0..i]
-        // Length is char_count + 1 to include position 0 and position at end
-        let char_count = self.cached_char_count;
-        self.cached_glyph_positions.clear();
-        self.cached_glyph_positions.reserve(char_count + 1);
-        self.cached_glyph_positions.push(0.0); // Position at index 0
-
-        // Measure width at each character boundary
-        for (i, (byte_idx, _)) in display.char_indices().enumerate() {
-            // Width up to this character
-            let prefix = &display[..byte_idx];
-            let width = if prefix.is_empty() {
-                0.0
-            } else {
-                measure_text_styled(prefix, font_size, None, font_family, font_weight).width
-            };
-            // Update position for this index (already have 0 at index 0)
-            if i > 0 {
-                self.cached_glyph_positions.push(width);
-            }
-        }
-
-        // Add final position (total width)
-        self.cached_text_width =
-            measure_text_styled(display, font_size, None, font_family, font_weight).width;
-        self.cached_glyph_positions.push(self.cached_text_width);
+        // Build cumulative position array (positions[i] = x of the boundary
+        // before character i) by shaping the text ONCE. The previous
+        // implementation measured every prefix — O(n) shaping passes of
+        // O(n) text per keystroke — and flooded the measurement cache with
+        // one entry per prefix.
+        self.cached_glyph_positions = crate::renderer::measure_char_positions_styled(
+            display,
+            font_size,
+            font_family,
+            font_weight,
+        );
+        self.cached_text_width = self
+            .cached_glyph_positions
+            .last()
+            .copied()
+            .unwrap_or_default();
 
         self.measurements_dirty = false;
     }
@@ -1112,21 +1102,21 @@ impl Widget for TextInput {
         let bounds = tree.get_bounds(id).unwrap_or_default();
 
         match event {
-            Event::MouseDown { x, y, button } => {
-                if bounds.contains(*x, *y) && *button == MouseButton::Left {
-                    // Request focus and start cursor blink animation
-                    request_focus(id);
-                    request_job(id, JobRequest::Animation(RequiredJob::Paint));
+            Event::MouseDown { x, y, button }
+                if bounds.contains(*x, *y) && *button == MouseButton::Left =>
+            {
+                // Request focus and start cursor blink animation
+                request_focus(id);
+                request_job(id, JobRequest::Animation(RequiredJob::Paint));
 
-                    // Set cursor position
-                    let char_index = self.char_index_at_x(*x, bounds);
-                    self.selection = Selection::new(char_index);
-                    self.is_dragging = true;
-                    self.reset_cursor_blink();
-                    self.ensure_cursor_visible(bounds.width);
+                // Set cursor position
+                let char_index = self.char_index_at_x(*x, bounds);
+                self.selection = Selection::new(char_index);
+                self.is_dragging = true;
+                self.reset_cursor_blink();
+                self.ensure_cursor_visible(bounds.width);
 
-                    return EventResponse::Handled;
-                }
+                return EventResponse::Handled;
             }
             Event::MouseMove { x, y, .. } => {
                 let in_bounds = bounds.contains(*x, *y);
@@ -1149,27 +1139,22 @@ impl Widget for TextInput {
                     return EventResponse::Handled;
                 }
             }
-            Event::MouseUp { button, .. } => {
-                if *button == MouseButton::Left && self.is_dragging {
-                    self.is_dragging = false;
-                    return EventResponse::Handled;
-                }
+            Event::MouseUp { button, .. } if *button == MouseButton::Left && self.is_dragging => {
+                self.is_dragging = false;
+                return EventResponse::Handled;
             }
-            Event::KeyDown { key, modifiers } => {
-                if has_focus(id) {
-                    // Track key for repeat
-                    let now = Instant::now();
-                    self.pressed_key = Some((*key, *modifiers));
-                    self.key_press_time = now;
-                    self.last_repeat_time = now;
+            Event::KeyDown { key, modifiers } if has_focus(id) => {
+                // Track key for repeat
+                let now = Instant::now();
+                self.pressed_key = Some((*key, *modifiers));
+                self.key_press_time = now;
+                self.last_repeat_time = now;
 
-                    let response =
-                        self.handle_key(key, modifiers.ctrl, modifiers.shift, bounds.width);
-                    if response == EventResponse::Handled {
-                        request_job(id, JobRequest::Paint);
-                    }
-                    return response;
+                let response = self.handle_key(key, modifiers.ctrl, modifiers.shift, bounds.width);
+                if response == EventResponse::Handled {
+                    request_job(id, JobRequest::Paint);
                 }
+                return response;
             }
             Event::KeyUp { key, .. } => {
                 // Stop repeating when key is released
@@ -1179,19 +1164,15 @@ impl Widget for TextInput {
                     self.pressed_key = None;
                 }
             }
-            Event::FocusOut => {
-                if has_focus(id) {
-                    release_focus(id);
-                    self.cursor_visible = false;
-                    self.is_dragging = false;
-                    request_job(id, JobRequest::Paint);
-                }
+            Event::FocusOut if has_focus(id) => {
+                release_focus(id);
+                self.cursor_visible = false;
+                self.is_dragging = false;
+                request_job(id, JobRequest::Paint);
             }
-            Event::MouseLeave => {
-                if self.is_hovered {
-                    self.is_hovered = false;
-                    set_cursor(CursorIcon::Default);
-                }
+            Event::MouseLeave if self.is_hovered => {
+                self.is_hovered = false;
+                set_cursor(CursorIcon::Default);
             }
             _ => {}
         }
