@@ -490,32 +490,13 @@ fn render_surface(
             layer_boundaries =
                 flatten_root_into(&surface.root_node, &mut surface.flattened_commands);
         });
-        time_phase!(render_stats::Phase::GpuRender, {
-            renderer.render(
-                wgpu_surface,
-                &surface.flattened_commands,
-                layer_boundaries,
-                surface.config.background_color,
-            );
-        });
 
-        // Cache paint results AFTER flatten so cached_flatten data is preserved.
-        // This enables incremental flatten for paint-cached nodes on subsequent
-        // frames. The surface root itself is never cache-reused (it always
-        // repaints), so only its children are cached.
-        time_phase!(render_stats::Phase::CachePaintResults, {
-            for child in &surface.root_node.children {
-                cache_paint_results(tree, child);
-            }
-            tree.clear_needs_paint(surface.widget_id);
-        });
-
-        // Report damage region to Wayland compositor
-        let damage = tree.take_damage();
-
-        // Track render stats (when compiled with --features render-stats)
-        render_stats::record_frame_painted();
-        render_stats::end_frame(&damage);
+        // Report damage BEFORE presenting: presenting attaches the buffer and
+        // commits the wl_surface (inside wgpu/the driver's Wayland path), so
+        // pending damage set now is part of that commit. The previous code
+        // damaged + committed AFTER present, attaching the damage to an empty
+        // second commit the compositor could not use.
+        let damage = tree.take_damage(surface.widget_id);
         match damage {
             DamageRegion::None => {
                 // Shouldn't happen since we're rendering, but report full damage to be safe
@@ -535,8 +516,40 @@ fn render_surface(
             }
         }
 
-        // Commit surface
-        wl_surface.commit();
+        let presented;
+        time_phase!(render_stats::Phase::GpuRender, {
+            presented = renderer.render(
+                wgpu_surface,
+                &surface.flattened_commands,
+                layer_boundaries,
+                surface.config.background_color,
+            );
+        });
+
+        if !presented {
+            // Nothing reached the screen (lost/outdated swapchain — common
+            // right after a resize). Keep all dirty flags so the content is
+            // repainted next frame instead of staying stale, restore full
+            // damage, and request that frame.
+            tree.set_full_damage(surface.widget_id);
+            jobs::request_frame();
+            return;
+        }
+
+        // Cache paint results AFTER flatten so cached_flatten data is preserved.
+        // This enables incremental flatten for paint-cached nodes on subsequent
+        // frames. The surface root itself is never cache-reused (it always
+        // repaints), so only its children are cached.
+        time_phase!(render_stats::Phase::CachePaintResults, {
+            for child in &surface.root_node.children {
+                cache_paint_results(tree, child);
+            }
+            tree.clear_needs_paint(surface.widget_id);
+        });
+
+        // Track render stats (when compiled with --features render-stats)
+        render_stats::record_frame_painted();
+        render_stats::end_frame(&damage);
 
         // Request frame callback if not yet initialized
         if !first_frame_presented {

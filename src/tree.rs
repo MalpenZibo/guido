@@ -129,8 +129,10 @@ pub struct Tree {
     sparse: Vec<SparseSlot>,
     /// Free list of reusable sparse indices
     free_indices: Vec<u32>,
-    /// Accumulated damage region for the current frame
-    damage: DamageRegion,
+    /// Accumulated damage region for the current frame, keyed by the
+    /// surface's root widget. Per-surface so that one surface's render
+    /// cannot consume (or misreport) damage accumulated by another.
+    damage: std::collections::HashMap<WidgetId, DamageRegion>,
 }
 
 impl Tree {
@@ -140,7 +142,7 @@ impl Tree {
             dense: Vec::new(),
             sparse: Vec::new(),
             free_indices: Vec::new(),
-            damage: DamageRegion::None,
+            damage: std::collections::HashMap::new(),
         }
     }
 
@@ -387,9 +389,10 @@ impl Tree {
     /// Also accumulates the widget's surface-relative bounds into the
     /// damage region for Wayland damage reporting.
     pub fn mark_needs_paint(&mut self, widget_id: WidgetId) {
-        // Accumulate damage for the actual dirty widget (before propagation)
-        if let Some(bounds) = self.get_surface_relative_bounds(widget_id) {
-            self.expand_damage_rect(bounds);
+        // Accumulate damage for the actual dirty widget (before propagation),
+        // attributed to the widget's surface root
+        if let Some((root, bounds)) = self.surface_relative_bounds_and_root(widget_id) {
+            self.expand_damage_rect(root, bounds);
         }
 
         let mut current = widget_id;
@@ -424,9 +427,12 @@ impl Tree {
 
     /// Mark a widget and all its descendants as needing paint.
     ///
-    /// Sets full damage since the entire subtree is being repainted.
+    /// Sets full damage for the widget's surface since the entire subtree
+    /// is being repainted.
     pub fn mark_subtree_needs_paint(&mut self, widget_id: WidgetId) {
-        self.damage = DamageRegion::Full;
+        if let Some(root) = self.surface_root_of(widget_id) {
+            self.damage.insert(root, DamageRegion::Full);
+        }
         self.mark_subtree_needs_paint_inner(widget_id);
     }
 
@@ -449,6 +455,13 @@ impl Tree {
     /// Get the surface-relative bounds of a widget by walking up the parent chain
     /// and summing origins.
     pub fn get_surface_relative_bounds(&self, id: WidgetId) -> Option<Rect> {
+        self.surface_relative_bounds_and_root(id)
+            .map(|(_, bounds)| bounds)
+    }
+
+    /// Walk to the surface root, returning it together with the widget's
+    /// surface-relative bounds (origins summed along the chain).
+    fn surface_relative_bounds_and_root(&self, id: WidgetId) -> Option<(WidgetId, Rect)> {
         let idx = self.get_dense_index(id)?;
         let size = self.dense[idx].cached_size?;
         let mut x = 0.0f32;
@@ -463,12 +476,25 @@ impl Tree {
                 None => break,
             }
         }
-        Some(Rect::new(x, y, size.width, size.height))
+        Some((current, Rect::new(x, y, size.width, size.height)))
     }
 
-    /// Union a rect into the accumulated damage region.
-    fn expand_damage_rect(&mut self, rect: Rect) {
-        self.damage = match &self.damage {
+    /// Find the surface root (topmost ancestor) of a widget.
+    fn surface_root_of(&self, id: WidgetId) -> Option<WidgetId> {
+        let mut current = id;
+        loop {
+            let dense_idx = self.get_dense_index(current)?;
+            match self.dense[dense_idx].parent {
+                Some(parent) => current = parent,
+                None => return Some(current),
+            }
+        }
+    }
+
+    /// Union a rect into the damage region of the given surface root.
+    fn expand_damage_rect(&mut self, root: WidgetId, rect: Rect) {
+        let entry = self.damage.entry(root).or_insert(DamageRegion::None);
+        *entry = match entry {
             DamageRegion::None => DamageRegion::Partial(rect),
             DamageRegion::Partial(existing) => {
                 let min_x = existing.x.min(rect.x);
@@ -481,14 +507,15 @@ impl Tree {
         };
     }
 
-    /// Set full-surface damage (e.g., on resize or initialization).
-    pub fn set_full_damage(&mut self) {
-        self.damage = DamageRegion::Full;
+    /// Set full-surface damage for a surface root (e.g., on resize,
+    /// initialization, or a failed present that must be retried).
+    pub fn set_full_damage(&mut self, root: WidgetId) {
+        self.damage.insert(root, DamageRegion::Full);
     }
 
-    /// Take the accumulated damage region, resetting it to None.
-    pub fn take_damage(&mut self) -> DamageRegion {
-        std::mem::replace(&mut self.damage, DamageRegion::None)
+    /// Take the accumulated damage region for a surface root, resetting it.
+    pub fn take_damage(&mut self, root: WidgetId) -> DamageRegion {
+        self.damage.remove(&root).unwrap_or(DamageRegion::None)
     }
 
     /// Set whether a widget is a relayout boundary.
@@ -569,6 +596,7 @@ impl Tree {
         self.dense.clear();
         self.sparse.clear();
         self.free_indices.clear();
+        self.damage.clear();
     }
 
     /// Get the number of registered widgets.

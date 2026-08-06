@@ -249,26 +249,31 @@ impl Renderer {
     }
 
     /// Render flattened commands to a surface.
+    ///
+    /// Returns `true` if a frame was actually presented. On `false` (lost/
+    /// outdated swapchain, out of memory) nothing reached the screen — the
+    /// caller must keep its dirty state so the content is repainted on the
+    /// next frame instead of showing stale pixels.
     pub fn render(
         &mut self,
         surface: &mut SurfaceState,
         commands: &[FlattenedCommand],
         boundaries: super::flatten::LayerBoundaries,
         clear_color: Color,
-    ) {
+    ) -> bool {
         let output = match surface.surface.get_current_texture() {
             Ok(output) => output,
             Err(wgpu::SurfaceError::Lost) => {
                 surface.resize(surface.width(), surface.height());
-                return;
+                return false;
             }
             Err(wgpu::SurfaceError::OutOfMemory) => {
                 log::error!("Out of GPU memory");
-                return;
+                return false;
             }
             Err(e) => {
                 log::error!("Surface error: {:?}", e);
-                return;
+                return false;
             }
         };
 
@@ -465,6 +470,7 @@ impl Renderer {
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
+        true
     }
 }
 
