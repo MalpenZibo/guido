@@ -46,7 +46,7 @@ fn main() {
 
 fn bench_row(i: usize) -> Container {
     let value = create_signal(format!("Item {i}"));
-    let checked = create_signal(i % 5 == 0);
+    let checked = create_signal(i.is_multiple_of(5));
 
     container()
         .layout(Flex::row().spacing(8.0))

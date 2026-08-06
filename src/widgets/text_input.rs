@@ -1102,21 +1102,21 @@ impl Widget for TextInput {
         let bounds = tree.get_bounds(id).unwrap_or_default();
 
         match event {
-            Event::MouseDown { x, y, button } => {
-                if bounds.contains(*x, *y) && *button == MouseButton::Left {
-                    // Request focus and start cursor blink animation
-                    request_focus(id);
-                    request_job(id, JobRequest::Animation(RequiredJob::Paint));
+            Event::MouseDown { x, y, button }
+                if bounds.contains(*x, *y) && *button == MouseButton::Left =>
+            {
+                // Request focus and start cursor blink animation
+                request_focus(id);
+                request_job(id, JobRequest::Animation(RequiredJob::Paint));
 
-                    // Set cursor position
-                    let char_index = self.char_index_at_x(*x, bounds);
-                    self.selection = Selection::new(char_index);
-                    self.is_dragging = true;
-                    self.reset_cursor_blink();
-                    self.ensure_cursor_visible(bounds.width);
+                // Set cursor position
+                let char_index = self.char_index_at_x(*x, bounds);
+                self.selection = Selection::new(char_index);
+                self.is_dragging = true;
+                self.reset_cursor_blink();
+                self.ensure_cursor_visible(bounds.width);
 
-                    return EventResponse::Handled;
-                }
+                return EventResponse::Handled;
             }
             Event::MouseMove { x, y, .. } => {
                 let in_bounds = bounds.contains(*x, *y);
@@ -1139,27 +1139,22 @@ impl Widget for TextInput {
                     return EventResponse::Handled;
                 }
             }
-            Event::MouseUp { button, .. } => {
-                if *button == MouseButton::Left && self.is_dragging {
-                    self.is_dragging = false;
-                    return EventResponse::Handled;
-                }
+            Event::MouseUp { button, .. } if *button == MouseButton::Left && self.is_dragging => {
+                self.is_dragging = false;
+                return EventResponse::Handled;
             }
-            Event::KeyDown { key, modifiers } => {
-                if has_focus(id) {
-                    // Track key for repeat
-                    let now = Instant::now();
-                    self.pressed_key = Some((*key, *modifiers));
-                    self.key_press_time = now;
-                    self.last_repeat_time = now;
+            Event::KeyDown { key, modifiers } if has_focus(id) => {
+                // Track key for repeat
+                let now = Instant::now();
+                self.pressed_key = Some((*key, *modifiers));
+                self.key_press_time = now;
+                self.last_repeat_time = now;
 
-                    let response =
-                        self.handle_key(key, modifiers.ctrl, modifiers.shift, bounds.width);
-                    if response == EventResponse::Handled {
-                        request_job(id, JobRequest::Paint);
-                    }
-                    return response;
+                let response = self.handle_key(key, modifiers.ctrl, modifiers.shift, bounds.width);
+                if response == EventResponse::Handled {
+                    request_job(id, JobRequest::Paint);
                 }
+                return response;
             }
             Event::KeyUp { key, .. } => {
                 // Stop repeating when key is released
@@ -1169,19 +1164,15 @@ impl Widget for TextInput {
                     self.pressed_key = None;
                 }
             }
-            Event::FocusOut => {
-                if has_focus(id) {
-                    release_focus(id);
-                    self.cursor_visible = false;
-                    self.is_dragging = false;
-                    request_job(id, JobRequest::Paint);
-                }
+            Event::FocusOut if has_focus(id) => {
+                release_focus(id);
+                self.cursor_visible = false;
+                self.is_dragging = false;
+                request_job(id, JobRequest::Paint);
             }
-            Event::MouseLeave => {
-                if self.is_hovered {
-                    self.is_hovered = false;
-                    set_cursor(CursorIcon::Default);
-                }
+            Event::MouseLeave if self.is_hovered => {
+                self.is_hovered = false;
+                set_cursor(CursorIcon::Default);
             }
             _ => {}
         }

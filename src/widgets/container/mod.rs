@@ -1514,15 +1514,15 @@ impl Widget for Container {
                 }
             };
             match local_event.as_ref() {
-                Event::MouseEnter { x, y } => {
-                    if bounds.contains_rounded(*x, *y, corner_radius) && !ix.is_hovered {
-                        ix.is_hovered = true;
-                        if ix.hover_state.is_some() {
-                            request_repaint(id);
-                        }
-                        if let Some(ref callback) = ix.on_hover {
-                            callback(true);
-                        }
+                Event::MouseEnter { x, y }
+                    if bounds.contains_rounded(*x, *y, corner_radius) && !ix.is_hovered =>
+                {
+                    ix.is_hovered = true;
+                    if ix.hover_state.is_some() {
+                        request_repaint(id);
+                    }
+                    if let Some(ref callback) = ix.on_hover {
+                        callback(true);
                     }
                 }
                 Event::MouseMove { x, y } => {
