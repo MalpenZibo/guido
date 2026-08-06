@@ -72,6 +72,10 @@ pub struct WaylandSurfaceState {
     pub scale_factor_received: bool,
     /// Whether the first frame has been presented
     pub first_frame_presented: bool,
+    /// Whether a wl_surface.frame callback is in flight. While true, the
+    /// compositor has not yet shown the last frame — rendering another one
+    /// would outpace it. Cleared by the frame-done handler.
+    pub frame_callback_pending: bool,
     /// Pending events for this surface
     pub pending_events: Vec<Event>,
 }
@@ -93,6 +97,7 @@ impl WaylandSurfaceState {
             scale_factor: 1.0,
             scale_factor_received: false,
             first_frame_presented: false,
+            frame_callback_pending: false,
             pending_events: Vec::new(),
         }
     }
@@ -695,16 +700,22 @@ impl CompositorHandler for WaylandState {
         surface: &wl_surface::WlSurface,
         _time: u32,
     ) {
-        // Find which surface this is for
+        // The compositor consumed the last frame: this surface may render
+        // again. Callbacks are re-armed on every present (see
+        // render_surface), so this is the pacing signal for the surface.
         if let Some(id) = self.surface_lookup.get(&surface.id()).copied()
             && let Some(surface_state) = self.surfaces.get_mut(&id)
-            && !surface_state.first_frame_presented
         {
-            log::info!(
-                "Surface {:?} first frame presented by compositor - initialization complete",
-                id
-            );
-            surface_state.first_frame_presented = true;
+            surface_state.frame_callback_pending = false;
+            if !surface_state.first_frame_presented {
+                log::info!(
+                    "Surface {:?} first frame presented by compositor - initialization complete",
+                    id
+                );
+                surface_state.first_frame_presented = true;
+            }
+            // Wake the loop so a dirty surface renders promptly
+            crate::jobs::request_frame();
         }
     }
 }
@@ -930,10 +941,20 @@ impl PointerHandler for WaylandState {
                     self.pointer_x = event.position.0 as f32;
                     self.pointer_y = event.position.1 as f32;
                     if let Some(events) = target_events {
-                        events.push(Event::MouseMove {
-                            x: self.pointer_x,
-                            y: self.pointer_y,
-                        });
+                        // Coalesce runs of MouseMove: only the latest position
+                        // matters for hover state, and every queued move costs
+                        // a full event-dispatch walk of the widget tree.
+                        if let Some(last @ Event::MouseMove { .. }) = events.last_mut() {
+                            *last = Event::MouseMove {
+                                x: self.pointer_x,
+                                y: self.pointer_y,
+                            };
+                        } else {
+                            events.push(Event::MouseMove {
+                                x: self.pointer_x,
+                                y: self.pointer_y,
+                            });
+                        }
                     }
                 }
                 PointerEventKind::Press { button, .. } => {

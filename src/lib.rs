@@ -322,6 +322,7 @@ fn render_surface(
     let height = wayland_surface.height;
     let first_frame_presented = wayland_surface.first_frame_presented;
     let scale_factor_received = wayland_surface.scale_factor_received;
+    let frame_callback_pending = wayland_surface.frame_callback_pending;
     let wl_surface = wayland_surface.wl_surface.clone();
 
     // Skip if GPU not ready (will be initialized next frame)
@@ -394,6 +395,21 @@ fn render_surface(
         surface.previous_scale_factor = scale_factor;
     }
 
+    // Frame pacing: while a wl_surface.frame callback is in flight the
+    // compositor hasn't shown the previous frame — rendering another one
+    // would only queue behind it (previously this was "throttled" by
+    // blocking the whole event loop on the Fifo swapchain). Return BEFORE
+    // draining jobs: animation continuations must stay queued, otherwise
+    // each loop iteration would advance them, re-ping the wakeup, and spin
+    // the loop flat-out between frame callbacks. Input events (dispatched
+    // above) are not delayed. Init and resizes bypass the gate.
+    let fully_initialized = first_frame_presented && scale_factor_received;
+    let force_render_surface = !fully_initialized;
+    if frame_callback_pending && !force_render_surface && !needs_resize && !scale_changed {
+        render_stats::record_frame_skipped();
+        return;
+    }
+
     // Process ALL pending jobs BEFORE paint.
     // This includes Animation jobs which were previously deferred to end-of-frame.
     // Processing animations here ensures hover/pressed state changes update animation
@@ -425,8 +441,6 @@ fn render_surface(
     jobs::recycle_job_buffer(followup);
 
     // Check render conditions
-    let fully_initialized = first_frame_presented && scale_factor_received;
-    let force_render_surface = !fully_initialized;
     let has_pending_layouts = !layout_roots.is_empty();
 
     // Only render if something changed (or during initialization)
@@ -501,6 +515,14 @@ fn render_surface(
                 flatten_root_into(&surface.root_node, &mut surface.flattened_commands);
         });
 
+        // Re-arm the frame callback BEFORE presenting so the request rides
+        // the same commit as the buffer (present() commits internally). The
+        // callback's arrival is the signal that this surface may render its
+        // next frame. Previously the callback was requested exactly once at
+        // startup and never again — the only pacing was the event loop
+        // blocking inside the Fifo swapchain.
+        wl_surface.frame(qh, wl_surface.clone());
+
         // Report damage BEFORE presenting: presenting attaches the buffer and
         // commits the wl_surface (inside wgpu/the driver's Wayland path), so
         // pending damage set now is part of that commit. The previous code
@@ -561,9 +583,10 @@ fn render_surface(
         render_stats::record_frame_painted();
         render_stats::end_frame(&damage);
 
-        // Request frame callback if not yet initialized
-        if !first_frame_presented {
-            wl_surface.frame(qh, wl_surface.clone());
+        // The frame callback requested before present is now committed;
+        // rendering for this surface is gated until it fires.
+        if let Some(ws) = wayland_state.get_surface_mut(id) {
+            ws.frame_callback_pending = true;
         }
     }
 }
