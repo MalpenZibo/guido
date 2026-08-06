@@ -3,6 +3,7 @@ pub mod context;
 pub mod cursor;
 pub mod effect;
 pub mod focus;
+pub(crate) mod guard;
 pub mod into_signal;
 pub mod invalidation;
 pub mod memo;

@@ -51,11 +51,14 @@ where
             job_type,
         });
     });
-    let result = f();
-    TRACKING_CONTEXT.with(|ctx| {
-        ctx.borrow_mut().pop();
+    // Pop on unwind too: a leaked frame would silently attribute every
+    // later signal read in the app to this widget.
+    let _guard = crate::reactive::guard::defer(|| {
+        TRACKING_CONTEXT.with(|ctx| {
+            ctx.borrow_mut().pop();
+        });
     });
-    result
+    f()
 }
 
 /// Suspend widget-level signal tracking during the given closure.
@@ -69,12 +72,13 @@ pub fn suspend_widget_tracking<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    TRACKING_CONTEXT.with(|ctx| {
-        let saved: Vec<_> = ctx.borrow_mut().drain(..).collect();
-        let result = f();
-        *ctx.borrow_mut() = saved;
-        result
-    })
+    let saved: Vec<_> = TRACKING_CONTEXT.with(|ctx| ctx.borrow_mut().drain(..).collect());
+    // Restore on unwind too: losing the saved stack would permanently
+    // disable widget invalidation for every context that was active.
+    let _guard = crate::reactive::guard::defer(move || {
+        TRACKING_CONTEXT.with(|ctx| *ctx.borrow_mut() = saved);
+    });
+    f()
 }
 
 /// Record that a signal was read. Called from Signal::get().

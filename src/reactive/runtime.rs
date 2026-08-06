@@ -450,18 +450,29 @@ pub(crate) fn run_effect_by_id(effect_id: EffectId) {
         return;
     };
 
-    // Phase 2 (no borrow): run the callback with read-tracking buffered
+    // Phase 2 (no borrow): run the callback with read-tracking buffered.
+    // A panicking callback must still reach phase 3: without it the slot
+    // would be stuck in Running with its callback lost, and the tracking
+    // frame would leak. Catch, restore state, then propagate the panic.
     EFFECT_TRACKING.with(|stack| {
         stack.borrow_mut().push((effect_id, EffectReads::new()));
     });
-    suspend_widget_tracking(&mut *callback);
+    let panic_payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        suspend_widget_tracking(&mut *callback);
+    }))
+    .err();
     let reads = EFFECT_TRACKING
         .with(|stack| stack.borrow_mut().pop())
         .map(|(_eid, reads)| reads)
         .unwrap_or_default();
 
     // Phase 3 (borrow): restore the callback and register dependencies
+    // (possibly partial if the callback panicked mid-run)
     with_runtime(|rt| rt.finish_effect(effect_id, callback, reads));
+
+    if let Some(payload) = panic_payload {
+        std::panic::resume_unwind(payload);
+    }
 }
 
 /// Drain the pending-effect queue, running each effect. No-op when already
@@ -531,13 +542,74 @@ pub(crate) fn reset_runtime() {
 /// jobs) is NOT batched — widgets still get per-field jobs immediately.
 pub fn batch<R>(f: impl FnOnce() -> R) -> R {
     BATCH_DEPTH.with(|d| d.set(d.get() + 1));
-    let result = f();
-    BATCH_DEPTH.with(|d| {
-        let new = d.get() - 1;
-        d.set(new);
-        if new == 0 {
-            flush_pending_effects();
-        }
+    // Restore the depth even if `f` panics: a caught panic must not leave
+    // BATCH_DEPTH stuck > 0 (which would stop every effect in the app from
+    // ever flushing again). Effects queued by the failed batch stay pending
+    // and run on the next notify — we deliberately don't flush during unwind.
+    let guard = super::guard::defer(|| {
+        BATCH_DEPTH.with(|d| d.set(d.get() - 1));
     });
+    let result = f();
+    drop(guard);
+    if BATCH_DEPTH.with(|d| d.get()) == 0 {
+        flush_pending_effects();
+    }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reactive::{create_effect, create_signal};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    /// A panic caught inside batch() must not leave BATCH_DEPTH stuck > 0 —
+    /// that would silently stop every effect in the app from ever flushing.
+    #[test]
+    fn test_caught_panic_in_batch_does_not_wedge_effects() {
+        let sig = create_signal(0);
+        let observed = Rc::new(Cell::new(0));
+        let o = observed.clone();
+        create_effect(move || o.set(sig.get())).detach();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            batch(|| {
+                sig.set(1);
+                panic!("boom");
+            })
+        }));
+        assert!(result.is_err());
+        assert_eq!(BATCH_DEPTH.with(|d| d.get()), 0, "batch depth must unwind");
+
+        // Effects must still flush on the next write
+        sig.set(2);
+        assert_eq!(observed.get(), 2);
+    }
+
+    /// A panicking effect callback must be restored into its slot so the
+    /// effect stays alive, and the flush machinery must stay usable.
+    #[test]
+    fn test_panicking_effect_survives_and_reruns() {
+        let sig = create_signal(0);
+        let observed = Rc::new(Cell::new(0));
+        let o = observed.clone();
+        create_effect(move || {
+            let v = sig.get();
+            o.set(v);
+            if v == 1 {
+                panic!("effect panic");
+            }
+        })
+        .detach();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sig.set(1)));
+        assert!(result.is_err(), "panic must propagate out of set()");
+        assert_eq!(observed.get(), 1);
+        assert!(!FLUSHING.with(|f| f.get()), "flush guard must have reset");
+
+        // The effect must still be alive, tracked, and re-runnable
+        sig.set(2);
+        assert_eq!(observed.get(), 2);
+    }
 }

@@ -208,13 +208,17 @@ pub fn with_owner<T>(f: impl FnOnce() -> T) -> (T, OwnerId) {
         prev
     });
 
+    // Restore on unwind too: a leaked owner scope would silently re-parent
+    // every reactive resource created afterwards.
+    let guard = crate::reactive::guard::defer(move || {
+        CURRENT_OWNER.with(|current| {
+            *current.borrow_mut() = prev_owner;
+        });
+    });
+
     // Execute the closure
     let result = f();
-
-    // Restore previous owner
-    CURRENT_OWNER.with(|current| {
-        *current.borrow_mut() = prev_owner;
-    });
+    drop(guard);
 
     (result, owner_id)
 }
