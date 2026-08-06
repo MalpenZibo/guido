@@ -407,12 +407,14 @@ fn render_surface(
     // jobs are deduped by the JobQueue HashSet.
     let jobs = drain_pending_jobs();
     process_jobs(&jobs, tree, layout_roots);
+    jobs::recycle_job_buffer(jobs);
 
     // Process follow-up jobs from animation advances and reconciliation
     let followup = drain_non_animation_jobs();
     if !followup.is_empty() {
         process_jobs(&followup, tree, layout_roots);
     }
+    jobs::recycle_job_buffer(followup);
 
     // Check render conditions
     let fully_initialized = first_frame_presented && scale_factor_received;

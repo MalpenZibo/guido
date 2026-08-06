@@ -23,7 +23,6 @@
 //! mechanism, ensuring the frame is processed promptly.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::sync::{
     Mutex,
     atomic::{AtomicBool, AtomicU8, Ordering},
@@ -36,16 +35,24 @@ use crate::reactive::invalidation::clear_widget_subscribers;
 use crate::tree::{Tree, WidgetId};
 
 /// Job queue with O(1) dedup via HashSet + Vec for ordered iteration.
+///
+/// Drained buffers come from (and should be returned to, via
+/// [`recycle_job_buffer`]) a small spare pool so per-frame drains don't
+/// re-allocate from zero.
 struct JobQueue {
-    set: HashSet<Job>,
+    set: rustc_hash::FxHashSet<Job>,
     vec: Vec<Job>,
+    /// Spare buffers for capacity reuse across frames (at most 2: one per
+    /// drain flavor in flight).
+    spare: Vec<Vec<Job>>,
 }
 
 impl JobQueue {
     fn new() -> Self {
         Self {
-            set: HashSet::new(),
+            set: rustc_hash::FxHashSet::default(),
             vec: Vec::new(),
+            spare: Vec::new(),
         }
     }
 
@@ -57,11 +64,12 @@ impl JobQueue {
 
     fn drain_all(&mut self) -> Vec<Job> {
         self.set.clear();
-        std::mem::take(&mut self.vec)
+        let replacement = self.spare.pop().unwrap_or_default();
+        std::mem::replace(&mut self.vec, replacement)
     }
 
     fn drain_non_animation(&mut self) -> Vec<Job> {
-        let mut non_anim = Vec::new();
+        let mut non_anim = self.spare.pop().unwrap_or_default();
         self.vec.retain(|job| {
             if job.job_type == JobType::Animation {
                 true
@@ -72,6 +80,13 @@ impl JobQueue {
             }
         });
         non_anim
+    }
+
+    fn recycle(&mut self, mut buf: Vec<Job>) {
+        if self.spare.len() < 2 {
+            buf.clear();
+            self.spare.push(buf);
+        }
     }
 
     fn is_empty(&self) -> bool {
@@ -185,6 +200,11 @@ pub fn drain_pending_jobs() -> Vec<Job> {
 /// advances and reconciliation, without re-draining Animation jobs.
 pub fn drain_non_animation_jobs() -> Vec<Job> {
     PENDING_JOBS.with(|jobs| jobs.borrow_mut().drain_non_animation())
+}
+
+/// Return a drained job buffer for capacity reuse on later frames.
+pub fn recycle_job_buffer(buf: Vec<Job>) {
+    PENDING_JOBS.with(|jobs| jobs.borrow_mut().recycle(buf));
 }
 
 /// Process all jobs in a single pass, partitioned by type.
