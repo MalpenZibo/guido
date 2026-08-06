@@ -29,7 +29,7 @@ use std::sync::Arc;
 use layout::Constraints;
 use platform::create_wayland_app;
 use reactive::owner::with_owner;
-use reactive::{OwnerId, set_system_clipboard, take_clipboard_change, take_cursor_change};
+use reactive::{OwnerId, take_clipboard_change, take_cursor_change};
 use renderer::{GpuContext, PaintContext, Renderer, flatten_root_into};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, drain_surface_commands};
 use surface_manager::{ManagedSurface, SurfaceManager};
@@ -169,7 +169,7 @@ pub mod prelude {
     };
 }
 
-use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
+use smithay_client_toolkit::reexports::client::QueueHandle;
 
 use crate::{
     jobs::{
@@ -311,7 +311,6 @@ fn render_surface(
     surface: &mut surface_manager::ManagedSurface,
     wayland_state: &mut platform::WaylandState,
     renderer: &mut Renderer,
-    connection: &Connection,
     qh: &QueueHandle<platform::WaylandState>,
     tree: &mut Tree,
     layout_roots: &mut Vec<WidgetId>,
@@ -342,21 +341,6 @@ fn render_surface(
         return;
     }
 
-    // Check for paste events
-    let has_paste_event = events.iter().any(|e| {
-        matches!(
-            e,
-            widgets::Event::KeyDown {
-                key: widgets::Key::Char('v'),
-                modifiers: widgets::Modifiers { ctrl: true, .. },
-                ..
-            }
-        )
-    });
-    if has_paste_event && let Some(text) = wayland_state.read_external_clipboard(connection) {
-        set_system_clipboard(text);
-    }
-
     // Dispatch events to widget
     for event in &events {
         tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
@@ -367,6 +351,11 @@ fn render_surface(
     // Sync clipboard to Wayland if it changed (copy operations)
     if let Some(text) = take_clipboard_change() {
         wayland_state.set_clipboard(text, qh);
+    }
+
+    // Sync primary selection to Wayland if it changed (select-to-copy)
+    if let Some(text) = reactive::take_primary_change() {
+        wayland_state.set_primary(text, qh);
     }
 
     // Sync cursor to Wayland if it changed
@@ -922,6 +911,19 @@ impl App {
                 ));
             }
 
+            // Apply prefetched clipboard/primary contents from reader threads
+            for (kind, content) in wayland_state.drain_clipboard_updates() {
+                match kind {
+                    platform::wayland::SelectionKind::Clipboard => match content {
+                        Some(text) => reactive::set_system_clipboard(text),
+                        None => reactive::clear_system_clipboard(),
+                    },
+                    platform::wayland::SelectionKind::Primary => {
+                        reactive::set_system_primary(content)
+                    }
+                }
+            }
+
             // Flush background-thread signal writes once per frame (queued via WriteSignal).
             // Must run before take_frame_request() so that signal changes from bg writes
             // are processed into jobs before we check the frame request flag.
@@ -943,7 +945,6 @@ impl App {
                         surface,
                         &mut wayland_state,
                         renderer,
-                        &connection,
                         &qh,
                         &mut self.tree,
                         &mut self.layout_roots,

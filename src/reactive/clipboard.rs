@@ -12,11 +12,17 @@ thread_local! {
     /// Flag indicating clipboard was changed and needs to be synced to Wayland
     static CLIPBOARD_CHANGED: RefCell<bool> = const { RefCell::new(false) };
 
-    /// Pending clipboard read request (for async clipboard reading from Wayland)
-    static CLIPBOARD_READ_REQUESTED: RefCell<bool> = const { RefCell::new(false) };
-
-    /// System clipboard contents (from Wayland selection offer)
+    /// System clipboard contents (prefetched from the Wayland selection offer)
     static SYSTEM_CLIPBOARD: RefCell<Option<String>> = const { RefCell::new(None) };
+
+    /// Internal primary-selection buffer (our outgoing content)
+    static PRIMARY: RefCell<Option<String>> = const { RefCell::new(None) };
+
+    /// Flag indicating the primary selection changed and needs syncing
+    static PRIMARY_CHANGED: RefCell<bool> = const { RefCell::new(false) };
+
+    /// System primary-selection contents (prefetched from other apps)
+    static SYSTEM_PRIMARY: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// Copy text to the clipboard
@@ -80,10 +86,45 @@ pub fn clear_system_clipboard() {
     });
 }
 
-/// Request reading from system clipboard
-pub fn request_clipboard_read() {
-    CLIPBOARD_READ_REQUESTED.with(|r| {
-        *r.borrow_mut() = true;
+/// Copy text to the primary selection (select-to-copy).
+pub fn primary_copy(text: &str) {
+    PRIMARY.with(|c| {
+        *c.borrow_mut() = Some(text.to_string());
+    });
+    PRIMARY_CHANGED.with(|changed| {
+        *changed.borrow_mut() = true;
+    });
+}
+
+/// Take pending primary-selection change (for syncing to Wayland)
+pub(crate) fn take_primary_change() -> Option<String> {
+    let changed = PRIMARY_CHANGED.with(|c| {
+        let was_changed = *c.borrow();
+        *c.borrow_mut() = false;
+        was_changed
+    });
+
+    if changed {
+        PRIMARY.with(|c| c.borrow().clone())
+    } else {
+        None
+    }
+}
+
+/// Paste text from the primary selection (middle-click paste).
+pub fn primary_paste() -> Option<String> {
+    SYSTEM_PRIMARY.with(|sc| {
+        if let Some(text) = sc.borrow().as_ref() {
+            return Some(text.clone());
+        }
+        PRIMARY.with(|c| c.borrow().clone())
+    })
+}
+
+/// Set/clear system primary-selection contents (from Wayland)
+pub(crate) fn set_system_primary(text: Option<String>) {
+    SYSTEM_PRIMARY.with(|sc| {
+        *sc.borrow_mut() = text;
     });
 }
 
@@ -93,17 +134,8 @@ pub fn request_clipboard_read() {
 pub(crate) fn reset_clipboard() {
     CLIPBOARD.with(|c| *c.borrow_mut() = None);
     CLIPBOARD_CHANGED.with(|c| *c.borrow_mut() = false);
-    CLIPBOARD_READ_REQUESTED.with(|c| *c.borrow_mut() = false);
     SYSTEM_CLIPBOARD.with(|c| *c.borrow_mut() = None);
-}
-
-/// Check and clear clipboard read request
-pub fn take_clipboard_read_request() -> bool {
-    CLIPBOARD_READ_REQUESTED.with(|r| {
-        let requested = *r.borrow();
-        if requested {
-            *r.borrow_mut() = false;
-        }
-        requested
-    })
+    PRIMARY.with(|c| *c.borrow_mut() = None);
+    PRIMARY_CHANGED.with(|c| *c.borrow_mut() = false);
+    SYSTEM_PRIMARY.with(|c| *c.borrow_mut() = None);
 }
