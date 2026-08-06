@@ -382,6 +382,7 @@ This is a work-in-progress GUI library. Current implemented features:
 - Mouse event handling with proper transform hit testing
 - Multi-surface support with shared reactive state
 - Dynamic surface property modification (layer, keyboard interactivity, anchor, size, margins)
+- Multi-output support: reactive `outputs()` enumeration, per-output surface pinning, `surface_output()` tracking
 - Text input widget with full editing support
 - Image widget with raster and SVG support
 
