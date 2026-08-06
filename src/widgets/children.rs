@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use crate::jobs::{JobRequest, JobType, request_job};
 use crate::layout::{Constraints, Size};
+use crate::reactive::invalidation::clear_widget_subscribers;
 use crate::reactive::{OwnerId, dispose_owner, with_signal_tracking};
 use crate::renderer::PaintContext;
 use crate::tree::{Tree, WidgetId};
@@ -191,8 +192,12 @@ impl ChildrenSource {
                         // Update current keys
                         *current_keys = new_keys;
 
-                        // Unregister removed widgets from tree (triggers Drop/cleanup)
+                        // Unregister removed widgets from tree (triggers Drop/cleanup).
+                        // Clear their signal subscriptions first — otherwise the dead
+                        // WidgetId stays subscribed forever and every subsequent write
+                        // to those signals enqueues a job for a nonexistent widget.
                         for old_id in cached.values() {
+                            clear_widget_subscribers(*old_id);
                             tree.unregister(*old_id);
                         }
                         cached.clear();
