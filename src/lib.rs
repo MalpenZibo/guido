@@ -797,9 +797,12 @@ impl App {
             let any_surface_needs_init = wayland_state.any_surface_needs_render();
             let force_render = any_surface_needs_init;
 
-            // Check if we need to actively poll (jobs pushed during previous frame)
+            // Check if we need to actively poll: jobs pushed during the
+            // previous frame, or a frame request that landed after this
+            // iteration consumed the flag (blocking on a set flag would
+            // suppress all later pings — see frame_request_pending).
             let has_pending = has_pending_jobs();
-            let needs_polling = has_pending || force_render;
+            let needs_polling = has_pending || force_render || jobs::frame_request_pending();
 
             // Dispatch events from calloop:
             // - If polling needed (animations/callbacks/init), use timeout
@@ -816,6 +819,11 @@ impl App {
                 log::error!("Event loop dispatch failed: {e}");
                 return ExitReason::Error(platform::PlatformError::ConnectionLost);
             }
+
+            // Reset ping coalescing: the first request_frame from here on
+            // sends a fresh ping so the next dispatch can't block on
+            // work queued during this iteration.
+            jobs::mark_loop_awake();
 
             // Check for programmatic exit/restart requests
             match get_exit_request() {

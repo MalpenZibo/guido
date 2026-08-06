@@ -313,6 +313,9 @@ pub(crate) fn get_exit_request() -> ExitRequest {
 
 /// Global flag to indicate a frame is requested
 static FRAME_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// Whether a wakeup ping is already in flight for the current blocked/idle
+/// period. Cleared by `mark_loop_awake()` right after dispatch returns.
+static PING_SENT: AtomicBool = AtomicBool::new(false);
 
 /// Global wakeup handle for signaling the event loop.
 /// Uses `Mutex<Option<Ping>>` instead of `OnceLock` so it can be reset on App drop.
@@ -327,16 +330,30 @@ pub fn init_wakeup(ping: Ping) {
 
 /// Request that the main event loop process a frame
 pub(crate) fn request_frame() {
-    // Only ping on first request - avoids redundant syscalls when multiple signals update
-    let was_requested = FRAME_REQUESTED.swap(true, Ordering::Relaxed);
-    if !was_requested {
-        // Wake up the event loop immediately
-        if let Ok(guard) = WAKEUP_PING.lock()
-            && let Some(ref ping) = *guard
-        {
-            ping.ping();
-        }
+    FRAME_REQUESTED.store(true, Ordering::Relaxed);
+    // Coalesce pings per loop iteration via a dedicated flag, NOT via
+    // FRAME_REQUESTED: the frame flag is consumed mid-iteration by
+    // take_frame_request(), so gating the ping on it lost wakeups — a
+    // request landing while the flag happened to be set sent no ping, the
+    // take then cleared the flag, and the loop blocked indefinitely with
+    // work queued (only an unrelated Wayland event like mouse movement
+    // would revive it). PING_SENT is instead cleared exactly once per
+    // wakeup (mark_loop_awake), so during any blocked period the first
+    // request always pings.
+    let already_pinged = PING_SENT.swap(true, Ordering::Relaxed);
+    if !already_pinged
+        && let Ok(guard) = WAKEUP_PING.lock()
+        && let Some(ref ping) = *guard
+    {
+        ping.ping();
     }
+}
+
+/// Reset ping coalescing after the event loop woke up. Any `request_frame`
+/// from here until the next dispatch sends (at most) one fresh ping, which
+/// keeps the eventfd readable so that dispatch returns immediately.
+pub(crate) fn mark_loop_awake() {
+    PING_SENT.store(false, Ordering::Relaxed);
 }
 
 /// Reset all job state (pending jobs, frame request flag, wakeup ping).
@@ -347,6 +364,7 @@ pub(crate) fn reset_jobs() {
         jobs.borrow_mut().drain_all();
     });
     FRAME_REQUESTED.store(false, Ordering::Relaxed);
+    PING_SENT.store(false, Ordering::Relaxed);
     EXIT_REQUEST.store(ExitRequest::Running as u8, Ordering::Relaxed);
     if let Ok(mut guard) = WAKEUP_PING.lock() {
         *guard = None;
@@ -356,6 +374,18 @@ pub(crate) fn reset_jobs() {
 /// Check if a frame has been requested and clear the flag
 pub fn take_frame_request() -> bool {
     FRAME_REQUESTED.swap(false, Ordering::Relaxed)
+}
+
+/// Peek the frame-request flag without clearing it.
+///
+/// Used by the main loop before blocking: a request that landed after this
+/// iteration's `take_frame_request()` (e.g. from a background thread) leaves
+/// the flag set, and `request_frame`'s ping-on-first-request optimization
+/// then suppresses every later ping — blocking indefinitely on a set flag
+/// would make the app deaf to background wakeups until an unrelated Wayland
+/// event (mouse movement) arrives.
+pub fn frame_request_pending() -> bool {
+    FRAME_REQUESTED.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]
