@@ -1538,17 +1538,30 @@ impl PointerHandler for WaylandState {
                         _ => ScrollSource::Wheel,
                     };
 
-                    // Calculate delta in pixels
-                    // For mouse wheel: use discrete * pixels_per_line, or fall back to absolute
-                    // For touchpad/finger: use absolute (already in pixels)
-                    let delta_x = if horizontal.discrete != 0 {
-                        horizontal.discrete as f32 * SCROLL_PIXELS_PER_LINE
+                    // Calculate delta in pixels.
+                    // Wheel steps by preference: value120 (wl_pointer v8+,
+                    // fractional steps from high-resolution wheels) then
+                    // legacy discrete. Touchpad/finger scroll has neither
+                    // and uses absolute (already in pixels).
+                    let wheel_steps =
+                        |scroll: &smithay_client_toolkit::seat::pointer::AxisScroll| {
+                            if scroll.value120 != 0 {
+                                scroll.value120 as f32 / 120.0
+                            } else {
+                                scroll.discrete as f32
+                            }
+                        };
+
+                    let steps_x = wheel_steps(&horizontal);
+                    let delta_x = if steps_x != 0.0 {
+                        steps_x * SCROLL_PIXELS_PER_LINE
                     } else {
                         horizontal.absolute as f32
                     };
 
-                    let delta_y = if vertical.discrete != 0 {
-                        vertical.discrete as f32 * SCROLL_PIXELS_PER_LINE
+                    let steps_y = wheel_steps(&vertical);
+                    let delta_y = if steps_y != 0.0 {
+                        steps_y * SCROLL_PIXELS_PER_LINE
                     } else {
                         vertical.absolute as f32
                     };
