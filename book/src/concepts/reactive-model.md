@@ -30,7 +30,7 @@ count.update(|c| *c += 1);
 
 ## Signal (Read-Only)
 
-`Signal<T>` is a read-only reactive value (16 bytes, `Copy`). It cannot be written to — calling `.set()` is a compile-time error. There are two ways to create one:
+`Signal<T>` is a read-only reactive value (12 bytes, `Copy`). It cannot be written to — calling `.set()` is a compile-time error. There are two ways to create one:
 
 ```rust
 // Stored: wraps a static value

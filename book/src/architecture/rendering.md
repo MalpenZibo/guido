@@ -5,34 +5,32 @@ This page explains how Guido renders widgets to the screen.
 ## Pipeline Overview
 
 ```
-Main loop (once per frame):
+Main loop (once per iteration):
  1. flush_bg_writes()              → Drain queued background-thread signal writes
  2. take_frame_request()           → Check if a frame was requested
 
 Per-surface rendering:
- 3. Dispatch events                → Route input events to widgets
- 4. drain_non_animation_jobs()     → Collect non-animation jobs (Animation jobs stay in queue)
- 5. handle_unregister_jobs()       → Cleanup dropped widgets
- 6. handle_paint_jobs()            → Mark widgets needing paint, accumulate damage
- 7. handle_reconcile_jobs()        → Reconcile dynamic children
- 8. handle_layout_jobs()           → Collect layout roots
- 9. Partial layout                 → Only dirty subtrees re-layout
-10. Skip-frame check               → Skip paint if root is clean
-11. widget.paint(tree, ctx)        → Build render tree (cache reuse for clean children)
-12. cache_paint_results()          → Store rendered nodes, clear needs_paint flags
-13. flatten_tree_into()            → Flatten to draw commands (incremental for clean subtrees)
-14. GPU rendering                  → Instanced SDF shapes with HiDPI scaling
-15. damage_buffer()                → Report damage region to Wayland compositor
-16. wl_surface.commit()            → Present frame
-
-After all surfaces render:
-17. drain_pending_jobs()           → Collect remaining Animation jobs
-18. handle_animation_jobs()        → Advance animations once per frame
+ 3. Dispatch events                → Route input events (MouseMoves coalesced)
+ 4. Frame-pacing gate              → Return if the compositor hasn't shown the
+                                     previous frame yet (jobs stay queued)
+ 5. drain_pending_jobs()           → Process jobs: unregister, advance
+    + process_jobs()                 animations, reconcile children, mark dirty
+ 6. Partial layout                 → Only dirty subtrees re-layout
+ 7. Skip-frame check               → Skip paint if root is clean
+ 8. widget.paint(tree, ctx)        → Build render tree (Rc cache reuse for clean children)
+ 9. flatten_root_into()            → Flatten to draw commands (incremental for clean subtrees)
+10. frame() + damage_buffer()      → Re-arm the frame callback and report damage,
+                                     both BEFORE presenting
+11. GPU rendering + present()      → Instanced SDF shapes with HiDPI scaling;
+                                     present() commits the surface
+12. cache_paint_results()          → Rc-share rendered nodes into the cache,
+                                     clear needs_paint flags
 ```
 
-Animation jobs are processed centrally after all surfaces render. This prevents
-cross-surface job loss in multi-surface apps, where one surface's drain could
-swallow another surface's animation continuation jobs.
+Rendering is paced by the compositor's `wl_surface.frame` callbacks: after each
+present, a new callback is requested, and the surface won't render again until
+it fires. An animating surface renders exactly once per compositor frame; an
+idle surface renders nothing and the loop sleeps.
 
 ## Layout Pass
 
@@ -210,19 +208,15 @@ Clipping respects corner radius and curvature for proper rounded container clipp
 
 ## Animation Advancement
 
-Animations advance *after all surfaces render*, once per frame in the main loop:
+Animations advance during per-surface job processing, before layout and paint,
+so the frame being built always renders with up-to-date animation values. Each
+advance pushes a continuation job (`Animation` plus a `Paint` or `Layout`
+follow-up when the value changed), which schedules the next advancement.
 
-```rust
-// After all surfaces have rendered:
-let animation_jobs = drain_pending_jobs();  // Only Animation jobs remain
-handle_animation_jobs(&animation_jobs, &mut tree);
-```
-
-This ordering means the current frame renders with the current animation state,
-and `advance_animations()` prepares values for the next frame. Widgets like
-TextInput use `advance_animations()` to drive cursor blinking via `Animation(Paint)`
-jobs, which mark the widget for repaint on the next frame when the cursor
-visibility toggles.
+Continuation jobs are throttled by the frame-pacing gate: while the compositor
+hasn't shown the previous frame, they stay queued, so animations step once per
+displayed frame instead of once per loop iteration. Widgets like TextInput use
+this mechanism to drive cursor blinking.
 
 ## Performance Notes
 
@@ -269,17 +263,17 @@ The rendering pipeline includes several optimizations to avoid redundant work:
 **Partial Paint**: Each widget in the Tree has a `needs_paint` flag. When a widget's
 visual state changes (e.g., a signal update triggers a Paint job), the flag propagates
 upward to ancestors. During paint, Container checks each child's flag — clean children
-reuse their cached `RenderNode` from the previous frame, with only the parent position
-transform updated.
+reuse their cached `RenderNode` from the previous frame. The cache is `Rc`-shared with
+the render tree: reusing an unmoved child is a refcount bump, and a moved child clones
+only the node header (its subtree and draw commands stay shared).
 
 **Skip Frame**: If no widget needs paint after job processing and layout, the entire
-paint→flatten→render→commit cycle is skipped for that surface. Animation jobs are
-processed centrally in the main loop regardless, so they always advance.
+paint→flatten→render cycle is skipped for that surface.
 
 **Damage Regions**: As widgets are marked for paint, their surface-relative bounds are
-accumulated into a `DamageRegion` (None, Partial, or Full). Before presenting, the
-damage is reported to the Wayland compositor via `wl_surface.damage_buffer()`, allowing
-the compositor to optimize its own compositing.
+accumulated into a per-surface `DamageRegion` (None, Partial, or Full). The damage is
+set as pending Wayland state before presenting — `present()` commits it together with
+the new buffer — allowing the compositor to optimize its own compositing.
 
 **Incremental Flatten**: The flattener caches its output per `RenderNode`. Clean subtrees
 (where `repainted == false`) reuse their cached flattened commands with a translation

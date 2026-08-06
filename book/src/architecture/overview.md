@@ -10,7 +10,7 @@ Single-threaded reactive primitives inspired by SolidJS.
 
 **Key Types:**
 - `RwSignal<T>` - Read-write reactive values (8 bytes, `Copy`). Created via `create_signal()`. Supports `.get()`, `.set()`, `.update()`, `.writer()`
-- `Signal<T>` - Read-only reactive values (16 bytes, `Copy`). Created via `create_stored()`, `create_derived()`, or `RwSignal::read_only()`. Supports `.get()`, `.with()` — no `.set()`
+- `Signal<T>` - Read-only reactive values (12 bytes, `Copy`). Created via `create_stored()`, `create_derived()`, or `RwSignal::read_only()`. Supports `.get()`, `.with()` — no `.set()`
 - `Memo<T>` - Eager derived values that only notify on actual changes
 - `Effect` - Side effects that re-run on changes
 
@@ -89,7 +89,7 @@ Built-in: `Flex` for row/column layouts.
 
 ### `transform.rs` - 2D Transforms
 
-4x4 matrices for 2D operations:
+2D affine transforms (6 floats, 24 bytes — exactly what the GPU shader consumes):
 
 ```rust
 Transform::translate(x, y)

@@ -25,7 +25,7 @@ count.update(|c| *c += 1);
 
 **Key types:**
 - `RwSignal<T>` (8 bytes) — read-write signal returned by `create_signal()`. Supports `.get()`, `.set()`, `.update()`, `.writer()`
-- `Signal<T>` (16 bytes) — read-only signal. Created via `create_stored()` (static), `create_derived()` (closure-backed), or by coercing an `RwSignal<T>`
+- `Signal<T>` (12 bytes) — read-only signal. Created via `create_stored()` (static), `create_derived()` (closure-backed), or by coercing an `RwSignal<T>`
 
 **Key properties:**
 - Both `Signal<T>` and `RwSignal<T>` are `Copy` — no cloning needed
@@ -260,16 +260,26 @@ pub struct RwSignal<T> {
 #[derive(Clone, Copy)]
 pub struct Signal<T> {
     id: SignalId,
-    kind: SignalKind,   // 16 bytes — read-only, supports stored/mutable/derived
+    kind: SignalKind,   // 12 bytes total — read-only, supports stored/mutable/derived
 }
 ```
+
+`SignalId` is generational — `{ index: u32, generation: u32 }`. Storage slots
+are recycled with a bumped generation, so a stale `Copy` handle held after its
+owner was disposed can never silently alias the slot's next occupant: reads of
+disposed signals fail loudly. Effect and owner ids use the same scheme.
 
 The actual value is stored in `thread_local! { RefCell<SignalStorage> }`, accessed by `id`. This design allows:
 - Both types to be `Copy`
 - Zero-lock access on the main thread (thread-local `RefCell` only)
 - Automatic dependency tracking via thread-local runtime
 
-`RwSignal<T>` is the compact read-write handle (8 bytes). `Signal<T>` is the read-only wrapper (16 bytes) that also supports static (`create_stored`) and derived (`create_derived`) values via its `SignalKind` discriminant.
+`RwSignal<T>` is the compact read-write handle (8 bytes). `Signal<T>` is the read-only wrapper (12 bytes) that also supports static (`create_stored`) and derived (`create_derived`) values via its `SignalKind` discriminant.
+
+Effect callbacks execute with no internal borrow held: writing a signal inside
+an effect notifies its subscribers normally, so effect → effect and memo → memo
+chains work. Panics inside effects or `batch()` are unwind-safe — scope state
+restores via Drop guards and the effect stays alive and re-runnable.
 
 `WriteSignal<T>` is a separate `Send` handle that queues writes through a thread-safe channel, which the main thread drains each frame:
 

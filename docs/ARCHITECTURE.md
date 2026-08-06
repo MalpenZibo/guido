@@ -32,7 +32,7 @@ Single-threaded reactive primitives inspired by SolidJS and Floem.
 
 **Key Types:**
 - `RwSignal<T>` (8 bytes) - Read-write reactive values returned by `create_signal()`. Supports `.get()`, `.set()`, `.update()`, `.writer()`. `Copy`, `!Send`.
-- `Signal<T>` (16 bytes) - Read-only reactive wrapper. Created via `create_stored()` (static), `create_derived()` (closure-backed), or by coercing an `RwSignal<T>`. `Copy`, read-only (`.get()` only).
+- `Signal<T>` (12 bytes) - Read-only reactive wrapper. Created via `create_stored()` (static), `create_derived()` (closure-backed), or by coercing an `RwSignal<T>`. `Copy`, read-only (`.get()` only).
 - `Memo<T>` - Eager derived values that recompute when dependencies change, only notify on actual changes (`PartialEq`)
 - `Effect` - Side effects that re-run when tracked signals change
 - `WriteSignal<T>` - `Send` handle for background thread updates, obtained via `RwSignal::writer()`
@@ -47,6 +47,16 @@ count.set(5);                           // doubled automatically becomes 10
 ```
 
 The runtime uses thread-local storage for automatic dependency tracking. When a signal is read inside a `Memo`, `Effect`, or during widget `paint()`/`layout()`, it registers itself as a dependency.
+
+**Identity safety:** signal, effect, owner, and widget ids are all generational
+(`index + generation`). Slots are recycled, but a stale `Copy` handle held after
+disposal can never alias the slot's next occupant — reads of disposed signals
+fail loudly instead of silently reading unrelated state.
+
+**Effect execution:** effect callbacks run with no runtime borrow held, so
+writing signals inside an effect works and chains (effect → effect, memo →
+memo). Scope state (batch depth, owners, tracking contexts) is restored via
+Drop guards, so a caught panic cannot wedge the reactive system.
 
 ### `widgets/` - UI Components
 
@@ -98,36 +108,41 @@ Hardware-accelerated rendering using wgpu.
 **Components:**
 - `Renderer` - Main renderer managing GPU resources and render passes
 - `PaintContext` - Build render tree nodes during widget painting
-- `RenderTree` / `RenderNode` - Hierarchical render tree with local coordinates
+- `RenderNode` - Hierarchical render tree with local coordinates (one root per surface, children Rc-shared with the paint cache)
 - Custom WGSL shaders for SDF-based instanced rendering
 
 **Rendering Pipeline (per frame):**
 
-*Main loop (once per frame):*
+*Main loop (once per iteration):*
 1. `flush_bg_writes()` - Drain queued background-thread signal writes
 2. `take_frame_request()` - Check if a frame was requested
 
 *Per-surface rendering:*
-3. Dispatch events to widgets
-4. `drain_non_animation_jobs()` - Collect Paint/Layout/Reconcile/Unregister jobs (Animation jobs stay in queue)
-5. `handle_unregister_jobs()` - Cleanup dropped widgets
-6. `handle_paint_jobs()` - Mark widgets needing paint (propagates upward, accumulates damage)
-7. `handle_reconcile_jobs()` / `handle_layout_jobs()` - Collect layout roots
-8. Partial layout from `layout_roots` - Only dirty subtrees re-layout
-9. Force full repaint on resize, scale change, or initialization
-10. **Skip frame** if root widget doesn't need paint
-11. `widget.paint(tree, ctx)` - Build render tree via PaintContext (clean children reuse cached nodes)
-12. `cache_paint_results()` - Store paint output per widget, clear `needs_paint` flags
-13. `flatten_tree_into()` - Flatten render tree to draw commands (incremental: clean subtrees reuse cached commands)
-14. GPU rendering with instanced SDF shapes and HiDPI scaling
-15. Report damage region to Wayland via `wl_surface.damage_buffer()`
-16. `wl_surface.commit()` - Present frame
+3. Dispatch events to widgets (queued `MouseMove`s are coalesced to the latest position)
+4. **Frame-pacing gate**: if a `wl_surface.frame` callback is still in flight, return
+   before draining jobs — the compositor hasn't shown the previous frame yet.
+   Queued jobs (including animation continuations) stay pending until the
+   callback fires and wakes the loop. Init and resizes bypass the gate.
+5. `drain_pending_jobs()` + `process_jobs()` - Unregister → Animation (advance values) → Reconcile → Paint → Layout marking
+6. Process follow-up jobs pushed by animation advances and reconciliation
+7. Partial layout from `layout_roots` - Only dirty subtrees re-layout
+8. Force full repaint on resize, scale change, or initialization
+9. **Skip frame** if root widget doesn't need paint
+10. `widget.paint(tree, ctx)` - Build render tree via PaintContext (clean children reuse Rc-shared cached nodes)
+11. `flatten_root_into()` - Flatten render tree to draw commands (incremental: clean subtrees reuse cached commands)
+12. Re-arm the `wl_surface.frame` callback and report per-surface damage via
+    `wl_surface.damage_buffer()` — both BEFORE presenting, so they ride the
+    commit that `present()` performs internally
+13. GPU rendering with instanced SDF shapes and HiDPI scaling; `present()` commits.
+    If presentation fails (lost/outdated swapchain), dirty state is kept and a
+    retry frame is requested — no stale content
+14. `cache_paint_results()` - Rc-share paint output per widget into the cache,
+    clear `needs_paint`/`repainted` flags (skips already-clean subtrees)
 
-*After all surfaces render:*
-17. `drain_pending_jobs()` - Collect remaining Animation jobs
-18. `handle_animation_jobs()` - Advance animations once per frame
-
-Animation jobs are processed centrally to prevent cross-surface job loss in multi-surface apps, where one surface's drain could swallow another surface's animation continuation jobs.
+Rendering is paced by the compositor's frame callbacks: an animating surface
+renders once per callback, and an idle surface renders nothing at all. There is
+no post-loop animation phase — animations advance during job processing, and
+their continuation jobs are throttled by the pacing gate.
 
 **Shape Features:**
 - Rounded rectangles with configurable superellipse curvature
@@ -171,7 +186,8 @@ handle.set_size(400, 300);
 
 ### `transform.rs` - 2D Transforms
 
-4x4 transformation matrices for 2D operations.
+2D affine transforms stored as 6 floats `[a, b, tx, c, d, ty]` (24 bytes) —
+exactly the layout the GPU shader consumes.
 
 **Operations:**
 ```rust
@@ -330,14 +346,20 @@ The paint system tracks which widgets need repainting:
 
 - **`needs_paint` flag**: Each widget in the Tree has a `needs_paint` flag that propagates
   upward to ancestors (like `needs_layout`). Only widgets marked dirty are repainted.
-- **Cached paint**: After painting, each widget's `RenderNode` output is cached. On subsequent
-  frames, Container reuses cached nodes for clean children by cloning with an updated position
-  transform (decomposing parent position from user transform).
+- **Rc-shared paint cache**: After painting, each widget's `RenderNode` is cached as an
+  `Rc` to the same node in the frame's render tree — a refcount bump, not a clone. On
+  subsequent frames, a clean child whose position didn't change is reused via `Rc::clone`
+  (zero copies); if it moved, only the node header is cloned (children and commands stay
+  shared) with the position recomposed from the decomposed parent/user transforms.
+- **Partial propagation**: a node whose children were culled (`partial`) poisons its
+  ancestors in the cache walk — incomplete paints are never cached, so reuse can never
+  resurrect a subtree with missing children.
 - **Skip frame**: If the root widget doesn't need paint after job processing and layout,
-  the entire paint→flatten→render→commit cycle is skipped. Animation jobs still run.
+  the entire paint→flatten→render cycle is skipped.
 - **Damage regions**: `mark_needs_paint()` accumulates surface-relative bounds into a
-  `DamageRegion` (None/Partial/Full). Before commit, the damage is reported to the Wayland
-  compositor via `wl_surface.damage_buffer()`, enabling compositor-side optimizations.
+  per-surface `DamageRegion` (None/Partial/Full), keyed by the surface's root widget so
+  multi-surface apps can't consume each other's damage. Damage is set as pending state
+  BEFORE presenting, so it rides the commit that `present()` performs internally.
 - **Incremental flatten**: `RenderNode` caches its flattened commands. Clean subtrees
   (with `repainted == false`) reuse cached commands with a translation offset, skipping
   the full recursive flatten.
@@ -382,7 +404,7 @@ The feature has zero overhead when disabled (code is completely compiled out).
 | `src/renderer/mod.rs` | Module exports |
 | `src/renderer/render.rs` | Main renderer, GPU setup |
 | `src/renderer/paint_context.rs` | PaintContext API for building render tree |
-| `src/renderer/tree.rs` | RenderNode, RenderTree structures |
+| `src/renderer/tree.rs` | RenderNode structure and paint-cache sharing |
 | `src/renderer/flatten.rs` | Tree flattening with transform inheritance |
 | `src/renderer/shader.wgsl` | GPU shaders for instanced SDF rendering |
 | `src/reactive/signal.rs` | Signal implementation |

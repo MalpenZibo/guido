@@ -74,13 +74,20 @@ cargo clippy
 cargo test
 ```
 
+### Cargo Features
+
+- `svg` (default) — SVG image support via resvg. Without it, `ImageSource::Svg*` sources fail to decode with a logged warning.
+- `webp` (default) — WebP raster decoding. PNG and JPEG are always available.
+- `gif` (opt-in) — GIF raster decoding.
+- `render-stats` (opt-in) — per-second rendering statistics on stdout; zero overhead when disabled.
+
 ## Architecture
 
 ### Core Modules
 
 **`reactive/`** - Single-threaded reactive system inspired by SolidJS
 - `RwSignal<T>`: Read-write reactive signal (8 bytes). Created via `create_signal` (requires Clone+PartialEq+Send). Has `.get()`, `.set()`, `.update()`, `.writer()`. Converts to `Signal<T>` via `.read_only()` or `.into()`
-- `Signal<T>`: Read-only reactive signal (16 bytes). Created via `create_stored` (static, requires Clone) or `create_derived` (closure-backed). Has `.get()`, `.with()` — no mutation methods. Widget props accept `Signal<T>` via `IntoSignal<T, M>` (marker-type disambiguation — integers accepted where `f32`/`Length`/`Padding` expected)
+- `Signal<T>`: Read-only reactive signal (12 bytes). Created via `create_stored` (static, requires Clone) or `create_derived` (closure-backed). Has `.get()`, `.with()` — no mutation methods. Widget props accept `Signal<T>` via `IntoSignal<T, M>` (marker-type disambiguation — integers accepted where `f32`/`Length`/`Padding` expected)
 - `Memo<T>`: Eager computed values that recompute when dependencies change, only notify on actual changes (`PartialEq`)
 - `Effect`: Side effects that re-run when tracked signals change
 - `Owner`: Ownership system for automatic resource cleanup (signals, effects, custom callbacks)
@@ -158,30 +165,25 @@ All widgets implement:
 
 ### Rendering Pipeline
 
-Each frame has two phases — per-surface rendering and centralized animation processing:
+Rendering is paced by the compositor's `wl_surface.frame` callbacks: an
+animating surface renders once per callback, an idle surface renders nothing.
 
-**Main loop (once per frame):**
+**Main loop (once per iteration):**
 1. `flush_bg_writes()` - Drain queued background-thread signal writes
 2. `take_frame_request()` - Check if a frame was requested
 
 **Per-surface rendering:**
-3. Dispatch events to widgets
-4. `drain_non_animation_jobs()` - Collect Paint/Layout/Reconcile/Unregister jobs (Animation jobs stay in queue)
-5. Process jobs: unregister dropped widgets, mark paint/layout dirty flags, reconcile dynamic children
+3. Dispatch events to widgets (queued `MouseMove`s are coalesced to the latest position)
+4. **Frame-pacing gate**: if the previous frame's callback hasn't fired yet, return
+   before draining jobs (animation continuations stay queued; init/resizes bypass)
+5. `drain_pending_jobs()` + `process_jobs()` - Unregister → advance animations → reconcile dynamic children → mark paint/layout dirty flags
 6. Partial layout from `layout_roots` - Only dirty subtrees re-layout
 7. **Skip frame** if root widget doesn't need paint
-8. `widget.paint(tree, ctx)` - Build render tree (clean children reuse cached `RenderNode`s)
-9. `cache_paint_results()` - Store paint output per widget, clear `needs_paint` flags
-10. `flatten_tree_into()` - Flatten render tree to draw commands (incremental: clean subtrees reuse cached commands)
-11. GPU rendering with instanced SDF shapes, HiDPI scaling, layer ordering (shapes → images → text → overlay)
-12. Report damage region to Wayland via `wl_surface.damage_buffer()`
-13. `wl_surface.commit()` - Present frame
-
-**After all surfaces render:**
-14. `drain_pending_jobs()` - Collect remaining Animation jobs
-15. `handle_animation_jobs()` - Advance animations once per frame
-
-Animation jobs are processed centrally to prevent cross-surface job loss in multi-surface apps.
+8. `widget.paint(tree, ctx)` - Build render tree (clean children reuse Rc-shared cached `RenderNode`s — reuse is a refcount bump, not a clone)
+9. `flatten_root_into()` - Flatten render tree to draw commands (incremental: clean subtrees reuse cached commands)
+10. Re-arm the frame callback and report per-surface damage via `wl_surface.damage_buffer()` — both BEFORE presenting so they ride the commit performed inside `present()`
+11. GPU rendering with instanced SDF shapes, HiDPI scaling, layer ordering (shapes → images → text → overlay); on a lost/outdated swapchain the dirty state is kept and a retry frame is requested
+12. `cache_paint_results()` - Rc-share paint output per widget, clear `needs_paint` flags (partial paints poison their ancestors and are never cached)
 
 ### Event System
 

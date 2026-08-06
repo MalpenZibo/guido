@@ -2,7 +2,7 @@
 
 Guido signals (`RwSignal<T>` and `Signal<T>`) live on the main thread and are `!Send` — they cannot be captured directly in background tasks. To update signals from a background task, call `.writer()` on an `RwSignal<T>` to obtain a `WriteSignal<T>`, which **is** `Send`. Writes through a `WriteSignal` are queued and applied on the main thread during the next frame.
 
-The `create_service` API provides a convenient way to spawn async background tasks that are automatically cleaned up when the component unmounts. Services run as tokio tasks.
+The `create_service` API provides a convenient way to spawn async background tasks that are automatically cleaned up when the component unmounts. Services run as tokio tasks: if your `main` already runs inside a tokio runtime (e.g. `#[tokio::main]`), that runtime is used; otherwise guido lazily starts a small background runtime of its own, so a plain `fn main()` works too.
 
 ## Basic Pattern: Read-Only Service
 
