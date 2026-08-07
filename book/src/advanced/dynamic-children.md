@@ -72,6 +72,46 @@ With proper keys:
 - **Insertions** only create new widgets
 - **Deletions** only remove specific widgets
 
+## Single Reactive Child: Presence vs Content
+
+`.child()` accepts two reactive closure forms, and picking the wrong one is a
+subtle trap.
+
+The `Option<Widget>` form is **presence-only**. It always reconciles under the
+same internal key, so a `Some -> Some` transition keeps the first widget ever
+built and discards the rebuilt one. Use it to show or hide a widget whose own
+properties are reactive:
+
+```rust
+// Good: appears/disappears; the text widget itself tracks the signal
+container().child(move || {
+    logged_in.get().then(|| text(move || username.get()))
+})
+```
+
+When the widget's *structure* depends on data — lists, branches, trees rebuilt
+from a snapshot — return `Option<(u64, Widget)>` instead. The key states which
+version of the content the widget renders: same key keeps the cached widget,
+a new key swaps the rebuilt one in (running owner cleanup for the old):
+
+```rust
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+fn hash_key(value: impl Hash) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+container().child(move || {
+    let entries = menu_entries.get();
+    Some((hash_key(&entries), build_menu(entries)))
+})
+```
+
+If you ever write `.child(move || Some(...))` where the widget is built from
+signal data and it "never updates", this is why — key it.
+
 ## Automatic Ownership & Cleanup
 
 Signals and effects created inside the child closure are **automatically owned** and cleaned up when the child is removed:
@@ -246,6 +286,18 @@ container()
 impl Container {
     // Single child
     pub fn child(self, child: impl Widget + 'static) -> Self;
+
+    // Single reactive child, presence-only (Some -> Some keeps the first widget)
+    pub fn child<F, W>(self, child: F) -> Self
+    where
+        F: Fn() -> Option<W> + 'static,
+        W: Widget + 'static;
+
+    // Single reactive child, content-keyed (new key swaps the widget in)
+    pub fn child<F, W>(self, child: F) -> Self
+    where
+        F: Fn() -> Option<(u64, W)> + 'static,
+        W: Widget + 'static;
 
     // Multiple static children
     pub fn children<W: Widget + 'static>(
