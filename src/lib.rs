@@ -1,4 +1,5 @@
 pub mod animation;
+mod blur;
 pub mod image_metadata;
 mod ingress;
 mod jobs;
@@ -497,12 +498,23 @@ fn render_surface(
             tree.mark_subtree_needs_paint(surface.widget_id);
         }
 
+        // Collect this surface's blur region from registered widgets (post
+        // layout, so bounds are current).
+        let blur_rects = blur::collect_for_surface(tree, surface.widget_id);
+
         // Skip frame if nothing needs paint
         if !tree.needs_paint(surface.widget_id) {
+            // A blur-region change without a repaint (e.g. the compositor's
+            // blur capability arriving) still needs its own commit.
+            wayland_state.sync_blur_region(id, blur_rects, qh, true);
             render_stats::record_frame_skipped();
             render_stats::end_frame(&DamageRegion::None);
             return;
         }
+
+        // Set the blur region now so it rides the buffer commit performed
+        // inside present() — region and content change in the same frame.
+        wayland_state.sync_blur_region(id, blur_rects, qh, false);
 
         // Clear and reuse the root node (preserves capacity)
         surface.root_node.clear();
@@ -959,6 +971,7 @@ impl Drop for App {
         surface::reset_surface_commands();
         widget_ref::reset_widget_refs();
         outputs::reset_outputs();
+        blur::reset_blur();
         FONTS_CONSUMED.with(|f| f.set(false));
     }
 }
