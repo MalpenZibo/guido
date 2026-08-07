@@ -108,6 +108,12 @@ pub fn surface_output(id: SurfaceId) -> Option<OutputId> {
     surface_outputs_signal().with(|m| m.get(&id).copied())
 }
 
+/// Untracked snapshot of the current outputs (for main-loop code that must
+/// not subscribe).
+pub(crate) fn current_outputs() -> Vec<OutputInfo> {
+    outputs_signal().with_untracked(|v| v.clone())
+}
+
 /// Replace the reactive output list. Called by the platform layer whenever
 /// the compositor adds, removes, or reconfigures an output.
 pub(crate) fn sync_outputs(list: Vec<OutputInfo>) {

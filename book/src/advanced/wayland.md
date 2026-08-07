@@ -526,6 +526,55 @@ instead of withdrawing, to keep the region authoritative.
 
 See `examples/blur_example.rs`.
 
+## Session Lock (Lock Screens)
+
+`lock_session` asks the compositor to lock the session
+(`ext-session-lock-v1`). Once granted, guido creates one lock surface
+per output using your widget factory — the compositor blanks every
+output, shows the lock surfaces, and routes all input to them, so a
+`text_input` password field works out of the box:
+
+```rust
+lock_session(|output: OutputInfo| {
+    let attempt = create_signal(String::new());
+    container()
+        .width(fill())
+        .height(fill())
+        .background(Color::rgb(0.07, 0.07, 0.1))
+        .layout(Flex::column().main_alignment(MainAlignment::Center))
+        .child(text(format!("Locked — {:?}", output.name)))
+        .child(text_input(attempt).password(true).on_submit(|s| {
+            if verify_password(s) {
+                unlock_session();
+            }
+        }))
+});
+```
+
+The lifecycle is reactive:
+
+```rust
+text(move || format!("{:?}", lock_state().get()))
+// Unlocked → Locking → Locked, back to Unlocked on unlock/denial
+```
+
+Details worth knowing:
+
+- Outputs plugged in **while locked** get a lock surface automatically
+  (the factory is called again); the compositor blanks any output
+  without one.
+- If the compositor refuses the lock (no protocol support, or another
+  lock client is active), `lock_state` returns to `Unlocked`.
+- Unlike ordinary surfaces, closing lock surfaces never exits the app:
+  a lock daemon whose only surfaces are lock surfaces keeps running
+  after unlocking, idle until the next `lock_session` call.
+- Layer-shell properties (anchor, margins, exclusive zone…) don't
+  apply to lock surfaces; their size always comes from the compositor.
+
+See `examples/simple_lock.rs` — note that running it really locks your
+session (it has a 30-second auto-unlock safety net; the password is
+`guido`).
+
 ## Complete Examples
 
 ### Status Bar

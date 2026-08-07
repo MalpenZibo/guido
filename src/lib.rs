@@ -7,6 +7,7 @@ pub mod layout;
 pub mod outputs;
 pub mod reactive;
 pub mod render_stats;
+pub mod session_lock;
 pub mod surface;
 mod surface_manager;
 pub mod transform;
@@ -146,6 +147,9 @@ pub mod prelude {
         with_context,
     };
     pub use crate::renderer::{PaintContext, Shadow, measure_text};
+    pub use crate::session_lock::{
+        LockState, lock_session, lock_state, session_locked, unlock_session,
+    };
     pub use crate::surface::{
         SurfaceConfig, SurfaceHandle, SurfaceId, spawn_surface, surface_handle,
     };
@@ -878,6 +882,15 @@ impl App {
                 break;
             }
 
+            // Drive the session-lock state machine (lock/unlock requests,
+            // grant/denial events, per-output lock surfaces)
+            session_lock::process_session_lock(
+                &mut surface_manager,
+                &mut wayland_state,
+                &qh,
+                &mut self.tree,
+            );
+
             // Process dynamic surface commands
             if !process_surface_commands(
                 &mut surface_manager,
@@ -972,6 +985,7 @@ impl Drop for App {
         widget_ref::reset_widget_refs();
         outputs::reset_outputs();
         blur::reset_blur();
+        session_lock::reset_session_lock();
         FONTS_CONSUMED.with(|f| f.set(false));
     }
 }

@@ -385,6 +385,7 @@ This is a work-in-progress GUI library. Current implemented features:
 - Multi-output support: reactive `outputs()` enumeration, per-output surface pinning, `surface_output()` tracking
 - Input regions: per-surface clickable rectangles / click-through surfaces (`input_region`, `click_through`, `set_input_region`)
 - Compositor background blur (`ext-background-effect-v1`) via `container().background_blur()`, shaped by bounds + corner radius
+- Session lock (`ext-session-lock-v1`): `lock_session(factory)` / `unlock_session()` / reactive `lock_state()`, one lock surface per output with hotplug handling
 - Text input widget with full editing support
 - Image widget with raster and SVG support
 
