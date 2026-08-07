@@ -1,5 +1,6 @@
 pub mod animation;
 pub mod image_metadata;
+mod ingress;
 mod jobs;
 pub mod layout;
 pub mod reactive;
@@ -34,6 +35,7 @@ use widgets::font::FontFamily;
 
 // Calloop imports for event-driven main loop (via smithay-client-toolkit re-exports)
 use smithay_client_toolkit::reexports::calloop::EventLoop;
+use smithay_client_toolkit::reexports::calloop::channel as calloop_channel;
 use smithay_client_toolkit::reexports::calloop::ping::make_ping;
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 
@@ -786,6 +788,24 @@ impl App {
             })
             .expect("Failed to insert ping source");
 
+        // Cross-thread ingress channel: background threads send messages
+        // here instead of hand-rolling wakeups. calloop guarantees a send
+        // wakes the next dispatch — see the ingress module.
+        let (ingress_tx, ingress_channel) = calloop_channel::channel();
+        ingress::install_ingress(ingress_tx);
+        loop_handle
+            .insert_source(ingress_channel, |event, _, _wayland_state| {
+                if let calloop_channel::Event::Msg(message) = event {
+                    match message {
+                        // Doorbell only: the write payloads live in the
+                        // reactive write queue, drained at the flush point
+                        // later this same iteration.
+                        ingress::IngressMessage::BgWritesQueued => {}
+                    }
+                }
+            })
+            .expect("Failed to insert ingress channel");
+
         // Insert Wayland source - this handles all Wayland protocol events
         WaylandSource::new(connection.clone(), event_queue)
             .insert(loop_handle.clone())
@@ -797,9 +817,12 @@ impl App {
             let any_surface_needs_init = wayland_state.any_surface_needs_render();
             let force_render = any_surface_needs_init;
 
-            // Check if we need to actively poll (jobs pushed during previous frame)
+            // Check if we need to actively poll: jobs pushed during the
+            // previous frame, or a frame request that landed after this
+            // iteration consumed the flag (blocking on a set flag would
+            // suppress all later pings — see frame_request_pending).
             let has_pending = has_pending_jobs();
-            let needs_polling = has_pending || force_render;
+            let needs_polling = has_pending || force_render || jobs::frame_request_pending();
 
             // Dispatch events from calloop:
             // - If polling needed (animations/callbacks/init), use timeout
@@ -816,6 +839,11 @@ impl App {
                 log::error!("Event loop dispatch failed: {e}");
                 return ExitReason::Error(platform::PlatformError::ConnectionLost);
             }
+
+            // Reset ping coalescing: the first request_frame from here on
+            // sends a fresh ping so the next dispatch can't block on
+            // work queued during this iteration.
+            jobs::mark_loop_awake();
 
             // Check for programmatic exit/restart requests
             match get_exit_request() {
@@ -901,6 +929,7 @@ impl Drop for App {
         // Reset all thread-local and static state so the next App can start clean.
         reactive::reset_reactive();
         jobs::reset_jobs();
+        ingress::reset_ingress();
         surface::reset_surface_commands();
         widget_ref::reset_widget_refs();
         FONTS_CONSUMED.with(|f| f.set(false));
