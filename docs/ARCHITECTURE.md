@@ -121,12 +121,11 @@ Hardware-accelerated rendering using wgpu.
 3. Dispatch events to widgets (queued `MouseMove`s are coalesced to the latest position)
 4. **Frame-pacing gate**: if a `wl_surface.frame` callback is still in flight, return
    before draining jobs — the compositor hasn't shown the previous frame yet.
-   Queued jobs (including animation continuations) stay pending until the
-   callback fires and wakes the loop. Init and resizes bypass the gate.
-   The gate is per-surface but the job queue is global, so a surface's drain
-   defers (quietly re-queues) animation jobs owned by *other, frame-gated*
-   surfaces: advancing them would outpace their callbacks and spin the loop
-   flat-out. Non-animation jobs are surface-agnostic and always run.
+   The gate and the job queues have the same per-surface granularity
+   (surface-owned scheduling, see Jobs System): a gated surface's queued
+   jobs — including animation continuations — sit untouched in its own
+   queue until the callback fires and wakes the loop. Init and resizes
+   bypass the gate.
 5. `drain_pending_jobs()` + `process_jobs()` - Unregister → Animation (advance values) → Reconcile → Paint → Layout marking
 6. Process follow-up jobs pushed by animation advances and reconciliation
 7. Partial layout from `layout_roots` - Only dirty subtrees re-layout
@@ -243,12 +242,24 @@ The jobs system connects reactive signals to widget invalidation.
 - `Unregister` - Widget needs cleanup (deferred Drop)
 - `Animation` - Widget has active animations
 
-**How It Works:**
-- Signals push jobs to a global queue when values change
-- `request_job()` is thread-safe and wakes the event loop
-- For animations, `request_job()` with `JobRequest::Animation(RequiredJob)` adds both the Animation job and any required follow-up job (Paint or Layout)
-- Main loop drains jobs and processes by type in order
-- Animation jobs run after paint to advance state for next frame
+**How It Works — surface-owned scheduling:**
+- Jobs are keyed by widget, but their *scheduling domain* is the surface:
+  the frame-pacing gate is per-surface, so the queues are too.
+- `request_job()` pushes into a global **inbox** (push sites have no `Tree`
+  access) and wakes the event loop. For animations,
+  `JobRequest::Animation(RequiredJob)` adds both the Animation job and any
+  required follow-up job (Paint or Layout).
+- `distribute_jobs(tree, active_roots)` is the **single place where
+  ownership is resolved**: it sorts the inbox into per-surface queues keyed
+  by surface root (topmost ancestor). Jobs with no live owning surface go
+  to the **orphan lane**, processed once per loop iteration (deferred
+  Unregister cleanup); queues of destroyed surfaces are retired there too.
+- Each surface's render pass drains **only its own queue** and processes by
+  type in order. A frame-gated surface's animation continuations sit in its
+  own queue until its callback fires — no other surface can advance them
+  (this exact bug once spun the loop at ~260k iterations/s).
+- `layout_roots` are per-surface as well, so one surface's render pass
+  never lays out another surface's subtrees.
 
 ## Event Loop Wakeup Contract
 
