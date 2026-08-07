@@ -172,10 +172,7 @@ pub mod prelude {
 use smithay_client_toolkit::reexports::client::QueueHandle;
 
 use crate::{
-    jobs::{
-        drain_non_animation_jobs, drain_pending_jobs, get_exit_request, has_pending_jobs,
-        init_wakeup, process_jobs, take_frame_request,
-    },
+    jobs::{get_exit_request, has_pending_jobs, init_wakeup, process_jobs, take_frame_request},
     tree::{DamageRegion, Tree, WidgetId},
 };
 
@@ -315,7 +312,7 @@ fn render_surface(
     tree: &mut Tree,
     layout_roots: &mut Vec<WidgetId>,
     frame_requested: bool,
-    gated_roots: &rustc_hash::FxHashSet<WidgetId>,
+    active_roots: &rustc_hash::FxHashSet<WidgetId>,
 ) {
     // Get wayland surface state
     let Some(wayland_surface) = wayland_state.get_surface_mut(id) else {
@@ -348,6 +345,11 @@ fn render_surface(
             widget.event(tree, id, event);
         });
     }
+
+    // Jobs pushed by the event handlers above (hover/pressed state changes,
+    // clicks) land in the inbox: distribute now so this surface's drain
+    // below picks them up in the same frame (no 1-frame hover delay).
+    jobs::distribute_jobs(tree, active_roots);
 
     // Sync clipboard to Wayland if it changed (copy operations)
     if let Some(text) = take_clipboard_change() {
@@ -426,39 +428,20 @@ fn render_surface(
     // 4. Layout — needs updated animation values + reconciled children
     // 5. Paint — needs final layout positions
     //
-    // Cross-surface note: the queue is global but the pacing gate above is
-    // per-surface, so this drain also picks up jobs belonging to OTHER
-    // surfaces. Animation jobs owned by a frame-gated surface must NOT be
-    // advanced here: each advance re-queues a continuation, and with this
-    // surface gate-open every loop iteration would advance them — the loop
-    // then spins flat-out (hundreds of thousands of iterations/s observed)
-    // until the other surface's callback fires. Defer them quietly instead;
-    // their wakeup is the owning surface's frame callback + the 16 ms
-    // animation poll. Non-animation jobs (unregister, reconcile, paint,
-    // layout) are surface-agnostic tree maintenance and always run.
-    let mut jobs = drain_pending_jobs();
-    if !gated_roots.is_empty() {
-        let mut deferred: smallvec::SmallVec<[jobs::Job; 8]> = smallvec::SmallVec::new();
-        let my_root = surface.widget_id;
-        jobs.retain(|job| {
-            if job.job_type != jobs::JobType::Animation {
-                return true;
-            }
-            match tree.surface_root_of(job.widget_id) {
-                Some(root) if root != my_root && gated_roots.contains(&root) => {
-                    deferred.push(*job);
-                    false
-                }
-                _ => true,
-            }
-        });
-        jobs::requeue_jobs_quiet(deferred);
-    }
+    // Scheduling is surface-owned: distribute_jobs resolved ownership and
+    // this drain returns ONLY jobs belonging to this surface's subtree, so
+    // the pacing gate above and the queue have the same granularity — a
+    // gated surface's animation continuations sit untouched in its own
+    // queue until its frame callback fires, regardless of what other
+    // surfaces do in between.
+    let jobs = jobs::drain_surface_jobs(surface.widget_id);
     process_jobs(&jobs, tree, layout_roots);
     jobs::recycle_job_buffer(jobs);
 
     // Process follow-up jobs from animation advances and reconciliation
-    let followup = drain_non_animation_jobs();
+    // (they land in the inbox — re-distribute before draining)
+    jobs::distribute_jobs(tree, active_roots);
+    let followup = jobs::drain_surface_non_animation_jobs(surface.widget_id);
     if !followup.is_empty() {
         process_jobs(&followup, tree, layout_roots);
     }
@@ -631,8 +614,10 @@ pub struct App {
     surface_definitions: Vec<SurfaceDefinition>,
     /// The layout tree for widget storage (owned by App)
     tree: Tree,
-    /// Layout roots that need re-layout (Vec with dedup — typically 1–3 per frame)
-    layout_roots: Vec<WidgetId>,
+    /// Layout roots that need re-layout, keyed by surface root so one
+    /// surface's render pass never lays out another surface's subtrees
+    /// (each inner Vec is deduped — typically 1–3 entries per frame)
+    layout_roots: rustc_hash::FxHashMap<WidgetId, Vec<WidgetId>>,
     /// Root owner for the reactive graph. When disposed, cascades cleanup
     /// through all signals, effects, and cleanup callbacks.
     root_owner_id: Option<OwnerId>,
@@ -643,7 +628,7 @@ impl App {
         Self {
             surface_definitions: Vec::new(),
             tree: Tree::new(),
-            layout_roots: Vec::new(),
+            layout_roots: rustc_hash::FxHashMap::default(),
             root_owner_id: None,
         }
     }
@@ -953,26 +938,35 @@ impl App {
             if let Some(renderer) = renderer.as_mut() {
                 let surface_ids: Vec<SurfaceId> = surface_manager.ids().collect();
 
-                // Surface roots whose frame callback is still in flight:
-                // their animation jobs must not be advanced by OTHER
-                // surfaces' render passes (see the cross-surface note in
-                // render_surface). Init-phase surfaces bypass their own
-                // gate, so they are never considered gated here either.
-                let gated_roots: rustc_hash::FxHashSet<WidgetId> = surface_ids
+                // Live surface roots: the ownership domain for job
+                // scheduling. Computed after surface commands/session-lock
+                // processing so closed surfaces are already gone.
+                let active_roots: rustc_hash::FxHashSet<WidgetId> = surface_ids
                     .iter()
-                    .filter_map(|sid| {
-                        let ws = wayland_state.get_surface(*sid)?;
-                        let gated = ws.frame_callback_pending
-                            && ws.first_frame_presented
-                            && ws.scale_factor_received;
-                        gated.then(|| surface_manager.get(*sid).map(|s| s.widget_id))?
-                    })
+                    .filter_map(|sid| surface_manager.get(*sid).map(|s| s.widget_id))
                     .collect();
+
+                // Resolve job ownership, then run the orphan lane: jobs
+                // whose widget has no live surface (deferred Unregister
+                // cleanup from closed surfaces, mostly) must not wait for
+                // a render pass that will never come.
+                jobs::distribute_jobs(&self.tree, &active_roots);
+                let orphans = jobs::drain_orphan_jobs();
+                if !orphans.is_empty() {
+                    let mut scratch_layout_roots = Vec::new();
+                    process_jobs(&orphans, &mut self.tree, &mut scratch_layout_roots);
+                }
+                jobs::recycle_job_buffer(orphans);
+
+                // Drop layout roots of surfaces that no longer exist.
+                self.layout_roots
+                    .retain(|root, _| active_roots.contains(root));
 
                 for id in surface_ids {
                     let Some(surface) = surface_manager.get_mut(id) else {
                         continue;
                     };
+                    let layout_roots = self.layout_roots.entry(surface.widget_id).or_default();
                     render_surface(
                         id,
                         surface,
@@ -980,9 +974,9 @@ impl App {
                         renderer,
                         &qh,
                         &mut self.tree,
-                        &mut self.layout_roots,
+                        layout_roots,
                         frame_requested,
-                        &gated_roots,
+                        &active_roots,
                     );
                 }
             }

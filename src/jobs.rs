@@ -42,9 +42,6 @@ use crate::tree::{Tree, WidgetId};
 struct JobQueue {
     set: rustc_hash::FxHashSet<Job>,
     vec: Vec<Job>,
-    /// Spare buffers for capacity reuse across frames (at most 2: one per
-    /// drain flavor in flight).
-    spare: Vec<Vec<Job>>,
 }
 
 impl JobQueue {
@@ -52,7 +49,6 @@ impl JobQueue {
         Self {
             set: rustc_hash::FxHashSet::default(),
             vec: Vec::new(),
-            spare: Vec::new(),
         }
     }
 
@@ -62,31 +58,24 @@ impl JobQueue {
         }
     }
 
-    fn drain_all(&mut self) -> Vec<Job> {
+    /// Drain everything, installing `replacement` as the new backing buffer.
+    fn drain_all(&mut self, replacement: Vec<Job>) -> Vec<Job> {
         self.set.clear();
-        let replacement = self.spare.pop().unwrap_or_default();
         std::mem::replace(&mut self.vec, replacement)
     }
 
-    fn drain_non_animation(&mut self) -> Vec<Job> {
-        let mut non_anim = self.spare.pop().unwrap_or_default();
+    /// Drain everything except Animation jobs into `buf`.
+    fn drain_non_animation(&mut self, mut buf: Vec<Job>) -> Vec<Job> {
         self.vec.retain(|job| {
             if job.job_type == JobType::Animation {
                 true
             } else {
                 self.set.remove(job);
-                non_anim.push(*job);
+                buf.push(*job);
                 false
             }
         });
-        non_anim
-    }
-
-    fn recycle(&mut self, mut buf: Vec<Job>) {
-        if self.spare.len() < 2 {
-            buf.clear();
-            self.spare.push(buf);
-        }
+        buf
     }
 
     fn is_empty(&self) -> bool {
@@ -94,11 +83,67 @@ impl JobQueue {
     }
 }
 
-// Thread-local job queue for pending reactive updates.
+/// Surface-owned scheduling.
+///
+/// Jobs are keyed by widget, but their *scheduling domain* is the surface:
+/// the frame-pacing gate is per-surface, so the queues must be too — a
+/// global queue drained by whichever surface renders first let a gate-open
+/// surface advance another surface's animations unpaced (a busy-spin at
+/// hundreds of thousands of iterations/s).
+///
+/// Push sites (`request_job`) have no `Tree` access, so jobs land in a
+/// global `inbox` first. [`distribute_jobs`] — the single place where
+/// ownership is resolved — sorts them into per-surface queues keyed by the
+/// surface root widget. Each surface's render pass drains only its own
+/// queue: a frame-gated surface's animation jobs simply sit in its queue
+/// until its callback fires. Jobs whose widget has no live surface (mid-
+/// teardown, or their surface was destroyed) go to the `orphans` lane,
+/// processed once per loop iteration so deferred Unregister cleanup always
+/// runs.
+struct JobQueues {
+    /// Push-side inbox (no ownership resolved yet).
+    inbox: JobQueue,
+    /// Per-surface queues, keyed by surface root widget.
+    per_root: rustc_hash::FxHashMap<WidgetId, JobQueue>,
+    /// Jobs with no live owning surface.
+    orphans: JobQueue,
+    /// Spare buffers for capacity reuse across frames.
+    spare: Vec<Vec<Job>>,
+}
+
+impl JobQueues {
+    fn new() -> Self {
+        Self {
+            inbox: JobQueue::new(),
+            per_root: rustc_hash::FxHashMap::default(),
+            orphans: JobQueue::new(),
+            spare: Vec::new(),
+        }
+    }
+
+    fn spare_buf(&mut self) -> Vec<Job> {
+        self.spare.pop().unwrap_or_default()
+    }
+
+    fn recycle(&mut self, mut buf: Vec<Job>) {
+        if self.spare.len() < 4 {
+            buf.clear();
+            self.spare.push(buf);
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inbox.is_empty()
+            && self.orphans.is_empty()
+            && self.per_root.values().all(JobQueue::is_empty)
+    }
+}
+
+// Thread-local job queues for pending reactive updates.
 // All job producers (signal writes, animations) run on the main thread,
 // so no Mutex is needed.
 thread_local! {
-    static PENDING_JOBS: RefCell<JobQueue> = RefCell::new(JobQueue::new());
+    static PENDING_JOBS: RefCell<JobQueues> = RefCell::new(JobQueues::new());
 }
 
 /// Job types for reactive invalidation (stored in the queue)
@@ -150,22 +195,23 @@ pub struct Job {
 pub fn request_job(widget_id: WidgetId, request: JobRequest) {
     PENDING_JOBS.with(|jobs| {
         let mut jobs = jobs.borrow_mut();
+        let inbox = &mut jobs.inbox;
         match request {
             JobRequest::Animation(required) => {
-                jobs.push(Job {
+                inbox.push(Job {
                     widget_id,
                     job_type: JobType::Animation,
                 });
                 match required {
                     RequiredJob::None => {}
                     RequiredJob::Paint => {
-                        jobs.push(Job {
+                        inbox.push(Job {
                             widget_id,
                             job_type: JobType::Paint,
                         });
                     }
                     RequiredJob::Layout => {
-                        jobs.push(Job {
+                        inbox.push(Job {
                             widget_id,
                             job_type: JobType::Layout,
                         });
@@ -180,7 +226,7 @@ pub fn request_job(widget_id: WidgetId, request: JobRequest) {
                     JobRequest::Unregister => JobType::Unregister,
                     JobRequest::Animation(_) => unreachable!(),
                 };
-                jobs.push(Job {
+                inbox.push(Job {
                     widget_id,
                     job_type,
                 });
@@ -190,36 +236,95 @@ pub fn request_job(widget_id: WidgetId, request: JobRequest) {
     request_frame();
 }
 
-/// Drain all pending jobs
-pub fn drain_pending_jobs() -> Vec<Job> {
-    PENDING_JOBS.with(|jobs| jobs.borrow_mut().drain_all())
+/// Resolve job ownership: sort the inbox into per-surface queues.
+///
+/// This is the ONLY place where a job's owning surface is determined
+/// (topmost ancestor walk — parent links are complete between loop phases,
+/// which is when this runs). `active_roots` is the set of live surface
+/// roots: jobs resolving anywhere else — widget already gone, surface
+/// destroyed, never parented — go to the orphan lane. Queues whose root is
+/// no longer active are retired into the orphan lane too, so a closed
+/// surface's deferred Unregister jobs still run and nothing keeps
+/// `has_pending_jobs` true forever.
+pub fn distribute_jobs(tree: &Tree, active_roots: &rustc_hash::FxHashSet<WidgetId>) {
+    PENDING_JOBS.with(|jobs| {
+        let mut jobs = jobs.borrow_mut();
+
+        // Retire queues for surfaces that no longer exist.
+        let dead: SmallVec<[WidgetId; 2]> = jobs
+            .per_root
+            .keys()
+            .filter(|root| !active_roots.contains(root))
+            .copied()
+            .collect();
+        for root in dead {
+            if let Some(mut queue) = jobs.per_root.remove(&root) {
+                for job in queue.vec.drain(..) {
+                    jobs.orphans.push(job);
+                }
+            }
+        }
+
+        // Sort the inbox.
+        if jobs.inbox.is_empty() {
+            return;
+        }
+        let buf = jobs.spare_buf();
+        let pending = jobs.inbox.drain_all(buf);
+        for job in &pending {
+            match tree.surface_root_of(job.widget_id) {
+                Some(root) if active_roots.contains(&root) => {
+                    jobs.per_root
+                        .entry(root)
+                        .or_insert_with(JobQueue::new)
+                        .push(*job);
+                }
+                _ => jobs.orphans.push(*job),
+            }
+        }
+        jobs.recycle(pending);
+    });
 }
 
-/// Drain all pending jobs EXCEPT Animation jobs.
+/// Drain all jobs owned by the given surface root.
+pub fn drain_surface_jobs(root: WidgetId) -> Vec<Job> {
+    PENDING_JOBS.with(|jobs| {
+        let mut jobs = jobs.borrow_mut();
+        let buf = jobs.spare_buf();
+        match jobs.per_root.get_mut(&root) {
+            Some(queue) => queue.drain_all(buf),
+            None => buf,
+        }
+    })
+}
+
+/// Drain the given surface's jobs EXCEPT Animation jobs.
 /// Used to collect follow-up jobs (Paint/Layout) pushed by animation
 /// advances and reconciliation, without re-draining Animation jobs.
-pub fn drain_non_animation_jobs() -> Vec<Job> {
-    PENDING_JOBS.with(|jobs| jobs.borrow_mut().drain_non_animation())
+pub fn drain_surface_non_animation_jobs(root: WidgetId) -> Vec<Job> {
+    PENDING_JOBS.with(|jobs| {
+        let mut jobs = jobs.borrow_mut();
+        let buf = jobs.spare_buf();
+        match jobs.per_root.get_mut(&root) {
+            Some(queue) => queue.drain_non_animation(buf),
+            None => buf,
+        }
+    })
+}
+
+/// Drain the orphan lane (jobs with no live owning surface — deferred
+/// Unregister cleanup, mostly). Processed once per loop iteration.
+pub fn drain_orphan_jobs() -> Vec<Job> {
+    PENDING_JOBS.with(|jobs| {
+        let mut jobs = jobs.borrow_mut();
+        let buf = jobs.spare_buf();
+        jobs.orphans.drain_all(buf)
+    })
 }
 
 /// Return a drained job buffer for capacity reuse on later frames.
 pub fn recycle_job_buffer(buf: Vec<Job>) {
     PENDING_JOBS.with(|jobs| jobs.borrow_mut().recycle(buf));
-}
-
-/// Re-queue jobs WITHOUT waking the loop.
-///
-/// Used to defer animation jobs belonging to a frame-gated surface that were
-/// drained by another surface's render pass: their wakeup is the owning
-/// surface's frame callback (plus the 16 ms animation poll), so pinging here
-/// would just spin the loop between callbacks.
-pub fn requeue_jobs_quiet(deferred: impl IntoIterator<Item = Job>) {
-    PENDING_JOBS.with(|jobs| {
-        let mut jobs = jobs.borrow_mut();
-        for job in deferred {
-            jobs.push(job);
-        }
-    });
 }
 
 /// Process all jobs in a single pass, partitioned by type.
@@ -286,7 +391,7 @@ pub fn has_pending_jobs() -> bool {
 #[cfg(test)]
 fn clear_pending_jobs() {
     PENDING_JOBS.with(|jobs| {
-        jobs.borrow_mut().drain_all();
+        *jobs.borrow_mut() = JobQueues::new();
     });
 }
 
@@ -376,7 +481,7 @@ pub(crate) fn mark_loop_awake() {
 /// Called during `App::drop()` to clear stale jobs and allow re-initialization.
 pub(crate) fn reset_jobs() {
     PENDING_JOBS.with(|jobs| {
-        jobs.borrow_mut().drain_all();
+        *jobs.borrow_mut() = JobQueues::new();
     });
     FRAME_REQUESTED.store(false, Ordering::Relaxed);
     PING_SENT.store(false, Ordering::Relaxed);
@@ -406,98 +511,152 @@ pub fn frame_request_pending() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tree::WidgetId;
+    use crate::layout::{Constraints, Size};
+    use crate::widgets::Widget;
 
-    fn widget_id(n: u64) -> WidgetId {
-        WidgetId::from_u64(n)
+    struct TestWidget;
+    impl Widget for TestWidget {
+        fn layout(&mut self, _: &mut Tree, _: WidgetId, _: Constraints) -> Size {
+            Size::zero()
+        }
+        fn paint(&self, _: &Tree, _: WidgetId, _: &mut crate::renderer::PaintContext) {}
     }
 
-    /// Helper: directly push jobs into PENDING_JOBS for testing.
-    fn push_test_jobs(jobs: &[Job]) {
-        PENDING_JOBS.with(|pending| {
-            let mut pending = pending.borrow_mut();
-            for job in jobs {
-                pending.push(*job);
-            }
-        });
+    /// Two surfaces (roots), one child each. Returns (tree, roots, children).
+    fn two_surface_tree() -> (Tree, [WidgetId; 2], [WidgetId; 2]) {
+        let mut tree = Tree::new();
+        let root_a = tree.register(Box::new(TestWidget));
+        let root_b = tree.register(Box::new(TestWidget));
+        let child_a = tree.register(Box::new(TestWidget));
+        let child_b = tree.register(Box::new(TestWidget));
+        tree.set_parent(child_a, root_a);
+        tree.set_parent(child_b, root_b);
+        (tree, [root_a, root_b], [child_a, child_b])
+    }
+
+    fn roots_set(roots: &[WidgetId]) -> rustc_hash::FxHashSet<WidgetId> {
+        roots.iter().copied().collect()
+    }
+
+    fn push(widget_id: WidgetId, job_type: JobType) -> Job {
+        let job = Job {
+            widget_id,
+            job_type,
+        };
+        PENDING_JOBS.with(|pending| pending.borrow_mut().inbox.push(job));
+        job
     }
 
     #[test]
-    fn drain_non_animation_keeps_animation_jobs() {
-        // Clear any leftover state from other tests
+    fn jobs_are_routed_to_their_owning_surface() {
         clear_pending_jobs();
+        let (tree, roots, children) = two_surface_tree();
+        let active = roots_set(&roots);
 
-        let anim_job = Job {
-            widget_id: widget_id(1),
-            job_type: JobType::Animation,
-        };
-        let paint_job = Job {
-            widget_id: widget_id(2),
-            job_type: JobType::Paint,
-        };
-        let layout_job = Job {
-            widget_id: widget_id(3),
-            job_type: JobType::Layout,
-        };
+        let job_a = push(children[0], JobType::Paint);
+        let job_b = push(children[1], JobType::Layout);
+        distribute_jobs(&tree, &active);
 
-        push_test_jobs(&[anim_job, paint_job, layout_job]);
+        let drained_a = drain_surface_jobs(roots[0]);
+        assert_eq!(drained_a, vec![job_a]);
+        let drained_b = drain_surface_jobs(roots[1]);
+        assert_eq!(drained_b, vec![job_b]);
 
-        // drain_non_animation_jobs should return Paint + Layout, keep Animation
-        let drained = drain_non_animation_jobs();
+        // A second drain returns nothing — queues are per surface and empty
+        assert!(drain_surface_jobs(roots[0]).is_empty());
+        assert!(!has_pending_jobs() || drain_orphan_jobs().is_empty());
+    }
+
+    #[test]
+    fn gated_surface_animations_survive_other_surfaces_drains() {
+        // The core invariant behind the pacing fix: draining surface B can
+        // never touch surface A's animation continuations.
+        clear_pending_jobs();
+        let (tree, roots, children) = two_surface_tree();
+        let active = roots_set(&roots);
+
+        let anim_a = push(children[0], JobType::Animation);
+        distribute_jobs(&tree, &active);
+
+        // Surface B renders (A is frame-gated and never drains)
+        assert!(drain_surface_jobs(roots[1]).is_empty());
+        assert!(drain_surface_non_animation_jobs(roots[1]).is_empty());
+
+        // A's animation is still queued, untouched
+        let drained_a = drain_surface_jobs(roots[0]);
+        assert_eq!(drained_a, vec![anim_a]);
+    }
+
+    #[test]
+    fn drain_surface_non_animation_keeps_animation_jobs() {
+        clear_pending_jobs();
+        let (tree, roots, children) = two_surface_tree();
+        let active = roots_set(&roots);
+
+        let anim = push(children[0], JobType::Animation);
+        let paint = push(children[0], JobType::Paint);
+        let layout = push(roots[0], JobType::Layout);
+        distribute_jobs(&tree, &active);
+
+        let drained = drain_surface_non_animation_jobs(roots[0]);
         assert_eq!(drained.len(), 2);
-        assert!(drained.contains(&paint_job));
-        assert!(drained.contains(&layout_job));
+        assert!(drained.contains(&paint));
+        assert!(drained.contains(&layout));
 
-        // Animation job should still be in PENDING_JOBS
-        let remaining = drain_pending_jobs();
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0], anim_job);
+        let remaining = drain_surface_jobs(roots[0]);
+        assert_eq!(remaining, vec![anim]);
     }
 
     #[test]
-    fn drain_non_animation_with_no_animations() {
+    fn jobs_without_a_live_surface_go_to_the_orphan_lane() {
         clear_pending_jobs();
+        let (mut tree, roots, children) = two_surface_tree();
+        let active = roots_set(&roots);
 
-        let paint_job = Job {
-            widget_id: widget_id(1),
-            job_type: JobType::Paint,
-        };
-        let unregister_job = Job {
-            widget_id: widget_id(2),
-            job_type: JobType::Unregister,
-        };
+        // Widget removed from the tree before distribution (deferred
+        // Unregister after teardown)
+        let ghost = children[1];
+        tree.unregister(ghost);
+        let orphan_job = push(ghost, JobType::Unregister);
+        distribute_jobs(&tree, &active);
 
-        push_test_jobs(&[paint_job, unregister_job]);
-
-        let drained = drain_non_animation_jobs();
-        assert_eq!(drained.len(), 2);
-
-        // Nothing should remain
-        let remaining = drain_pending_jobs();
-        assert!(remaining.is_empty());
+        assert_eq!(drain_orphan_jobs(), vec![orphan_job]);
+        assert!(drain_surface_jobs(roots[1]).is_empty());
     }
 
     #[test]
-    fn drain_non_animation_with_only_animations() {
+    fn dead_surface_queues_are_retired_into_the_orphan_lane() {
         clear_pending_jobs();
+        let (tree, roots, children) = two_surface_tree();
+        let active = roots_set(&roots);
 
-        let anim1 = Job {
-            widget_id: widget_id(1),
-            job_type: JobType::Animation,
-        };
-        let anim2 = Job {
-            widget_id: widget_id(2),
-            job_type: JobType::Animation,
-        };
+        let job_a = push(children[0], JobType::Unregister);
+        distribute_jobs(&tree, &active);
 
-        push_test_jobs(&[anim1, anim2]);
+        // Surface A closes: its root disappears from the active set. The
+        // queued job must not be stranded (it would keep has_pending_jobs
+        // true forever with no render pass to drain it).
+        let only_b = roots_set(&roots[1..]);
+        distribute_jobs(&tree, &only_b);
 
-        // Should return empty — all jobs are animations
-        let drained = drain_non_animation_jobs();
-        assert!(drained.is_empty());
+        assert_eq!(drain_orphan_jobs(), vec![job_a]);
+        assert!(!has_pending_jobs());
+    }
 
-        // Both should remain
-        let remaining = drain_pending_jobs();
-        assert_eq!(remaining.len(), 2);
+    #[test]
+    fn inbox_dedup_survives_distribution() {
+        clear_pending_jobs();
+        let (tree, roots, children) = two_surface_tree();
+        let active = roots_set(&roots);
+
+        let job = push(children[0], JobType::Paint);
+        // Same job pushed twice — deduped in the inbox
+        push(children[0], JobType::Paint);
+        distribute_jobs(&tree, &active);
+        // ...and pushing again after distribution dedups in the surface queue
+        push(children[0], JobType::Paint);
+        distribute_jobs(&tree, &active);
+
+        assert_eq!(drain_surface_jobs(roots[0]), vec![job]);
     }
 }
