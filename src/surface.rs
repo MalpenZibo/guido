@@ -216,6 +216,117 @@ impl SurfaceConfig {
     }
 }
 
+/// Which point of the anchor rectangle a popup attaches to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PopupAnchor {
+    /// Center of the anchor rect.
+    #[default]
+    None,
+    Top,
+    Bottom,
+    Left,
+    Right,
+    TopLeft,
+    BottomLeft,
+    TopRight,
+    BottomRight,
+}
+
+/// Which direction a popup grows from its anchor point.
+///
+/// `Bottom` means "downwards" (typical menu under a bar button).
+pub type PopupGravity = PopupAnchor;
+
+/// Configuration for an xdg popup anchored to a parent surface.
+///
+/// The compositor positions the popup relative to `anchor_rect` (parent
+/// surface coordinates) and adjusts it to stay on screen (flip/slide).
+///
+/// ```ignore
+/// spawn_popup(
+///     bar_surface_id,
+///     PopupConfig::new(250, 300)
+///         .anchor_rect(button_rect)
+///         .anchor(PopupAnchor::Bottom)
+///         .gravity(PopupGravity::Bottom)
+///         .grab(),
+///     move || menu_widget(),
+/// );
+/// ```
+#[derive(Clone)]
+pub struct PopupConfig {
+    /// Popup size in logical pixels (required by xdg_positioner).
+    pub width: u32,
+    pub height: u32,
+    /// Rectangle the popup anchors to, in parent surface coordinates.
+    pub anchor_rect: Rect,
+    /// Which point of the anchor rect to attach to.
+    pub anchor: PopupAnchor,
+    /// Which direction the popup grows.
+    pub gravity: PopupGravity,
+    /// Extra offset from the anchor point.
+    pub offset: (i32, i32),
+    /// Take an input grab: clicking outside dismisses the popup (menu
+    /// semantics). The compositor reports the dismissal reactively — see
+    /// [`PopupHandle::dismissed`].
+    pub grab: bool,
+    /// Background color of the popup surface.
+    pub background_color: Color,
+}
+
+impl PopupConfig {
+    /// Create a popup configuration with the given size.
+    pub fn new(width: u32, height: u32) -> Self {
+        Self {
+            width,
+            height,
+            anchor_rect: Rect::new(0.0, 0.0, 1.0, 1.0),
+            anchor: PopupAnchor::Bottom,
+            gravity: PopupGravity::Bottom,
+            offset: (0, 0),
+            grab: false,
+            background_color: Color::TRANSPARENT,
+        }
+    }
+
+    /// Set the rectangle the popup anchors to (parent surface coordinates).
+    /// Typically a widget's bounds from a [`crate::widget_ref::WidgetRef`].
+    pub fn anchor_rect(mut self, rect: Rect) -> Self {
+        self.anchor_rect = rect;
+        self
+    }
+
+    /// Set which point of the anchor rect the popup attaches to.
+    pub fn anchor(mut self, anchor: PopupAnchor) -> Self {
+        self.anchor = anchor;
+        self
+    }
+
+    /// Set which direction the popup grows.
+    pub fn gravity(mut self, gravity: PopupGravity) -> Self {
+        self.gravity = gravity;
+        self
+    }
+
+    /// Set an extra offset from the anchor point.
+    pub fn offset(mut self, x: i32, y: i32) -> Self {
+        self.offset = (x, y);
+        self
+    }
+
+    /// Take an input grab: clicking outside dismisses the popup.
+    pub fn grab(mut self) -> Self {
+        self.grab = true;
+        self
+    }
+
+    /// Set the background color of the popup surface.
+    pub fn background_color(mut self, color: Color) -> Self {
+        self.background_color = color;
+        self
+    }
+}
+
 /// Handle to a spawned surface for controlling it from widget code.
 ///
 /// The handle can be cloned and shared between callbacks. It allows
@@ -353,6 +464,13 @@ pub(crate) enum SurfaceCommand {
         id: SurfaceId,
         rects: Option<Vec<Rect>>,
     },
+    /// Create an xdg popup anchored to a parent surface.
+    CreatePopup {
+        id: SurfaceId,
+        parent: SurfaceId,
+        config: PopupConfig,
+        widget_fn: Box<dyn FnOnce() -> Box<dyn Widget>>,
+    },
 }
 
 // Thread-local storage for the surface command queue.
@@ -429,6 +547,109 @@ where
     });
 
     SurfaceHandle { id }
+}
+
+/// Handle to a spawned popup.
+///
+/// Popups close either programmatically ([`PopupHandle::close`]) or by the
+/// compositor (grab + outside click, parent gone): watch that reactively
+/// via [`PopupHandle::dismissed`].
+#[derive(Clone, Copy)]
+pub struct PopupHandle {
+    id: SurfaceId,
+    dismissed: crate::reactive::RwSignal<bool>,
+}
+
+impl PopupHandle {
+    /// The popup's surface ID.
+    pub fn id(&self) -> SurfaceId {
+        self.id
+    }
+
+    /// Close the popup programmatically.
+    pub fn close(&self) {
+        self.dismissed.set(true);
+        push_surface_command(SurfaceCommand::Close(self.id));
+    }
+
+    /// Whether the popup has been dismissed (tracked read — reactive inside
+    /// tracked closures). True after `close()` or a compositor dismissal
+    /// (click outside a grabbed popup, parent closed).
+    pub fn dismissed(&self) -> bool {
+        self.dismissed.get()
+    }
+}
+
+// Registry of popup dismissal signals so the platform layer can flip them
+// when the compositor dismisses a popup (xdg_popup.popup_done).
+thread_local! {
+    static POPUP_DISMISSED: RefCell<std::collections::HashMap<SurfaceId, crate::reactive::RwSignal<bool>>> =
+        RefCell::new(std::collections::HashMap::new());
+}
+
+/// Mark a popup dismissed (called by the platform layer on popup_done, and
+/// on close). Removes the registry entry.
+pub(crate) fn mark_popup_dismissed(id: SurfaceId) {
+    let signal = POPUP_DISMISSED.with(|reg| reg.borrow_mut().remove(&id));
+    if let Some(signal) = signal {
+        signal.set(true);
+    }
+}
+
+/// Reset popup registry state.
+///
+/// Called during `App::drop()`.
+pub(crate) fn reset_popups() {
+    POPUP_DISMISSED.with(|reg| reg.borrow_mut().clear());
+}
+
+/// Spawn an xdg popup anchored to a parent surface.
+///
+/// The compositor positions the popup relative to `config.anchor_rect`
+/// (parent surface coordinates), keeps it on screen (flip/slide at screen
+/// edges), and — with [`PopupConfig::grab`] — dismisses it when the user
+/// clicks outside: real menu semantics, no fullscreen overlay needed.
+///
+/// The popup renders its own widget tree and shares the reactive state
+/// with the rest of the app, like any surface.
+///
+/// # Example
+///
+/// ```ignore
+/// let button_rect = button_ref.rect().get();
+/// let popup = spawn_popup(
+///     bar_id,
+///     PopupConfig::new(250, 300)
+///         .anchor_rect(button_rect)
+///         .grab(),
+///     move || menu_widget(),
+/// );
+/// // Reactively observe dismissal (e.g. reset the open/closed state):
+/// create_effect(move || {
+///     if popup.dismissed() {
+///         menu_open.set(false);
+///     }
+/// });
+/// ```
+pub fn spawn_popup<W, F>(parent: SurfaceId, config: PopupConfig, widget_fn: F) -> PopupHandle
+where
+    W: Widget + 'static,
+    F: FnOnce() -> W + 'static,
+{
+    let id = SurfaceId::next();
+    let dismissed = crate::reactive::create_signal(false);
+    POPUP_DISMISSED.with(|reg| {
+        reg.borrow_mut().insert(id, dismissed);
+    });
+
+    push_surface_command(SurfaceCommand::CreatePopup {
+        id,
+        parent,
+        config,
+        widget_fn: Box::new(move || Box::new(widget_fn())),
+    });
+
+    PopupHandle { id, dismissed }
 }
 
 /// Get a handle to control an existing surface.
