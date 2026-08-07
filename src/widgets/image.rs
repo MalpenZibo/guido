@@ -21,6 +21,15 @@ pub enum ImageSource {
     Path(PathBuf),
     /// Raster image from in-memory bytes
     Bytes(Arc<[u8]>),
+    /// Raw pre-decoded RGBA8 pixels (row-major, `width * height * 4` bytes).
+    ///
+    /// Skips the decode step entirely — for pixel data that never existed in
+    /// an encoded format, like tray icon pixmaps or album art from D-Bus.
+    Rgba {
+        width: u32,
+        height: u32,
+        pixels: Arc<[u8]>,
+    },
     /// SVG from a file path
     SvgPath(PathBuf),
     /// SVG from in-memory bytes
