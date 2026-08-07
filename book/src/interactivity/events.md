@@ -80,6 +80,14 @@ container()
     .child(text(move || format!("Offset: {:.0}", offset.get())))
 ```
 
+## Touch Input
+
+Touchscreens work out of the box: the first finger down drives the same
+pointer pipeline as the mouse, so `on_click`, `hover_state`,
+`pressed_state` (including ripples), and scroll all respond to touch. A
+tap is a click; lifting the finger clears hover state. No code changes
+are needed.
+
 ## Combining Events
 
 A container can have multiple event handlers:
