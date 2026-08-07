@@ -151,7 +151,8 @@ pub mod prelude {
         LockState, lock_session, lock_state, session_locked, unlock_session,
     };
     pub use crate::surface::{
-        SurfaceConfig, SurfaceHandle, SurfaceId, spawn_surface, surface_handle,
+        PopupAnchor, PopupConfig, PopupGravity, PopupHandle, SurfaceConfig, SurfaceHandle,
+        SurfaceId, spawn_popup, spawn_surface, surface_handle,
     };
     pub use crate::transform::Transform;
     pub use crate::transform_origin::{HorizontalAnchor, TransformOrigin, VerticalAnchor};
@@ -212,6 +213,9 @@ fn process_surface_commands(
             }
             SurfaceCommand::Close(id) => {
                 log::info!("Closing dynamic surface {:?}", id);
+                // If this was a popup, make sure its dismissal signal fires
+                // (no-op for other surfaces or already-dismissed popups)
+                surface::mark_popup_dismissed(id);
                 // Drop the managed surface FIRST: its wgpu Surface<'static>
                 // borrows the wl_surface through erased raw pointers, so the
                 // GPU surface must die before the Wayland surface it points
@@ -251,6 +255,30 @@ fn process_surface_commands(
             }
             SurfaceCommand::SetInputRegion { id, rects } => {
                 wayland_state.set_surface_input_region(id, rects.as_deref());
+            }
+            SurfaceCommand::CreatePopup {
+                id,
+                parent,
+                config,
+                widget_fn,
+            } => {
+                log::info!("Creating popup {:?} anchored to {:?}", id, parent);
+                if wayland_state.create_popup_surface_with_id(&qh.clone(), id, parent, &config) {
+                    let (widget, owner_id) = with_owner(widget_fn);
+                    // Reuse the surface pipeline: only the background color
+                    // matters from the synthesized config (size arrives with
+                    // the popup configure)
+                    let surface_config = SurfaceConfig::new()
+                        .width(config.width)
+                        .height(config.height)
+                        .background_color(config.background_color);
+                    let managed = ManagedSurface::new(id, surface_config, widget, owner_id, tree);
+                    surface_manager.add(managed);
+                } else {
+                    // Creation failed (no xdg_wm_base, parent gone): report
+                    // as dismissed so the app can react.
+                    surface::mark_popup_dismissed(id);
+                }
             }
         }
     }
@@ -1011,6 +1039,7 @@ impl Drop for App {
         jobs::reset_jobs();
         ingress::reset_ingress();
         surface::reset_surface_commands();
+        surface::reset_popups();
         widget_ref::reset_widget_refs();
         outputs::reset_outputs();
         blur::reset_blur();

@@ -526,6 +526,47 @@ instead of withdrawing, to keep the region authoritative.
 
 See `examples/blur_example.rs`.
 
+## Popups (Menus, Dropdowns)
+
+`spawn_popup` creates an **xdg popup** anchored to a surface: the
+compositor positions it relative to an anchor rectangle, keeps it on
+screen (flipping/sliding at screen edges), and — with `.grab()` —
+dismisses it when the user clicks outside. Real menu semantics, no
+fullscreen overlay:
+
+```rust
+let popup = spawn_popup(
+    bar_id,
+    PopupConfig::new(250, 300)                 // size (required by xdg)
+        .anchor_rect(button_ref.rect().get())  // parent surface coords
+        .anchor(PopupAnchor::Bottom)           // attach point on the rect
+        .gravity(PopupGravity::Bottom)         // growth direction
+        .grab(),                               // dismiss on outside click
+    move || menu_widget(),
+);
+```
+
+Dismissal is reactive — reset your open/closed state when the
+compositor closes the popup:
+
+```rust
+create_effect(move || {
+    if popup.dismissed() {
+        menu_open.set(false);
+    }
+})
+.detach();
+```
+
+`popup.close()` closes it programmatically. Popups render their own
+widget tree and share the app's reactive state like any surface;
+anchoring a popup to another popup creates a nested popup (submenus).
+
+Note: for a bottom bar use `anchor(Top)` + `gravity(Top)` so the menu
+opens upward — or just rely on the compositor's flip adjustment.
+
+See `examples/popup_example.rs`.
+
 ## Session Lock (Lock Screens)
 
 `lock_session` asks the compositor to lock the session

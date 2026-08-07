@@ -388,6 +388,7 @@ This is a work-in-progress GUI library. Current implemented features:
 - Session lock (`ext-session-lock-v1`): `lock_session(factory)` / `unlock_session()` / reactive `lock_state()`, one lock surface per output with hotplug handling
 - Touch input (`wl_touch`): first finger drives the pointer pipeline — tap = click, works with hover/pressed state layers
 - Clipboard: async prefetch (paste never blocks the UI thread) + primary selection (select-to-copy, middle-click paste)
+- xdg popups (`spawn_popup`): compositor-positioned menus anchored to a surface, grab semantics (outside click dismisses, reactive `dismissed()`), nested popups
 - Text input widget with full editing support
 - Image widget with raster and SVG support
 
