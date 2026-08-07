@@ -245,7 +245,7 @@ pub type PopupGravity = PopupAnchor;
 /// ```ignore
 /// spawn_popup(
 ///     bar_surface_id,
-///     PopupConfig::new(250, 300)
+///     PopupConfig::new(250)
 ///         .anchor_rect(button_rect)
 ///         .anchor(PopupAnchor::Bottom)
 ///         .gravity(PopupGravity::Bottom)
@@ -255,9 +255,15 @@ pub type PopupGravity = PopupAnchor;
 /// ```
 #[derive(Clone)]
 pub struct PopupConfig {
-    /// Popup size in logical pixels (required by xdg_positioner).
+    /// Popup width in logical pixels.
     pub width: u32,
-    pub height: u32,
+    /// Popup height in logical pixels. `None` (the default) sizes the popup
+    /// to its content: the widget is laid out at the given width before the
+    /// popup is created, and repositioned when its content height changes
+    /// (submenus expanding, lists growing). Content using `height(fill())`
+    /// resolves to the screen-height cap — give such popups an explicit
+    /// height instead.
+    pub height: Option<u32>,
     /// Rectangle the popup anchors to, in parent surface coordinates.
     pub anchor_rect: Rect,
     /// Which point of the anchor rect to attach to.
@@ -275,11 +281,12 @@ pub struct PopupConfig {
 }
 
 impl PopupConfig {
-    /// Create a popup configuration with the given size.
-    pub fn new(width: u32, height: u32) -> Self {
+    /// Create a popup configuration with the given width; the height sizes
+    /// to the content (see [`PopupConfig::height`] to fix it instead).
+    pub fn new(width: u32) -> Self {
         Self {
             width,
-            height,
+            height: None,
             anchor_rect: Rect::new(0.0, 0.0, 1.0, 1.0),
             anchor: PopupAnchor::Bottom,
             gravity: PopupGravity::Bottom,
@@ -287,6 +294,12 @@ impl PopupConfig {
             grab: false,
             background_color: Color::TRANSPARENT,
         }
+    }
+
+    /// Fix the popup height instead of sizing it to the content.
+    pub fn height(mut self, height: u32) -> Self {
+        self.height = Some(height);
+        self
     }
 
     /// Set the rectangle the popup anchors to (parent surface coordinates).
@@ -619,7 +632,7 @@ pub(crate) fn reset_popups() {
 /// let button_rect = button_ref.rect().get();
 /// let popup = spawn_popup(
 ///     bar_id,
-///     PopupConfig::new(250, 300)
+///     PopupConfig::new(250)
 ///         .anchor_rect(button_rect)
 ///         .grab(),
 ///     move || menu_widget(),

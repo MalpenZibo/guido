@@ -68,16 +68,17 @@ fn main() {
 
                                 let popup = spawn_popup(
                                     bar_id_for_click.borrow().unwrap(),
-                                    PopupConfig::new(220, 168)
+                                    PopupConfig::new(220)
                                         .anchor_rect(button_ref.rect().get())
                                         .anchor(PopupAnchor::Top)
                                         .gravity(PopupGravity::Top)
                                         .grab()
                                         .background_color(Color::TRANSPARENT),
                                     || {
+                                        // Auto-height popup: the content
+                                        // wraps, no fill-height here
                                         container()
                                             .width(fill())
-                                            .height(fill())
                                             .background(Color::rgb(0.13, 0.13, 0.2))
                                             .corner_radius(10.0)
                                             .padding(8.0)
