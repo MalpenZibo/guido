@@ -207,6 +207,21 @@ pub fn recycle_job_buffer(buf: Vec<Job>) {
     PENDING_JOBS.with(|jobs| jobs.borrow_mut().recycle(buf));
 }
 
+/// Re-queue jobs WITHOUT waking the loop.
+///
+/// Used to defer animation jobs belonging to a frame-gated surface that were
+/// drained by another surface's render pass: their wakeup is the owning
+/// surface's frame callback (plus the 16 ms animation poll), so pinging here
+/// would just spin the loop between callbacks.
+pub fn requeue_jobs_quiet(deferred: impl IntoIterator<Item = Job>) {
+    PENDING_JOBS.with(|jobs| {
+        let mut jobs = jobs.borrow_mut();
+        for job in deferred {
+            jobs.push(job);
+        }
+    });
+}
+
 /// Process all jobs in a single pass, partitioned by type.
 ///
 /// Order is preserved: Unregister → Animation → Reconcile → Paint → Layout.
