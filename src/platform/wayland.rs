@@ -87,8 +87,12 @@ pub enum SurfaceRole {
     /// Kept alive here — dropping it destroys the protocol object.
     Lock(SessionLockSurface),
     /// An xdg popup anchored to another surface. Kept alive here —
-    /// dropping it destroys the xdg objects.
-    Popup(Popup),
+    /// dropping it destroys the xdg objects. The config is retained to
+    /// rebuild positioners for repositioning (auto-height growth).
+    Popup {
+        popup: Popup,
+        config: crate::surface::PopupConfig,
+    },
 }
 
 /// Events from the session-lock protocol, drained by the main loop.
@@ -131,6 +135,9 @@ pub struct WaylandSurfaceState {
     /// been pushed yet (also reset when the blur capability changes, so the
     /// region is re-sent if it comes back).
     blur_region: Option<Vec<BlurRect>>,
+    /// Height sent in an in-flight popup reposition (cleared by the popup
+    /// configure), so repeated content measurements don't re-send it.
+    pending_popup_height: Option<u32>,
 }
 
 impl WaylandSurfaceState {
@@ -154,6 +161,7 @@ impl WaylandSurfaceState {
             pending_events: Vec::new(),
             bg_effect_surface: None,
             blur_region: None,
+            pending_popup_height: None,
         }
     }
 
@@ -199,6 +207,8 @@ pub struct WaylandState {
     // xdg shell (popups anchored to layer surfaces)
     /// `None` where xdg_wm_base is unavailable — popups then fail with a log.
     xdg_shell: Option<XdgShell>,
+    /// Monotonic token for xdg_popup.reposition requests.
+    reposition_token: u32,
 
     // Session lock (ext-session-lock-v1)
     session_lock_state: SessionLockState,
@@ -382,6 +392,7 @@ pub fn create_wayland_app() -> Result<
         bg_effect_manager,
         bg_effect_supports_blur: false,
         xdg_shell,
+        reposition_token: 0,
         session_lock_state,
         active_lock: None,
         lock_events: Vec::new(),
@@ -560,35 +571,20 @@ impl WaylandState {
         std::mem::take(&mut self.lock_events)
     }
 
-    /// Create an xdg popup anchored to `parent` with a specific SurfaceId.
-    ///
-    /// The popup's actual size/position arrive with the popup configure
-    /// (the compositor may flip/slide it to stay on screen). Returns false
-    /// when xdg_wm_base is missing or the parent can't host popups.
-    pub fn create_popup_surface_with_id(
-        &mut self,
-        qh: &QueueHandle<Self>,
-        id: SurfaceId,
-        parent: SurfaceId,
+    /// Build an xdg_positioner for a popup config at the given size.
+    fn build_popup_positioner(
+        xdg_shell: &XdgShell,
         config: &crate::surface::PopupConfig,
-    ) -> bool {
-        let Some(ref xdg_shell) = self.xdg_shell else {
-            log::error!("Cannot create popup: compositor lacks xdg_wm_base");
-            return false;
-        };
-        let Some(parent_state) = self.surfaces.get(&parent) else {
-            log::warn!("Cannot create popup: parent surface {:?} is gone", parent);
-            return false;
-        };
-
+        size: (u32, u32),
+    ) -> Option<XdgPositioner> {
         let positioner = match XdgPositioner::new(xdg_shell) {
             Ok(p) => p,
             Err(e) => {
                 log::error!("Failed to create xdg_positioner: {e}");
-                return false;
+                return None;
             }
         };
-        positioner.set_size(config.width.max(1) as i32, config.height.max(1) as i32);
+        positioner.set_size(size.0.max(1) as i32, size.1.max(1) as i32);
         let r = config.anchor_rect;
         positioner.set_anchor_rect(
             r.x.floor() as i32,
@@ -607,6 +603,36 @@ impl WaylandState {
                 | xdg_positioner::ConstraintAdjustment::SlideX
                 | xdg_positioner::ConstraintAdjustment::SlideY,
         );
+        Some(positioner)
+    }
+
+    /// Create an xdg popup anchored to `parent` with a specific SurfaceId.
+    ///
+    /// `size` is the resolved popup size (config height, or the measured
+    /// content height for auto-height popups). The actual size/position
+    /// arrive with the popup configure (the compositor may flip/slide it to
+    /// stay on screen). Returns false when xdg_wm_base is missing or the
+    /// parent can't host popups.
+    pub fn create_popup_surface_with_id(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        id: SurfaceId,
+        parent: SurfaceId,
+        config: &crate::surface::PopupConfig,
+        size: (u32, u32),
+    ) -> bool {
+        let Some(ref xdg_shell) = self.xdg_shell else {
+            log::error!("Cannot create popup: compositor lacks xdg_wm_base");
+            return false;
+        };
+        let Some(parent_state) = self.surfaces.get(&parent) else {
+            log::warn!("Cannot create popup: parent surface {:?} is gone", parent);
+            return false;
+        };
+
+        let Some(positioner) = Self::build_popup_positioner(xdg_shell, config, size) else {
+            return false;
+        };
 
         let wl_surface = self.compositor_state.create_surface(qh);
         let popup = match &parent_state.role {
@@ -625,7 +651,10 @@ impl WaylandState {
                 layer_surface.get_popup(popup.xdg_popup());
                 popup
             }
-            SurfaceRole::Popup(parent_popup) => {
+            SurfaceRole::Popup {
+                popup: parent_popup,
+                ..
+            } => {
                 // Nested popup (submenu): ordinary xdg parent
                 let parent_xdg = parent_popup.xdg_surface().clone();
                 match Popup::from_surface(
@@ -660,10 +689,13 @@ impl WaylandState {
 
         self.surface_lookup.insert(wl_surface.id(), id);
         let surface_state = WaylandSurfaceState::new(
-            SurfaceRole::Popup(popup),
+            SurfaceRole::Popup {
+                popup,
+                config: config.clone(),
+            },
             wl_surface,
-            config.width,
-            config.height,
+            size.0,
+            size.1,
         );
         self.surfaces.insert(id, surface_state);
 
@@ -671,11 +703,58 @@ impl WaylandState {
             "Created popup {:?} on parent {:?} ({}x{}, grab: {})",
             id,
             parent,
-            config.width,
-            config.height,
+            size.0,
+            size.1,
             config.grab
         );
         true
+    }
+
+    /// For auto-height popups: the width to measure content at.
+    /// Returns `None` for non-popup surfaces or fixed-height popups.
+    pub(crate) fn popup_auto_width(&self, id: SurfaceId) -> Option<u32> {
+        match &self.surfaces.get(&id)?.role {
+            SurfaceRole::Popup { config, .. } if config.height.is_none() => Some(config.width),
+            _ => None,
+        }
+    }
+
+    /// Reposition an auto-height popup when its content height changed.
+    /// The compositor answers with a new configure carrying the final size.
+    pub(crate) fn reposition_popup_if_changed(
+        &mut self,
+        id: SurfaceId,
+        new_height: u32,
+        qh: &QueueHandle<Self>,
+    ) {
+        let _ = qh;
+        let Some(ref xdg_shell) = self.xdg_shell else {
+            return;
+        };
+        let Some(surface_state) = self.surfaces.get_mut(&id) else {
+            return;
+        };
+        if surface_state.height == new_height
+            || surface_state.pending_popup_height == Some(new_height)
+        {
+            return;
+        }
+        let SurfaceRole::Popup { popup, config } = &surface_state.role else {
+            return;
+        };
+        // xdg_popup.reposition needs protocol v3
+        if popup.xdg_popup().version() < 3 {
+            return;
+        }
+        let Some(positioner) =
+            Self::build_popup_positioner(xdg_shell, config, (config.width, new_height))
+        else {
+            return;
+        };
+        self.reposition_token = self.reposition_token.wrapping_add(1);
+        popup.reposition(&positioner, self.reposition_token);
+        surface_state.pending_popup_height = Some(new_height);
+        log::debug!("Popup {:?} repositioning to height {}", id, new_height);
     }
 
     /// Push a surface's blur region to the compositor if it changed.
@@ -900,7 +979,7 @@ impl WaylandState {
                     f(layer_surface);
                     surface_state.wl_surface.commit();
                 }
-                SurfaceRole::Lock(_) | SurfaceRole::Popup(_) => {
+                SurfaceRole::Lock(_) | SurfaceRole::Popup { .. } => {
                     log::warn!(
                         "Ignoring layer-shell property change on non-layer surface {:?}",
                         id
@@ -2175,6 +2254,7 @@ impl PopupHandler for WaylandState {
             if config.height > 0 {
                 surface_state.height = config.height as u32;
             }
+            surface_state.pending_popup_height = None;
             surface_state.configured = true;
             crate::jobs::request_frame();
         }

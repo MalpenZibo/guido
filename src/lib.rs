@@ -263,26 +263,69 @@ fn process_surface_commands(
                 widget_fn,
             } => {
                 log::info!("Creating popup {:?} anchored to {:?}", id, parent);
-                if wayland_state.create_popup_surface_with_id(&qh.clone(), id, parent, &config) {
-                    let (widget, owner_id) = with_owner(widget_fn);
-                    // Reuse the surface pipeline: only the background color
-                    // matters from the synthesized config (size arrives with
-                    // the popup configure)
-                    let surface_config = SurfaceConfig::new()
-                        .width(config.width)
-                        .height(config.height)
-                        .background_color(config.background_color);
-                    let managed = ManagedSurface::new(id, surface_config, widget, owner_id, tree);
+
+                // Build the widget tree FIRST: auto-height popups size to
+                // their content, so the content must exist to be measured
+                // before the xdg_positioner is created.
+                let (widget, owner_id) = with_owner(widget_fn);
+                let surface_config = SurfaceConfig::new()
+                    .width(config.width)
+                    .height(config.height.unwrap_or(1))
+                    .background_color(config.background_color);
+                let managed = ManagedSurface::new(id, surface_config, widget, owner_id, tree);
+
+                let height = config.height.unwrap_or_else(|| {
+                    measure_popup_height(tree, managed.widget_id, config.width, parent)
+                });
+
+                if wayland_state.create_popup_surface_with_id(
+                    qh,
+                    id,
+                    parent,
+                    &config,
+                    (config.width, height),
+                ) {
                     surface_manager.add(managed);
                 } else {
-                    // Creation failed (no xdg_wm_base, parent gone): report
-                    // as dismissed so the app can react.
+                    // Creation failed (no xdg_wm_base, parent gone): drop the
+                    // widget tree and report the popup as dismissed.
+                    drop(managed);
                     surface::mark_popup_dismissed(id);
                 }
             }
         }
     }
     true
+}
+
+/// Measure a popup's natural content height at the given width.
+///
+/// Capped at the parent surface's output height (minus a margin) so a
+/// runaway or `fill()`-height content can't request an absurd popup.
+fn measure_popup_height(tree: &mut Tree, root: WidgetId, width: u32, parent: SurfaceId) -> u32 {
+    let cap = outputs::surface_output(parent)
+        .and_then(|oid| {
+            outputs::current_outputs()
+                .into_iter()
+                .find(|o| o.id == oid)
+                .and_then(|o| o.logical_size)
+        })
+        .or_else(|| {
+            outputs::current_outputs()
+                .into_iter()
+                .find_map(|o| o.logical_size)
+        })
+        .map(|(_, h)| (h as f32 - 64.0).max(100.0))
+        .unwrap_or(800.0);
+
+    let constraints = Constraints::new(width as f32, 0.0, width as f32, cap);
+    let measured = tree
+        .with_widget_mut(root, |widget, id, tree| {
+            widget.layout(tree, id, constraints)
+        })
+        .map(|size| size.height)
+        .unwrap_or(100.0);
+    (measured.ceil() as u32).max(1)
 }
 
 /// Walk the render tree after painting and cache each node's output.
@@ -516,6 +559,19 @@ fn render_surface(
             tree.mark_subtree_needs_paint(surface.widget_id);
         }
         // If neither condition is true, skip layout entirely - nothing is dirty
+
+        // Auto-height popups follow their content: when this surface had
+        // layout activity, re-measure the natural height and ask the
+        // compositor to reposition if it changed (submenus expanding, lists
+        // growing). The measure pass runs under different constraints, so
+        // the real layout is restored right after.
+        if has_pending_layouts && let Some(popup_width) = wayland_state.popup_auto_width(id) {
+            let natural = measure_popup_height(tree, surface.widget_id, popup_width, id);
+            tree.with_widget_mut(surface.widget_id, |widget, wid, tree| {
+                widget.layout(tree, wid, constraints);
+            });
+            wayland_state.reposition_popup_if_changed(id, natural, qh);
+        }
 
         // Update widget ref signals with current bounds after layout
         widget_ref::update_widget_refs(tree);

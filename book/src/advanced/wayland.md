@@ -537,7 +537,7 @@ fullscreen overlay:
 ```rust
 let popup = spawn_popup(
     bar_id,
-    PopupConfig::new(250, 300)                 // size (required by xdg)
+    PopupConfig::new(250)                      // width; height sizes to content
         .anchor_rect(button_ref.rect().get())  // parent surface coords
         .anchor(PopupAnchor::Bottom)           // attach point on the rect
         .gravity(PopupGravity::Bottom)         // growth direction
