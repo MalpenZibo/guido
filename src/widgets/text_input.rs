@@ -16,7 +16,8 @@ use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
     CursorIcon, IntoSignal, OptionSignalExt, RwSignal, Signal, clipboard_copy, clipboard_paste,
-    has_focus, release_focus, request_focus, set_cursor, with_signal_tracking,
+    has_focus, primary_copy, primary_paste, release_focus, request_focus, set_cursor,
+    with_signal_tracking,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled};
 use crate::tree::{Tree, WidgetId};
@@ -1141,6 +1142,25 @@ impl Widget for TextInput {
             }
             Event::MouseUp { button, .. } if *button == MouseButton::Left && self.is_dragging => {
                 self.is_dragging = false;
+                // Select-to-copy: a completed mouse selection becomes the
+                // primary selection (middle-click paste elsewhere)
+                if let Some(text) = self.get_selected_text() {
+                    primary_copy(&text);
+                }
+                return EventResponse::Handled;
+            }
+            Event::MouseDown { x, y, button }
+                if bounds.contains(*x, *y) && *button == MouseButton::Middle =>
+            {
+                // Middle-click paste from the primary selection
+                request_focus(id);
+                let char_index = self.char_index_at_x(*x, bounds);
+                self.selection = Selection::new(char_index);
+                if let Some(text) = primary_paste() {
+                    self.insert_text(&text, bounds.width);
+                }
+                self.reset_cursor_blink();
+                request_job(id, JobRequest::Paint);
                 return EventResponse::Handled;
             }
             Event::KeyDown { key, modifiers } if has_focus(id) => {

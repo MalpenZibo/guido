@@ -245,7 +245,12 @@ fn login_form() -> Container {
 ## Features
 
 - **Selection**: Click and drag to select text, or use Shift+Arrow keys
-- **Clipboard**: Full copy/cut/paste support via Ctrl+C/X/V
+- **Clipboard**: Full copy/cut/paste support via Ctrl+C/X/V. System
+  clipboard contents are prefetched asynchronously whenever another app
+  copies, so paste is instant and never blocks the UI
+- **Primary selection**: selecting text with the mouse sets the primary
+  selection (paste it elsewhere with middle click); middle-clicking the
+  input pastes the primary selection at the click position
 - **Undo/Redo**: History with intelligent coalescing of rapid edits
 - **Scrolling**: Long text scrolls horizontally to keep cursor visible
 - **Cursor Blinking**: Standard blinking cursor when focused

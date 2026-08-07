@@ -29,7 +29,7 @@ use std::sync::Arc;
 use layout::Constraints;
 use platform::create_wayland_app;
 use reactive::owner::with_owner;
-use reactive::{OwnerId, set_system_clipboard, take_clipboard_change, take_cursor_change};
+use reactive::{OwnerId, take_clipboard_change, take_cursor_change};
 use renderer::{GpuContext, PaintContext, Renderer, flatten_root_into};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, drain_surface_commands};
 use surface_manager::{ManagedSurface, SurfaceManager};
@@ -169,7 +169,7 @@ pub mod prelude {
     };
 }
 
-use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
+use smithay_client_toolkit::reexports::client::QueueHandle;
 
 use crate::{
     jobs::{
@@ -311,7 +311,6 @@ fn render_surface(
     surface: &mut surface_manager::ManagedSurface,
     wayland_state: &mut platform::WaylandState,
     renderer: &mut Renderer,
-    connection: &Connection,
     qh: &QueueHandle<platform::WaylandState>,
     tree: &mut Tree,
     layout_roots: &mut Vec<WidgetId>,
@@ -342,21 +341,6 @@ fn render_surface(
         return;
     }
 
-    // Check for paste events
-    let has_paste_event = events.iter().any(|e| {
-        matches!(
-            e,
-            widgets::Event::KeyDown {
-                key: widgets::Key::Char('v'),
-                modifiers: widgets::Modifiers { ctrl: true, .. },
-                ..
-            }
-        )
-    });
-    if has_paste_event && let Some(text) = wayland_state.read_external_clipboard(connection) {
-        set_system_clipboard(text);
-    }
-
     // Dispatch events to widget
     for event in &events {
         tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
@@ -367,6 +351,11 @@ fn render_surface(
     // Sync clipboard to Wayland if it changed (copy operations)
     if let Some(text) = take_clipboard_change() {
         wayland_state.set_clipboard(text, qh);
+    }
+
+    // Sync primary selection to Wayland if it changed (select-to-copy)
+    if let Some(text) = reactive::take_primary_change() {
+        wayland_state.set_primary(text, qh);
     }
 
     // Sync cursor to Wayland if it changed
@@ -820,13 +809,19 @@ impl App {
         let (ingress_tx, ingress_channel) = calloop_channel::channel();
         ingress::install_ingress(ingress_tx);
         loop_handle
-            .insert_source(ingress_channel, |event, _, _wayland_state| {
+            .insert_source(ingress_channel, |event, _, wayland_state| {
                 if let calloop_channel::Event::Msg(message) = event {
                     match message {
                         // Doorbell only: the write payloads live in the
                         // reactive write queue, drained at the flush point
                         // later this same iteration.
                         ingress::IngressMessage::BgWritesQueued => {}
+                        // Prefetched selection content from a reader thread
+                        ingress::IngressMessage::ClipboardUpdate {
+                            kind,
+                            generation,
+                            content,
+                        } => wayland_state.apply_clipboard_update(kind, generation, content),
                     }
                 }
             })
@@ -943,7 +938,6 @@ impl App {
                         surface,
                         &mut wayland_state,
                         renderer,
-                        &connection,
                         &qh,
                         &mut self.tree,
                         &mut self.layout_roots,

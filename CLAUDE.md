@@ -387,6 +387,7 @@ This is a work-in-progress GUI library. Current implemented features:
 - Compositor background blur (`ext-background-effect-v1`) via `container().background_blur()`, shaped by bounds + corner radius
 - Session lock (`ext-session-lock-v1`): `lock_session(factory)` / `unlock_session()` / reactive `lock_state()`, one lock surface per output with hotplug handling
 - Touch input (`wl_touch`): first finger drives the pointer pipeline — tap = click, works with hover/pressed state layers
+- Clipboard: async prefetch (paste never blocks the UI thread) + primary selection (select-to-copy, middle-click paste)
 - Text input widget with full editing support
 - Image widget with raster and SVG support
 
