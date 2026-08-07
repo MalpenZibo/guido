@@ -480,7 +480,7 @@ impl Tree {
     }
 
     /// Find the surface root (topmost ancestor) of a widget.
-    fn surface_root_of(&self, id: WidgetId) -> Option<WidgetId> {
+    pub(crate) fn surface_root_of(&self, id: WidgetId) -> Option<WidgetId> {
         let mut current = id;
         loop {
             let dense_idx = self.get_dense_index(current)?;

@@ -156,6 +156,11 @@ impl SurfaceManager {
         self.surfaces.remove(&id)
     }
 
+    /// Get a surface by ID.
+    pub fn get(&self, id: SurfaceId) -> Option<&ManagedSurface> {
+        self.surfaces.get(&id)
+    }
+
     /// Get a mutable surface by ID.
     pub fn get_mut(&mut self, id: SurfaceId) -> Option<&mut ManagedSurface> {
         self.surfaces.get_mut(&id)

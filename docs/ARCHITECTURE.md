@@ -123,6 +123,10 @@ Hardware-accelerated rendering using wgpu.
    before draining jobs — the compositor hasn't shown the previous frame yet.
    Queued jobs (including animation continuations) stay pending until the
    callback fires and wakes the loop. Init and resizes bypass the gate.
+   The gate is per-surface but the job queue is global, so a surface's drain
+   defers (quietly re-queues) animation jobs owned by *other, frame-gated*
+   surfaces: advancing them would outpace their callbacks and spin the loop
+   flat-out. Non-animation jobs are surface-agnostic and always run.
 5. `drain_pending_jobs()` + `process_jobs()` - Unregister → Animation (advance values) → Reconcile → Paint → Layout marking
 6. Process follow-up jobs pushed by animation advances and reconciliation
 7. Partial layout from `layout_roots` - Only dirty subtrees re-layout
