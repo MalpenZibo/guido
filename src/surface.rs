@@ -40,7 +40,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::outputs::OutputId;
 use crate::platform::{Anchor, KeyboardInteractivity, Layer};
-use crate::widgets::{Color, Widget};
+use crate::widgets::{Color, Rect, Widget};
 
 /// Unique identifier for each surface in the application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -95,6 +95,10 @@ pub struct SurfaceConfig {
     pub margin: (i32, i32, i32, i32),
     /// Output (monitor) to show the surface on. None lets the compositor choose.
     pub output: Option<OutputId>,
+    /// Input region in logical surface coordinates. `None` means the whole
+    /// surface accepts input; `Some(rects)` limits input to those rectangles
+    /// (an empty list makes the surface fully click-through).
+    pub input_region: Option<Vec<Rect>>,
 }
 
 impl Default for SurfaceConfig {
@@ -110,6 +114,7 @@ impl Default for SurfaceConfig {
             exclusive_zone: None,
             margin: (0, 0, 0, 0),
             output: None,
+            input_region: None,
         }
     }
 }
@@ -189,6 +194,24 @@ impl SurfaceConfig {
     /// creation (a layer surface is bound to its output for its lifetime).
     pub fn output(mut self, output: OutputId) -> Self {
         self.output = Some(output);
+        self
+    }
+
+    /// Limit pointer/touch input to the given rectangles (logical surface
+    /// coordinates). Everything outside them lets clicks pass through to
+    /// whatever is below. An empty list makes the surface fully
+    /// click-through.
+    ///
+    /// Use `SurfaceHandle::set_input_region` to change it at runtime.
+    pub fn input_region(mut self, rects: impl Into<Vec<Rect>>) -> Self {
+        self.input_region = Some(rects.into());
+        self
+    }
+
+    /// Make the whole surface click-through: pointer and touch input passes
+    /// to whatever is below. Shorthand for `input_region([])`.
+    pub fn click_through(mut self) -> Self {
+        self.input_region = Some(Vec::new());
         self
     }
 }
@@ -276,6 +299,17 @@ impl SurfaceHandle {
             left,
         });
     }
+
+    /// Set the input region for this surface.
+    ///
+    /// `None` restores the default (the whole surface accepts input).
+    /// `Some(rects)` limits pointer/touch input to those rectangles in
+    /// logical surface coordinates — everything outside them lets clicks
+    /// pass through to whatever is below. `Some(vec![])` makes the surface
+    /// fully click-through.
+    pub fn set_input_region(&self, rects: Option<Vec<Rect>>) {
+        push_surface_command(SurfaceCommand::SetInputRegion { id: self.id, rects });
+    }
 }
 
 /// Commands for dynamic surface creation/destruction and property modification.
@@ -313,6 +347,11 @@ pub(crate) enum SurfaceCommand {
         right: i32,
         bottom: i32,
         left: i32,
+    },
+    /// Set the input region for a surface.
+    SetInputRegion {
+        id: SurfaceId,
+        rects: Option<Vec<Rect>>,
     },
 }
 

@@ -247,6 +247,9 @@ fn process_surface_commands(
             } => {
                 wayland_state.set_surface_margin(id, top, right, bottom, left);
             }
+            SurfaceCommand::SetInputRegion { id, rects } => {
+                wayland_state.set_surface_input_region(id, rects.as_deref());
+            }
         }
     }
     true
