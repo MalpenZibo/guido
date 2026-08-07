@@ -38,6 +38,7 @@
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::outputs::OutputId;
 use crate::platform::{Anchor, KeyboardInteractivity, Layer};
 use crate::widgets::{Color, Widget};
 
@@ -90,6 +91,10 @@ pub struct SurfaceConfig {
     pub background_color: Color,
     /// Exclusive zone (reserves screen space). None means use height.
     pub exclusive_zone: Option<i32>,
+    /// Margins from the anchored screen edges (top, right, bottom, left).
+    pub margin: (i32, i32, i32, i32),
+    /// Output (monitor) to show the surface on. None lets the compositor choose.
+    pub output: Option<OutputId>,
 }
 
 impl Default for SurfaceConfig {
@@ -103,6 +108,8 @@ impl Default for SurfaceConfig {
             namespace: "guido-surface".to_string(),
             background_color: Color::rgb(0.1, 0.1, 0.15),
             exclusive_zone: None,
+            margin: (0, 0, 0, 0),
+            output: None,
         }
     }
 }
@@ -163,6 +170,25 @@ impl SurfaceConfig {
     /// - `KeyboardInteractivity::Exclusive`: Surface grabs keyboard focus exclusively.
     pub fn keyboard_interactivity(mut self, mode: KeyboardInteractivity) -> Self {
         self.keyboard_interactivity = mode;
+        self
+    }
+
+    /// Set the margins from the anchored screen edges, applied at creation.
+    ///
+    /// Use `SurfaceHandle::set_margin` to change them at runtime.
+    pub fn margin(mut self, top: i32, right: i32, bottom: i32, left: i32) -> Self {
+        self.margin = (top, right, bottom, left);
+        self
+    }
+
+    /// Pin the surface to a specific output (monitor).
+    ///
+    /// Get output ids from the reactive [`crate::outputs::outputs`] list. If
+    /// the output is disconnected before the surface is created, the
+    /// compositor chooses one instead. The output cannot be changed after
+    /// creation (a layer surface is bound to its output for its lifetime).
+    pub fn output(mut self, output: OutputId) -> Self {
+        self.output = Some(output);
         self
     }
 }

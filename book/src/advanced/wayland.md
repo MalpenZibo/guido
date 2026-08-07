@@ -350,6 +350,109 @@ App::new().run(|app| {
 });
 ```
 
+## Multiple Outputs (Monitors)
+
+Connected outputs are exposed as a reactive list. Reading it inside a
+tracked closure (an effect, a dynamic child, a reactive property)
+re-runs the closure when monitors are plugged in, unplugged, or
+reconfigured:
+
+```rust
+use guido::prelude::*;
+
+create_effect(move || {
+    for info in outputs().get() {
+        println!(
+            "{:?}: {:?} {} ({}x{:?})",
+            info.id, info.name, info.model, info.scale_factor, info.logical_size
+        );
+    }
+});
+```
+
+Each `OutputInfo` carries a stable `OutputId` plus the connector name
+(`"DP-1"`, `"eDP-1"`, …), description, make/model, integer scale factor,
+and logical size/position when the compositor reports them. Ids are never
+reused: a monitor that is unplugged and reconnected gets a fresh id.
+
+### Pinning a Surface to an Output
+
+By default the compositor picks the output a surface appears on. Pass an
+`OutputId` to pin it:
+
+```rust
+spawn_surface(
+    SurfaceConfig::new()
+        .height(32)
+        .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+        .output(info.id),
+    move || bar_widget(),
+);
+```
+
+The output cannot be changed after creation — a layer surface is bound to
+its output for its lifetime. If the output disconnects before the surface
+is created, the compositor chooses one instead (a warning is logged).
+
+### One Bar per Monitor
+
+An app can start with **zero surfaces** and spawn one per output from an
+effect — the classic multi-monitor status bar. See
+`examples/multi_output.rs` for the full version:
+
+```rust
+App::new().run(|_app| {
+    let bars: Rc<RefCell<HashMap<OutputId, SurfaceHandle>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+
+    create_effect(move || {
+        let current = outputs().get();
+        let mut bars = bars.borrow_mut();
+
+        // Drop bars for disconnected outputs
+        bars.retain(|id, handle| {
+            let alive = current.iter().any(|o| o.id == *id);
+            if !alive {
+                handle.close();
+            }
+            alive
+        });
+
+        // Spawn a bar on every new output
+        for info in current {
+            if !bars.contains_key(&info.id) {
+                let handle = spawn_surface(
+                    SurfaceConfig::new().height(32).output(info.id),
+                    move || bar_widget(),
+                );
+                bars.insert(info.id, handle);
+            }
+        }
+    });
+});
+```
+
+When the compositor closes the surfaces of an unplugged monitor, the
+bars keep working on the remaining outputs. Note that the app exits when
+its last surface closes, so an all-monitors-disconnected event ends the
+app.
+
+### Tracking Which Output a Surface Is On
+
+`surface_output(surface_id)` reports the output a surface is currently
+shown on (`None` until the compositor maps it). It is a tracked read —
+reactive inside any tracked closure:
+
+```rust
+text(move || match surface_output(my_surface_id) {
+    Some(out) => format!("shown on output {}", out.raw()),
+    None => "not mapped yet".to_string(),
+})
+```
+
+For a surface spanning multiple outputs, this reports the one entered
+most recently.
+
 ## Complete Examples
 
 ### Status Bar
@@ -458,6 +561,29 @@ impl SurfaceConfig {
     pub fn exclusive_zone(self, zone: Option<i32>) -> Self;
     pub fn namespace(self, namespace: impl Into<String>) -> Self;
     pub fn background_color(self, color: Color) -> Self;
+    pub fn margin(self, top: i32, right: i32, bottom: i32, left: i32) -> Self;
+    pub fn output(self, output: OutputId) -> Self;
+}
+```
+
+### Outputs
+
+```rust
+/// Reactive list of connected outputs, sorted by id
+pub fn outputs() -> Signal<Vec<OutputInfo>>;
+
+/// The output a surface is currently shown on (tracked read)
+pub fn surface_output(id: SurfaceId) -> Option<OutputId>;
+
+pub struct OutputInfo {
+    pub id: OutputId,
+    pub name: Option<String>,        // connector, e.g. "DP-1"
+    pub description: Option<String>,
+    pub make: String,
+    pub model: String,
+    pub scale_factor: i32,
+    pub logical_size: Option<(i32, i32)>,
+    pub logical_position: Option<(i32, i32)>,
 }
 ```
 
