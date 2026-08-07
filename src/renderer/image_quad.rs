@@ -266,6 +266,16 @@ impl ImageQuadRenderer {
                 "bytes".hash(&mut hasher);
                 Self::hash_bytes(bytes, &mut hasher);
             }
+            ImageSource::Rgba {
+                width,
+                height,
+                pixels,
+            } => {
+                "rgba".hash(&mut hasher);
+                width.hash(&mut hasher);
+                height.hash(&mut hasher);
+                Self::hash_bytes(pixels, &mut hasher);
+            }
             ImageSource::SvgPath(path) => {
                 "svg_path".hash(&mut hasher);
                 path.hash(&mut hasher);
@@ -345,7 +355,8 @@ impl ImageQuadRenderer {
                     }
                 };
                 let rgba = img.to_rgba8();
-                self.upload_raster(device, queue, &format, &rgba)
+                let (width, height) = rgba.dimensions();
+                self.upload_raster(device, queue, &format, width, height, rgba.as_raw())
             }
             ImageSource::Bytes(bytes) => {
                 let img = match image::load_from_memory(bytes) {
@@ -356,7 +367,28 @@ impl ImageQuadRenderer {
                     }
                 };
                 let rgba = img.to_rgba8();
-                self.upload_raster(device, queue, &format, &rgba)
+                let (width, height) = rgba.dimensions();
+                self.upload_raster(device, queue, &format, width, height, rgba.as_raw())
+            }
+            ImageSource::Rgba {
+                width,
+                height,
+                pixels,
+            } => {
+                let expected = (*width as usize)
+                    .checked_mul(*height as usize)
+                    .and_then(|v| v.checked_mul(4));
+                if Some(pixels.len()) != expected {
+                    log::warn!(
+                        "Rgba image source size mismatch: {}x{} expects {:?} bytes, got {}",
+                        width,
+                        height,
+                        expected,
+                        pixels.len()
+                    );
+                    return None;
+                }
+                self.upload_raster(device, queue, &format, *width, *height, pixels)
             }
             ImageSource::SvgPath(path) => {
                 let data = match std::fs::read(path) {
@@ -374,15 +406,16 @@ impl ImageQuadRenderer {
         }
     }
 
-    /// Upload a raster image to GPU.
+    /// Upload raw RGBA8 pixel data to GPU.
     fn upload_raster(
         &self,
         device: &Device,
         queue: &Queue,
         format: &TextureFormat,
-        rgba: &image::RgbaImage,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
     ) -> Option<CachedTexture> {
-        let (width, height) = rgba.dimensions();
         if width == 0 || height == 0 {
             return None;
         }
@@ -409,7 +442,7 @@ impl ImageQuadRenderer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            rgba.as_raw(),
+            rgba,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * width),

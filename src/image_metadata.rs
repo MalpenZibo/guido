@@ -22,6 +22,7 @@ pub fn get_intrinsic_size(source: &ImageSource) -> Option<(u32, u32)> {
         ImageSource::Bytes(bytes) => image::load_from_memory(bytes)
             .ok()
             .map(|img| img.dimensions()),
+        ImageSource::Rgba { width, height, .. } => Some((*width, *height)),
         ImageSource::SvgPath(path) => get_svg_size_from_file(path),
         ImageSource::SvgBytes(bytes) => get_svg_size_from_bytes(bytes),
     }

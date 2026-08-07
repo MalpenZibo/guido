@@ -36,9 +36,14 @@ ImageSource::SvgPath("./icon.svg".into())
 
 // From memory (SVG)
 ImageSource::SvgBytes(svg_string.as_bytes().into())
+
+// Raw pre-decoded RGBA8 pixels (width * height * 4 bytes, row-major)
+ImageSource::Rgba { width: 22, height: 22, pixels: rgba_bytes.into() }
 ```
 
 When using a string path with `image()`, the file extension determines the type automatically: `.svg` files use SVG rendering, all others use raster decoding.
+
+`ImageSource::Rgba` skips decoding entirely — use it for pixel data that never existed in an encoded format, such as tray icon pixmaps or album art received over D-Bus.
 
 ## Sizing
 
