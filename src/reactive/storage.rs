@@ -91,6 +91,21 @@ fn clone_slot_rc(id: SignalId, operation: &str) -> Rc<dyn Any> {
     })
 }
 
+/// Like [`clone_slot_rc`] but returns None for vacant/recycled slots
+/// instead of panicking. Used by write paths: writes race disposal by
+/// design (queued `WriteSignal` flushes, delayed timers) and must degrade
+/// to a no-op, not a crash.
+fn try_clone_slot_rc(id: SignalId) -> Option<Rc<dyn Any>> {
+    STORAGE.with(|storage| {
+        let storage = storage.borrow();
+        let slot = storage.slots.get(id.index())?;
+        if slot.generation != id.generation() {
+            return None;
+        }
+        slot.value.as_ref().map(Rc::clone)
+    })
+}
+
 /// Get a reference to the signal's RefCell, handling errors consistently.
 fn with_signal_cell<T: 'static, R>(
     id: SignalId,
@@ -260,15 +275,20 @@ pub fn with_signal_value<T: 'static, R>(id: SignalId, f: impl FnOnce(&T) -> R) -
 /// This performs the comparison and write in a single `with_signal_cell` call,
 /// avoiding the overhead of two separate storage accesses.
 pub fn compare_and_set_signal_value<T: PartialEq + 'static>(id: SignalId, value: T) -> bool {
-    with_signal_cell(id, "write", |cell: &RefCell<T>| {
-        let mut current = cell.borrow_mut();
-        if *current != value {
-            *current = value;
-            true
-        } else {
-            false
-        }
-    })
+    let Some(rc) = try_clone_slot_rc(id) else {
+        // Writes race disposal by design (queued flushes, delayed timers):
+        // dropping the write is the correct outcome, not a panic
+        log::warn!("ignoring write to disposed signal {id}");
+        return false;
+    };
+    let cell = downcast_cell::<T>(&rc, id);
+    let mut current = cell.borrow_mut();
+    if *current != value {
+        *current = value;
+        true
+    } else {
+        false
+    }
 }
 
 /// Compare and update: clone the old value, apply the closure, compare, and return
@@ -277,11 +297,24 @@ pub fn compare_and_update_signal_value<T: Clone + PartialEq + 'static>(
     id: SignalId,
     f: impl FnOnce(&mut T),
 ) -> bool {
-    with_signal_cell(id, "update", |cell: &RefCell<T>| {
-        let mut current = cell.borrow_mut();
-        let old = current.clone();
-        f(&mut current);
-        old != *current
+    let Some(rc) = try_clone_slot_rc(id) else {
+        log::warn!("ignoring update of disposed signal {id}");
+        return false;
+    };
+    let cell = downcast_cell::<T>(&rc, id);
+    let mut current = cell.borrow_mut();
+    let old = current.clone();
+    f(&mut current);
+    old != *current
+}
+
+fn downcast_cell<T: 'static>(rc: &Rc<dyn Any>, id: SignalId) -> &RefCell<T> {
+    rc.downcast_ref::<RefCell<T>>().unwrap_or_else(|| {
+        panic!(
+            "Signal {} type mismatch: stored type does not match requested type {}",
+            id,
+            std::any::type_name::<T>()
+        )
     })
 }
 
@@ -305,4 +338,20 @@ pub fn has_signal(id: SignalId) -> bool {
             .and_then(|slot| slot.value.as_ref())
             .is_some()
     })
+}
+
+#[cfg(test)]
+mod dispose_write_tests {
+    use crate::reactive::create_signal;
+    use crate::reactive::owner::{dispose_owner, with_owner};
+
+    /// Writes race disposal by design (queued WriteSignal flushes, delayed
+    /// timers): they must be dropped, not panic.
+    #[test]
+    fn write_to_disposed_signal_is_a_noop() {
+        let (sig, owner) = with_owner(|| create_signal(1u32));
+        dispose_owner(owner);
+        sig.set(2); // must not panic
+        sig.update(|v| *v += 1); // must not panic
+    }
 }
