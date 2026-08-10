@@ -162,7 +162,7 @@ pub mod prelude {
         FontWeight, GradientDirection, Image, ImageSource, IntoChildren, Key, LinearGradient,
         Modifiers, MouseButton, Overflow, Padding, Rect, ScrollAxis, ScrollSource,
         ScrollbarBuilder, ScrollbarVisibility, Selection, StateStyle, Text, TextInput, Widget,
-        container, image, text, text_input,
+        container, dynamic, image, keyed, text, text_input,
     };
     pub use crate::{
         App, ExitReason, SignalFields, component, default_font_family, load_font, quit_app,

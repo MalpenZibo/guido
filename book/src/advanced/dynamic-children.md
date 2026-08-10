@@ -4,182 +4,137 @@ Learn the different ways to add children to containers, from static to fully rea
 
 ![Children Example](../images/children_example.png)
 
-## Static Children
+## The Model
 
-### Single Child
-
-```rust
-container().child(text("Hello"))
-```
-
-### Multiple Children
+Children come in exactly four forms — two static, two reactive:
 
 ```rust
-container().children([
-    text("First"),
-    text("Second"),
-    text("Third"),
-])
+container()
+    .child(text("Hello"))                                  // static single
+    .children([text("A"), text("B")])                      // static list
+    .child(dynamic(move || data.get(), build_widget))      // reactive single
+    .children(keyed(move || items.get(), |i| i.id, row))   // reactive list
 ```
 
-## Dynamic Children with Keyed Reconciliation
+`dynamic()` and `keyed()` are values, not methods: they pair a **tracked data
+closure** with an **untracked builder**. The data closure is the only reactive
+part — the signals it reads decide when to re-evaluate, and its result is what
+the builder receives. Data the widget must react to has to flow through the
+data closure; that is what makes stale content unexpressible.
 
-For lists that change based on signals, use the keyed children API:
+Bare closures are **rejected at compile time**. With `.child(move || ...)`
+there would be no way to know which data the widget was built from, so content
+updates could be silently discarded — the compiler error points you to
+`dynamic()` / `keyed()` instead.
+
+## Reactive Single Child: `dynamic(data, build)`
 
 ```rust
-let items = create_signal(vec![1u64, 2, 3]);
-
-container().children(move || {
-    items.get().into_iter().map(|id| {
-        // Return (key, closure) - closure creates the widget
-        (id, move || {
-            container()
-                .padding(8.0)
-                .background(Color::rgb(0.2, 0.2, 0.3))
-                .child(text(format!("Item {}", id)))
-        })
-    })
-})
+// Content that re-renders when the data changes
+container().child(dynamic(
+    move || menu_entries.get(),   // tracked; T: Clone + PartialEq
+    |entries| build_menu(entries) // untracked; runs only when T changed
+))
 ```
 
-### The Closure Pattern
+The data result is compared with the previous value (`PartialEq`):
 
-The key insight is returning `(key, || widget)` instead of `(key, widget)`:
+- **unchanged** → the existing widget is kept untouched: inner state,
+  animations and subscriptions persist, the builder does not run
+- **changed** → the builder runs and the rebuilt widget replaces the old one
+  (its owner scope is disposed)
+
+The builder may return `Option<widget>` to also control presence:
 
 ```rust
-// The closure ensures:
-// 1. Widget is only created for NEW keys (not every frame)
-// 2. Signals/effects inside are automatically owned
-// 3. Cleanup runs when the child is removed
-
-(item.id, move || create_item_widget(item))
+// Shown only while there is an active window
+container().child(dynamic(
+    move || state.active_window.get(),
+    |window| window.map(title_widget),
+))
 ```
 
-### How Keys Work
-
-The key identifies each item for efficient updates:
+The builder runs with signal tracking suspended: reads inside it see current
+values but create no dependencies. Choose what goes through the data closure
+and what stays internally reactive:
 
 ```rust
-// Good: Unique, stable identifier
-(item.id, move || widget)
+// Rebuild the row when the label changes...
+dynamic(move || item.get(), |item| text(item.label))
 
-// Bad: Index changes when items reorder
-(index as u64, move || widget)
+// ...or keep the widget and let it track the label itself
+dynamic(move || item.with(|i| i.id), |_| text(move || item.with(|i| i.label.clone())))
 ```
 
-With proper keys:
-- **Reordering** preserves widget state
-- **Insertions** only create new widgets
-- **Deletions** only remove specific widgets
-
-## Single Reactive Child: Presence vs Content
-
-`.child()` accepts two reactive closure forms, and picking the wrong one is a
-subtle trap.
-
-The `Option<Widget>` form is **presence-only**. It always reconciles under the
-same internal key, so a `Some -> Some` transition keeps the first widget ever
-built and discards the rebuilt one. Use it to show or hide a widget whose own
-properties are reactive:
+## Reactive Lists: `keyed(data, key, build)`
 
 ```rust
-// Good: appears/disappears; the text widget itself tracks the signal
-container().child(move || {
-    logged_in.get().then(|| text(move || username.get()))
-})
+let items = create_signal(vec![
+    Item { id: 1, name: "First".into() },
+    Item { id: 2, name: "Second".into() },
+]);
+
+container().children(keyed(
+    move || items.get(),   // tracked; items: Clone + PartialEq
+    |item| item.id,        // stable identity (survives reorders)
+    |item| item_widget(item),
+))
 ```
 
-When the widget's *structure* depends on data — lists, branches, trees rebuilt
-from a snapshot — return `Option<(u64, Widget)>` instead. The key states which
-version of the content the widget renders: same key keeps the cached widget,
-a new key swaps the rebuilt one in (running owner cleanup for the old):
+Per item, identity (`key`) and content (`PartialEq`) are diffed separately:
+
+- **new key** → the builder runs
+- **known key, item unchanged** → the existing widget is kept, including
+  across reorders (state and animations persist)
+- **known key, item changed** → only that row is rebuilt
+- **key gone** → the widget is dropped with owner cleanup
+
+Keys must be unique and stable — never use the index:
 
 ```rust
-use std::hash::{DefaultHasher, Hash, Hasher};
-
-fn hash_key(value: impl Hash) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish()
-}
-
-container().child(move || {
-    let entries = menu_entries.get();
-    Some((hash_key(&entries), build_menu(entries)))
-})
+keyed(data, |item| item.id, build)        // Good: stable identity
+keyed(data, |(index, _)| *index as u64, build)  // Bad: reorder loses state
 ```
 
-If you ever write `.child(move || Some(...))` where the widget is built from
-signal data and it "never updates", this is why — key it.
+The item type chooses the update granularity, exactly like `dynamic()`:
+fields included in the item trigger a row rebuild when they change; fields
+left out can be read via signals inside the row for in-place updates.
 
 ## Automatic Ownership & Cleanup
 
-Signals and effects created inside the child closure are **automatically owned** and cleaned up when the child is removed:
+Builders run inside an **owner scope**: signals and effects created there are
+automatically owned and cleaned up when the child is removed or rebuilt.
 
 ```rust
-container().children(move || {
-    items.get().into_iter().map(|id| (id, move || {
-        // This signal is OWNED by this child
-        let local_count = create_signal(0);
+fn item_widget(item: Item) -> impl Widget {
+    // This signal is OWNED by this row
+    let clicks = create_signal(0);
 
-        // This effect is also owned
-        create_effect(move || {
-            println!("Count: {}", local_count.get());
-        });
+    // Register cleanup for non-reactive resources
+    on_cleanup(move || {
+        log::info!("Item {} removed", item.id);
+    });
 
-        // Register cleanup for non-reactive resources
-        on_cleanup(move || {
-            println!("Child {} removed!", id);
-        });
+    container()
+        .padding(8.0)
+        .hover_state(|s| s.lighter(0.1))
+        .on_click(move || clicks.update(|c| *c += 1))
+        .child(text(move || format!("{} (clicks: {})", item.name, clicks.get())))
+}
 
-        container()
-            .on_click(move || local_count.update(|c| *c += 1))
-            .child(text(move || local_count.get().to_string()))
-    }))
-})
+container().children(keyed(move || items.get(), |i| i.id, item_widget))
 ```
 
-When a child is removed:
+When a child is removed or rebuilt:
 1. The widget is dropped
 2. `on_cleanup` callbacks run
 3. Effects are disposed
 4. Signals are disposed
 
-### Extracting Widget Creation
-
-You can extract the widget creation into a function:
-
-```rust
-fn create_item_widget(id: u64, name: String) -> impl Widget {
-    // Everything here is automatically owned!
-    let hover = create_signal(false);
-
-    on_cleanup(move || {
-        log::info!("Item {} cleaned up", id);
-    });
-
-    container()
-        .padding(8.0)
-        .background(move || {
-            if hover.get() { Color::rgb(0.3, 0.3, 0.4) }
-            else { Color::rgb(0.2, 0.2, 0.3) }
-        })
-        .on_hover(move |h| hover.set(h))
-        .child(text(name).color(Color::WHITE))
-}
-
-// Use it with the closure wrapper
-container().children(move || {
-    items.get().into_iter().map(|item| {
-        (item.id, move || create_item_widget(item.id, item.name.clone()))
-    })
-})
-```
-
 ## Complete Example
 
 ```rust
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct Item {
     id: u64,
     name: String,
@@ -197,7 +152,6 @@ fn dynamic_list_demo() -> impl Widget {
         .padding(16.0)
         .layout(Flex::column().spacing(12.0))
         .child(
-            // Control buttons
             container()
                 .layout(Flex::row().spacing(8.0))
                 .children([
@@ -217,35 +171,9 @@ fn dynamic_list_demo() -> impl Widget {
                 ])
         )
         .child(
-            // Dynamic list with automatic cleanup
             container()
                 .layout(Flex::column().spacing(4.0))
-                .children(move || {
-                    items.get().into_iter().map(|item| {
-                        let id = item.id;
-                        let name = item.name.clone();
-                        (id, move || {
-                            // Local state for this item
-                            let clicks = create_signal(0);
-
-                            on_cleanup(move || {
-                                log::info!("Item {} removed", id);
-                            });
-
-                            container()
-                                .padding(8.0)
-                                .background(Color::rgb(0.2, 0.2, 0.3))
-                                .corner_radius(4.0)
-                                .hover_state(|s| s.lighter(0.1))
-                                .pressed_state(|s| s.ripple())
-                                .on_click(move || clicks.update(|c| *c += 1))
-                                .child(
-                                    text(move || format!("{} (clicks: {})", name, clicks.get()))
-                                        .color(Color::WHITE)
-                                )
-                        })
-                    })
-                })
+                .children(keyed(move || items.get(), |i| i.id, item_widget))
         )
 }
 
@@ -263,19 +191,15 @@ fn button(label: &str, on_click: impl Fn() + 'static) -> Container {
 
 ## Mixing Static and Dynamic
 
-Combine static and dynamic children freely:
+Combine static and dynamic children freely, in any order:
 
 ```rust
 container()
     .layout(Flex::column().spacing(8.0))
     // Static header
     .child(text("Items:").font_size(18.0).color(Color::WHITE))
-    // Dynamic list
-    .children(move || {
-        items.get().into_iter().map(|item| {
-            (item.id, move || item_view(item.clone()))
-        })
-    })
+    // Reactive list
+    .children(keyed(move || items.get(), |i| i.id, item_view))
     // Static footer
     .child(text("End of list").color(Color::rgb(0.6, 0.6, 0.7)))
 ```
@@ -284,36 +208,35 @@ container()
 
 ```rust
 impl Container {
-    // Single child
-    pub fn child(self, child: impl Widget + 'static) -> Self;
+    // A widget value, or dynamic(data, build)
+    pub fn child<M>(self, child: impl IntoChild<M>) -> Self;
 
-    // Single reactive child, presence-only (Some -> Some keeps the first widget)
-    pub fn child<F, W>(self, child: F) -> Self
-    where
-        F: Fn() -> Option<W> + 'static,
-        W: Widget + 'static;
-
-    // Single reactive child, content-keyed (new key swaps the widget in)
-    pub fn child<F, W>(self, child: F) -> Self
-    where
-        F: Fn() -> Option<(u64, W)> + 'static,
-        W: Widget + 'static;
-
-    // Multiple static children
-    pub fn children<W: Widget + 'static>(
-        self,
-        children: impl IntoIterator<Item = W>
-    ) -> Self;
-
-    // Dynamic keyed children with automatic ownership
-    pub fn children<F, I, G, W>(self, children: F) -> Self
-    where
-        F: Fn() -> I + 'static,
-        I: IntoIterator<Item = (u64, G)>,
-        G: FnOnce() -> W + 'static,
-        W: Widget + 'static;
+    // An iterator of widgets, or keyed(data, key, build)
+    pub fn children<M>(self, children: impl IntoChildren<M>) -> Self;
 }
 
-// Cleanup registration (use inside dynamic child closures)
+// Reactive single child: tracked data + untracked builder.
+// The builder may return a widget, or Option<widget> for presence.
+pub fn dynamic<T, C>(
+    data: impl Fn() -> T + 'static,
+    build: impl Fn(T) -> C + 'static,
+) -> DynChild<T, C>
+where
+    T: Clone + PartialEq + 'static,
+    C: IntoDynChild;
+
+// Reactive children list: tracked data, key-based identity,
+// untracked per-item builder with content diffing.
+pub fn keyed<T, I, W>(
+    data: impl Fn() -> I + 'static,
+    key: impl Fn(&T) -> u64 + 'static,
+    build: impl Fn(T) -> W + 'static,
+) -> KeyedChildren<T, I, W>
+where
+    T: Clone + PartialEq + 'static,
+    I: IntoIterator<Item = T>,
+    W: Widget + 'static;
+
+// Cleanup registration (use inside builders)
 pub fn on_cleanup(f: impl FnOnce() + 'static);
 ```

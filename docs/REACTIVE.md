@@ -164,24 +164,33 @@ text(move || format!("Count: {}", count.get()))
 
 ### Reactive Children
 
-Dynamic lists with keyed reconciliation:
+Reactive single children and lists take a tracked data closure plus an
+untracked builder (`dynamic()` / `keyed()`) — bare closures are a compile
+error:
 
 ```rust
 let items = create_signal(vec![
-    ("a", "Item A"),
-    ("b", "Item B"),
-    ("c", "Item C"),
+    (1u64, "Item A".to_string()),
+    (2, "Item B".to_string()),
 ]);
 
-container().children(move || {
-    items.get().into_iter().map(|(id, label)| {
-        let key = id.as_ptr() as u64;  // Use stable key
-        (key, move || text(label))     // Closure returns widget
-    })
-})
+// Single child whose content depends on data
+container().child(dynamic(
+    move || items.with(|l| l.len()),
+    |len| text(format!("{len} items")),
+))
+
+// Keyed list: identity via key, per-item content diffing via PartialEq
+container().children(keyed(
+    move || items.get(),
+    |(id, _)| *id,
+    |(_, label)| text(label),
+))
 ```
 
-The key ensures widget state is preserved when items are reordered.
+Identity keys preserve widget state across reorders; a changed item rebuilds
+only its own row. See the book's Dynamic Children chapter for the full
+semantics.
 
 ## IntoSignal Pattern
 
@@ -341,40 +350,42 @@ Signals and effects persist in memory by default. The **reactive owner** system 
 
 ### Automatic Ownership for Dynamic Children
 
-**Dynamic children automatically get owner scopes.** Return `(key, closure)` pairs where the closure produces the widget. Any signals, effects, or cleanup callbacks created inside the closure are automatically owned and cleaned up when the child is removed:
+**Dynamic children automatically get owner scopes.** The `dynamic()` /
+`keyed()` builders run inside an owner scope: any signals, effects, or cleanup
+callbacks created there are automatically owned and cleaned up when the child
+is removed or rebuilt:
 
 ```rust
 let items = create_signal(vec![1u64, 2, 3]);
 
-container().children(move || {
-    items.get().into_iter().map(|id| {
-        // Return (key, closure) - the closure runs inside an owner scope
-        (id, move || {
-            // ========================================================
-            // Everything created inside this closure is AUTOMATICALLY
-            // owned by the child's owner scope. When the child is
-            // removed, all these resources are automatically cleaned up!
-            // ========================================================
+container().children(keyed(
+    move || items.get(),
+    |id| *id,
+    |id| {
+        // ========================================================
+        // Everything created inside the builder is AUTOMATICALLY
+        // owned by the child's owner scope. When the child is
+        // removed, all these resources are automatically cleaned up!
+        // ========================================================
 
-            // This signal is owned by the child
-            let local_count = create_signal(0);
+        // This signal is owned by the child
+        let local_count = create_signal(0);
 
-            // This effect is also owned - disposed when child is removed
-            create_effect(move || {
-                println!("Child {} count: {}", id, local_count.get());
-            });
+        // This effect is also owned - disposed when child is removed
+        create_effect(move || {
+            println!("Child {} count: {}", id, local_count.get());
+        });
 
-            // Register cleanup for non-reactive resources
-            on_cleanup(move || {
-                println!("Child {} was removed!", id);
-            });
+        // Register cleanup for non-reactive resources
+        on_cleanup(move || {
+            println!("Child {} was removed!", id);
+        });
 
-            container()
-                .on_click(move || local_count.update(|c| *c += 1))
-                .child(text(move || format!("Child {} ({})", id, local_count.get())))
-        })
-    })
-});
+        container()
+            .on_click(move || local_count.update(|c| *c += 1))
+            .child(text(move || format!("Child {} ({})", id, local_count.get())))
+    },
+));
 
 // When an item is removed from the list:
 // 1. The child's OwnedWidget is dropped
@@ -384,20 +395,29 @@ container().children(move || {
 // 5. Signals are disposed
 ```
 
-**Important:** The closure syntax `(key, move || { ... })` is required for proper ownership. Signals created outside the closure won't be owned:
+**Important:** resources must be created inside the builder. Signals created
+while producing the data won't be owned:
 
 ```rust
-// WRONG - signal not owned (created outside closure)
-.map(|id| {
-    let signal = create_signal(0);  // NOT OWNED!
-    (id, container().child(...))
-})
+// WRONG - signal not owned (created in the data closure)
+keyed(
+    move || items.get().into_iter().map(|id| {
+        let signal = create_signal(0);  // NOT OWNED!
+        (id, signal)
+    }).collect::<Vec<_>>(),
+    |(id, _)| *id,
+    |(_, signal)| container().child(text(move || signal.get().to_string())),
+)
 
-// CORRECT - signal owned (created inside closure)
-.map(|id| (id, move || {
-    let signal = create_signal(0);  // OWNED!
-    container().child(...)
-}))
+// CORRECT - signal owned (created inside the builder)
+keyed(
+    move || items.get(),
+    |id| *id,
+    |id| {
+        let signal = create_signal(0);  // OWNED!
+        container().child(text(move || signal.get().to_string()))
+    },
+)
 ```
 
 You can also extract the child creation into a function:
@@ -408,10 +428,7 @@ fn create_child(id: u64) -> impl Widget {
     container().child(text(move || signal.get().to_string()))
 }
 
-// Call the function inside the closure
-container().children(move || {
-    items.get().into_iter().map(|id| (id, move || create_child(id)))
-})
+container().children(keyed(move || items.get(), |id| *id, create_child))
 ```
 
 ### Custom Cleanup Callbacks
@@ -475,15 +492,17 @@ Attempting to read or write a disposed signal will panic with a clear error mess
 // DON'T DO THIS - signal may be accessed after disposal
 let leaked_signal: Option<Signal<i32>> = None;
 
-container().children(move || {
-    items.get().into_iter().map(|id| {
+container().children(keyed(
+    move || items.get(),
+    |id| *id,
+    |id| {
         let signal = create_signal(0);
         // WRONG: Don't leak signals outside their owner
         // leaked_signal = Some(signal);
 
-        (id, container().child(text(move || signal.get().to_string())))
-    })
-});
+        container().child(text(move || signal.get().to_string()))
+    },
+));
 
 // If you access leaked_signal after the child is removed,
 // you'll get a panic: "Signal was disposed - cannot read after owner cleanup."

@@ -36,25 +36,26 @@ fn main() {
         let item_ids: RwSignal<Vec<u64>> = create_signal((0..INITIAL_ITEM_COUNT as u64).collect());
 
         let store_for_children = item_store.clone();
-        let dyn_container_view =
-            container()
-                .layout(Flex::column().spacing(10.0))
-                .children(move || {
+        let store_for_rows = item_store.clone();
+        let dyn_container_view = container()
+            .layout(Flex::column().spacing(10.0))
+            .children(keyed(
+                move || {
                     let store = store_for_children.borrow();
                     // Read item_ids to track reactivity
-                    let ids = item_ids.get();
-                    ids.iter()
-                        .filter_map(|&id| {
-                            store.get(id as usize).map(|item| {
-                                let enabled = item.enabled;
-                                let input_value = item.input_value;
-                                (id, move || {
-                                    create_item_row(enabled, input_value, id as usize)
-                                })
-                            })
-                        })
+                    item_ids
+                        .get()
+                        .into_iter()
+                        .filter(|&id| store.get(id as usize).is_some())
                         .collect::<Vec<_>>()
-                });
+                },
+                |id| *id,
+                move |id| {
+                    let store = store_for_rows.borrow();
+                    let item = store.get(id as usize).expect("row exists in store");
+                    create_item_row(item.enabled, item.input_value, id as usize)
+                },
+            ));
 
         let store_for_button = item_store.clone();
         let view = container()

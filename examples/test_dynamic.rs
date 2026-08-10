@@ -32,22 +32,17 @@ async fn main() {
             .child(
                 text("An item will be added after 2 seconds...").color(Color::rgb(0.7, 0.7, 0.7)),
             )
-            .child(
-                container()
-                    .layout(Flex::row().spacing(4.0))
-                    .children(move || {
-                        let list = items.get();
-                        list.into_iter().map(|id| {
-                            (id, move || {
-                                container()
-                                    .padding(8.0)
-                                    .background(Color::rgb(0.3 + id as f32 * 0.1, 0.3, 0.4))
-                                    .corner_radius(4.0)
-                                    .child(text(format!("Item {}", id)).color(Color::WHITE))
-                            })
-                        })
-                    }),
-            );
+            .child(container().layout(Flex::row().spacing(4.0)).children(keyed(
+                move || items.get(),
+                |id| *id,
+                |id| {
+                    container()
+                        .padding(8.0)
+                        .background(Color::rgb(0.3 + id as f32 * 0.1, 0.3, 0.4))
+                        .corner_radius(4.0)
+                        .child(text(format!("Item {}", id)).color(Color::WHITE))
+                },
+            )));
 
         app.add_surface(
             SurfaceConfig::new()

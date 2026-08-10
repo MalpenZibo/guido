@@ -202,16 +202,15 @@ fn main() {
                 .color(Color::WHITE),
             )
             .child(
-                // Children container with dynamic children
-                // The closure wrapper ensures create_child_widget runs inside owner scope
+                // Children container with dynamic children — the builder runs
+                // inside an owner scope, so per-child effects get cleaned up
                 container()
                     .layout(Flex::column().spacing(8.0))
-                    .children(move || {
-                        children_ids
-                            .get()
-                            .into_iter()
-                            .map(|id| (id, move || create_child_widget(id)))
-                    }),
+                    .children(keyed(
+                        move || children_ids.get(),
+                        |id| *id,
+                        create_child_widget,
+                    )),
             );
 
         app.add_surface(
