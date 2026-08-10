@@ -34,15 +34,42 @@ const TEXT_MARGIN: f32 = TEXT_BUFFER_MARGIN_MULTIPLIER;
 
 /// A prepared text quad ready for rendering.
 pub struct PreparedTextQuad {
-    #[allow(dead_code)] // Kept alive for GPU usage
-    texture: Texture,
-    bind_group: BindGroup,
+    cached: std::rc::Rc<CachedTextTexture>,
     /// Vertex buffer with pre-computed vertices in NDC
     vertex_buffer: WgpuBuffer,
 }
 
+/// A rasterized text texture, reused across frames.
+///
+/// Rasterizing text is the expensive step: shaping, an offscreen texture,
+/// a render pass and a bind group per text. Without caching, every frame
+/// re-created all of it for every visible text — content-heavy surfaces
+/// (a weather menu, long lists) reached >1s of GPU work per frame and
+/// never got a frame out.
+struct CachedTextTexture {
+    #[allow(dead_code)] // Kept alive for GPU usage
+    texture: Texture,
+    bind_group: BindGroup,
+    last_used: std::cell::Cell<u64>,
+}
+
+/// Everything that affects the rasterized pixels of a text texture.
+#[derive(PartialEq, Eq, Hash)]
+struct TextCacheKey {
+    text: String,
+    font_size_bits: u32,
+    weight: u16,
+    family: crate::widgets::FontFamily,
+    color: [u8; 4],
+    tex_width: u32,
+    tex_height: u32,
+}
+
 /// Renderer for transformed text as textured quads.
 pub struct TextQuadRenderer {
+    // Rasterized text textures reused across frames
+    text_cache: std::collections::HashMap<TextCacheKey, std::rc::Rc<CachedTextTexture>>,
+    frame_gen: u64,
     // Text rendering (glyphon-based)
     font_system: FontSystem,
     swash_cache: SwashCache,
@@ -188,6 +215,8 @@ impl TextQuadRenderer {
 
         Self {
             font_system,
+            text_cache: std::collections::HashMap::new(),
+            frame_gen: 0,
             swash_cache,
             cache,
             atlas,
@@ -218,13 +247,20 @@ impl TextQuadRenderer {
         indices: &[usize],
         scale_factor: f32,
     ) -> Vec<PreparedTextQuad> {
-        indices
+        self.frame_gen += 1;
+        let quads = indices
             .iter()
             .map(|&idx| {
                 let entry = &entries[idx];
                 self.render_text_to_quad(device, queue, entry, scale_factor)
             })
-            .collect()
+            .collect();
+        // Bounded cache: on overflow keep only the textures this frame used
+        if self.text_cache.len() > 512 {
+            let current = self.frame_gen;
+            self.text_cache.retain(|_, c| c.last_used.get() == current);
+        }
+        quads
     }
 
     /// Render a single text entry to a textured quad.
@@ -243,27 +279,59 @@ impl TextQuadRenderer {
         // Scale font size for crisp rendering
         let scaled_font_size = entry.font_size * effective_scale;
 
-        // Create buffer for text
-        let mut buffer = Buffer::new(
-            &mut self.font_system,
-            Metrics::new(scaled_font_size, scaled_font_size * 1.2),
-        );
-
-        // Add extra margin to buffer size to account for font rendering differences at scaled sizes
+        // Texture dimensions are deterministic from the entry, so they can
+        // key the cache before any shaping happens
         let buffer_width = entry.rect.width * effective_scale * TEXT_MARGIN;
         let buffer_height = entry.rect.height * effective_scale * TEXT_MARGIN;
-
-        buffer.set_size(
-            &mut self.font_system,
-            Some(buffer_width),
-            Some(buffer_height),
-        );
+        let padding = TEXT_TEXTURE_PADDING * effective_scale;
+        let tex_width = ((buffer_width + padding * 2.0).ceil() as u32).max(1);
+        let tex_height = ((buffer_height + padding * 2.0).ceil() as u32).max(1);
 
         let weight = if entry.font_weight == FontWeight::default() {
             FontWeight::NORMAL
         } else {
             entry.font_weight
         };
+
+        let cache_key = TextCacheKey {
+            text: entry.text.clone(),
+            font_size_bits: scaled_font_size.to_bits(),
+            weight: weight.0,
+            family: entry.font_family.clone(),
+            color: [
+                (entry.color.r * 255.0) as u8,
+                (entry.color.g * 255.0) as u8,
+                (entry.color.b * 255.0) as u8,
+                (entry.color.a * 255.0) as u8,
+            ],
+            tex_width,
+            tex_height,
+        };
+
+        if let Some(cached) = self.text_cache.get(&cache_key) {
+            cached.last_used.set(self.frame_gen);
+            let cached = cached.clone();
+            return self.build_quad(
+                device,
+                entry,
+                cached,
+                tex_width,
+                tex_height,
+                padding,
+                scale_factor,
+            );
+        }
+
+        // Cache miss: shape and rasterize
+        let mut buffer = Buffer::new(
+            &mut self.font_system,
+            Metrics::new(scaled_font_size, scaled_font_size * 1.2),
+        );
+        buffer.set_size(
+            &mut self.font_system,
+            Some(buffer_width),
+            Some(buffer_height),
+        );
         buffer.set_text(
             &mut self.font_system,
             &entry.text,
@@ -274,11 +342,6 @@ impl TextQuadRenderer {
             None,
         );
         buffer.shape_until_scroll(&mut self.font_system, true);
-
-        // Calculate texture size with padding
-        let padding = TEXT_TEXTURE_PADDING * effective_scale;
-        let tex_width = ((buffer_width + padding * 2.0).ceil() as u32).max(1);
-        let tex_height = ((buffer_height + padding * 2.0).ceil() as u32).max(1);
 
         // Create offscreen texture
         let texture = device.create_texture(&TextureDescriptor {
@@ -386,6 +449,36 @@ impl TextQuadRenderer {
             ],
         });
 
+        let cached = std::rc::Rc::new(CachedTextTexture {
+            texture,
+            bind_group,
+            last_used: std::cell::Cell::new(self.frame_gen),
+        });
+        self.text_cache.insert(cache_key, cached.clone());
+        self.build_quad(
+            device,
+            entry,
+            cached,
+            tex_width,
+            tex_height,
+            padding,
+            scale_factor,
+        )
+    }
+
+    /// Build the per-frame quad (vertices depend on position/transform, the
+    /// texture itself is cached).
+    #[allow(clippy::too_many_arguments)]
+    fn build_quad(
+        &self,
+        device: &Arc<Device>,
+        entry: &TextEntry,
+        cached: std::rc::Rc<CachedTextTexture>,
+        tex_width: u32,
+        tex_height: u32,
+        padding: f32,
+        scale_factor: f32,
+    ) -> PreparedTextQuad {
         // The entry.rect is in LOCAL coordinates. We need to apply the world_transform
         // to get screen coordinates. The world_transform already includes everything:
         // parent translations, rotations, scales, and center_at adjustments.
@@ -506,8 +599,7 @@ impl TextQuadRenderer {
         });
 
         PreparedTextQuad {
-            texture,
-            bind_group,
+            cached,
             vertex_buffer,
         }
     }
@@ -522,7 +614,7 @@ impl TextQuadRenderer {
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 
         for quad in quads {
-            render_pass.set_bind_group(0, &quad.bind_group, &[]);
+            render_pass.set_bind_group(0, &quad.cached.bind_group, &[]);
             render_pass.set_vertex_buffer(0, quad.vertex_buffer.slice(..));
             render_pass.draw_indexed(0..6, 0, 0..1);
         }
