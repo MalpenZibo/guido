@@ -47,9 +47,18 @@ impl ServiceContext {
 /// Handle to a background service for sending commands.
 ///
 /// Clone this handle to send commands from multiple places.
-#[derive(Clone)]
 pub struct Service<Cmd> {
     sender: mpsc::UnboundedSender<Cmd>,
+}
+
+// Manual impl: the derive would add a spurious `Cmd: Clone` bound, but only
+// the sender is cloned.
+impl<Cmd> Clone for Service<Cmd> {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+        }
+    }
 }
 
 impl<Cmd> Service<Cmd> {
