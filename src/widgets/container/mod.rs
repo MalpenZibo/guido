@@ -1828,25 +1828,46 @@ impl Widget for Container {
         // When animations exist, also track raw signal reads for Animation jobs.
         // This ensures signal changes trigger advance_animations() to update targets.
         // (The animated_* methods above may read from the animation cache instead of the signal,
-        // so we do a second pass reading raw signals for Animation subscriber registration.)
+        // so we do a second pass reading targets for Animation subscriber registration.)
+        //
+        // The same pass compares each animation's stored target against the
+        // current effective value. The subscription only exists after the
+        // first paint, so a write landing between the animation's
+        // set_immediate initialization (first layout — possibly a popup's
+        // measure pass, long before a heavy tree finishes its first paint)
+        // and this registration notifies nobody. Requesting one Animation
+        // job on a detected mismatch lets advance_animations adopt the
+        // missed target; without it, a menu whose open-flip write raced the
+        // first paint stays collapsed at scale 0 forever.
         if self.has_animated_state_properties() {
-            with_signal_tracking(id, JobType::Animation, || {
-                if let Some(s) = &self.background {
-                    let _ = s.get();
+            let target_drift = with_signal_tracking(id, JobType::Animation, || {
+                let anims = self.anims.as_ref().unwrap();
+                let mut drift = false;
+                if let Some(a) = &anims.border_width {
+                    let t = self.effective_border_width_target(tree);
+                    drift |= !a.is_initial() && *a.target() != t;
                 }
-                if let Some(s) = &self.corner_radius {
-                    let _ = s.get();
+                if let Some(a) = &anims.background {
+                    let t = self.effective_background_target(tree);
+                    drift |= !a.is_initial() && *a.target() != t;
                 }
-                if let Some(s) = &self.border_width {
-                    let _ = s.get();
+                if let Some(a) = &anims.corner_radius {
+                    let t = self.effective_corner_radius_target(tree);
+                    drift |= !a.is_initial() && *a.target() != t;
                 }
-                if let Some(s) = &self.border_color {
-                    let _ = s.get();
+                if let Some(a) = &anims.border_color {
+                    let t = self.effective_border_color_target(tree);
+                    drift |= !a.is_initial() && *a.target() != t;
                 }
-                if let Some(s) = &self.transform {
-                    let _ = s.get();
+                if let Some(a) = &anims.transform {
+                    let t = self.effective_transform_target(tree);
+                    drift |= !a.is_initial() && *a.target() != t;
                 }
+                drift
             });
+            if target_drift {
+                request_job(id, JobRequest::Animation(RequiredJob::None));
+            }
         }
 
         // Publish the blur region: bounds are read fresh from the tree at
@@ -2134,4 +2155,75 @@ impl Widget for Container {
 
 pub fn container() -> Container {
     Container::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::animation::{TimingFunction, Transition};
+    use crate::jobs::{self, Job};
+    use crate::layout::Constraints;
+    use crate::reactive::create_signal;
+    use crate::renderer::PaintContext;
+
+    /// Regression test for the missed-write race that left popup menus
+    /// permanently collapsed: the Animation subscription for an animated
+    /// prop is only registered during paint, but the animation target is
+    /// initialized (set_immediate) during the first layout — possibly a
+    /// popup measure pass long before a heavy tree finishes its first
+    /// paint. A signal write landing in that window notified nobody and
+    /// the animation sat on the stale target forever. The first paint must
+    /// detect the drift and request an Animation job so
+    /// advance_animations adopts the missed target.
+    #[test]
+    fn write_between_first_layout_and_first_paint_starts_animation() {
+        let open = create_signal(false);
+        let widget = container()
+            .transform(move || {
+                if open.get() {
+                    Transform::IDENTITY
+                } else {
+                    Transform::scale_xy(1.0, 0.0)
+                }
+            })
+            .animate_transform(Transition::new(200, TimingFunction::EaseOut));
+
+        let mut tree = Tree::new();
+        let id = tree.register(Box::new(widget));
+
+        // First layout: initializes the animation to the collapsed state
+        // via set_immediate. No Animation subscription exists yet.
+        tree.with_widget_mut(id, |w, id, tree| {
+            w.layout(tree, id, Constraints::new(0.0, 0.0, 100.0, 100.0));
+        });
+
+        // The missed write: no subscriber is registered, so this notifies
+        // nobody and pushes no job for the widget.
+        open.set(true);
+
+        // Discard anything queued so far so the assertion below only sees
+        // jobs produced by the paint.
+        let roots: rustc_hash::FxHashSet<WidgetId> = [id].into_iter().collect();
+        jobs::distribute_jobs(&tree, &roots);
+        jobs::recycle_job_buffer(jobs::drain_surface_jobs(id));
+        jobs::recycle_job_buffer(jobs::drain_orphan_jobs());
+
+        // First paint: registers the subscription AND must notice the
+        // animation target no longer matches the signal value.
+        let mut root_node = crate::renderer::RenderNode::new(id.as_u64());
+        tree.with_widget_mut(id, |w, id, tree| {
+            let mut ctx = PaintContext::new(&mut root_node);
+            w.paint(tree, id, &mut ctx);
+        });
+
+        jobs::distribute_jobs(&tree, &roots);
+        let drained = jobs::drain_surface_jobs(id);
+        assert!(
+            drained.contains(&Job {
+                widget_id: id,
+                job_type: JobType::Animation,
+            }),
+            "paint must request an Animation job for the missed target change, got {drained:?}"
+        );
+    }
 }
