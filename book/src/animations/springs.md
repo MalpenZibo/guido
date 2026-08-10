@@ -12,23 +12,31 @@ Transition::spring(SpringConfig::BOUNCY)
 
 ### DEFAULT
 
-Balanced spring - responsive without excessive bounce:
+Balanced spring - responsive without excessive bounce, settles in ~270ms:
 
 ```rust
 SpringConfig::DEFAULT
 ```
 
-### SMOOTH
+### SNAPPY
 
-Gentle spring - minimal overshoot:
+Quickest response with subtle overshoot, settles in ~185ms:
 
 ```rust
-SpringConfig::SMOOTH
+SpringConfig::SNAPPY
+```
+
+### GENTLE
+
+Slower and smooth - minimal overshoot, settles in ~325ms:
+
+```rust
+SpringConfig::GENTLE
 ```
 
 ### BOUNCY
 
-Energetic spring - visible bounce:
+Energetic spring - visible bounce, settles in ~410ms:
 
 ```rust
 SpringConfig::BOUNCY

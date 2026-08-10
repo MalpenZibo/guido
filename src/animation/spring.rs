@@ -40,32 +40,36 @@ pub struct SpringConfig {
 }
 
 impl SpringConfig {
-    /// Default spring - fluid motion with moderate overshoot
+    /// Default spring - fluid motion with moderate overshoot.
+    /// Settles in ~270ms (damping ratio 0.66, ~6% overshoot).
     pub const DEFAULT: Self = Self {
         mass: 1.0,
-        stiffness: 150.0,
-        damping: 16.0,
+        stiffness: 500.0,
+        damping: 29.5,
     };
 
-    /// Bouncy spring with noticeable overshoot
+    /// Bouncy spring with noticeable overshoot.
+    /// Settles in ~410ms (damping ratio 0.49, ~17% overshoot).
     pub const BOUNCY: Self = Self {
         mass: 1.0,
-        stiffness: 150.0,
-        damping: 12.0,
+        stiffness: 400.0,
+        damping: 19.6,
     };
 
-    /// Snappy spring - quicker response, subtle overshoot
+    /// Snappy spring - quickest response, subtle overshoot.
+    /// Settles in ~185ms (damping ratio 0.72, ~4% overshoot).
     pub const SNAPPY: Self = Self {
         mass: 1.0,
-        stiffness: 250.0,
-        damping: 20.0,
+        stiffness: 900.0,
+        damping: 43.0,
     };
 
-    /// Gentle spring - slow and smooth, minimal overshoot
+    /// Gentle spring - slower and smooth, minimal overshoot.
+    /// Settles in ~325ms (damping ratio 0.78, ~3% overshoot).
     pub const GENTLE: Self = Self {
         mass: 1.0,
-        stiffness: 100.0,
-        damping: 15.0,
+        stiffness: 250.0,
+        damping: 24.7,
     };
 }
 
