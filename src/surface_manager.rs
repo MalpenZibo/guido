@@ -133,6 +133,24 @@ impl Drop for ManagedSurface {
     }
 }
 
+/// Tear down a closed surface's widget tree synchronously.
+///
+/// Removing a `ManagedSurface` only disposes its reactive owner; without
+/// this, the widget subtree stays registered in the [`Tree`] forever (a
+/// leak that grows with every closed popup) and its signal subscribers
+/// stay live — the next write to a subscribed signal reconciles a dead
+/// dynamic child whose closure reads owner-disposed state and panics.
+///
+/// Widgets are unregistered children-first, so each Drop's deferred
+/// Unregister requests target already-removed ids and no-op; any stale
+/// queued job no-ops too because the ids fail the tree's generation check.
+///
+/// Call this BEFORE dropping the `ManagedSurface`: subscribers must be
+/// gone before the owner (and the signals it holds) is disposed.
+pub(crate) fn teardown_widget_subtree(tree: &mut Tree, root: WidgetId) {
+    crate::jobs::teardown_widget_subtree(tree, root);
+}
+
 /// Manages all surfaces in the application.
 pub struct SurfaceManager {
     surfaces: HashMap<SurfaceId, ManagedSurface>,
@@ -226,5 +244,70 @@ impl SurfaceManager {
 impl Default for SurfaceManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use super::*;
+    use crate::layout::{Constraints, Size};
+    use crate::reactive::owner::{dispose_owner as dispose, with_owner};
+    use crate::reactive::{create_memo, create_signal};
+    use crate::widgets::Widget;
+    use crate::widgets::children::ChildrenSource;
+    use crate::widgets::into_child::{DynamicChild, IntoChild};
+
+    struct TestWidget;
+    impl Widget for TestWidget {
+        fn layout(&mut self, _: &mut Tree, _: crate::tree::WidgetId, _: Constraints) -> Size {
+            Size::zero()
+        }
+        fn paint(&self, _: &Tree, _: crate::tree::WidgetId, _: &mut crate::renderer::PaintContext) {
+        }
+    }
+
+    /// The surface-close crash scenario: a dynamic child reads a memo owned
+    /// by the surface factory's owner scope; the surface closes (owner
+    /// disposed); a later write to the tracked signal must NOT re-run the
+    /// dead closure (which would read the disposed memo and panic) — and the
+    /// subtree must actually leave the tree (the popup leak).
+    #[test]
+    fn teardown_clears_subscribers_and_empties_tree() {
+        let mut tree = Tree::new();
+        let parent = tree.register(Box::new(TestWidget));
+        let mut source = ChildrenSource::default();
+        source.set_container_id(parent);
+
+        let sig = create_signal(0u64);
+        let builds = Rc::new(Cell::new(0usize));
+
+        // Mimic the surface factory: reactive state owned by a scope that
+        // dies with the surface
+        let (memo, owner_id) = with_owner(|| create_memo(move || sig.get() + 1));
+
+        let counter = builds.clone();
+        let closure = move || {
+            let _ = memo.get();
+            counter.set(counter.get() + 1);
+            TestWidget
+        };
+        IntoChild::<DynamicChild>::add_to_container(closure, &mut source);
+        source.reconcile_and_get(&mut tree);
+        assert_eq!(builds.get(), 1);
+        assert!(tree.widget_count() > 1);
+
+        // Surface close: subtree teardown, THEN owner disposal
+        teardown_widget_subtree(&mut tree, parent);
+        dispose(owner_id);
+
+        // The write that used to reconcile the dead child into a panic
+        sig.set(1);
+        source.reconcile_with_tracking(&mut tree);
+
+        assert_eq!(builds.get(), 1, "dead closure must not re-run");
+        assert_eq!(tree.widget_count(), 0, "subtree must leave the tree");
     }
 }
