@@ -220,7 +220,11 @@ fn process_surface_commands(
                 // borrows the wl_surface through erased raw pointers, so the
                 // GPU surface must die before the Wayland surface it points
                 // at (previously a use-after-free during swapchain teardown).
-                surface_manager.remove(id);
+                if let Some(managed) = surface_manager.remove(id) {
+                    // Unregister the widget tree and its signal subscribers
+                    // before the drop disposes the reactive owner
+                    surface_manager::teardown_widget_subtree(tree, managed.widget_id);
+                }
                 wayland_state.destroy_surface(id);
 
                 // If no surfaces left, exit

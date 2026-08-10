@@ -143,7 +143,7 @@ pub(crate) fn process_session_lock(
             LockEvent::Locked => set_state(LockState::Locked),
             LockEvent::Finished => {
                 // Denied, or the lock ended without our unlock_session().
-                teardown_lock_surfaces(surface_manager, wayland_state);
+                teardown_lock_surfaces(surface_manager, wayland_state, tree);
                 LOCK.with(|l| l.borrow_mut().factory = None);
                 set_state(LockState::Unlocked);
             }
@@ -154,7 +154,7 @@ pub(crate) fn process_session_lock(
     let unlock_requested = LOCK.with(|l| std::mem::take(&mut l.borrow_mut().unlock_requested));
     if unlock_requested && state_signal().get_untracked() != LockState::Unlocked {
         wayland_state.unlock_session();
-        teardown_lock_surfaces(surface_manager, wayland_state);
+        teardown_lock_surfaces(surface_manager, wayland_state, tree);
         LOCK.with(|l| l.borrow_mut().factory = None);
         set_state(LockState::Unlocked);
     }
@@ -179,7 +179,9 @@ pub(crate) fn process_session_lock(
             stale
         });
         for (_, sid) in stale {
-            surface_manager.remove(sid);
+            if let Some(managed) = surface_manager.remove(sid) {
+                crate::surface_manager::teardown_widget_subtree(tree, managed.widget_id);
+            }
             wayland_state.destroy_surface(sid);
         }
 
@@ -218,7 +220,11 @@ pub(crate) fn process_session_lock(
     }
 }
 
-fn teardown_lock_surfaces(surface_manager: &mut SurfaceManager, wayland_state: &mut WaylandState) {
+fn teardown_lock_surfaces(
+    surface_manager: &mut SurfaceManager,
+    wayland_state: &mut WaylandState,
+    tree: &mut crate::tree::Tree,
+) {
     let surfaces: Vec<SurfaceId> = LOCK.with(|l| {
         l.borrow_mut()
             .surfaces
@@ -229,7 +235,9 @@ fn teardown_lock_surfaces(surface_manager: &mut SurfaceManager, wayland_state: &
     for sid in surfaces {
         // Removed directly — not via SurfaceCommand::Close — so an app whose
         // only surfaces were lock surfaces keeps running after unlock.
-        surface_manager.remove(sid);
+        if let Some(managed) = surface_manager.remove(sid) {
+            crate::surface_manager::teardown_widget_subtree(tree, managed.widget_id);
+        }
         wayland_state.destroy_surface(sid);
     }
 }

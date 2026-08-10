@@ -325,6 +325,26 @@ impl Tree {
             .unwrap_or(&[])
     }
 
+    /// Collect a subtree in post-order (children before parents).
+    ///
+    /// Used for surface teardown: unregistering in this order means each
+    /// widget's Drop finds its children already gone, so the deferred
+    /// Unregister jobs it schedules become no-ops.
+    pub fn collect_subtree_post_order(&self, root: WidgetId) -> Vec<WidgetId> {
+        let mut ordered = Vec::new();
+        // Pre-order DFS, then reverse: yields children before parents
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            if self.get_dense_index(id).is_none() {
+                continue;
+            }
+            ordered.push(id);
+            stack.extend_from_slice(self.get_children(id));
+        }
+        ordered.reverse();
+        ordered
+    }
+
     /// Mark a widget as needing layout, returning the layout root.
     ///
     /// The needs_layout flag bubbles up to the nearest relayout boundary or root.
