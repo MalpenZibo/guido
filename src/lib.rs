@@ -136,7 +136,7 @@ pub mod prelude {
     pub use crate::animation::{SpringConfig, TimingFunction, Transition, TransitionConfig};
     pub use crate::layout::{
         Axis, Constraints, CrossAlignment, Flex, IntoF32, Length, MainAlignment, Overlay, Size,
-        at_least, at_most, fill,
+        at_least, at_most, fill, fraction,
     };
     pub use crate::outputs::{OutputId, OutputInfo, outputs, surface_output};
     pub use crate::platform::{Anchor, KeyboardInteractivity, Layer};
