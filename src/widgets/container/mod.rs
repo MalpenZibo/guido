@@ -304,7 +304,8 @@ impl Container {
         self
     }
 
-    /// Add a single child (static or dynamic)
+    /// Add a single child: a widget value, or [`dynamic(data, build)`](crate::widgets::dynamic)
+    /// for reactive content.
     pub fn child<M>(mut self, child: impl IntoChild<M>) -> Self {
         child.add_to_container(&mut self.children_source);
         self

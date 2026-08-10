@@ -1,25 +1,57 @@
-use crate::reactive::with_owner;
+//! Child attachment forms for containers.
+//!
+//! Children come in four forms — two static, two reactive:
+//!
+//! ```ignore
+//! container()
+//!     .child(text("hi"))                                  // static single
+//!     .child(move || build_menu(entries.get()))           // reactive single
+//!     .children([a, b, c])                                // static list
+//!     .children(keyed(move || items.get(), |i| i.id, row)) // reactive keyed list
+//! ```
+//!
+//! A reactive closure re-runs when a signal it read is written, and its
+//! result **replaces** the previous widget — there is no key comparison and
+//! no silent discard. Tracking is per segment: only the closure whose
+//! signals changed re-runs, not every dynamic child of the container.
+//!
+//! State created inside a closure (signals, effects, `on_cleanup`) lives in
+//! an owner scope disposed on replacement. State that must survive a rebuild
+//! belongs in signals created outside the closure. To narrow *when* a
+//! closure re-runs, read a [`Memo`](crate::reactive::Memo) instead of the
+//! raw signal — memos notify only when their value actually changes.
+//!
+//! For lists, [`keyed()`] preserves per-row state through stable identity
+//! and rebuilds only rows whose item content changed.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use crate::reactive::invalidation::suspend_widget_tracking;
+use crate::reactive::{OwnerId, dispose_owner, with_owner};
 
 use super::Widget;
-use super::children::{ChildrenSource, DynItem, OwnedWidget};
+use super::children::{ChildrenSource, DynItem, OwnedWidget, SharedOwner};
 
-/// Marker type for static child (widget value)
+/// Marker type for a static child (widget value)
 pub struct StaticChild;
 
-/// Marker type for dynamic child (closure)
+/// Marker type for a reactive child (closure)
 pub struct DynamicChild;
 
-/// Marker type for keyed dynamic child (closure returning `Option<(key, widget)>`)
-pub struct KeyedChild;
-
-/// Trait for types that can be added as a child to a container
+/// Trait for values that can be added as a single child to a container.
 ///
-/// This trait uses a marker type parameter to disambiguate between:
-/// - Static widgets (evaluated once at creation) - uses `StaticChild` marker
-/// - Dynamic closures returning `Option<Widget>` (presence-reactive) - uses `DynamicChild` marker
-/// - Dynamic closures returning `Option<(u64, Widget)>` (content-reactive) - uses `KeyedChild` marker
-///
-/// The marker parameter defaults to `StaticChild` so `.child(widget)` works without annotation.
+/// Accepted forms:
+/// - a widget value — static, evaluated once
+/// - `move || widget` / `move || Option<widget>` — reactive: the closure
+///   re-runs when a signal it reads changes, and its result replaces the
+///   previous child (`None` removes it)
+#[diagnostic::on_unimplemented(
+    message = "`.child()` takes a widget or a reactive closure, and `{Self}` is neither",
+    note = "reactive forms: `.child(move || widget)` or `.child(move || Option<widget>)` — the closure re-runs and replaces the child when a signal it reads changes",
+    note = "for reactive lists use `.children(...)` with a closure or `keyed(data, key, build)`"
+)]
 pub trait IntoChild<Marker = StaticChild> {
     fn add_to_container(self, children_source: &mut ChildrenSource);
 }
@@ -31,77 +63,76 @@ impl<W: Widget + 'static> IntoChild<StaticChild> for W {
     }
 }
 
-/// Implementation for dynamic closures returning `Option<Widget>`.
-///
-/// **This form is presence-only.** The child always reconciles under the same
-/// key, so `Some -> Some` transitions keep the FIRST widget ever built and
-/// discard the rebuilt one — signals and state inside it persist, but a
-/// widget with different structure will never appear. Use it to show/hide a
-/// widget whose own properties are reactive.
-///
-/// When the widget's *structure* depends on data (lists, branches, rebuilt
-/// trees), return `Option<(key, widget)>` instead — see [`KeyedChild`] — with
-/// a key that changes alongside the content (typically a hash of the data).
-impl<F, W> IntoChild<DynamicChild> for F
-where
-    F: Fn() -> Option<W> + 'static,
-    W: Widget + 'static,
-{
-    fn add_to_container(self, children_source: &mut ChildrenSource) {
-        let child_fn = std::rc::Rc::new(self);
+/// What a reactive child closure may return: a widget (always present) or
+/// `Option<widget>` (present when Some).
+pub trait IntoDynChild {
+    fn into_dyn_child(self) -> Option<Box<dyn Widget>>;
+}
 
-        let items_fn = move || {
-            let child_fn = child_fn.clone();
-            if let Some(widget) = child_fn() {
-                // For single optional child, wrap in owner at creation time
-                vec![DynItem::new(0, move || {
-                    let (widget, owner_id) = with_owner(|| widget);
-                    OwnedWidget::new(Box::new(widget), owner_id)
-                })]
-            } else {
-                vec![]
-            }
-        };
-
-        children_source.add_dynamic(items_fn);
+impl<W: Widget + 'static> IntoDynChild for W {
+    fn into_dyn_child(self) -> Option<Box<dyn Widget>> {
+        Some(Box::new(self))
     }
 }
 
-/// Implementation for dynamic closures returning `Option<(u64, Widget)>`.
-///
-/// The content-reactive companion to the presence-only `Option<Widget>` form:
-/// the key states which version of the content the widget renders. Same key =
-/// the cached widget is kept (rebuilt value discarded, inner state persists);
-/// new key = the old widget is dropped (owner cleanup runs) and the rebuilt
-/// one is swapped in.
-///
-/// # Example
-///
-/// ```ignore
-/// let entries = create_signal(vec!["a".to_string()]);
-/// container().child(move || {
-///     let list = entries.get();
-///     let key = hash_of(&list); // any u64 that changes with the content
-///     Some((key, build_list_widget(list)))
-/// })
-/// ```
-impl<F, W> IntoChild<KeyedChild> for F
+impl<W: Widget + 'static> IntoDynChild for Option<W> {
+    fn into_dyn_child(self) -> Option<Box<dyn Widget>> {
+        self.map(|w| Box::new(w) as Box<dyn Widget>)
+    }
+}
+
+/// Reactive single child: the closure runs inside its segment's tracking
+/// scope — the signals it reads are what trigger a re-run — and inside an
+/// owner scope, so signals/effects created during the build are disposed
+/// when the widget is replaced or removed. Every re-run replaces the child.
+impl<F, C> IntoChild<DynamicChild> for F
 where
-    F: Fn() -> Option<(u64, W)> + 'static,
-    W: Widget + 'static,
+    F: Fn() -> C + 'static,
+    C: IntoDynChild,
 {
     fn add_to_container(self, children_source: &mut ChildrenSource) {
-        let child_fn = std::rc::Rc::new(self);
+        struct State {
+            generation: u64,
+            /// Widget built by the latest run, adopted by the reconciler's
+            /// factory call in the same pass (the fresh generation key
+            /// guarantees the factory runs).
+            pending: Option<(Box<dyn Widget>, OwnerId)>,
+        }
+
+        let state = Rc::new(RefCell::new(State {
+            generation: 0,
+            pending: None,
+        }));
+        let child_fn = Rc::new(self);
 
         let items_fn = move || {
-            let child_fn = child_fn.clone();
-            if let Some((key, widget)) = child_fn() {
-                vec![DynItem::new(key, move || {
-                    let (widget, owner_id) = with_owner(|| widget);
-                    OwnedWidget::new(Box::new(widget), owner_id)
-                })]
-            } else {
-                vec![]
+            let mut st = state.borrow_mut();
+
+            // Defensive: a widget stashed by a previous pass that was never
+            // adopted would leak its owner scope.
+            if let Some((_, owner_id)) = st.pending.take() {
+                dispose_owner(owner_id);
+            }
+
+            let child_fn = Rc::clone(&child_fn);
+            let (built, owner_id) = with_owner(move || child_fn().into_dyn_child());
+            match built {
+                Some(widget) => {
+                    st.generation += 1;
+                    st.pending = Some((widget, owner_id));
+                    let adopt_state = Rc::clone(&state);
+                    vec![DynItem::new(st.generation, move || {
+                        let (widget, owner_id) =
+                            adopt_state.borrow_mut().pending.take().expect(
+                                "reactive child factory ran without a freshly built widget",
+                            );
+                        OwnedWidget::new(widget, owner_id)
+                    })]
+                }
+                None => {
+                    dispose_owner(owner_id);
+                    vec![]
+                }
             }
         };
 
@@ -112,16 +143,21 @@ where
 /// Marker type for static children (iterator of widgets)
 pub struct StaticChildren;
 
-/// Marker type for dynamic children (closure returning keyed items)
+/// Marker type for reactive children (closure or [`keyed()`])
 pub struct DynamicChildren;
 
-/// Trait for types that can be added as children to a container
+/// Trait for values that can be added as children to a container.
 ///
-/// This trait uses a marker type parameter to disambiguate between:
-/// - Static children (iterator of widgets) - uses `StaticChildren` marker
-/// - Dynamic children (closure returning keyed items) - uses `DynamicChildren` marker
-///
-/// The marker parameter defaults to `StaticChildren` so `.children([...])` works without annotation.
+/// Accepted forms:
+/// - an iterator of widgets — static, evaluated once
+/// - `move || iterator_of_widgets` — reactive: re-runs when a signal it
+///   reads changes, replacing all rows
+/// - [`keyed(data, key, build)`](keyed) — reactive with stable identity:
+///   preserves per-row state, rebuilds only changed rows
+#[diagnostic::on_unimplemented(
+    message = "`.children()` takes an iterator of widgets, a reactive closure returning one, or `keyed(data, key, build)` — and `{Self}` is none of those",
+    note = "`.children(move || widgets)` replaces all rows when a signal it reads changes; `keyed(data, key, build)` preserves per-row state via stable identity and rebuilds only rows whose item changed"
+)]
 pub trait IntoChildren<Marker = StaticChildren> {
     fn add_to_container(self, children_source: &mut ChildrenSource);
 }
@@ -140,53 +176,220 @@ where
     }
 }
 
-/// Implementation for dynamic children with closures.
+/// Reactive unkeyed list: the closure re-runs when a signal it reads
+/// changes and its rows replace the previous ones wholesale. All rows of
+/// one run share a single owner scope, disposed when the last row drops.
 ///
-/// Accepts `Fn() -> Iterator<Item = (key, FnOnce() -> Widget)>`.
-///
-/// Each child's closure runs inside an owner scope, so signals and effects
-/// created during widget construction are automatically owned and cleaned up
-/// when the child is removed.
-///
-/// **IMPORTANT:** The widget closure is only called for NEW keys. Existing keys
-/// reuse their cached widgets, so signals/effects persist across frames.
-///
-/// # Example
-///
-/// ```ignore
-/// let items = create_signal(vec![1, 2, 3]);
-/// container().children(move || {
-///     items.get().iter().map(|&id| {
-///         (id as u64, move || {
-///             text(format!("Item {}", id))
-///         })
-///     })
-/// })
-/// ```
-impl<F, I, G, W> IntoChildren<DynamicChildren> for F
+/// Rows have no identity across runs — inner state does not survive a
+/// re-run. Use [`keyed()`] when rows carry state worth preserving.
+impl<F, I, W> IntoChildren<DynamicChildren> for F
 where
     F: Fn() -> I + 'static,
-    I: IntoIterator<Item = (u64, G)>,
-    G: FnOnce() -> W + 'static,
+    I: IntoIterator<Item = W>,
     W: Widget + 'static,
 {
     fn add_to_container(self, children_source: &mut ChildrenSource) {
+        struct State {
+            next_generation: u64,
+            /// Rows built by the latest run, adopted by the reconciler's
+            /// factory calls in the same pass.
+            pending: HashMap<u64, Box<dyn Widget>>,
+        }
+
+        let state = Rc::new(RefCell::new(State {
+            next_generation: 0,
+            pending: HashMap::new(),
+        }));
+        let list_fn = Rc::new(self);
+
         let items_fn = move || {
-            self()
-                .into_iter()
-                .map(|(key, widget_fn)| {
-                    // Return DynItem with a LAZY widget factory.
-                    // The closure is only called by reconciliation for NEW keys.
-                    // with_owner wraps the widget creation for automatic cleanup.
-                    DynItem::new(key, move || {
-                        let (widget, owner_id) = with_owner(widget_fn);
-                        OwnedWidget::new(Box::new(widget), owner_id)
-                    })
-                })
-                .collect()
+            let mut st = state.borrow_mut();
+            // Defensive: unadopted rows from a previous pass (their shared
+            // owner guard was dropped with the unadopted factories).
+            st.pending.clear();
+
+            let list_fn = Rc::clone(&list_fn);
+            let (widgets, owner_id) = with_owner(move || {
+                list_fn()
+                    .into_iter()
+                    .map(|w| Box::new(w) as Box<dyn Widget>)
+                    .collect::<Vec<_>>()
+            });
+            if widgets.is_empty() {
+                dispose_owner(owner_id);
+                return vec![];
+            }
+
+            let shared = SharedOwner::new(owner_id);
+            let mut out = Vec::with_capacity(widgets.len());
+            for widget in widgets {
+                let generation = st.next_generation;
+                st.next_generation += 1;
+                st.pending.insert(generation, widget);
+
+                let adopt_state = Rc::clone(&state);
+                let shared = shared.clone();
+                out.push(DynItem::new(generation, move || {
+                    let widget = adopt_state
+                        .borrow_mut()
+                        .pending
+                        .remove(&generation)
+                        .expect("reactive children factory ran without a freshly built row");
+                    OwnedWidget::new_shared(widget, shared)
+                }));
+            }
+            out
         };
+
         children_source.add_dynamic(items_fn);
     }
+}
+
+/// A reactive keyed children list: tracked data, key-based identity,
+/// untracked per-item builder. Built with [`keyed()`], consumed by
+/// `.children()`.
+pub struct KeyedChildren<T, I, W> {
+    data: Box<dyn Fn() -> I>,
+    key: Box<dyn Fn(&T) -> u64>,
+    build: Box<dyn Fn(T) -> W>,
+}
+
+/// Reactive keyed children list: tracked data, key-based identity,
+/// untracked per-item builder with content diffing.
+///
+/// `data` runs inside the segment's tracking scope and yields the items.
+/// `key` extracts each item's stable identity (it survives reorders). Per
+/// item:
+///
+/// - new key → `build` runs (untracked, in an owner scope)
+/// - known key, item `==` previous → the existing widget is kept untouched
+///   (inner state and animations persist, including across reorders)
+/// - known key, item changed → `build` re-runs and the rebuilt widget
+///   replaces the old one (its owner scope is disposed)
+/// - key gone → widget dropped with owner cleanup
+///
+/// The item type chooses the granularity: fields excluded from it can be
+/// read via signals inside the row for in-place updates, fields included
+/// trigger a row rebuild when they change.
+///
+/// ```ignore
+/// container().children(keyed(
+///     move || workspaces.get(),
+///     |ws| ws.id,
+///     workspace_pill,
+/// ))
+/// ```
+pub fn keyed<T, I, W>(
+    data: impl Fn() -> I + 'static,
+    key: impl Fn(&T) -> u64 + 'static,
+    build: impl Fn(T) -> W + 'static,
+) -> KeyedChildren<T, I, W>
+where
+    T: Clone + PartialEq + 'static,
+    I: IntoIterator<Item = T>,
+    W: Widget + 'static,
+{
+    KeyedChildren {
+        data: Box::new(data),
+        key: Box::new(key),
+        build: Box::new(build),
+    }
+}
+
+impl<T, I, W> IntoChildren<DynamicChildren> for KeyedChildren<T, I, W>
+where
+    T: Clone + PartialEq + 'static,
+    I: IntoIterator<Item = T> + 'static,
+    W: Widget + 'static,
+{
+    fn add_to_container(self, children_source: &mut ChildrenSource) {
+        add_keyed_children(children_source, self.data, self.key, self.build);
+    }
+}
+
+/// Wire a (tracked data, key, untracked builder) triple into a
+/// ChildrenSource as a keyed dynamic list. See [`keyed()`] for the
+/// semantics.
+fn add_keyed_children<T, I, W>(
+    source: &mut ChildrenSource,
+    data_fn: impl Fn() -> I + 'static,
+    key_fn: impl Fn(&T) -> u64 + 'static,
+    build_fn: impl Fn(T) -> W + 'static,
+) where
+    T: Clone + PartialEq + 'static,
+    I: IntoIterator<Item = T>,
+    W: Widget + 'static,
+{
+    struct Row<T> {
+        item: T,
+        /// Serves as the reconciliation key: globally unique per (identity,
+        /// content version), stable while the item compares equal.
+        generation: u64,
+    }
+    struct KeyedState<T> {
+        rows: HashMap<u64, Row<T>>,
+        next_generation: u64,
+        /// Widgets built eagerly this pass, awaiting adoption by the
+        /// reconciler's factory calls (keyed by generation).
+        pending: HashMap<u64, (Box<dyn Widget>, OwnerId)>,
+    }
+
+    let state = Rc::new(RefCell::new(KeyedState::<T> {
+        rows: HashMap::new(),
+        next_generation: 0,
+        pending: HashMap::new(),
+    }));
+
+    let items_fn = move || {
+        let items = data_fn(); // tracked: runs inside the segment scope
+        let mut st = state.borrow_mut();
+
+        // Defensive: widgets stashed by a previous pass that were never
+        // adopted would leak their owner scopes.
+        for (_, (_, owner_id)) in st.pending.drain() {
+            dispose_owner(owner_id);
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for item in items {
+            let key = key_fn(&item);
+            if !seen.insert(key) {
+                log::warn!("keyed children: duplicate key {key}, skipping item");
+                continue;
+            }
+
+            let generation = match st.rows.get(&key) {
+                Some(row) if row.item == item => row.generation,
+                _ => {
+                    let generation = st.next_generation;
+                    st.next_generation += 1;
+                    let (widget, owner_id) = with_owner(|| {
+                        suspend_widget_tracking(|| {
+                            Box::new(build_fn(item.clone())) as Box<dyn Widget>
+                        })
+                    });
+                    st.pending.insert(generation, (widget, owner_id));
+                    st.rows.insert(key, Row { item, generation });
+                    generation
+                }
+            };
+
+            let adopt_state = Rc::clone(&state);
+            out.push(DynItem::new(generation, move || {
+                let (widget, owner_id) = adopt_state
+                    .borrow_mut()
+                    .pending
+                    .remove(&generation)
+                    .expect("keyed children factory ran without a freshly built widget");
+                OwnedWidget::new(widget, owner_id)
+            }));
+        }
+        st.rows.retain(|key, _| seen.contains(key));
+        out
+    };
+
+    source.add_dynamic(items_fn);
 }
 
 #[cfg(test)]
@@ -196,6 +399,7 @@ mod tests {
 
     use super::*;
     use crate::layout::{Constraints, Size};
+    use crate::reactive::{create_signal, on_cleanup};
     use crate::tree::{Tree, WidgetId};
 
     struct TestWidget;
@@ -216,55 +420,176 @@ mod tests {
     }
 
     #[test]
-    fn keyed_child_swaps_widget_when_key_changes() {
+    fn closure_child_replaces_on_tracked_change() {
         let (mut tree, mut source) = children_host();
-        let key = Rc::new(Cell::new(1u64));
+        let sig = create_signal(1u64);
+        let unrelated = create_signal(0u64);
+        let builds = Rc::new(Cell::new(0usize));
 
-        let key_reader = key.clone();
-        let closure = move || Some((key_reader.get(), TestWidget));
-        IntoChild::<KeyedChild>::add_to_container(closure, &mut source);
-
-        let first = source.reconcile_and_get(&mut tree).clone();
-        assert_eq!(first.len(), 1);
-
-        // Same key: the cached widget must be kept
-        source.reconcile_with_tracking(&mut tree);
-        assert_eq!(source.reconcile_and_get(&mut tree).clone(), first);
-
-        // New key: the widget must be replaced
-        key.set(2);
-        source.reconcile_with_tracking(&mut tree);
-        let second = source.reconcile_and_get(&mut tree).clone();
-        assert_eq!(second.len(), 1);
-        assert_ne!(second[0], first[0]);
-    }
-
-    #[test]
-    fn option_child_is_presence_only() {
-        let (mut tree, mut source) = children_host();
-        let present = Rc::new(Cell::new(true));
-
-        let present_reader = present.clone();
-        let closure = move || present_reader.get().then_some(TestWidget);
+        let builds_counter = builds.clone();
+        let closure = move || {
+            sig.get();
+            builds_counter.set(builds_counter.get() + 1);
+            TestWidget
+        };
         IntoChild::<DynamicChild>::add_to_container(closure, &mut source);
 
         let first = source.reconcile_and_get(&mut tree).clone();
         assert_eq!(first.len(), 1);
+        assert_eq!(builds.get(), 1);
 
-        // Some -> Some keeps the original widget: this form cannot express
-        // content changes, only presence
+        // Untracked signal change: segment not dirty, widget untouched
+        unrelated.set(1);
         source.reconcile_with_tracking(&mut tree);
         assert_eq!(source.reconcile_and_get(&mut tree).clone(), first);
+        assert_eq!(builds.get(), 1);
 
-        // None removes it, Some builds a fresh one
-        present.set(false);
+        // Tracked signal change: closure re-runs, widget replaced
+        sig.set(2);
         source.reconcile_with_tracking(&mut tree);
+        let second = source.reconcile_and_get(&mut tree).clone();
+        assert_eq!(second.len(), 1);
+        assert_ne!(second[0], first[0]);
+        assert_eq!(builds.get(), 2);
+
+        // No-op write (same value): signals skip notification entirely
+        sig.set(2);
+        source.reconcile_with_tracking(&mut tree);
+        assert_eq!(source.reconcile_and_get(&mut tree).clone(), second);
+        assert_eq!(builds.get(), 2);
+    }
+
+    #[test]
+    fn segments_rerun_independently() {
+        let (mut tree, mut source) = children_host();
+        let sig_a = create_signal(0u64);
+        let sig_b = create_signal(0u64);
+
+        let closure_a = move || {
+            sig_a.get();
+            TestWidget
+        };
+        let closure_b = move || {
+            sig_b.get();
+            TestWidget
+        };
+        IntoChild::<DynamicChild>::add_to_container(closure_a, &mut source);
+        IntoChild::<DynamicChild>::add_to_container(closure_b, &mut source);
+
+        let first = source.reconcile_and_get(&mut tree).clone();
+        assert_eq!(first.len(), 2);
+
+        // Only segment A's signal changes: B's widget must survive
+        sig_a.set(1);
+        source.reconcile_with_tracking(&mut tree);
+        let second = source.reconcile_and_get(&mut tree).clone();
+        assert_ne!(second[0], first[0]);
+        assert_eq!(second[1], first[1]);
+    }
+
+    #[test]
+    fn closure_child_controls_presence() {
+        let (mut tree, mut source) = children_host();
+        let show = create_signal(false);
+
+        let closure = move || show.get().then_some(TestWidget);
+        IntoChild::<DynamicChild>::add_to_container(closure, &mut source);
+
         assert!(source.reconcile_and_get(&mut tree).is_empty());
 
-        present.set(true);
+        show.set(true);
         source.reconcile_with_tracking(&mut tree);
-        let revived = source.reconcile_and_get(&mut tree).clone();
-        assert_eq!(revived.len(), 1);
-        assert_ne!(revived[0], first[0]);
+        assert_eq!(source.reconcile_and_get(&mut tree).len(), 1);
+
+        show.set(false);
+        source.reconcile_with_tracking(&mut tree);
+        assert!(source.reconcile_and_get(&mut tree).is_empty());
+    }
+
+    #[test]
+    fn closure_children_replace_all_rows_and_dispose_batch_owner() {
+        let (mut tree, mut source) = children_host();
+        let count = create_signal(2u64);
+        let cleanups = Rc::new(Cell::new(0usize));
+
+        let cleanups_counter = cleanups.clone();
+        let closure = move || {
+            let cleanups_counter = cleanups_counter.clone();
+            on_cleanup(move || cleanups_counter.set(cleanups_counter.get() + 1));
+            (0..count.get()).map(|_| TestWidget).collect::<Vec<_>>()
+        };
+        IntoChildren::<DynamicChildren>::add_to_container(closure, &mut source);
+
+        let first = source.reconcile_and_get(&mut tree).clone();
+        assert_eq!(first.len(), 2);
+        assert_eq!(cleanups.get(), 0);
+
+        count.set(3);
+        source.reconcile_with_tracking(&mut tree);
+        let second = source.reconcile_and_get(&mut tree).clone();
+        assert_eq!(second.len(), 3);
+        // All rows replaced, previous batch owner disposed exactly once
+        assert!(first.iter().all(|id| !second.contains(id)));
+        assert_eq!(cleanups.get(), 1);
+    }
+
+    #[test]
+    fn keyed_children_diff_by_identity_and_content() {
+        let (mut tree, mut source) = children_host();
+        let items = create_signal(vec![(1u64, "a".to_string()), (2, "b".to_string())]);
+        let builds = Rc::new(Cell::new(0usize));
+
+        let builds_counter = builds.clone();
+        keyed(
+            move || items.get(),
+            |(id, _)| *id,
+            move |_| {
+                builds_counter.set(builds_counter.get() + 1);
+                TestWidget
+            },
+        )
+        .add_to_container(&mut source);
+
+        let first = source.reconcile_and_get(&mut tree).clone();
+        assert_eq!(first.len(), 2);
+        assert_eq!(builds.get(), 2);
+
+        // Reorder with equal content: widgets reused, order follows data
+        items.set(vec![(2, "b".to_string()), (1, "a".to_string())]);
+        source.reconcile_with_tracking(&mut tree);
+        let reordered = source.reconcile_and_get(&mut tree).clone();
+        assert_eq!(reordered, vec![first[1], first[0]]);
+        assert_eq!(builds.get(), 2);
+
+        // Content change on one item: only that row rebuilds
+        items.set(vec![(2, "B!".to_string()), (1, "a".to_string())]);
+        source.reconcile_with_tracking(&mut tree);
+        let changed = source.reconcile_and_get(&mut tree).clone();
+        assert_eq!(changed.len(), 2);
+        assert_ne!(changed[0], reordered[0]); // row 2 rebuilt
+        assert_eq!(changed[1], reordered[1]); // row 1 untouched
+        assert_eq!(builds.get(), 3);
+
+        // Removal drops only the removed row
+        items.set(vec![(1, "a".to_string())]);
+        source.reconcile_with_tracking(&mut tree);
+        let removed = source.reconcile_and_get(&mut tree).clone();
+        assert_eq!(removed, vec![changed[1]]);
+        assert_eq!(builds.get(), 3);
+    }
+
+    #[test]
+    fn keyed_children_skip_duplicate_keys() {
+        let (mut tree, mut source) = children_host();
+
+        keyed(
+            move || vec![(7u64, "x"), (7, "y")],
+            |(id, _)| *id,
+            |_| TestWidget,
+        )
+        .add_to_container(&mut source);
+
+        // Only the first item with a given key is rendered
+        assert_eq!(source.reconcile_and_get(&mut tree).len(), 1);
     }
 }

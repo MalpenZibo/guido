@@ -214,20 +214,19 @@ fn main() {
                                 .color(Color::rgb(0.8, 0.8, 0.8))
                         )
                         .child(
-                            // Dynamic list with keyed reconciliation
+                            // Dynamic list: key by ID preserves widget state on
+                            // reorder; a changed item rebuilds only its row
                             container()
                                 .layout(Flex::row().spacing(4.0))
-                                .children(move || {
-                                    items.get().into_iter().map(|item| {
-                                        // Key by ID - preserves widget state on reorder!
-                                        // Return (key, closure) - closure runs in owner scope
-                                        (item.id, move || container()
-                                            .padding(8.0)
-                                            .background(item.color)
-                                            .corner_radius(4.0)
-                                            .child(text(item.name).color(Color::WHITE)))
-                                    })
-                                })
+                                .children(keyed(
+                                    move || items.get(),
+                                    |item| item.id,
+                                    |item| container()
+                                        .padding(8.0)
+                                        .background(item.color)
+                                        .corner_radius(4.0)
+                                        .child(text(item.name).color(Color::WHITE)),
+                                ))
                         )
                 )
                 )
@@ -283,17 +282,11 @@ fn main() {
                                 .child(
                                     // Dynamic child in the middle!
                                     move || {
-                                        if show_optional.get() {
-                                            Some(
-                                                container()
-                                                    .padding(8.0)
-                                                    .background(Color::rgb(0.5, 0.3, 0.5))
-                                                    .corner_radius(4.0)
-                                                    .child(text("Dynamic Middle!").color(Color::WHITE))
-                                            )
-                                        } else {
-                                            None
-                                        }
+                                        show_optional.get().then(|| container()
+                                            .padding(8.0)
+                                            .background(Color::rgb(0.5, 0.3, 0.5))
+                                            .corner_radius(4.0)
+                                            .child(text("Dynamic Middle!").color(Color::WHITE)))
                                     }
                                 )
                                 .child(
@@ -359,31 +352,19 @@ fn main() {
                                 .layout(Flex::column().spacing(4.0))
                                 .child(text("Static 1").color(Color::WHITE))
                                 .child(move || {
-                                    if show_optional2.get() {
-                                        Some(
-                                            container()
-                                                .padding(6.0)
-                                                .background(Color::rgb(0.5, 0.2, 0.3))
-                                                .corner_radius(4.0)
-                                                .child(text("Dynamic 1").color(Color::WHITE))
-                                        )
-                                    } else {
-                                        None
-                                    }
+                                    show_optional2.get().then(|| container()
+                                        .padding(6.0)
+                                        .background(Color::rgb(0.5, 0.2, 0.3))
+                                        .corner_radius(4.0)
+                                        .child(text("Dynamic 1").color(Color::WHITE)))
                                 })
                                 .child(text("Static 2").color(Color::WHITE))
                                 .child(move || {
-                                    if show_optional.get() {
-                                        Some(
-                                            container()
-                                                .padding(6.0)
-                                                .background(Color::rgb(0.3, 0.2, 0.5))
-                                                .corner_radius(4.0)
-                                                .child(text("Dynamic 2").color(Color::WHITE))
-                                        )
-                                    } else {
-                                        None
-                                    }
+                                    show_optional.get().then(|| container()
+                                        .padding(6.0)
+                                        .background(Color::rgb(0.3, 0.2, 0.5))
+                                        .corner_radius(4.0)
+                                        .child(text("Dynamic 2").color(Color::WHITE)))
                                 })
                                 .child(text("Static 3").color(Color::WHITE))
                         )
@@ -411,19 +392,19 @@ fn main() {
                             container()
                                 .layout(Flex::column().spacing(4.0))
                                 .child(text("Static header before list").color(Color::rgb(0.8, 0.8, 0.8)))
-                                .children(move || {
-                                    vec!["Keyed Item 1", "Keyed Item 2"].into_iter().map(|content| {
+                                .children(keyed(
+                                    || vec!["Keyed Item 1", "Keyed Item 2"],
+                                    |content| {
                                         let mut hasher = DefaultHasher::new();
                                         content.hash(&mut hasher);
-                                        let key = hasher.finish();
-                                        // Return (key, closure) - closure runs in owner scope
-                                        (key, move || container()
-                                            .padding(8.0)
-                                            .background(Color::rgb(0.5, 0.3, 0.5))
-                                            .corner_radius(4.0)
-                                            .child(text(content).color(Color::WHITE)))
-                                    })
-                                })
+                                        hasher.finish()
+                                    },
+                                    |content| container()
+                                        .padding(8.0)
+                                        .background(Color::rgb(0.5, 0.3, 0.5))
+                                        .corner_radius(4.0)
+                                        .child(text(content).color(Color::WHITE)),
+                                ))
                                 .child(text("Static footer after list").color(Color::rgb(0.8, 0.8, 0.8)))
                         )
                 )

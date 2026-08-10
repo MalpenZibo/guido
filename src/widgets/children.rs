@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::jobs::{JobRequest, JobType, request_job};
+use crate::jobs::{JobRequest, request_job};
 use crate::layout::{Constraints, Size};
 use crate::reactive::invalidation::clear_widget_subscribers;
-use crate::reactive::{OwnerId, dispose_owner, with_signal_tracking};
+use crate::reactive::{OwnerId, dispose_owner};
 use crate::renderer::PaintContext;
 use crate::tree::{Tree, WidgetId};
 
@@ -22,6 +22,10 @@ enum SegmentType {
         cached: HashMap<u64, WidgetId>,
         /// Current keys in display order
         current_keys: Vec<u64>,
+        /// Whether items_fn has run at least once. After the first run the
+        /// segment only re-runs when a signal it tracks is written
+        /// (per-segment dirty marking in the invalidation registry).
+        has_run: bool,
     },
 }
 
@@ -92,6 +96,7 @@ impl ChildrenSource {
             items_fn: Rc::new(items_fn),
             cached: HashMap::new(),
             current_keys: Vec::new(),
+            has_run: false,
         });
     }
 
@@ -102,21 +107,40 @@ impl ChildrenSource {
             .any(|s| matches!(s, SegmentType::Dynamic { .. }))
     }
 
-    /// Reconcile all dynamic segments and rebuild merged list
+    /// Reconcile dynamic segments and rebuild the merged list.
+    ///
+    /// Each dynamic segment re-runs its items_fn only when a signal it read
+    /// was written (per-segment dirty marking) or on its first run. Reads
+    /// during the run are tracked to this (container, segment) pair.
     fn reconcile(&mut self, tree: &mut Tree, parent_id: WidgetId) {
-        // First pass: check if any dynamic segment needs reconciliation
+        let dirty = crate::reactive::invalidation::take_dirty_segments(parent_id);
+
+        // First pass: re-run dirty segments and collect those whose keys changed
         let mut segments_with_changes: Vec<(usize, Vec<DynItem>)> = Vec::new();
 
-        for (idx, segment) in self.segments.iter().enumerate() {
+        for (idx, segment) in self.segments.iter_mut().enumerate() {
             if let SegmentType::Dynamic {
                 items_fn,
                 current_keys,
+                has_run,
                 ..
             } = segment
             {
-                let new_items = items_fn();
-                let new_keys: Vec<u64> = new_items.iter().map(|i| i.key).collect();
+                let needs_run =
+                    !*has_run || dirty.as_ref().is_some_and(|d| d.contains(&(idx as u32)));
+                if !needs_run {
+                    continue;
+                }
 
+                let items_fn = Rc::clone(items_fn);
+                let new_items = crate::reactive::invalidation::with_segment_tracking(
+                    parent_id,
+                    idx as u32,
+                    || items_fn(),
+                );
+                *has_run = true;
+
+                let new_keys: Vec<u64> = new_items.iter().map(|i| i.key).collect();
                 if new_keys != *current_keys {
                     segments_with_changes.push((idx, new_items));
                 }
@@ -229,11 +253,8 @@ impl ChildrenSource {
 
         let prev_count = self.merged.len();
 
-        // Track signal reads during reconciliation
-        // This registers container as subscriber for any signals read
-        with_signal_tracking(container_id, JobType::Reconcile, || {
-            self.reconcile(tree, container_id);
-        });
+        // Signal reads are tracked per segment inside reconcile()
+        self.reconcile(tree, container_id);
         self.initial_reconcile_done = true;
 
         prev_count != self.merged.len()
@@ -245,9 +266,8 @@ impl ChildrenSource {
         // Lazy initial reconciliation (for first frame before any jobs exist)
         if self.has_dynamic() && !self.initial_reconcile_done {
             if let Some(container_id) = self.container_id {
-                with_signal_tracking(container_id, JobType::Reconcile, || {
-                    self.reconcile(tree, container_id);
-                });
+                // Signal reads are tracked per segment inside reconcile()
+                self.reconcile(tree, container_id);
                 self.initial_reconcile_done = true;
             } else {
                 // Fallback: reconcile without tracking (shouldn't happen in practice)
@@ -412,19 +432,67 @@ impl DynItem {
 /// ```
 pub struct OwnedWidget {
     inner: Box<dyn Widget>,
-    owner_id: OwnerId,
+    owner: OwnerHandle,
+}
+
+enum OwnerHandle {
+    /// This widget is the sole user of the owner scope.
+    Exclusive(OwnerId),
+    /// The owner scope is shared by several widgets (one closure run built
+    /// them all); it is disposed when the last of them drops.
+    Shared {
+        _guard: SharedOwner,
+    },
+}
+
+/// Reference-counted owner scope: disposes the owner when the last clone
+/// drops. Used by reactive list closures, where a single run builds every
+/// row inside one scope.
+#[derive(Clone)]
+pub struct SharedOwner {
+    _guard: Rc<OwnerGuard>,
+}
+
+struct OwnerGuard(OwnerId);
+
+impl Drop for OwnerGuard {
+    fn drop(&mut self) {
+        dispose_owner(self.0);
+    }
+}
+
+impl SharedOwner {
+    pub fn new(owner_id: OwnerId) -> Self {
+        Self {
+            _guard: Rc::new(OwnerGuard(owner_id)),
+        }
+    }
 }
 
 impl OwnedWidget {
     /// Create a new owned widget with the given inner widget and owner ID.
     pub fn new(inner: Box<dyn Widget>, owner_id: OwnerId) -> Self {
-        Self { inner, owner_id }
+        Self {
+            inner,
+            owner: OwnerHandle::Exclusive(owner_id),
+        }
+    }
+
+    /// Create an owned widget participating in a shared owner scope.
+    pub fn new_shared(inner: Box<dyn Widget>, shared: SharedOwner) -> Self {
+        Self {
+            inner,
+            owner: OwnerHandle::Shared { _guard: shared },
+        }
     }
 }
 
 impl Drop for OwnedWidget {
     fn drop(&mut self) {
-        dispose_owner(self.owner_id);
+        if let OwnerHandle::Exclusive(owner_id) = self.owner {
+            dispose_owner(owner_id);
+        }
+        // Shared: the SharedOwner guard disposes when its last clone drops
     }
 }
 

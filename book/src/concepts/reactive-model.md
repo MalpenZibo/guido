@@ -206,8 +206,10 @@ This is useful in effects where you want to read initial values without re-runni
 Signals and effects created inside dynamic children are automatically cleaned up when the child is removed. Use `on_cleanup` to register custom cleanup logic:
 
 ```rust
-container().children(move || {
-    items.get().into_iter().map(|id| (id, move || {
+container().children(keyed(
+    move || items.get(),
+    |id| *id,
+    |id| {
         // These are automatically owned and disposed
         let count = create_signal(0);
         create_effect(move || println!("Count: {}", count.get()));
@@ -218,8 +220,8 @@ container().children(move || {
         });
 
         container().child(text(move || count.get().to_string()))
-    }))
-})
+    },
+))
 ```
 
 See [Dynamic Children](../advanced/dynamic-children.md) for more details on automatic ownership.

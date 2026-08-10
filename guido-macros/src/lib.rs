@@ -270,14 +270,14 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     // Generate children methods if needed
     let children_methods = if has_children {
         quote! {
-            #vis fn child(self, child: impl ::guido::widgets::IntoChild) -> Self {
+            #vis fn child<M>(self, child: impl ::guido::widgets::IntoChild<M>) -> Self {
                 child.add_to_container(&mut *self.__children.borrow_mut());
                 self
             }
 
-            #vis fn children<I>(self, children: I) -> Self
+            #vis fn children<M, I>(self, children: I) -> Self
             where
-                I: ::guido::widgets::IntoChildren,
+                I: ::guido::widgets::IntoChildren<M>,
             {
                 children.add_to_container(&mut *self.__children.borrow_mut());
                 self
