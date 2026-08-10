@@ -88,6 +88,28 @@ container()
 container().corner_radius(8.0)  // 8px radius on all corners
 ```
 
+### Per-Corner Radii
+
+Round each corner independently with `corner_radii` — accordion-style
+lists round only the top of the first row and only the bottom of the last:
+
+```rust
+use guido::prelude::CornerRadii;
+
+container().corner_radii(CornerRadii::top(16.0))     // first row
+container().corner_radii(CornerRadii::bottom(16.0))  // last row
+container().corner_radii(CornerRadii {
+    top_left: 16.0,
+    top_right: 4.0,
+    bottom_right: 16.0,
+    bottom_left: 4.0,
+})
+```
+
+`corner_radii` overrides `corner_radius` for drawing (background, border,
+shadow, gradient). Child clipping, blur regions and rounded hit testing
+keep using a uniform radius — the largest of the four.
+
 ### Corner Curvature (Superellipse)
 
 Control the shape of corners using CSS K-values:

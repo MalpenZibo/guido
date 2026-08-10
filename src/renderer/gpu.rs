@@ -93,12 +93,9 @@ pub struct ShapeInstance {
     /// Rectangle bounds: [x, y, width, height]
     pub rect: [f32; 4],
 
-    /// Corner radius in logical pixels
-    pub corner_radius: f32,
-    /// Superellipse curvature (K-value: 1.0=circle, 2.0=squircle)
-    pub shape_curvature: f32,
-    /// Padding for 16-byte alignment (wgpu uniform buffer requirement)
-    pub _pad0: [f32; 2],
+    /// Corner radii in physical pixels:
+    /// [top_left, top_right, bottom_right, bottom_left]
+    pub corner_radii: [f32; 4],
 
     // === Colors ===
     /// Fill color RGBA
@@ -109,8 +106,10 @@ pub struct ShapeInstance {
     // === Border ===
     /// Border width in logical pixels
     pub border_width: f32,
+    /// Superellipse curvature (K-value: 1.0=circle, 2.0=squircle)
+    pub shape_curvature: f32,
     /// Padding for 16-byte alignment
-    pub _pad1: [f32; 3],
+    pub _pad1: [f32; 2],
 
     // === Shadow ===
     /// Shadow offset in logical pixels (x, y)
@@ -158,13 +157,12 @@ impl Default for ShapeInstance {
     fn default() -> Self {
         Self {
             rect: [0.0, 0.0, 0.0, 0.0],
-            corner_radius: 0.0,
-            shape_curvature: 1.0,
-            _pad0: [0.0, 0.0],
+            corner_radii: [0.0; 4],
             fill_color: [0.0, 0.0, 0.0, 0.0],
             border_color: [0.0, 0.0, 0.0, 0.0],
             border_width: 0.0,
-            _pad1: [0.0, 0.0, 0.0],
+            shape_curvature: 1.0,
+            _pad1: [0.0, 0.0],
             shadow_offset: [0.0, 0.0],
             shadow_blur: 0.0,
             shadow_spread: 0.0,
@@ -189,12 +187,12 @@ impl ShapeInstance {
     pub fn from_rect(
         rect: [f32; 4],
         fill_color: [f32; 4],
-        corner_radius: f32,
+        corner_radii: [f32; 4],
         curvature: f32,
     ) -> Self {
         Self {
             rect,
-            corner_radius,
+            corner_radii,
             shape_curvature: curvature,
             fill_color,
             ..Default::default()
@@ -293,7 +291,7 @@ impl ShapeInstance {
                     shader_location: 1,
                     format: VertexFormat::Float32x4,
                 },
-                // corner_radius, shape_curvature, _pad0[0], _pad0[1]
+                // corner_radii: [top_left, top_right, bottom_right, bottom_left]
                 VertexAttribute {
                     offset: 16,
                     shader_location: 2,
@@ -311,7 +309,7 @@ impl ShapeInstance {
                     shader_location: 4,
                     format: VertexFormat::Float32x4,
                 },
-                // border_width, _pad1[0], _pad1[1], _pad1[2]
+                // border_width, shape_curvature, _pad1[0], _pad1[1]
                 VertexAttribute {
                     offset: 64,
                     shader_location: 5,

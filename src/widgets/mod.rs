@@ -9,6 +9,7 @@ pub mod text;
 pub mod text_input;
 pub mod widget;
 
+pub use crate::renderer::CornerRadii;
 pub use children::ChildrenSource;
 pub use container::{Border, Container, GradientDirection, LinearGradient, Overflow, container};
 pub use font::{FontFamily, FontWeight};

@@ -25,13 +25,13 @@ struct VertexInput {
 struct InstanceInput {
     // rect: [x, y, width, height] in logical pixels
     @location(1) rect: vec4<f32>,
-    // corner_radius, shape_curvature, _pad, _pad
-    @location(2) shape_params: vec4<f32>,
+    // corner radii: [top_left, top_right, bottom_right, bottom_left]
+    @location(2) shape_radii: vec4<f32>,
     // fill_color RGBA
     @location(3) fill_color: vec4<f32>,
     // border_color RGBA
     @location(4) border_color: vec4<f32>,
-    // border_width, _pad, _pad, _pad
+    // border_width, shape_curvature, _pad, _pad
     @location(5) border_params: vec4<f32>,
     // shadow_offset.xy, shadow_blur, shadow_spread
     @location(6) shadow_params: vec4<f32>,
@@ -63,10 +63,10 @@ struct VertexOutput {
     @location(2) frag_pos: vec2<f32>,
     // Shape rect in logical pixels [x, y, width, height]
     @location(3) shape_rect: vec4<f32>,
-    // corner_radius, shape_curvature
-    @location(4) shape_params: vec2<f32>,
-    // border_width
-    @location(5) border_width: f32,
+    // corner radii: [top_left, top_right, bottom_right, bottom_left]
+    @location(4) shape_radii: vec4<f32>,
+    // border_width, shape_curvature
+    @location(5) border_params: vec2<f32>,
     // shadow_offset.xy, shadow_blur, shadow_spread
     @location(6) shadow_params: vec4<f32>,
     // shadow_color
@@ -171,8 +171,8 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     out.fill_color = instance.fill_color;
     out.border_color = instance.border_color;
     out.shape_rect = instance.rect;
-    out.shape_params = instance.shape_params.xy;  // corner_radius, curvature
-    out.border_width = instance.border_params.x;
+    out.shape_radii = instance.shape_radii;
+    out.border_params = instance.border_params.xy;  // border_width, curvature
     out.shadow_params = instance.shadow_params;
     out.shadow_color = instance.shadow_color;
 
@@ -208,10 +208,18 @@ fn superellipse_length(p: vec2<f32>, n: f32) -> f32 {
 }
 
 // Unified SDF for rounded rectangle with superellipse corners
-// rect: [x, y, width, height], radius: corner radius, k: curvature
-fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radius: f32, k: f32) -> f32 {
+// rect: [x, y, width, height], k: curvature
+// radii: [top_left, top_right, bottom_right, bottom_left] — the quadrant
+// the fragment falls in selects its radius, then the math is identical to
+// the uniform case (the abs() below folds everything into one quadrant).
+fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radii: vec4<f32>, k: f32) -> f32 {
     let center = vec2<f32>(rect.x + rect.z * 0.5, rect.y + rect.w * 0.5);
     let half_size = vec2<f32>(rect.z * 0.5, rect.w * 0.5);
+
+    // Select this quadrant's radius
+    let rel = pos - center;
+    let top = select(vec2<f32>(radii.y, radii.z), vec2<f32>(radii.x, radii.w), rel.x < 0.0);
+    let radius = select(top.y, top.x, rel.y < 0.0);
 
     // Clamp radius to half the smaller dimension
     let r = min(radius, min(half_size.x, half_size.y));
@@ -271,11 +279,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let pos = in.frag_pos;
-    let radius = in.shape_params.x;
-    let curvature = in.shape_params.y;
+    let radii = in.shape_radii;
+    let curvature = in.border_params.y;
+    let border_width = in.border_params.x;
 
     // Compute SDF for the shape
-    let dist = rounded_rect_sdf(pos, in.shape_rect, radius, curvature);
+    let dist = rounded_rect_sdf(pos, in.shape_rect, radii, curvature);
 
     // Anti-aliasing using fwidth
     let aa = fwidth(dist) * 1.0;
@@ -302,7 +311,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let shadow_pos = pos - shadow_offset;
 
         // Compute shadow SDF (expanded by spread)
-        let shadow_dist = rounded_rect_sdf(shadow_pos, in.shape_rect, radius, curvature) - shadow_spread;
+        let shadow_dist = rounded_rect_sdf(shadow_pos, in.shape_rect, radii, curvature) - shadow_spread;
 
         // Convert to alpha with blur falloff
         let shadow_alpha = in.shadow_color.a * (1.0 - smoothstep(-shadow_blur, shadow_blur * 2.0, shadow_dist));
@@ -312,14 +321,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // === Main Shape ===
     var shape_result: vec4<f32>;
 
-    if (in.border_width <= 0.0) {
+    if (border_width <= 0.0) {
         // No border - simple filled shape
         let alpha = 1.0 - smoothstep(-aa, aa, dist);
         shape_result = vec4<f32>(fill_color.rgb, fill_color.a * alpha);
     } else {
         // With border
         let outer_edge = dist;
-        let inner_edge = dist + in.border_width;
+        let inner_edge = dist + border_width;
 
         let shape_alpha = 1.0 - smoothstep(-aa, aa, outer_edge);
         let fill_alpha = 1.0 - smoothstep(-aa, aa, inner_edge);
@@ -363,12 +372,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // world_pos for world clips (regular clipping)
         let clip_pos = select(in.world_pos, in.frag_pos, in.clip_params.z > 0.5);
 
-        // Compute clip SDF
+        // Compute clip SDF (clips stay uniform-radius)
         let clip_dist = rounded_rect_sdf(
             clip_pos,
             in.clip_rect,
-            in.clip_params.x,  // corner_radius
-            in.clip_params.y   // curvature
+            vec4<f32>(in.clip_params.x),  // corner_radius, all corners
+            in.clip_params.y              // curvature
         );
 
         // Smooth clip edge (anti-aliased)
