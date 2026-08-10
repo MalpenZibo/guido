@@ -440,9 +440,7 @@ enum OwnerHandle {
     Exclusive(OwnerId),
     /// The owner scope is shared by several widgets (one closure run built
     /// them all); it is disposed when the last of them drops.
-    Shared {
-        _guard: SharedOwner,
-    },
+    Shared { _guard: SharedOwner },
 }
 
 /// Reference-counted owner scope: disposes the owner when the last clone
