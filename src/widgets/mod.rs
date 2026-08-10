@@ -14,8 +14,7 @@ pub use container::{Border, Container, GradientDirection, LinearGradient, Overfl
 pub use font::{FontFamily, FontWeight};
 pub use image::{ContentFit, Image, ImageSource, image};
 pub use into_child::{
-    DynChild, DynamicChildren, IntoChild, IntoChildren, IntoDynChild, KeyedChildren,
-    StaticChildren, dynamic, keyed,
+    DynamicChildren, IntoChild, IntoChildren, IntoDynChild, KeyedChildren, StaticChildren, keyed,
 };
 pub use scroll::{ScrollAxis, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibility};
 pub use state_layer::{BackgroundOverride, RippleConfig, StateStyle};

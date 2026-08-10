@@ -281,13 +281,13 @@ fn main() {
                                 )
                                 .child(
                                     // Dynamic child in the middle!
-                                    dynamic(move || show_optional.get(), |show| {
-                                        show.then(|| container()
+                                    move || {
+                                        show_optional.get().then(|| container()
                                             .padding(8.0)
                                             .background(Color::rgb(0.5, 0.3, 0.5))
                                             .corner_radius(4.0)
                                             .child(text("Dynamic Middle!").color(Color::WHITE)))
-                                    })
+                                    }
                                 )
                                 .child(
                                     container()
@@ -351,21 +351,21 @@ fn main() {
                             container()
                                 .layout(Flex::column().spacing(4.0))
                                 .child(text("Static 1").color(Color::WHITE))
-                                .child(dynamic(move || show_optional2.get(), |show| {
-                                    show.then(|| container()
+                                .child(move || {
+                                    show_optional2.get().then(|| container()
                                         .padding(6.0)
                                         .background(Color::rgb(0.5, 0.2, 0.3))
                                         .corner_radius(4.0)
                                         .child(text("Dynamic 1").color(Color::WHITE)))
-                                }))
+                                })
                                 .child(text("Static 2").color(Color::WHITE))
-                                .child(dynamic(move || show_optional.get(), |show| {
-                                    show.then(|| container()
+                                .child(move || {
+                                    show_optional.get().then(|| container()
                                         .padding(6.0)
                                         .background(Color::rgb(0.3, 0.2, 0.5))
                                         .corner_radius(4.0)
                                         .child(text("Dynamic 2").color(Color::WHITE)))
-                                }))
+                                })
                                 .child(text("Static 3").color(Color::WHITE))
                         )
                 )

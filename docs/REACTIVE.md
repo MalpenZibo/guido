@@ -164,9 +164,9 @@ text(move || format!("Count: {}", count.get()))
 
 ### Reactive Children
 
-Reactive single children and lists take a tracked data closure plus an
-untracked builder (`dynamic()` / `keyed()`) — bare closures are a compile
-error:
+A closure child re-runs when a signal it reads changes, and its result
+**replaces** the previous widget (returning `None` removes it). Tracking is
+per segment: only the closure whose signals changed re-runs.
 
 ```rust
 let items = create_signal(vec![
@@ -174,13 +174,16 @@ let items = create_signal(vec![
     (2, "Item B".to_string()),
 ]);
 
-// Single child whose content depends on data
-container().child(dynamic(
-    move || items.with(|l| l.len()),
-    |len| text(format!("{len} items")),
-))
+// Single reactive child — rebuilt when `items` changes
+container().child(move || text(format!("{} items", items.with(|l| l.len()))))
 
-// Keyed list: identity via key, per-item content diffing via PartialEq
+// Reactive list, unkeyed — all rows replaced when `items` changes
+container().children(move || {
+    items.with(|l| l.iter().map(|(_, label)| text(label.clone())).collect::<Vec<_>>())
+})
+
+// Keyed list: identity via key, per-item content diffing via PartialEq —
+// rows keep their state across reorders, only changed rows rebuild
 container().children(keyed(
     move || items.get(),
     |(id, _)| *id,
@@ -188,9 +191,9 @@ container().children(keyed(
 ))
 ```
 
-Identity keys preserve widget state across reorders; a changed item rebuilds
-only its own row. See the book's Dynamic Children chapter for the full
-semantics.
+To narrow when a closure re-runs, read a `Memo` instead of the raw signal —
+memos notify only when their computed value actually changes. See the book's
+Dynamic Children chapter for the full semantics.
 
 ## IntoSignal Pattern
 
@@ -350,10 +353,10 @@ Signals and effects persist in memory by default. The **reactive owner** system 
 
 ### Automatic Ownership for Dynamic Children
 
-**Dynamic children automatically get owner scopes.** The `dynamic()` /
-`keyed()` builders run inside an owner scope: any signals, effects, or cleanup
-callbacks created there are automatically owned and cleaned up when the child
-is removed or rebuilt:
+**Dynamic children automatically get owner scopes.** Reactive child closures
+and `keyed()` builders run inside an owner scope: any signals, effects, or
+cleanup callbacks created there are automatically owned and cleaned up when
+the child is removed or rebuilt:
 
 ```rust
 let items = create_signal(vec![1u64, 2, 3]);

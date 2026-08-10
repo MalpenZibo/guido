@@ -6,74 +6,75 @@ Learn the different ways to add children to containers, from static to fully rea
 
 ## The Model
 
-Children come in exactly four forms — two static, two reactive:
+Children come in four forms — two static, two reactive, plus a keyed variant
+for lists:
 
 ```rust
 container()
     .child(text("Hello"))                                  // static single
+    .child(move || build_menu(entries.get()))              // reactive single
     .children([text("A"), text("B")])                      // static list
-    .child(dynamic(move || data.get(), build_widget))      // reactive single
-    .children(keyed(move || items.get(), |i| i.id, row))   // reactive list
+    .children(move || build_rows(items.get()))             // reactive list
+    .children(keyed(move || items.get(), |i| i.id, row))   // reactive keyed list
 ```
 
-`dynamic()` and `keyed()` are values, not methods: they pair a **tracked data
-closure** with an **untracked builder**. The data closure is the only reactive
-part — the signals it reads decide when to re-evaluate, and its result is what
-the builder receives. Data the widget must react to has to flow through the
-data closure; that is what makes stale content unexpressible.
+The rule is the one from SolidJS and Leptos: **a value is static, a closure
+is reactive**. A reactive closure re-runs when a signal it reads changes,
+and its result **replaces** the previous widget — always. There is no key
+comparison and no silently discarded rebuild.
 
-Bare closures are **rejected at compile time**. With `.child(move || ...)`
-there would be no way to know which data the widget was built from, so content
-updates could be silently discarded — the compiler error points you to
-`dynamic()` / `keyed()` instead.
+Tracking is per segment: each closure re-runs only when *its own* signals
+change, never because a sibling changed.
 
-## Reactive Single Child: `dynamic(data, build)`
+## Reactive Single Child
 
 ```rust
-// Content that re-renders when the data changes
-container().child(dynamic(
-    move || menu_entries.get(),   // tracked; T: Clone + PartialEq
-    |entries| build_menu(entries) // untracked; runs only when T changed
-))
+// Content rebuilt when the data changes
+container().child(move || build_menu(menu_entries.get()))
+
+// Presence: Option shows/hides — None removes the child
+container().child(move || {
+    state.active_window.get().map(|w| title_widget(w))
+})
 ```
 
-The data result is compared with the previous value (`PartialEq`):
+Because widget properties are themselves lazy closures (a `text(move || ...)`
+tracks its signal at paint time, not at construction), the reads tracked by a
+child closure are naturally the **structural** ones: the closure re-runs
+exactly when the shape of the content must change, while property-level
+updates keep flowing through the widgets without any rebuild.
 
-- **unchanged** → the existing widget is kept untouched: inner state,
-  animations and subscriptions persist, the builder does not run
-- **changed** → the builder runs and the rebuilt widget replaces the old one
-  (its owner scope is disposed)
+### Controlling granularity with memos
 
-The builder may return `Option<widget>` to also control presence:
+A closure re-runs whenever a tracked signal *changes value*. If your content
+depends on a reduction of the data (a count, a filtered subset), read a memo
+instead of the raw signal — memos notify only when the computed value
+actually changes:
 
 ```rust
-// Shown only while there is an active window
-container().child(dynamic(
-    move || state.active_window.get(),
-    |window| window.map(title_widget),
-))
+let count = create_memo(move || items.with(|l| l.len()));
+
+// Rebuilt only when the count changes, not on every list edit
+container().child(move || text(format!("{} items", count.get())))
 ```
 
-The builder runs with signal tracking suspended: reads inside it see current
-values but create no dependencies. Choose what goes through the data closure
-and what stays internally reactive:
+## Reactive Lists
+
+The unkeyed closure form replaces **all rows** when it re-runs:
 
 ```rust
-// Rebuild the row when the label changes...
-dynamic(move || item.get(), |item| text(item.label))
-
-// ...or keep the widget and let it track the label itself
-dynamic(move || item.with(|i| i.id), |_| text(move || item.with(|i| i.label.clone())))
+container().children(move || {
+    items.with(|list| {
+        list.iter().map(|item| row_widget(item)).collect::<Vec<_>>()
+    })
+})
 ```
 
-## Reactive Lists: `keyed(data, key, build)`
+Rows have no identity across runs: inner state (hover, animations, local
+signals) does not survive a re-run. That is fine for simple rows; for rows
+that carry state, use `keyed()`:
 
 ```rust
-let items = create_signal(vec![
-    Item { id: 1, name: "First".into() },
-    Item { id: 2, name: "Second".into() },
-]);
-
 container().children(keyed(
     move || items.get(),   // tracked; items: Clone + PartialEq
     |item| item.id,        // stable identity (survives reorders)
@@ -92,18 +93,19 @@ Per item, identity (`key`) and content (`PartialEq`) are diffed separately:
 Keys must be unique and stable — never use the index:
 
 ```rust
-keyed(data, |item| item.id, build)        // Good: stable identity
+keyed(data, |item| item.id, build)              // Good: stable identity
 keyed(data, |(index, _)| *index as u64, build)  // Bad: reorder loses state
 ```
 
-The item type chooses the update granularity, exactly like `dynamic()`:
-fields included in the item trigger a row rebuild when they change; fields
-left out can be read via signals inside the row for in-place updates.
+The item type chooses the update granularity: fields included in the item
+trigger a row rebuild when they change; fields left out can be read via
+signals inside the row for in-place updates.
 
 ## Automatic Ownership & Cleanup
 
-Builders run inside an **owner scope**: signals and effects created there are
-automatically owned and cleaned up when the child is removed or rebuilt.
+Reactive closures and keyed builders run inside an **owner scope**: signals
+and effects created there are automatically owned and cleaned up when the
+child is removed or rebuilt.
 
 ```rust
 fn item_widget(item: Item) -> impl Widget {
@@ -130,6 +132,9 @@ When a child is removed or rebuilt:
 2. `on_cleanup` callbacks run
 3. Effects are disposed
 4. Signals are disposed
+
+State that must survive a rebuild belongs in signals created *outside* the
+closure.
 
 ## Complete Example
 
@@ -198,7 +203,9 @@ container()
     .layout(Flex::column().spacing(8.0))
     // Static header
     .child(text("Items:").font_size(18.0).color(Color::WHITE))
-    // Reactive list
+    // Reactive middle
+    .child(move || warning.get().then(|| warning_banner()))
+    // Reactive keyed list
     .children(keyed(move || items.get(), |i| i.id, item_view))
     // Static footer
     .child(text("End of list").color(Color::rgb(0.6, 0.6, 0.7)))
@@ -208,24 +215,15 @@ container()
 
 ```rust
 impl Container {
-    // A widget value, or dynamic(data, build)
+    // A widget value, or a reactive closure returning a widget / Option<widget>
     pub fn child<M>(self, child: impl IntoChild<M>) -> Self;
 
-    // An iterator of widgets, or keyed(data, key, build)
+    // An iterator of widgets, a reactive closure returning one,
+    // or keyed(data, key, build)
     pub fn children<M>(self, children: impl IntoChildren<M>) -> Self;
 }
 
-// Reactive single child: tracked data + untracked builder.
-// The builder may return a widget, or Option<widget> for presence.
-pub fn dynamic<T, C>(
-    data: impl Fn() -> T + 'static,
-    build: impl Fn(T) -> C + 'static,
-) -> DynChild<T, C>
-where
-    T: Clone + PartialEq + 'static,
-    C: IntoDynChild;
-
-// Reactive children list: tracked data, key-based identity,
+// Reactive keyed children list: tracked data, key-based identity,
 // untracked per-item builder with content diffing.
 pub fn keyed<T, I, W>(
     data: impl Fn() -> I + 'static,
@@ -237,6 +235,6 @@ where
     I: IntoIterator<Item = T>,
     W: Widget + 'static;
 
-// Cleanup registration (use inside builders)
+// Cleanup registration (use inside reactive closures and builders)
 pub fn on_cleanup(f: impl FnOnce() + 'static);
 ```

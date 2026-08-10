@@ -32,6 +32,10 @@ use crate::tree::WidgetId;
 struct SignalTrackingContext {
     widget_id: WidgetId,
     job_type: JobType,
+    /// For reconciliation: which dynamic-children segment of the widget is
+    /// reading. Lets a signal write dirty exactly one segment instead of
+    /// re-running every dynamic segment of the container.
+    segment: Option<u32>,
 }
 
 thread_local! {
@@ -45,10 +49,34 @@ pub fn with_signal_tracking<F, R>(widget_id: WidgetId, job_type: JobType, f: F) 
 where
     F: FnOnce() -> R,
 {
+    with_tracking_context(widget_id, job_type, None, f)
+}
+
+/// Run a closure while tracking signal reads for one dynamic-children
+/// segment of a widget. Reads register the widget for `Reconcile` jobs and
+/// additionally mark the segment, so reconciliation re-runs only the
+/// segments whose dependencies actually changed.
+pub(crate) fn with_segment_tracking<F, R>(widget_id: WidgetId, segment: u32, f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    with_tracking_context(widget_id, JobType::Reconcile, Some(segment), f)
+}
+
+fn with_tracking_context<F, R>(
+    widget_id: WidgetId,
+    job_type: JobType,
+    segment: Option<u32>,
+    f: F,
+) -> R
+where
+    F: FnOnce() -> R,
+{
     TRACKING_CONTEXT.with(|ctx| {
         ctx.borrow_mut().push(SignalTrackingContext {
             widget_id,
             job_type,
+            segment,
         });
     });
     // Pop on unwind too: a leaked frame would silently attribute every
@@ -86,7 +114,12 @@ where
 pub fn record_signal_read(signal_id: SignalId) {
     TRACKING_CONTEXT.with(|ctx| {
         if let Some(tracking) = ctx.borrow().last() {
-            register_subscriber(tracking.widget_id, signal_id, tracking.job_type);
+            register_subscriber_impl(
+                tracking.widget_id,
+                signal_id,
+                tracking.job_type,
+                tracking.segment,
+            );
         }
     });
 }
@@ -95,11 +128,13 @@ pub fn record_signal_read(signal_id: SignalId) {
 // Unified Subscriber Registry
 // ============================================================================
 
-/// Subscriber entry with widget ID and job type
+/// Subscriber entry with widget ID, job type and (for reconciliation) the
+/// dynamic-children segment that performed the read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct Subscriber {
     widget_id: WidgetId,
     job_type: JobType,
+    segment: Option<u32>,
 }
 
 /// Most signals have 1-2 widget subscribers (e.g. one paint, one layout).
@@ -139,33 +174,24 @@ impl SubscriberRegistry {
                 .resize_with(signal_id.index() + 1, SmallVec::new);
         }
     }
-
-    /// Remove a subscriber pair from the `active` set for every job type.
-    /// Used by widget cleanup, which knows the widget but not which job
-    /// types it registered with.
-    fn deactivate_widget_signal(&mut self, signal_index: usize, widget_id: WidgetId) {
-        for job_type in [
-            JobType::Layout,
-            JobType::Paint,
-            JobType::Reconcile,
-            JobType::Unregister,
-            JobType::Animation,
-        ] {
-            self.active.remove(&(
-                signal_index,
-                Subscriber {
-                    widget_id,
-                    job_type,
-                },
-            ));
-        }
-    }
 }
 
 thread_local! {
     /// Subscriber registry. All access is on the main thread — background writes go
     /// through `queue_bg_write()` → `flush_bg_writes()` which executes on the main thread.
     static REGISTRY: RefCell<SubscriberRegistry> = RefCell::new(SubscriberRegistry::new());
+
+    /// Dynamic-children segments dirtied by signal writes, per container.
+    /// Consumed by reconciliation via `take_dirty_segments()`.
+    static DIRTY_SEGMENTS: RefCell<FxHashMap<WidgetId, SmallVec<[u32; 4]>>> =
+        RefCell::new(FxHashMap::default());
+}
+
+/// Take (and clear) the set of dirty dynamic-children segments for a widget.
+/// `None` means no segment-tracked signal of this widget changed since the
+/// last call.
+pub(crate) fn take_dirty_segments(widget_id: WidgetId) -> Option<SmallVec<[u32; 4]>> {
+    DIRTY_SEGMENTS.with(|d| d.borrow_mut().remove(&widget_id))
 }
 
 /// Register a widget as a subscriber for a signal with a specific job type.
@@ -174,12 +200,22 @@ thread_local! {
 /// overwhelming majority — widgets re-read their signals every frame) is a
 /// single hash-set lookup.
 pub fn register_subscriber(widget_id: WidgetId, signal_id: SignalId, job_type: JobType) {
+    register_subscriber_impl(widget_id, signal_id, job_type, None);
+}
+
+fn register_subscriber_impl(
+    widget_id: WidgetId,
+    signal_id: SignalId,
+    job_type: JobType,
+    segment: Option<u32>,
+) {
     REGISTRY.with(|reg| {
         let mut reg = reg.borrow_mut();
 
         let sub = Subscriber {
             widget_id,
             job_type,
+            segment,
         };
         if !reg.active.insert((signal_id.index(), sub)) {
             return; // Already subscribed — the hot path
@@ -209,6 +245,15 @@ pub fn notify_signal_change(signal_id: SignalId) {
             return;
         };
         for sub in subs {
+            if let Some(segment) = sub.segment {
+                DIRTY_SEGMENTS.with(|d| {
+                    let mut d = d.borrow_mut();
+                    let dirty = d.entry(sub.widget_id).or_default();
+                    if !dirty.contains(&segment) {
+                        dirty.push(segment);
+                    }
+                });
+            }
             let request = match sub.job_type {
                 JobType::Layout => JobRequest::Layout,
                 JobType::Paint => JobRequest::Paint,
@@ -250,12 +295,26 @@ pub fn clear_widget_subscribers(widget_id: WidgetId) {
         // Use reverse index: only touch the signals this widget actually subscribes to
         if let Some(signal_ids) = reg.widget_to_signals.remove(&widget_id) {
             for signal_id in signal_ids {
-                reg.deactivate_widget_signal(signal_id.index(), widget_id);
-                if let Some(subs) = reg.signal_to_widgets.get_mut(signal_id.index()) {
-                    subs.retain(|s| s.widget_id != widget_id);
+                let Some(subs) = reg.signal_to_widgets.get_mut(signal_id.index()) else {
+                    continue;
+                };
+                // Collect the widget's exact entries first so `active` drops
+                // precisely what was registered (job types and segments are
+                // unknown to the caller).
+                let removed: SmallVec<[Subscriber; 2]> = subs
+                    .iter()
+                    .filter(|s| s.widget_id == widget_id)
+                    .copied()
+                    .collect();
+                subs.retain(|s| s.widget_id != widget_id);
+                for sub in removed {
+                    reg.active.remove(&(signal_id.index(), sub));
                 }
             }
         }
+    });
+    DIRTY_SEGMENTS.with(|d| {
+        d.borrow_mut().remove(&widget_id);
     });
 }
 
@@ -265,6 +324,7 @@ pub fn clear_widget_subscribers(widget_id: WidgetId) {
 pub(crate) fn reset_invalidation() {
     TRACKING_CONTEXT.with(|ctx| ctx.borrow_mut().clear());
     REGISTRY.with(|reg| *reg.borrow_mut() = SubscriberRegistry::new());
+    DIRTY_SEGMENTS.with(|d| d.borrow_mut().clear());
 }
 
 /// Get the number of signals with active subscribers (for testing).
@@ -346,6 +406,7 @@ mod tests {
             assert!(s.contains(&Subscriber {
                 widget_id: wid,
                 job_type: JobType::Paint,
+                segment: None,
             }));
         });
 
