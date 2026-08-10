@@ -47,13 +47,14 @@ struct CachedTexture {
 struct CacheKey {
     /// Hash of the source
     source_hash: u64,
-    /// Scale at which the image was rendered (for SVGs)
-    render_scale: u32, // Quantized to reduce cache entries
+    /// Rasterization variant (for SVGs): quantized scale + target size.
+    /// Raster images always use 0 — they decode at intrinsic size.
+    svg_variant: u64,
 }
 
 impl PartialEq for CacheKey {
     fn eq(&self, other: &Self) -> bool {
-        self.source_hash == other.source_hash && self.render_scale == other.render_scale
+        self.source_hash == other.source_hash && self.svg_variant == other.svg_variant
     }
 }
 
@@ -62,7 +63,7 @@ impl Eq for CacheKey {}
 impl Hash for CacheKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.source_hash.hash(state);
-        self.render_scale.hash(state);
+        self.svg_variant.hash(state);
     }
 }
 
@@ -290,6 +291,12 @@ impl ImageQuadRenderer {
     }
 
     /// Get or create a cached texture for the given source.
+    ///
+    /// `svg_target` is the widget rect the SVG will be displayed in
+    /// (logical pixels): the rasterization is sized to it instead of the
+    /// SVG's intrinsic size, so a 16px icon costs a 16px raster no matter
+    /// how large its viewBox is. `None` (ContentFit::None) keeps the
+    /// intrinsic size, which is what that fit mode displays.
     fn get_or_create_texture(
         &mut self,
         device: &Device,
@@ -297,6 +304,7 @@ impl ImageQuadRenderer {
         source: &ImageSource,
         transform_scale: f32,
         scale_factor: f32,
+        svg_target: Option<(f32, f32)>,
     ) -> Option<Arc<CachedTexture>> {
         let is_svg = source.is_svg();
         let render_scale = if is_svg {
@@ -309,9 +317,20 @@ impl ImageQuadRenderer {
         let quantized_scale = (render_scale * 4.0).round() as u32;
 
         let source_hash = Self::hash_source(source);
+        // SVG rasterization variant: scale + quantized target size (the
+        // same icon shown at 16px and 48px needs two textures).
+        let svg_variant = if is_svg {
+            let (qw, qh) = match svg_target {
+                Some((w, h)) => (w.round().max(1.0) as u64, h.round().max(1.0) as u64),
+                None => (0, 0),
+            };
+            (quantized_scale as u64) << 40 | qw << 20 | qh
+        } else {
+            0
+        };
         let key = CacheKey {
             source_hash,
-            render_scale: if is_svg { quantized_scale } else { 0 },
+            svg_variant,
         };
 
         // Check if we already have this texture cached
@@ -324,7 +343,7 @@ impl ImageQuadRenderer {
         }
 
         // Load and create texture
-        let texture = self.load_texture(device, queue, source, render_scale)?;
+        let texture = self.load_texture(device, queue, source, render_scale, svg_target)?;
 
         let cached = Arc::new(texture);
         self.texture_cache.insert(key, cached.clone());
@@ -338,6 +357,7 @@ impl ImageQuadRenderer {
         queue: &Queue,
         source: &ImageSource,
         render_scale: f32,
+        svg_target: Option<(f32, f32)>,
     ) -> Option<CachedTexture> {
         // Use Rgba8Unorm to pass colors through without sRGB conversion
         let format = TextureFormat::Rgba8Unorm;
@@ -398,10 +418,10 @@ impl ImageQuadRenderer {
                         return None;
                     }
                 };
-                self.load_svg(device, queue, &format, &data, render_scale)
+                self.load_svg(device, queue, &format, &data, render_scale, svg_target)
             }
             ImageSource::SvgBytes(bytes) => {
-                self.load_svg(device, queue, &format, bytes, render_scale)
+                self.load_svg(device, queue, &format, bytes, render_scale, svg_target)
             }
         }
     }
@@ -476,12 +496,19 @@ impl ImageQuadRenderer {
         _format: &TextureFormat,
         _bytes: &[u8],
         _scale: f32,
+        _target: Option<(f32, f32)>,
     ) -> Option<CachedTexture> {
         log::warn!("SVG image used but the `svg` feature is disabled");
         None
     }
 
     /// Load and rasterize an SVG.
+    ///
+    /// With a `target` (the widget rect in logical pixels) the raster is
+    /// sized to what will actually be displayed rather than the SVG's
+    /// intrinsic size — a 16px weather icon with a 104px viewBox costs a
+    /// 16px raster, not a 104px one. This is both faster (rasterization
+    /// cost scales with pixels) and sharper (no GPU minification).
     #[cfg(feature = "svg")]
     fn load_svg(
         &self,
@@ -490,12 +517,23 @@ impl ImageQuadRenderer {
         format: &TextureFormat,
         bytes: &[u8],
         scale: f32,
+        target: Option<(f32, f32)>,
     ) -> Option<CachedTexture> {
         let tree = resvg::usvg::Tree::from_data(bytes, &resvg::usvg::Options::default()).ok()?;
         let size = tree.size();
 
         let intrinsic_width = size.width() as u32;
         let intrinsic_height = size.height() as u32;
+
+        // Fit the raster to the display target, preserving aspect ratio
+        // (contain). `scale` already carries transform scale, HiDPI factor
+        // and the quality multiplier.
+        let scale = match target {
+            Some((tw, th)) if tw >= 1.0 && th >= 1.0 => {
+                scale * (tw / size.width()).min(th / size.height())
+            }
+            _ => scale,
+        };
 
         // Calculate scaled dimensions
         let scaled_width = (size.width() * scale).ceil() as u32;
@@ -595,9 +633,19 @@ impl ImageQuadRenderer {
         // Extract scale from transform for SVG quality
         let transform_scale = cmd.world_transform.extract_scale().max(1.0);
 
+        // Rasterize SVGs at the size they are displayed at; ContentFit::None
+        // shows the image at intrinsic size, so no target there.
+        let svg_target = (*content_fit != ContentFit::None).then_some((rect.width, rect.height));
+
         // Get or create the texture
-        let cached =
-            self.get_or_create_texture(device, queue, source, transform_scale, scale_factor)?;
+        let cached = self.get_or_create_texture(
+            device,
+            queue,
+            source,
+            transform_scale,
+            scale_factor,
+            svg_target,
+        )?;
 
         // Create bind group
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
