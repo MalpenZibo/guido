@@ -459,6 +459,47 @@ mod tests {
         assert_eq!(builds.get(), 2);
     }
 
+    /// A replaced dynamic child's WHOLE subtree must leave the tree during
+    /// the reconcile itself. If descendants lingered for deferred cleanup,
+    /// their queued reconciles could still run in the same batch and read
+    /// state owned (and just disposed) by the replaced root.
+    #[test]
+    fn replaced_child_subtree_is_torn_down_synchronously() {
+        struct ParentWidget;
+        impl Widget for ParentWidget {
+            fn layout(&mut self, _: &mut Tree, _: WidgetId, _: Constraints) -> Size {
+                Size::zero()
+            }
+            fn paint(&self, _: &Tree, _: WidgetId, _: &mut crate::renderer::PaintContext) {}
+            fn register_children(&mut self, tree: &mut Tree, id: WidgetId) {
+                let child = tree.register(Box::new(TestWidget));
+                tree.set_parent(child, id);
+            }
+        }
+
+        let (mut tree, mut source) = children_host();
+        let sig = create_signal(0u64);
+
+        let closure = move || {
+            sig.get();
+            ParentWidget
+        };
+        IntoChild::<DynamicChild>::add_to_container(closure, &mut source);
+        source.reconcile_and_get(&mut tree);
+
+        // host + row root + row's registered child
+        let count_after_build = tree.widget_count();
+        assert_eq!(count_after_build, 3);
+
+        // Tracked change: the row is replaced by a fresh build
+        sig.set(1);
+        source.reconcile_with_tracking(&mut tree);
+
+        // Same shape, and the OLD subtree is fully gone already — no
+        // deferred leftovers
+        assert_eq!(tree.widget_count(), count_after_build);
+    }
+
     #[test]
     fn segments_rerun_independently() {
         let (mut tree, mut source) = children_host();

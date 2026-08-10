@@ -246,6 +246,28 @@ pub fn request_job(widget_id: WidgetId, request: JobRequest) {
 /// no longer active are retired into the orphan lane too, so a closed
 /// surface's deferred Unregister jobs still run and nothing keeps
 /// `has_pending_jobs` true forever.
+/// Synchronously tear down a widget subtree: clear each widget's signal
+/// subscribers (and dirty segments) and unregister it from the tree,
+/// children first.
+///
+/// Used wherever a subtree is discarded while the app keeps running — a
+/// closed surface, or an old dynamic/keyed child replaced during
+/// reconciliation. The deferred Drop→Unregister cascade is NOT enough
+/// there: the discarded root's exclusive owner is disposed immediately,
+/// but its descendants would stay in the tree (subscribers live, queued
+/// reconciles runnable) until their deferred jobs ran — and a reconcile
+/// executing in that window reads owner-disposed state and panics.
+///
+/// Children-first order means each widget Drop's deferred Unregister
+/// requests target already-removed ids and no-op; stale queued jobs no-op
+/// too via the tree's generation check.
+pub(crate) fn teardown_widget_subtree(tree: &mut crate::tree::Tree, root: WidgetId) {
+    for id in tree.collect_subtree_post_order(root) {
+        clear_widget_subscribers(id);
+        tree.unregister(id);
+    }
+}
+
 pub fn distribute_jobs(tree: &Tree, active_roots: &rustc_hash::FxHashSet<WidgetId>) {
     PENDING_JOBS.with(|jobs| {
         let mut jobs = jobs.borrow_mut();

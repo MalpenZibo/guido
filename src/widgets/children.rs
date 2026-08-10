@@ -3,7 +3,6 @@ use std::rc::Rc;
 
 use crate::jobs::{JobRequest, request_job};
 use crate::layout::{Constraints, Size};
-use crate::reactive::invalidation::clear_widget_subscribers;
 use crate::reactive::{OwnerId, dispose_owner};
 use crate::renderer::PaintContext;
 use crate::tree::{Tree, WidgetId};
@@ -216,13 +215,15 @@ impl ChildrenSource {
                         // Update current keys
                         *current_keys = new_keys;
 
-                        // Unregister removed widgets from tree (triggers Drop/cleanup).
-                        // Clear their signal subscriptions first — otherwise the dead
-                        // WidgetId stays subscribed forever and every subsequent write
-                        // to those signals enqueues a job for a nonexistent widget.
+                        // Discard replaced widgets: the WHOLE subtree comes out of
+                        // the tree synchronously (subscribers + dirty segments
+                        // cleared, children first). The root's exclusive owner is
+                        // disposed by its Drop right here, so any state it owned
+                        // (memos captured by descendant closures) dies with it —
+                        // a descendant left behind for deferred cleanup could
+                        // still reconcile this batch and read that disposed state.
                         for old_id in cached.values() {
-                            clear_widget_subscribers(*old_id);
-                            tree.unregister(*old_id);
+                            crate::jobs::teardown_widget_subtree(tree, *old_id);
                         }
                         cached.clear();
                     } else {

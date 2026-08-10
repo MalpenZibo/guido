@@ -148,10 +148,7 @@ impl Drop for ManagedSurface {
 /// Call this BEFORE dropping the `ManagedSurface`: subscribers must be
 /// gone before the owner (and the signals it holds) is disposed.
 pub(crate) fn teardown_widget_subtree(tree: &mut Tree, root: WidgetId) {
-    for id in tree.collect_subtree_post_order(root) {
-        crate::reactive::invalidation::clear_widget_subscribers(id);
-        tree.unregister(id);
-    }
+    crate::jobs::teardown_widget_subtree(tree, root);
 }
 
 /// Manages all surfaces in the application.
