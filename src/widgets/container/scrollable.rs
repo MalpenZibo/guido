@@ -658,8 +658,11 @@ impl Container {
         let hit_area =
             sd.scroll_state
                 .scrollbar_hit_area(axis, bounds, &sd.scrollbar_config, needs_other);
+        // The handle paints wider on hover (hover_width); accept drags across
+        // that full width, not just the resting-width strip
+        let handle_hit = widen_across_axis(axis, handle_rect, hit_area);
 
-        if handle_rect.contains(x, y) {
+        if handle_hit.contains(x, y) {
             // Start dragging handle
             let sd = self.scroll_mut();
             sd.scroll_state.set_dragging(axis, true);
@@ -791,10 +794,12 @@ impl Container {
         let handle_rect =
             sd.scroll_state
                 .scrollbar_handle_rect(axis, bounds, &sd.scrollbar_config, needs_other);
+        // Hover follows the same widened area the drag hit-test uses
+        let handle_hit = widen_across_axis(axis, handle_rect, hit_area);
 
         let mut needs_repaint = false;
         let is_track_hovered = hit_area.contains(x, y);
-        let is_hovered = handle_rect.contains(x, y);
+        let is_hovered = handle_hit.contains(x, y);
 
         // Update track and handle hover state in one borrow
         let sd = self.scroll_mut();
@@ -886,5 +891,14 @@ impl Container {
         }
 
         old_x != sd.scroll_state.offset_x || old_y != sd.scroll_state.offset_y
+    }
+}
+
+/// The handle's interactive rect: its extent along the scroll axis, widened
+/// across the axis to the hit area (which spans the hover-expanded width).
+fn widen_across_axis(axis: ScrollbarAxis, handle: Rect, hit_area: Rect) -> Rect {
+    match axis {
+        ScrollbarAxis::Vertical => Rect::new(hit_area.x, handle.y, hit_area.width, handle.height),
+        ScrollbarAxis::Horizontal => Rect::new(handle.x, hit_area.y, handle.width, hit_area.height),
     }
 }
