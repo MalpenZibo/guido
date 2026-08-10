@@ -21,6 +21,110 @@ impl Border {
     }
 }
 
+/// Per-corner radii for rounded rectangles (logical pixels).
+///
+/// Most shapes use a uniform radius — `f32` converts directly. Per-corner
+/// values enable accordion-style lists where the first row rounds only its
+/// top corners and the last only its bottom ones.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CornerRadii {
+    pub top_left: f32,
+    pub top_right: f32,
+    pub bottom_right: f32,
+    pub bottom_left: f32,
+}
+
+impl CornerRadii {
+    /// The same radius on all four corners.
+    pub fn uniform(radius: f32) -> Self {
+        Self {
+            top_left: radius,
+            top_right: radius,
+            bottom_right: radius,
+            bottom_left: radius,
+        }
+    }
+
+    /// `radius` on the top corners, zero on the bottom ones.
+    pub fn top(radius: f32) -> Self {
+        Self {
+            top_left: radius,
+            top_right: radius,
+            bottom_right: 0.0,
+            bottom_left: 0.0,
+        }
+    }
+
+    /// `radius` on the bottom corners, zero on the top ones.
+    pub fn bottom(radius: f32) -> Self {
+        Self {
+            top_left: 0.0,
+            top_right: 0.0,
+            bottom_right: radius,
+            bottom_left: radius,
+        }
+    }
+
+    /// The largest of the four radii (uniform approximations: clip, blur).
+    pub fn max(&self) -> f32 {
+        self.top_left
+            .max(self.top_right)
+            .max(self.bottom_right)
+            .max(self.bottom_left)
+    }
+
+    /// As `[top_left, top_right, bottom_right, bottom_left]`.
+    pub fn to_array(self) -> [f32; 4] {
+        [
+            self.top_left,
+            self.top_right,
+            self.bottom_right,
+            self.bottom_left,
+        ]
+    }
+
+    /// Multiply every radius (logical → physical pixels).
+    pub fn scaled(self, factor: f32) -> Self {
+        Self {
+            top_left: self.top_left * factor,
+            top_right: self.top_right * factor,
+            bottom_right: self.bottom_right * factor,
+            bottom_left: self.bottom_left * factor,
+        }
+    }
+}
+
+impl From<f32> for CornerRadii {
+    fn from(radius: f32) -> Self {
+        Self::uniform(radius)
+    }
+}
+
+impl From<[f32; 4]> for CornerRadii {
+    /// `[top_left, top_right, bottom_right, bottom_left]` — clockwise from
+    /// the top left, CSS `border-radius` order.
+    fn from(r: [f32; 4]) -> Self {
+        Self {
+            top_left: r[0],
+            top_right: r[1],
+            bottom_right: r[2],
+            bottom_left: r[3],
+        }
+    }
+}
+
+impl From<(f32, f32, f32, f32)> for CornerRadii {
+    /// `(top_left, top_right, bottom_right, bottom_left)`.
+    fn from(r: (f32, f32, f32, f32)) -> Self {
+        Self {
+            top_left: r.0,
+            top_right: r.1,
+            bottom_right: r.2,
+            bottom_left: r.3,
+        }
+    }
+}
+
 /// A single draw operation in local coordinates.
 ///
 /// All coordinates and sizes are in the node's local coordinate space.
@@ -33,8 +137,8 @@ pub enum DrawCommand {
         rect: Rect,
         /// Fill color
         color: Color,
-        /// Corner radius in logical pixels
-        radius: f32,
+        /// Corner radii in logical pixels
+        radius: CornerRadii,
         /// Superellipse curvature (K-value: 1.0 = circle, 2.0 = squircle)
         curvature: f32,
         /// Optional border
@@ -84,11 +188,11 @@ pub enum DrawCommand {
 
 impl DrawCommand {
     /// Create a simple rounded rectangle.
-    pub fn rounded_rect(rect: Rect, color: Color, radius: f32) -> Self {
+    pub fn rounded_rect(rect: Rect, color: Color, radius: impl Into<CornerRadii>) -> Self {
         Self::RoundedRect {
             rect,
             color,
-            radius,
+            radius: radius.into(),
             curvature: 1.0,
             border: None,
             shadow: None,
@@ -100,13 +204,13 @@ impl DrawCommand {
     pub fn rounded_rect_with_curvature(
         rect: Rect,
         color: Color,
-        radius: f32,
+        radius: impl Into<CornerRadii>,
         curvature: f32,
     ) -> Self {
         Self::RoundedRect {
             rect,
             color,
-            radius,
+            radius: radius.into(),
             curvature,
             border: None,
             shadow: None,

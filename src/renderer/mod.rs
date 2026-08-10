@@ -25,7 +25,7 @@ mod textured_vertex;
 mod tree;
 mod types;
 
-pub use commands::{Border, DrawCommand};
+pub use commands::{Border, CornerRadii, DrawCommand};
 pub use flatten::{FlattenedCommand, LayerBoundaries, flatten_root_into};
 pub use gpu_context::{GpuContext, SurfaceState};
 pub use paint_context::PaintContext;

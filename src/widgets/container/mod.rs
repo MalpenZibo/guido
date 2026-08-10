@@ -213,6 +213,7 @@ pub struct Container {
     pub(super) background: Option<Signal<Color>>,
     pub(super) gradient: Option<LinearGradient>,
     pub(super) corner_radius: Option<Signal<f32>>,
+    pub(super) corner_radii: Option<Signal<crate::renderer::CornerRadii>>,
     pub(super) corner_curvature: Option<Signal<f32>>,
     pub(super) border_width: Option<Signal<f32>>,
     pub(super) border_color: Option<Signal<Color>>,
@@ -252,6 +253,7 @@ impl Container {
             background: None,
             gradient: None,
             corner_radius: None,
+            corner_radii: None,
             corner_curvature: None,
             border_width: None,
             border_color: None,
@@ -374,6 +376,26 @@ impl Container {
     /// ```
     pub fn corner_radius<M>(mut self, radius: impl IntoSignal<f32, M>) -> Self {
         self.corner_radius = Some(radius.into_signal());
+        self
+    }
+
+    /// Set per-corner radii (overrides `corner_radius` for drawing).
+    ///
+    /// Enables accordion-style lists where the first row rounds only its
+    /// top corners and the last row only its bottom ones:
+    ///
+    /// ```ignore
+    /// container().corner_radii(CornerRadii::top(16.0))     // first row
+    /// container().corner_radii(CornerRadii::bottom(16.0))  // last row
+    /// ```
+    ///
+    /// Child clipping, blur regions and rounded hit testing keep using a
+    /// uniform radius (the largest of the four).
+    pub fn corner_radii<M>(
+        mut self,
+        radii: impl IntoSignal<crate::renderer::CornerRadii, M>,
+    ) -> Self {
+        self.corner_radii = Some(radii.into_signal());
         self
     }
 
@@ -1904,6 +1926,17 @@ impl Widget for Container {
             }
         }
 
+        // Per-corner radii override the uniform (animated) radius for
+        // drawing. Clip, blur region and rounded hit testing stay uniform,
+        // approximated by the largest corner.
+        let corner_radii = with_signal_tracking(id, JobType::Paint, || {
+            self.corner_radii
+                .as_ref()
+                .map(|s| s.get())
+                .unwrap_or_else(|| crate::renderer::CornerRadii::uniform(corner_radius))
+        });
+        let corner_radius = corner_radius.max(corner_radii.max());
+
         // Publish the blur region: bounds are read fresh from the tree at
         // frame sync, so only the (possibly animated) radius is recorded.
         if self.background_blur {
@@ -1932,7 +1965,7 @@ impl Widget for Container {
                     end_color: gradient.end_color,
                     direction: gradient.direction.into(),
                 },
-                corner_radius,
+                corner_radii,
                 corner_curvature,
             );
         } else if background.a > 0.0 {
@@ -1940,7 +1973,7 @@ impl Widget for Container {
                 ctx.draw_rounded_rect_with_shadow(
                     local_bounds,
                     background,
-                    corner_radius,
+                    corner_radii,
                     corner_curvature,
                     shadow,
                 );
@@ -1948,7 +1981,7 @@ impl Widget for Container {
                 ctx.draw_rounded_rect_with_curvature(
                     local_bounds,
                     background,
-                    corner_radius,
+                    corner_radii,
                     corner_curvature,
                 );
             }
@@ -1959,7 +1992,7 @@ impl Widget for Container {
             ctx.draw_border_frame_with_curvature(
                 local_bounds,
                 border_color,
-                corner_radius,
+                corner_radii,
                 border_width,
                 corner_curvature,
             );

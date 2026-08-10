@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use super::commands::{Border, DrawCommand};
+use super::commands::{Border, CornerRadii, DrawCommand};
 use super::tree::{ClipRegion, NodeId, RenderNode};
 use super::types::{Gradient, Shadow};
 use crate::transform::Transform;
@@ -188,11 +188,11 @@ impl<'a> PaintContext<'a> {
     // -------------------------------------------------------------------------
 
     /// Draw a rounded rectangle in local coordinates.
-    pub fn draw_rounded_rect(&mut self, rect: Rect, color: Color, radius: f32) {
+    pub fn draw_rounded_rect(&mut self, rect: Rect, color: Color, radius: impl Into<CornerRadii>) {
         self.node.commands.push(Rc::new(DrawCommand::RoundedRect {
             rect,
             color,
-            radius,
+            radius: radius.into(),
             curvature: 1.0,
             border: None,
             shadow: None,
@@ -205,13 +205,13 @@ impl<'a> PaintContext<'a> {
         &mut self,
         rect: Rect,
         color: Color,
-        radius: f32,
+        radius: impl Into<CornerRadii>,
         curvature: f32,
     ) {
         self.node.commands.push(Rc::new(DrawCommand::RoundedRect {
             rect,
             color,
-            radius,
+            radius: radius.into(),
             curvature,
             border: None,
             shadow: None,
@@ -224,13 +224,13 @@ impl<'a> PaintContext<'a> {
         &mut self,
         rect: Rect,
         gradient: Gradient,
-        radius: f32,
+        radius: impl Into<CornerRadii>,
         curvature: f32,
     ) {
         self.node.commands.push(Rc::new(DrawCommand::RoundedRect {
             rect,
             color: gradient.start_color, // Fallback color
-            radius,
+            radius: radius.into(),
             curvature,
             border: None,
             shadow: None,
@@ -243,13 +243,13 @@ impl<'a> PaintContext<'a> {
         &mut self,
         rect: Rect,
         border_color: Color,
-        radius: f32,
+        radius: impl Into<CornerRadii>,
         border_width: f32,
     ) {
         self.node.commands.push(Rc::new(DrawCommand::RoundedRect {
             rect,
             color: Color::TRANSPARENT,
-            radius,
+            radius: radius.into(),
             curvature: 1.0,
             border: Some(Border::new(border_width, border_color)),
             shadow: None,
@@ -262,14 +262,14 @@ impl<'a> PaintContext<'a> {
         &mut self,
         rect: Rect,
         border_color: Color,
-        radius: f32,
+        radius: impl Into<CornerRadii>,
         border_width: f32,
         curvature: f32,
     ) {
         self.node.commands.push(Rc::new(DrawCommand::RoundedRect {
             rect,
             color: Color::TRANSPARENT,
-            radius,
+            radius: radius.into(),
             curvature,
             border: Some(Border::new(border_width, border_color)),
             shadow: None,
@@ -282,14 +282,14 @@ impl<'a> PaintContext<'a> {
         &mut self,
         rect: Rect,
         color: Color,
-        radius: f32,
+        radius: impl Into<CornerRadii>,
         curvature: f32,
         shadow: Shadow,
     ) {
         self.node.commands.push(Rc::new(DrawCommand::RoundedRect {
             rect,
             color,
-            radius,
+            radius: radius.into(),
             curvature,
             border: None,
             shadow: Some(shadow),
@@ -303,7 +303,7 @@ impl<'a> PaintContext<'a> {
         &mut self,
         rect: Rect,
         color: Color,
-        radius: f32,
+        radius: impl Into<CornerRadii>,
         curvature: f32,
         border: Option<Border>,
         shadow: Option<Shadow>,
@@ -312,7 +312,7 @@ impl<'a> PaintContext<'a> {
         self.node.commands.push(Rc::new(DrawCommand::RoundedRect {
             rect,
             color,
-            radius,
+            radius: radius.into(),
             curvature,
             border,
             shadow,
@@ -429,13 +429,18 @@ impl<'a> PaintContext<'a> {
     }
 
     /// Draw a rounded rectangle as overlay (rendered after children).
-    pub fn draw_overlay_rounded_rect(&mut self, rect: Rect, color: Color, radius: f32) {
+    pub fn draw_overlay_rounded_rect(
+        &mut self,
+        rect: Rect,
+        color: Color,
+        radius: impl Into<CornerRadii>,
+    ) {
         self.node
             .overlay_commands
             .push(Rc::new(DrawCommand::RoundedRect {
                 rect,
                 color,
-                radius,
+                radius: radius.into(),
                 curvature: 1.0,
                 border: None,
                 shadow: None,

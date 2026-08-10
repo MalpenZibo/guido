@@ -494,7 +494,7 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
                     rect.height * scale,
                 ],
                 [color.r, color.g, color.b, color.a],
-                radius * scale,
+                radius.scaled(scale).to_array(),
                 *curvature,
             )
             .with_transform(&cmd.world_transform, scale);
@@ -527,8 +527,8 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
             let mut instance = ShapeInstance::from_rect(
                 [rect_x, rect_y, size, size],
                 [color.r, color.g, color.b, color.a],
-                radius * scale, // Full radius = circle
-                1.0,            // Circular corners
+                [radius * scale; 4], // Full radius = circle
+                1.0,                 // Circular corners
             )
             .with_transform(&cmd.world_transform, scale);
 
