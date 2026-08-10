@@ -918,6 +918,21 @@ impl Container {
         })
     }
 
+    /// Whether any animation follows a signal-backed target (as opposed to
+    /// width/height, whose targets are content-driven and recomputed every
+    /// layout). These are the animations that keep a copy of signal state
+    /// and therefore need the paint-time target re-sync.
+    fn has_signal_animated_props(&self) -> bool {
+        self.anims.as_ref().is_some_and(|a| {
+            a.padding.is_some()
+                || a.border_width.is_some()
+                || a.background.is_some()
+                || a.corner_radius.is_some()
+                || a.border_color.is_some()
+                || a.transform.is_some()
+        })
+    }
+
     /// Request repaint for state changes (hover/press), with Animation job if needed
     fn request_state_change_repaint(&self, id: WidgetId) {
         if self.has_animated_state_properties() {
@@ -1328,6 +1343,16 @@ impl Widget for Container {
         // Initialize paint animations on first layout (set_immediate so they start
         // from the correct signal value rather than a stale construction-time value)
         // Compute targets first to avoid borrow conflicts with &mut anim + &self
+        let pd_init = self
+            .anims
+            .as_ref()
+            .and_then(|a| a.padding.as_ref())
+            .is_some_and(|a| a.is_initial());
+        let bw_init = self
+            .anims
+            .as_ref()
+            .and_then(|a| a.border_width.as_ref())
+            .is_some_and(|a| a.is_initial());
         let bg_init = self
             .anims
             .as_ref()
@@ -1348,27 +1373,32 @@ impl Widget for Container {
             .as_ref()
             .and_then(|a| a.transform.as_ref())
             .is_some_and(|a| a.is_initial());
-        if bg_init || cr_init || bc_init || tf_init {
-            let bg_target = if bg_init {
-                Some(self.effective_background_target(tree))
-            } else {
-                None
-            };
-            let cr_target = if cr_init {
-                Some(self.effective_corner_radius_target(tree))
-            } else {
-                None
-            };
-            let bc_target = if bc_init {
-                Some(self.effective_border_color_target(tree))
-            } else {
-                None
-            };
-            let tf_target = if tf_init {
-                Some(self.effective_transform_target(tree))
-            } else {
-                None
-            };
+        if pd_init || bw_init || bg_init || cr_init || bc_init || tf_init {
+            // First layout of a container with signal-animated props: read
+            // every animated prop's signal under Animation tracking so the
+            // subscriptions exist from THIS moment. Widget creation and
+            // first layout run in one synchronous block (for popups, the
+            // measure-before-spawn), so no write can land before them —
+            // without this, subscriptions would only appear at the first
+            // PAINT, and a write in between (a menu's open-flip timer
+            // racing a heavy first paint) would notify nobody. Paint's
+            // drift pass re-tracks every frame afterwards, so dependencies
+            // taken through conditional closure branches stay current.
+            let (bg_target, cr_target, bc_target, tf_target) =
+                with_signal_tracking(id, JobType::Animation, || {
+                    if pd_init {
+                        let _ = self.padding.get_or(Padding::default());
+                    }
+                    if bw_init {
+                        let _ = self.effective_border_width_target(tree);
+                    }
+                    (
+                        bg_init.then(|| self.effective_background_target(tree)),
+                        cr_init.then(|| self.effective_corner_radius_target(tree)),
+                        bc_init.then(|| self.effective_border_color_target(tree)),
+                        tf_init.then(|| self.effective_transform_target(tree)),
+                    )
+                });
             if let Some(ref mut anims) = self.anims {
                 if let (Some(anim), Some(target)) = (&mut anims.background, bg_target) {
                     anim.set_immediate(target);
@@ -1831,18 +1861,22 @@ impl Widget for Container {
         // so we do a second pass reading targets for Animation subscriber registration.)
         //
         // The same pass compares each animation's stored target against the
-        // current effective value. The subscription only exists after the
-        // first paint, so a write landing between the animation's
-        // set_immediate initialization (first layout — possibly a popup's
-        // measure pass, long before a heavy tree finishes its first paint)
-        // and this registration notifies nobody. Requesting one Animation
-        // job on a detected mismatch lets advance_animations adopt the
-        // missed target; without it, a menu whose open-flip write raced the
-        // first paint stays collapsed at scale 0 forever.
-        if self.has_animated_state_properties() {
+        // current effective value and requests one Animation job on drift,
+        // letting advance_animations adopt whatever the subscription may
+        // have missed. Together with the first-layout registration in
+        // layout() this upholds the AnimationState invariant: a cache of
+        // signal-derived state must either be subscribed from creation or
+        // reconciled pull-style at every use — AnimationState gets both
+        // (registration closes the creation window, this pass converges
+        // conditional closure branches and state-layer overrides).
+        if self.has_signal_animated_props() {
             let target_drift = with_signal_tracking(id, JobType::Animation, || {
                 let anims = self.anims.as_ref().unwrap();
                 let mut drift = false;
+                if let Some(a) = &anims.padding {
+                    let t = self.padding.get_or(Padding::default());
+                    drift |= !a.is_initial() && *a.target() != t;
+                }
                 if let Some(a) = &anims.border_width {
                     let t = self.effective_border_width_target(tree);
                     drift |= !a.is_initial() && *a.target() != t;
@@ -2224,6 +2258,46 @@ mod tests {
                 job_type: JobType::Animation,
             }),
             "paint must request an Animation job for the missed target change, got {drained:?}"
+        );
+    }
+
+    /// The Animation subscription must exist from the FIRST LAYOUT, not the
+    /// first paint: creation and first layout run in one synchronous block,
+    /// so registering there leaves no window for a write to go unnoticed.
+    /// A write right after layout — before any paint — must already
+    /// schedule an Animation job. Padding is the prop that was never
+    /// covered by the paint-time pass alone.
+    #[test]
+    fn padding_write_after_first_layout_schedules_animation() {
+        let pad = create_signal(4.0_f32);
+        let widget = container()
+            .padding(move || pad.get())
+            .animate_padding(Transition::new(200, TimingFunction::EaseOut));
+
+        let mut tree = Tree::new();
+        let id = tree.register(Box::new(widget));
+
+        tree.with_widget_mut(id, |w, id, tree| {
+            w.layout(tree, id, Constraints::new(0.0, 0.0, 100.0, 100.0));
+        });
+
+        // Discard jobs produced so far; only the write below matters.
+        let roots: rustc_hash::FxHashSet<WidgetId> = [id].into_iter().collect();
+        jobs::distribute_jobs(&tree, &roots);
+        jobs::recycle_job_buffer(jobs::drain_surface_jobs(id));
+        jobs::recycle_job_buffer(jobs::drain_orphan_jobs());
+
+        pad.set(12.0);
+
+        jobs::distribute_jobs(&tree, &roots);
+        let drained = jobs::drain_surface_jobs(id);
+        assert!(
+            drained.contains(&Job {
+                widget_id: id,
+                job_type: JobType::Animation,
+            }),
+            "a write after first layout must schedule an Animation job \
+             without waiting for a paint, got {drained:?}"
         );
     }
 }

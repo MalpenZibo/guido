@@ -317,6 +317,32 @@ Changing either `a` or `b` will cause `sum` to recompute.
 
 Widget properties also participate in auto-tracking. During `paint()` and `layout()`, any signal reads (including inside closures passed as properties) are automatically tracked, so the widget is repainted or relaid out when dependencies change.
 
+### Cached Copies of Signal State (Invariant)
+
+Widget-side tracking is **lazy**: a subscription exists only after the first
+tracked read. This is safe for plain properties because layout/paint always
+pull the *current* signal value — a write that lands before the first read
+is not lost, the first read simply sees it.
+
+It is NOT safe for state that keeps a **copy** of a signal-derived value and
+updates it via subscription-triggered jobs (push). A write landing before
+the subscription exists notifies nobody, and the copy goes stale forever.
+`AnimationState` (animation targets) is exactly this shape, and any future
+cache of signal-derived state will be too. Such caches MUST do both of:
+
+1. **Register their subscriptions on the widget's first `layout()`** —
+   creation and first layout run in one synchronous block, so no write can
+   land in between (see the first-layout Animation tracking pass in
+   `Container::layout`).
+2. **Reconcile pull-style at each use** — compare the stored copy against
+   the current effective value and schedule a catch-up job on drift (see
+   the target-drift pass in `Container::paint`). This also converges
+   dependencies read through conditional closure branches and values that
+   change without any signal write (state-layer overrides).
+
+Regression tests: `write_between_first_layout_and_first_paint_starts_animation`
+and `padding_write_after_first_layout_schedules_animation`.
+
 ## Best Practices
 
 ### Minimize Signal Reads
