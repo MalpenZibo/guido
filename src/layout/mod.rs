@@ -78,6 +78,11 @@ pub struct Length {
     pub exact: Option<f32>,
     /// When true, expand to fill all available space
     pub fill: bool,
+    /// Fraction (0.0..=1.0) of the available space, resolved against the
+    /// incoming constraints at layout time. Behaves like an `exact` length
+    /// whose value is only known during layout — a slider fill bar at 55%
+    /// is `fraction(0.55)` with no measure round-trip.
+    pub fraction: Option<f32>,
 }
 
 impl Length {
@@ -88,6 +93,7 @@ impl Length {
             max: None,
             exact: Some(value.into_f32()),
             fill: false,
+            fraction: None,
         }
     }
 
@@ -120,6 +126,7 @@ pub fn at_least(min: impl IntoF32) -> Length {
         max: None,
         exact: None,
         fill: false,
+        fraction: None,
     }
 }
 
@@ -139,6 +146,7 @@ pub fn at_most(max: impl IntoF32) -> Length {
         max: Some(max.into_f32()),
         exact: None,
         fill: false,
+        fraction: None,
     }
 }
 
@@ -160,6 +168,35 @@ pub fn fill() -> Length {
         max: None,
         exact: None,
         fill: true,
+        fraction: None,
+    }
+}
+
+/// Create a length that takes a fraction (0.0..=1.0) of the available
+/// space, resolved at layout time.
+///
+/// The natural tool for value-proportional bars (sliders, gauges,
+/// progress): the width follows the value on the very first frame, with
+/// no measured-rect round-trip.
+///
+/// # Examples
+/// ```
+/// use guido::prelude::*;
+///
+/// // A fill bar at 55% of the track width
+/// container().width(fraction(0.55));
+///
+/// // Reactive: follows the volume signal
+/// let volume = create_signal(40);
+/// container().width(move || fraction(volume.get() as f32 / 100.0));
+/// ```
+pub fn fraction(f: impl IntoF32) -> Length {
+    Length {
+        min: None,
+        max: None,
+        exact: None,
+        fill: false,
+        fraction: Some(f.into_f32()),
     }
 }
 
@@ -171,6 +208,7 @@ impl From<f32> for Length {
             max: None,
             exact: Some(value),
             fill: false,
+            fraction: None,
         }
     }
 }

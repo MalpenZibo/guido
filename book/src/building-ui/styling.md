@@ -112,6 +112,20 @@ container().width(at_most(400))              // At most 400px
 container().width(at_least(100).at_most(400)) // Range
 ```
 
+### Fraction of Available Space
+
+`fraction(f)` takes a fraction (0.0..=1.0) of the space offered by the
+parent, resolved at layout time. It is the natural tool for
+value-proportional bars — sliders, gauges, progress — because the width
+follows the value on the very first frame, with no measured-rect
+round-trip:
+
+```rust
+// A slider fill bar at the current volume
+let volume = create_signal(40);
+container().width(move || fraction(volume.get() as f32 / 100.0))
+```
+
 ## Complete Example
 
 ```rust

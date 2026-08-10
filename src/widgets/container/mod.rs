@@ -1166,7 +1166,7 @@ impl Widget for Container {
         // Auto-track signal reads for layout properties.
         // Any signals read here (including closures) will register this widget
         // as a Layout subscriber so future changes trigger re-layout.
-        let (padding, width_length, height_length) =
+        let (padding, mut width_length, mut height_length) =
             with_signal_tracking(id, JobType::Layout, || {
                 (
                     self.animated_padding(),
@@ -1174,6 +1174,21 @@ impl Widget for Container {
                     self.height.as_ref().map(|h| h.get()).unwrap_or_default(),
                 )
             });
+
+        // Resolve fractional lengths against the incoming constraints: from
+        // here on a fraction is an exact length whose value became known at
+        // layout time, so everything downstream (flex sizing, animation
+        // targets, min/max clamping) works unchanged.
+        if let Some(f) = width_length.fraction
+            && constraints.max_width.is_finite()
+        {
+            width_length.exact = Some((constraints.max_width * f).max(0.0));
+        }
+        if let Some(f) = height_length.fraction
+            && constraints.max_height.is_finite()
+        {
+            height_length.exact = Some((constraints.max_height * f).max(0.0));
+        }
 
         // Calculate dimensions for child layout constraints.
         // When a layout animation is active and the width/height is exact, use
