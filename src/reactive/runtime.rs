@@ -142,6 +142,25 @@ pub fn record_effect_read(signal_id: SignalId) {
     });
 }
 
+/// Suspend effect-level read tracking during the given closure.
+///
+/// Reads inside the closure are attributed to no effect. The counterpart of
+/// [`suspend_widget_tracking`](super::invalidation::suspend_widget_tracking):
+/// together they make a computation invisible to whatever is tracking around
+/// it, which is what a memo's seed computation needs.
+pub(crate) fn suspend_effect_tracking<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let saved: Vec<_> = EFFECT_TRACKING.with(|stack| stack.borrow_mut().drain(..).collect());
+    // Restore on unwind too: losing the saved stack would silently drop the
+    // dependencies of every effect currently on the stack.
+    let _guard = super::guard::defer(move || {
+        EFFECT_TRACKING.with(|stack| *stack.borrow_mut() = saved);
+    });
+    f()
+}
+
 /// Return the current write epoch. Captured by `WriteSignal` at creation
 /// time so that writes queued after a restart carry the old epoch.
 pub(crate) fn current_write_epoch() -> u64 {

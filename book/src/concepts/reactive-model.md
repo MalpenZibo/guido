@@ -297,6 +297,21 @@ let count = create_signal(0);
 let doubled = create_memo(move || count.get() * 2);
 ```
 
+A memo is also a **tracking barrier**, which is what makes it the tool for
+narrowing a rebuild. Signals read inside it belong to it alone, even when the
+memo is created inside something that is itself tracked — a dynamic-children
+closure, a paint pass, an effect:
+
+```rust
+// `levels` is written 60 times a second by an audio service
+container().child(move || {
+    let active = create_memo(move || levels.with(|l| !l.is_empty()));
+    // This closure depends on the bool, not on `levels`: the subtree is
+    // rebuilt when the bool flips, not on every write
+    active.get().then(|| expensive_module())
+})
+```
+
 ## API Reference
 
 ### Signal Creation

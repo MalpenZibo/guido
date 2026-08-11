@@ -1,5 +1,7 @@
 use super::effect::create_effect;
 use super::into_signal::{IntoSignal, MemoMarker};
+use super::invalidation::suspend_widget_tracking;
+use super::runtime::suspend_effect_tracking;
 use super::signal::{RwSignal, Signal, create_signal};
 
 /// Eager computed value that recomputes immediately when dependencies change.
@@ -51,7 +53,14 @@ where
     T: Clone + PartialEq + Send + 'static,
     F: Fn() -> T + 'static,
 {
-    let initial = f();
+    // The seed value is computed with tracking suspended. A memo is often
+    // created inside something that is itself being tracked — a dynamic
+    // children closure building a component, a paint/layout pass, another
+    // effect — and attributing this first read to that scope would hand it
+    // every dependency the memo exists to absorb: a hot signal read only
+    // inside the memo would rebuild the enclosing subtree on every write.
+    // The memo's own effect below establishes the real dependencies.
+    let initial = suspend_widget_tracking(|| suspend_effect_tracking(&f));
     let signal = create_signal(initial);
     // The effect runs immediately (establishing dependencies) and re-runs
     // whenever any dependency changes. Signal::set() uses PartialEq to
@@ -154,6 +163,70 @@ mod tests {
 
         count.set(5);
         assert_eq!(observed.get(), 10, "memo change must propagate to effects");
+    }
+
+    /// A memo built inside a widget's tracked scope must not hand that widget
+    /// its dependencies. This is the whole point of memoizing: a component
+    /// created inside a dynamic-children closure that memoizes a hot signal
+    /// (a per-frame audio level, a clock tick) must not make the closure —
+    /// and with it the entire subtree it builds — rebuild on every write.
+    #[test]
+    fn memo_created_in_a_tracked_scope_does_not_leak_its_dependencies() {
+        use crate::jobs::{self, JobType};
+        use crate::reactive::invalidation::with_signal_tracking;
+        use crate::tree::WidgetId;
+
+        let hot = create_signal(0);
+        let wid = WidgetId::from_u64(4242);
+
+        let memo = with_signal_tracking(wid, JobType::Reconcile, || {
+            create_memo(move || hot.get() * 2)
+        });
+        assert_eq!(memo.get(), 0);
+
+        // Discard anything queued while building
+        jobs::reset_jobs();
+
+        hot.set(21);
+
+        assert!(
+            !jobs::has_pending_jobs(),
+            "writing a signal only the memo reads must not invalidate the \
+             widget whose scope happened to build the memo"
+        );
+        assert_eq!(memo.get(), 42, "the memo itself must still track it");
+    }
+
+    /// Same isolation for the effect that happens to be running: creating a
+    /// memo inside an effect must not add the memo's dependencies to it.
+    #[test]
+    fn memo_created_inside_an_effect_does_not_leak_its_dependencies() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let hot = create_signal(0);
+        let trigger = create_signal(0);
+        let runs = Rc::new(Cell::new(0));
+        let runs_c = runs.clone();
+
+        crate::reactive::create_effect(move || {
+            trigger.get();
+            runs_c.set(runs_c.get() + 1);
+            let _memo = create_memo(move || hot.get() * 2);
+        })
+        .detach();
+
+        assert_eq!(runs.get(), 1);
+
+        hot.set(1);
+        assert_eq!(
+            runs.get(),
+            1,
+            "the enclosing effect must not depend on what the memo reads"
+        );
+
+        trigger.set(1);
+        assert_eq!(runs.get(), 2, "its own dependencies must still fire");
     }
 
     /// Memo-of-memo chains must propagate through both levels.
