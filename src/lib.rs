@@ -1009,9 +1009,9 @@ impl App {
                 &mut self.tree,
             );
 
-            // Dispose owners retired from inside their own computations
-            // (retire_owner). Safe here: no user closure is on the stack.
-            reactive::owner::dispose_retired_owners();
+            // Run deferred owner disposals (public dispose_owner). Safe
+            // here: no user closure is on the stack.
+            reactive::owner::flush_pending_disposals();
 
             // Process dynamic surface commands
             if !process_surface_commands(
@@ -1116,7 +1116,7 @@ impl Drop for App {
         // Dispose the root owner first — cascades cleanup through the entire
         // reactive graph (signals, effects, cleanup callbacks).
         if let Some(root_id) = self.root_owner_id {
-            reactive::dispose_owner(root_id);
+            reactive::dispose_owner_now(root_id);
         }
 
         // Clear the tree BEFORE resetting jobs. Dropping widgets triggers

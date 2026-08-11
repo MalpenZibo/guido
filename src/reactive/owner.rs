@@ -241,13 +241,15 @@ pub fn current_owner() -> Option<OwnerId> {
 /// After disposal, any attempt to access the disposed signals will panic
 /// with a clear error message.
 ///
-/// **Safety note:** disposal is synchronous — never call this from code
-/// the owner itself owns (an effect observing "close myself" would free
-/// its own running closure). Use [`retire_owner`] there instead.
-///
-/// **Note:** This function is not part of the public API and may change.
-/// Cleanup is automatic when using dynamic children or components.
-pub fn dispose_owner(id: OwnerId) {
+/// Internal engine: synchronous disposal, used by the library's own
+/// teardown paths (surface close, reconcile discard, component Drop)
+/// where ordering invariants are controlled. A running effect that
+/// disposes its own owner is protected by the runtime's take/put-back
+/// callback pattern (`EffectState::DisposedWhileRunning`), but code
+/// after the call must not touch the owner's signals — public callers
+/// get the deferred [`dispose_owner`] instead, which is safe anywhere.
+#[doc(hidden)]
+pub fn dispose_owner_now(id: OwnerId) {
     // Take the owner out of the arena and prune it from its parent's
     // children list. Without the pruning, long-lived parents (most notably
     // the root owner) accumulate one dead child entry for every owner ever
@@ -272,7 +274,7 @@ pub fn dispose_owner(id: OwnerId) {
 
     // Dispose children first (depth-first)
     for child_id in owner.children {
-        dispose_owner(child_id);
+        dispose_owner_now(child_id);
     }
 
     // Run cleanup callbacks in reverse order (LIFO)
@@ -374,42 +376,42 @@ pub(crate) fn effect_has_owner(id: EffectId) -> bool {
     OWNERS.with(|owners| owners.borrow().effect_owners.contains_key(&id))
 }
 
-// Owners scheduled for deferred disposal (see `retire_owner`).
+// Owners scheduled for deferred disposal (see `dispose_owner`).
 thread_local! {
-    static RETIRED_OWNERS: std::cell::RefCell<Vec<OwnerId>> =
+    static PENDING_DISPOSALS: std::cell::RefCell<Vec<OwnerId>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// Schedule an owner for disposal at a safe point.
+/// Dispose an owner: all its signals, effects, and cleanup callbacks.
 ///
-/// Self-closing UI has to dispose an owner from code that the owner
-/// itself owns: an effect observing a popup's dismissal, a dialog's own
-/// close button. Calling [`dispose_owner`] there would free the closure
-/// currently executing. `retire_owner` queues the disposal instead; the
-/// main loop drains the queue once per iteration, when no user closure
-/// is on the stack.
+/// Disposal is **deferred**: the main loop drains pending disposals once
+/// per iteration, at a point where no user closure is on the stack. That
+/// makes this safe to call from anywhere — including code the owner
+/// itself owns (an effect observing a popup's dismissal, a dialog's own
+/// close button) and code whose widgets outlive the current instant
+/// (a popup surface that lives until its Close command is processed).
 ///
-/// Retiring the same owner twice (or an already-disposed owner) is
-/// harmless — disposal is idempotent.
-pub fn retire_owner(id: OwnerId) {
-    RETIRED_OWNERS.with(|v| v.borrow_mut().push(id));
-    // Wake the loop so a retirement from a quiet moment (compositor
+/// Disposing the same owner twice (or an already-disposed owner) is
+/// harmless.
+pub fn dispose_owner(id: OwnerId) {
+    PENDING_DISPOSALS.with(|v| v.borrow_mut().push(id));
+    // Wake the loop so a disposal requested in a quiet moment (compositor
     // dismissal with no other activity) is not postponed indefinitely
     crate::jobs::request_frame();
 }
 
-/// Dispose every retired owner. Called by the main loop at a safe point —
-/// never call from inside reactive computations.
-pub(crate) fn dispose_retired_owners() {
-    // split_off keeps draining safe even if a cleanup callback retires
-    // another owner while running (it lands in the next drain)
+/// Run every pending deferred disposal. Called by the main loop at a safe
+/// point — never call from inside reactive computations.
+pub(crate) fn flush_pending_disposals() {
+    // split_off keeps draining safe even if a cleanup callback disposes
+    // another owner while running (it lands in the next batch)
     loop {
-        let batch = RETIRED_OWNERS.with(|v| v.borrow_mut().split_off(0));
+        let batch = PENDING_DISPOSALS.with(|v| v.borrow_mut().split_off(0));
         if batch.is_empty() {
             return;
         }
         for id in batch {
-            dispose_owner(id);
+            dispose_owner_now(id);
         }
     }
 }
@@ -422,53 +424,53 @@ mod tests {
     fn test_with_owner_basic() {
         let (value, owner_id) = with_owner(|| 42);
         assert_eq!(value, 42);
-        dispose_owner(owner_id);
+        dispose_owner_now(owner_id);
     }
 
-    /// retire_owner defers: nothing is disposed until the main loop drains
-    /// the queue, so an owned computation can safely retire its own owner
-    /// ("close myself" UI). Double-retiring is harmless.
+    /// The public dispose_owner defers: nothing is disposed until the main
+    /// loop flushes, so an owned computation can safely dispose its own
+    /// owner ("close myself" UI). Double-disposing is harmless.
     #[test]
-    fn test_retire_owner_defers_disposal() {
+    fn test_dispose_owner_defers_disposal() {
         let cleaned = std::rc::Rc::new(std::cell::Cell::new(false));
         let flag = cleaned.clone();
         let (_, owner_id) = with_owner(move || {
             on_cleanup(move || flag.set(true));
         });
 
-        retire_owner(owner_id);
-        retire_owner(owner_id); // idempotent
+        dispose_owner(owner_id);
+        dispose_owner(owner_id); // idempotent
         assert!(
             !cleaned.get(),
-            "retire_owner must not dispose synchronously"
+            "public dispose_owner must not dispose synchronously"
         );
 
-        dispose_retired_owners();
-        assert!(cleaned.get(), "drain must dispose the retired owner");
+        flush_pending_disposals();
+        assert!(cleaned.get(), "flush must dispose the pending owner");
 
-        // Draining again (and a stale retire) must be a no-op
-        retire_owner(owner_id);
-        dispose_retired_owners();
+        // Flushing again (and a stale dispose) must be a no-op
+        dispose_owner(owner_id);
+        flush_pending_disposals();
     }
 
-    /// A cleanup callback that retires ANOTHER owner while the queue is
-    /// being drained must not be lost.
+    /// A cleanup callback that disposes ANOTHER owner while the queue is
+    /// being flushed must not be lost.
     #[test]
-    fn test_retire_owner_during_drain_is_processed() {
+    fn test_dispose_during_flush_is_processed() {
         let cleaned_b = std::rc::Rc::new(std::cell::Cell::new(false));
         let flag_b = cleaned_b.clone();
         let (_, owner_b) = with_owner(move || {
             on_cleanup(move || flag_b.set(true));
         });
         let (_, owner_a) = with_owner(move || {
-            on_cleanup(move || retire_owner(owner_b));
+            on_cleanup(move || dispose_owner(owner_b));
         });
 
-        retire_owner(owner_a);
-        dispose_retired_owners();
+        dispose_owner(owner_a);
+        flush_pending_disposals();
         assert!(
             cleaned_b.get(),
-            "an owner retired during the drain must be disposed in the same drain"
+            "an owner disposed during the flush must be handled in the same flush"
         );
     }
 
@@ -477,7 +479,7 @@ mod tests {
     #[test]
     fn test_stale_owner_id_cannot_alias_recycled_slot() {
         let (_, first) = with_owner(|| ());
-        dispose_owner(first);
+        dispose_owner_now(first);
 
         // Reuses the freed slot
         let disposed = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -489,10 +491,10 @@ mod tests {
         assert_ne!(first.generation, second.generation);
 
         // Disposing via the stale ID must be a no-op
-        dispose_owner(first);
+        dispose_owner_now(first);
         assert!(!disposed.get(), "stale OwnerId disposed the new owner");
 
-        dispose_owner(second);
+        dispose_owner_now(second);
         assert!(disposed.get());
     }
 
@@ -507,7 +509,7 @@ mod tests {
         });
 
         for child in &child_ids {
-            dispose_owner(*child);
+            dispose_owner_now(*child);
         }
 
         OWNERS.with(|owners| {
@@ -520,7 +522,7 @@ mod tests {
             );
         });
 
-        dispose_owner(parent_id);
+        dispose_owner_now(parent_id);
     }
 
     #[test]
@@ -565,7 +567,7 @@ mod tests {
         });
 
         // Dispose the outer owner
-        dispose_owner(outer_id);
+        dispose_owner_now(outer_id);
 
         // Children should be disposed first
         let order = cleanup_order.lock().unwrap();
@@ -594,7 +596,7 @@ mod tests {
             });
         });
 
-        dispose_owner(owner_id);
+        dispose_owner_now(owner_id);
 
         // Should be reverse order (LIFO)
         let order = cleanup_order.lock().unwrap();
@@ -606,8 +608,8 @@ mod tests {
         let (_, owner_id) = with_owner(|| {});
 
         // Should not panic
-        dispose_owner(owner_id);
-        dispose_owner(owner_id);
+        dispose_owner_now(owner_id);
+        dispose_owner_now(owner_id);
     }
 
     #[test]
@@ -634,7 +636,7 @@ mod tests {
         );
 
         // Dispose the owner
-        dispose_owner(owner_id);
+        dispose_owner_now(owner_id);
 
         // Effect should no longer be owned (removed from reverse mapping)
         assert!(
@@ -653,7 +655,7 @@ mod tests {
         assert_eq!(signal.get(), 42);
 
         // Dispose the owner
-        dispose_owner(owner_id);
+        dispose_owner_now(owner_id);
 
         // Note: accessing disposed signal should panic, but we don't test that
         // here since it would terminate the test. The storage.rs tests cover
@@ -685,7 +687,7 @@ mod tests {
         assert!(effect_has_owner(effect_ids.2));
 
         // Dispose
-        dispose_owner(owner_id);
+        dispose_owner_now(owner_id);
 
         // None should be owned anymore
         assert!(!effect_has_owner(effect_ids.0));
@@ -718,7 +720,7 @@ mod tests {
         assert!(effect_has_owner(outer_effect));
 
         // Dispose outer (which should dispose inner first due to depth-first)
-        dispose_owner(outer_id);
+        dispose_owner_now(outer_id);
 
         // Both should be disposed
         assert!(!effect_has_owner(inner_effect));
@@ -737,7 +739,7 @@ mod tests {
         assert_eq!(signal.get(), 42);
 
         // Dispose root owner — cascades signal disposal
-        dispose_owner(root_id);
+        dispose_owner_now(root_id);
 
         // Signal should be disposed (reading would panic)
         let panicked = std::panic::catch_unwind(|| signal.get()).is_err();
@@ -754,7 +756,7 @@ mod tests {
         assert_eq!(signal2.get(), 99);
 
         // Cleanup
-        dispose_owner(new_root);
+        dispose_owner_now(new_root);
         reset_owners();
     }
 }

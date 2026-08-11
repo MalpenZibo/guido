@@ -460,16 +460,21 @@ fn create_child(id: u64) -> impl Widget {
 container().children(keyed(move || items.get(), |id| *id, create_child))
 ```
 
-### Self-Closing Scopes: `retire_owner`
+### Disposing Owner Scopes: `dispose_owner`
 
-Self-closing UI must dispose an owner **from code the owner itself owns**
-— an effect observing a popup's dismissal, a dialog's own close button.
-Synchronous disposal there would free the closure currently executing.
-`retire_owner(id)` queues the disposal instead; the main loop drains the
-queue once per iteration, when no user closure is on the stack:
+`guido::reactive::dispose_owner(id)` disposes an owner created with
+`with_owner`: all its signals, effects, and cleanup callbacks.
+
+Disposal is **deferred**: the main loop runs pending disposals once per
+iteration, at a point where no user closure is on the stack. That makes
+it safe to call from anywhere — including code the owner itself owns
+(an effect observing a popup's dismissal, a dialog's own close button)
+and code whose widgets outlive the current instant (a popup surface that
+lives until its Close command is processed). Deferral is a mechanism,
+not a second API: there is nothing to choose between.
 
 ```rust
-use guido::reactive::retire_owner;
+use guido::reactive::dispose_owner;
 
 // The owner id only exists after with_owner returns, so code inside the
 // scope reaches it through app state (a slot, a thread-local registry):
@@ -479,10 +484,10 @@ let (popup, owner_id) = guido::reactive::owner::with_owner(move || {
     spawn_popup(bar, config, move || {
         menu_view(move || {
             // Close button: this callback is owned by the very scope it
-            // is about to tear down — dispose_owner here would free the
-            // closure currently executing. Retiring is safe:
+            // is tearing down — safe, disposal runs at the next loop
+            // iteration:
             if let Some(id) = slot.get() {
-                retire_owner(id);
+                dispose_owner(id);
             }
         })
     })
@@ -490,7 +495,10 @@ let (popup, owner_id) = guido::reactive::owner::with_owner(move || {
 owner_slot.set(Some(owner_id));
 ```
 
-Retiring twice, or retiring an already-disposed owner, is harmless.
+Disposing twice, or disposing an already-disposed owner, is harmless.
+(The library's own teardown paths — surface close, reconcile discard,
+component Drop — use an internal synchronous variant whose ordering
+guarantees they control.)
 
 ### Custom Cleanup Callbacks
 
