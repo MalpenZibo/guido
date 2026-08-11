@@ -706,6 +706,27 @@ impl Container {
         self
     }
 
+    /// Enable transform animation with an ENTER transition: on first
+    /// layout the transform animates from `enter_from` to its effective
+    /// value, so the widget appears mid-animation — no signal flip, no
+    /// timer. A menu that scales open declares it directly:
+    ///
+    /// ```ignore
+    /// .transform(move || if open.get() { Transform::IDENTITY } else { collapsed })
+    /// .animate_transform_from(collapsed, Transition::spring(SpringConfig::SNAPPY))
+    /// // `open` can simply start true: the enter plays from `collapsed`
+    /// ```
+    pub fn animate_transform_from(
+        mut self,
+        enter_from: Transform,
+        transition: impl Into<TransitionConfig>,
+    ) -> Self {
+        let initial = self.transform.get_or(Transform::IDENTITY);
+        self.anims_mut().transform =
+            Some(AnimationState::new(initial, transition).with_enter_from(enter_from));
+        self
+    }
+
     /// Set style overrides for the hover state.
     pub fn hover_state<F>(mut self, f: F) -> Self
     where
@@ -1456,7 +1477,14 @@ impl Widget for Container {
                     anim.set_immediate(target);
                 }
                 if let (Some(anim), Some(target)) = (&mut anims.transform, tf_target) {
-                    anim.set_immediate(target);
+                    // Enter transition: animate in from the declared value
+                    // instead of snapping to the target
+                    if let Some(enter) = anim.take_enter_from() {
+                        anim.begin_from(enter, target);
+                        request_job(id, JobRequest::Animation(RequiredJob::Paint));
+                    } else {
+                        anim.set_immediate(target);
+                    }
                 }
             }
         }
@@ -2326,6 +2354,46 @@ mod tests {
                 job_type: JobType::Animation,
             }),
             "paint must request an Animation job for the missed target change, got {drained:?}"
+        );
+    }
+
+    /// An enter transition starts animating at first layout — the widget
+    /// appears mid-animation, no signal flip or timer needed.
+    #[test]
+    fn enter_transition_starts_animating_at_first_layout() {
+        use crate::animation::TimingFunction;
+
+        let collapsed = Transform::scale_xy(1.0, 0.0);
+        let entering = container()
+            .transform(Transform::IDENTITY)
+            .animate_transform_from(collapsed, Transition::new(200, TimingFunction::EaseOut));
+        let plain = container()
+            .transform(Transform::IDENTITY)
+            .animate_transform(Transition::new(200, TimingFunction::EaseOut));
+
+        let mut tree = Tree::new();
+        let entering_id = tree.register(Box::new(entering));
+        let plain_id = tree.register(Box::new(plain));
+        let c = Constraints::new(0.0, 0.0, 100.0, 100.0);
+        for id in [entering_id, plain_id] {
+            tree.with_widget_mut(id, |w, id, tree| {
+                w.layout(tree, id, c);
+            });
+        }
+
+        let entering_animating = tree
+            .with_widget_mut(entering_id, |w, id, tree| w.advance_animations(tree, id))
+            .unwrap();
+        let plain_animating = tree
+            .with_widget_mut(plain_id, |w, id, tree| w.advance_animations(tree, id))
+            .unwrap();
+        assert!(
+            entering_animating,
+            "enter transition must be in flight right after the first layout"
+        );
+        assert!(
+            !plain_animating,
+            "a plain animation initializes settled at its target"
         );
     }
 

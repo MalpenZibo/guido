@@ -7,7 +7,7 @@ pub use spring::{SpringConfig, SpringState};
 pub use timing::TimingFunction;
 
 /// Configuration for how a property should animate when it changes
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Transition {
     /// Duration of the animation in milliseconds
     pub duration_ms: f32,
@@ -15,6 +15,22 @@ pub struct Transition {
     pub timing: TimingFunction,
     /// Delay before animation starts in milliseconds
     pub delay_ms: f32,
+    /// Called once when an animation driven by this transition settles.
+    /// Direction-specific by construction: a callback on the `reverse`
+    /// transition fires exactly when the closing animation completes —
+    /// the lifecycle hook for "animate out, then destroy".
+    pub on_complete: Option<std::rc::Rc<dyn Fn()>>,
+}
+
+impl std::fmt::Debug for Transition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Transition")
+            .field("duration_ms", &self.duration_ms)
+            .field("timing", &self.timing)
+            .field("delay_ms", &self.delay_ms)
+            .field("on_complete", &self.on_complete.as_ref().map(|_| "<fn>"))
+            .finish()
+    }
 }
 
 impl Transition {
@@ -24,6 +40,7 @@ impl Transition {
             duration_ms: duration_ms.into_f32(),
             timing,
             delay_ms: 0.0,
+            on_complete: None,
         }
     }
 
@@ -33,7 +50,16 @@ impl Transition {
             duration_ms: 1000.0, // Spring duration is dynamic, this is max
             timing: TimingFunction::Spring(config),
             delay_ms: 0.0,
+            on_complete: None,
         }
+    }
+
+    /// Run a callback (main thread) when an animation driven by this
+    /// transition settles. Fires once per completed run; a retarget that
+    /// completes again fires again.
+    pub fn on_complete(mut self, f: impl Fn() + 'static) -> Self {
+        self.on_complete = Some(std::rc::Rc::new(f));
+        self
     }
 
     /// Set the delay before the animation starts
