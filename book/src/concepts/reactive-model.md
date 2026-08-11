@@ -312,6 +312,30 @@ container().child(move || {
 })
 ```
 
+## Snapshots vs. Reactive Reads
+
+Reading a signal subscribes whoever is *currently* running. Inside a closure
+that guido re-runs — a widget property, a child closure, an effect — that means
+the UI follows the value. Outside one, there is nobody to subscribe, so the
+read is a snapshot:
+
+```rust
+text(format!("{}", count.get()))          // snapshot: never updates again
+text(move || format!("{}", count.get()))  // reactive
+text(count_as_string)                     // reactive: pass the signal itself
+```
+
+Rust cannot tell those apart at compile time, so **debug builds print a warning
+at the offending line**:
+
+```
+guido: src/main.rs:42:31: signal read with no reactive scope — this value is a
+snapshot and will not update. Pass a closure instead …
+```
+
+If the snapshot is what you meant, say so with `get_untracked()` and the
+warning goes away. Release builds contain none of this.
+
 ## API Reference
 
 ### Signal Creation

@@ -1,6 +1,7 @@
 pub mod clipboard;
 pub mod context;
 pub mod cursor;
+pub mod diagnostics;
 pub mod effect;
 pub mod focus;
 pub(crate) mod guard;
@@ -68,4 +69,5 @@ pub(crate) fn reset_reactive() {
     cursor::reset_cursor();
     focus::reset_focus();
     context::reset_contexts();
+    diagnostics::reset();
 }

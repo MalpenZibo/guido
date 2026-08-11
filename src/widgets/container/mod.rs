@@ -642,7 +642,8 @@ impl Container {
             .width
             .as_ref()
             .map(|w| {
-                let len = w.get();
+                // Builder time, before the widget exists: a snapshot by nature
+                let len = w.get_untracked();
                 len.exact.or(len.min).unwrap_or(0.0)
             })
             .unwrap_or(0.0);
@@ -656,7 +657,7 @@ impl Container {
             .height
             .as_ref()
             .map(|h| {
-                let len = h.get();
+                let len = h.get_untracked();
                 len.exact.or(len.min).unwrap_or(0.0)
             })
             .unwrap_or(0.0);
@@ -666,42 +667,42 @@ impl Container {
 
     /// Enable animation for background color changes
     pub fn animate_background(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.background.get_or(Color::TRANSPARENT);
+        let initial = self.background.get_or_untracked(Color::TRANSPARENT);
         self.anims_mut().background = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for corner radius changes
     pub fn animate_corner_radius(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.corner_radius.get_or(0.0);
+        let initial = self.corner_radius.get_or_untracked(0.0);
         self.anims_mut().corner_radius = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for padding changes
     pub fn animate_padding(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.padding.get_or(Padding::default());
+        let initial = self.padding.get_or_untracked(Padding::default());
         self.anims_mut().padding = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for border width changes
     pub fn animate_border_width(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.border_width.get_or(0.0);
+        let initial = self.border_width.get_or_untracked(0.0);
         self.anims_mut().border_width = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for border color changes
     pub fn animate_border_color(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.border_color.get_or(Color::TRANSPARENT);
+        let initial = self.border_color.get_or_untracked(Color::TRANSPARENT);
         self.anims_mut().border_color = Some(AnimationState::new(initial, transition));
         self
     }
 
     /// Enable animation for transform changes
     pub fn animate_transform(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.transform.get_or(Transform::IDENTITY);
+        let initial = self.transform.get_or_untracked(Transform::IDENTITY);
         self.anims_mut().transform = Some(AnimationState::new(initial, transition));
         self
     }
@@ -721,7 +722,7 @@ impl Container {
         enter_from: Transform,
         transition: impl Into<TransitionConfig>,
     ) -> Self {
-        let initial = self.transform.get_or(Transform::IDENTITY);
+        let initial = self.transform.get_or_untracked(Transform::IDENTITY);
         self.anims_mut().transform =
             Some(AnimationState::new(initial, transition).with_enter_from(enter_from));
         self
@@ -807,11 +808,16 @@ impl Container {
         // This happens when:
         // 1. It has explicit fixed width AND height
         // 2. OR the parent passes tight constraints (min == max)
-        let has_fixed_width = self.width.as_ref().is_some_and(|w| w.get().exact.is_some());
+        // Snapshots: this runs inside the widget's own layout, which reads the
+        // same signals under tracking right after — the subscription exists
+        let has_fixed_width = self
+            .width
+            .as_ref()
+            .is_some_and(|w| w.get_untracked().exact.is_some());
         let has_fixed_height = self
             .height
             .as_ref()
-            .is_some_and(|h| h.get().exact.is_some());
+            .is_some_and(|h| h.get_untracked().exact.is_some());
         let tight_width = constraints.min_width == constraints.max_width;
         let tight_height = constraints.min_height == constraints.max_height;
         (has_fixed_width || tight_width) && (has_fixed_height || tight_height)
@@ -1134,12 +1140,23 @@ impl Widget for Container {
     }
 
     fn layout_hints(&self) -> LayoutHints {
-        if !self.visible.get_or(true) {
+        // The parent asks this while laying out; snapshots are right here,
+        // because the child's own layout subscribes to the same signals and a
+        // change re-runs it (and bubbles to the parent) anyway.
+        if !self.visible.get_or_untracked(true) {
             return LayoutHints::default();
         }
         LayoutHints {
-            fill_width: self.width.as_ref().map(|w| w.get().fill).unwrap_or(false),
-            fill_height: self.height.as_ref().map(|h| h.get().fill).unwrap_or(false),
+            fill_width: self
+                .width
+                .as_ref()
+                .map(|w| w.get_untracked().fill)
+                .unwrap_or(false),
+            fill_height: self
+                .height
+                .as_ref()
+                .map(|h| h.get_untracked().fill)
+                .unwrap_or(false),
         }
     }
 

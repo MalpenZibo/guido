@@ -469,10 +469,14 @@ fn render_surface(
         return;
     }
 
-    // Dispatch events to widget
+    // Dispatch events to widget. Handlers read signals for their current
+    // value, not to subscribe — a click wants the value at click time — so
+    // the whole dispatch is a snapshot zone.
     for event in &events {
-        tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
-            widget.event(tree, id, event);
+        reactive::diagnostics::snapshot_zone(|| {
+            tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
+                widget.event(tree, id, event);
+            });
         });
     }
 

@@ -128,6 +128,11 @@ fn vec_remove<T: PartialEq>(vec: &mut Vec<T>, value: &T) {
     }
 }
 
+/// Whether an effect (or memo) is currently executing and collecting reads.
+pub(crate) fn effect_tracking_active() -> bool {
+    EFFECT_TRACKING.with(|stack| stack.try_borrow().map(|s| !s.is_empty()).unwrap_or(true))
+}
+
 /// Buffer a signal read for the currently executing effect.
 /// Called from tracked_get/tracked_with. During effect execution, the Runtime
 /// RefCell is already borrowed, so reads are buffered here and applied after.
