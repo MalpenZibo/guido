@@ -127,6 +127,23 @@ impl Widget for Text {
         // Text widgets are never relayout boundaries
         tree.set_relayout_boundary(id, false);
 
+        // Same early-out as Container: an unchanged text under unchanged
+        // constraints neither re-measures nor gets repainted, even when an
+        // ancestor re-runs its layout. Content and style changes come through
+        // signals tracked below, which mark this widget for layout.
+        let constraints_changed = tree.cached_constraints(id) != Some(constraints);
+        let reactive_changed = tree.needs_layout(id);
+        if !(constraints_changed || reactive_changed) {
+            crate::render_stats::record_layout_skipped();
+            return tree.cached_size(id).unwrap_or_default();
+        }
+        crate::render_stats::record_layout_executed_with_reasons(
+            crate::render_stats::LayoutReasons {
+                constraints_changed,
+                reactive_changed,
+            },
+        );
+
         // Refresh cached values from reactive properties
         // This reads signals and registers layout dependencies
         self.refresh(id);

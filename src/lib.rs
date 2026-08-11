@@ -606,10 +606,13 @@ fn render_surface(
                     widget.layout(tree, id, cached);
                 });
             }
-            // Layout may reposition children — conservatively mark subtrees as needing paint
-            for root_id in &roots {
-                tree.mark_subtree_needs_paint(*root_id);
-            }
+            // Paint invalidation is per widget, not per subtree: every widget
+            // that actually ran its layout marked itself (and its ancestors)
+            // inside Tree::cache_layout, and Tree::set_origin damaged what
+            // moved. Marking the whole subtree here instead would repaint
+            // every descendant of the layout root — which in a
+            // content-sized tree is the whole surface — and throw away the
+            // paint and flatten caches the layout pass just earned.
         } else if needs_resize {
             // Full layout from root only when explicitly needed (first frame, resize, etc.)
             tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
