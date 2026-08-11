@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use crate::jobs::{JobRequest, request_job};
 use crate::layout::{Constraints, Size};
-use crate::reactive::{OwnerId, dispose_owner};
+use crate::reactive::{OwnerId, dispose_owner_now};
 use crate::renderer::PaintContext;
 use crate::tree::{Tree, WidgetId};
 
@@ -456,7 +456,7 @@ struct OwnerGuard(OwnerId);
 
 impl Drop for OwnerGuard {
     fn drop(&mut self) {
-        dispose_owner(self.0);
+        dispose_owner_now(self.0);
     }
 }
 
@@ -489,7 +489,7 @@ impl OwnedWidget {
 impl Drop for OwnedWidget {
     fn drop(&mut self) {
         if let OwnerHandle::Exclusive(owner_id) = self.owner {
-            dispose_owner(owner_id);
+            dispose_owner_now(owner_id);
         }
         // Shared: the SharedOwner guard disposes when its last clone drops
     }

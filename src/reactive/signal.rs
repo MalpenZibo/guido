@@ -559,10 +559,10 @@ mod tests {
     /// wrote the new signal's value.
     #[test]
     fn test_stale_handle_does_not_alias_recycled_slot() {
-        use super::super::owner::{dispose_owner, with_owner};
+        use super::super::owner::{dispose_owner_now, with_owner};
 
         let (stale, owner_id) = with_owner(|| create_signal(1_i32));
-        dispose_owner(owner_id);
+        dispose_owner_now(owner_id);
 
         // Recycles the freed slot with the same value type
         let fresh = create_signal(2_i32);

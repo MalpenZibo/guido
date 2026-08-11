@@ -343,14 +343,14 @@ pub fn has_signal(id: SignalId) -> bool {
 #[cfg(test)]
 mod dispose_write_tests {
     use crate::reactive::create_signal;
-    use crate::reactive::owner::{dispose_owner, with_owner};
+    use crate::reactive::owner::{dispose_owner_now, with_owner};
 
     /// Writes race disposal by design (queued WriteSignal flushes, delayed
     /// timers): they must be dropped, not panic.
     #[test]
     fn write_to_disposed_signal_is_a_noop() {
         let (sig, owner) = with_owner(|| create_signal(1u32));
-        dispose_owner(owner);
+        dispose_owner_now(owner);
         sig.set(2); // must not panic
         sig.update(|v| *v += 1); // must not panic
     }

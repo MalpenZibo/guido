@@ -183,7 +183,7 @@ fn service_runtime() -> tokio::runtime::Handle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reactive::owner::{dispose_owner, with_owner};
+    use crate::reactive::owner::{dispose_owner_now, with_owner};
     use std::sync::atomic::AtomicI32;
     use std::time::Duration;
 
@@ -213,7 +213,7 @@ mod tests {
         }
         assert_eq!(received.load(Ordering::SeqCst), 5);
 
-        dispose_owner(owner_id);
+        dispose_owner_now(owner_id);
     }
 
     #[tokio::test]
@@ -236,7 +236,7 @@ mod tests {
         assert!(count_before > 0, "Service should have run at least once");
 
         // Dispose the owner
-        dispose_owner(owner_id);
+        dispose_owner_now(owner_id);
 
         // Wait for service to notice and stop
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -283,7 +283,7 @@ mod tests {
         assert_eq!(received.load(Ordering::SeqCst), 60);
 
         // Cleanup
-        dispose_owner(owner_id);
+        dispose_owner_now(owner_id);
     }
 
     #[tokio::test]
@@ -315,6 +315,6 @@ mod tests {
 
         assert_eq!(received.load(Ordering::SeqCst), 12);
 
-        dispose_owner(owner_id);
+        dispose_owner_now(owner_id);
     }
 }

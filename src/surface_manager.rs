@@ -9,7 +9,7 @@ use smithay_client_toolkit::reexports::client::Connection;
 
 use crate::layout::Constraints;
 use crate::platform::{WaylandState, WaylandWindowWrapper};
-use crate::reactive::owner::{OwnerId, dispose_owner};
+use crate::reactive::owner::{OwnerId, dispose_owner_now};
 use crate::renderer::{FlattenedCommand, GpuContext, RenderNode, SurfaceState};
 use crate::surface::{SurfaceConfig, SurfaceId};
 use crate::tree::{Tree, WidgetId};
@@ -129,7 +129,7 @@ impl ManagedSurface {
 
 impl Drop for ManagedSurface {
     fn drop(&mut self) {
-        dispose_owner(self.owner_id);
+        dispose_owner_now(self.owner_id);
     }
 }
 
@@ -254,7 +254,7 @@ mod tests {
 
     use super::*;
     use crate::layout::{Constraints, Size};
-    use crate::reactive::owner::{dispose_owner as dispose, with_owner};
+    use crate::reactive::owner::{dispose_owner_now as dispose, with_owner};
     use crate::reactive::{create_memo, create_signal};
     use crate::widgets::Widget;
     use crate::widgets::children::ChildrenSource;

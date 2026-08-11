@@ -34,16 +34,17 @@ pub use into_signal::{
 pub use into_signal::{IntoSignal, IntoVal};
 pub(crate) use invalidation::with_signal_tracking;
 pub use memo::{Memo, create_memo};
-// Only on_cleanup is public API - with_owner, dispose_owner, and OwnerId are
-// internal and automatically used by the dynamic children system
-pub(crate) use owner::{OwnerId, create_root_owner, dispose_owner, with_owner};
-pub use owner::{on_cleanup, retire_owner};
+// with_owner and OwnerId are internal and automatically used by the
+// dynamic children system; the public dispose_owner is deferred (safe to
+// call from anywhere), the synchronous engine stays crate-internal.
+pub(crate) use owner::{OwnerId, create_root_owner, dispose_owner_now, with_owner};
+pub use owner::{dispose_owner, on_cleanup};
 
 /// Internal module for macro support. NOT PART OF PUBLIC API.
 /// Do not use directly - these are re-exported for proc macros only.
 #[doc(hidden)]
 pub mod __internal {
-    pub use super::owner::{OwnerId, dispose_owner, with_owner};
+    pub use super::owner::{OwnerId, dispose_owner_now as dispose_owner, with_owner};
     pub use super::runtime::batch;
 }
 pub(crate) use runtime::flush_bg_writes;

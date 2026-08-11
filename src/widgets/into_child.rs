@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::reactive::invalidation::suspend_widget_tracking;
-use crate::reactive::{OwnerId, dispose_owner, with_owner};
+use crate::reactive::{OwnerId, dispose_owner_now, with_owner};
 
 use super::Widget;
 use super::children::{ChildrenSource, DynItem, OwnedWidget, SharedOwner};
@@ -111,7 +111,7 @@ where
             // Defensive: a widget stashed by a previous pass that was never
             // adopted would leak its owner scope.
             if let Some((_, owner_id)) = st.pending.take() {
-                dispose_owner(owner_id);
+                dispose_owner_now(owner_id);
             }
 
             let child_fn = Rc::clone(&child_fn);
@@ -130,7 +130,7 @@ where
                     })]
                 }
                 None => {
-                    dispose_owner(owner_id);
+                    dispose_owner_now(owner_id);
                     vec![]
                 }
             }
@@ -216,7 +216,7 @@ where
                     .collect::<Vec<_>>()
             });
             if widgets.is_empty() {
-                dispose_owner(owner_id);
+                dispose_owner_now(owner_id);
                 return vec![];
             }
 
@@ -347,7 +347,7 @@ fn add_keyed_children<T, I, W>(
         // Defensive: widgets stashed by a previous pass that were never
         // adopted would leak their owner scopes.
         for (_, (_, owner_id)) in st.pending.drain() {
-            dispose_owner(owner_id);
+            dispose_owner_now(owner_id);
         }
 
         let mut seen = std::collections::HashSet::new();
