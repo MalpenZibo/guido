@@ -2206,27 +2206,38 @@ impl Widget for Container {
                 && !tree.needs_paint(child_id)
                 && let Some(cached) = tree.cached_paint(child_id)
             {
-                if cached.parent_position == child_position && cached.bounds == child_local {
-                    // Position unchanged: reuse the cached node wholesale.
-                    // Zero copies — the render tree and the cache share it.
-                    ctx.add_child_rc(std::rc::Rc::clone(cached));
-                } else {
-                    // Position changed: shallow header clone (children and
-                    // commands are Rc-shared, so this copies no subtree).
-                    // Decompose: extract user transform, recompose with new position.
-                    let mut reused = (**cached).clone();
-                    let user_part = cached
-                        .parent_position
-                        .inverse()
-                        .then(&cached.local_transform);
-                    reused.local_transform = child_position.then(&user_part);
-                    reused.parent_position = child_position;
-                    reused.bounds = child_local;
-                    reused.repainted.set(false);
-                    ctx.add_child_rc(std::rc::Rc::new(reused));
+                // A cached node may only be re-parented, never re-sized: its
+                // commands were built for the size it was painted at. A size
+                // change means the child ran layout and marked itself, so it
+                // should not reach here — falling through to a full paint if
+                // it ever does keeps a missed invalidation from turning into
+                // stale content stretched to the wrong box.
+                let same_size = cached.bounds.width == child_local.width
+                    && cached.bounds.height == child_local.height;
+                if same_size {
+                    if cached.parent_position == child_position {
+                        // Position unchanged: reuse the cached node wholesale.
+                        // Zero copies — the render tree and the cache share it.
+                        ctx.add_child_rc(std::rc::Rc::clone(cached));
+                    } else {
+                        // Position changed: shallow header clone (children and
+                        // commands are Rc-shared, so this copies no subtree).
+                        // Decompose: extract user transform, recompose with new position.
+                        let mut reused = (**cached).clone();
+                        let user_part = cached
+                            .parent_position
+                            .inverse()
+                            .then(&cached.local_transform);
+                        reused.local_transform = child_position.then(&user_part);
+                        reused.parent_position = child_position;
+                        reused.bounds = child_local;
+                        reused.repainted.set(false);
+                        ctx.add_child_rc(std::rc::Rc::new(reused));
+                    }
+                    crate::render_stats::record_paint_child_cached();
+                    continue;
                 }
-                crate::render_stats::record_paint_child_cached();
-                continue;
+                // Different size: fall through to a full paint below.
             }
 
             // Full paint (child is dirty, no cache, or partially visible scrollable child)

@@ -575,12 +575,39 @@ impl Tree {
             .unwrap_or(false)
     }
 
-    /// Cache the constraints and size for a widget.
+    /// Cache the constraints and size for a widget, and invalidate its paint.
+    ///
+    /// This is only reached by a widget that actually ran its layout — the
+    /// ones that hit the early-out (clean, same constraints) return before
+    /// getting here — so it is the point where the layout pass tells paint
+    /// what it touched. Same rule as Flutter, whose `RenderObject.layout()`
+    /// ends in `markNeedsPaint()` for the objects that laid out; everything
+    /// the pass skipped keeps its cached paint.
+    ///
+    /// Running layout is the invalidation signal, not a size change: a
+    /// widget's painted output can depend on state it refreshes during
+    /// layout (a `Text` re-reads its content there and paints from the
+    /// cached copy), so a clock going from `15:23` to `15:24` at the very
+    /// same width still has to be redrawn.
+    ///
+    /// When the size changes, the damage covers both the rectangle the
+    /// widget used to occupy and the one it occupies now.
     pub fn cache_layout(&mut self, id: WidgetId, constraints: Constraints, size: Size) {
-        if let Some(idx) = self.get_dense_index(id) {
-            self.dense[idx].cached_constraints = Some(constraints);
-            self.dense[idx].cached_size = Some(size);
+        let Some(idx) = self.get_dense_index(id) else {
+            return;
+        };
+        let previous_size = self.dense[idx].cached_size;
+        if previous_size.is_some_and(|prev| prev != size)
+            && let Some((root, vacated)) = self.surface_relative_bounds_and_root(id)
+        {
+            self.expand_damage_rect(root, vacated);
         }
+        let idx = self.get_dense_index(id).expect("checked above");
+        self.dense[idx].cached_constraints = Some(constraints);
+        self.dense[idx].cached_size = Some(size);
+        // Damages the new rect and marks the ancestors, which have to redraw
+        // to re-emit this widget at its new geometry.
+        self.mark_needs_paint(id);
     }
 
     /// Get cached constraints for a widget.
@@ -596,9 +623,26 @@ impl Tree {
     }
 
     /// Set the origin (position) for a widget.
+    ///
+    /// A widget that moves damages the pixels it leaves behind as well as the
+    /// ones it now covers. It does not need repainting for that: its painted
+    /// content is position-independent and the parent re-emits it at the new
+    /// offset (paint-cache reuse re-parents the cached node). The parent is
+    /// already marked, since moving a child means it ran its own layout.
     pub fn set_origin(&mut self, id: WidgetId, x: f32, y: f32) {
-        if let Some(idx) = self.get_dense_index(id) {
-            self.dense[idx].origin = (x, y);
+        let Some(idx) = self.get_dense_index(id) else {
+            return;
+        };
+        if self.dense[idx].origin == (x, y) {
+            return;
+        }
+        if let Some((root, vacated)) = self.surface_relative_bounds_and_root(id) {
+            self.expand_damage_rect(root, vacated);
+        }
+        let idx = self.get_dense_index(id).expect("checked above");
+        self.dense[idx].origin = (x, y);
+        if let Some((root, occupied)) = self.surface_relative_bounds_and_root(id) {
+            self.expand_damage_rect(root, occupied);
         }
     }
 
@@ -985,6 +1029,117 @@ mod tests {
         assert!(
             tree.needs_paint(root_id),
             "surface root must see the dirty descendant or the frame is skipped"
+        );
+    }
+
+    /// Build `root -> [a, b]`, both laid out and clean.
+    fn two_children_tree() -> (Tree, WidgetId, WidgetId, WidgetId) {
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(MockWidget::new()));
+        let a = tree.register(Box::new(MockWidget::new()));
+        let b = tree.register(Box::new(MockWidget::new()));
+        tree.set_parent(a, root);
+        tree.set_parent(b, root);
+
+        let c = Constraints::new(0.0, 0.0, 100.0, 100.0);
+        tree.cache_layout(root, c, Size::new(100.0, 100.0));
+        tree.cache_layout(a, c, Size::new(40.0, 20.0));
+        tree.set_origin(a, 0.0, 0.0);
+        tree.cache_layout(b, c, Size::new(40.0, 20.0));
+        tree.set_origin(b, 0.0, 20.0);
+        for id in [root, a, b] {
+            tree.clear_needs_paint(id);
+        }
+        let _ = tree.take_damage(root);
+        (tree, root, a, b)
+    }
+
+    /// The point of incremental invalidation: re-laying out one subtree must
+    /// leave its siblings' paint caches alone. Marking the layout root's whole
+    /// subtree instead (the old behaviour) repainted every widget under it,
+    /// which in a content-sized tree is the entire surface.
+    #[test]
+    fn relayout_of_one_child_leaves_its_sibling_paintable_from_cache() {
+        let (mut tree, root, a, b) = two_children_tree();
+
+        // `a` re-runs its layout; `b` is untouched
+        tree.cache_layout(
+            a,
+            Constraints::new(0.0, 0.0, 100.0, 100.0),
+            Size::new(60.0, 20.0),
+        );
+
+        assert!(tree.needs_paint(a), "the widget that laid out repaints");
+        assert!(
+            tree.needs_paint(root),
+            "its ancestors repaint to re-emit it at the new geometry"
+        );
+        assert!(
+            !tree.needs_paint(b),
+            "an untouched sibling must keep its cached paint"
+        );
+    }
+
+    /// A widget can run layout and come out the same size while painting
+    /// something else — a clock going from `15:23` to `15:24` refreshes its
+    /// glyphs during layout. Running layout is the invalidation signal.
+    #[test]
+    fn running_layout_repaints_even_when_the_size_is_unchanged() {
+        let (mut tree, _root, a, _b) = two_children_tree();
+        let same = tree.cached_size(a).unwrap();
+
+        tree.cache_layout(a, Constraints::new(0.0, 0.0, 100.0, 100.0), same);
+
+        assert!(tree.needs_paint(a));
+    }
+
+    /// Shrinking must damage the rectangle the widget stops covering, or the
+    /// compositor keeps showing the pixels it left behind.
+    #[test]
+    fn shrinking_damages_the_vacated_rectangle() {
+        let (mut tree, root, a, _b) = two_children_tree();
+
+        tree.cache_layout(
+            a,
+            Constraints::new(0.0, 0.0, 100.0, 100.0),
+            Size::new(10.0, 20.0),
+        );
+
+        match tree.take_damage(root) {
+            DamageRegion::Partial(rect) => {
+                assert!(
+                    rect.width >= 40.0,
+                    "damage must cover the old 40px-wide box, got {rect:?}"
+                );
+            }
+            other => panic!("expected partial damage, got {other:?}"),
+        }
+    }
+
+    /// Moving a widget damages both where it was and where it lands. Its own
+    /// paint stays valid — the parent re-emits it at the new offset.
+    #[test]
+    fn moving_a_widget_damages_both_positions() {
+        let (mut tree, root, a, _b) = two_children_tree();
+
+        tree.set_origin(a, 0.0, 60.0);
+
+        match tree.take_damage(root) {
+            DamageRegion::Partial(rect) => {
+                assert!(
+                    rect.y <= 0.0,
+                    "damage must reach the old position, got {rect:?}"
+                );
+                assert!(
+                    rect.y + rect.height >= 80.0,
+                    "damage must reach the new position, got {rect:?}"
+                );
+            }
+            other => panic!("expected partial damage, got {other:?}"),
+        }
+        assert!(
+            !tree.needs_paint(a),
+            "a widget that only moved keeps its cached paint"
         );
     }
 }
