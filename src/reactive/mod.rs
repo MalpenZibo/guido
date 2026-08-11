@@ -36,8 +36,8 @@ pub(crate) use invalidation::with_signal_tracking;
 pub use memo::{Memo, create_memo};
 // Only on_cleanup is public API - with_owner, dispose_owner, and OwnerId are
 // internal and automatically used by the dynamic children system
-pub use owner::on_cleanup;
 pub(crate) use owner::{OwnerId, create_root_owner, dispose_owner, with_owner};
+pub use owner::{on_cleanup, retire_owner};
 
 /// Internal module for macro support. NOT PART OF PUBLIC API.
 /// Do not use directly - these are re-exported for proc macros only.

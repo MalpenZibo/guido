@@ -1009,6 +1009,10 @@ impl App {
                 &mut self.tree,
             );
 
+            // Dispose owners retired from inside their own computations
+            // (retire_owner). Safe here: no user closure is on the stack.
+            reactive::owner::dispose_retired_owners();
+
             // Process dynamic surface commands
             if !process_surface_commands(
                 &mut surface_manager,
