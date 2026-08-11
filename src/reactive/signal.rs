@@ -99,6 +99,22 @@ fn update_and_notify<T: Clone + PartialEq + 'static>(id: SignalId, f: impl FnOnc
     }
 }
 
+/// Write without comparison: every write notifies (main thread only).
+fn write_and_notify_always<T: Clone + 'static>(id: SignalId, value: T) {
+    if crate::reactive::storage::set_signal_value_always(id, value) {
+        notify_signal_change(id);
+        notify_write(id);
+    }
+}
+
+/// Update without comparison: every update notifies (main thread only).
+fn update_and_notify_always<T: Clone + 'static>(id: SignalId, f: impl FnOnce(&mut T)) {
+    if crate::reactive::storage::update_signal_value_always(id, f) {
+        notify_signal_change(id);
+        notify_write(id);
+    }
+}
+
 /// A read-only reactive signal.
 ///
 /// `Signal<T>` provides read access to reactive values. It is returned by
@@ -216,7 +232,11 @@ impl<T: Clone + 'static> RwSignal<T> {
 }
 
 impl<T: Clone + PartialEq + 'static> RwSignal<T> {
-    /// Set a new value (notifies subscribers if changed)
+    /// Set a new value (notifies subscribers if changed).
+    ///
+    /// This is the STATE write: equal values are deduplicated. For
+    /// trigger-style writes where every emission must notify — or for
+    /// types with no meaningful `PartialEq` — use [`RwSignal::set_always`].
     pub fn set(&self, value: T) {
         write_and_notify(self.id, value);
     }
@@ -227,7 +247,31 @@ impl<T: Clone + PartialEq + 'static> RwSignal<T> {
     }
 }
 
-impl<T: Clone + PartialEq + Send + 'static> RwSignal<T> {
+impl<T: Clone + 'static> RwSignal<T> {
+    /// Set a new value, notifying subscribers unconditionally.
+    ///
+    /// Equality is a property of the WRITE SITE, not of the signal: `set`
+    /// publishes state (equal values deduplicate), `set_always` fires a
+    /// trigger (every emission notifies). No `PartialEq` bound — types
+    /// without meaningful equality can only be written this way, and the
+    /// compiler steers them here.
+    ///
+    /// Note that a signal still holds ONE value: two `set_always` calls
+    /// before the consumer runs coalesce to the last value (one
+    /// notification per flush). That is correct for frame-coalescing
+    /// triggers (an OSD flash, an animation kick); event streams that
+    /// must not lose emissions belong in an async channel, not a signal.
+    pub fn set_always(&self, value: T) {
+        write_and_notify_always(self.id, value);
+    }
+
+    /// Update the value using a closure, notifying unconditionally.
+    pub fn update_always<F: FnOnce(&mut T)>(&self, f: F) {
+        update_and_notify_always(self.id, f);
+    }
+}
+
+impl<T: Clone + Send + 'static> RwSignal<T> {
     /// Get a `WriteSignal<T>` for writing from background threads.
     ///
     /// `WriteSignal<T>` is `Send` and can be captured in `create_service` closures.
@@ -334,6 +378,51 @@ impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
     }
 }
 
+impl<T: Clone + Send + 'static> WriteSignal<T> {
+    /// Sets the signal's value, notifying subscribers unconditionally.
+    ///
+    /// The trigger-style counterpart of [`WriteSignal::set`]: no
+    /// comparison, no `PartialEq` bound. Same threading semantics
+    /// (immediate on the main thread, queued for the next frame from
+    /// background threads).
+    pub fn set_always(&self, value: T) {
+        if has_signal(self.id) {
+            write_and_notify_always(self.id, value);
+        } else {
+            let id = self.id;
+            let epoch = self.epoch;
+            queue_bg_write(epoch, move || {
+                // See `set()`: disposal can race a queued write; drop it.
+                if has_signal(id) {
+                    write_and_notify_always(id, value);
+                } else {
+                    log::debug!("dropping background write to disposed signal {id}");
+                }
+            });
+        }
+    }
+
+    /// Updates the signal's value using a closure, notifying unconditionally.
+    pub fn update_always<F>(&self, f: F)
+    where
+        F: FnOnce(&mut T) + Send + 'static,
+    {
+        if has_signal(self.id) {
+            update_and_notify_always(self.id, f);
+        } else {
+            let id = self.id;
+            let epoch = self.epoch;
+            queue_bg_write(epoch, move || {
+                if has_signal(id) {
+                    update_and_notify_always(id, f);
+                } else {
+                    log::debug!("dropping background update to disposed signal {id}");
+                }
+            });
+        }
+    }
+}
+
 /// Create a read-write reactive signal.
 ///
 /// Returns an [`RwSignal<T>`] that supports both reading and writing.
@@ -347,7 +436,7 @@ impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
 /// count.get();            // read
 /// container().padding(count) // auto-converts to Signal<T> via IntoSignal
 /// ```
-pub fn create_signal<T: Clone + PartialEq + Send + 'static>(value: T) -> RwSignal<T> {
+pub fn create_signal<T: Clone + Send + 'static>(value: T) -> RwSignal<T> {
     let id = create_signal_value(value);
     // Safe even inside effect callbacks: the runtime borrow is never held
     // across user code anymore.
@@ -597,5 +686,52 @@ mod tests {
         let writer = signal.writer();
         writer.update(|v| *v += 5);
         assert_eq!(signal.get(), 15);
+    }
+
+    /// Equality is a property of the write site: `set` deduplicates equal
+    /// values, `set_always` notifies unconditionally.
+    #[test]
+    fn set_dedups_but_set_always_notifies() {
+        use crate::reactive::create_effect;
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let sig = create_signal(7);
+        let runs = Rc::new(Cell::new(0));
+        let counter = runs.clone();
+        create_effect(move || {
+            let _ = sig.get();
+            counter.set(counter.get() + 1);
+        })
+        .detach();
+        assert_eq!(runs.get(), 1);
+
+        sig.set(7); // equal: state write deduplicates
+        assert_eq!(runs.get(), 1, "set of an equal value must not notify");
+
+        sig.set_always(7); // equal, but trigger write
+        assert_eq!(runs.get(), 2, "set_always must notify unconditionally");
+    }
+
+    /// A type with no `PartialEq` can live in a signal — the compiler
+    /// steers it to the trigger-style writes.
+    #[test]
+    fn non_partialeq_type_uses_always_writes() {
+        #[derive(Clone)]
+        struct Snapshot {
+            value: u32,
+        }
+
+        let sig = create_signal(Snapshot { value: 1 });
+        sig.set_always(Snapshot { value: 2 });
+        assert_eq!(sig.with(|s| s.value), 2);
+
+        sig.update_always(|s| s.value += 1);
+        assert_eq!(sig.with(|s| s.value), 3);
+
+        // Background-writer path too (same-thread branch)
+        let w = sig.writer();
+        w.set_always(Snapshot { value: 10 });
+        assert_eq!(sig.with(|s| s.value), 10);
     }
 }

@@ -28,6 +28,33 @@ count.update(|c| *c += 1);
 - **Automatic tracking** - Dependencies are tracked when reading inside reactive contexts
 - **Converts to Signal** - Call `.read_only()` or `.into()` to get a read-only `Signal<T>`
 
+## State vs. Triggers: `set` and `set_always`
+
+`set` publishes **state**: equal values are deduplicated (`PartialEq`),
+so republishing unchanged data costs nothing. `set_always` fires a
+**trigger**: every write notifies, no comparison, no `PartialEq` bound —
+the natural write for "something happened" values like an OSD flash:
+
+```rust
+volume.set(50);          // state: setting 50 twice notifies once
+osd.set_always(info);    // trigger: every flash notifies
+```
+
+For a data-less pulse there is `Trigger`:
+
+```rust
+let refresh = create_trigger();
+create_effect(move || {
+    refresh.track();
+    rebuild();
+});
+refresh.notify(); // rebuild() runs every time
+```
+
+Signals hold one value, so rapid `set_always` calls coalesce to the last
+one per frame — perfect for UI triggers, wrong for event streams that
+must not lose emissions (those belong in an async channel).
+
 ## Signal (Read-Only)
 
 `Signal<T>` is a read-only reactive value (12 bytes, `Copy`). It cannot be written to — calling `.set()` is a compile-time error. There are two ways to create one:

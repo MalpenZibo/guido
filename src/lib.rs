@@ -141,10 +141,10 @@ pub mod prelude {
     pub use crate::outputs::{OutputId, OutputInfo, outputs, surface_output};
     pub use crate::platform::{Anchor, KeyboardInteractivity, Layer};
     pub use crate::reactive::{
-        CursorIcon, Memo, OptionSignalExt, RwSignal, Service, Signal, WriteSignal, create_derived,
-        create_effect, create_memo, create_service, create_signal, create_stored, expect_context,
-        has_context, on_cleanup, provide_context, provide_signal_context, set_cursor, use_context,
-        with_context,
+        CursorIcon, Memo, OptionSignalExt, RwSignal, Service, Signal, Trigger, WriteSignal,
+        create_derived, create_effect, create_memo, create_service, create_signal, create_stored,
+        create_trigger, expect_context, has_context, on_cleanup, provide_context,
+        provide_signal_context, set_cursor, use_context, with_context,
     };
     pub use crate::renderer::{PaintContext, Shadow, measure_text};
     pub use crate::session_lock::{

@@ -12,6 +12,7 @@ pub mod runtime;
 pub mod service;
 pub mod signal;
 pub mod storage;
+mod trigger;
 
 pub(crate) use clipboard::{
     clear_system_clipboard, set_system_clipboard, set_system_primary, take_clipboard_change,
@@ -39,6 +40,7 @@ pub use memo::{Memo, create_memo};
 // call from anywhere), the synchronous engine stays crate-internal.
 pub(crate) use owner::{OwnerId, create_root_owner, dispose_owner_now, with_owner};
 pub use owner::{dispose_owner, on_cleanup};
+pub use trigger::{Trigger, create_trigger};
 
 /// Internal module for macro support. NOT PART OF PUBLIC API.
 /// Do not use directly - these are re-exported for proc macros only.
