@@ -949,26 +949,32 @@ impl WaylandState {
 
         layer_surface.set_anchor(config.anchor);
 
-        // When anchored to both edges on an axis, set that dimension to 0
-        // to let the compositor stretch the surface to fill
-        let use_width =
-            if config.anchor.contains(Anchor::LEFT) && config.anchor.contains(Anchor::RIGHT) {
-                0 // Let compositor decide
-            } else {
-                config.width
-            };
-        let use_height =
-            if config.anchor.contains(Anchor::TOP) && config.anchor.contains(Anchor::BOTTOM) {
-                0 // Let compositor decide
-            } else {
-                config.height
-            };
+        // When anchored to both edges on an axis, the compositor owns
+        // that dimension: set it to 0 so it stretches. Content sizing on
+        // such an axis can never take effect — warn loudly.
+        let stretch_w =
+            config.anchor.contains(Anchor::LEFT) && config.anchor.contains(Anchor::RIGHT);
+        let stretch_h =
+            config.anchor.contains(Anchor::TOP) && config.anchor.contains(Anchor::BOTTOM);
+        if (stretch_w && config.width.is_content()) || (stretch_h && config.height.is_content()) {
+            log::warn!(
+                "Surface {id:?}: content() sizing on an axis anchored to both                  screen edges is compositor-owned and will be ignored"
+            );
+        }
+        let initial_width = config.width.initial();
+        let initial_height = config.height.initial();
+        let use_width = if stretch_w { 0 } else { initial_width };
+        let use_height = if stretch_h { 0 } else { initial_height };
 
         layer_surface.set_size(use_width, use_height);
         layer_surface.set_keyboard_interactivity(config.keyboard_interactivity);
 
-        // Set exclusive zone: None means use height, Some(0) means no exclusive zone
-        let zone = config.exclusive_zone.unwrap_or(config.height as i32);
+        let zone = config.exclusive_zone.resolve(
+            config.anchor,
+            config.margin,
+            initial_width,
+            initial_height,
+        );
         layer_surface.set_exclusive_zone(zone);
 
         let (top, right, bottom, left) = config.margin;
@@ -990,16 +996,16 @@ impl WaylandState {
         let surface_state = WaylandSurfaceState::new(
             SurfaceRole::Layer(layer_surface),
             wl_surface,
-            config.width,
-            config.height,
+            initial_width,
+            initial_height,
         );
         self.surfaces.insert(id, surface_state);
 
         log::info!(
             "Created surface {:?} with size {}x{}, anchor {:?}, layer {:?}, keyboard {:?}",
             id,
-            config.width,
-            config.height,
+            initial_width,
+            initial_height,
             config.anchor,
             config.layer,
             config.keyboard_interactivity

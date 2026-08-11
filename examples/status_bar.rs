@@ -6,6 +6,7 @@ fn main() {
             SurfaceConfig::new()
                 .height(32)
                 .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+                .exclusive_zone(ExclusiveZone::Auto)
                 .background_color(Color::rgb(0.1, 0.1, 0.15)),
             || {
                 container()

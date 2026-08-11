@@ -4,6 +4,7 @@ mod animations;
 mod ripple;
 mod scrollable;
 
+pub(crate) use animations::with_measure_final;
 pub use animations::{AdvanceResult, AnimationState, get_animated_value};
 pub use ripple::RippleState;
 
@@ -1199,7 +1200,11 @@ impl Widget for Container {
         let child_layout_width =
             if let Some(anim) = self.anims.as_ref().and_then(|a| a.width.as_ref()) {
                 if !anim.is_initial() && width_length.exact.is_some() {
-                    *anim.current()
+                    if animations::measuring_final() {
+                        *anim.target()
+                    } else {
+                        *anim.current()
+                    }
                 } else {
                     width_length.exact.unwrap_or(constraints.max_width)
                 }
@@ -1217,7 +1222,11 @@ impl Widget for Container {
         let child_layout_height =
             if let Some(anim) = self.anims.as_ref().and_then(|a| a.height.as_ref()) {
                 if !anim.is_initial() && height_length.exact.is_some() {
-                    *anim.current()
+                    if animations::measuring_final() {
+                        *anim.target()
+                    } else {
+                        *anim.current()
+                    }
                 } else {
                     height_length.exact.unwrap_or(constraints.max_height)
                 }
@@ -1474,12 +1483,18 @@ impl Widget for Container {
             || has_exact_height
             || self.scroll_axis.allows_vertical();
 
-        // Calculate final dimensions
+        // Calculate final dimensions (measure-final: report animation
+        // targets so content-sized surfaces size once, not per frame)
         let mut width = if let Some(anim) = self.anims.as_ref().and_then(|a| a.width.as_ref()) {
-            if allow_shrink_width {
-                *anim.current()
+            let animated = if animations::measuring_final() {
+                *anim.target()
             } else {
-                content_width.max(*anim.current())
+                *anim.current()
+            };
+            if allow_shrink_width {
+                animated
+            } else {
+                content_width.max(animated)
             }
         } else if let Some(exact) = width_length.exact {
             exact
@@ -1498,10 +1513,15 @@ impl Widget for Container {
         }
 
         let mut height = if let Some(anim) = self.anims.as_ref().and_then(|a| a.height.as_ref()) {
-            if allow_shrink_height {
-                *anim.current()
+            let animated = if animations::measuring_final() {
+                *anim.target()
             } else {
-                content_height.max(*anim.current())
+                *anim.current()
+            };
+            if allow_shrink_height {
+                animated
+            } else {
+                content_height.max(animated)
             }
         } else if let Some(exact) = height_length.exact {
             exact
@@ -2306,6 +2326,51 @@ mod tests {
                 job_type: JobType::Animation,
             }),
             "paint must request an Animation job for the missed target change, got {drained:?}"
+        );
+    }
+
+    /// Content-sized surfaces measure under the measure-final flag: layout
+    /// must report animation TARGETS, not in-flight values, so a growth
+    /// animation resizes the surface once instead of once per frame.
+    #[test]
+    fn measure_final_reads_animation_targets() {
+        let height_sig = create_signal(100.0_f32);
+        let widget = container()
+            .width(50.0)
+            .height(move || height_sig.get())
+            .animate_height(Transition::new(200, TimingFunction::EaseOut));
+
+        let mut tree = Tree::new();
+        let id = tree.register(Box::new(widget));
+        // The real flow measures under DIFFERENT constraints than the
+        // render layout (loose caps vs the exact surface size), which is
+        // also what defeats the layout cache here
+        let render = Constraints::new(0.0, 0.0, 400.0, 400.0);
+        let measure = Constraints::new(0.0, 0.0, 500.0, 500.0);
+
+        // First layout initializes the animation at 100
+        tree.with_widget_mut(id, |w, id, tree| {
+            w.layout(tree, id, render);
+        });
+
+        // Retarget to 180: the animation starts from ~100
+        height_sig.set(180.0);
+        let mid = tree
+            .with_widget_mut(id, |w, id, tree| w.layout(tree, id, render))
+            .unwrap();
+        assert!(
+            mid.height < 180.0,
+            "mid-animation layout should not have reached the target yet (got {})",
+            mid.height
+        );
+
+        let fin = super::animations::with_measure_final(|| {
+            tree.with_widget_mut(id, |w, id, tree| w.layout(tree, id, measure))
+        })
+        .unwrap();
+        assert_eq!(
+            fin.height, 180.0,
+            "measure-final must report the animation target"
         );
     }
 

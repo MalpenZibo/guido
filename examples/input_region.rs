@@ -18,7 +18,7 @@ fn main() {
                 .height(80)
                 .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
                 .layer(Layer::Overlay)
-                .exclusive_zone(Some(0))
+                .exclusive_zone(ExclusiveZone::None)
                 .background_color(Color::TRANSPARENT)
                 // Start fully click-through; the effect below narrows the
                 // region to the pill once it has been laid out.

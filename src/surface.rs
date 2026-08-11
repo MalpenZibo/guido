@@ -75,10 +75,10 @@ impl SurfaceId {
 /// ```
 #[derive(Clone)]
 pub struct SurfaceConfig {
-    /// Width of the surface in logical pixels.
-    pub width: u32,
-    /// Height of the surface in logical pixels.
-    pub height: u32,
+    /// Width of the surface (fixed pixels or content-following).
+    pub width: SurfaceExtent,
+    /// Height of the surface (fixed pixels or content-following).
+    pub height: SurfaceExtent,
     /// Anchor edges for the surface position.
     pub anchor: Anchor,
     /// Layer shell layer (background, bottom, top, overlay).
@@ -89,8 +89,8 @@ pub struct SurfaceConfig {
     pub namespace: String,
     /// Background color for the surface.
     pub background_color: Color,
-    /// Exclusive zone (reserves screen space). None means use height.
-    pub exclusive_zone: Option<i32>,
+    /// Screen-space reservation policy (see [`ExclusiveZone`]).
+    pub exclusive_zone: ExclusiveZone,
     /// Margins from the anchored screen edges (top, right, bottom, left).
     pub margin: (i32, i32, i32, i32),
     /// Output (monitor) to show the surface on. None lets the compositor choose.
@@ -101,17 +101,181 @@ pub struct SurfaceConfig {
     pub input_region: Option<Vec<Rect>>,
 }
 
+/// Per-axis sizing for layer surfaces.
+///
+/// `Fixed` is a size in logical pixels (plain integers convert into it).
+/// `Content` follows the content's natural size on that axis — the
+/// [`content()`] constructor reads like [`fill()`](crate::layout::fill)
+/// and friends:
+///
+/// ```ignore
+/// SurfaceConfig::new()
+///     .width(360)             // fixed
+///     .height(content())      // follows the toast stack
+/// ```
+///
+/// Content semantics, designed to stay footgun-free:
+/// - Resizing is asynchronous (one compositor round trip per change) and
+///   happens on CONTENT changes, not per animation frame: the natural
+///   size is measured against animation **targets**, so an animated
+///   growth resizes once up front and the animation plays inside the
+///   final-size surface.
+/// - On an axis anchored to both screen edges the compositor owns the
+///   size; `Content` there is ignored with a warning at creation.
+/// - An exclusive zone of [`ExclusiveZone::FollowHeight`] follows content
+///   resizes; every other policy never moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SurfaceExtent {
+    /// Fixed size in logical pixels.
+    Fixed(u32),
+    /// Follow the content's natural size on this axis.
+    Content,
+}
+
+impl SurfaceExtent {
+    /// The initial protocol size (`Content` starts at 1px until the first
+    /// measure lands).
+    pub(crate) fn initial(self) -> u32 {
+        match self {
+            SurfaceExtent::Fixed(v) => v,
+            SurfaceExtent::Content => 1,
+        }
+    }
+
+    pub(crate) fn is_content(self) -> bool {
+        matches!(self, SurfaceExtent::Content)
+    }
+}
+
+impl From<u32> for SurfaceExtent {
+    fn from(v: u32) -> Self {
+        SurfaceExtent::Fixed(v)
+    }
+}
+
+impl From<i32> for SurfaceExtent {
+    fn from(v: i32) -> Self {
+        SurfaceExtent::Fixed(v.max(0) as u32)
+    }
+}
+
+/// A [`SurfaceExtent`] that follows the content's natural size.
+pub fn content() -> SurfaceExtent {
+    SurfaceExtent::Content
+}
+
+/// Screen-space reservation for layer surfaces, mapping the layer-shell
+/// exclusive-zone semantics to intent. Reserving is **opt-in**: the
+/// default is [`ExclusiveZone::None`] — a bar declares its reservation
+/// explicitly:
+///
+/// ```ignore
+/// .exclusive_zone(ExclusiveZone::Auto)    // a bar reserving itself
+/// .exclusive_zone(34)                     // fixed reservation
+/// .exclusive_zone(ExclusiveZone::None)    // reserve nothing (toasts, OSD)
+/// .exclusive_zone(ExclusiveZone::Ignore)  // overlap panels too
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExclusiveZone {
+    /// Reserve the surface's own extent on the anchored axis, plus the
+    /// margin on that edge (gtk-layer-shell's "auto exclusive zone"): the
+    /// height of a top/bottom bar, the width of a left/right dock — the
+    /// axis follows from the anchor, it is never a choice. Content-sized
+    /// surfaces keep the reservation in sync when they resize. Per the
+    /// layer-shell spec a zone is only meaningful anchored to one edge
+    /// (plus optionally both perpendicular ones); on other anchors this
+    /// resolves to no reservation.
+    Auto,
+    /// Reserve exactly this many logical pixels.
+    Fixed(u32),
+    /// Reserve nothing; the surface is moved by other surfaces' zones.
+    None,
+    /// Reserve nothing and ignore other surfaces' zones (the surface may
+    /// overlap panels; protocol value -1).
+    Ignore,
+}
+
+impl ExclusiveZone {
+    /// Protocol value. [`Auto`](ExclusiveZone::Auto) resolves against the
+    /// surface extent on the anchored axis plus that edge's margin.
+    pub(crate) fn resolve(
+        self,
+        anchor: Anchor,
+        margin: (i32, i32, i32, i32),
+        width: u32,
+        height: u32,
+    ) -> i32 {
+        match self {
+            ExclusiveZone::Auto => match Self::follow_axis(anchor) {
+                Some(FollowAxis::Height) => {
+                    let edge_margin = if anchor.contains(Anchor::TOP) {
+                        margin.0
+                    } else {
+                        margin.2
+                    };
+                    height as i32 + edge_margin
+                }
+                Some(FollowAxis::Width) => {
+                    let edge_margin = if anchor.contains(Anchor::LEFT) {
+                        margin.3
+                    } else {
+                        margin.1
+                    };
+                    width as i32 + edge_margin
+                }
+                None => {
+                    log::warn!(
+                        "ExclusiveZone::Auto on a corner/full anchor has no \
+                         meaningful axis (layer-shell spec); reserving nothing"
+                    );
+                    0
+                }
+            },
+            ExclusiveZone::Fixed(z) => z as i32,
+            ExclusiveZone::None => 0,
+            ExclusiveZone::Ignore => -1,
+        }
+    }
+
+    /// The axis an `Auto` reservation tracks, from the anchor — the
+    /// layer-shell rule: a zone is meaningful anchored to one edge, or
+    /// one edge plus both perpendicular ones.
+    pub(crate) fn follow_axis(anchor: Anchor) -> Option<FollowAxis> {
+        let vertical_edge = anchor.contains(Anchor::TOP) != anchor.contains(Anchor::BOTTOM);
+        let horizontal_edge = anchor.contains(Anchor::LEFT) != anchor.contains(Anchor::RIGHT);
+        match (vertical_edge, horizontal_edge) {
+            (true, false) => Some(FollowAxis::Height),
+            (false, true) => Some(FollowAxis::Width),
+            // Corner (one edge of each axis) or no meaningful anchor
+            _ => None,
+        }
+    }
+}
+
+/// The axis an [`ExclusiveZone::Auto`] reservation tracks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FollowAxis {
+    Width,
+    Height,
+}
+
+impl From<u32> for ExclusiveZone {
+    fn from(z: u32) -> Self {
+        ExclusiveZone::Fixed(z)
+    }
+}
+
 impl Default for SurfaceConfig {
     fn default() -> Self {
         Self {
-            width: 400,
-            height: 300,
+            width: SurfaceExtent::Fixed(400),
+            height: SurfaceExtent::Fixed(300),
             anchor: Anchor::empty(),
             layer: Layer::Top,
             keyboard_interactivity: KeyboardInteractivity::OnDemand,
             namespace: "guido-surface".to_string(),
             background_color: Color::rgb(0.1, 0.1, 0.15),
-            exclusive_zone: None,
+            exclusive_zone: ExclusiveZone::None,
             margin: (0, 0, 0, 0),
             output: None,
             input_region: None,
@@ -126,14 +290,14 @@ impl SurfaceConfig {
     }
 
     /// Set the width of the surface.
-    pub fn width(mut self, width: u32) -> Self {
-        self.width = width;
+    pub fn width(mut self, width: impl Into<SurfaceExtent>) -> Self {
+        self.width = width.into();
         self
     }
 
     /// Set the height of the surface.
-    pub fn height(mut self, height: u32) -> Self {
-        self.height = height;
+    pub fn height(mut self, height: impl Into<SurfaceExtent>) -> Self {
+        self.height = height.into();
         self
     }
 
@@ -163,8 +327,8 @@ impl SurfaceConfig {
 
     /// Set the exclusive zone (reserves screen space).
     /// Pass Some(0) for no exclusive zone, None to use the surface height.
-    pub fn exclusive_zone(mut self, zone: Option<i32>) -> Self {
-        self.exclusive_zone = zone;
+    pub fn exclusive_zone(mut self, zone: impl Into<ExclusiveZone>) -> Self {
+        self.exclusive_zone = zone.into();
         self
     }
 

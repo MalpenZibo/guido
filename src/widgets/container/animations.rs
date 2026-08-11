@@ -280,6 +280,27 @@ macro_rules! advance_anim {
     };
 }
 
+thread_local! {
+    /// While set, layout reads animation TARGETS instead of current
+    /// values. Content-sized surfaces measure under this flag so their
+    /// natural size is animation-invariant: an animated growth resizes
+    /// the surface once, to the final size, and the animation plays
+    /// inside it — never one compositor configure per frame.
+    static MEASURE_FINAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` with layout reading animation targets instead of current values.
+pub(crate) fn with_measure_final<R>(f: impl FnOnce() -> R) -> R {
+    MEASURE_FINAL.with(|m| m.set(true));
+    let out = f();
+    MEASURE_FINAL.with(|m| m.set(false));
+    out
+}
+
+pub(crate) fn measuring_final() -> bool {
+    MEASURE_FINAL.with(|m| m.get())
+}
+
 /// Helper to get an animated value or a fallback
 #[inline]
 pub fn get_animated_value<T: Animatable + Copy>(
@@ -287,7 +308,13 @@ pub fn get_animated_value<T: Animatable + Copy>(
     fallback: impl FnOnce() -> T,
 ) -> T {
     match anim {
-        Some(a) => *a.current(),
+        Some(a) => {
+            if measuring_final() {
+                *a.target()
+            } else {
+                *a.current()
+            }
+        }
         None => fallback(),
     }
 }

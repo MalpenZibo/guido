@@ -19,7 +19,7 @@ fn main() {
                 .anchor(Anchor::TOP)
                 .margin(120, 0, 0, 0)
                 .layer(Layer::Overlay)
-                .exclusive_zone(Some(0))
+                .exclusive_zone(ExclusiveZone::None)
                 .background_color(Color::TRANSPARENT),
             move || {
                 container()
