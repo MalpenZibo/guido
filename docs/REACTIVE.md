@@ -52,6 +52,24 @@ let label = create_memo(move || format!("Count: {}", count.get()));
 text(label)  // Only repaints when the formatted string changes
 ```
 
+A memo is a **tracking barrier**: what it reads is its own business. Creating
+one inside something that is itself tracked — a dynamic-children closure
+building a component, a paint or layout pass, another effect — registers no
+dependency on the surrounding scope. That is what makes the pattern work:
+
+```rust
+// Inside a dynamic-children closure. `levels` is written 60 times a second.
+container().child(move || {
+    let active = create_memo(move || levels.with(|l| !l.is_empty()));
+    // The closure depends on `active` (a bool that rarely flips), NOT on
+    // `levels` — the subtree is rebuilt when the bool changes, not per frame.
+    active.get().then(|| expensive_module())
+})
+```
+
+Only the value read *through* the memo (`active.get()` above) creates a
+dependency, and it only fires when the memoized value actually changes.
+
 ### Per-Field Signals (`SignalFields`)
 
 When a `Signal<AppState>` changes, **all** subscribers re-render — even if only one field changed. The `#[derive(SignalFields)]` macro solves this by generating per-field signal decomposition with zero-clone updates.
