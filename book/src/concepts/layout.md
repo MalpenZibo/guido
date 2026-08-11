@@ -219,15 +219,96 @@ container()
 
 ## Layout Without Explicit Flex
 
-Containers without `.layout()` stack children (each child fills the container):
+Containers without `.layout()` use `Flex::column()`:
 
 ```rust
-// Children overlap, each filling the container
+// Same as .layout(Flex::column())
 container()
     .children([
-        background_image(),
-        overlay_content(),
+        text("first"),
+        text("second"),
     ])
+```
+
+## Stacking Children (ZStack)
+
+`ZStack` places every child at the same position, stacked along the Z axis —
+later children paint on top:
+
+```rust
+container()
+    .layout(ZStack::new())
+    .child(background())
+    .child(content())   // drawn on top
+```
+
+### Leaders and Followers
+
+The stack takes the size of its largest child, but a child that declares
+`fill()` on an axis **follows** the stack instead of leading it: it never
+contributes to that axis and is laid out against the size the other children
+established.
+
+That is how a decoration is sized to its sibling without measuring anything:
+
+```rust
+container()
+    .layout(ZStack::new())
+    // Follower: exactly as wide and tall as the card below it
+    .child(
+        container()
+            .width(fill())
+            .height(fill())
+            .background(Color::rgb(0.2, 0.2, 0.3))
+    )
+    // Leader: the stack is as big as this card
+    .child(card_content())
+```
+
+Without this rule the background would expand to all the available space,
+and sizing it to its sibling would need a [WidgetRef](../advanced/widget-ref.md)
+round-trip — one frame behind, and zero on the first frame.
+
+The two axes are decided independently, which is what makes the status-bar
+case work: a child with only `.height(fill())` fills the bar height and still
+leads the width.
+
+```rust
+container()
+    .height(fill())
+    .layout(ZStack::new())
+    // Follows both axes
+    .child(container().width(fill()).height(fill()).child(visualizer()))
+    // Fills the bar height, leads the width
+    .child(container().height(fill()).child(now_playing()))
+```
+
+When *every* child fills an axis there is no size to follow, and the stack
+takes all the space it was offered on that axis.
+
+### Positioning Inside the Stack
+
+Every child sits at the stack's origin. To place a follower elsewhere, let it
+fill both axes and use its own layout:
+
+```rust
+container()
+    .layout(ZStack::new())
+    .child(icon_widget())
+    // Alert dot pinned to the icon's top-right corner
+    .child(
+        container()
+            .width(fill())
+            .height(fill())
+            .layout(Flex::row().main_alignment(MainAlignment::End))
+            .child(
+                container()
+                    .width(4)
+                    .height(4)
+                    .corner_radius(2)
+                    .background(Color::RED)
+            )
+    )
 ```
 
 ## API Reference
@@ -260,4 +341,10 @@ CrossAlignment::Start
 CrossAlignment::Center
 CrossAlignment::End
 CrossAlignment::Stretch
+```
+
+### ZStack
+
+```rust
+ZStack::new() -> ZStack                // Children stacked at the same origin
 ```

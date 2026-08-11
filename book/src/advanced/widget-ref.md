@@ -65,6 +65,20 @@ let popup = container()
     .child(popup_content());
 ```
 
+## When Not to Use It
+
+A `WidgetRef` rect is written *after* layout, so a property derived from one
+lags a frame — and reads zero on the first frame, before any layout has run.
+That is fine for positioning a popup, and wrong for sizing. Two common cases
+have direct layout support instead:
+
+- **A bar proportional to a value** (slider fill, gauge, progress): use
+  [`fraction()`](../concepts/layout.md#size-constraints), resolved against the
+  real constraints during layout.
+- **A widget sized to a sibling** (background, badge, decoration): stack them
+  with [`ZStack`](../concepts/layout.md#stacking-children-zstack) and give the
+  follower `fill()`.
+
 ## Edge Cases
 
 - **Before first layout**: The signal returns `Rect::default()` (all zeros)
