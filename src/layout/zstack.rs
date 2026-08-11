@@ -1,29 +1,29 @@
-//! Overlay layout that stacks children on top of each other.
+//! ZStack layout that stacks children on top of each other.
 
 use crate::tree::{Tree, WidgetId};
 
 use super::{Constraints, Layout, Size};
 
-/// Overlay layout that places all children at the same position,
-/// stacking them on top of each other. Later children appear on top.
+/// Layout that places all children at the same position, stacking them along
+/// the Z axis. Later children appear on top.
 ///
-/// The size of the overlay is determined by the largest child.
-pub struct Overlay;
+/// The size of the stack is determined by the largest child.
+pub struct ZStack;
 
-impl Overlay {
-    /// Create a new overlay layout
+impl ZStack {
+    /// Create a new z-stack layout
     pub fn new() -> Self {
         Self
     }
 }
 
-impl Default for Overlay {
+impl Default for ZStack {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Layout for Overlay {
+impl Layout for ZStack {
     fn layout(
         &mut self,
         tree: &mut Tree,

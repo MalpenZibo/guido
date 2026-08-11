@@ -135,7 +135,7 @@ pub fn quit_app() {
 pub mod prelude {
     pub use crate::animation::{SpringConfig, TimingFunction, Transition, TransitionConfig};
     pub use crate::layout::{
-        Axis, Constraints, CrossAlignment, Flex, IntoF32, Length, MainAlignment, Overlay, Size,
+        Axis, Constraints, CrossAlignment, Flex, IntoF32, Length, MainAlignment, Size, ZStack,
         at_least, at_most, fill, fraction,
     };
     pub use crate::outputs::{OutputId, OutputInfo, outputs, surface_output};
