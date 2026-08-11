@@ -185,6 +185,26 @@ struct SurfaceDefinition {
     widget_fn: Box<dyn FnOnce() -> Box<dyn Widget>>,
 }
 
+/// Close one surface synchronously: dismissal signal, widget-tree
+/// teardown, GPU surface, Wayland objects. The managed surface drops
+/// FIRST — its wgpu `Surface<'static>` borrows the wl_surface through
+/// erased raw pointers, so the GPU surface must die before the Wayland
+/// surface it points at.
+fn close_surface_now(
+    id: SurfaceId,
+    surface_manager: &mut SurfaceManager,
+    wayland_state: &mut platform::WaylandState,
+    tree: &mut Tree,
+) {
+    surface::mark_popup_dismissed(id);
+    if let Some(managed) = surface_manager.remove(id) {
+        // Unregister the widget tree and its signal subscribers before the
+        // drop disposes the reactive owner
+        surface_manager::teardown_widget_subtree(tree, managed.widget_id);
+    }
+    wayland_state.destroy_surface(id);
+}
+
 /// Process dynamic surface commands (create, close, property changes).
 /// Returns false if all surfaces have been closed and the app should exit.
 fn process_surface_commands(
@@ -213,19 +233,13 @@ fn process_surface_commands(
             }
             SurfaceCommand::Close(id) => {
                 log::info!("Closing dynamic surface {:?}", id);
-                // If this was a popup, make sure its dismissal signal fires
-                // (no-op for other surfaces or already-dismissed popups)
-                surface::mark_popup_dismissed(id);
-                // Drop the managed surface FIRST: its wgpu Surface<'static>
-                // borrows the wl_surface through erased raw pointers, so the
-                // GPU surface must die before the Wayland surface it points
-                // at (previously a use-after-free during swapchain teardown).
-                if let Some(managed) = surface_manager.remove(id) {
-                    // Unregister the widget tree and its signal subscribers
-                    // before the drop disposes the reactive owner
-                    surface_manager::teardown_widget_subtree(tree, managed.widget_id);
+                // Popup chains tear down children-first: destroying a popup
+                // that still has a live child raises not_the_topmost_popup
+                // and the compositor kills the connection.
+                for child in wayland_state.popup_descendants_bottom_up(id) {
+                    close_surface_now(child, surface_manager, wayland_state, tree);
                 }
-                wayland_state.destroy_surface(id);
+                close_surface_now(id, surface_manager, wayland_state, tree);
 
                 // If no surfaces left, exit
                 if surface_manager.is_empty() {
@@ -281,6 +295,19 @@ fn process_surface_commands(
                 let height = config.height.unwrap_or_else(|| {
                     measure_popup_height(tree, managed.widget_id, config.width, parent)
                 });
+
+                // A new grab must nest under the current grab holder:
+                // xdg-shell forbids a grabbing popup whose parent chain
+                // does not include the popup currently holding the grab
+                // (the compositor kills the connection with
+                // not_the_topmost_popup). Destroy conflicting grab chains
+                // before creating, children first.
+                if config.grab {
+                    for stale in wayland_state.conflicting_grab_popups(parent) {
+                        log::info!("Closing popup {:?} before new grab popup {:?}", stale, id);
+                        close_surface_now(stale, surface_manager, wayland_state, tree);
+                    }
+                }
 
                 if wayland_state.create_popup_surface_with_id(
                     qh,
