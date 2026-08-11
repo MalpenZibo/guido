@@ -460,6 +460,38 @@ fn create_child(id: u64) -> impl Widget {
 container().children(keyed(move || items.get(), |id| *id, create_child))
 ```
 
+### Self-Closing Scopes: `retire_owner`
+
+Self-closing UI must dispose an owner **from code the owner itself owns**
+— an effect observing a popup's dismissal, a dialog's own close button.
+Synchronous disposal there would free the closure currently executing.
+`retire_owner(id)` queues the disposal instead; the main loop drains the
+queue once per iteration, when no user closure is on the stack:
+
+```rust
+use guido::reactive::retire_owner;
+
+// The owner id only exists after with_owner returns, so code inside the
+// scope reaches it through app state (a slot, a thread-local registry):
+let owner_slot = Rc::new(Cell::new(None));
+let slot = owner_slot.clone();
+let (popup, owner_id) = guido::reactive::owner::with_owner(move || {
+    spawn_popup(bar, config, move || {
+        menu_view(move || {
+            // Close button: this callback is owned by the very scope it
+            // is about to tear down — dispose_owner here would free the
+            // closure currently executing. Retiring is safe:
+            if let Some(id) = slot.get() {
+                retire_owner(id);
+            }
+        })
+    })
+});
+owner_slot.set(Some(owner_id));
+```
+
+Retiring twice, or retiring an already-disposed owner, is harmless.
+
 ### Custom Cleanup Callbacks
 
 Use `on_cleanup` inside dynamic children or component render methods to register cleanup logic for non-reactive resources:
