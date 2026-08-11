@@ -151,8 +151,9 @@ pub mod prelude {
         LockState, lock_session, lock_state, session_locked, unlock_session,
     };
     pub use crate::surface::{
-        PopupAnchor, PopupConfig, PopupGravity, PopupHandle, SurfaceConfig, SurfaceHandle,
-        SurfaceId, spawn_popup, spawn_surface, surface_handle,
+        ExclusiveZone, PopupAnchor, PopupConfig, PopupGravity, PopupHandle, SurfaceConfig,
+        SurfaceExtent, SurfaceHandle, SurfaceId, content, spawn_popup, spawn_surface,
+        surface_handle,
     };
     pub use crate::transform::Transform;
     pub use crate::transform_origin::{HorizontalAnchor, TransformOrigin, VerticalAnchor};
@@ -330,11 +331,23 @@ fn process_surface_commands(
 }
 
 /// Measure a popup's natural content height at the given width.
-///
-/// Capped at the parent surface's output height (minus a margin) so a
-/// runaway or `fill()`-height content can't request an absurd popup.
 fn measure_popup_height(tree: &mut Tree, root: WidgetId, width: u32, parent: SurfaceId) -> u32 {
-    let cap = outputs::surface_output(parent)
+    measure_natural_size(tree, root, Some(width), None, parent).1
+}
+
+/// Measure a widget tree's natural size. `fixed_w`/`fixed_h` pin an axis;
+/// `None` measures it loose, capped at the surface's output size (minus a
+/// margin) so a runaway or `fill()` content can't request an absurd
+/// surface. Runs under the measure-final flag: animation TARGETS, not
+/// in-flight values, so the result is animation-invariant.
+fn measure_natural_size(
+    tree: &mut Tree,
+    root: WidgetId,
+    fixed_w: Option<u32>,
+    fixed_h: Option<u32>,
+    surface: SurfaceId,
+) -> (u32, u32) {
+    let output_size = outputs::surface_output(surface)
         .and_then(|oid| {
             outputs::current_outputs()
                 .into_iter()
@@ -345,18 +358,33 @@ fn measure_popup_height(tree: &mut Tree, root: WidgetId, width: u32, parent: Sur
             outputs::current_outputs()
                 .into_iter()
                 .find_map(|o| o.logical_size)
-        })
-        .map(|(_, h)| (h as f32 - 64.0).max(100.0))
-        .unwrap_or(800.0);
+        });
+    let cap = |v: i32| (v as f32 - 64.0).max(100.0);
+    let (cap_w, cap_h) = match output_size {
+        Some((w, h)) => (cap(w), cap(h)),
+        None => (800.0, 800.0),
+    };
 
-    let constraints = Constraints::new(width as f32, 0.0, width as f32, cap);
-    let measured = tree
-        .with_widget_mut(root, |widget, id, tree| {
+    let (min_w, max_w) = match fixed_w {
+        Some(w) => (w as f32, w as f32),
+        None => (0.0, cap_w),
+    };
+    let (min_h, max_h) = match fixed_h {
+        Some(h) => (h as f32, h as f32),
+        None => (0.0, cap_h),
+    };
+
+    let constraints = Constraints::new(min_w, min_h, max_w, max_h);
+    let measured = widgets::container::with_measure_final(|| {
+        tree.with_widget_mut(root, |widget, id, tree| {
             widget.layout(tree, id, constraints)
         })
-        .map(|size| size.height)
-        .unwrap_or(100.0);
-    (measured.ceil() as u32).max(1)
+    })
+    .unwrap_or(layout::Size::new(100.0, 100.0));
+
+    let w = fixed_w.unwrap_or_else(|| (measured.width.ceil() as u32).max(1));
+    let h = fixed_h.unwrap_or_else(|| (measured.height.ceil() as u32).max(1));
+    (w, h)
 }
 
 /// Walk the render tree after painting and cache each node's output.
@@ -602,6 +630,41 @@ fn render_surface(
                 widget.layout(tree, wid, constraints);
             });
             wayland_state.reposition_popup_if_changed(id, natural, qh);
+        } else if (has_pending_layouts || force_render_surface)
+            && (surface.config.width.is_content() || surface.config.height.is_content())
+        {
+            // Initialization included: a freshly spawned surface reaches
+            // its first frames through the full-layout path, not
+            // layout_roots — without measuring here a single-toast spawn
+            // would stay at its 1px initial size until the NEXT content
+            // change.
+            // Content-sized layer surface (toast stacks, OSDs): measure
+            // the natural size and follow it — the layer counterpart of
+            // the popup reposition above. Without this a content-sized
+            // surface is stuck at its initial size: the real layout
+            // clamps to the surface, so a measured rect can never exceed
+            // it. The measure reads animation TARGETS, so an animated
+            // growth resizes once and the animation plays inside.
+            let fixed_w = (!surface.config.width.is_content()).then_some(width);
+            let fixed_h = (!surface.config.height.is_content()).then_some(height);
+            let (nw, nh) = measure_natural_size(tree, surface.widget_id, fixed_w, fixed_h, id);
+            tree.with_widget_mut(surface.widget_id, |widget, wid, tree| {
+                widget.layout(tree, wid, constraints);
+            });
+            if (nw, nh) != (width, height) {
+                wayland_state.set_surface_size(id, nw, nh);
+                // Auto reservations follow automatic resizes too; every
+                // other policy never moves
+                if surface.config.exclusive_zone == surface::ExclusiveZone::Auto {
+                    let zone = surface.config.exclusive_zone.resolve(
+                        surface.config.anchor,
+                        surface.config.margin,
+                        nw,
+                        nh,
+                    );
+                    wayland_state.set_surface_exclusive_zone(id, zone);
+                }
+            }
         }
 
         // Update widget ref signals with current bounds after layout

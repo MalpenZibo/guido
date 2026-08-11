@@ -51,6 +51,7 @@ fn main() {
                     SurfaceConfig::new()
                         .height(32)
                         .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+                        .exclusive_zone(ExclusiveZone::Auto)
                         .layer(Layer::Top)
                         .namespace("guido-multi-output")
                         .output(info.id),

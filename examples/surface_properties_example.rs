@@ -23,6 +23,7 @@ fn main() {
                 .width(500)
                 .height(300)
                 .anchor(Anchor::TOP | Anchor::LEFT)
+                .exclusive_zone(ExclusiveZone::Auto)
                 .layer(Layer::Top)
                 .keyboard_interactivity(KeyboardInteractivity::OnDemand)
                 .namespace("surface-properties-example")
