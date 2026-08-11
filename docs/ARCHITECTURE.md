@@ -84,7 +84,7 @@ Text rendering with:
 - `AnyWidget` type alias (`Box<dyn Widget>`) for type-erased widgets
 - `Widget::into_any()` method for boxing widgets in conditional branches
 
-**Layout System** (`widgets/layout.rs`)
+**Layout System** (`layout/`)
 Pluggable layouts via the `Layout` trait:
 ```rust
 pub trait Layout {
@@ -98,8 +98,11 @@ pub trait Layout {
 }
 ```
 
-Built-in implementation:
+Built-in implementations:
 - `Flex` - Flexbox-style row/column layout with spacing and alignment
+- `ZStack` - Children share an origin and stack along the Z axis. Children
+  that don't `fill()` an axis lead it (the stack takes their size); children
+  that do fill it follow, laid out against the size the others established
 
 ### `renderer/` - GPU Rendering
 
