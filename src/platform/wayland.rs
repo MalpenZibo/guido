@@ -92,6 +92,9 @@ pub enum SurfaceRole {
     Popup {
         popup: Popup,
         config: crate::surface::PopupConfig,
+        /// The surface this popup is anchored to — used to tear down popup
+        /// chains in protocol order (children before parents).
+        parent: crate::surface::SurfaceId,
     },
 }
 
@@ -692,6 +695,7 @@ impl WaylandState {
             SurfaceRole::Popup {
                 popup,
                 config: config.clone(),
+                parent,
             },
             wl_surface,
             size.0,
@@ -708,6 +712,69 @@ impl WaylandState {
             config.grab
         );
         true
+    }
+
+    /// Live popup descendants of `root`, deepest first — the order the
+    /// protocol demands for teardown (a popup must be destroyed before its
+    /// parent, or the compositor raises `not_the_topmost_popup`).
+    pub(crate) fn popup_descendants_bottom_up(&self, root: SurfaceId) -> Vec<SurfaceId> {
+        let mut out = Vec::new();
+        let mut frontier = vec![root];
+        while let Some(current) = frontier.pop() {
+            for (id, state) in &self.surfaces {
+                if let SurfaceRole::Popup { parent, .. } = &state.role
+                    && *parent == current
+                {
+                    out.push(*id);
+                    frontier.push(*id);
+                }
+            }
+        }
+        out.reverse(); // deepest first
+        out
+    }
+
+    /// Grabbing popups that would make a new grab on `new_parent` illegal:
+    /// xdg-shell requires a new grab to nest under the current grab holder,
+    /// so any live grabbing popup that is not `new_parent` itself (or one
+    /// of its ancestors) must be destroyed before the new popup is created.
+    /// Returned deepest-chain-first, ready for ordered teardown.
+    pub(crate) fn conflicting_grab_popups(&self, new_parent: SurfaceId) -> Vec<SurfaceId> {
+        // Ancestor chain of the new popup (surfaces a nested grab may sit on)
+        let mut ancestors = vec![new_parent];
+        let mut current = new_parent;
+        while let Some(state) = self.surfaces.get(&current) {
+            match &state.role {
+                SurfaceRole::Popup { parent, .. } => {
+                    ancestors.push(*parent);
+                    current = *parent;
+                }
+                _ => break,
+            }
+        }
+
+        let mut conflicts: Vec<SurfaceId> = self
+            .surfaces
+            .iter()
+            .filter(|(id, state)| {
+                matches!(&state.role, SurfaceRole::Popup { config, .. } if config.grab)
+                    && !ancestors.contains(id)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        // Close whole chains children-first: append descendants and dedup
+        let mut ordered = Vec::new();
+        for id in conflicts.drain(..) {
+            for d in self.popup_descendants_bottom_up(id) {
+                if !ordered.contains(&d) {
+                    ordered.push(d);
+                }
+            }
+            if !ordered.contains(&id) {
+                ordered.push(id);
+            }
+        }
+        ordered
     }
 
     /// For auto-height popups: the width to measure content at.
@@ -739,7 +806,7 @@ impl WaylandState {
         {
             return;
         }
-        let SurfaceRole::Popup { popup, config } = &surface_state.role else {
+        let SurfaceRole::Popup { popup, config, .. } = &surface_state.role else {
             return;
         };
         // xdg_popup.reposition needs protocol v3
