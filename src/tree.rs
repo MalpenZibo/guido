@@ -454,6 +454,29 @@ impl Tree {
             self.damage.insert(root, DamageRegion::Full);
         }
         self.mark_subtree_needs_paint_inner(widget_id);
+        // Ancestors must learn a descendant is dirty: the per-surface
+        // skip check reads the surface root's flag and paint-cache reuse
+        // consults each ancestor. Without this, a reconcile-only update
+        // (a closure child whose signals no paint pass ever tracked, e.g.
+        // a calendar month grid) relaid out its subtree and then the
+        // frame was skipped forever — widgets current, screen stale.
+        let mut current = widget_id;
+        loop {
+            let Some(dense_idx) = self.get_dense_index(current) else {
+                return;
+            };
+            let Some(parent) = self.dense[dense_idx].parent else {
+                return;
+            };
+            let Some(parent_idx) = self.get_dense_index(parent) else {
+                return;
+            };
+            if self.dense[parent_idx].needs_paint {
+                return; // Already marked — its ancestors are too
+            }
+            self.dense[parent_idx].needs_paint = true;
+            current = parent;
+        }
     }
 
     fn mark_subtree_needs_paint_inner(&mut self, widget_id: WidgetId) {
@@ -926,5 +949,42 @@ mod tests {
         assert!(tree.needs_paint(child1_id));
         assert!(tree.needs_paint(child2_id));
         assert!(tree.needs_paint(grandchild_id));
+    }
+
+    /// Regression test: marking a subtree must also inform the ANCESTORS —
+    /// the per-surface skip check reads the surface root's flag, so a
+    /// reconcile-only update (partial layout root deep in the tree, no
+    /// paint-tracked signals anywhere on the path) would otherwise relayout
+    /// its subtree and then never produce a frame: widgets current, screen
+    /// permanently stale.
+    #[test]
+    fn test_mark_subtree_needs_paint_propagates_to_ancestors() {
+        let mut tree = Tree::new();
+        let root_id = tree.register(Box::new(MockWidget::new()));
+        let child_id = tree.register(Box::new(MockWidget::new()));
+        let grandchild_id = tree.register(Box::new(MockWidget::new()));
+        let leaf_id = tree.register(Box::new(MockWidget::new()));
+
+        tree.set_parent(child_id, root_id);
+        tree.set_parent(grandchild_id, child_id);
+        tree.set_parent(leaf_id, grandchild_id);
+
+        tree.clear_needs_paint(root_id);
+        tree.clear_needs_paint(child_id);
+        tree.clear_needs_paint(grandchild_id);
+        tree.clear_needs_paint(leaf_id);
+
+        // Mark a subtree deep in the tree: the surface root must see it
+        tree.mark_subtree_needs_paint(grandchild_id);
+        assert!(tree.needs_paint(grandchild_id));
+        assert!(tree.needs_paint(leaf_id));
+        assert!(
+            tree.needs_paint(child_id),
+            "parent of the marked subtree must be marked"
+        );
+        assert!(
+            tree.needs_paint(root_id),
+            "surface root must see the dirty descendant or the frame is skipped"
+        );
     }
 }
