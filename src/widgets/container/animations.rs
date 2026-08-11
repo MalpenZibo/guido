@@ -42,6 +42,9 @@ pub struct AnimationState<T: Animatable> {
     initialized: bool,
     /// Previous value for change detection
     prev_value: Option<T>,
+    /// Pending enter value: consumed at first layout to start an enter
+    /// animation instead of snapping to the target
+    enter_from: Option<T>,
 }
 
 impl<T: Animatable> AnimationState<T> {
@@ -67,6 +70,7 @@ impl<T: Animatable> AnimationState<T> {
             spring_state,
             initialized: false, // Not yet initialized with real content-based value
             prev_value: None,
+            enter_from: None,
         }
     }
 
@@ -112,6 +116,7 @@ impl<T: Animatable> AnimationState<T> {
         if self.progress >= 1.0 && self.spring_state.is_none() {
             return AdvanceResult::NoChange;
         }
+        let was_running = self.is_animating();
 
         // Extract scalar transition values upfront to avoid borrow conflicts
         // with self.spring_state. Copy SpringConfig (which is Copy) instead of
@@ -178,6 +183,17 @@ impl<T: Animatable> AnimationState<T> {
         self.current = new_value;
         self.prev_value = Some(new_value);
 
+        // Completion edge: fire the transition's callback once per run.
+        // The callback may write signals or push surface commands; it must
+        // not touch the widget tree synchronously (it runs inside
+        // advance_animations).
+        if was_running
+            && !self.is_animating()
+            && let Some(cb) = self.active_transition().on_complete.clone()
+        {
+            cb();
+        }
+
         if changed {
             AdvanceResult::Changed(new_value)
         } else {
@@ -198,6 +214,32 @@ impl<T: Animatable> AnimationState<T> {
     /// Get target value
     pub fn target(&self) -> &T {
         &self.target
+    }
+
+    /// Take the pending enter value, if any (consumed at first layout).
+    pub(crate) fn take_enter_from(&mut self) -> Option<T> {
+        self.enter_from.take()
+    }
+
+    /// Store an enter value: the first layout starts an animation from it
+    /// to the effective target instead of snapping (see
+    /// `Container::animate_transform_from`).
+    pub(crate) fn with_enter_from(mut self, from: T) -> Self {
+        self.enter_from = Some(from);
+        self
+    }
+
+    /// Begin animating from an explicit value (enter transitions): the
+    /// widget appears mid-animation instead of snapping to its target.
+    pub(crate) fn begin_from(&mut self, from: T, target: T) {
+        self.current = from;
+        self.start = from;
+        self.initialized = true;
+        // Reuse animate_to for direction selection and spring setup; it
+        // starts from `current`, which is now the enter value
+        let t = target;
+        self.target = from; // force the retarget below to fire
+        self.animate_to(t);
     }
 
     /// Set value immediately without animation (for initialization)
@@ -322,6 +364,36 @@ pub fn get_animated_value<T: Animatable + Copy>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// on_complete fires exactly once per completed run; a retarget that
+    /// completes again fires again.
+    #[test]
+    fn on_complete_fires_once_per_run() {
+        use crate::animation::TimingFunction;
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let fired = Rc::new(Cell::new(0));
+        let counter = fired.clone();
+        let mut anim = AnimationState::new(
+            0.0_f32,
+            crate::animation::Transition::new(1, TimingFunction::Linear)
+                .on_complete(move || counter.set(counter.get() + 1)),
+        );
+        anim.set_immediate(0.0);
+
+        anim.animate_to(1.0);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        anim.advance();
+        assert_eq!(fired.get(), 1, "settle must fire the callback once");
+        anim.advance();
+        assert_eq!(fired.get(), 1, "no refire after completion");
+
+        anim.animate_to(2.0);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        anim.advance();
+        assert_eq!(fired.get(), 2, "a new completed run fires again");
+    }
     use crate::animation::TimingFunction;
 
     #[test]
