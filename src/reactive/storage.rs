@@ -308,6 +308,33 @@ pub fn compare_and_update_signal_value<T: Clone + PartialEq + 'static>(
     old != *current
 }
 
+/// Set unconditionally: no comparison, no `PartialEq` bound. Returns
+/// `true` if the write landed (`false` only when the slot is disposed).
+///
+/// Backs [`RwSignal::set_always`]: trigger-style writes where every
+/// emission must notify (or where the type has no meaningful equality).
+pub fn set_signal_value_always<T: 'static>(id: SignalId, value: T) -> bool {
+    let Some(rc) = try_clone_slot_rc(id) else {
+        log::warn!("ignoring write to disposed signal {id}");
+        return false;
+    };
+    let cell = downcast_cell::<T>(&rc, id);
+    *cell.borrow_mut() = value;
+    true
+}
+
+/// Update unconditionally: no comparison, no `PartialEq` bound. Returns
+/// `true` if the update ran (`false` only when the slot is disposed).
+pub fn update_signal_value_always<T: 'static>(id: SignalId, f: impl FnOnce(&mut T)) -> bool {
+    let Some(rc) = try_clone_slot_rc(id) else {
+        log::warn!("ignoring update of disposed signal {id}");
+        return false;
+    };
+    let cell = downcast_cell::<T>(&rc, id);
+    f(&mut cell.borrow_mut());
+    true
+}
+
 fn downcast_cell<T: 'static>(rc: &Rc<dyn Any>, id: SignalId) -> &RefCell<T> {
     rc.downcast_ref::<RefCell<T>>().unwrap_or_else(|| {
         panic!(

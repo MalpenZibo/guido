@@ -261,6 +261,46 @@ let service = create_service(move |mut rx, ctx| async move {
 service.send(Cmd::Refresh);
 ```
 
+## State vs. Events (Write-Site Equality)
+
+A signal is **state**: a cell holding a current value, notifying when the
+value *changes*. `set` compares with `PartialEq` and deduplicates equal
+writes — that is what keeps an idle bar idle when services republish
+unchanged data.
+
+An **event** is different: two identical emissions are two emissions.
+Rather than a separate signal variant, equality is a property of the
+**write site** — the writer knows whether it is publishing state or
+firing a trigger:
+
+```rust
+volume.set(50);          // state: equal values deduplicate
+osd.set_always(info);    // trigger: every emission notifies
+refresh.notify();        // Trigger (create_trigger) = RwSignal<()> + set_always
+```
+
+`set_always` / `update_always` (and their `WriteSignal` counterparts)
+have no `PartialEq` bound — types without meaningful equality can only
+be written this way, and the compiler steers them there. `create_signal`
+itself requires only `Clone + Send`.
+
+Two caveats define the boundary of this tool:
+
+- A signal still holds ONE value: two `set_always` calls before the
+  consumer runs coalesce to the last value. That is correct for
+  frame-coalescing triggers (an OSD flash, an animation kick) — the
+  screen only shows the last frame anyway. **Event streams that must not
+  lose emissions belong in an async channel** (a service's command
+  queue), not in the reactive graph.
+- Never fake events by giving a type a lying `PartialEq` (a version
+  counter compared instead of the data): it breaks `==` for every other
+  use and hides the intent. `set_always` says the same thing honestly.
+
+For comparison: Solid deduplicates by default with per-signal opt-out
+(`equals: false`); Leptos and Floem never deduplicate on `set` and rely
+on `Memo` for cutoff. Guido keeps dedup as the default (idle cost
+matters here) and opts out per-write.
+
 ## Signal Internals
 
 Signals are lightweight handles that index into thread-local storage:
