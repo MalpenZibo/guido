@@ -1389,13 +1389,22 @@ impl Widget for Container {
         // Reconcile and get children IDs
         let children = self.children_source.reconcile_and_get(tree);
 
+        // A layout reads its own reactive properties (Flex's spacing and
+        // alignment, whatever a user-written Layout declares) while running.
+        // Those reads belong to this container just like padding and width do
+        // — without the scope they register no subscriber, and the property
+        // silently stops being reactive. Nesting is safe: every container
+        // opens its own scope, so a child's reads attribute to the child.
+        let layout_impl = &mut self.layout;
         let content_size = if !children.is_empty() {
-            self.layout.layout(
-                tree,
-                children,
-                child_constraints,
-                (child_origin_x, child_origin_y),
-            )
+            with_signal_tracking(id, JobType::Layout, || {
+                layout_impl.layout(
+                    tree,
+                    children,
+                    child_constraints,
+                    (child_origin_x, child_origin_y),
+                )
+            })
         } else {
             Size::zero()
         };
@@ -2563,6 +2572,47 @@ mod tests {
             }),
             "a write after first layout must schedule an Animation job \
              without waiting for a paint, got {drained:?}"
+        );
+    }
+
+    /// A layout's own reactive properties must invalidate the container that
+    /// runs it. They are read inside `Layout::layout`, which the container
+    /// used to call outside any tracking scope: the read registered no
+    /// subscriber, so `Flex::spacing(signal)` — and every property of every
+    /// user-written `Layout` — silently stopped being reactive.
+    #[test]
+    fn a_layout_property_invalidates_its_container() {
+        let spacing = create_signal(4.0f32);
+        let widget = container()
+            .layout(crate::layout::Flex::row().spacing(move || spacing.get()))
+            .child(container().width(10.0).height(10.0))
+            .child(container().width(10.0).height(10.0));
+
+        let mut tree = Tree::new();
+        let id = tree.register(Box::new(widget));
+        tree.with_widget_mut(id, |w, id, tree| w.register_children(tree, id));
+        let size = tree
+            .with_widget_mut(id, |w, id, tree| {
+                w.layout(tree, id, Constraints::new(0.0, 0.0, 500.0, 500.0))
+            })
+            .unwrap();
+        assert_eq!(size.width, 24.0, "10 + spacing 4 + 10");
+
+        let roots: rustc_hash::FxHashSet<WidgetId> = [id].into_iter().collect();
+        jobs::distribute_jobs(&tree, &roots);
+        jobs::recycle_job_buffer(jobs::drain_surface_jobs(id));
+        jobs::recycle_job_buffer(jobs::drain_orphan_jobs());
+
+        spacing.set(20.0);
+
+        jobs::distribute_jobs(&tree, &roots);
+        let drained = jobs::drain_surface_jobs(id);
+        assert!(
+            drained.contains(&Job {
+                widget_id: id,
+                job_type: JobType::Layout,
+            }),
+            "writing a layout's reactive property must queue a Layout job, got {drained:?}"
         );
     }
 }
