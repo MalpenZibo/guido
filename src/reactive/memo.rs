@@ -1,3 +1,4 @@
+use super::diagnostics::snapshot_zone;
 use super::effect::create_effect;
 use super::into_signal::{IntoSignal, MemoMarker};
 use super::invalidation::suspend_widget_tracking;
@@ -60,7 +61,7 @@ where
     // every dependency the memo exists to absorb: a hot signal read only
     // inside the memo would rebuild the enclosing subtree on every write.
     // The memo's own effect below establishes the real dependencies.
-    let initial = suspend_widget_tracking(|| suspend_effect_tracking(&f));
+    let initial = snapshot_zone(|| suspend_widget_tracking(|| suspend_effect_tracking(&f)));
     let signal = create_signal(initial);
     // The effect runs immediately (establishing dependencies) and re-runs
     // whenever any dependency changes. Signal::set() uses PartialEq to

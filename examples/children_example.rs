@@ -112,7 +112,9 @@ fn main() {
                             container()
                                 .layout(Flex::row().spacing(4.0))
                                 .child(text("Fixed").color(Color::WHITE))
-                                // This is evaluated ONCE at creation - won't update!
+                                // Evaluated ONCE at creation — it will never
+                                // update. Debug builds warn about exactly this
+                                // read; the closure below is the fix.
                                 .maybe_child(
                                     if show_optional.get() {
                                         Some(

@@ -191,7 +191,9 @@ impl<T: Animatable> AnimationState<T> {
             && !self.is_animating()
             && let Some(cb) = self.active_transition().on_complete.clone()
         {
-            cb();
+            // A completion callback reads for the current value, like an
+            // event handler — it is not a place to subscribe from.
+            crate::reactive::diagnostics::snapshot_zone(|| cb());
         }
 
         if changed {

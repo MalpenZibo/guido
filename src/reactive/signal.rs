@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 
+use super::diagnostics::{check_reactive_scope, snapshot_zone};
 use super::invalidation::{notify_signal_change, record_signal_read};
 use super::owner::register_signal;
 use super::runtime::{
@@ -47,11 +48,19 @@ pub(crate) enum SignalKind {
 /// - Mutable: full effect + widget tracking, reads `Rc<RefCell<T>>`
 /// - Derived: calls the closure (which tracks its own reads internally)
 #[inline]
+#[cfg_attr(debug_assertions, track_caller)]
 fn tracked_get<T: Clone + 'static>(id: SignalId, kind: SignalKind) -> T {
     match kind {
+        // A stored value never changes: reading it outside a scope is not a
+        // missed subscription, there is nothing to subscribe to.
         SignalKind::Stored => get_stored_value(id),
-        SignalKind::Derived => try_call_derived::<T>(id).expect("derived closure missing"),
+        SignalKind::Derived => {
+            check_reactive_scope();
+            // The closure's own reads would otherwise report a second time
+            snapshot_zone(|| try_call_derived::<T>(id).expect("derived closure missing"))
+        }
         SignalKind::Mutable => {
+            check_reactive_scope();
             record_effect_read(id);
             record_signal_read(id);
             get_signal_value(id)
@@ -64,6 +73,7 @@ fn tracked_get<T: Clone + 'static>(id: SignalId, kind: SignalKind) -> T {
 /// - Mutable: full tracking, borrows through `Rc<RefCell<T>>`
 /// - Derived: calls the closure and passes the result to `f`
 #[inline]
+#[cfg_attr(debug_assertions, track_caller)]
 fn tracked_with<T: Clone + 'static, R>(
     id: SignalId,
     kind: SignalKind,
@@ -72,10 +82,12 @@ fn tracked_with<T: Clone + 'static, R>(
     match kind {
         SignalKind::Stored => with_stored_value(id, f),
         SignalKind::Derived => {
-            let val = try_call_derived::<T>(id).unwrap();
+            check_reactive_scope();
+            let val = snapshot_zone(|| try_call_derived::<T>(id).unwrap());
             f(&val)
         }
         SignalKind::Mutable => {
+            check_reactive_scope();
             record_effect_read(id);
             record_signal_read(id);
             with_signal_value(id, f)
@@ -140,6 +152,7 @@ impl_signal_id_traits!(Signal);
 
 impl<T: Clone + 'static> Signal<T> {
     /// Get the current value (tracks as dependency for effects)
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn get(&self) -> T {
         tracked_get(self.id, self.kind)
     }
@@ -148,12 +161,15 @@ impl<T: Clone + 'static> Signal<T> {
     pub fn get_untracked(&self) -> T {
         match self.kind {
             SignalKind::Stored => get_stored_value(self.id),
-            SignalKind::Derived => try_call_derived::<T>(self.id).unwrap(),
+            // The caller asked for a snapshot; the closure's own reads are
+            // part of that snapshot and must not be reported either
+            SignalKind::Derived => snapshot_zone(|| try_call_derived::<T>(self.id).unwrap()),
             SignalKind::Mutable => get_signal_value(self.id),
         }
     }
 
     /// Borrow the value for reading
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         tracked_with(self.id, self.kind, f)
     }
@@ -163,7 +179,7 @@ impl<T: Clone + 'static> Signal<T> {
         match self.kind {
             SignalKind::Stored => with_stored_value(self.id, f),
             SignalKind::Derived => {
-                let val = try_call_derived::<T>(self.id).unwrap();
+                let val = snapshot_zone(|| try_call_derived::<T>(self.id).unwrap());
                 f(&val)
             }
             SignalKind::Mutable => with_signal_value(self.id, f),
@@ -194,7 +210,9 @@ impl_signal_id_traits!(RwSignal);
 impl<T: Clone + 'static> RwSignal<T> {
     /// Get the current value (tracks as dependency for effects)
     #[inline]
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn get(&self) -> T {
+        check_reactive_scope();
         record_effect_read(self.id);
         record_signal_read(self.id);
         get_signal_value(self.id)
@@ -208,7 +226,9 @@ impl<T: Clone + 'static> RwSignal<T> {
 
     /// Borrow the value for reading
     #[inline]
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        check_reactive_scope();
         record_effect_read(self.id);
         record_signal_read(self.id);
         with_signal_value(self.id, f)
@@ -512,12 +532,19 @@ pub trait OptionSignalExt<T: Clone + 'static> {
     /// Get the signal's value, or compute a default if no signal exists.
     fn get_or_else(&self, f: impl FnOnce() -> T) -> T;
 
+    /// Snapshot the signal's value without subscribing, or return `default`.
+    /// For reads that are consumed within the current pass.
+    fn get_or_untracked(&self, default: T) -> T;
+
     /// Return the existing signal, or create a stored signal from `default`
     /// and write it back into `self` for future use.
     fn signal_or(&mut self, default: T) -> Signal<T>;
 }
 
 impl<T: Clone + 'static> OptionSignalExt<T> for Option<Signal<T>> {
+    // track_caller so the snapshot diagnostic names the widget code that read
+    // the property, not this helper
+    #[cfg_attr(debug_assertions, track_caller)]
     fn get_or(&self, default: T) -> T {
         match self {
             Some(s) => s.get(),
@@ -525,10 +552,18 @@ impl<T: Clone + 'static> OptionSignalExt<T> for Option<Signal<T>> {
         }
     }
 
+    #[cfg_attr(debug_assertions, track_caller)]
     fn get_or_else(&self, f: impl FnOnce() -> T) -> T {
         match self {
             Some(s) => s.get(),
             None => f(),
+        }
+    }
+
+    fn get_or_untracked(&self, default: T) -> T {
+        match self {
+            Some(s) => s.get_untracked(),
+            None => default,
         }
     }
 

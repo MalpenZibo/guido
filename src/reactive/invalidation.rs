@@ -109,6 +109,11 @@ where
     f()
 }
 
+/// Whether a widget tracking scope is currently active (layout/paint/reconcile).
+pub(crate) fn widget_tracking_active() -> bool {
+    TRACKING_CONTEXT.with(|ctx| !ctx.borrow().is_empty())
+}
+
 /// Record that a signal was read. Called from Signal::get().
 /// If tracking is active, registers the current widget as a subscriber.
 pub fn record_signal_read(signal_id: SignalId) {

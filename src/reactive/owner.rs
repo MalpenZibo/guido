@@ -279,7 +279,8 @@ pub fn dispose_owner_now(id: OwnerId) {
 
     // Run cleanup callbacks in reverse order (LIFO)
     for cleanup in owner.cleanups.into_iter().rev() {
-        cleanup();
+        // Teardown code reads for the current value; the scope is going away
+        crate::reactive::diagnostics::snapshot_zone(cleanup);
     }
 
     // Dispose effects and remove from reverse mapping

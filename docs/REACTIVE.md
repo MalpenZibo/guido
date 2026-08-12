@@ -70,6 +70,37 @@ container().child(move || {
 Only the value read *through* the memo (`active.get()` above) creates a
 dependency, and it only fires when the memoized value actually changes.
 
+### Snapshot Reads (and the debug warning)
+
+A tracked read (`get`/`with`) registers the *currently active* reactive scope
+as a subscriber. With no scope active there is nobody to register, so the value
+is a snapshot — frozen into whatever it was used for:
+
+```rust
+text(format!("{}", count.get()))          // snapshot: never updates again
+text(move || format!("{}", count.get()))  // reactive: the closure re-runs
+```
+
+The two lines differ only in *where* the read happens, which Rust cannot check
+at compile time. So debug builds warn at the read site instead, naming the
+exact line:
+
+```
+guido: src/main.rs:42:31: signal read with no reactive scope — this value is a
+snapshot and will not update. Pass a closure instead …
+```
+
+One warning per call site, nothing in release builds. Two ways to say a
+snapshot is intended:
+
+- `get_untracked()` / `with_untracked()` for a single read
+- `reactive::diagnostics::snapshot_zone(|| …)` for a whole callback region
+
+Reads that are already correct stay silent: inside a widget's layout/paint
+scope, inside effects and memos, inside event handlers and animation
+completions (guido marks those regions itself), and reads of `create_stored`
+values, which cannot change in the first place.
+
 ### Per-Field Signals (`SignalFields`)
 
 When a `Signal<AppState>` changes, **all** subscribers re-render — even if only one field changed. The `#[derive(SignalFields)]` macro solves this by generating per-field signal decomposition with zero-clone updates.

@@ -115,6 +115,41 @@ pub fn button(
 }
 ```
 
+## The Body Runs Once
+
+A component's body executes **one time**, when the widget is first built, inside
+its own ownership scope — that is what lets the signals and effects it creates
+die with the component. Reactivity comes from the closures it leaves behind,
+not from re-running the body:
+
+```rust
+#[component]
+pub fn status_chip(label: String, active: bool) -> impl Widget {
+    container()
+        // Reactive: the closure re-runs when `active` changes
+        .background(move || if active.get() { Color::GREEN } else { Color::GRAY })
+        // Reactive: the signal is passed through untouched
+        .child(text(label))
+}
+```
+
+Reading a prop **outside** a closure takes a snapshot of it, and the component
+will never update:
+
+```rust
+// Wrong: the branch is decided once, for good
+if active.get() { selected_row() } else { plain_row() }
+
+// Right: the choice itself lives in a closure
+container().child(move || {
+    if active.get() { selected_row().into_any() } else { plain_row().into_any() }
+})
+```
+
+Debug builds warn at the exact line when a prop is read this way — unless the
+caller passed a plain value, which cannot change anyway. If the snapshot is
+deliberate, `get_untracked()` says so and silences the warning.
+
 ## Components with Children
 
 ```rust
