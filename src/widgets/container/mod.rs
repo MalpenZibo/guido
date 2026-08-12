@@ -1,15 +1,20 @@
 //! Container widget and related functionality.
 
 mod animations;
+mod box_model;
+mod interaction;
 mod ripple;
 mod scrollable;
+mod style;
 
 #[cfg(test)]
 mod characterization;
 
 pub(crate) use animations::with_measure_final;
 pub use animations::{AdvanceResult, AnimationState, get_animated_value};
+use interaction::{HitContext, untransform_point};
 pub use ripple::RippleState;
+use style::Decoration;
 
 use std::borrow::Cow;
 use std::rc::Rc;
@@ -802,296 +807,6 @@ impl Container {
         self.interact_mut().focused_state = Some(f(StateStyle::new()));
         self
     }
-
-    /// Check if any child widget has focus
-    fn has_child_focus(&self, tree: &Tree) -> bool {
-        if let Some(focused_id) = focused_widget() {
-            return self.widget_has_focus(tree, focused_id);
-        }
-        false
-    }
-
-    /// Recursively check if this widget or any child matches the focused widget ID
-    fn widget_has_focus(&self, tree: &Tree, focused_id: WidgetId) -> bool {
-        for &child_id in self.children_source.get() {
-            if child_id == focused_id {
-                return true;
-            }
-            // Recursively check nested containers/widgets
-            if tree.with_widget(child_id, |child| {
-                child.has_focus_descendant(tree, focused_id)
-            }) == Some(true)
-            {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Check if this widget is a relayout boundary given constraints.
-    /// A widget is a boundary if its size doesn't depend on children.
-    fn is_relayout_boundary_for(&self, constraints: Constraints) -> bool {
-        // A widget with an active layout-affecting animation is NOT a boundary,
-        // because its size changes each frame and the parent must reposition siblings.
-        let has_active_layout_anim = self.anims.as_ref().is_some_and(|a| {
-            a.width.as_ref().is_some_and(|x| x.is_animating())
-                || a.height.as_ref().is_some_and(|x| x.is_animating())
-                || a.padding.as_ref().is_some_and(|x| x.is_animating())
-        });
-        if has_active_layout_anim {
-            return false;
-        }
-
-        // Widget is a boundary if its size doesn't depend on children.
-        // This happens when:
-        // 1. It has explicit fixed width AND height
-        // 2. OR the parent passes tight constraints (min == max)
-        // Snapshots: this runs inside the widget's own layout, which reads the
-        // same signals under tracking right after — the subscription exists
-        let has_fixed_width = self
-            .width
-            .as_ref()
-            .is_some_and(|w| w.get_untracked().exact.is_some());
-        let has_fixed_height = self
-            .height
-            .as_ref()
-            .is_some_and(|h| h.get_untracked().exact.is_some());
-        let tight_width = constraints.min_width == constraints.max_width;
-        let tight_height = constraints.min_height == constraints.max_height;
-        (has_fixed_width || tight_width) && (has_fixed_height || tight_height)
-    }
-
-    // State layer resolution helper
-    // Priority: pressed > focused > hovered
-    fn resolve_state_value<T: Clone>(
-        &self,
-        tree: &Tree,
-        base: T,
-        extractor: impl Fn(&StateStyle) -> Option<T>,
-    ) -> T {
-        let Some(ref ix) = self.interaction else {
-            return base;
-        };
-        if ix.is_pressed
-            && let Some(ref state) = ix.pressed_state
-            && let Some(value) = extractor(state)
-        {
-            return value;
-        }
-        // Check focused state
-        if ix.focused_state.is_some()
-            && self.has_child_focus(tree)
-            && let Some(ref state) = ix.focused_state
-            && let Some(value) = extractor(state)
-        {
-            return value;
-        }
-        if ix.is_hovered
-            && let Some(ref state) = ix.hover_state
-            && let Some(value) = extractor(state)
-        {
-            return value;
-        }
-        base
-    }
-
-    /// Get the effective background color target considering state layers.
-    fn effective_background_target(&self, tree: &Tree) -> Color {
-        let base = self.background.get_or(Color::TRANSPARENT);
-        self.resolve_state_value(tree, base, |state| {
-            let bg_color = state
-                .background
-                .as_ref()
-                .map(|bg| resolve_background(base, bg));
-            match (bg_color, state.alpha) {
-                (Some(mut c), Some(a)) => {
-                    c.a = a;
-                    Some(c)
-                }
-                (Some(c), None) => Some(c),
-                (None, Some(a)) => {
-                    let mut c = base;
-                    c.a = a;
-                    Some(c)
-                }
-                (None, None) => None,
-            }
-        })
-    }
-
-    /// Get the effective border width target considering state layers.
-    fn effective_border_width_target(&self, tree: &Tree) -> f32 {
-        let base = self.border_width.get_or(0.0);
-        self.resolve_state_value(tree, base, |state| state.border_width)
-    }
-
-    /// Get the effective border color target considering state layers.
-    fn effective_border_color_target(&self, tree: &Tree) -> Color {
-        let base = self.border_color.get_or(Color::TRANSPARENT);
-        self.resolve_state_value(tree, base, |state| state.border_color)
-    }
-
-    /// Get the effective corner radius target considering state layers.
-    fn effective_corner_radius_target(&self, tree: &Tree) -> f32 {
-        let base = self.corner_radius.get_or(0.0);
-        self.resolve_state_value(tree, base, |state| state.corner_radius)
-    }
-
-    /// Get the effective transform target considering state layers.
-    fn effective_transform_target(&self, tree: &Tree) -> Transform {
-        let base = self.transform.get_or(Transform::IDENTITY);
-        self.resolve_state_value(tree, base, |state| state.transform)
-    }
-
-    /// Get the effective elevation considering state layers (not animated).
-    fn effective_elevation(&self, tree: &Tree) -> f32 {
-        let base = self.elevation.get_or(0.0);
-        self.resolve_state_value(tree, base, |state| state.elevation)
-    }
-
-    /// Get current padding (animated or static)
-    fn animated_padding(&self) -> Padding {
-        get_animated_value(self.anims.as_ref().and_then(|a| a.padding.as_ref()), || {
-            self.padding.get_or(Padding::default())
-        })
-    }
-
-    /// Get current background color (animated or effective target)
-    fn animated_background(&self, tree: &Tree) -> Color {
-        get_animated_value(
-            self.anims.as_ref().and_then(|a| a.background.as_ref()),
-            || self.effective_background_target(tree),
-        )
-    }
-
-    /// Get current corner radius (animated or effective target)
-    fn animated_corner_radius(&self, tree: &Tree) -> f32 {
-        get_animated_value(
-            self.anims.as_ref().and_then(|a| a.corner_radius.as_ref()),
-            || self.effective_corner_radius_target(tree),
-        )
-    }
-
-    /// Get current border width (animated or effective target)
-    fn animated_border_width(&self, tree: &Tree) -> f32 {
-        get_animated_value(
-            self.anims.as_ref().and_then(|a| a.border_width.as_ref()),
-            || self.effective_border_width_target(tree),
-        )
-    }
-
-    /// Get current border color (animated or effective target)
-    fn animated_border_color(&self, tree: &Tree) -> Color {
-        get_animated_value(
-            self.anims.as_ref().and_then(|a| a.border_color.as_ref()),
-            || self.effective_border_color_target(tree),
-        )
-    }
-
-    /// Get current transform (animated or effective target)
-    fn animated_transform(&self, tree: &Tree) -> Transform {
-        get_animated_value(
-            self.anims.as_ref().and_then(|a| a.transform.as_ref()),
-            || self.effective_transform_target(tree),
-        )
-    }
-
-    /// Check if any state layer properties have animations enabled
-    fn has_animated_state_properties(&self) -> bool {
-        self.anims.as_ref().is_some_and(|a| {
-            a.background.is_some()
-                || a.corner_radius.is_some()
-                || a.border_color.is_some()
-                || a.transform.is_some()
-        })
-    }
-
-    /// Whether any animation follows a signal-backed target (as opposed to
-    /// width/height, whose targets are content-driven and recomputed every
-    /// layout). These are the animations that keep a copy of signal state
-    /// and therefore need the paint-time target re-sync.
-    fn has_signal_animated_props(&self) -> bool {
-        self.anims.as_ref().is_some_and(|a| {
-            a.padding.is_some()
-                || a.border_width.is_some()
-                || a.background.is_some()
-                || a.corner_radius.is_some()
-                || a.border_color.is_some()
-                || a.transform.is_some()
-        })
-    }
-
-    /// Request repaint for state changes (hover/press), with Animation job if needed
-    fn request_state_change_repaint(&self, id: WidgetId) {
-        if self.has_animated_state_properties() {
-            request_job(id, JobRequest::Animation(RequiredJob::Paint));
-        } else {
-            request_job(id, JobRequest::Paint);
-        }
-    }
-}
-
-/// Convert elevation level to shadow parameters
-/// Map a point from surface space into the container's untransformed space.
-///
-/// A container's own transform is applied around its origin at paint time, so
-/// hit testing has to undo it before comparing against the laid-out bounds.
-/// An identity transform returns the point unchanged.
-fn untransform_point(
-    transform: &Transform,
-    origin: TransformOrigin,
-    bounds: Rect,
-    x: f32,
-    y: f32,
-) -> (f32, f32) {
-    if transform.is_identity() {
-        return (x, y);
-    }
-    let (origin_x, origin_y) = origin.resolve(bounds);
-    transform
-        .center_at(origin_x, origin_y)
-        .inverse()
-        .transform_point(x, y)
-}
-
-/// Same as [`untransform_point`], expressed relative to the container's own
-/// origin — the space ripples and pointer callbacks work in.
-fn local_point(
-    transform: &Transform,
-    origin: TransformOrigin,
-    bounds: Rect,
-    x: f32,
-    y: f32,
-) -> (f32, f32) {
-    let (ux, uy) = untransform_point(transform, origin, bounds, x, y);
-    (ux - bounds.x, uy - bounds.y)
-}
-
-fn elevation_to_shadow(level: f32) -> Shadow {
-    if level <= 0.0 {
-        return Shadow::none();
-    }
-
-    let (offset_y, blur, alpha) = match level as i32 {
-        1 => (1.0, 3.0, 0.12),
-        2 => (2.0, 4.0, 0.16),
-        3 => (3.0, 6.0, 0.19),
-        4 => (4.0, 8.0, 0.20),
-        5 => (6.0, 10.0, 0.22),
-        _ => {
-            let offset = (level * 1.2).min(12.0);
-            let blur = (level * 2.0).min(24.0);
-            let alpha = (0.12 + level * 0.02).min(0.25);
-            (offset, blur, alpha)
-        }
-    };
-
-    Shadow::new(
-        (0.0, offset_y),
-        blur,
-        0.0,
-        Color::rgba(0.0, 0.0, 0.0, alpha),
-    )
 }
 
 impl Default for Container {
@@ -1234,7 +949,6 @@ impl Widget for Container {
     }
 
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
-        // Check visibility with signal tracking so changes trigger re-layout
         let is_visible = with_signal_tracking(id, JobType::Layout, || self.visible.get_or(true));
         if !is_visible {
             tree.set_relayout_boundary(id, true);
@@ -1244,188 +958,29 @@ impl Widget for Container {
             return size;
         }
 
-        // Register this widget's relayout boundary status with the tree
         tree.set_relayout_boundary(id, self.is_relayout_boundary_for(constraints));
-
-        // Ensure scrollbar containers exist if scrolling is enabled
         self.ensure_scrollbar_containers(tree, id);
 
-        // Check if constraints changed compared to cached value in Tree
+        // Nothing to redo when the constraints are the same and no tracked
+        // signal (or animation) marked us dirty.
         let constraints_changed = tree.cached_constraints(id) != Some(constraints);
-
-        // Check if this widget was marked dirty by signal changes or animations
-        // (animations call mark_needs_layout directly when their value changes)
         let reactive_changed = tree.needs_layout(id);
-
-        let needs_layout = constraints_changed || reactive_changed;
-
-        if !needs_layout {
+        if !constraints_changed && !reactive_changed {
             crate::render_stats::record_layout_skipped();
-            // Return cached size from Tree
             return tree.cached_size(id).unwrap_or_default();
         }
-
         crate::render_stats::record_layout_executed_with_reasons(
             crate::render_stats::LayoutReasons {
                 constraints_changed,
                 reactive_changed,
             },
         );
-
-        // Clear dirty flag since we're doing layout now
         tree.clear_needs_layout(id);
 
-        // Auto-track signal reads for layout properties.
-        // Any signals read here (including closures) will register this widget
-        // as a Layout subscriber so future changes trigger re-layout.
-        let (padding, mut width_length, mut height_length) =
-            with_signal_tracking(id, JobType::Layout, || {
-                (
-                    self.animated_padding(),
-                    self.width.as_ref().map(|w| w.get()).unwrap_or_default(),
-                    self.height.as_ref().map(|h| h.get()).unwrap_or_default(),
-                )
-            });
+        let lengths = self.read_box_lengths(id, constraints);
+        let child = self.child_layout(&lengths, constraints);
+        let padding = lengths.padding;
 
-        // Resolve fractional lengths against the incoming constraints: from
-        // here on a fraction is an exact length whose value became known at
-        // layout time, so everything downstream (flex sizing, animation
-        // targets, min/max clamping) works unchanged.
-        if let Some(f) = width_length.fraction
-            && constraints.max_width.is_finite()
-        {
-            width_length.exact = Some((constraints.max_width * f).max(0.0));
-        }
-        if let Some(f) = height_length.fraction
-            && constraints.max_height.is_finite()
-        {
-            height_length.exact = Some((constraints.max_height * f).max(0.0));
-        }
-
-        // Calculate dimensions for child layout constraints.
-        // When a layout animation is active and the width/height is exact, use
-        // the animated current value so children are positioned within the actual
-        // visible bounds (e.g., Center alignment tracks the animating size).
-        // For non-exact (shrink-to-fit) widths, use the signal value to avoid a
-        // circular dependency: animated width → constrains children → target = clamped.
-        let child_layout_width =
-            if let Some(anim) = self.anims.as_ref().and_then(|a| a.width.as_ref()) {
-                if !anim.is_initial() && width_length.exact.is_some() {
-                    if animations::measuring_final() {
-                        *anim.target()
-                    } else {
-                        *anim.current()
-                    }
-                } else {
-                    width_length.exact.unwrap_or(constraints.max_width)
-                }
-            } else if let Some(exact) = width_length.exact {
-                exact
-            } else {
-                let w = constraints.max_width;
-                if let Some(max) = width_length.max {
-                    w.min(max)
-                } else {
-                    w
-                }
-            };
-
-        let child_layout_height =
-            if let Some(anim) = self.anims.as_ref().and_then(|a| a.height.as_ref()) {
-                if !anim.is_initial() && height_length.exact.is_some() {
-                    if animations::measuring_final() {
-                        *anim.target()
-                    } else {
-                        *anim.current()
-                    }
-                } else {
-                    height_length.exact.unwrap_or(constraints.max_height)
-                }
-            } else if let Some(exact) = height_length.exact {
-                exact
-            } else {
-                let h = constraints.max_height;
-                if let Some(max) = height_length.max {
-                    h.min(max)
-                } else {
-                    h
-                }
-            };
-
-        // Child constraints with padding
-        let mut child_max_width = (child_layout_width - padding.horizontal()).max(0.0);
-        let mut child_max_height = (child_layout_height - padding.vertical()).max(0.0);
-
-        // Reserve gutter space for scrollbars
-        if let Some(ref sd) = self.scroll_data
-            && sd.scrollbar_config.reserve_gutter
-            && sd.scrollbar_visibility != ScrollbarVisibility::Hidden
-        {
-            let gutter = sd.scrollbar_config.width + sd.scrollbar_config.margin * 2.0;
-            if self.scroll_axis.allows_vertical() {
-                child_max_width = (child_max_width - gutter).max(0.0);
-            }
-            if self.scroll_axis.allows_horizontal() {
-                child_max_height = (child_max_height - gutter).max(0.0);
-            }
-        }
-
-        let child_min_width = if width_length.exact.is_some() || width_length.fill {
-            child_max_width
-        } else {
-            // Propagate the effective minimum so layouts like Center/End know
-            // how much space they actually have to position children within.
-            // Sources of minimum: explicit at_least(min) or parent constraints.
-            let effective_min = width_length.min.unwrap_or(0.0).max(constraints.min_width);
-            (effective_min - padding.horizontal())
-                .max(0.0)
-                .min(child_max_width)
-        };
-        let child_min_height = if height_length.exact.is_some() || height_length.fill {
-            child_max_height
-        } else {
-            let effective_min = height_length.min.unwrap_or(0.0).max(constraints.min_height);
-            (effective_min - padding.vertical())
-                .max(0.0)
-                .min(child_max_height)
-        };
-
-        // For scrollable containers, use unbounded constraints in scroll direction
-        let scroll_axis = self.scroll_axis;
-
-        let child_constraints = match scroll_axis {
-            ScrollAxis::Vertical => Constraints {
-                min_width: 0.0,
-                min_height: 0.0,
-                max_width: child_max_width,
-                max_height: f32::INFINITY,
-            },
-            ScrollAxis::Horizontal => Constraints {
-                min_width: 0.0,
-                min_height: 0.0,
-                max_width: f32::INFINITY,
-                max_height: child_max_height,
-            },
-            ScrollAxis::Both => Constraints {
-                min_width: 0.0,
-                min_height: 0.0,
-                max_width: f32::INFINITY,
-                max_height: f32::INFINITY,
-            },
-            ScrollAxis::None => Constraints {
-                min_width: child_min_width,
-                min_height: child_min_height,
-                max_width: child_max_width,
-                max_height: child_max_height,
-            },
-        };
-
-        // Children are positioned in LOCAL coordinates (relative to container's 0,0).
-        // The container's absolute position is handled by the parent via transforms.
-        // Scroll offset is applied as a transform in paint().
-        let (child_origin_x, child_origin_y) = (padding.left, padding.top);
-
-        // Reconcile and get children IDs
         let children = self.children_source.reconcile_and_get(tree);
 
         // A layout reads its own reactive properties (Flex's spacing and
@@ -1437,29 +992,25 @@ impl Widget for Container {
         let layout_impl = &mut self.layout;
         let content_size = if !children.is_empty() {
             with_signal_tracking(id, JobType::Layout, || {
-                layout_impl.layout(
-                    tree,
-                    children,
-                    child_constraints,
-                    (child_origin_x, child_origin_y),
-                )
+                layout_impl.layout(tree, children, child.constraints, child.origin)
             })
         } else {
             Size::zero()
         };
 
-        // Update scroll state with the viewport dimensions available for children.
-        if scroll_axis != ScrollAxis::None {
+        if self.scroll_axis != ScrollAxis::None {
             let sd = self.scroll_mut();
             sd.scroll_state.content_width = content_size.width + padding.horizontal();
             sd.scroll_state.content_height = content_size.height + padding.vertical();
-            sd.scroll_state.viewport_width = child_max_width;
-            sd.scroll_state.viewport_height = child_max_height;
+            sd.scroll_state.viewport_width = child.viewport.width;
+            sd.scroll_state.viewport_height = child.viewport.height;
             sd.scroll_state.clamp_offsets();
         }
 
         let content_width = content_size.width + padding.horizontal();
         let content_height = content_size.height + padding.vertical();
+        let width_length = lengths.width;
+        let height_length = lengths.height;
 
         // Update animation targets
         if let Some(ref mut anims) = self.anims {
@@ -1588,110 +1139,7 @@ impl Widget for Container {
             }
         }
 
-        // Determine shrink behavior
-        let width_animating = self
-            .anims
-            .as_ref()
-            .and_then(|a| a.width.as_ref())
-            .is_some_and(|a| a.is_animating());
-        let height_animating = self
-            .anims
-            .as_ref()
-            .and_then(|a| a.height.as_ref())
-            .is_some_and(|a| a.is_animating());
-        let has_exact_width = width_length.exact.is_some();
-        let has_exact_height = height_length.exact.is_some();
-        let allow_shrink_width = self.overflow == Overflow::Hidden
-            || width_animating
-            || has_exact_width
-            || self.scroll_axis.allows_horizontal();
-        let allow_shrink_height = self.overflow == Overflow::Hidden
-            || height_animating
-            || has_exact_height
-            || self.scroll_axis.allows_vertical();
-
-        // Calculate final dimensions (measure-final: report animation
-        // targets so content-sized surfaces size once, not per frame)
-        let mut width = if let Some(anim) = self.anims.as_ref().and_then(|a| a.width.as_ref()) {
-            let animated = if animations::measuring_final() {
-                *anim.target()
-            } else {
-                *anim.current()
-            };
-            if allow_shrink_width {
-                animated
-            } else {
-                content_width.max(animated)
-            }
-        } else if let Some(exact) = width_length.exact {
-            exact
-        } else if width_length.fill {
-            constraints.max_width
-        } else {
-            content_width
-        };
-
-        // Apply Length min/max as post-adjustments (works with all cases including fill)
-        if let Some(min) = width_length.min {
-            width = width.max(min);
-        }
-        if let Some(max) = width_length.max {
-            width = width.min(max);
-        }
-
-        let mut height = if let Some(anim) = self.anims.as_ref().and_then(|a| a.height.as_ref()) {
-            let animated = if animations::measuring_final() {
-                *anim.target()
-            } else {
-                *anim.current()
-            };
-            if allow_shrink_height {
-                animated
-            } else {
-                content_height.max(animated)
-            }
-        } else if let Some(exact) = height_length.exact {
-            exact
-        } else if height_length.fill {
-            constraints.max_height
-        } else {
-            content_height
-        };
-
-        // Apply Length min/max as post-adjustments (works with all cases including fill)
-        if let Some(min) = height_length.min {
-            height = height.max(min);
-        }
-        if let Some(max) = height_length.max {
-            height = height.min(max);
-        }
-
-        let has_width_anim = self.anims.as_ref().is_some_and(|a| a.width.is_some());
-        let has_height_anim = self.anims.as_ref().is_some_and(|a| a.height.is_some());
-        if !allow_shrink_width && !has_width_anim && !has_exact_width {
-            width = width.max(content_width);
-        }
-        if !allow_shrink_height && !has_height_anim && !has_exact_height {
-            height = height.max(content_height);
-        }
-
-        // When explicit dimensions are set, respect them over min constraints
-        // This allows children with .width(60) to stay 60px even when parent uses Stretch
-        let final_width = if width_length.exact.is_some() {
-            // Explicit width: only apply max constraint, not min
-            width.min(constraints.max_width)
-        } else {
-            width.max(constraints.min_width).min(constraints.max_width)
-        };
-        let final_height = if height_length.exact.is_some() {
-            // Explicit height: only apply max constraint, not min
-            height.min(constraints.max_height)
-        } else {
-            height
-                .max(constraints.min_height)
-                .min(constraints.max_height)
-        };
-        let size = Size::new(final_width, final_height);
+        let size = self.resolve_size(&lengths, constraints, content_size);
 
         // Layout scrollbar containers after size is determined
         // Note: cache_layout is called at the end which stores size in Tree
@@ -1713,108 +1161,54 @@ impl Widget for Container {
             return EventResponse::Ignored;
         }
 
-        // Get bounds from Tree (single source of truth)
-        let bounds = tree.get_bounds(id).unwrap_or_default();
-
-        let transform = self.animated_transform(tree);
-        let transform_origin = self.transform_origin.get_or(TransformOrigin::CENTER);
-        let corner_radius = self.animated_corner_radius(tree);
+        let hit = HitContext {
+            bounds: tree.get_bounds(id).unwrap_or_default(),
+            corner_radius: self.animated_corner_radius(tree),
+            transform: self.animated_transform(tree),
+            transform_origin: self.transform_origin.get_or(TransformOrigin::CENTER),
+        };
 
         // Undo our own transform before hit testing against the laid-out bounds
         let local_event: Cow<'_, Event> = match event.coords() {
-            Some((x, y)) if !transform.is_identity() => {
+            Some((x, y)) if !hit.transform.is_identity() => {
                 let (local_x, local_y) =
-                    untransform_point(&transform, transform_origin, bounds, x, y);
+                    untransform_point(&hit.transform, hit.transform_origin, hit.bounds, x, y);
                 Cow::Owned(event.with_coords(local_x, local_y))
             }
             _ => Cow::Borrowed(event),
         };
 
-        // Handle scrollbar events first
-        if let Some(response) = self.handle_scrollbar_event(tree, id, bounds, &local_event) {
+        if let Some(response) = self.handle_scrollbar_event(tree, id, hit.bounds, &local_event) {
             return response;
         }
 
-        // Pre-dispatch: update hover state and fire pointer move callback
-        // before children get the event. This ensures parent hover tracking
-        // works even when a child container handles the MouseMove/MouseEnter.
-        let has_animated = self.has_animated_state_properties();
-        if let Some(ref mut ix) = self.interaction {
-            let request_repaint = |id: WidgetId| {
-                if has_animated {
-                    request_job(id, JobRequest::Animation(RequiredJob::Paint));
-                } else {
-                    request_job(id, JobRequest::Paint);
-                }
-            };
-            match local_event.as_ref() {
-                Event::MouseEnter { x, y }
-                    if bounds.contains_rounded(*x, *y, corner_radius) && !ix.is_hovered =>
-                {
-                    ix.is_hovered = true;
-                    if ix.hover_state.is_some() {
-                        request_repaint(id);
-                    }
-                    if let Some(ref callback) = ix.on_hover {
-                        callback(true);
-                    }
-                }
-                Event::MouseMove { x, y } => {
-                    if let Some(ref callback) = ix.on_pointer_move
-                        && (bounds.contains_rounded(*x, *y, corner_radius) || ix.is_pressed)
-                    {
-                        callback(*x - bounds.x, *y - bounds.y);
-                    }
+        self.track_pointer(id, &hit, &local_event);
 
-                    let was_hovered = ix.is_hovered;
-                    ix.is_hovered = bounds.contains_rounded(*x, *y, corner_radius);
-
-                    if was_hovered != ix.is_hovered {
-                        if ix.hover_state.is_some() {
-                            request_repaint(id);
-                        }
-                        if let Some(ref callback) = ix.on_hover {
-                            callback(ix.is_hovered);
-                        }
-                    }
+        // Children are positioned relative to our origin (and to the scroll
+        // offset, when we scroll), so their events have to be too.
+        let child_event: Cow<'_, Event> = match local_event.coords() {
+            Some((x, y)) => {
+                let (mut cx, mut cy) = (x - hit.bounds.x, y - hit.bounds.y);
+                if self.scroll_axis != ScrollAxis::None {
+                    let sd = self.scroll();
+                    cx += sd.scroll_state.offset_x;
+                    cy += sd.scroll_state.offset_y;
                 }
-                _ => {}
+                Cow::Owned(local_event.with_coords(cx, cy))
             }
-        }
-
-        // Transform event coordinates to local space (relative to container origin)
-        // Children are positioned in local coordinates, so events must be too
-        let child_event: Cow<'_, Event> = if let Some((x, y)) = local_event.coords() {
-            // Convert from global/window coordinates to local (relative to container)
-            let local_x = x - bounds.x;
-            let local_y = y - bounds.y;
-
-            // For scrollable containers, also add scroll offset
-            let (child_x, child_y) = if self.scroll_axis != ScrollAxis::None {
-                let sd = self.scroll();
-                (
-                    local_x + sd.scroll_state.offset_x,
-                    local_y + sd.scroll_state.offset_y,
-                )
-            } else {
-                (local_x, local_y)
-            };
-            Cow::Owned(local_event.with_coords(child_x, child_y))
-        } else {
-            local_event.clone()
+            None => local_event.clone(),
         };
 
-        // When overflow is hidden, children outside the container's bounds are
-        // clipped and invisible. Skip dispatching pointer events to them so that
-        // invisible children (e.g. inside a 0-height collapsed submenu) cannot
-        // steal clicks from siblings positioned below.
-        let skip_child_dispatch = (self.overflow == Overflow::Hidden
-            || self.scroll_axis != ScrollAxis::None)
+        // Children clipped away by hidden overflow or scrolling are invisible,
+        // and an invisible child must not steal a click from a sibling drawn
+        // below it (a collapsed submenu used to do exactly that).
+        let clips_children =
+            self.overflow == Overflow::Hidden || self.scroll_axis != ScrollAxis::None;
+        let skip_child_dispatch = clips_children
             && local_event
                 .coords()
-                .is_some_and(|(x, y)| !bounds.contains(x, y));
+                .is_some_and(|(x, y)| !hit.bounds.contains(x, y));
 
-        // Let children handle first (layout already reconciled)
         if !skip_child_dispatch {
             for &child_id in self.children_source.get() {
                 if let Some(response) = tree.with_widget_mut(child_id, |child, child_id, tree| {
@@ -1826,175 +1220,7 @@ impl Widget for Container {
             }
         }
 
-        // Handle our own events
-        match local_event.as_ref() {
-            // Hover tracking already handled in pre-dispatch above.
-            // Don't return Handled — hover changes should not prevent
-            // sibling containers from tracking their own hover state.
-            Event::MouseEnter { .. } | Event::MouseMove { .. } => {}
-            Event::MouseDown { x, y, button } if *button != MouseButton::Left => {
-                if bounds.contains_rounded(*x, *y, corner_radius)
-                    && let Some(ref ix) = self.interaction
-                {
-                    let callback = match button {
-                        MouseButton::Right => ix.on_right_click.as_ref(),
-                        MouseButton::Middle => ix.on_middle_click.as_ref(),
-                        MouseButton::Left => None,
-                    };
-                    if let Some(callback) = callback {
-                        callback();
-                        return EventResponse::Handled;
-                    }
-                }
-            }
-            Event::MouseDown { x, y, button } => {
-                if bounds.contains_rounded(*x, *y, corner_radius)
-                    && *button == MouseButton::Left
-                    && let Some(ref mut ix) = self.interaction
-                {
-                    let was_pressed = ix.is_pressed;
-                    ix.is_pressed = true;
-
-                    // Start ripple animation if configured
-                    let has_ripple = ix
-                        .pressed_state
-                        .as_ref()
-                        .is_some_and(|s| s.ripple.is_some());
-                    if has_ripple {
-                        let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
-                        let (local_x, local_y) =
-                            local_point(&transform, transform_origin, bounds, screen_x, screen_y);
-                        ix.ripple.start(local_x, local_y);
-                        // Ripple animation needs Animation + Paint
-                        request_job(id, JobRequest::Animation(RequiredJob::Paint));
-                    }
-
-                    if !was_pressed && ix.pressed_state.is_some() {
-                        self.request_state_change_repaint(id);
-                    }
-                    if let Some(ref ix) = self.interaction
-                        && let Some(ref callback) = ix.on_mouse_down
-                    {
-                        callback(*x - bounds.x, *y - bounds.y);
-                        return EventResponse::Handled;
-                    }
-                    if let Some(ref ix) = self.interaction
-                        && (ix.on_click.is_some() || ix.on_mouse_up.is_some())
-                    {
-                        return EventResponse::Handled;
-                    }
-                }
-            }
-            Event::MouseUp { x, y, button } => {
-                if let Some(ref mut ix) = self.interaction
-                    && ix.is_pressed
-                    && *button == MouseButton::Left
-                {
-                    let was_pressed = ix.is_pressed;
-                    ix.is_pressed = false;
-
-                    // Start ripple fade animation
-                    if ix.ripple.is_active() {
-                        let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
-                        let (local_x, local_y) =
-                            local_point(&transform, transform_origin, bounds, screen_x, screen_y);
-                        ix.ripple.start_fade(local_x, local_y);
-                        // Ripple fade animation needs Animation + Paint
-                        request_job(id, JobRequest::Animation(RequiredJob::Paint));
-                    }
-
-                    if was_pressed && ix.pressed_state.is_some() {
-                        self.request_state_change_repaint(id);
-                    }
-                    let mut handled = false;
-                    if let Some(ref ix) = self.interaction
-                        && let Some(ref callback) = ix.on_mouse_up
-                    {
-                        callback(*x - bounds.x, *y - bounds.y);
-                        handled = true;
-                    }
-                    if let Some(ref ix) = self.interaction
-                        && bounds.contains_rounded(*x, *y, corner_radius)
-                        && let Some(ref callback) = ix.on_click
-                    {
-                        callback();
-                        return EventResponse::Handled;
-                    }
-                    if handled {
-                        return EventResponse::Handled;
-                    }
-                }
-            }
-            Event::MouseLeave => {
-                if let Some(ref mut ix) = self.interaction {
-                    let was_hovered = ix.is_hovered;
-                    let was_pressed = ix.is_pressed;
-                    if ix.is_hovered {
-                        ix.is_hovered = false;
-                        if let Some(ref callback) = ix.on_hover {
-                            callback(false);
-                        }
-                    }
-                    ix.is_pressed = false;
-
-                    // Start ripple fade to center
-                    if ix.ripple.is_active() {
-                        ix.ripple.start_fade_to_center(bounds.width, bounds.height);
-                        // Ripple fade animation needs Animation + Paint
-                        request_job(id, JobRequest::Animation(RequiredJob::Paint));
-                    }
-
-                    if (was_hovered && ix.hover_state.is_some())
-                        || (was_pressed && ix.pressed_state.is_some())
-                    {
-                        self.request_state_change_repaint(id);
-                    }
-                }
-            }
-            Event::Scroll {
-                x,
-                y,
-                delta_x,
-                delta_y,
-                source,
-            } => {
-                if bounds.contains_rounded(*x, *y, corner_radius) {
-                    if self.scroll_axis != ScrollAxis::None {
-                        let consumed = self.apply_scroll(*delta_x, *delta_y, *source);
-                        if consumed {
-                            // Kinetic scrolling needs Animation + Paint if has velocity
-                            let sd = self.scroll();
-                            let has_velocity = sd.scroll_state.velocity_x.abs() > 0.5
-                                || sd.scroll_state.velocity_y.abs() > 0.5;
-                            if has_velocity {
-                                request_job(id, JobRequest::Animation(RequiredJob::Paint));
-                            } else {
-                                request_job(id, JobRequest::Paint);
-                            }
-                            return EventResponse::Handled;
-                        }
-                    }
-
-                    if let Some(ref ix) = self.interaction
-                        && let Some(ref callback) = ix.on_scroll
-                    {
-                        callback(*delta_x, *delta_y, *source);
-                        return EventResponse::Handled;
-                    }
-                }
-            }
-            Event::KeyDown { key, modifiers } => {
-                if let Some(ref ix) = self.interaction
-                    && let Some(ref callback) = ix.on_key_down
-                {
-                    callback(*key, *modifiers);
-                    return EventResponse::Handled;
-                }
-            }
-            Event::KeyUp { .. } | Event::FocusIn | Event::FocusOut => {}
-        }
-
-        EventResponse::Ignored
+        self.handle_own_event(id, &hit, event, &local_event)
     }
 
     fn has_focus_descendant(&self, tree: &Tree, focused_id: WidgetId) -> bool {
@@ -2104,60 +1330,28 @@ impl Widget for Container {
             crate::blur::register_blur(id, corner_radius);
         }
 
-        let shadow = elevation_to_shadow(elevation_level);
-
-        // LOCAL bounds (0,0 is widget origin) - all drawing uses these
+        // LOCAL bounds: the origin is this container, the parent already
+        // positioned the node.
         let local_bounds = Rect::new(0.0, 0.0, bounds.width, bounds.height);
         ctx.set_bounds(local_bounds);
 
-        // Apply user transform (rotation, scale, user-specified translate)
-        // Position is handled by the parent via set_transform before calling paint
-        // We COMPOSE our user transform with the existing position transform
+        // Compose our own transform on top of the position the parent set.
         if !user_transform.is_identity() {
             ctx.apply_transform_with_origin(user_transform, transform_origin);
         }
 
-        // Draw background using LOCAL coordinates
-        if let Some(ref gradient) = self.gradient {
-            ctx.draw_gradient_rect(
-                local_bounds,
-                crate::renderer::Gradient {
-                    start_color: gradient.start_color,
-                    end_color: gradient.end_color,
-                    direction: gradient.direction.into(),
-                },
+        self.paint_decoration(
+            ctx,
+            local_bounds,
+            &Decoration {
+                background,
                 corner_radii,
                 corner_curvature,
-            );
-        } else if background.a > 0.0 {
-            if elevation_level > 0.0 {
-                ctx.draw_rounded_rect_with_shadow(
-                    local_bounds,
-                    background,
-                    corner_radii,
-                    corner_curvature,
-                    shadow,
-                );
-            } else {
-                ctx.draw_rounded_rect_with_curvature(
-                    local_bounds,
-                    background,
-                    corner_radii,
-                    corner_curvature,
-                );
-            }
-        }
-
-        // Draw border using LOCAL coordinates (values captured above in with_signal_tracking)
-        if border_width > 0.0 {
-            ctx.draw_border_frame_with_curvature(
-                local_bounds,
-                border_color,
-                corner_radii,
+                elevation: elevation_level,
                 border_width,
-                corner_curvature,
-            );
-        }
+                border_color,
+            },
+        );
 
         // Determine if we need to clip children
         let is_scrollable = self.scroll_axis != ScrollAxis::None;
