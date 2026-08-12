@@ -1,0 +1,32 @@
+node 0,0 430x240
+  node 0,0 410x70 at 10,10
+    node 0,0 70x70
+      draw rect 0,0 70x70 fill=#4d80e6ff radius=16/16/16/16
+    node 0,0 70x70 at 80,0
+      draw rect 0,0 70x70 fill=#4d80e6ff radius=16/16/16/16 curvature=2
+    node 0,0 70x70 at 160,0
+      draw rect 0,0 70x70 fill=#4d80e6ff radius=16/16/16/16 curvature=0
+    node 0,0 70x70 at 240,0
+      draw rect 0,0 70x70 fill=#4d80e6ff radius=16/16/16/16 curvature=-1
+    node 0,0 70x70 at 320,0
+      draw rect 0,0 70x70 fill=#4d80e6ff radius=16/16/16/16 curvature=1.5
+  node 0,0 410x60 at 10,90
+    node 0,0 60x60
+      draw rect 0,0 60x60 fill=#e6e6f2ff radius=8/8/8/8
+    node 0,0 60x60 at 70,0
+      draw rect 0,0 60x60 fill=#e6e6f2ff radius=8/8/8/8 shadow=#0000001f+0,1 blur=3
+    node 0,0 60x60 at 140,0
+      draw rect 0,0 60x60 fill=#e6e6f2ff radius=8/8/8/8 shadow=#00000029+0,2 blur=4
+    node 0,0 60x60 at 210,0
+      draw rect 0,0 60x60 fill=#e6e6f2ff radius=8/8/8/8 shadow=#00000030+0,3 blur=6
+    node 0,0 60x60 at 280,0
+      draw rect 0,0 60x60 fill=#e6e6f2ff radius=8/8/8/8 shadow=#00000033+0,4 blur=8
+    node 0,0 60x60 at 350,0
+      draw rect 0,0 60x60 fill=#e6e6f2ff radius=8/8/8/8 shadow=#00000038+0,6 blur=10
+  node 0,0 410x70 at 10,160
+    node 0,0 70x70
+      draw rect 0,0 70x70 fill=#00000000 radius=16/16/16/16 border=#ffffffff@2
+    node 0,0 70x70 at 80,0
+      draw rect 0,0 70x70 fill=#ff0000ff radius=16/0/16/0
+    node 0,0 70x70 at 160,0
+      draw rect 0,0 70x70 fill=#ff0000ff radius=0/0/0/0 gradient=#ff0000ff->#0000ffff Vertical

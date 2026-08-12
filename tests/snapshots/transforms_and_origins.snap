@@ -1,0 +1,15 @@
+node 0,0 240x380
+  node 0,0 80x40 matrix[0.87 -0.5 0.5 0.87 20 20] origin=Center/Center
+    draw rect 0,0 80x40 fill=#ff0000ff radius=6/6/6/6
+  node 0,0 80x40 matrix[0.87 -0.5 0.5 0.87 20 72] origin=Left/Top
+    draw rect 0,0 80x40 fill=#00ff00ff radius=6/6/6/6
+  node 0,0 80x40 matrix[1.5 0 0 1.5 20 124] origin=Center/Center
+    draw rect 0,0 80x40 fill=#0000ffff radius=6/6/6/6
+  node 0,0 80x40 matrix[2 0 0 0.5 20 176] origin=Center/Center
+    draw rect 0,0 80x40 fill=#ffff00ff radius=6/6/6/6
+  node 0,0 80x40 at 35,223
+    draw rect 0,0 80x40 fill=#00ffffff radius=6/6/6/6
+  node 0,0 200x80 matrix[0.98 -0.17 0.17 0.98 20 280] origin=Center/Center
+    draw rect 0,0 200x80 fill=#333340ff radius=0/0/0/0
+    node 0,0 80x40 matrix[0.75 -0.27 0.27 0.75 0 0] origin=Center/Center
+      draw rect 0,0 80x40 fill=#ff00ffff radius=6/6/6/6
