@@ -30,6 +30,7 @@ use crate::widget_ref::{WidgetRef, register_widget_ref};
 
 use super::children::ChildrenSource;
 use super::into_child::{IntoChild, IntoChildren};
+use super::paint_children::{ChildPaintOptions, paint_children};
 use super::scroll::{
     ScrollAxis, ScrollState, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibility,
 };
@@ -1031,6 +1032,41 @@ impl Container {
 }
 
 /// Convert elevation level to shadow parameters
+/// Map a point from surface space into the container's untransformed space.
+///
+/// A container's own transform is applied around its origin at paint time, so
+/// hit testing has to undo it before comparing against the laid-out bounds.
+/// An identity transform returns the point unchanged.
+fn untransform_point(
+    transform: &Transform,
+    origin: TransformOrigin,
+    bounds: Rect,
+    x: f32,
+    y: f32,
+) -> (f32, f32) {
+    if transform.is_identity() {
+        return (x, y);
+    }
+    let (origin_x, origin_y) = origin.resolve(bounds);
+    transform
+        .center_at(origin_x, origin_y)
+        .inverse()
+        .transform_point(x, y)
+}
+
+/// Same as [`untransform_point`], expressed relative to the container's own
+/// origin — the space ripples and pointer callbacks work in.
+fn local_point(
+    transform: &Transform,
+    origin: TransformOrigin,
+    bounds: Rect,
+    x: f32,
+    y: f32,
+) -> (f32, f32) {
+    let (ux, uy) = untransform_point(transform, origin, bounds, x, y);
+    (ux - bounds.x, uy - bounds.y)
+}
+
 fn elevation_to_shadow(level: f32) -> Shadow {
     if level <= 0.0 {
         return Shadow::none();
@@ -1684,19 +1720,14 @@ impl Widget for Container {
         let transform_origin = self.transform_origin.get_or(TransformOrigin::CENTER);
         let corner_radius = self.animated_corner_radius(tree);
 
-        // Transform event coordinates to local space
-        let local_event: Cow<'_, Event> = if !transform.is_identity() {
-            if let Some((x, y)) = event.coords() {
-                let (origin_x, origin_y) = transform_origin.resolve(bounds);
-                // Transform is in screen space, simply center and invert
-                let screen_space_transform = transform.center_at(origin_x, origin_y);
-                let (local_x, local_y) = screen_space_transform.inverse().transform_point(x, y);
+        // Undo our own transform before hit testing against the laid-out bounds
+        let local_event: Cow<'_, Event> = match event.coords() {
+            Some((x, y)) if !transform.is_identity() => {
+                let (local_x, local_y) =
+                    untransform_point(&transform, transform_origin, bounds, x, y);
                 Cow::Owned(event.with_coords(local_x, local_y))
-            } else {
-                Cow::Borrowed(event)
             }
-        } else {
-            Cow::Borrowed(event)
+            _ => Cow::Borrowed(event),
         };
 
         // Handle scrollbar events first
@@ -1830,18 +1861,9 @@ impl Widget for Container {
                         .as_ref()
                         .is_some_and(|s| s.ripple.is_some());
                     if has_ripple {
-                        // Convert screen coords to local coords accounting for transform
                         let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
-                        let (local_x, local_y) = if !transform.is_identity() {
-                            let (origin_x, origin_y) = transform_origin.resolve(bounds);
-                            let screen_transform = transform.center_at(origin_x, origin_y);
-                            let (inv_x, inv_y) = screen_transform
-                                .inverse()
-                                .transform_point(screen_x, screen_y);
-                            (inv_x - bounds.x, inv_y - bounds.y)
-                        } else {
-                            (screen_x - bounds.x, screen_y - bounds.y)
-                        };
+                        let (local_x, local_y) =
+                            local_point(&transform, transform_origin, bounds, screen_x, screen_y);
                         ix.ripple.start(local_x, local_y);
                         // Ripple animation needs Animation + Paint
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
@@ -1873,18 +1895,9 @@ impl Widget for Container {
 
                     // Start ripple fade animation
                     if ix.ripple.is_active() {
-                        // Convert screen coords to local coords accounting for transform
                         let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
-                        let (local_x, local_y) = if !transform.is_identity() {
-                            let (origin_x, origin_y) = transform_origin.resolve(bounds);
-                            let screen_transform = transform.center_at(origin_x, origin_y);
-                            let (inv_x, inv_y) = screen_transform
-                                .inverse()
-                                .transform_point(screen_x, screen_y);
-                            (inv_x - bounds.x, inv_y - bounds.y)
-                        } else {
-                            (screen_x - bounds.x, screen_y - bounds.y)
-                        };
+                        let (local_x, local_y) =
+                            local_point(&transform, transform_origin, bounds, screen_x, screen_y);
                         ix.ripple.start_fade(local_x, local_y);
                         // Ripple fade animation needs Animation + Paint
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
@@ -2227,124 +2240,25 @@ impl Widget for Container {
             all_children
         };
 
-        for &child_id in visible_children {
-            // Get child bounds from Tree - these are in LOCAL coordinates (relative to parent)
-            let child_bounds = tree
-                .get_bounds(child_id)
-                .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
-            // Child's LOCAL bounds (0,0 origin with its own width/height)
-            let child_local = Rect::new(0.0, 0.0, child_bounds.width, child_bounds.height);
-            // Child offset is directly from child bounds (already in local coordinates)
-            let child_offset_x = child_bounds.x;
-            let child_offset_y = child_bounds.y;
-
-            // Child's position transform (may include scroll offset)
-            let child_position = if is_scrollable {
-                let sd = self.scroll();
-                Transform::translate(
-                    child_offset_x - sd.scroll_state.offset_x,
-                    child_offset_y - sd.scroll_state.offset_y,
-                )
-            } else {
-                Transform::translate(child_offset_x, child_offset_y)
-            };
-
-            // Cull clean off-screen children using the effective viewport
-            if let Some(ref cull_rect) = effective_cull_rect
-                && !tree.needs_paint(child_id)
-            {
-                let child_rect = Rect::new(
-                    child_offset_x,
-                    child_offset_y,
-                    child_bounds.width,
-                    child_bounds.height,
-                );
-                if !cull_rect.intersects(&child_rect) {
-                    crate::render_stats::record_paint_child_culled();
-                    // Mark this node's paint as partial so it won't be cached.
-                    // Without this, the incomplete paint (missing culled children)
-                    // could be reused later when the node is fully visible,
-                    // permanently hiding the culled children.
-                    ctx.mark_partial();
-                    continue;
-                }
-            }
-
-            // Try cached paint for clean children.
-            // For scrollable containers, allow cache reuse when the child is fully
-            // within the viewport — cull_rect propagation is unnecessary since all
-            // grandchildren are visible. Only partially visible edge items need full
-            // repaint for proper cull_rect propagation.
-            let can_use_cache = if is_scrollable {
-                if let Some(ref cull) = effective_cull_rect {
-                    child_offset_y >= cull.y
-                        && child_offset_y + child_bounds.height <= cull.y + cull.height
-                        && child_offset_x >= cull.x
-                        && child_offset_x + child_bounds.width <= cull.x + cull.width
-                } else {
-                    false
-                }
-            } else {
-                true
-            };
-            if can_use_cache
-                && !tree.needs_paint(child_id)
-                && let Some(cached) = tree.cached_paint(child_id)
-            {
-                // A cached node may only be re-parented, never re-sized: its
-                // commands were built for the size it was painted at. A size
-                // change means the child ran layout and marked itself, so it
-                // should not reach here — falling through to a full paint if
-                // it ever does keeps a missed invalidation from turning into
-                // stale content stretched to the wrong box.
-                let same_size = cached.bounds.width == child_local.width
-                    && cached.bounds.height == child_local.height;
-                if same_size {
-                    if cached.parent_position == child_position {
-                        // Position unchanged: reuse the cached node wholesale.
-                        // Zero copies — the render tree and the cache share it.
-                        ctx.add_child_rc(std::rc::Rc::clone(cached));
-                    } else {
-                        // Position changed: shallow header clone (children and
-                        // commands are Rc-shared, so this copies no subtree).
-                        // Decompose: extract user transform, recompose with new position.
-                        let mut reused = (**cached).clone();
-                        let user_part = cached
-                            .parent_position
-                            .inverse()
-                            .then(&cached.local_transform);
-                        reused.local_transform = child_position.then(&user_part);
-                        reused.parent_position = child_position;
-                        reused.bounds = child_local;
-                        reused.repainted.set(false);
-                        ctx.add_child_rc(std::rc::Rc::new(reused));
-                    }
-                    crate::render_stats::record_paint_child_cached();
-                    continue;
-                }
-                // Different size: fall through to a full paint below.
-            }
-
-            // Full paint (child is dirty, no cache, or partially visible scrollable child)
-            let mut child_ctx = ctx.add_child(child_id.as_u64(), child_local);
-            child_ctx.set_transform(child_position);
-
-            // Propagate cull_rect to child (transformed into child's local space)
-            if let Some(ref cull_rect) = effective_cull_rect {
-                child_ctx.set_cull_rect(Rect::new(
-                    cull_rect.x - child_offset_x,
-                    cull_rect.y - child_offset_y,
-                    cull_rect.width,
-                    cull_rect.height,
-                ));
-            }
-
-            // Paint child via tree
-            tree.with_widget(child_id, |child| {
-                child.paint(tree, child_id, &mut child_ctx)
-            });
-            crate::render_stats::record_paint_child_painted();
-        }
+        let scroll_offset = if is_scrollable {
+            let sd = self.scroll();
+            (sd.scroll_state.offset_x, sd.scroll_state.offset_y)
+        } else {
+            (0.0, 0.0)
+        };
+        paint_children(
+            tree,
+            ctx,
+            visible_children,
+            &ChildPaintOptions {
+                scroll_offset,
+                cull_rect: effective_cull_rect,
+                // A scroller's cull rect moves under its content, so a
+                // partially visible child has to repaint for its own children
+                // to be culled against the current rect.
+                cache_requires_full_visibility: is_scrollable,
+            },
+        );
 
         // Draw scrollbar containers
         if is_scrollable {
