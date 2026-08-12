@@ -17,7 +17,7 @@ pub fn button(label: String) -> impl Widget {
         .corner_radius(6.0)
         .hover_state(|s| s.lighter(0.1))
         .pressed_state(|s| s.ripple())
-        .child(text(label.clone()).color(Color::WHITE))
+        .child(text(label).color(Color::WHITE))
 }
 ```
 
@@ -40,7 +40,7 @@ Parameters without attributes become standard props with `Default::default()`:
 ```rust
 #[component]
 pub fn button(label: String) -> impl Widget {
-    container().child(text(label.clone()))
+    container().child(text(label))
 }
 ```
 
@@ -62,7 +62,7 @@ pub fn button(
     container()
         .padding(padding)
         .background(background)
-        .child(text(label.clone()).color(Color::WHITE))
+        .child(text(label).color(Color::WHITE))
 }
 ```
 
@@ -82,8 +82,8 @@ pub fn button(
     #[prop(callback)] on_click: (),
 ) -> impl Widget {
     container()
-        .on_click_option(on_click.clone())
-        .child(text(label.clone()))
+        .on_click_option(on_click)
+        .child(text(label))
 }
 ```
 
@@ -93,6 +93,26 @@ Provide closures for events:
 button()
     .label("Click me")
     .on_click(|| println!("Clicked!"))
+```
+
+Inside the body a callback prop is an `Option<Callback<..>>`. A
+[`Callback`](../concepts/reactive-model.md) is a `Copy` handle to the closure,
+so it goes into as many closures as needed without being cloned, and is called
+with `run`:
+
+```rust
+#[component]
+pub fn stepper(#[prop(callback)] on_change: fn(i32)) -> impl Widget {
+    container()
+        .layout(Flex::row().spacing(4))
+        // The same handle used twice — no clone in sight
+        .child(container().on_click(move || {
+            if let Some(cb) = on_change { cb.run(-1) }
+        }))
+        .child(container().on_click(move || {
+            if let Some(cb) = on_change { cb.run(1) }
+        }))
+}
 ```
 
 ## Accessing Props
@@ -110,8 +130,8 @@ pub fn button(
     container()
         .padding(padding)                  // Pass Signal<Padding> directly (Copy, keeps reactivity)
         .background(background)            // Pass Signal<Color> directly (Copy, keeps reactivity)
-        .on_click_option(on_click.clone()) // Clone optional callback
-        .child(text(label.clone()))
+        .on_click_option(on_click)         // Copy handle, no clone
+        .child(text(label))
 }
 ```
 
@@ -163,7 +183,7 @@ pub fn card(
         .background(Color::rgb(0.18, 0.18, 0.22))
         .corner_radius(8.0)
         .layout(Flex::column().spacing(8.0))
-        .child(text(title.clone()).font_size(18.0).color(Color::WHITE))
+        .child(text(title).font_size(18.0).color(Color::WHITE))
         .children_source(children)
 }
 ```
@@ -247,8 +267,8 @@ pub fn button(
         .corner_radius(6.0)
         .hover_state(|s| s.lighter(0.1))
         .pressed_state(|s| s.ripple())
-        .on_click_option(on_click.clone())
-        .child(text(label.clone()).color(Color::WHITE))
+        .on_click_option(on_click)
+        .child(text(label).color(Color::WHITE))
 }
 
 #[component]
@@ -262,7 +282,7 @@ pub fn card(
         .background(background)
         .corner_radius(8.0)
         .layout(Flex::column().spacing(8.0))
-        .child(text(title.clone()).font_size(18.0).color(Color::WHITE))
+        .child(text(title).font_size(18.0).color(Color::WHITE))
         .children_source(children)
 }
 

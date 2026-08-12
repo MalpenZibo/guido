@@ -530,10 +530,12 @@ impl Container {
         self
     }
 
-    /// Accept an optional click callback (useful for components)
-    pub fn on_click_option(mut self, callback: Option<ClickCallback>) -> Self {
+    /// Accept an optional click callback — the shape a `#[component]`
+    /// callback prop has, so it can be forwarded straight through.
+    pub fn on_click_option(mut self, callback: Option<crate::reactive::Callback>) -> Self {
         if callback.is_some() || self.interaction.is_some() {
-            self.interact_mut().on_click = callback;
+            self.interact_mut().on_click =
+                callback.map(|cb| std::rc::Rc::new(move || cb.run()) as ClickCallback);
         }
         self
     }

@@ -350,6 +350,31 @@ For comparison: Solid deduplicates by default with per-signal opt-out
 on `Memo` for cutoff. Guido keeps dedup as the default (idle cost
 matters here) and opts out per-write.
 
+## Copy Handles
+
+Signals, [`Service`](#background-task-updates) and `Callback` are all `Copy`:
+each is an id into the reactive arena, not the thing itself. That is what lets
+them be dropped into as many closures as a view needs without a clone, and what
+keeps a struct that groups them `Copy` too:
+
+```rust
+#[derive(Clone, Copy)]
+struct AudioHandles {
+    data: RwSignal<Option<AudioService>>,   // Copy
+    svc: Service<AudioCommand>,             // Copy
+    on_toggle: Callback,                    // Copy
+}
+```
+
+The `Send` halves are separate by design, since the arena is main-thread only:
+`RwSignal::writer()` for a background write, `Service::sender()` for a command
+from a background task.
+
+```rust
+let cb = Callback::new(move |v: i32| println!("{v}"));
+cb.run(7);          // arity stays flat: run(), run(a), run(a, b)
+```
+
 ## Signal Internals
 
 Signals are lightweight handles that index into thread-local storage:

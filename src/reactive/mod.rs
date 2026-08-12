@@ -1,3 +1,4 @@
+pub mod callback;
 pub mod clipboard;
 pub mod context;
 pub mod cursor;
@@ -50,6 +51,7 @@ pub mod __internal {
     pub use super::owner::{OwnerId, dispose_owner_now as dispose_owner, with_owner};
     pub use super::runtime::batch;
 }
+pub use callback::Callback;
 pub(crate) use runtime::flush_bg_writes;
 pub use service::{Service, ServiceContext, create_service};
 pub use signal::{

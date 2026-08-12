@@ -25,6 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 
 use super::on_cleanup;
+use super::signal::{Signal, create_stored};
 
 /// Context passed to the service function.
 ///
@@ -46,27 +47,44 @@ impl ServiceContext {
 
 /// Handle to a background service for sending commands.
 ///
-/// Clone this handle to send commands from multiple places.
+/// `Copy`, like [`Signal`](super::Signal): the channel lives in the reactive
+/// arena and the handle is just its id, so it can be dropped into as many
+/// closures as needed without a clone. Handles of services, signals and
+/// callbacks being `Copy` is what keeps a struct that groups them `Copy` too.
+///
+/// Main-thread only (`!Send`). To send commands from a background task, take
+/// the [`sender()`](Service::sender) — the same split as
+/// [`RwSignal::writer`](super::RwSignal::writer).
 pub struct Service<Cmd> {
-    sender: mpsc::UnboundedSender<Cmd>,
+    sender: Signal<mpsc::UnboundedSender<Cmd>>,
 }
 
-// Manual impl: the derive would add a spurious `Cmd: Clone` bound, but only
-// the sender is cloned.
+// Manual impls: the derives would demand `Cmd: Clone`/`Cmd: Copy`, but the
+// handle is an arena id whatever the command type is.
 impl<Cmd> Clone for Service<Cmd> {
     fn clone(&self) -> Self {
-        Self {
-            sender: self.sender.clone(),
-        }
+        *self
     }
 }
 
-impl<Cmd> Service<Cmd> {
+impl<Cmd> Copy for Service<Cmd> {}
+
+impl<Cmd: 'static> Service<Cmd> {
     /// Send a command to the service.
     ///
-    /// Returns silently if the service has stopped.
+    /// Returns silently if the service has stopped. Sending after the owning
+    /// scope was disposed logs a warning and does nothing — the task it would
+    /// reach was aborted with that scope.
     pub fn send(&self, cmd: Cmd) {
-        let _ = self.sender.send(cmd);
+        self.sender.with_untracked(|tx| {
+            let _ = tx.send(cmd);
+        });
+    }
+
+    /// The `Send` half of this handle, for driving the service from a
+    /// background task. The counterpart of `RwSignal::writer()`.
+    pub fn sender(&self) -> mpsc::UnboundedSender<Cmd> {
+        self.sender.with_untracked(|tx| tx.clone())
     }
 }
 
@@ -135,6 +153,8 @@ where
 
     let ctx = ServiceContext { running };
     let handle = service_runtime().spawn(f(rx, ctx));
+    // The channel lives in the arena so the handle can be Copy
+    let sender = create_stored(tx);
 
     // Register cleanup to stop the task when component unmounts.
     // Setting is_running to false allows graceful shutdown, while abort()
@@ -145,7 +165,7 @@ where
         handle.abort();
     });
 
-    Service { sender: tx }
+    Service { sender }
 }
 
 /// Get a runtime handle for spawning service tasks.
@@ -307,7 +327,7 @@ mod tests {
         });
 
         // Clone and send from different handles
-        let service2 = service.clone();
+        let service2 = service;
         service.send(5);
         service2.send(7);
 
