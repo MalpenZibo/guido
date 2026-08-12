@@ -4,6 +4,9 @@ mod animations;
 mod ripple;
 mod scrollable;
 
+#[cfg(test)]
+mod characterization;
+
 pub(crate) use animations::with_measure_final;
 pub use animations::{AdvanceResult, AnimationState, get_animated_value};
 pub use ripple::RippleState;
