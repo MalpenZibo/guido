@@ -46,6 +46,8 @@ use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 thread_local! {
     static DEFAULT_FONT_FAMILY: RefCell<FontFamily> = const { RefCell::new(FontFamily::SansSerif) };
     static CUSTOM_FONTS: RefCell<Vec<Arc<Vec<u8>>>> = const { RefCell::new(Vec::new()) };
+    static CUSTOM_FONT_HASHES: RefCell<rustc_hash::FxHashSet<u64>> =
+        RefCell::new(rustc_hash::FxHashSet::default());
     static FONTS_CONSUMED: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -89,6 +91,15 @@ pub fn load_font(data: Vec<u8>) {
             "load_font() called after FontSystem initialization — \
              this font will not be available. Call load_font() before App::run()."
         );
+    }
+    // Idempotent: an app that reloads its config re-registers the same fonts
+    // on every run, and without this each run would keep another copy.
+    let mut hasher = std::hash::BuildHasher::build_hasher(&rustc_hash::FxBuildHasher);
+    std::hash::Hasher::write(&mut hasher, &data);
+    let hash = std::hash::Hasher::finish(&hasher);
+    let is_new = CUSTOM_FONT_HASHES.with(|seen| seen.borrow_mut().insert(hash));
+    if !is_new {
+        return;
     }
     CUSTOM_FONTS.with(|fonts| {
         fonts.borrow_mut().push(Arc::new(data));
@@ -1212,5 +1223,27 @@ impl Drop for App {
 impl Default for App {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod font_registry_tests {
+    /// An app that reloads its config calls load_font again on every run.
+    /// Without dedup each run kept another copy of the same bytes.
+    #[test]
+    fn loading_the_same_font_twice_registers_it_once() {
+        let font = vec![7u8; 64];
+        super::load_font(font.clone());
+        let after_first = super::CUSTOM_FONTS.with(|f| f.borrow().len());
+        super::load_font(font);
+        let after_second = super::CUSTOM_FONTS.with(|f| f.borrow().len());
+        assert_eq!(after_first, after_second);
+
+        super::load_font(vec![9u8; 64]);
+        assert_eq!(
+            super::CUSTOM_FONTS.with(|f| f.borrow().len()),
+            after_second + 1,
+            "a different font must still register"
+        );
     }
 }
