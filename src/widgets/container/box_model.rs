@@ -131,11 +131,7 @@ impl Container {
     ) -> f32 {
         if let Some(anim) = anim {
             if !anim.is_initial() && length.exact.is_some() {
-                return if animations::measuring_final() {
-                    *anim.target()
-                } else {
-                    *anim.current()
-                };
+                return anim.displayed();
             }
             return length.exact.unwrap_or(available);
         }
@@ -294,14 +290,8 @@ impl Container {
                 Axis::Vertical => self.scroll_axis.allows_vertical(),
             };
 
-        // Measure-final reports the animation's destination, so a
-        // content-sized surface sizes itself once instead of every frame.
         let mut size = if let Some(anim) = anim {
-            let animated = if animations::measuring_final() {
-                *anim.target()
-            } else {
-                *anim.current()
-            };
+            let animated = anim.displayed();
             if allow_shrink {
                 animated
             } else {
