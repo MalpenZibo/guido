@@ -32,11 +32,15 @@ use super::scroll::{
 };
 use super::state_layer::{StateStyle, resolve_background};
 use super::widget::{
-    Color, Event, EventResponse, LayoutHints, MouseButton, Padding, Rect, ScrollSource, Widget,
+    Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding, Rect,
+    ScrollSource, Widget,
 };
 
 /// Callback for click events
 pub type ClickCallback = Rc<dyn Fn()>;
+
+/// Callback for a key press: the key and the modifiers held with it.
+pub type KeyCallback = Rc<dyn Fn(Key, Modifiers)>;
 /// Callback for hover events (bool = is_hovered)
 pub type HoverCallback = Rc<dyn Fn(bool)>;
 /// Callback for scroll events (delta_x, delta_y, source)
@@ -142,6 +146,9 @@ pub(super) struct ContainerAnims {
 /// Only allocated when `.on_click()`, `.hover_state()`, `.pressed_state()`, etc. are called.
 pub(super) struct InteractionState {
     pub(super) on_click: Option<ClickCallback>,
+    pub(super) on_right_click: Option<ClickCallback>,
+    pub(super) on_middle_click: Option<ClickCallback>,
+    pub(super) on_key_down: Option<KeyCallback>,
     pub(super) on_hover: Option<HoverCallback>,
     pub(super) on_scroll: Option<ScrollCallback>,
     pub(super) on_pointer_move: Option<PointerMoveCallback>,
@@ -159,6 +166,9 @@ impl Default for InteractionState {
     fn default() -> Self {
         Self {
             on_click: None,
+            on_right_click: None,
+            on_middle_click: None,
+            on_key_down: None,
             on_hover: None,
             on_scroll: None,
             on_pointer_move: None,
@@ -527,6 +537,28 @@ impl Container {
 
     pub fn on_click<F: Fn() + 'static>(mut self, callback: F) -> Self {
         self.interact_mut().on_click = Some(Rc::new(callback));
+        self
+    }
+
+    /// Called on a right-button press inside the bounds.
+    pub fn on_right_click<F: Fn() + 'static>(mut self, callback: F) -> Self {
+        self.interact_mut().on_right_click = Some(Rc::new(callback));
+        self
+    }
+
+    /// Called on a middle-button press inside the bounds.
+    pub fn on_middle_click<F: Fn() + 'static>(mut self, callback: F) -> Self {
+        self.interact_mut().on_middle_click = Some(Rc::new(callback));
+        self
+    }
+
+    /// Called for every key press this container's surface receives.
+    ///
+    /// Delivered while the surface has keyboard focus — a layer surface with
+    /// [`KeyboardInteractivity`](crate::platform::KeyboardInteractivity) set,
+    /// or a popup holding a grab.
+    pub fn on_key_down<F: Fn(Key, Modifiers) + 'static>(mut self, callback: F) -> Self {
+        self.interact_mut().on_key_down = Some(Rc::new(callback));
         self
     }
 
@@ -1757,6 +1789,21 @@ impl Widget for Container {
             // Don't return Handled — hover changes should not prevent
             // sibling containers from tracking their own hover state.
             Event::MouseEnter { .. } | Event::MouseMove { .. } => {}
+            Event::MouseDown { x, y, button } if *button != MouseButton::Left => {
+                if bounds.contains_rounded(*x, *y, corner_radius)
+                    && let Some(ref ix) = self.interaction
+                {
+                    let callback = match button {
+                        MouseButton::Right => ix.on_right_click.as_ref(),
+                        MouseButton::Middle => ix.on_middle_click.as_ref(),
+                        MouseButton::Left => None,
+                    };
+                    if let Some(callback) = callback {
+                        callback();
+                        return EventResponse::Handled;
+                    }
+                }
+            }
             Event::MouseDown { x, y, button } => {
                 if bounds.contains_rounded(*x, *y, corner_radius)
                     && *button == MouseButton::Left
@@ -1911,8 +1958,15 @@ impl Widget for Container {
                     }
                 }
             }
-            // Keyboard and focus events are handled by focused widgets, not containers
-            Event::KeyDown { .. } | Event::KeyUp { .. } | Event::FocusIn | Event::FocusOut => {}
+            Event::KeyDown { key, modifiers } => {
+                if let Some(ref ix) = self.interaction
+                    && let Some(ref callback) = ix.on_key_down
+                {
+                    callback(*key, *modifiers);
+                    return EventResponse::Handled;
+                }
+            }
+            Event::KeyUp { .. } | Event::FocusIn | Event::FocusOut => {}
         }
 
         EventResponse::Ignored

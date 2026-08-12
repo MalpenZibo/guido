@@ -54,6 +54,23 @@ container().on_hover(|hovered| {
 })
 ```
 
+## Other Buttons and Keys
+
+```rust
+container()
+    .on_click(|| println!("left"))
+    .on_right_click(|| println!("right"))
+    .on_middle_click(|| println!("middle"))
+    .on_key_down(|key, _mods| {
+        if key == Key::Escape {
+            close();
+        }
+    })
+```
+
+`on_key_down` fires while the surface has keyboard focus — a layer surface
+with `KeyboardInteractivity` set, or a popup holding a grab.
+
 ## Scroll Events
 
 ```rust
