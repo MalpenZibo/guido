@@ -3,6 +3,7 @@ pub mod container;
 pub mod font;
 pub mod image;
 pub mod into_child;
+mod paint_children;
 pub mod scroll;
 pub mod state_layer;
 pub mod text;
