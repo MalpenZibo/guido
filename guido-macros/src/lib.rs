@@ -34,6 +34,18 @@ use syn::{DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro
 ///         .child(text(label).color(Color::WHITE))
 /// }
 /// ```
+/// The argument tuple for a callback prop: `()`, `(A,)`, `(A, B)`, …
+fn callback_args_tuple(params: &[Type]) -> proc_macro2::TokenStream {
+    match params.len() {
+        0 => quote! { () },
+        1 => {
+            let only = &params[0];
+            quote! { (#only,) }
+        }
+        _ => quote! { (#(#params),*) },
+    }
+}
+
 #[proc_macro_attribute]
 pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemFn);
@@ -188,9 +200,9 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         let ty = &field.ty;
 
         if field.is_callback {
-            let params = &field.callback_params;
+            let args = callback_args_tuple(&field.callback_params);
             quote! {
-                #name: Option<std::rc::Rc<dyn Fn(#(#params),*)>>
+                #name: Option<::guido::reactive::Callback<#args>>
             }
         } else if field.is_children {
             quote! {
@@ -243,7 +255,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             let params = &field.callback_params;
             quote! {
                 #vis fn #name<F: Fn(#(#params),*) + 'static>(mut self, f: F) -> Self {
-                    self.#name = Some(std::rc::Rc::new(f));
+                    self.#name = Some(::guido::reactive::Callback::new(f));
                     self
                 }
             }
@@ -320,9 +332,9 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 let #name = self.#take_name();
             }
         } else if field.is_callback {
-            // Callbacks are Option<Rc<...>> — not Copy, need reference
+            // Option<Callback<..>> is Copy: bind by value, no clone ceremony
             quote! {
-                let #name = &self.#name;
+                let #name = self.#name;
             }
         } else {
             // Signal<T> is Copy — just copy it

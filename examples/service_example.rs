@@ -67,7 +67,7 @@ async fn main() {
                 .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
                 .background_color(Color::rgb(0.1, 0.1, 0.15)),
             move || {
-                let svc = service.clone();
+                let svc = service;
 
                 container()
                     .layout(
@@ -79,7 +79,6 @@ async fn main() {
                     // Workspace buttons
                     .child(container().layout(Flex::row().spacing(4.0)).children(
                         workspaces.clone().into_iter().map(move |id| {
-                            let svc = svc.clone();
                             container()
                                 .width(32.0)
                                 .height(32.0)
