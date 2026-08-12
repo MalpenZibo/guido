@@ -187,6 +187,16 @@ impl<T: Clone + 'static> Signal<T> {
     }
 }
 
+impl<T: Clone + Send + Sync + 'static> Signal<T> {
+    /// Watch this signal from a background task.
+    ///
+    /// See [`RwSignal::watch`].
+    pub fn watch(&self) -> tokio::sync::watch::Receiver<T> {
+        let this = *self;
+        watch_value(this.get_untracked(), move || this.get())
+    }
+}
+
 /// A read-write reactive signal.
 ///
 /// Created by [`create_signal`]. Provides both read and write access.
@@ -288,6 +298,39 @@ impl<T: Clone + 'static> RwSignal<T> {
     /// Update the value using a closure, notifying unconditionally.
     pub fn update_always<F: FnOnce(&mut T)>(&self, f: F) {
         update_and_notify_always(self.id, f);
+    }
+}
+
+impl<T: Clone + Send + Sync + 'static> RwSignal<T> {
+    /// Watch this signal from a background task.
+    ///
+    /// The mirror of [`writer()`](RwSignal::writer): that one carries writes
+    /// from a task to the main thread, this one carries the value the other
+    /// way. The returned `watch::Receiver` is `Send`, always holds the current
+    /// value (`borrow()`), and can be awaited (`changed()`) instead of polled
+    /// — which is what an `Arc<AtomicBool>` mirrored by hand cannot do.
+    ///
+    /// When the scope that created it is disposed the sender drops, so
+    /// `changed()` returns `Err`: the task's cue that the UI is gone.
+    ///
+    /// ```ignore
+    /// let wide = create_memo(move || menu.get() == Some(Menu::SystemInfo));
+    /// let mut wide_rx = wide.watch();
+    ///
+    /// create_service::<(), _, _>(move |_rx, ctx| async move {
+    ///     while ctx.is_running() {
+    ///         let scope = if *wide_rx.borrow() { Scope::All } else { Scope::Bar };
+    ///         sample(scope);
+    ///         tokio::select! {
+    ///             _ = wide_rx.changed() => {}                       // react at once
+    ///             _ = tokio::time::sleep(interval) => {}
+    ///         }
+    ///     }
+    /// });
+    /// ```
+    pub fn watch(&self) -> tokio::sync::watch::Receiver<T> {
+        let this = *self;
+        watch_value(this.get_untracked(), move || this.get())
     }
 }
 
@@ -520,6 +563,29 @@ pub fn create_derived<T: Clone + 'static>(f: impl Fn() -> T + 'static) -> Signal
     }
 }
 
+/// Feed a `tokio::watch` channel from a reactive read.
+///
+/// Shared by the `watch()` of every signal kind. The effect that pumps the
+/// channel belongs to the current scope, so it dies with whatever created it
+/// — exactly like the task on the other end of the channel.
+fn watch_value<T: Clone + Send + Sync + 'static>(
+    initial: T,
+    read: impl Fn() -> T + 'static,
+) -> tokio::sync::watch::Receiver<T> {
+    let (tx, rx) = tokio::sync::watch::channel(initial);
+    let effect = super::effect::create_effect(move || {
+        let _ = tx.send(read());
+    });
+    if super::owner::current_owner().is_some() {
+        // Owned: the scope disposes it, and dropping the sender is how the
+        // task learns the UI is gone (`changed()` returns Err)
+        drop(effect);
+    } else {
+        effect.detach();
+    }
+    rx
+}
+
 /// Extension trait for `Option<Signal<T>>` to support lazy-default widget properties.
 ///
 /// Widget properties stored as `Option<Signal<T>>` start as `None` (zero allocation).
@@ -576,6 +642,63 @@ impl<T: Clone + 'static> OptionSignalExt<T> for Option<Signal<T>> {
                 s
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod watch_tests {
+    use super::*;
+
+    /// The bridge apps were hand-rolling with `Arc<AtomicBool>`: a value a
+    /// background task can read, kept current by the reactive graph.
+    #[test]
+    fn a_watcher_sees_the_current_value_and_every_change() {
+        let flag = create_signal(false);
+        let rx = flag.watch();
+        assert!(!*rx.borrow());
+
+        flag.set(true);
+        assert!(*rx.borrow(), "the watcher follows the signal");
+        assert!(rx.has_changed().unwrap(), "and is notified, not polled");
+    }
+
+    /// A memo is the natural thing to watch: only real transitions wake the
+    /// task.
+    #[test]
+    fn watching_a_memo_reports_only_real_changes() {
+        let count = create_signal(0);
+        let is_high = crate::reactive::create_memo(move || count.get() > 10);
+        let mut rx = is_high.watch();
+        assert!(!*rx.borrow_and_update());
+
+        count.set(5);
+        assert!(
+            !rx.has_changed().unwrap(),
+            "still false: nothing to wake for"
+        );
+
+        count.set(50);
+        assert!(rx.has_changed().unwrap());
+        assert!(*rx.borrow_and_update());
+    }
+
+    /// Disposing the scope drops the sender, which is how the task learns the
+    /// UI is gone.
+    #[test]
+    fn disposing_the_scope_closes_the_channel() {
+        let (rx, owner) = crate::reactive::owner::with_owner(|| {
+            let flag = create_signal(false);
+            flag.watch()
+        });
+
+        assert!(!rx.borrow().to_owned());
+        crate::reactive::__internal::dispose_owner(owner);
+
+        // The sender is gone: the channel reports closed without awaiting
+        assert!(
+            rx.has_changed().is_err(),
+            "a disposed scope must close the channel"
+        );
     }
 }
 
