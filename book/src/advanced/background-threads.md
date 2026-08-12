@@ -199,6 +199,44 @@ let view = container()
     .child(text(move || time.get()).font_size(48.0).color(Color::WHITE));
 ```
 
+## Reading UI State From a Task: `watch()`
+
+`writer()` carries values from a task to the UI. The other direction —
+a task that needs to follow something the UI decides — is `watch()`, which
+returns a `tokio::sync::watch::Receiver<T>`: `Send`, always holding the current
+value, and awaitable.
+
+```rust
+let menu_open = create_memo(move || active_menu.get() == Some(Menu::SystemInfo));
+let mut open_rx = menu_open.watch();
+
+let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+    while ctx.is_running() {
+        // Current value, no polling
+        let scope = if *open_rx.borrow_and_update() { Scope::All } else { Scope::Bar };
+        sample(scope);
+
+        // Sleep, but wake early if the UI changes its mind
+        tokio::select! {
+            _ = tokio::time::sleep(interval) => {}
+            changed = open_rx.changed() => {
+                if changed.is_err() {
+                    return;   // the scope that owns the watcher is gone
+                }
+            }
+        }
+    }
+});
+```
+
+Watching a `Memo` is usually what you want: it only notifies when the derived
+value actually changes, so the task wakes on real transitions rather than on
+every keystroke behind them.
+
+This replaces the `Arc<AtomicBool>` mirrored by an effect that apps otherwise
+write by hand — and unlike the atomic, the task can *wait* on the change
+instead of polling for it.
+
 ## Best Practices
 
 ### Use `tokio::select!` for Responsive Shutdown
@@ -247,24 +285,26 @@ let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
 });
 ```
 
-### Clone Service Handle for Multiple Callbacks
+### The Service Handle Is `Copy`
+
+`Service<Cmd>` is a handle into the reactive arena, so it goes into as many
+callbacks as you like without a clone:
 
 ```rust
 let service = create_service(...);
 
-// Clone for each callback that needs it
-let svc1 = service.clone();
-let svc2 = service.clone();
-
 container()
     .child(
         container()
-            .on_click(move || svc1.send(Cmd::Action1))
+            .on_click(move || service.send(Cmd::Action1))
             .child(text("Action 1"))
     )
     .child(
         container()
-            .on_click(move || svc2.send(Cmd::Action2))
+            .on_click(move || service.send(Cmd::Action2))
             .child(text("Action 2"))
     )
 ```
+
+To send commands from *inside* another background task, take the `Send` half
+with `service.sender()` — the handle itself is main-thread only, like signals.

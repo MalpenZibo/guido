@@ -94,6 +94,18 @@ impl<T: Clone + PartialEq + Send + 'static> Memo<T> {
         self.signal.with(f)
     }
 
+    /// Watch this memo from a background task.
+    ///
+    /// See [`RwSignal::watch`](super::RwSignal::watch). A memo is usually what
+    /// you want to watch: it only notifies when the derived value actually
+    /// changes, so the task wakes on real transitions.
+    pub fn watch(&self) -> tokio::sync::watch::Receiver<T>
+    where
+        T: Send + Sync,
+    {
+        self.signal.watch()
+    }
+
     /// Extract as a read-only signal.
     pub fn into_signal(self) -> Signal<T> {
         self.signal.read_only()
