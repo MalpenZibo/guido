@@ -227,42 +227,62 @@ fn overflowing_content_grows_a_visible_container() {
     assert_eq!(hidden.fit(100.0, 500.0).width, 100.0);
 }
 
-/// Pins an asymmetry rather than endorsing it: with a width animation
-/// attached, the extent children are laid out inside ignores `at_most`, while
-/// without one it is clamped. It reads like an oversight — the container's own
-/// final size honours the cap either way, so only the children's constraints
-/// differ — but it is what the code has always done, and changing it is a
-/// behaviour change that belongs in its own commit with its own test.
+/// Attaching an animation must not change what children are offered. It used
+/// to: the animated path skipped the `at_most` clamp, so children were laid out
+/// against the parent's full width and then the container was cut back to the
+/// cap — content overflowing a box that had told it there was room.
 #[test]
-fn an_animated_width_does_not_clamp_children_to_at_most() {
+fn at_most_bounds_children_with_or_without_a_size_animation() {
     use crate::animation::{TimingFunction, Transition};
 
-    let mut clamped = H::new(
-        container()
-            .width(at_most(60.0))
-            .child(container().width(fill()).height(5.0)),
-    );
-    clamped.fit(500.0, 500.0);
-    let child = clamped.children()[0];
-    assert_eq!(clamped.tree.get_bounds(child).unwrap().width, 60.0);
+    for animated in [false, true] {
+        let inner = container().width(fill()).height(5.0);
+        let outer = container().width(at_most(60.0));
+        let outer = if animated {
+            outer.animate_width(Transition::new(200, TimingFunction::EaseOut))
+        } else {
+            outer
+        };
+
+        let mut h = H::new(outer.child(inner));
+        h.fit(500.0, 500.0);
+        let child = h.children()[0];
+        assert_eq!(
+            h.tree.get_bounds(child).unwrap().width,
+            60.0,
+            "child must be bounded by the cap (animated: {animated})"
+        );
+        assert_eq!(h.tree.cached_size(h.root).unwrap().width, 60.0);
+    }
+}
+
+/// The worst of the same bug: a wrapping child measured against the wrong width
+/// gets the wrong *height* too, and no clamp downstream can recover it. Text
+/// laid out as one 366px line inside a 100px box came out 16.8 tall instead of
+/// 84 — the container was the right width and the wrong shape.
+///
+/// Font-independent by construction: it asserts the two agree, never a metric.
+#[test]
+fn a_size_animation_does_not_change_how_content_wraps() {
+    use crate::animation::{TimingFunction, Transition};
+    use crate::widgets::text::text;
+
+    let sentence = "una frase abbastanza lunga da dover andare a capo piu volte";
+
+    let mut plain = H::new(container().width(at_most(100.0)).child(text(sentence)));
+    let plain_size = plain.fit(500.0, 500.0);
 
     let mut animated = H::new(
         container()
-            .width(at_most(60.0))
+            .width(at_most(100.0))
             .animate_width(Transition::new(200, TimingFunction::EaseOut))
-            .child(container().width(fill()).height(5.0)),
+            .child(text(sentence)),
     );
-    animated.fit(500.0, 500.0);
-    let child = animated.children()[0];
+    let animated_size = animated.fit(500.0, 500.0);
+
     assert_eq!(
-        animated.tree.get_bounds(child).unwrap().width,
-        500.0,
-        "the animated branch offers the full width, cap ignored"
-    );
-    assert_eq!(
-        animated.tree.cached_size(animated.root).unwrap().width,
-        60.0,
-        "the container itself still honours the cap"
+        plain_size, animated_size,
+        "an attached animation must not change how the content wraps"
     );
 }
 
