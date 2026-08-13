@@ -654,6 +654,57 @@ fn scroll_reaches_the_callback_inside_the_bounds() {
 // Reactivity: which job type each property invalidates
 // ---------------------------------------------------------------------------
 
+/// Advancing animations reads each animated property's target. That read is a
+/// snapshot — the subscription is established by `seed_animations` at the first
+/// layout and refreshed by `resync_animation_targets` at every paint — so the
+/// debug diagnostic must stay quiet about it.
+///
+/// It did not, and reported every animated container's border width and corner
+/// radius as a value that "will not update", which is the opposite of true. A
+/// warning that cries wolf on correct code is worse than no warning: it teaches
+/// people to scroll past the ones that are right.
+///
+/// Both halves are asserted together on purpose — silence is only correct if
+/// the property really is subscribed.
+#[cfg(debug_assertions)]
+#[test]
+fn advancing_animations_does_not_report_a_missing_scope() {
+    use crate::animation::{TimingFunction, Transition};
+    use crate::reactive::diagnostics::report_count;
+
+    let t = || Transition::new(200, TimingFunction::EaseOut);
+    let wide = create_signal(false);
+    let mut h = H::new(
+        container()
+            .width(50.0)
+            .height(50.0)
+            .background(Color::RED)
+            .border(move || if wide.get() { 6.0 } else { 2.0 }, Color::BLUE)
+            .corner_radius(move || if wide.get() { 20.0 } else { 4.0 })
+            .animate_border_width(t())
+            .animate_corner_radius(t()),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+
+    let before = report_count();
+    let root = h.root;
+    h.tree.with_widget_mut(root, |w, id, tree| {
+        w.advance_animations(tree, id);
+    });
+    assert_eq!(
+        report_count() - before,
+        0,
+        "advancing animations must not be reported as a non-reactive read"
+    );
+
+    let queued = h.jobs_from(|| wide.set(true));
+    assert!(
+        queued.contains(&JobType::Animation),
+        "and the properties must genuinely be subscribed, got {queued:?}"
+    );
+}
+
 /// Layout-affecting properties queue a Layout job when their signal changes.
 #[test]
 fn padding_invalidates_layout() {

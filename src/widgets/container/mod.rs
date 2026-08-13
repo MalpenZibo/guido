@@ -827,12 +827,32 @@ impl Widget for Container {
             // Compute targets before borrowing anims mutably (&self methods conflict
             // with &mut self.anims). Skipped entirely for the majority of non-animated
             // containers since self.anims is None.
-            let padding_target = self.padding.get_or(Padding::default());
-            let border_width_target = self.effective_border_width_target(tree);
-            let bg_target = self.effective_background_target(tree);
-            let corner_radius_target = self.effective_corner_radius_target(tree);
-            let border_color_target = self.effective_border_color_target(tree);
-            let transform_target = self.effective_transform_target(tree);
+            //
+            // A snapshot on purpose: this pass consumes the target, it does not
+            // subscribe to it. The subscriptions for these very properties are
+            // established by `seed_animations` at the first layout and refreshed
+            // by `resync_animation_targets` at every paint, both under an
+            // Animation tracking scope — see anim_bridge.rs. Without saying so,
+            // the debug diagnostic reports each of these reads as a value that
+            // "will not update", which is the opposite of true and trains the
+            // reader to ignore a warning that is usually right.
+            let (
+                padding_target,
+                border_width_target,
+                bg_target,
+                corner_radius_target,
+                border_color_target,
+                transform_target,
+            ) = crate::reactive::diagnostics::snapshot_zone(|| {
+                (
+                    self.padding.get_or(Padding::default()),
+                    self.effective_border_width_target(tree),
+                    self.effective_background_target(tree),
+                    self.effective_corner_radius_target(tree),
+                    self.effective_border_color_target(tree),
+                    self.effective_transform_target(tree),
+                )
+            });
             let anims = self.anims.as_mut().unwrap();
             // Layout-affecting animations: width, height, padding
             advance_anim!(anims, width, id, any_animating, layout);
