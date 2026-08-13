@@ -34,7 +34,13 @@ pub struct TextRenderState {
     #[allow(dead_code)] // Used for viewport and atlas construction
     cache: Cache,
     atlas: TextAtlas,
-    text_renderer: TextRenderer,
+    /// One renderer per draw group that contains text.
+    ///
+    /// glyphon draws everything a `TextRenderer` prepared in a single call,
+    /// so text that must appear between two other groups needs a renderer of
+    /// its own. Grown on demand and reused across frames; a UI with one group
+    /// keeps exactly one, as before.
+    text_renderers: Vec<TextRenderer>,
     buffers: Vec<Buffer>,
     viewport: Viewport,
     /// Cache of shaped text buffers from the previous frame, keyed by
@@ -69,7 +75,7 @@ impl TextRenderState {
             swash_cache,
             cache,
             atlas,
-            text_renderer,
+            text_renderers: vec![text_renderer],
             buffers: Vec::new(),
             viewport,
             buffer_cache: HashMap::new(),
@@ -77,21 +83,48 @@ impl TextRenderState {
         }
     }
 
-    /// Prepare non-transformed text for rendering directly to screen.
-    /// Returns a list of indices of texts that have transforms and need special handling.
-    pub fn prepare_text(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        texts: &[TextEntry],
-        screen_width: u32,
-        screen_height: u32,
-        scale_factor: f32,
-    ) -> Vec<usize> {
-        // Move last frame's buffers into cache for reuse
+    /// Start a frame: recycle last frame's shaped buffers into the cache.
+    ///
+    /// Split out of [`prepare_layer`](Self::prepare_layer) because a frame may
+    /// prepare several groups and the recycling has to happen once for all.
+    pub fn begin_frame(&mut self) {
         for (key, buffer) in self.frame_keys.drain(..).zip(self.buffers.drain(..)) {
             self.buffer_cache.entry(key).or_default().push(buffer);
         }
+    }
+
+    /// Drop shaped buffers no group asked for. Call once every group has been
+    /// prepared — whatever is still cached went unused this frame.
+    pub fn end_frame(&mut self) {
+        self.buffer_cache.clear();
+    }
+
+    /// Prepare one draw group's non-transformed text.
+    ///
+    /// `slot` selects the renderer, and with it when this text lands relative
+    /// to the other groups; see [`render_slot`](Self::render_slot).
+    /// Returns the indices, within `texts`, that need the textured-quad path.
+    pub fn prepare_layer(
+        &mut self,
+        slot: usize,
+        device: &Device,
+        queue: &Queue,
+        texts: &[TextEntry],
+        screen: (u32, u32),
+        scale_factor: f32,
+    ) -> Vec<usize> {
+        let (screen_width, screen_height) = screen;
+        while self.text_renderers.len() <= slot {
+            self.text_renderers.push(TextRenderer::new(
+                &mut self.atlas,
+                device,
+                MultisampleState::default(),
+                None,
+            ));
+        }
+        // Buffers accumulate across the frame's groups; this is where this
+        // group's own shaped buffers begin.
+        let buffers_start = self.buffers.len();
 
         // Collect indices of texts that have non-trivial transforms (for texture-based rendering)
         let mut transformed_indices = Vec::new();
@@ -188,9 +221,6 @@ impl TextRenderState {
             self.buffers.push(buffer);
         }
 
-        // Evict unused cache entries (anything still in buffer_cache was not used this frame)
-        self.buffer_cache.clear();
-
         // Filter to only non-transformed, non-culled texts for TextArea creation
         // Use HashSet for O(1) lookup instead of Vec::contains which is O(n)
         let transformed_set: HashSet<_> = transformed_indices.iter().copied().collect();
@@ -201,9 +231,21 @@ impl TextRenderState {
             .map(|(_, entry)| entry)
             .collect();
 
+        // Destructured so the text areas can borrow the buffers immutably
+        // while `prepare` takes the font system and atlas mutably.
+        let Self {
+            font_system,
+            swash_cache,
+            atlas,
+            viewport,
+            buffers,
+            text_renderers,
+            ..
+        } = self;
+
         let text_areas: Vec<TextArea> = non_transformed_texts
             .iter()
-            .zip(self.buffers.iter())
+            .zip(buffers[buffers_start..].iter())
             .map(|(entry, buffer)| {
                 // Position text in world space using the full transform.
                 // This is consistent with the clip rect (also in world space via
@@ -252,7 +294,7 @@ impl TextRenderState {
             .collect();
 
         // Update viewport with current screen dimensions
-        self.viewport.update(
+        viewport.update(
             queue,
             Resolution {
                 width: screen_width,
@@ -260,14 +302,14 @@ impl TextRenderState {
             },
         );
 
-        let result = self.text_renderer.prepare(
+        let result = text_renderers[slot].prepare(
             device,
             queue,
-            &mut self.font_system,
-            &mut self.atlas,
-            &self.viewport,
+            font_system,
+            atlas,
+            viewport,
             text_areas,
-            &mut self.swash_cache,
+            swash_cache,
         );
 
         if let Err(e) = result {
@@ -277,9 +319,12 @@ impl TextRenderState {
         transformed_indices
     }
 
-    pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, _device: &Device) {
-        self.text_renderer
-            .render(&self.atlas, &self.viewport, pass)
-            .expect("Failed to render text");
+    /// Draw the text prepared into `slot`.
+    pub fn render_slot<'a>(&'a self, slot: usize, pass: &mut wgpu::RenderPass<'a>) {
+        if let Some(renderer) = self.text_renderers.get(slot) {
+            renderer
+                .render(&self.atlas, &self.viewport, pass)
+                .expect("Failed to render text");
+        }
     }
 }

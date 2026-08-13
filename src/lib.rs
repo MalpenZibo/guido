@@ -722,11 +722,13 @@ fn render_surface(
             });
         });
 
-        // Flatten tree into reused buffer
-        let layer_boundaries;
+        // Flatten tree into reused buffers
         time_phase!(render_stats::Phase::Flatten, {
-            layer_boundaries =
-                flatten_root_into(&surface.root_node, &mut surface.flattened_commands);
+            flatten_root_into(
+                &surface.root_node,
+                &mut surface.flattened_commands,
+                &mut surface.command_layers,
+            );
         });
 
         // Re-arm the frame callback BEFORE presenting so the request rides
@@ -767,7 +769,7 @@ fn render_surface(
             presented = renderer.render(
                 wgpu_surface,
                 &surface.flattened_commands,
-                layer_boundaries,
+                &surface.command_layers,
                 surface.config.background_color,
             );
         });

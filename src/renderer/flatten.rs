@@ -1,5 +1,6 @@
 //! Tree flattening with world transform computation.
 
+use std::ops::Range;
 use std::rc::Rc;
 
 use crate::transform::Transform;
@@ -9,9 +10,10 @@ use super::commands::DrawCommand;
 use super::tree::{CachedFlatten, ClipRegion, RenderNode};
 
 /// Render layer for draw command ordering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum RenderLayer {
     /// Background shapes (filled rectangles, borders, etc.)
+    #[default]
     Shapes = 0,
     /// Image content (after shapes, before text)
     Images = 1,
@@ -57,111 +59,162 @@ pub struct FlattenedCommand {
     pub clip_is_local: bool,
 }
 
-/// Layered command buffers that avoid post-flatten sorting.
+/// Draw commands grouped so that batching never reorders drawing.
 ///
-/// Commands are emitted directly into per-layer buckets during flattening,
-/// then concatenated in layer order. This replaces the O(n log n) sort with O(n) append.
+/// Each group buckets its commands by [`RenderLayer`], and the GPU draws a
+/// group one bucket at a time — shapes, then images, then text, then overlay.
+/// That is what lets commands of a kind share a draw call.
+///
+/// Bucketing alone would reorder: with a single set of buckets for the whole
+/// frame, *every* shape is drawn before *every* image, so a container
+/// background painted over an image ends up underneath it however the tree is
+/// arranged. A new group is therefore opened whenever a command's layer would
+/// go backwards, and the groups are drawn in order. Batching survives, the
+/// order survives with it, and a tree that never paints a lower layer over a
+/// higher one produces exactly one group — the same single set of draw calls
+/// as before.
 struct LayeredCommands {
+    groups: Vec<LayerBuckets>,
+}
+
+#[derive(Default)]
+struct LayerBuckets {
     shapes: Vec<FlattenedCommand>,
     images: Vec<FlattenedCommand>,
     text: Vec<FlattenedCommand>,
     overlay: Vec<FlattenedCommand>,
+    /// Highest layer already in this group. A command below it has to start a
+    /// new group or it would be drawn too early.
+    high_water: RenderLayer,
+}
+
+impl LayerBuckets {
+    fn bucket_mut(&mut self, layer: RenderLayer) -> &mut Vec<FlattenedCommand> {
+        match layer {
+            RenderLayer::Shapes => &mut self.shapes,
+            RenderLayer::Images => &mut self.images,
+            RenderLayer::Text => &mut self.text,
+            RenderLayer::Overlay => &mut self.overlay,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.shapes.len() + self.images.len() + self.text.len() + self.overlay.len()
+    }
 }
 
 impl LayeredCommands {
     fn new() -> Self {
         Self {
-            shapes: Vec::new(),
-            images: Vec::new(),
-            text: Vec::new(),
-            overlay: Vec::new(),
+            groups: vec![LayerBuckets::default()],
         }
     }
 
     fn push(&mut self, cmd: FlattenedCommand) {
-        match cmd.layer {
-            RenderLayer::Shapes => self.shapes.push(cmd),
-            RenderLayer::Images => self.images.push(cmd),
-            RenderLayer::Text => self.text.push(cmd),
-            RenderLayer::Overlay => self.overlay.push(cmd),
+        let layer = cmd.layer;
+        // `expect`: `new` seeds one group and nothing ever removes one.
+        let current = self.groups.last().expect("at least one group");
+        if layer < current.high_water {
+            self.groups.push(LayerBuckets {
+                high_water: layer,
+                ..Default::default()
+            });
         }
+        let current = self.groups.last_mut().expect("at least one group");
+        current.high_water = current.high_water.max(layer);
+        current.bucket_mut(layer).push(cmd);
     }
 
-    /// Take a snapshot of current lengths across all layer buckets.
-    /// Used with `commands_since()` to capture everything added by a subtree.
-    fn snapshot(&self) -> LayerSnapshot {
-        LayerSnapshot {
-            shapes: self.shapes.len(),
-            images: self.images.len(),
-            text: self.text.len(),
-            overlay: self.overlay.len(),
-        }
+    /// Number of commands pushed so far, used to capture a subtree's output.
+    fn len(&self) -> usize {
+        self.groups.iter().map(LayerBuckets::len).sum()
     }
 
-    /// Collect all commands added since a snapshot (across all layers).
-    /// Used to populate `CachedFlatten` which stores a flat mixed-layer Vec.
-    fn commands_since(&self, snap: &LayerSnapshot) -> Vec<FlattenedCommand> {
-        let mut result = Vec::new();
-        result.extend_from_slice(&self.shapes[snap.shapes..]);
-        result.extend_from_slice(&self.images[snap.images..]);
-        result.extend_from_slice(&self.text[snap.text..]);
-        result.extend_from_slice(&self.overlay[snap.overlay..]);
+    /// Every command added since `start`, in draw order.
+    ///
+    /// Draw order matters: `CachedFlatten` replays these through [`push`], so
+    /// feeding them back in the order they will be drawn reproduces the same
+    /// group boundaries next frame.
+    ///
+    /// [`push`]: Self::push
+    fn commands_since(&self, start: usize) -> Vec<FlattenedCommand> {
+        let mut result = Vec::with_capacity(self.len().saturating_sub(start));
+        let mut seen = 0;
+        for group in &self.groups {
+            for bucket in [&group.shapes, &group.images, &group.text, &group.overlay] {
+                for cmd in bucket {
+                    if seen >= start {
+                        result.push(cmd.clone());
+                    }
+                    seen += 1;
+                }
+            }
+        }
         result
     }
 
-    /// Drain all layers into the output buffer in correct render order.
-    /// Returns the boundary offsets: (images_start, text_start, overlay_start).
-    fn drain_into(self, out: &mut Vec<FlattenedCommand>) -> LayerBoundaries {
-        let images_start = self.shapes.len();
-        let text_start = images_start + self.images.len();
-        let overlay_start = text_start + self.text.len();
-
-        out.extend(self.shapes);
-        out.extend(self.images);
-        out.extend(self.text);
-        out.extend(self.overlay);
-
-        LayerBoundaries {
-            images_start,
-            text_start,
-            overlay_start,
+    /// Flatten the groups into one buffer in draw order, recording where each
+    /// group's buckets landed.
+    fn drain_into(self, out: &mut Vec<FlattenedCommand>, layers: &mut Vec<CommandLayer>) {
+        for group in self.groups {
+            let mut layer = CommandLayer::default();
+            for (bucket, range) in [
+                (group.shapes, &mut layer.shapes),
+                (group.images, &mut layer.images),
+                (group.text, &mut layer.text),
+                (group.overlay, &mut layer.overlay),
+            ] {
+                let start = out.len();
+                out.extend(bucket);
+                *range = start..out.len();
+            }
+            // A group left empty by a subtree that drew nothing would cost a
+            // pointless set of pipeline switches.
+            if !layer.is_empty() {
+                layers.push(layer);
+            }
         }
     }
 }
 
-/// Snapshot of `LayeredCommands` lengths for capturing subtree output.
-struct LayerSnapshot {
-    shapes: usize,
-    images: usize,
-    text: usize,
-    overlay: usize,
+/// Where one group's commands landed in the flat command buffer.
+///
+/// Drawn in field order: shapes, images, text, overlay.
+#[derive(Debug, Clone, Default)]
+pub struct CommandLayer {
+    pub shapes: Range<usize>,
+    pub images: Range<usize>,
+    pub text: Range<usize>,
+    pub overlay: Range<usize>,
 }
 
-/// Pre-computed layer boundary offsets, eliminating the need for `partition_point` calls.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct LayerBoundaries {
-    pub images_start: usize,
-    pub text_start: usize,
-    pub overlay_start: usize,
+impl CommandLayer {
+    pub fn is_empty(&self) -> bool {
+        self.shapes.is_empty()
+            && self.images.is_empty()
+            && self.text.is_empty()
+            && self.overlay.is_empty()
+    }
 }
 
-/// Flatten a render tree into an existing buffer (clears and reuses capacity).
+/// Flatten a render tree into existing buffers (cleared and reused).
 ///
 /// Flatten results are cached on nodes (via interior mutability) for
 /// incremental reuse in subsequent frames.
 ///
-/// Returns `LayerBoundaries` with pre-computed offsets for each render layer,
-/// replacing the previous `partition_point` lookups in the renderer.
+/// `layers` receives the groups to draw, in order; see [`LayeredCommands`].
 pub fn flatten_root_into(
     root: &RenderNode,
     commands: &mut Vec<FlattenedCommand>,
-) -> LayerBoundaries {
+    layers: &mut Vec<CommandLayer>,
+) {
     commands.clear();
+    layers.clear();
 
     let mut layered = LayeredCommands::new();
     flatten_node(root, Transform::IDENTITY, None, None, &mut layered);
 
-    layered.drain_into(commands)
+    layered.drain_into(commands, layers);
 }
 
 /// Recursively flatten a node and its children.
@@ -223,16 +276,12 @@ fn flatten_node(
     }
 
     // Full flatten — existing logic
-    // Track if we should cache this node's flatten output.
-    // Snapshot captures lengths across all layer buckets so we can collect
-    // everything added by this subtree (including children) for caching.
+    // Track if we should cache this node's flatten output. The mark captures
+    // how much has been pushed so far, so everything this subtree adds
+    // (including children) can be collected for caching.
     let should_cache =
         node.clip.is_none() && parent_clip.is_none() && world_transform.is_translation_only();
-    let snap = if should_cache {
-        Some(out.snapshot())
-    } else {
-        None
-    };
+    let mark = if should_cache { Some(out.len()) } else { None };
 
     // Compute world transform origin (for shapes that need it)
     let world_origin = if !node.local_transform.is_identity() {
@@ -314,11 +363,11 @@ fn flatten_node(
     }
 
     // Cache flatten results for next frame, but only when reuse is possible.
-    // The snapshot captures everything added since the start of this node
-    // (including all children), matching the original `out[start_idx..]` behavior.
-    *node.cached_flatten.borrow_mut() = snap.map(|snap| {
+    // The mark captures everything added since the start of this node
+    // (including all children).
+    *node.cached_flatten.borrow_mut() = mark.map(|mark| {
         Rc::new(CachedFlatten {
-            commands: out.commands_since(&snap),
+            commands: out.commands_since(mark),
             world_transform,
         })
     });
@@ -396,5 +445,158 @@ fn intersect_clips(a: &WorldClip, b: &WorldClip) -> WorldClip {
         rect: Rect::new(min_x, min_y, width, height),
         corner_radius,
         curvature,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::widgets::Color;
+
+    fn command(layer: RenderLayer) -> FlattenedCommand {
+        FlattenedCommand {
+            command: Rc::new(DrawCommand::rounded_rect(
+                Rect::new(0.0, 0.0, 1.0, 1.0),
+                Color::WHITE,
+                0.0,
+            )),
+            world_transform: Transform::IDENTITY,
+            world_transform_origin: None,
+            layer,
+            clip: None,
+            clip_is_local: false,
+        }
+    }
+
+    /// Drive `push` with a sequence of layers and report the resulting groups
+    /// as the layers each one holds, in draw order.
+    fn groups(sequence: &[RenderLayer]) -> Vec<Vec<RenderLayer>> {
+        let mut layered = LayeredCommands::new();
+        for layer in sequence {
+            layered.push(command(*layer));
+        }
+
+        let mut commands = Vec::new();
+        let mut layers = Vec::new();
+        layered.drain_into(&mut commands, &mut layers);
+
+        layers
+            .iter()
+            .map(|layer| {
+                [&layer.shapes, &layer.images, &layer.text, &layer.overlay]
+                    .iter()
+                    .flat_map(|range| commands[(*range).clone()].iter().map(|c| c.layer))
+                    .collect()
+            })
+            .collect()
+    }
+
+    use RenderLayer::{Images, Overlay, Shapes, Text};
+
+    #[test]
+    fn ascending_layers_stay_in_one_group() {
+        // The common case: nothing is painted over a higher layer, so the
+        // whole frame batches exactly as it did before groups existed.
+        assert_eq!(
+            groups(&[Shapes, Shapes, Images, Text, Overlay]),
+            vec![vec![Shapes, Shapes, Images, Text, Overlay]]
+        );
+    }
+
+    #[test]
+    fn a_shape_after_an_image_opens_a_group() {
+        // The bug groups exist to fix: a container background painted over an
+        // image must not be batched back underneath it.
+        assert_eq!(
+            groups(&[Shapes, Images, Shapes]),
+            vec![vec![Shapes, Images], vec![Shapes]]
+        );
+    }
+
+    #[test]
+    fn an_image_after_text_opens_a_group() {
+        assert_eq!(
+            groups(&[Images, Text, Images]),
+            vec![vec![Images, Text], vec![Images]]
+        );
+    }
+
+    #[test]
+    fn repeats_of_the_current_layer_do_not_split() {
+        assert_eq!(
+            groups(&[Images, Images, Images]),
+            vec![vec![Images, Images, Images]]
+        );
+    }
+
+    #[test]
+    fn each_regression_opens_exactly_one_group() {
+        assert_eq!(
+            groups(&[Shapes, Images, Shapes, Images, Shapes]),
+            vec![vec![Shapes, Images], vec![Shapes, Images], vec![Shapes]]
+        );
+    }
+
+    #[test]
+    fn a_group_is_reopened_only_below_its_high_water_mark() {
+        // Text lifts the group's mark to 2, so the following image regresses
+        // even though it is above the shapes already in the group.
+        assert_eq!(
+            groups(&[Shapes, Text, Images]),
+            vec![vec![Shapes, Text], vec![Images]]
+        );
+    }
+
+    #[test]
+    fn replaying_a_cached_subtree_reproduces_its_grouping() {
+        // `commands_since` feeds cached commands back through `push` on later
+        // frames. If it did not hand them back in draw order, a cached subtree
+        // would re-group differently from the one that produced it — the same
+        // widget would draw correctly on the frame it was painted and wrongly
+        // on every frame it was reused.
+        let sequence = [Shapes, Images, Shapes, Text, Images];
+
+        let mut original = LayeredCommands::new();
+        for layer in sequence {
+            original.push(command(layer));
+        }
+        let cached = original.commands_since(0);
+
+        let mut replayed = LayeredCommands::new();
+        for cmd in cached {
+            replayed.push(cmd);
+        }
+
+        let (mut a_cmds, mut a_layers) = (Vec::new(), Vec::new());
+        original.drain_into(&mut a_cmds, &mut a_layers);
+        let (mut b_cmds, mut b_layers) = (Vec::new(), Vec::new());
+        replayed.drain_into(&mut b_cmds, &mut b_layers);
+
+        assert_eq!(a_layers.len(), b_layers.len());
+        let order = |cmds: &[FlattenedCommand], layers: &[CommandLayer]| -> Vec<RenderLayer> {
+            layers
+                .iter()
+                .flat_map(|l| {
+                    [&l.shapes, &l.images, &l.text, &l.overlay]
+                        .iter()
+                        .flat_map(|r| cmds[(*r).clone()].iter().map(|c| c.layer))
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        };
+        assert_eq!(order(&a_cmds, &a_layers), order(&b_cmds, &b_layers));
+    }
+
+    #[test]
+    fn empty_groups_are_dropped() {
+        // A group that ends up with nothing in it would cost pipeline
+        // switches for no draws.
+        let mut layered = LayeredCommands::new();
+        layered.push(command(Images));
+        layered.push(command(Shapes));
+        let mut commands = Vec::new();
+        let mut layers = Vec::new();
+        layered.drain_into(&mut commands, &mut layers);
+        assert!(layers.iter().all(|layer| !layer.is_empty()));
     }
 }

@@ -173,7 +173,7 @@ The transform origin is resolved from the node's bounds and used to center the t
 
 ### RenderLayer Ordering
 
-Commands are sorted by layer for correct render order:
+Commands are bucketed by kind so that commands of a kind share a draw call:
 
 ```rust
 pub enum RenderLayer {
@@ -183,6 +183,35 @@ pub enum RenderLayer {
     Overlay = 3,  // Overlay effects (ripples, highlights)
 }
 ```
+
+### Draw groups
+
+Bucketing on its own reorders drawing: with one set of buckets for the whole
+frame, *every* shape is drawn before *every* image, so a container background
+painted over an image ends up underneath it however the tree is arranged.
+
+The flattener therefore emits a sequence of **draw groups**. Each group has its
+own four buckets, and a new group is opened whenever a command's layer would go
+backwards:
+
+```rust
+pub struct CommandLayer {
+    pub shapes: Range<usize>,
+    pub images: Range<usize>,
+    pub text: Range<usize>,
+    pub overlay: Range<usize>,
+}
+```
+
+The renderer walks the groups in order and draws each one bucket by bucket.
+Batching survives, ordering survives with it, and a tree that never paints a
+lower layer over a higher one produces exactly one group — the same single set
+of draw calls as before. The split is minimal by construction, so no merge pass
+is needed afterwards.
+
+glyphon draws everything a `TextRenderer` prepared in one call, so a group with
+directly-rendered text gets a renderer of its own from a pool that grows on
+demand. `examples/draw_order_example.rs` exercises the regressions.
 
 ### FlattenedCommand
 

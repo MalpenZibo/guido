@@ -110,7 +110,9 @@ cargo test
 - Supports circles, gradients, and clipping
 - Text rendering via glyphon library
 - HiDPI-aware with automatic scaling
-- Layered rendering: shapes → text → overlay shapes (for effects like ripples)
+- Layered rendering: shapes → images → text → overlay, per draw group; a group is
+  split whenever the tree paints a lower layer over a higher one, so batching
+  never reorders drawing
 
 **`platform/`** - Wayland layer shell integration
 - Uses smithay-client-toolkit for Wayland protocol handling
@@ -182,7 +184,7 @@ animating surface renders once per callback, an idle surface renders nothing.
 8. `widget.paint(tree, ctx)` - Build render tree (clean children reuse Rc-shared cached `RenderNode`s — reuse is a refcount bump, not a clone)
 9. `flatten_root_into()` - Flatten render tree to draw commands (incremental: clean subtrees reuse cached commands)
 10. Re-arm the frame callback and report per-surface damage via `wl_surface.damage_buffer()` — both BEFORE presenting so they ride the commit performed inside `present()`
-11. GPU rendering with instanced SDF shapes, HiDPI scaling, layer ordering (shapes → images → text → overlay); on a lost/outdated swapchain the dirty state is kept and a retry frame is requested
+11. GPU rendering with instanced SDF shapes, HiDPI scaling, and per-group layer ordering (shapes → images → text → overlay, one group per draw-order regression); on a lost/outdated swapchain the dirty state is kept and a retry frame is requested
 12. `cache_paint_results()` - Rc-share paint output per widget, clear `needs_paint` flags (partial paints poison their ancestors and are never cached)
 
 ### Event System
