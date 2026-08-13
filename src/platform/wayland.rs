@@ -2396,6 +2396,7 @@ impl Dispatch<ExtBackgroundEffectManagerV1, ()> for WaylandState {
                 if blur { "available" } else { "lost" }
             );
             state.bg_effect_supports_blur = blur;
+            crate::compositor::set_blur_capability(blur);
 
             // The compositor drops its regions when the capability goes away:
             // forget ours and wake the loop to push them again if it's back.

@@ -1,5 +1,6 @@
 pub mod animation;
 mod blur;
+pub mod compositor;
 pub mod image_metadata;
 mod ingress;
 mod jobs;
@@ -145,6 +146,7 @@ pub fn quit_app() {
 
 pub mod prelude {
     pub use crate::animation::{SpringConfig, TimingFunction, Transition, TransitionConfig};
+    pub use crate::compositor::{CompositorEffects, compositor_effects};
     pub use crate::layout::{
         Axis, Constraints, CrossAlignment, Flex, IntoF32, Length, MainAlignment, Size, ZStack,
         at_least, at_most, fill, fraction,
@@ -1216,6 +1218,7 @@ impl Drop for App {
         surface::reset_popups();
         widget_ref::reset_widget_refs();
         outputs::reset_outputs();
+        compositor::reset_compositor_effects();
         blur::reset_blur();
         session_lock::reset_session_lock();
         FONTS_CONSUMED.with(|f| f.set(false));
