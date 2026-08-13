@@ -118,22 +118,20 @@ impl Container {
     /// back in would make the content define the target that defines the
     /// content.
     ///
-    /// Note the asymmetry in the animated branch: it does **not** clamp to
-    /// `length.max`, while the static branch does. Pinned by
-    /// `characterization::an_animated_width_does_not_clamp_children_to_at_most`
-    /// because it is what the code has always done; it reads like an
-    /// oversight, and correcting it belongs in its own change.
+    /// Everything outside the running-animation case falls through to the same
+    /// answer, cap included: what children are offered must not depend on
+    /// whether an animation happens to be attached.
     fn animated_extent(
         &self,
         anim: Option<&AnimationState<f32>>,
         length: &Length,
         available: f32,
     ) -> f32 {
-        if let Some(anim) = anim {
-            if !anim.is_initial() && length.exact.is_some() {
-                return anim.displayed();
-            }
-            return length.exact.unwrap_or(available);
+        if let Some(anim) = anim
+            && !anim.is_initial()
+            && length.exact.is_some()
+        {
+            return anim.displayed();
         }
         match length.exact {
             Some(exact) => exact,

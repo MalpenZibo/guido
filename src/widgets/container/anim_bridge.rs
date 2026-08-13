@@ -54,11 +54,13 @@ impl Container {
             (
                 lengths.width.exact,
                 lengths.width.min,
+                lengths.width.max,
                 content.width + lengths.padding.horizontal(),
             ),
             (
                 lengths.height.exact,
                 lengths.height.min,
+                lengths.height.max,
                 content.height + lengths.padding.vertical(),
             ),
         ];
@@ -67,12 +69,22 @@ impl Container {
         };
         let mut retargeted = false;
 
-        for (anim, (exact, min, content_extent)) in [anims.width.as_mut(), anims.height.as_mut()]
-            .into_iter()
-            .zip(targets)
+        for (anim, (exact, min, max, content_extent)) in
+            [anims.width.as_mut(), anims.height.as_mut()]
+                .into_iter()
+                .zip(targets)
         {
             let Some(anim) = anim else { continue };
-            let target = exact.unwrap_or_else(|| content_extent.max(min.unwrap_or(0.0)));
+            // The target is where the size is heading, so it obeys the same
+            // bounds the size does. An unclamped one animates toward a value
+            // `resolve_size` will cap anyway: frames spent going nowhere.
+            let target = exact.unwrap_or_else(|| {
+                let grown = content_extent.max(min.unwrap_or(0.0));
+                match max {
+                    Some(max) => grown.min(max),
+                    None => grown,
+                }
+            });
 
             if anim.is_initial() {
                 // Mark initialized at the first layout whatever the value, so
