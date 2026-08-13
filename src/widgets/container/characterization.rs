@@ -227,6 +227,45 @@ fn overflowing_content_grows_a_visible_container() {
     assert_eq!(hidden.fit(100.0, 500.0).width, 100.0);
 }
 
+/// Pins an asymmetry rather than endorsing it: with a width animation
+/// attached, the extent children are laid out inside ignores `at_most`, while
+/// without one it is clamped. It reads like an oversight — the container's own
+/// final size honours the cap either way, so only the children's constraints
+/// differ — but it is what the code has always done, and changing it is a
+/// behaviour change that belongs in its own commit with its own test.
+#[test]
+fn an_animated_width_does_not_clamp_children_to_at_most() {
+    use crate::animation::{TimingFunction, Transition};
+
+    let mut clamped = H::new(
+        container()
+            .width(at_most(60.0))
+            .child(container().width(fill()).height(5.0)),
+    );
+    clamped.fit(500.0, 500.0);
+    let child = clamped.children()[0];
+    assert_eq!(clamped.tree.get_bounds(child).unwrap().width, 60.0);
+
+    let mut animated = H::new(
+        container()
+            .width(at_most(60.0))
+            .animate_width(Transition::new(200, TimingFunction::EaseOut))
+            .child(container().width(fill()).height(5.0)),
+    );
+    animated.fit(500.0, 500.0);
+    let child = animated.children()[0];
+    assert_eq!(
+        animated.tree.get_bounds(child).unwrap().width,
+        500.0,
+        "the animated branch offers the full width, cap ignored"
+    );
+    assert_eq!(
+        animated.tree.cached_size(animated.root).unwrap().width,
+        60.0,
+        "the container itself still honours the cap"
+    );
+}
+
 #[test]
 fn an_invisible_container_measures_zero() {
     let mut h = H::new(container().visible(false).child(box_of(40.0, 20.0)));
