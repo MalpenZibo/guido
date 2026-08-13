@@ -345,20 +345,35 @@ pub(crate) fn measuring_final() -> bool {
     MEASURE_FINAL.with(|m| m.get())
 }
 
-/// Helper to get an animated value or a fallback
+impl<T: Animatable + Copy> AnimationState<T> {
+    /// The value this animation contributes right now.
+    ///
+    /// Normally the in-flight value — that is the animation. While a natural
+    /// size is being measured it is the destination instead, so a
+    /// content-sized surface resizes once to where the animation is going and
+    /// the animation plays inside it, rather than asking the compositor for a
+    /// new size on every frame.
+    ///
+    /// Every read of an animated value goes through here, so that rule is
+    /// stated once.
+    #[inline]
+    pub fn displayed(&self) -> T {
+        if measuring_final() {
+            *self.target()
+        } else {
+            *self.current()
+        }
+    }
+}
+
+/// The animated value if an animation exists, the fallback otherwise.
 #[inline]
 pub fn get_animated_value<T: Animatable + Copy>(
     anim: Option<&AnimationState<T>>,
     fallback: impl FnOnce() -> T,
 ) -> T {
     match anim {
-        Some(a) => {
-            if measuring_final() {
-                *a.target()
-            } else {
-                *a.current()
-            }
-        }
+        Some(a) => a.displayed(),
         None => fallback(),
     }
 }

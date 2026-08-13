@@ -1,5 +1,6 @@
 //! Container widget and related functionality.
 
+mod anim_bridge;
 mod animations;
 mod box_model;
 mod interaction;
@@ -1007,137 +1008,8 @@ impl Widget for Container {
             sd.scroll_state.clamp_offsets();
         }
 
-        let content_width = content_size.width + padding.horizontal();
-        let content_height = content_size.height + padding.vertical();
-        let width_length = lengths.width;
-        let height_length = lengths.height;
-
-        // Update animation targets
-        if let Some(ref mut anims) = self.anims {
-            if let Some(ref mut anim) = anims.width {
-                let effective_target = if let Some(exact) = width_length.exact {
-                    exact
-                } else {
-                    let min_w = width_length.min.unwrap_or(0.0);
-                    content_width.max(min_w)
-                };
-                if anim.is_initial() {
-                    // Always mark as initialized on first layout so subsequent
-                    // changes animate rather than snap.
-                    anim.set_immediate(effective_target);
-                } else if (effective_target - *anim.target()).abs() > 0.001 {
-                    anim.animate_to(effective_target);
-                    // Width affects layout, so use RequiredJob::Layout
-                    request_job(id, JobRequest::Animation(RequiredJob::Layout));
-                    // Parent must reposition siblings as this child's width changes
-                    if let Some(parent_id) = tree.get_parent(id) {
-                        request_job(parent_id, JobRequest::Layout);
-                    }
-                }
-            }
-
-            if let Some(ref mut anim) = anims.height {
-                let effective_target = if let Some(exact) = height_length.exact {
-                    exact
-                } else {
-                    let min_h = height_length.min.unwrap_or(0.0);
-                    content_height.max(min_h)
-                };
-                if anim.is_initial() {
-                    anim.set_immediate(effective_target);
-                } else if (effective_target - *anim.target()).abs() > 0.001 {
-                    anim.animate_to(effective_target);
-                    // Height affects layout, so use RequiredJob::Layout
-                    request_job(id, JobRequest::Animation(RequiredJob::Layout));
-                    // Parent must reposition siblings as this child's height changes
-                    if let Some(parent_id) = tree.get_parent(id) {
-                        request_job(parent_id, JobRequest::Layout);
-                    }
-                }
-            }
-        }
-
-        // Initialize paint animations on first layout (set_immediate so they start
-        // from the correct signal value rather than a stale construction-time value)
-        // Compute targets first to avoid borrow conflicts with &mut anim + &self
-        let pd_init = self
-            .anims
-            .as_ref()
-            .and_then(|a| a.padding.as_ref())
-            .is_some_and(|a| a.is_initial());
-        let bw_init = self
-            .anims
-            .as_ref()
-            .and_then(|a| a.border_width.as_ref())
-            .is_some_and(|a| a.is_initial());
-        let bg_init = self
-            .anims
-            .as_ref()
-            .and_then(|a| a.background.as_ref())
-            .is_some_and(|a| a.is_initial());
-        let cr_init = self
-            .anims
-            .as_ref()
-            .and_then(|a| a.corner_radius.as_ref())
-            .is_some_and(|a| a.is_initial());
-        let bc_init = self
-            .anims
-            .as_ref()
-            .and_then(|a| a.border_color.as_ref())
-            .is_some_and(|a| a.is_initial());
-        let tf_init = self
-            .anims
-            .as_ref()
-            .and_then(|a| a.transform.as_ref())
-            .is_some_and(|a| a.is_initial());
-        if pd_init || bw_init || bg_init || cr_init || bc_init || tf_init {
-            // First layout of a container with signal-animated props: read
-            // every animated prop's signal under Animation tracking so the
-            // subscriptions exist from THIS moment. Widget creation and
-            // first layout run in one synchronous block (for popups, the
-            // measure-before-spawn), so no write can land before them —
-            // without this, subscriptions would only appear at the first
-            // PAINT, and a write in between (a menu's open-flip timer
-            // racing a heavy first paint) would notify nobody. Paint's
-            // drift pass re-tracks every frame afterwards, so dependencies
-            // taken through conditional closure branches stay current.
-            let (bg_target, cr_target, bc_target, tf_target) =
-                with_signal_tracking(id, JobType::Animation, || {
-                    if pd_init {
-                        let _ = self.padding.get_or(Padding::default());
-                    }
-                    if bw_init {
-                        let _ = self.effective_border_width_target(tree);
-                    }
-                    (
-                        bg_init.then(|| self.effective_background_target(tree)),
-                        cr_init.then(|| self.effective_corner_radius_target(tree)),
-                        bc_init.then(|| self.effective_border_color_target(tree)),
-                        tf_init.then(|| self.effective_transform_target(tree)),
-                    )
-                });
-            if let Some(ref mut anims) = self.anims {
-                if let (Some(anim), Some(target)) = (&mut anims.background, bg_target) {
-                    anim.set_immediate(target);
-                }
-                if let (Some(anim), Some(target)) = (&mut anims.corner_radius, cr_target) {
-                    anim.set_immediate(target);
-                }
-                if let (Some(anim), Some(target)) = (&mut anims.border_color, bc_target) {
-                    anim.set_immediate(target);
-                }
-                if let (Some(anim), Some(target)) = (&mut anims.transform, tf_target) {
-                    // Enter transition: animate in from the declared value
-                    // instead of snapping to the target
-                    if let Some(enter) = anim.take_enter_from() {
-                        anim.begin_from(enter, target);
-                        request_job(id, JobRequest::Animation(RequiredJob::Paint));
-                    } else {
-                        anim.set_immediate(target);
-                    }
-                }
-            }
-        }
+        self.update_size_targets(tree, id, &lengths, content_size);
+        self.seed_animations(tree, id);
 
         let size = self.resolve_size(&lengths, constraints, content_size);
 
@@ -1264,54 +1136,7 @@ impl Widget for Container {
             )
         });
 
-        // When animations exist, also track raw signal reads for Animation jobs.
-        // This ensures signal changes trigger advance_animations() to update targets.
-        // (The animated_* methods above may read from the animation cache instead of the signal,
-        // so we do a second pass reading targets for Animation subscriber registration.)
-        //
-        // The same pass compares each animation's stored target against the
-        // current effective value and requests one Animation job on drift,
-        // letting advance_animations adopt whatever the subscription may
-        // have missed. Together with the first-layout registration in
-        // layout() this upholds the AnimationState invariant: a cache of
-        // signal-derived state must either be subscribed from creation or
-        // reconciled pull-style at every use — AnimationState gets both
-        // (registration closes the creation window, this pass converges
-        // conditional closure branches and state-layer overrides).
-        if self.has_signal_animated_props() {
-            let target_drift = with_signal_tracking(id, JobType::Animation, || {
-                let anims = self.anims.as_ref().unwrap();
-                let mut drift = false;
-                if let Some(a) = &anims.padding {
-                    let t = self.padding.get_or(Padding::default());
-                    drift |= !a.is_initial() && *a.target() != t;
-                }
-                if let Some(a) = &anims.border_width {
-                    let t = self.effective_border_width_target(tree);
-                    drift |= !a.is_initial() && *a.target() != t;
-                }
-                if let Some(a) = &anims.background {
-                    let t = self.effective_background_target(tree);
-                    drift |= !a.is_initial() && *a.target() != t;
-                }
-                if let Some(a) = &anims.corner_radius {
-                    let t = self.effective_corner_radius_target(tree);
-                    drift |= !a.is_initial() && *a.target() != t;
-                }
-                if let Some(a) = &anims.border_color {
-                    let t = self.effective_border_color_target(tree);
-                    drift |= !a.is_initial() && *a.target() != t;
-                }
-                if let Some(a) = &anims.transform {
-                    let t = self.effective_transform_target(tree);
-                    drift |= !a.is_initial() && *a.target() != t;
-                }
-                drift
-            });
-            if target_drift {
-                request_job(id, JobRequest::Animation(RequiredJob::None));
-            }
-        }
+        self.resync_animation_targets(tree, id);
 
         // Per-corner radii override the uniform (animated) radius for
         // drawing. Clip, blur region and rounded hit testing stay uniform,
