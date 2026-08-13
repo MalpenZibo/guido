@@ -140,14 +140,6 @@ impl LayerBuckets {
             RenderLayer::Overlay => &mut self.overlay,
         }
     }
-
-    fn len(&self) -> usize {
-        self.backdrop.len()
-            + self.shapes.len()
-            + self.images.len()
-            + self.text.len()
-            + self.overlay.len()
-    }
 }
 
 impl LayeredCommands {
@@ -174,35 +166,56 @@ impl LayeredCommands {
         current.bucket_mut(layer).push(cmd);
     }
 
-    /// Number of commands pushed so far, used to capture a subtree's output.
-    fn len(&self) -> usize {
-        self.groups.iter().map(LayerBuckets::len).sum()
+    /// Where the buffers stand, so a subtree's own output can be picked out
+    /// again afterwards.
+    ///
+    /// A plain count would not do it. Commands land in the bucket for their
+    /// layer, so a shape pushed into a group that already holds text is
+    /// inserted *before* that text in draw order — the total is not a
+    /// position. Only the last group is ever appended to, so recording its
+    /// bucket lengths (and how many groups there were) pins the boundary
+    /// exactly.
+    fn mark(&self) -> Mark {
+        // `expect`: `new` seeds one group and nothing ever removes one.
+        let last = self.groups.last().expect("at least one group");
+        Mark {
+            groups: self.groups.len(),
+            buckets: [
+                last.backdrop.len(),
+                last.shapes.len(),
+                last.images.len(),
+                last.text.len(),
+                last.overlay.len(),
+            ],
+        }
     }
 
-    /// Every command added since `start`, in draw order.
+    /// Every command added since `mark`, in draw order.
     ///
     /// Draw order matters: `CachedFlatten` replays these through [`push`], so
     /// feeding them back in the order they will be drawn reproduces the same
     /// group boundaries next frame.
     ///
     /// [`push`]: Self::push
-    fn commands_since(&self, start: usize) -> Vec<FlattenedCommand> {
-        let mut result = Vec::with_capacity(self.len().saturating_sub(start));
-        let mut seen = 0;
-        for group in &self.groups {
-            for bucket in [
+    fn commands_since(&self, mark: Mark) -> Vec<FlattenedCommand> {
+        let mut result = Vec::new();
+        for (index, group) in self.groups.iter().enumerate().skip(mark.groups - 1) {
+            let buckets = [
                 &group.backdrop,
                 &group.shapes,
                 &group.images,
                 &group.text,
                 &group.overlay,
-            ] {
-                for cmd in bucket {
-                    if seen >= start {
-                        result.push(cmd.clone());
-                    }
-                    seen += 1;
-                }
+            ];
+            for (bucket_index, bucket) in buckets.into_iter().enumerate() {
+                // Groups opened after the mark are new all through; the group
+                // that was current keeps whatever it already held.
+                let from = if index == mark.groups - 1 {
+                    mark.buckets[bucket_index]
+                } else {
+                    0
+                };
+                result.extend_from_slice(&bucket[from..]);
             }
         }
         result
@@ -231,6 +244,16 @@ impl LayeredCommands {
             }
         }
     }
+}
+
+/// A position in [`LayeredCommands`], for capturing one subtree's output.
+#[derive(Debug, Clone, Copy)]
+struct Mark {
+    /// How many groups existed.
+    groups: usize,
+    /// Bucket lengths of the group that was current — the only one that can
+    /// still grow.
+    buckets: [usize; LAYER_COUNT],
 }
 
 /// Where one group's commands landed in the flat command buffer.
@@ -340,7 +363,7 @@ fn flatten_node(
     // (including children) can be collected for caching.
     let should_cache =
         node.clip.is_none() && parent_clip.is_none() && world_transform.is_translation_only();
-    let mark = if should_cache { Some(out.len()) } else { None };
+    let mark = if should_cache { Some(out.mark()) } else { None };
 
     // Compute world transform origin (for shapes that need it)
     let world_origin = if !node.local_transform.is_identity() {
@@ -705,7 +728,10 @@ mod tests {
         for layer in sequence {
             original.push(command(layer));
         }
-        let cached = original.commands_since(0);
+        let cached = original.commands_since(Mark {
+            groups: 1,
+            buckets: [0; LAYER_COUNT],
+        });
 
         let mut replayed = LayeredCommands::new();
         for cmd in cached {
@@ -779,6 +805,33 @@ mod tests {
         let mut layers = Vec::new();
         layered.drain_into(&mut commands, &mut layers);
         assert_eq!(layers.len(), 2);
+    }
+
+    #[test]
+    fn a_mark_survives_a_later_command_landing_in_an_earlier_bucket() {
+        // The reason a mark is not a count. Once a group can take a shape
+        // while already holding text — which is exactly what the overlap test
+        // allows — a later command is inserted *before* that text in draw
+        // order. A count would then hand a cached subtree its neighbour's
+        // commands, and the neighbour would be drawn twice.
+        let mut layered = LayeredCommands::new();
+        layered.push(command_at(Text, Rect::new(0.0, 0.0, 50.0, 20.0)));
+
+        // Everything from here belongs to the "subtree" being captured.
+        let mark = layered.mark();
+        // Does not overlap the text, so it joins the same group and slots
+        // into the shapes bucket, ahead of the text already there.
+        layered.push(command_at(Shapes, Rect::new(500.0, 0.0, 50.0, 20.0)));
+        layered.push(command_at(Text, Rect::new(500.0, 0.0, 50.0, 20.0)));
+
+        let captured = layered.commands_since(mark);
+        assert_eq!(
+            captured.len(),
+            2,
+            "the mark must not sweep up the earlier text"
+        );
+        assert_eq!(captured[0].layer, Shapes);
+        assert_eq!(captured[1].layer, Text);
     }
 
     #[test]
