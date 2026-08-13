@@ -418,7 +418,10 @@ impl Renderer {
         self.image_quads.clear();
         self.text_quads.clear();
         self.image_quad_renderer.begin_frame();
-        self.text_state.begin_frame();
+        self.text_state.begin_frame(
+            &self.queue,
+            (self.screen_width as u32, self.screen_height as u32),
+        );
 
         let mut prepared = Vec::with_capacity(layers.len());
         // Each group with directly-rendered text needs its own glyphon

@@ -87,10 +87,19 @@ impl TextRenderState {
     ///
     /// Split out of [`prepare_layer`](Self::prepare_layer) because a frame may
     /// prepare several groups and the recycling has to happen once for all.
-    pub fn begin_frame(&mut self) {
+    pub fn begin_frame(&mut self, queue: &Queue, screen: (u32, u32)) {
         for (key, buffer) in self.frame_keys.drain(..).zip(self.buffers.drain(..)) {
             self.buffer_cache.entry(key).or_default().push(buffer);
         }
+        // Once per frame, not once per group: every group renders into the
+        // same viewport.
+        self.viewport.update(
+            queue,
+            Resolution {
+                width: screen.0,
+                height: screen.1,
+            },
+        );
     }
 
     /// Drop shaped buffers no group asked for. Call once every group has been
@@ -292,15 +301,6 @@ impl TextRenderState {
                 }
             })
             .collect();
-
-        // Update viewport with current screen dimensions
-        viewport.update(
-            queue,
-            Resolution {
-                width: screen_width,
-                height: screen_height,
-            },
-        );
 
         let result = text_renderers[slot].prepare(
             device,

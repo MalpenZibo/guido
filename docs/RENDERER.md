@@ -209,6 +209,19 @@ lower layer over a higher one produces exactly one group — the same single set
 of draw calls as before. The split is minimal by construction, so no merge pass
 is needed afterwards.
 
+A layer going backwards is only split on when the incoming command's world
+bounds actually intersect something already drawn above it in that group.
+Without that test the rule fires between every pair of sibling widgets — each
+paints a background then a label, so the next sibling's background regresses —
+and `examples/showcase.rs` alone went to 16 groups, every one of them carrying
+its own glyphon renderer. Siblings do not overlap, so those splits bought
+nothing. With the test, `status_bar` is one group and `showcase` is four.
+
+Bounds are conservative: shapes grow by their shadow and border, text by half a
+font size for glyph overshoot, and anything under a rotation or scale counts as
+covering everything. Over-splitting costs a draw call; under-splitting would
+draw in the wrong order.
+
 glyphon draws everything a `TextRenderer` prepared in one call, so a group with
 directly-rendered text gets a renderer of its own from a pool that grows on
 demand. `examples/draw_order_example.rs` exercises the regressions.

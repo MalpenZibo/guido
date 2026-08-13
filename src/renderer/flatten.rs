@@ -74,11 +74,16 @@ pub struct FlattenedCommand {
 /// Bucketing alone would reorder: with a single set of buckets for the whole
 /// frame, *every* shape is drawn before *every* image, so a container
 /// background painted over an image ends up underneath it however the tree is
-/// arranged. A new group is therefore opened whenever a command's layer would
-/// go backwards, and the groups are drawn in order. Batching survives, the
-/// order survives with it, and a tree that never paints a lower layer over a
-/// higher one produces exactly one group — the same single set of draw calls
-/// as before.
+/// arranged. A new group is therefore opened when a command's layer goes
+/// backwards, and the groups are drawn in order.
+///
+/// Only when it goes backwards *over something it would cover*, though.
+/// Sibling widgets each draw a background and then a label, so a plain
+/// "layer went backwards" rule fires between every pair of them — and splits
+/// there buy nothing, because siblings do not overlap. Reordering is only
+/// observable where the pixels meet, so the group is kept unless the incoming
+/// command's bounds actually intersect something already drawn above it. A
+/// column of buttons stays one group; a tint over a photo gets two.
 struct LayeredCommands {
     groups: Vec<LayerBuckets>,
 }
@@ -90,12 +95,42 @@ struct LayerBuckets {
     images: Vec<FlattenedCommand>,
     text: Vec<FlattenedCommand>,
     overlay: Vec<FlattenedCommand>,
-    /// Highest layer already in this group. A command below it has to start a
-    /// new group or it would be drawn too early.
+    /// Highest layer already in this group. Only a command below this can
+    /// possibly be drawn too early.
     high_water: RenderLayer,
+    /// World-space bounds of everything in this group, per layer, so a
+    /// regression can be tested for actual overlap. `None` means the layer is
+    /// empty; an unbounded command widens it to everything.
+    bounds: [Option<Rect>; LAYER_COUNT],
 }
 
+/// Number of [`RenderLayer`] variants.
+const LAYER_COUNT: usize = 5;
+
 impl LayerBuckets {
+    /// Does `rect` meet anything already drawn above `layer` in this group?
+    ///
+    /// Conservative: layer bounds are a union, so two commands straddling a
+    /// gap read as covering it. Over-splitting only costs a draw call, while
+    /// under-splitting would draw in the wrong order.
+    fn covered_above(&self, layer: RenderLayer, rect: Option<Rect>) -> bool {
+        let Some(rect) = rect else {
+            // Nothing to test against: assume the worst and split.
+            return true;
+        };
+        (layer as usize + 1..LAYER_COUNT)
+            .any(|above| self.bounds[above].is_some_and(|bounds| bounds.intersects(&rect)))
+    }
+
+    fn record(&mut self, layer: RenderLayer, rect: Option<Rect>) {
+        let slot = &mut self.bounds[layer as usize];
+        match (*slot, rect) {
+            (_, None) => *slot = Some(EVERYTHING),
+            (None, Some(rect)) => *slot = Some(rect),
+            (Some(current), Some(rect)) => *slot = Some(union(current, rect)),
+        }
+    }
+
     fn bucket_mut(&mut self, layer: RenderLayer) -> &mut Vec<FlattenedCommand> {
         match layer {
             RenderLayer::Backdrop => &mut self.backdrop,
@@ -124,9 +159,10 @@ impl LayeredCommands {
 
     fn push(&mut self, cmd: FlattenedCommand) {
         let layer = cmd.layer;
+        let rect = world_bounds(&cmd);
         // `expect`: `new` seeds one group and nothing ever removes one.
         let current = self.groups.last().expect("at least one group");
-        if layer < current.high_water {
+        if layer < current.high_water && current.covered_above(layer, rect) {
             self.groups.push(LayerBuckets {
                 high_water: layer,
                 ..Default::default()
@@ -134,6 +170,7 @@ impl LayeredCommands {
         }
         let current = self.groups.last_mut().expect("at least one group");
         current.high_water = current.high_water.max(layer);
+        current.record(layer, rect);
         current.bucket_mut(layer).push(cmd);
     }
 
@@ -397,6 +434,89 @@ fn flatten_node(
     crate::render_stats::record_flatten_full();
 }
 
+/// Stand-in for "this could be anywhere", used when a command's extent is not
+/// known: it intersects everything, so the group splits.
+const EVERYTHING: Rect = Rect {
+    x: f32::NEG_INFINITY,
+    y: f32::NEG_INFINITY,
+    width: f32::INFINITY,
+    height: f32::INFINITY,
+};
+
+fn union(a: Rect, b: Rect) -> Rect {
+    let x = a.x.min(b.x);
+    let y = a.y.min(b.y);
+    let right = (a.x + a.width).max(b.x + b.width);
+    let bottom = (a.y + a.height).max(b.y + b.height);
+    Rect::new(x, y, right - x, bottom - y)
+}
+
+/// What a command covers, in world space, or `None` when that cannot be
+/// bounded cheaply.
+///
+/// Only used to decide whether two commands can safely swap places, so it has
+/// to be generous: a box that is too small could let something be drawn
+/// underneath what it should cover.
+fn world_bounds(cmd: &FlattenedCommand) -> Option<Rect> {
+    let local = match &*cmd.command {
+        DrawCommand::RoundedRect {
+            rect,
+            border,
+            shadow,
+            ..
+        } => {
+            // A shadow spills well outside the rect, and a border straddles
+            // its edge.
+            let mut grow: f32 = border.map_or(0.0, |b| b.width);
+            let mut offset: (f32, f32) = (0.0, 0.0);
+            if let Some(shadow) = shadow {
+                grow = grow.max(shadow.blur + shadow.spread);
+                offset = shadow.offset;
+            }
+            Rect::new(
+                rect.x - grow + offset.0.min(0.0),
+                rect.y - grow + offset.1.min(0.0),
+                rect.width + grow * 2.0 + offset.0.abs(),
+                rect.height + grow * 2.0 + offset.1.abs(),
+            )
+        }
+        DrawCommand::Circle { center, radius, .. } => Rect::new(
+            center.0 - radius,
+            center.1 - radius,
+            radius * 2.0,
+            radius * 2.0,
+        ),
+        DrawCommand::Image { rect, .. } => *rect,
+        DrawCommand::BackdropBlur { rect, .. } => *rect,
+        DrawCommand::Text {
+            rect, font_size, ..
+        } => {
+            // Glyphs overshoot their layout box — descenders, italics, marks.
+            // A font-size of slack costs an occasional extra group, where too
+            // tight a box would let a background cover a letter.
+            let slack = font_size * 0.5;
+            Rect::new(
+                rect.x - slack,
+                rect.y - slack,
+                rect.width + slack * 2.0,
+                rect.height + slack * 2.0,
+            )
+        }
+    };
+
+    if !cmd.world_transform.is_translation_only() {
+        // Rotation and scale would need the transformed corners; rather than
+        // pay for that on every command, treat it as unbounded and split.
+        return None;
+    }
+    Some(Rect::new(
+        local.x + cmd.world_transform.tx(),
+        local.y + cmd.world_transform.ty(),
+        local.width,
+        local.height,
+    ))
+}
+
 /// Compute axis-aligned bounding box from an array of points.
 fn aabb_from_points(points: &[(f32, f32)]) -> Rect {
     let (min_x, max_x, min_y, max_y) = points.iter().fold(
@@ -477,12 +597,14 @@ mod tests {
     use crate::widgets::Color;
 
     fn command(layer: RenderLayer) -> FlattenedCommand {
+        command_at(layer, Rect::new(0.0, 0.0, 100.0, 100.0))
+    }
+
+    /// Commands are only reordered where they overlap, so tests that care
+    /// about splitting have to place them.
+    fn command_at(layer: RenderLayer, rect: Rect) -> FlattenedCommand {
         FlattenedCommand {
-            command: Rc::new(DrawCommand::rounded_rect(
-                Rect::new(0.0, 0.0, 1.0, 1.0),
-                Color::WHITE,
-                0.0,
-            )),
+            command: Rc::new(DrawCommand::rounded_rect(rect, Color::WHITE, 0.0)),
             world_transform: Transform::IDENTITY,
             world_transform_origin: None,
             layer,
@@ -608,6 +730,55 @@ mod tests {
                 .collect()
         };
         assert_eq!(order(&a_cmds, &a_layers), order(&b_cmds, &b_layers));
+    }
+
+    #[test]
+    fn a_regression_that_covers_nothing_stays_in_the_group() {
+        // Sibling widgets each paint a background then a label: the next
+        // sibling's background is a regression, but it lands somewhere the
+        // previous label is not, so splitting there would buy nothing. This
+        // is the shape of nearly every real tree, which is why the overlap
+        // test is what keeps the group count near one.
+        let mut layered = LayeredCommands::new();
+        for column in 0..4 {
+            let x = column as f32 * 200.0;
+            layered.push(command_at(Shapes, Rect::new(x, 0.0, 100.0, 40.0)));
+            layered.push(command_at(Text, Rect::new(x, 0.0, 100.0, 40.0)));
+        }
+
+        let mut commands = Vec::new();
+        let mut layers = Vec::new();
+        layered.drain_into(&mut commands, &mut layers);
+        assert_eq!(layers.len(), 1, "non-overlapping siblings must not split");
+    }
+
+    #[test]
+    fn a_regression_that_covers_something_still_splits() {
+        let mut layered = LayeredCommands::new();
+        layered.push(command_at(Text, Rect::new(0.0, 0.0, 100.0, 40.0)));
+        // Lands on top of the label, so it has to be drawn after it.
+        layered.push(command_at(Shapes, Rect::new(20.0, 10.0, 40.0, 10.0)));
+
+        let mut commands = Vec::new();
+        let mut layers = Vec::new();
+        layered.drain_into(&mut commands, &mut layers);
+        assert_eq!(layers.len(), 2);
+    }
+
+    #[test]
+    fn an_unbounded_command_forces_a_split() {
+        // A rotated or scaled command is not bounded cheaply, so it is
+        // assumed to cover anything: correctness over a spare draw call.
+        let mut layered = LayeredCommands::new();
+        layered.push(command_at(Text, Rect::new(0.0, 0.0, 10.0, 10.0)));
+        let mut rotated = command_at(Shapes, Rect::new(900.0, 900.0, 10.0, 10.0));
+        rotated.world_transform = Transform::rotate(45.0);
+        layered.push(rotated);
+
+        let mut commands = Vec::new();
+        let mut layers = Vec::new();
+        layered.drain_into(&mut commands, &mut layers);
+        assert_eq!(layers.len(), 2);
     }
 
     #[test]
