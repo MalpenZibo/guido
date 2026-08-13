@@ -4,6 +4,9 @@ pub mod font;
 pub mod image;
 pub mod into_child;
 mod paint_children;
+
+#[cfg(test)]
+mod diagnostic_audit;
 pub mod scroll;
 pub mod state_layer;
 pub mod text;
