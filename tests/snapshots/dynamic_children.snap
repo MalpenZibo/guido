@@ -1,0 +1,9 @@
+node 0,0 136x150
+  node 0,0 120x30 at 8,8
+    draw rect 0,0 120x30 fill=#4d4d66ff radius=4/4/4/4
+  node 0,0 120x50 at 8,44
+    draw rect 0,0 120x50 fill=#4d4d66ff radius=4/4/4/4
+  node 0,0 120x20 at 8,100
+    draw rect 0,0 120x20 fill=#4d4d66ff radius=4/4/4/4
+  node 0,0 120x16 at 8,126
+    draw rect 0,0 120x16 fill=#803333ff radius=0/0/0/0

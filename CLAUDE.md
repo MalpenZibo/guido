@@ -327,6 +327,16 @@ See [docs/STYLING.md](docs/STYLING.md) for full styling reference.
 - **CRITICAL: Check that all CI checks pass before merging the PR**
 - Merge to main only through PRs after CI is green
 
+**Render-tree snapshots.** `tests/render_snapshots.rs` lays out and paints widget
+trees taken from `examples/` (no compositor, no GPU) and diffs the render tree
+against golden files in `tests/snapshots/`. A change in geometry or in what gets
+drawn shows up there without anyone having had to predict the assertion. When a
+change is intended, re-bless and **read the diff** — it is the review:
+
+```bash
+UPDATE_SNAPSHOTS=1 cargo test --test render_snapshots
+```
+
 **CRITICAL: Always run `cargo clippy` and `cargo fmt` before committing code changes.**
 - Fix all clippy errors (compilation will fail)
 - Address clippy warnings when reasonable

@@ -1,0 +1,56 @@
+node 0,0 300x424
+  node 0,0 300x60
+    draw rect 0,0 300x60 fill=#1f1f29ff radius=0/0/0/0
+    node 0,0 40x20
+      draw rect 0,0 40x20 fill=#ff0000ff radius=0/0/0/0
+    node 0,0 40x32 at 46,0
+      draw rect 0,0 40x32 fill=#00ff00ff radius=0/0/0/0
+    node 0,0 40x44 at 92,0
+      draw rect 0,0 40x44 fill=#0000ffff radius=0/0/0/0
+  node 0,0 300x60 at 0,64
+    draw rect 0,0 300x60 fill=#1f1f29ff radius=0/0/0/0
+    node 0,0 40x20 at 84,20
+      draw rect 0,0 40x20 fill=#ff0000ff radius=0/0/0/0
+    node 0,0 40x32 at 130,14
+      draw rect 0,0 40x32 fill=#00ff00ff radius=0/0/0/0
+    node 0,0 40x44 at 176,8
+      draw rect 0,0 40x44 fill=#0000ffff radius=0/0/0/0
+  node 0,0 300x60 at 0,128
+    draw rect 0,0 300x60 fill=#1f1f29ff radius=0/0/0/0
+    node 0,0 40x20 at 168,40
+      draw rect 0,0 40x20 fill=#ff0000ff radius=0/0/0/0
+    node 0,0 40x32 at 214,28
+      draw rect 0,0 40x32 fill=#00ff00ff radius=0/0/0/0
+    node 0,0 40x44 at 260,16
+      draw rect 0,0 40x44 fill=#0000ffff radius=0/0/0/0
+  node 0,0 300x60 at 0,192
+    draw rect 0,0 300x60 fill=#1f1f29ff radius=0/0/0/0
+    node 0,0 40x20
+      draw rect 0,0 40x20 fill=#ff0000ff radius=0/0/0/0
+    node 0,0 40x32 at 130,0
+      draw rect 0,0 40x32 fill=#00ff00ff radius=0/0/0/0
+    node 0,0 40x44 at 260,0
+      draw rect 0,0 40x44 fill=#0000ffff radius=0/0/0/0
+  node 0,0 300x60 at 0,256
+    draw rect 0,0 300x60 fill=#1f1f29ff radius=0/0/0/0
+    node 0,0 40x20 at 28,20
+      draw rect 0,0 40x20 fill=#ff0000ff radius=0/0/0/0
+    node 0,0 40x32 at 130,14
+      draw rect 0,0 40x32 fill=#00ff00ff radius=0/0/0/0
+    node 0,0 40x44 at 232,8
+      draw rect 0,0 40x44 fill=#0000ffff radius=0/0/0/0
+  node 0,0 300x60 at 0,320
+    draw rect 0,0 300x60 fill=#1f1f29ff radius=0/0/0/0
+    node 0,0 40x20 at 42,20
+      draw rect 0,0 40x20 fill=#ff0000ff radius=0/0/0/0
+    node 0,0 40x32 at 130,14
+      draw rect 0,0 40x32 fill=#00ff00ff radius=0/0/0/0
+    node 0,0 40x44 at 218,8
+      draw rect 0,0 40x44 fill=#0000ffff radius=0/0/0/0
+  node 0,0 300x40 at 0,384
+    node 0,0 50x20
+      draw rect 0,0 50x20 fill=#ff0000ff radius=0/0/0/0
+    node 0,0 188x20 at 56,0
+      draw rect 0,0 188x20 fill=#808080ff radius=0/0/0/0
+    node 0,0 50x20 at 250,0
+      draw rect 0,0 50x20 fill=#0000ffff radius=0/0/0/0

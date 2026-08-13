@@ -1,0 +1,82 @@
+node 0,0 648x216
+  node 0,0 200x200 at 8,8 clip(0,0 200x200 r=8)
+    draw rect 0,0 200x200 fill=#262633ff radius=8/8/8/8
+    node 0,0 136x648
+      node 0,0 120x24 at 8,8
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,41
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,74
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,107
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,140
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,173
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,206
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,239
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,272
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,305
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,338
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,371
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,404
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,437
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,470
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,503
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,536
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,569
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,602
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,635
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+    node 0,0 6x196 at 192,2
+      draw rect 0,0 6x196 fill=#ffffff0d radius=100/100/100/100
+    node 0,0 6x60.49 at 192,2
+      draw rect 0,0 6x60.49 fill=#ffffff4d radius=100/100/100/100
+  node 0,0 200x200 at 224,8 clip(0,0 200x200 r=0)
+    draw rect 0,0 200x200 fill=#262633ff radius=0/0/0/0
+    node 0,0 136x72
+      node 0,0 120x24 at 8,8
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+      node 0,0 120x24 at 8,41
+        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
+  node 0,0 200x80 at 440,8 clip(0,0 200x80 r=0)
+    draw rect 0,0 200x80 fill=#262633ff radius=0/0/0/0
+    node 0,0 888x56
+      node 0,0 80x40 at 8,8
+        draw rect 0,0 80x40 fill=#0000ffff radius=0/0/0/0
+      node 0,0 80x40 at 96,8
+        draw rect 0,0 80x40 fill=#0000ffff radius=0/0/0/0
+      node 0,0 80x40 at 184,8
+        draw rect 0,0 80x40 fill=#0000ffff radius=0/0/0/0
+      node 0,0 80x40 at 272,8
+        draw rect 0,0 80x40 fill=#0000ffff radius=0/0/0/0
+      node 0,0 80x40 at 360,8
+        draw rect 0,0 80x40 fill=#0000ffff radius=0/0/0/0
+      node 0,0 80x40 at 448,8
+        draw rect 0,0 80x40 fill=#0000ffff radius=0/0/0/0
+      node 0,0 80x40 at 536,8
+        draw rect 0,0 80x40 fill=#0000ffff radius=0/0/0/0
+      node 0,0 80x40 at 624,8
+        draw rect 0,0 80x40 fill=#0000ffff radius=0/0/0/0
+      node 0,0 80x40 at 712,8
+        draw rect 0,0 80x40 fill=#0000ffff radius=0/0/0/0
+      node 0,0 80x40 at 800,8
+        draw rect 0,0 80x40 fill=#0000ffff radius=0/0/0/0
+    node 0,0 196x6 at 2,72
+      draw rect 0,0 196x6 fill=#ffffff0d radius=100/100/100/100
+    node 0,0 44.14x6 at 2,72
+      draw rect 0,0 44.14x6 fill=#ffffff4d radius=100/100/100/100
