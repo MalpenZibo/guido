@@ -12,15 +12,21 @@ use super::tree::{CachedFlatten, ClipRegion, RenderNode};
 /// Render layer for draw command ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum RenderLayer {
-    /// Background shapes (filled rectangles, borders, etc.)
+    /// Backdrop effects, which filter what is already on the target.
+    ///
+    /// Lowest so that one always opens a draw group: everything it reads must
+    /// already have been drawn, which means it must land in a group of its
+    /// own, after the groups holding that content.
     #[default]
-    Shapes = 0,
+    Backdrop = 0,
+    /// Background shapes (filled rectangles, borders, etc.)
+    Shapes = 1,
     /// Image content (after shapes, before text)
-    Images = 1,
+    Images = 2,
     /// Text content
-    Text = 2,
+    Text = 3,
     /// Overlay effects (ripples, highlights)
-    Overlay = 3,
+    Overlay = 4,
 }
 
 /// Clip region transformed to world space (axis-aligned bounding box).
@@ -79,6 +85,7 @@ struct LayeredCommands {
 
 #[derive(Default)]
 struct LayerBuckets {
+    backdrop: Vec<FlattenedCommand>,
     shapes: Vec<FlattenedCommand>,
     images: Vec<FlattenedCommand>,
     text: Vec<FlattenedCommand>,
@@ -91,6 +98,7 @@ struct LayerBuckets {
 impl LayerBuckets {
     fn bucket_mut(&mut self, layer: RenderLayer) -> &mut Vec<FlattenedCommand> {
         match layer {
+            RenderLayer::Backdrop => &mut self.backdrop,
             RenderLayer::Shapes => &mut self.shapes,
             RenderLayer::Images => &mut self.images,
             RenderLayer::Text => &mut self.text,
@@ -99,7 +107,11 @@ impl LayerBuckets {
     }
 
     fn len(&self) -> usize {
-        self.shapes.len() + self.images.len() + self.text.len() + self.overlay.len()
+        self.backdrop.len()
+            + self.shapes.len()
+            + self.images.len()
+            + self.text.len()
+            + self.overlay.len()
     }
 }
 
@@ -141,7 +153,13 @@ impl LayeredCommands {
         let mut result = Vec::with_capacity(self.len().saturating_sub(start));
         let mut seen = 0;
         for group in &self.groups {
-            for bucket in [&group.shapes, &group.images, &group.text, &group.overlay] {
+            for bucket in [
+                &group.backdrop,
+                &group.shapes,
+                &group.images,
+                &group.text,
+                &group.overlay,
+            ] {
                 for cmd in bucket {
                     if seen >= start {
                         result.push(cmd.clone());
@@ -159,6 +177,7 @@ impl LayeredCommands {
         for group in self.groups {
             let mut layer = CommandLayer::default();
             for (bucket, range) in [
+                (group.backdrop, &mut layer.backdrop),
                 (group.shapes, &mut layer.shapes),
                 (group.images, &mut layer.images),
                 (group.text, &mut layer.text),
@@ -182,6 +201,8 @@ impl LayeredCommands {
 /// Drawn in field order: shapes, images, text, overlay.
 #[derive(Debug, Clone, Default)]
 pub struct CommandLayer {
+    /// Backdrop effects applied to the target before this group draws.
+    pub backdrop: Range<usize>,
     pub shapes: Range<usize>,
     pub images: Range<usize>,
     pub text: Range<usize>,
@@ -190,7 +211,8 @@ pub struct CommandLayer {
 
 impl CommandLayer {
     pub fn is_empty(&self) -> bool {
-        self.shapes.is_empty()
+        self.backdrop.is_empty()
+            && self.shapes.is_empty()
             && self.images.is_empty()
             && self.text.is_empty()
             && self.overlay.is_empty()
@@ -310,6 +332,7 @@ fn flatten_node(
         let layer = match &**cmd {
             DrawCommand::Text { .. } => RenderLayer::Text,
             DrawCommand::Image { .. } => RenderLayer::Images,
+            DrawCommand::BackdropBlur { .. } => RenderLayer::Backdrop,
             _ => RenderLayer::Shapes,
         };
         out.push(FlattenedCommand {

@@ -213,6 +213,24 @@ glyphon draws everything a `TextRenderer` prepared in one call, so a group with
 directly-rendered text gets a renderer of its own from a pool that grows on
 demand. `examples/draw_order_example.rs` exercises the regressions.
 
+### Backdrop effects
+
+`RenderLayer::Backdrop` sits below `Shapes` so a backdrop command always opens
+a group: everything it reads must already have been drawn, which means it must
+land after the groups holding that content.
+
+A backdrop effect samples the render target, which a pass cannot do to its own
+attachment. When a frame contains one, it is drawn into an offscreen colour
+target instead of the swapchain; at each backdrop group the pass ends, the
+effect runs, and the pass resumes with `LoadOp::Load`. The target is blitted to
+the swapchain once at the end and released after enough idle frames.
+
+Per region: downsample into a quarter-size working texture (rendering into a
+smaller target with a linear sampler is already a box filter), two separable
+gaussian passes ping-ponging between two working textures, then a composite
+back over the scene masked by the container's rounded-rect SDF. See
+`src/renderer/backdrop_pass.rs`.
+
 ### FlattenedCommand
 
 The output of tree flattening:

@@ -10,6 +10,7 @@ use wgpu::{
     BindGroup, BindGroupLayout, Buffer, BufferUsages, Device, Queue, RenderPipeline, ShaderModule,
 };
 
+use super::backdrop_pass::{BackdropRegion, BackdropRenderer};
 use super::commands::DrawCommand;
 use super::flatten::{CommandLayer, FlattenedCommand};
 use super::gpu::{QUAD_INDICES, QUAD_VERTICES, QuadVertex, ShaderUniforms, ShapeInstance};
@@ -18,7 +19,7 @@ use super::image_quad::{ImageQuadRenderer, PreparedImageQuad};
 use super::text::TextRenderState;
 use super::text_quad::{PreparedTextQuad, TextQuadRenderer};
 use super::types::TextEntry;
-use crate::widgets::Color;
+use crate::widgets::{Color, Rect};
 
 /// The renderer using instanced rendering.
 ///
@@ -58,6 +59,7 @@ pub struct Renderer {
     text_entry_buf: Vec<TextEntry>,
     image_quads: Vec<PreparedImageQuad>,
     text_quads: Vec<PreparedTextQuad>,
+    backdrop: BackdropRenderer,
 
     // Screen dimensions
     screen_width: f32,
@@ -142,6 +144,8 @@ impl Renderer {
         // Initialize image renderer
         let image_quad_renderer = ImageQuadRenderer::new(&device, format);
 
+        let backdrop = BackdropRenderer::new(&device, format);
+
         Self {
             device,
             queue,
@@ -160,6 +164,7 @@ impl Renderer {
             text_entry_buf: Vec::new(),
             image_quads: Vec::new(),
             text_quads: Vec::new(),
+            backdrop,
             screen_width: 800.0,
             screen_height: 600.0,
             scale_factor: 1.0,
@@ -292,6 +297,21 @@ impl Renderer {
 
         let prepared = self.prepare_layers(commands, layers);
 
+        // A backdrop effect reads pixels already drawn, which a pass cannot do
+        // to its own attachment: the frame goes to an offscreen target and is
+        // blitted over at the end. Frames without one draw straight to the
+        // swapchain and never allocate it.
+        let uses_backdrop = layers.iter().any(|layer| !layer.backdrop.is_empty());
+        if uses_backdrop {
+            self.backdrop.ensure_targets(
+                &self.device,
+                surface.width().max(1),
+                surface.height().max(1),
+            );
+        } else {
+            self.backdrop.note_unused();
+        }
+
         // Instances for every group live in one buffer; the groups address it
         // by range, which is what keeps their draws in order.
         self.ensure_instance_capacity(self.shape_instance_buf.len());
@@ -309,33 +329,37 @@ impl Renderer {
                 label: Some("Renderer Encoder"),
             });
 
+        let scene_view = uses_backdrop.then(|| self.backdrop.scene_view()).flatten();
+        let target = scene_view.unwrap_or(&view);
+
+        let scale = self.scale_factor;
         {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Renderer Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: clear_color.r as f64,
-                            g: clear_color.g as f64,
-                            b: clear_color.b as f64,
-                            a: clear_color.a as f64,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
+            let clear = wgpu::LoadOp::Clear(wgpu::Color {
+                r: clear_color.r as f64,
+                g: clear_color.g as f64,
+                b: clear_color.b as f64,
+                a: clear_color.a as f64,
             });
+            let mut load = clear;
+            let mut render_pass = begin_pass(&mut encoder, target, load);
+            load = wgpu::LoadOp::Load;
 
             // Groups are drawn in order; within a group, bucket order. The
             // shape pipeline is re-bound per draw because the image and text
             // renderers replace it.
-            for layer in &prepared {
+            for (index, layer) in prepared.iter().enumerate() {
+                if !layers[index].backdrop.is_empty() {
+                    // The effect samples the target, so the pass has to end
+                    // and its contents be stored before it can run.
+                    drop(render_pass);
+                    for command in &commands[layers[index].backdrop.clone()] {
+                        if let Some(region) = command_to_backdrop_region(command, scale) {
+                            self.backdrop.apply(&self.device, &mut encoder, &region);
+                        }
+                    }
+                    render_pass = begin_pass(&mut encoder, target, load);
+                }
+
                 if !layer.shapes.is_empty() {
                     self.bind_shape_pipeline(&mut render_pass);
                     render_pass.draw_indexed(0..6, 0, layer.shapes.clone());
@@ -360,6 +384,10 @@ impl Renderer {
                     render_pass.draw_indexed(0..6, 0, layer.overlay.clone());
                 }
             }
+        }
+
+        if uses_backdrop {
+            self.backdrop.present(&self.device, &mut encoder, &view);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -492,6 +520,78 @@ struct PreparedLayer {
     overlay: std::ops::Range<u32>,
 }
 
+/// Open a colour-only render pass over `target`.
+fn begin_pass<'a>(
+    encoder: &'a mut wgpu::CommandEncoder,
+    target: &'a wgpu::TextureView,
+    load: wgpu::LoadOp<wgpu::Color>,
+) -> wgpu::RenderPass<'a> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Renderer Render Pass"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: target,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load,
+                store: wgpu::StoreOp::Store,
+            },
+            depth_slice: None,
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    })
+}
+
+/// Resolve a backdrop command to the physical-pixel region it filters.
+fn command_to_backdrop_region(cmd: &FlattenedCommand, scale: f32) -> Option<BackdropRegion> {
+    let DrawCommand::BackdropBlur {
+        rect,
+        radius,
+        corner_radii,
+        curvature,
+    } = &*cmd.command
+    else {
+        return None;
+    };
+
+    // The effect works on axis-aligned pixels, so a rotated container gets the
+    // bounding box of its rotated rect — the mask still cuts the right shape
+    // out of it for the common translation-only case.
+    let corners = [
+        cmd.world_transform.transform_point(rect.x, rect.y),
+        cmd.world_transform
+            .transform_point(rect.x + rect.width, rect.y),
+        cmd.world_transform
+            .transform_point(rect.x, rect.y + rect.height),
+        cmd.world_transform
+            .transform_point(rect.x + rect.width, rect.y + rect.height),
+    ];
+    let min_x = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
+    let max_x = corners
+        .iter()
+        .map(|c| c.0)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_y = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
+    let max_y = corners
+        .iter()
+        .map(|c| c.1)
+        .fold(f32::NEG_INFINITY, f32::max);
+
+    Some(BackdropRegion {
+        rect: Rect::new(
+            min_x * scale,
+            min_y * scale,
+            (max_x - min_x) * scale,
+            (max_y - min_y) * scale,
+        ),
+        radius: radius * scale,
+        radii: corner_radii.scaled(scale),
+        curvature: *curvature,
+    })
+}
+
 /// Convert a single flattened command to a shape instance.
 fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstance> {
     match &*cmd.command {
@@ -558,6 +658,9 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
         }
         // Text commands are handled separately via command_to_text_entry
         DrawCommand::Text { .. } => None,
+        // Filters the target rather than adding geometry; handled between
+        // draw groups, not as an instance.
+        DrawCommand::BackdropBlur { .. } => None,
         // Image commands are handled separately via ImageQuadRenderer
         DrawCommand::Image { .. } => None,
     }

@@ -77,6 +77,47 @@ fn main() {
                     ),
             ))
             .child(panel(
+                "backdrop blur",
+                container()
+                    .width(220.0)
+                    .height(140.0)
+                    .corner_radius(8.0)
+                    .overflow(Overflow::Hidden)
+                    .layout(ZStack::new())
+                    .child(photo())
+                    .child(
+                        container()
+                            .width(fill())
+                            .height(fill())
+                            .layout(
+                                Flex::column()
+                                    .main_alignment(MainAlignment::Center)
+                                    .cross_alignment(CrossAlignment::Center),
+                            )
+                            .child(
+                                container()
+                                    .width(150.0)
+                                    .height(70.0)
+                                    .corner_radius(16.0)
+                                    .squircle()
+                                    // Blurs the photo beneath it, then paints
+                                    // its own translucent tint over the result.
+                                    .backdrop_blur(18.0)
+                                    .background(Color::rgba(0.1, 0.1, 0.15, 0.45))
+                                    .layout(
+                                        Flex::column()
+                                            .main_alignment(MainAlignment::Center)
+                                            .cross_alignment(CrossAlignment::Center),
+                                    )
+                                    .child(
+                                        text("frosted")
+                                            .font_size(18.0)
+                                            .color(Color::rgb(0.95, 0.95, 1.0)),
+                                    ),
+                            ),
+                    ),
+            ))
+            .child(panel(
                 "image over text",
                 container()
                     .width(220.0)
@@ -110,7 +151,7 @@ fn main() {
 
         app.add_surface(
             SurfaceConfig::new()
-                .width(800)
+                .width(1040)
                 .height(230)
                 .anchor(Anchor::TOP | Anchor::LEFT)
                 .layer(Layer::Top)

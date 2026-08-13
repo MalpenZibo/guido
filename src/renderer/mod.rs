@@ -10,6 +10,7 @@
 //! - World transforms are computed automatically by walking the tree during flatten
 //! - Overlays (like ripples) naturally render after children
 
+mod backdrop_pass;
 mod commands;
 mod constants;
 mod flatten;

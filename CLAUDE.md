@@ -396,7 +396,11 @@ This is a work-in-progress GUI library. Current implemented features:
 - Dynamic surface property modification (layer, keyboard interactivity, anchor, size, margins)
 - Multi-output support: reactive `outputs()` enumeration, per-output surface pinning, `surface_output()` tracking
 - Input regions: per-surface clickable rectangles / click-through surfaces (`input_region`, `click_through`, `set_input_region`)
-- Compositor background blur (`ext-background-effect-v1`) via `container().background_blur()`, shaped by bounds + corner radius
+- Backdrop blur via `container().backdrop_blur(radius)`: filters both the
+  surface's own drawn content (offscreen target, downsample + separable
+  gaussian, masked to the container's rounded shape) and the compositor's
+  backdrop (`ext-background-effect-v1`, shaped by bounds + corner radius).
+  Restrict with `BackdropSources`; check availability with `compositor_effects()`
 - Session lock (`ext-session-lock-v1`): `lock_session(factory)` / `unlock_session()` / reactive `lock_state()`, one lock surface per output with hotplug handling
 - Touch input (`wl_touch`): first finger drives the pointer pipeline — tap = click, works with hover/pressed state layers
 - Clipboard: async prefetch (paste never blocks the UI thread) + primary selection (select-to-copy, middle-click paste)
