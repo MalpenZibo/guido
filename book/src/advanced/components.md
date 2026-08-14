@@ -17,7 +17,7 @@ pub fn button(label: String) -> impl Widget {
         .corner_radius(6.0)
         .hover_state(|s| s.lighter(0.1))
         .pressed_state(|s| s.ripple())
-        .child(text(label).color(Color::WHITE))
+        .child(container().text_color(Color::WHITE).child(text(label)))
 }
 ```
 
@@ -62,7 +62,7 @@ pub fn button(
     container()
         .padding(padding)
         .background(background)
-        .child(text(label).color(Color::WHITE))
+        .child(container().text_color(Color::WHITE).child(text(label)))
 }
 ```
 
@@ -183,7 +183,7 @@ pub fn card(
         .background(Color::rgb(0.18, 0.18, 0.22))
         .corner_radius(8.0)
         .layout(Flex::column().spacing(8.0))
-        .child(text(title).font_size(18.0).color(Color::WHITE))
+        .child(container().font_size(18.0).text_color(Color::WHITE).child(text(title)))
         .children_source(children)
 }
 ```
@@ -268,7 +268,7 @@ pub fn button(
         .hover_state(|s| s.lighter(0.1))
         .pressed_state(|s| s.ripple())
         .on_click_option(on_click)
-        .child(text(label).color(Color::WHITE))
+        .child(container().text_color(Color::WHITE).child(text(label)))
 }
 
 #[component]
@@ -282,7 +282,7 @@ pub fn card(
         .background(background)
         .corner_radius(8.0)
         .layout(Flex::column().spacing(8.0))
-        .child(text(title).font_size(18.0).color(Color::WHITE))
+        .child(container().font_size(18.0).text_color(Color::WHITE).child(text(title)))
         .children_source(children)
 }
 
@@ -296,7 +296,7 @@ fn main() {
             .child(
                 card()
                     .title("Counter")
-                    .child(text(move || format!("Count: {}", count.get())).color(Color::WHITE))
+                    .child(container().text_color(Color::WHITE).child(text(move || format!("Count: {}", count.get()))))
                     .child(
                         container()
                             .layout(Flex::row().spacing(8.0))

@@ -44,17 +44,19 @@ fn lock_screen(output: OutputInfo) -> Container {
                 .cross_alignment(CrossAlignment::Center),
         )
         .child(
-            text(format!(
-                "Locked — {}",
-                output.name.unwrap_or_else(|| "output".into())
-            ))
-            .color(Color::WHITE)
-            .font_size(24.0),
+            container()
+                .text_color(Color::WHITE)
+                .font_size(24.0)
+                .child(text(format!(
+                    "Locked — {}",
+                    output.name.unwrap_or_else(|| "output".into())
+                ))),
         )
         .child(
-            text("password: guido (auto-unlocks after 30s)")
-                .color(Color::rgb(0.6, 0.6, 0.7))
-                .font_size(13.0),
+            container()
+                .text_color(Color::rgb(0.6, 0.6, 0.7))
+                .font_size(13.0)
+                .child(text("password: guido (auto-unlocks after 30s)")),
         )
         .child(
             container()
@@ -63,19 +65,15 @@ fn lock_screen(output: OutputInfo) -> Container {
                 .background(Color::rgb(0.15, 0.15, 0.2))
                 .corner_radius(8.0)
                 .focused_state(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
-                .child(
-                    text_input(attempt)
-                        .password(true)
-                        .text_color(Color::WHITE)
-                        .cursor_color(Color::rgb(0.4, 0.8, 1.0))
-                        .on_submit(move |s| {
-                            if s == PASSWORD {
-                                unlock_session();
-                            } else {
-                                error.set(true);
-                            }
-                        }),
-                ),
+                .text_color(Color::WHITE)
+                .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                .child(text_input(attempt).password(true).on_submit(move |s| {
+                    if s == PASSWORD {
+                        unlock_session();
+                    } else {
+                        error.set(true);
+                    }
+                })),
         )
         .child(text(move || {
             if error.get() {

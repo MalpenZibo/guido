@@ -126,7 +126,7 @@ fn interactive_button(label: &str) -> Container {
             .transform(Transform::scale(0.98))
         )
 
-        .child(text(label).color(Color::WHITE))
+        .child(container().text_color(Color::WHITE).child(text(label)))
 }
 ```
 

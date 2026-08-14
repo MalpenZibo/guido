@@ -8,12 +8,18 @@ use crate::tree::{Tree, WidgetId};
 use super::font::{FontFamily, FontWeight};
 use super::widget::{Color, EventResponse, Rect, Widget};
 
+/// A run of text.
+///
+/// Content only: colour, size, family and weight are declared on an enclosing
+/// container and inherited from the nearest one that sets them — see
+/// [`TextStyle`](super::TextStyle).
+///
+/// ```ignore
+/// container().font_size(21.0).text_color(theme.text)
+///     .child(text("Hello"))
+/// ```
 pub struct Text {
     content: Signal<String>,
-    color: Option<Signal<Color>>,
-    font_size: Option<Signal<f32>>,
-    font_family: Option<Signal<FontFamily>>,
-    font_weight: Option<Signal<FontWeight>>,
     /// If true, text won't wrap and will be clipped by parent container
     nowrap: bool,
     /// Cached values for painting (avoid re-reading signals)
@@ -32,74 +38,12 @@ impl Text {
         let default_family = default_font_family();
         Self {
             content,
-            color: None,
-            font_size: None,
-            font_family: None,
-            font_weight: None,
             nowrap: false,
             cached_text: String::new(), // Will be set during first layout
             cached_font_size: 14.0,
             cached_font_family: default_family,
             cached_font_weight: FontWeight::NORMAL,
         }
-    }
-
-    pub fn color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.color = Some(color.into_signal());
-        self
-    }
-
-    pub fn font_size<M>(mut self, size: impl IntoSignal<f32, M>) -> Self {
-        self.font_size = Some(size.into_signal());
-        self
-    }
-
-    /// Set the font family.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// text("Hello").font_family(FontFamily::Monospace)
-    /// text("Hello").font_family(FontFamily::Name("Inter".into()))
-    /// ```
-    pub fn font_family<M>(mut self, family: impl IntoSignal<FontFamily, M>) -> Self {
-        self.font_family = Some(family.into_signal());
-        self
-    }
-
-    /// Set the font weight.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// text("Hello").font_weight(FontWeight::BOLD)
-    /// text("Hello").font_weight(FontWeight(600))
-    /// ```
-    pub fn font_weight<M>(mut self, weight: impl IntoSignal<FontWeight, M>) -> Self {
-        self.font_weight = Some(weight.into_signal());
-        self
-    }
-
-    /// Shorthand for bold text (FontWeight::BOLD).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// text("Hello").bold()
-    /// ```
-    pub fn bold(self) -> Self {
-        self.font_weight(FontWeight::BOLD)
-    }
-
-    /// Shorthand for monospace font (FontFamily::Monospace).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// text("Hello").mono()
-    /// ```
-    pub fn mono(self) -> Self {
-        self.font_family(FontFamily::Monospace)
     }
 
     /// Prevent text from wrapping. Text will be clipped by parent container.
@@ -109,15 +53,18 @@ impl Text {
         self
     }
 
-    /// Refresh cached values from reactive properties.
-    /// Uses signal tracking to register layout dependencies so the widget
-    /// is re-laid out when any of these signals change.
-    fn refresh(&mut self, id: WidgetId) {
+    /// Refresh cached values from the inherited style.
+    ///
+    /// The signals are read here, inside this widget's tracking scope, so the
+    /// text is re-laid-out when whichever ancestor supplied a metric changes
+    /// it — and is left alone when an ancestor it does not depend on changes.
+    fn refresh(&mut self, tree: &Tree, id: WidgetId) {
         with_signal_tracking(id, JobType::Layout, || {
+            let style = tree.inherited_text_style(id);
             self.cached_text = self.content.get();
-            self.cached_font_size = self.font_size.get_or(14.0);
-            self.cached_font_family = self.font_family.get_or_else(default_font_family);
-            self.cached_font_weight = self.font_weight.get_or(FontWeight::NORMAL);
+            self.cached_font_size = style.font_size.get_or(14.0);
+            self.cached_font_family = style.font_family.get_or_else(default_font_family);
+            self.cached_font_weight = style.font_weight.get_or(FontWeight::NORMAL);
         });
     }
 }
@@ -144,9 +91,9 @@ impl Widget for Text {
             },
         );
 
-        // Refresh cached values from reactive properties
-        // This reads signals and registers layout dependencies
-        self.refresh(id);
+        // Refresh cached values from content and inherited style.
+        // This reads signals and registers layout dependencies.
+        self.refresh(tree, id);
 
         // Determine the effective max_width for measurement
         // If nowrap is true, don't pass max_width so text won't wrap
@@ -192,8 +139,11 @@ impl Widget for Text {
         // Parent Container sets position transform
         let size = tree.cached_size(id).unwrap_or_default();
         let local_bounds = Rect::new(0.0, 0.0, size.width, size.height);
-        // Read color with tracking so signal changes trigger repaint
-        let color = with_signal_tracking(id, JobType::Paint, || self.color.get_or(Color::WHITE));
+        // Read colour with tracking so a change on whichever ancestor supplied
+        // it triggers a repaint of this text and nothing else.
+        let color = with_signal_tracking(id, JobType::Paint, || {
+            tree.inherited_text_style(id).color.get_or(Color::WHITE)
+        });
         ctx.draw_text_styled(
             &self.cached_text,
             local_bounds,
@@ -222,6 +172,92 @@ impl Widget for Text {
 /// text(move || format!("Count: {}", count.get()))  // reactive closure
 /// text(my_signal)  // reactive signal
 /// ```
+///
+/// Styling lives on an enclosing container:
+/// ```ignore
+/// container().font_size(18.0).bold().child(text("Hello"))
+/// ```
 pub fn text<M>(content: impl IntoSignal<String, M>) -> Text {
     Text::new(content)
+}
+
+#[cfg(test)]
+mod tests {
+    use rustc_hash::FxHashSet;
+
+    use super::*;
+    use crate::jobs;
+    use crate::layout::Constraints;
+    use crate::reactive::create_signal;
+    use crate::renderer::{DrawCommand, RenderNode};
+    use crate::widgets::container;
+
+    /// Lay out and paint, returning the first text command's colour and size.
+    ///
+    /// The queued jobs are processed first, which is what turns a signal write
+    /// into `needs_layout` on the widgets that read it — and, because
+    /// `mark_needs_layout` walks to the relayout boundary, on the ancestors
+    /// that have to descend to reach them. Skip it and every container takes
+    /// its unchanged-constraints early-out, so the text is never asked to lay
+    /// out again and the test measures the cache instead of the resolution.
+    fn frame(tree: &mut Tree, root: WidgetId) -> (Color, f32) {
+        let roots: FxHashSet<WidgetId> = [root].into_iter().collect();
+        jobs::distribute_jobs(tree, &roots);
+        let drained = jobs::drain_surface_jobs(root);
+        let mut layout_roots = Vec::new();
+        jobs::process_jobs(&drained, tree, &mut layout_roots);
+        jobs::recycle_job_buffer(drained);
+        jobs::recycle_job_buffer(jobs::drain_orphan_jobs());
+
+        tree.with_widget_mut(root, |w, id, t| {
+            w.layout(t, id, Constraints::new(0.0, 0.0, 800.0, 600.0))
+        });
+        let mut node = RenderNode::new(root.as_u64());
+        tree.with_widget_mut(root, |w, id, t| {
+            let mut ctx = PaintContext::new(&mut node);
+            w.paint(t, id, &mut ctx);
+        });
+
+        fn find(node: &RenderNode) -> Option<(Color, f32)> {
+            for cmd in &node.commands {
+                if let DrawCommand::Text {
+                    color, font_size, ..
+                } = &**cmd
+                {
+                    return Some((*color, *font_size));
+                }
+            }
+            node.children.iter().find_map(|c| find(c))
+        }
+        find(&node).expect("a text command")
+    }
+
+    #[test]
+    fn a_text_follows_the_ancestor_signal_it_resolved_from() {
+        let size = create_signal(10.0f32);
+        let color = create_signal(Color::RED);
+
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            container()
+                .font_size(move || size.get())
+                .text_color(move || color.get())
+                // A plain container in between: the text must still end up
+                // subscribed to the signals two levels up.
+                .child(container().child(text("hi"))),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        assert_eq!(frame(&mut tree, root), (Color::RED, 10.0));
+
+        size.set(40.0);
+        color.set(Color::BLUE);
+
+        assert_eq!(
+            frame(&mut tree, root),
+            (Color::BLUE, 40.0),
+            "a change to an inherited declaration must re-measure and repaint \
+             the text that read it"
+        );
+    }
 }

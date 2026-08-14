@@ -125,14 +125,14 @@ container()
     )
     .padding(20.0)
     .children([
-        text("Left").font_size(24.0),
+        container().font_size(24.0).child(text("Left")),
         container()
             .layout(Flex::column().spacing(4.0))
             .children([
                 text("Center"),
                 text("Items"),
             ]),
-        text("Right").font_size(24.0),
+        container().font_size(24.0).child(text("Right")),
     ])
 ```
 

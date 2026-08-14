@@ -100,7 +100,8 @@ async fn main() {
                                                 .main_alignment(MainAlignment::Center)
                                                 .cross_alignment(CrossAlignment::Center),
                                         )
-                                        .child(text(format!("{}", id)).color(Color::WHITE)),
+                                        .text_color(Color::WHITE)
+                                        .child(text(format!("{}", id))),
                                 )
                         }),
                     ))
@@ -110,7 +111,8 @@ async fn main() {
                             .padding(8.0)
                             .background(Color::rgb(0.2, 0.2, 0.3))
                             .corner_radius(4.0)
-                            .child(text(move || time.get()).color(Color::WHITE)),
+                            .text_color(Color::WHITE)
+                            .child(text(move || time.get())),
                     )
             },
         );

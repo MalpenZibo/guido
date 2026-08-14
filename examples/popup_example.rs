@@ -14,7 +14,8 @@ fn menu_entry(label: &str) -> Container {
         .padding([8.0, 12.0])
         .corner_radius(6.0)
         .hover_state(|s| s.lighter(0.12))
-        .child(text(label).font_size(13))
+        .font_size(13)
+        .child(text(label))
 }
 
 fn main() {

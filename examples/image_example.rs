@@ -15,7 +15,12 @@ fn main() {
                     .corner_radius(4.0)
                     .child(img),
             )
-            .child(text(label).font_size(12.0).color(Color::rgb(0.7, 0.7, 0.7)))
+            .child(
+                container()
+                    .font_size(12.0)
+                    .text_color(Color::rgb(0.7, 0.7, 0.7))
+                    .child(text(label)),
+            )
     }
 
     // Helper to create a transformed image card
@@ -28,7 +33,12 @@ fn main() {
                     .corner_radius(4.0)
                     .child(img),
             )
-            .child(text(label).font_size(12.0).color(Color::rgb(0.7, 0.7, 0.7)))
+            .child(
+                container()
+                    .font_size(12.0)
+                    .text_color(Color::rgb(0.7, 0.7, 0.7))
+                    .child(text(label)),
+            )
     }
 
     // Panel with two columns: raster images and SVG images
@@ -39,7 +49,12 @@ fn main() {
             // Left column: Raster images
             container()
                 .layout(Flex::column().spacing(32.0))
-                .child(text("Raster Image").font_size(16.0).color(Color::WHITE))
+                .child(
+                    container()
+                        .font_size(16.0)
+                        .text_color(Color::WHITE)
+                        .child(text("Raster Image")),
+                )
                 .child(
                     container()
                         .layout(Flex::row().spacing(32.0))
@@ -90,7 +105,12 @@ fn main() {
             // Right column: SVG images
             container()
                 .layout(Flex::column().spacing(32.0))
-                .child(text("SVG Image").font_size(16.0).color(Color::WHITE))
+                .child(
+                    container()
+                        .font_size(16.0)
+                        .text_color(Color::WHITE)
+                        .child(text("SVG Image")),
+                )
                 .child(
                     container()
                         .layout(Flex::row().spacing(32.0))

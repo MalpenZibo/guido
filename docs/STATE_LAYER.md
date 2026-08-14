@@ -148,13 +148,14 @@ fn create_button(label: &str) -> Container {
         .background(Color::rgb(0.3, 0.5, 0.8))
         .corner_radius(8.0)
         .border(1.0, Color::rgb(0.4, 0.6, 0.9))
+        .text_color(Color::WHITE)
         // Animations
         .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
         .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
         // State overrides
         .hover_state(|s| s.lighter(0.1).border(2.0, Color::rgb(0.5, 0.7, 1.0)))
         .pressed_state(|s| s.ripple().darker(0.05).transform(Transform::scale(0.98)))
-        .child(text(label).color(Color::WHITE))
+        .child(text(label))
 }
 ```
 

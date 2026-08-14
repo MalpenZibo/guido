@@ -140,6 +140,6 @@ fn card_with_border() -> Container {
             .border(2.0, Color::rgb(0.4, 0.6, 0.9))
             .lighter(0.03)
         )
-        .child(text("Hover to see border change").color(Color::WHITE))
+        .child(container().text_color(Color::WHITE).child(text("Hover to see border change")))
 }
 ```

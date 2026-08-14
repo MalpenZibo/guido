@@ -48,18 +48,20 @@ fn create_width_animation_card(expanded: RwSignal<bool>) -> Container {
         .on_click(move || expanded.update(|e| *e = !*e))
         .child(
             container().layout(Flex::column().spacing(8.0)).children([
-                text("Width Animation with Spring")
+                container()
                     .font_size(18.0)
-                    .color(Color::rgb(0.9, 0.9, 0.95)),
-                text(move || {
-                    if expanded.get() {
-                        "Click to collapse (watch the spring bounce!)".to_string()
-                    } else {
-                        "Click to expand (watch the spring bounce!)".to_string()
-                    }
-                })
-                .font_size(14.0)
-                .color(Color::rgb(0.6, 0.6, 0.7)),
+                    .text_color(Color::rgb(0.9, 0.9, 0.95))
+                    .child(text("Width Animation with Spring")),
+                container()
+                    .font_size(14.0)
+                    .text_color(Color::rgb(0.6, 0.6, 0.7))
+                    .child(text(move || {
+                        if expanded.get() {
+                            "Click to collapse (watch the spring bounce!)".to_string()
+                        } else {
+                            "Click to expand (watch the spring bounce!)".to_string()
+                        }
+                    })),
             ]),
         )
 }
@@ -77,12 +79,14 @@ fn create_color_animation_card() -> Container {
         .pressed_state(|s| s.ripple())
         .child(
             container().layout(Flex::column().spacing(8.0)).children([
-                text("Background Color Animation")
+                container()
                     .font_size(18.0)
-                    .color(Color::rgb(0.9, 0.9, 0.95)),
-                text("Hover to see smooth color transition")
+                    .text_color(Color::rgb(0.9, 0.9, 0.95))
+                    .child(text("Background Color Animation")),
+                container()
                     .font_size(14.0)
-                    .color(Color::rgb(0.6, 0.6, 0.7)),
+                    .text_color(Color::rgb(0.6, 0.6, 0.7))
+                    .child(text("Hover to see smooth color transition")),
             ]),
         )
 }
@@ -105,18 +109,20 @@ fn create_combined_animation_card() -> Container {
         .on_click(move || clicked.update(|c| *c = !*c))
         .child(
             container().layout(Flex::column().spacing(8.0)).children([
-                text("Combined Animations")
+                container()
                     .font_size(18.0)
-                    .color(Color::rgb(0.9, 0.9, 0.95)),
-                text(move || {
-                    if clicked.get() {
-                        "Width, color, and corner radius all animating!".to_string()
-                    } else {
-                        "Click to see multiple properties animate together".to_string()
-                    }
-                })
-                .font_size(14.0)
-                .color(Color::rgb(0.6, 0.6, 0.7)),
+                    .text_color(Color::rgb(0.9, 0.9, 0.95))
+                    .child(text("Combined Animations")),
+                container()
+                    .font_size(14.0)
+                    .text_color(Color::rgb(0.6, 0.6, 0.7))
+                    .child(text(move || {
+                        if clicked.get() {
+                            "Width, color, and corner radius all animating!".to_string()
+                        } else {
+                            "Click to see multiple properties animate together".to_string()
+                        }
+                    })),
             ]),
         )
 }
@@ -143,18 +149,20 @@ fn create_border_animation_card() -> Container {
         .on_click(move || clicked.update(|c| *c = !*c))
         .child(
             container().layout(Flex::column().spacing(8.0)).children([
-                text("Border Animation")
+                container()
                     .font_size(18.0)
-                    .color(Color::rgb(0.9, 0.9, 0.95)),
-                text(move || {
-                    if clicked.get() {
-                        "Border width and color animating! Click to reset.".to_string()
-                    } else {
-                        "Hover for color change, click for width + color".to_string()
-                    }
-                })
-                .font_size(14.0)
-                .color(Color::rgb(0.6, 0.6, 0.7)),
+                    .text_color(Color::rgb(0.9, 0.9, 0.95))
+                    .child(text("Border Animation")),
+                container()
+                    .font_size(14.0)
+                    .text_color(Color::rgb(0.6, 0.6, 0.7))
+                    .child(text(move || {
+                        if clicked.get() {
+                            "Border width and color animating! Click to reset.".to_string()
+                        } else {
+                            "Hover for color change, click for width + color".to_string()
+                        }
+                    })),
             ]),
         )
 }

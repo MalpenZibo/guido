@@ -153,7 +153,7 @@ fn spring_button() -> Container {
             // In real app: trigger action and reset
         })
 
-        .child(text("Spring!").color(Color::WHITE).font_size(18.0))
+        .child(container().text_color(Color::WHITE).font_size(18.0).child(text("Spring!")))
 }
 ```
 
