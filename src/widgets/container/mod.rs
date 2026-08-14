@@ -328,6 +328,14 @@ pub struct Container {
     // what a per-frame repaint of the text costs under any design.
     pub(super) animated_text: Option<RwSignal<Option<Color>>>,
 
+    // The base the published derived falls back to: this container's own
+    // declaration, or the nearest ancestor's, resolved once at registration.
+    //
+    // The animation has to aim at the same value the derived would fold, or it
+    // departs from a colour the text was never showing — see
+    // `effective_text_color_target`.
+    pub(super) text_base: Option<Signal<Color>>,
+
     // Animation state (boxed to save ~400 bytes per non-animated container)
     pub(super) anims: Option<Box<ContainerAnims>>,
 
@@ -363,6 +371,7 @@ impl Container {
             text: None,
             text_owner: None,
             animated_text: None,
+            text_base: None,
             anims: None,
             scroll_axis: ScrollAxis::None,
             scroll_data: None,
@@ -1066,9 +1075,15 @@ impl Widget for Container {
                     self.effective_transform_target(id),
                 )
             });
-            let text_color_target = crate::reactive::diagnostics::snapshot_zone(|| {
-                self.effective_text_color_target(id)
-            });
+            let text_color_target = self
+                .anims
+                .as_ref()
+                .is_some_and(|a| a.text_color.is_some())
+                .then(|| {
+                    crate::reactive::diagnostics::snapshot_zone(|| {
+                        self.effective_text_color_target(id)
+                    })
+                });
             let animated_text = self.animated_text;
             let anims = self.anims.as_mut().unwrap();
 
@@ -1076,8 +1091,8 @@ impl Widget for Container {
             // other animated property is consumed by this container's own
             // paint, but this one is drawn by a descendant, so each step has
             // to leave through a signal. The write is what wakes the text.
-            if let Some(ref mut anim) = anims.text_color {
-                anim.animate_to(text_color_target);
+            if let (Some(anim), Some(target)) = (anims.text_color.as_mut(), text_color_target) {
+                anim.animate_to(target);
                 if anim.is_animating() {
                     any_animating = true;
                     let required = if anim.advance().is_changed() {

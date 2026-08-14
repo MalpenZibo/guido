@@ -807,12 +807,28 @@ fn visibility_invalidates_layout() {
 // A state layer reaching the text
 // ---------------------------------------------------------------------------
 
-/// Lay out, run the queued jobs, paint, and report the first text colour.
+/// Run the queued jobs, returning whether any of them was an animation step.
 ///
-/// The job drain is what turns the flag write into `needs_paint` on the text
-/// that subscribed to it; without it this would be measuring the paint cache.
+/// Processing rather than discarding matters twice over: it is what turns a
+/// flag write into `needs_paint` on the text that subscribed to it, and it is
+/// what advances an animation on the widget that owns it. `advance_animations`
+/// does not recurse — in the real loop the job carries the widget id — so a
+/// test that calls it on the root never touches an animated child.
+fn pump(h: &mut H) -> bool {
+    let roots = h.roots();
+    jobs::distribute_jobs(&h.tree, &roots);
+    let drained = jobs::drain_surface_jobs(h.root);
+    let animating = drained.iter().any(|job| job.job_type == JobType::Animation);
+    let mut layout_roots = Vec::new();
+    jobs::process_jobs(&drained, &mut h.tree, &mut layout_roots);
+    jobs::recycle_job_buffer(drained);
+    jobs::recycle_job_buffer(jobs::drain_orphan_jobs());
+    animating
+}
+
+/// Lay out, run the queued jobs, paint, and report the first text colour.
 fn painted_text_color(h: &mut H) -> Color {
-    h.drain_jobs();
+    pump(h);
     h.fit(400.0, 400.0);
     let node = h.paint();
 
@@ -1059,24 +1075,27 @@ fn a_focused_state_applies_while_a_descendant_holds_focus() {
 // An animated text colour
 // ---------------------------------------------------------------------------
 
-/// Advance until nothing is animating, or `limit` frames pass.
+/// Run frames until nothing is animating, or `limit` frames pass.
 ///
 /// Animations step against the wall clock, so a tight loop would advance them
 /// by microseconds and never arrive — the frames have to take real time.
 fn settle(h: &mut H, limit: usize) -> usize {
     for frame in 0..limit {
         std::thread::sleep(std::time::Duration::from_millis(4));
-        let root = h.root;
-        let animating = h
-            .tree
-            .with_widget_mut(root, |w, id, t| w.advance_animations(t, id))
-            .unwrap_or(false);
-        painted_text_color(h);
+        let animating = pump(h);
+        h.fit(400.0, 400.0);
+        h.paint();
         if !animating {
             return frame;
         }
     }
     limit
+}
+
+/// One frame: let time pass, run the jobs, and report what the text ended up.
+fn frame(h: &mut H) -> Color {
+    std::thread::sleep(std::time::Duration::from_millis(8));
+    painted_text_color(h)
 }
 
 /// The in-flight value has to reach a widget that is not the one animating.
@@ -1099,11 +1118,7 @@ fn an_animated_text_colour_passes_through_intermediate_values() {
     assert_eq!(painted_text_color(&mut h), Color::BLACK);
 
     set_hover(&mut h, true);
-    std::thread::sleep(std::time::Duration::from_millis(20));
-    let root = h.root;
-    h.tree
-        .with_widget_mut(root, |w, id, t| w.advance_animations(t, id));
-    let mid = painted_text_color(&mut h);
+    let mid = frame(&mut h);
     assert!(
         mid != Color::BLACK && mid != Color::WHITE,
         "expected a value between the two, got {mid:?}"
@@ -1139,4 +1154,46 @@ fn a_settled_animation_releases_the_colour_back_to_the_fold() {
     set_hover(&mut h, false);
     settle(&mut h, 80);
     assert_eq!(painted_text_color(&mut h), Color::BLACK);
+}
+
+/// The animation has to start from the colour a descendant would actually have
+/// shown — which, for a container with no colour of its own, is the inherited
+/// one.
+///
+/// Two notions of "base" have to agree: the one the published derived folds
+/// (declared, else inherited) and the one the animation is seeded from and
+/// aims at. Where they diverge the transition departs from somewhere the text
+/// never was, so hovering flashes through a third colour on the way.
+#[test]
+fn an_animated_colour_starts_from_the_inherited_base() {
+    let mut h = H::new(
+        container().text_color(Color::RED).child(
+            container()
+                .width(100.0)
+                .height(40.0)
+                .hover_state(|s| s.text_color(Color::BLUE))
+                .animate_text_color(Transition::new(80.0, TimingFunction::Linear))
+                .child(crate::widgets::text("Label")),
+        ),
+    );
+
+    assert_eq!(painted_text_color(&mut h), Color::RED);
+
+    set_hover(&mut h, true);
+    let first = frame(&mut h);
+    assert!(
+        first.r > first.b,
+        "the transition must leave from the inherited red, got {first:?}"
+    );
+
+    settle(&mut h, 80);
+    assert_eq!(painted_text_color(&mut h), Color::BLUE);
+
+    set_hover(&mut h, false);
+    settle(&mut h, 80);
+    assert_eq!(
+        painted_text_color(&mut h),
+        Color::RED,
+        "and come back to it"
+    );
 }
