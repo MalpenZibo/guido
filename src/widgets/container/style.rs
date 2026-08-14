@@ -126,12 +126,17 @@ impl Container {
     }
 
     /// The text colour a descendant should see, before any animation.
+    ///
+    /// The base has to be the same one the published derived folds — this
+    /// container's declaration *or the inherited one* — and not just the
+    /// declaration. Reading only the declaration made an animated container
+    /// with no colour of its own seed and aim at a `WHITE` placeholder, so
+    /// hovering left from a colour the text had never shown.
     pub(super) fn effective_text_color_target(&self, id: WidgetId) -> Color {
         let base = self
-            .text
-            .as_ref()
-            .and_then(|t| t.color)
-            .map(|c| c.get())
+            .text_base
+            .or_else(|| self.text.as_ref().and_then(|t| t.color))
+            .map(|color| color.get())
             .unwrap_or(Color::WHITE);
         self.resolve_state_value(id, base, |state| state.text_color)
     }
@@ -193,6 +198,8 @@ impl Container {
         let base = declared
             .and_then(|s| s.color)
             .or_else(|| tree.inherited_text_style(id).color);
+        // Kept so the animation aims at exactly what this fold falls back to.
+        self.text_base = base;
 
         let (color, owner) = with_owner(|| {
             create_derived(move || {
