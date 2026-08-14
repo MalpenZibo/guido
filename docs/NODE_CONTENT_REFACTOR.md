@@ -2,10 +2,10 @@
 
 **Status:** design — not yet implemented.
 **Goal:** replace the single `Widget` trait with two honest concepts — a **Node**
-(the concrete tree citizen: everything the tree stores and you compose) and
-**Content** (a leaf payload that declares and draws something: text, image, text
-input). A **Container** is the box kind of Node (style, layout, interaction,
-transform, animation, children).
+(the concrete type you compose and the tree stores) and **Content** (a leaf
+payload that declares and draws something: text, image, text input). A **Block**
+is the box kind of Node (style, layout, interaction, transform, animation,
+children).
 
 This document records the settled design and a step-by-step migration plan so
 the work can be paused and resumed (including across machines).
@@ -16,16 +16,47 @@ the work can be paused and resumed (including across machines).
 
 | Topic | Decision |
 |---|---|
-| **Universal type** | `Node` — the one concrete type the tree stores and you compose. Absorbs today's `AnyWidget`/`Box<dyn Widget>` **and** the internal `tree::Node` slot role, so there is no name collision. |
-| **Box kind** | Stays `Container`; the builder stays **`container()`** (no abbreviation — `div`/`pane`/`block`/`panel`/`group` were weighed and rejected; `container` is self-documenting and the churn/aliasing isn't worth it). |
+| **Universal type** | `Node` — the one concrete type you compose and the tree stores, replacing `AnyWidget`/`Box<dyn Widget>`. The tree's per-slot metadata (parent, children, dirty flags, cached paint, origin) stays a **separate** struct; rename today's `tree::Node` to `tree::Slot` to free the name. (These are genuinely different things — a composed `Node` has no parent or dirty flags yet — so the name is freed by renaming, not by merging.) |
+| **Box kind** | `Block`, builder **`block()`** (renamed from `Container`/`container()`). |
+| **Why rename now** | The migration already rewrites examples, docs, book and the macro, so the rename rides along at near-zero marginal cost. Outside a refactor it would not be worth the churn — this is the one cheap moment. `box` is a Rust keyword (`r#box()` is legal but unreadable); `div`/`pane` were rejected as meaningless; `node()` is ambiguous since `text()` also builds nodes. `block` is the CSS term for exactly this, and the API already speaks CSS (`background`, `padding`, `corner_radius`, `gradient`, `overflow`, `border`). |
 | **Content trait** | `Content` — one trait for all three leaves (`Text`, `Image`, `TextInput`). |
 | **Interactive leaf** | Kept under the *same* `Content` trait via optional hooks (`event`, `advance_animations`). `TextInput` fits without a second trait; its cursor blink is the one use of the animation hook — the accepted special case. |
-| **Sizing method** | `measure` (not `layout`): a leaf measures itself, it never lays out children. |
-| **Content vs children** | Mutually exclusive, **enforced by construction**: `container()` exposes `.child()`/`.children()` and no public `.content()`; `text()`/`image()`/`text_input()` build content nodes with no `.child()`. To style a leaf you wrap it in a `container()`, as today. |
+| **Sizing method** | `measure`, and **pure**: it takes `&Tree` (not `&mut`), returns size + decoration overflow, and does no bookkeeping. All the cache/dirty/boundary handling moves to the node — see §2. |
+| **Content vs children** | Mutually exclusive, **enforced by construction**: `block()` exposes `.child()`/`.children()` and no public `.content()`; `text()`/`image()`/`text_input()` build content nodes with no `.child()`. |
 | **Object safety** | `Content` stays object-safe (`Box<dyn Content>`): no generic or `Self`-returning methods. Leaf builder methods (`.nowrap()`, `.password()`, `.content_fit()`) remain inherent on the concrete leaf types, not on the trait. |
-| **Styling a leaf** | Leaves stay minimal: to style or click a text/image you wrap it in a `container()`, as today. Putting style directly on leaves is **deferred**, not rejected — see §2. |
+| **Tree storage** | `Box<Node>`, **not** an inlined `Node`. See §7 — inlining bloats the hot metadata array and is the one place where the original plan's performance claim was backwards. |
+| **Styling a leaf** | Leaves stay minimal: to style or click a text/image you wrap it in a `block()`. Putting style directly on leaves is **deferred**, not rejected — see §3. |
 
-## 2. Deferred: style directly on leaves
+## 2. The prize: hoisting the layout bookkeeping
+
+This is the strongest reason to do the refactor, and the only part with a
+*demonstrable* runtime win. It deserves to lead.
+
+All three leaves re-implement the same layout protocol by hand:
+
+```
+set_relayout_boundary(false) → (early-out?) → refresh → set_paint_overflow
+  → measure → constrain → cache_layout → clear_needs_layout
+```
+
+**Two of the three get it wrong.** `Text` has the early-out that skips the work
+when constraints are unchanged and no tracked signal marked it dirty
+(`src/widgets/text.rs:98-103`). `Image` and `TextInput` **do not** — so they
+re-measure every time an ancestor re-runs layout, even when nothing about them
+changed. For `TextInput` that means re-running the whole glyph-position pass.
+
+The refactor fixes this structurally rather than by patching two files: the node
+does early-out + boundary + cache + clear **once**, and `Content::measure`
+becomes just "measure yourself". A leaf can no longer forget the protocol
+because the protocol is no longer its job. The same applies to the signal
+tracking scope — the node opens `with_signal_tracking(id, JobType::Layout, …)`
+around `measure`, instead of each leaf remembering to.
+
+That is the shape of the win: **not** less code in absolute terms, but one
+correct copy of a protocol that currently exists in three copies, two of them
+wrong.
+
+## 3. Deferred: style directly on leaves
 
 A leaf could instead carry its own box properties, so a button is one node
 rather than two:
@@ -35,24 +66,24 @@ text("Save").padding(8).background(blue).on_click(save)   // one node
 ```
 
 **Deferred on purpose.** The change is *additive*: every existing form
-(`container().padding(8).child(text("x"))`) keeps working untouched, and none of
-the decisions above are invalidated by it — `Content`, `measure` and the
+(`block().padding(8).child(text("x"))`) keeps working untouched, and none of the
+decisions above are invalidated by it — `Content`, `measure` and the
 content/children exclusivity all stand either way. So it can be decided later,
 with more information, at no cost in rework beyond the work itself.
 
 **If it is ever taken up, it must be the shared-trait route**, i.e. box
 properties written once as default methods of a `Styled` trait
-(`fn box_data(&mut self) -> &mut BoxData`), implemented by `Container` and the
-three leaves, with each leaf holding `Option<Box<BoxData>>` so an unstyled leaf
-pays one null pointer and no allocation. Leaf builders keep returning `Self`, so
+(`fn box_data(&mut self) -> &mut BoxData`), implemented by `Block` and the three
+leaves, with each leaf holding `Option<Box<BoxData>>` so an unstyled leaf pays
+one null pointer and no allocation. Leaf builders keep returning `Self`, so
 `.nowrap()` and `.background()` chain in any order. Critically, `.child()`,
 `.children()`, `.layout()` and `.scrollable()` stay **off** the shared trait —
-they remain inherent to `Container`.
+they remain inherent to `Block`.
 
 **Rejected: the auto-wrapping sugar.** Giving leaves convenience methods that
-build the wrapper for them (`Text::padding()` returning a `Container` that wraps
+build the wrapper for them (`Text::padding()` returning a `Block` that wraps
 `self`) is cheap but opens a hole in the API — from the second call onwards the
-caller holds a `Container`, so this type-checks and reads as nonsense:
+caller holds a `Block`, so this type-checks and reads as nonsense:
 
 ```rust
 text("ciao").padding(8).layout(Flex::row()).child(text("altro"))
@@ -61,80 +92,74 @@ text("ciao").padding(8).layout(Flex::row()).child(text("altro"))
 A text with a row layout and a text inside it is not a thing. The shared-trait
 route does not have this flaw.
 
-## 3. Why
+## 4. Why
 
 The runtime has *already* drifted to a two-category world; only the type system
 still pretends everything is one uniform `Widget`.
 
-Evidence in the current code:
-
-- **Only `Container` has children.** `register_children` / `reconcile_children`
-  are overridden by `Container` alone. `Text`, `Image`, `TextInput` are always
-  leaves.
-- **Leaves do not own their geometry.** They paint in local coordinates
-  `(0,0)`; the parent positions them. Bounds/origin live in the `Tree`, not in
-  the widget (`src/tree.rs`).
+- **Only the box has children.** `register_children` / `reconcile_children` are
+  overridden by `Container` alone. `Text`, `Image`, `TextInput` are always leaves.
+- **Leaves do not own their geometry.** They paint in local coordinates `(0,0)`;
+  the parent positions them. Bounds/origin live in the tree, not in the widget.
 - **Leaves do not own their style.** `Text` / `TextInput` resolve
   `tree.inherited_text_style(id)` — colour, font, size flow down from the
-  enclosing container (`src/widgets/text.rs:77`).
-- **Leaves fill the trait with empty defaults.** `Text` and `Image` really
-  implement only `layout` (measure) and `paint` (draw); `event → Ignored`, no
+  enclosing box (`src/widgets/text.rs:77`).
+- **Leaves fill the trait with empty defaults.** `event → Ignored`, no
   animations, no reconcile, no `register_children`, no `layout_hints`.
 
 The only concrete `Widget` implementors in the whole library are `Container`
 plus the three leaves (`OwnedWidget` and `Box<dyn Widget>` are wrappers). There
 is **no** third-party or internal widget with children other than `Container`.
 The extension axis for *arrangement* is the `Layout` trait, not new widget
-types. Formalizing the split aligns the types with the runtime that already
-exists.
+types.
 
-## 4. The model
+## 5. The model
 
-Two axes, and they are **independent**. This is the key correction over an
-earlier, too-coarse framing ("a node is either a box with children or a leaf
-with content") — which forgot the childless styled box.
+Two axes, and they are **independent**:
 
-- **Topology axis:** has children (internal node) vs no children (leaf).
-- **Kind axis:** `Container` (styling + layout) vs `Content` (Text/Image/TextInput payload).
+- **Topology:** has children (internal node) vs no children (leaf).
+- **Kind:** `Block` (styling + layout) vs `Content` (Text/Image/TextInput payload).
 
-|                | has children  | no children (leaf)        |
-|----------------|---------------|---------------------------|
-| **Container**  | internal node | empty styled box (spacer, colored rect, ripple surface) |
-| **Content**    | — (never)     | always here               |
+|             | has children  | no children (leaf)                                      |
+|-------------|---------------|---------------------------------------------------------|
+| **Block**   | internal node | empty styled box (spacer, colored rect, ripple surface) |
+| **Content** | — (never)     | always here                                             |
 
-So a `Container` lives on *both* cells of its row: it may have children or be a
-childless styled box. A `Content` lives *only* in the leaf cell.
+A `Block` lives on *both* cells of its row: it may have children or be a
+childless styled box. A `Content` lives *only* in the leaf cell. (This is the
+correction over an earlier, too-coarse framing that forgot the childless styled
+box.)
 
-Everything in the tree is a **`Node`**. A `Node` is exactly one kind:
+Everything in the tree is a **`Node`**, which is exactly one kind:
 
-- **Container-kind:** box data (padding, background, border, corner, shadow,
-  transform, interaction, animations, scroll, backdrop blur, text-style
-  declaration) + children (possibly empty). Arrangement delegated to a `Layout`.
+- **Block-kind:** box data + children (possibly empty), arrangement delegated to
+  a `Layout`.
 - **Content-kind:** one `Box<dyn Content>` payload. Always a leaf.
 
 `Content` is a *payload inside a Node*, never a peer tree citizen: `text("hi")`
 is sugar that builds a Content-kind `Node`. That is why `row[text, image, text]`
 still works — each leaf is a `Node` laid out among its siblings.
 
-```
-                        the tree stores Nodes
-                    ┌──────────────┴───────────────┐
-             Container-kind                   Content-kind
-        (style · layout · children)        (Box<dyn Content>)
-          │                  │                     │
-    has children       no children          Text · Image · TextInput
-    (internal node)  (empty styled box)        (always a leaf)
-```
+## 6. The `Content` trait
 
-## 5. The `Content` trait
-
-`Content` is the current `Widget` trait **minus** everything about children.
+`Content` is the current `Widget` trait **minus** everything about children, and
+minus the bookkeeping hoisted into the node (§2).
 
 ```rust
+/// What a leaf reports from measurement.
+pub struct Measured {
+    pub size: Size,
+    /// How far decoration (glyph stroke/shadow) reaches past the glyphs.
+    /// The node records it as damage slop; it must not affect layout.
+    pub overflow: f32,
+}
+
 pub trait Content {
-    /// Measure the intrinsic size of this content within `constraints`.
-    /// A leaf has no children to lay out — this is measurement only.
-    fn measure(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size;
+    /// Measure this content within `constraints`. Pure: no cache writes, no
+    /// dirty-flag clearing, no relayout-boundary marking — the node does all
+    /// of that. Called inside the node's Layout tracking scope, so signal
+    /// reads here subscribe correctly.
+    fn measure(&mut self, tree: &Tree, id: WidgetId, constraints: Constraints) -> Measured;
 
     /// Draw in LOCAL coordinates (0,0 = the hosting node's origin).
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
@@ -158,90 +183,93 @@ pub trait Content {
 - `TextInput` additionally overrides `event` + `advance_animations`.
 
 Removed relative to `Widget`: `register_children`, `reconcile_children`,
-`layout_hints` (all box concerns). Renamed: `layout` → `measure`.
+`layout_hints` (all box concerns). Renamed and narrowed: `layout` → `measure`.
 
-### Node's own methods (concrete, not a trait)
+`Node` keeps the full set as **inherent methods on the concrete type**, so calls
+on the busy path are static rather than virtual. For a Content-kind node they
+delegate to the payload where meaningful and are no-ops for the rest.
 
-`Node` keeps the full set as inherent methods on the concrete type, so calls on
-the busy path (layout of children, event routing, animation, reconcile) become
-static instead of virtual: `layout`, `paint`, `event`, `advance_animations`,
-`reconcile_children`, `register_children`, `layout_hints`. For a Content-kind
-node these delegate to the `Content` payload where meaningful
-(`measure`/`paint`/`event`/`advance_animations`) and are no-ops for the rest.
-
-## 6. What this buys (and what it does not)
-
-Grounded in the storage + dispatch analysis (`src/tree.rs`, `src/jobs.rs`,
-`src/widgets/paint_children.rs`).
+## 7. What this buys (honestly)
 
 ### Performance
 
-- **Two boxed traits (`dyn` box + `dyn Content`) ⇒ ~0 gain.** The tree already
-  dispatches through `Box<dyn Widget>`; renaming the vtable changes nothing.
-- **A concrete `Node` ⇒ modest, real gain.** The tree stops holding
-  `Box<dyn Widget>` and holds a concrete `Node`; Container-path methods
-  de-virtualize (that is the busy path — most working nodes are containers), one
-  pointer indirection per node access disappears (box data inlines into the
-  `Node`), and tree construction does fewer heap allocations. Only leaf
-  `measure`/`paint` stays virtual (`dyn Content`), and leaves are the minority
-  doing little work.
-- **Bounded, not a revolution.** Paint already reuses clean children via
-  `Rc::clone` with *no* `paint` call (`paint_children.rs`), and animations /
-  reconcile only run for jobbed widgets (`jobs.rs`), so dispatch is already
-  well-pruned on stable frames. De-virtualization bites on *dirty* widgets and
-  on tree build. Dominant frame costs (text shaping, GPU submission, reactive
-  tracking scopes) are untouched. **Profile before treating this as a perf
-  change.**
+- **The one demonstrable win** is §2: `Image` and `TextInput` stop re-measuring
+  when nothing changed. That is real work removed, not a micro-optimisation.
+- **De-virtualization is modest**, and only in the `Box<Node>` form. Replacing
+  `widget: Box<dyn Widget>` with `node: Box<Node>` keeps the same allocation
+  count, halves the pointer (8 vs 16 bytes), and makes node-level calls static
+  and inlinable. Content dispatch stays `dyn` — minority, little work.
+- **Inlining `Node` into the tree slot is rejected.** Rough field count (could
+  not be measured in the dev container — no `wayland-client` — so confirm with
+  `size_of` before trusting it): `Container` ≈ 400 bytes, of which ~220 is 14
+  `Option<Signal>` fields; today's slot ≈ 130 bytes, holding the widget as a
+  16-byte fat pointer. Inlining would take every slot — **including every text
+  leaf** — to ~500 bytes, a ~4× bloat of the dense array that is walked
+  constantly for metadata only (parent chains in `mark_needs_layout`, damage
+  accumulation, bounds lookups). The vtable it removes is on calls the job
+  system and paint cache already skip on most frames. Cost is certain, benefit
+  is not.
+- **Dominant frame costs are untouched** by any of this: text shaping, GPU
+  submission, reactive tracking scopes. Do not sell this refactor as a
+  performance change beyond §2.
 
 ### Complexity
 
-Real reduction, concentrated in the leaf/dispatch/composition machinery:
+- **The types stop lying.** Leaves can no longer claim to have children,
+  reconcile, or register descendants. This is the main benefit and it is
+  qualitative.
+- **Written code shrinks only a little.** Today `Text`/`Image` write 3 trait
+  methods and `TextInput` writes 4; the rest are defaults they never touch.
+  After the split they write 2–4. (An earlier draft of this document claimed
+  "7 methods to 2" — that counted the trait's surface, not what leaves actually
+  implement. Corrected.)
+- **`AnyWidget` narrows rather than evaporates.** If `text()` returns `Text` so
+  `.nowrap()` can chain, then a mixed `if/else` still needs a conversion — it
+  becomes `.into_node()` instead of `.into_any()`. Better (one concrete type, no
+  trait object) but the pattern survives.
+- **`OwnedWidget`, the `Widget for Box<dyn Widget>` blanket impl, and the
+  speculative genericity in `paint_children.rs`** do go away. That module exists
+  "so an external composite widget gets the same behaviour" — no such widget
+  exists; with a concrete `Node` it is just a method.
 
-- Leaf contract drops from **7 methods to 2 (+2 optional)**; the types stop
-  claiming leaves can have children.
-- `AnyWidget` / `into_any()` type-erasure largely evaporates: content becomes
-  data, conditional branches return the same `Node` type.
-- `OwnedWidget` wrapper and the `Widget for Box<dyn Widget>` blanket impl shrink
-  or disappear.
-- `IntoChild` / `IntoChildren` routing narrows.
-- Speculative genericity goes away: `paint_children.rs` exists "so an external
-  composite widget gets the same behaviour" — but no such widget exists; with a
-  concrete `Node` it is just a `Node` method.
+**Not improved:** the size of `Block` itself (~6k lines). That is *feature
+count* (style + layout + interaction + transform + animation + scroll + blur),
+not trait shape, and it is addressed by the ongoing sub-struct decomposition
+(`InteractionState`, `ScrollData`, `ContainerAnims`, `TextStyle`) — an
+orthogonal axis. Keep the two efforts separate.
 
-**Not improved by this refactor:** the size of `Container` itself (~6k lines).
-That is *feature count* (style + layout + interaction + transform + animation +
-scroll + blur), not trait shape. It is addressed by the ongoing
-sub-module/sub-struct decomposition (`InteractionState`, `ScrollData`,
-`ContainerAnims`, `TextStyle`) — an orthogonal axis. Keep the two efforts
-separate.
-
-## 7. Migration plan (atomic steps)
+## 8. Migration plan (atomic steps)
 
 Each step must compile and pass `cargo test` + `cargo clippy --all-targets
 --all-features -- -D warnings` on its own. Re-bless render snapshots only when a
 geometry/draw change is intended, and read the diff.
 
+0. **Rename `Container` → `Block`, `container()` → `block()`.** Pure mechanical
+   commit, no logic changes. Done first so every later step is written in the
+   final vocabulary. Touches `src/`, `examples/`, `tests/`, `docs/`, `book/`,
+   and the `#[component]` macro.
 1. **Introduce the `Content` trait** (`src/widgets/content.rs`), no users yet.
-   Define it exactly as in §4. Compiles as dead-but-`pub` API.
+   Define it exactly as in §6. Compiles as dead-but-`pub` API.
 2. **Implement `Content` for the three leaves alongside `Widget`.** `Text` /
    `Image`: `measure` + `paint`. `TextInput`: also `event` +
-   `advance_animations`. Keep the existing `impl Widget` for now (delegating to
-   the new methods) so nothing else breaks. Biggest "prove the ergonomics" step
-   and a natural pause point.
-3. **Introduce the concrete `Node`** (Container-kind | Content-kind) and teach
-   it to host content. Sugar `text()` / `image()` / `text_input()` build
-   Content-kind nodes; `container()` builds Container-kind. Route
-   `layout→measure`, `paint`, `event`, `advance_animations` to the payload.
-4. **Make the tree store a concrete `Node`.** Replace `Box<dyn Widget>` in the
-   `Tree` (merging the slot role) with `Node`; convert the main-loop / `jobs.rs`
-   dispatch sites to concrete calls that branch by kind. Highest blast radius —
-   do it alone.
-5. **Delete the leaves' `impl Widget`** and remove `Widget`, `AnyWidget`,
-   `into_any`, `OwnedWidget`, the blanket impl, and the now-dead genericity in
-   `paint_children.rs`. Simplify `IntoChild`/`IntoChildren`.
-6. **Vocabulary sweep.** Update `#[component]` macro output, `docs/`, `book/`,
-   and snapshots to the `Node` / `Container` / `Content` vocabulary. `Container`
-   and `container()` keep their names; "widget" retires as the public noun.
+   `advance_animations`. Keep `impl Widget` for now, with its `layout` doing the
+   bookkeeping and calling the new pure `measure` — this is the rehearsal for
+   §2 and the natural pause point.
+3. **Introduce the concrete `Node` and hoist the bookkeeping.** `Node` hosts
+   either children or a `Box<dyn Content>`; it performs the early-out, boundary
+   marking, tracking scope, cache and dirty-flag handling once, then calls
+   `measure`. Sugar `text()`/`image()`/`text_input()` build Content-kind nodes;
+   `block()` builds Block-kind. **This is where the win in §2 lands.**
+4. **Switch tree storage to `Box<Node>`.** Replace `widget: Box<dyn Widget>`,
+   rename `tree::Node` → `tree::Slot`, convert main-loop and `jobs.rs` dispatch
+   to concrete calls. Then delete `Widget`, `AnyWidget`, `into_any`,
+   `OwnedWidget`, the blanket impl, and the dead genericity in
+   `paint_children.rs`; simplify `IntoChild`/`IntoChildren` into `IntoNode`.
 
-Steps 1–2 are safe and self-contained (good first PR / handoff point). Steps 3–4
-are the core. Steps 5–6 are cleanup.
+Steps 0–2 are safe and self-contained (good first PR / handoff point). Step 3 is
+the core and carries the payoff. Step 4 is cleanup plus the storage swap.
+
+An earlier draft had a sixth "vocabulary sweep" step (retiring "widget" as the
+public noun everywhere). Dropped: with step 0 doing the rename and step 4
+deleting the trait, what is left is cosmetic churn across prose for no
+functional gain.
