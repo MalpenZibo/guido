@@ -217,6 +217,13 @@ and `examples/showcase.rs` alone went to 16 groups, every one of them carrying
 its own glyphon renderer. Siblings do not overlap, so those splits bought
 nothing. With the test, `status_bar` is one group and `showcase` is four.
 
+Each layer of a group tracks its commands' rects individually, not just their
+union: labels scattered across a panel union into a box spanning the gaps
+between them, and the next sibling's background lands in a gap and splits for
+nothing. Past `MAX_TRACKED_RECTS` the union decides alone, which can only
+over-split. With the exact test, `status_bar` and `showcase` are one group each
+— the same draw calls as before groups existed.
+
 Bounds are conservative: shapes grow by their shadow and border, text by half a
 font size for glyph overshoot, and anything under a rotation or scale counts as
 covering everything. Over-splitting costs a draw call; under-splitting would

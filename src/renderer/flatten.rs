@@ -3,6 +3,8 @@
 use std::ops::Range;
 use std::rc::Rc;
 
+use smallvec::SmallVec;
+
 use crate::transform::Transform;
 use crate::widgets::Rect;
 
@@ -98,10 +100,63 @@ struct LayerBuckets {
     /// Highest layer already in this group. Only a command below this can
     /// possibly be drawn too early.
     high_water: RenderLayer,
-    /// World-space bounds of everything in this group, per layer, so a
-    /// regression can be tested for actual overlap. `None` means the layer is
-    /// empty; an unbounded command widens it to everything.
-    bounds: [Option<Rect>; LAYER_COUNT],
+    /// What each layer of this group covers, so a regression can be tested
+    /// for actual overlap.
+    bounds: [LayerBounds; LAYER_COUNT],
+}
+
+/// What one layer of a group covers.
+///
+/// A union alone is too coarse. Labels scattered across a panel union into a
+/// box that spans the gaps between them, and the next sibling's background
+/// lands in one of those gaps and splits for nothing — `examples/showcase.rs`
+/// split three times over exactly that, every split a false positive. Keeping
+/// the individual rects makes the test exact, up to a cap that stops a huge
+/// group turning the scan quadratic; past it the union decides alone, which
+/// can only ever over-split.
+#[derive(Default)]
+struct LayerBounds {
+    /// Cheap reject: nothing outside this can intersect anything inside.
+    union: Option<Rect>,
+    rects: SmallVec<[Rect; 16]>,
+    /// Set once `rects` stopped being the whole story.
+    overflowed: bool,
+}
+
+/// How many rects a layer tracks individually before falling back to the
+/// union. Past this the scan costs more than the draw call it saves.
+const MAX_TRACKED_RECTS: usize = 64;
+
+impl LayerBounds {
+    fn intersects(&self, rect: Rect) -> bool {
+        let Some(union) = self.union else {
+            return false;
+        };
+        if !union.intersects(&rect) {
+            return false;
+        }
+        // The union says "maybe"; the rects say for certain, unless there are
+        // more of them than we kept.
+        self.overflowed || self.rects.iter().any(|held| held.intersects(&rect))
+    }
+
+    fn record(&mut self, rect: Option<Rect>) {
+        let Some(rect) = rect else {
+            // Unbounded: covers anything from here on.
+            self.union = Some(EVERYTHING);
+            self.overflowed = true;
+            return;
+        };
+        self.union = Some(match self.union {
+            Some(union) => union_of(union, rect),
+            None => rect,
+        });
+        if self.rects.len() < MAX_TRACKED_RECTS {
+            self.rects.push(rect);
+        } else {
+            self.overflowed = true;
+        }
+    }
 }
 
 /// Number of [`RenderLayer`] variants.
@@ -109,26 +164,16 @@ const LAYER_COUNT: usize = 5;
 
 impl LayerBuckets {
     /// Does `rect` meet anything already drawn above `layer` in this group?
-    ///
-    /// Conservative: layer bounds are a union, so two commands straddling a
-    /// gap read as covering it. Over-splitting only costs a draw call, while
-    /// under-splitting would draw in the wrong order.
     fn covered_above(&self, layer: RenderLayer, rect: Option<Rect>) -> bool {
         let Some(rect) = rect else {
             // Nothing to test against: assume the worst and split.
             return true;
         };
-        (layer as usize + 1..LAYER_COUNT)
-            .any(|above| self.bounds[above].is_some_and(|bounds| bounds.intersects(&rect)))
+        (layer as usize + 1..LAYER_COUNT).any(|above| self.bounds[above].intersects(rect))
     }
 
     fn record(&mut self, layer: RenderLayer, rect: Option<Rect>) {
-        let slot = &mut self.bounds[layer as usize];
-        match (*slot, rect) {
-            (_, None) => *slot = Some(EVERYTHING),
-            (None, Some(rect)) => *slot = Some(rect),
-            (Some(current), Some(rect)) => *slot = Some(union(current, rect)),
-        }
+        self.bounds[layer as usize].record(rect);
     }
 
     fn bucket_mut(&mut self, layer: RenderLayer) -> &mut Vec<FlattenedCommand> {
@@ -466,7 +511,7 @@ const EVERYTHING: Rect = Rect {
     height: f32::INFINITY,
 };
 
-fn union(a: Rect, b: Rect) -> Rect {
+fn union_of(a: Rect, b: Rect) -> Rect {
     let x = a.x.min(b.x);
     let y = a.y.min(b.y);
     let right = (a.x + a.width).max(b.x + b.width);
@@ -832,6 +877,41 @@ mod tests {
         );
         assert_eq!(captured[0].layer, Shapes);
         assert_eq!(captured[1].layer, Text);
+    }
+
+    #[test]
+    fn a_gap_between_two_labels_is_not_covered() {
+        // The union of two labels spans the gap between them. Testing against
+        // the union alone would split on a background landing in that gap,
+        // which is what showcase did three times over.
+        let mut layered = LayeredCommands::new();
+        layered.push(command_at(Text, Rect::new(0.0, 0.0, 40.0, 20.0)));
+        layered.push(command_at(Text, Rect::new(400.0, 0.0, 40.0, 20.0)));
+        // Squarely between them, touching neither.
+        layered.push(command_at(Shapes, Rect::new(200.0, 0.0, 40.0, 20.0)));
+
+        let mut commands = Vec::new();
+        let mut layers = Vec::new();
+        layered.drain_into(&mut commands, &mut layers);
+        assert_eq!(layers.len(), 1);
+    }
+
+    #[test]
+    fn past_the_rect_cap_the_union_decides() {
+        // Beyond MAX_TRACKED_RECTS the scan would cost more than the draw
+        // call it saves, so the union takes over — which can only over-split.
+        let mut layered = LayeredCommands::new();
+        for i in 0..(MAX_TRACKED_RECTS + 1) {
+            let x = i as f32 * 100.0;
+            layered.push(command_at(Text, Rect::new(x, 0.0, 10.0, 10.0)));
+        }
+        // In a gap, so an exact test would keep one group.
+        layered.push(command_at(Shapes, Rect::new(50.0, 0.0, 10.0, 10.0)));
+
+        let mut commands = Vec::new();
+        let mut layers = Vec::new();
+        layered.drain_into(&mut commands, &mut layers);
+        assert_eq!(layers.len(), 2, "the union must stay conservative");
     }
 
     #[test]
