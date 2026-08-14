@@ -8,14 +8,16 @@ The Image widget displays raster images (PNG, JPEG, GIF, WebP) and SVG vector gr
 use guido::prelude::*;
 
 // Load from file path (auto-detects SVG)
-image("./icon.png")
+container()
     .width(32.0)
     .height(32.0)
+    .child(image("./icon.png"))
 
 // SVG from path
-image("./logo.svg")
+container()
     .width(100.0)
     .height(100.0)
+    .child(image("./logo.svg"))
 
 // SVG from memory
 image(ImageSource::SvgBytes(svg_data.into()))
@@ -55,28 +57,58 @@ Control how images fit within their bounds:
 | `ContentFit::None` | Use intrinsic size, ignore widget bounds |
 
 ```rust
-image("./photo.jpg")
+container()
     .width(200.0)
     .height(150.0)
+    .child(image("./photo.jpg"))
     .content_fit(ContentFit::Cover)
 ```
 
 ## Sizing
 
-Images can specify explicit dimensions or derive size from intrinsic dimensions:
+The box comes from the enclosing container, like every other size in guido; the
+image decides only how its pixels land inside it.
 
 ```rust
-// Explicit size
-image("./icon.png").width(32.0).height(32.0)
+// A 32x32 box
+container().width(32.0).height(32.0).child(image("./icon.png"))
 
-// Width only - height from aspect ratio
-image("./banner.png").width(200.0)
+// Width fixed, height from the aspect ratio (the default fit is Contain)
+container().width(200.0).child(image("./banner.png"))
 
-// Height only - width from aspect ratio
-image("./logo.svg").height(48.0)
-
-// No size - uses intrinsic dimensions (or 100x100 default)
+// No box at all - the image reports its intrinsic size
 image("./icon.png")
+```
+
+## Content Fit Modes
+
+The `content_fit()` method controls how the image maps into the box it is
+given:
+
+| Mode | Description |
+|------|-------------|
+| `ContentFit::Contain` | Fit within the box, preserving aspect ratio (default) |
+| `ContentFit::Cover` | Fill the box, cropping, preserving aspect ratio |
+| `ContentFit::Fill` | Stretch to fill exactly, ignoring aspect ratio |
+| `ContentFit::None` | Intrinsic size, ignoring the box |
+
+`Cover` and `Fill` take all the room the container offers; they differ in how
+the pixels land. `Contain` takes only the largest rect of the image's own
+aspect ratio that fits, so the empty strip is left to the parent's alignment
+rather than painted.
+
+```rust
+// Cover a 200x150 box, cropping what does not fit
+container()
+    .width(200.0)
+    .height(150.0)
+    .child(image("./photo.jpg").content_fit(ContentFit::Cover))
+
+// A wallpaper: cover the whole surface
+container()
+    .width(fill())
+    .height(fill())
+    .child(image(wallpaper).content_fit(ContentFit::Cover))
 ```
 
 ## Transform Composition
@@ -87,12 +119,12 @@ Images inherit transforms from parent containers, following the same pattern as 
 // Rotated image
 container()
     .rotate(15.0)
-    .child(image("./badge.svg").width(32.0).height(32.0))
+    .child(container().width(32.0).height(32.0).child(image("./badge.svg")))
 
 // Scaled image
 container()
     .scale(1.5)
-    .child(image("./icon.png").width(24.0).height(24.0))
+    .child(container().width(24.0).height(24.0).child(image("./icon.png")))
 
 // Combined transforms
 container()
