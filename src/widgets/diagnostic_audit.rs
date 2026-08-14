@@ -58,11 +58,6 @@ fn diagnostics_from_full_lifecycle(widget: impl Widget + 'static) -> u64 {
         w.reconcile_children(t, id);
     });
 
-    // `has_focus_descendant` is deliberately not called on its own: nothing
-    // does that. It is only ever reached from `resolve_state_value`, which the
-    // passes above already exercise, and calling it bare would measure a path
-    // that does not exist.
-
     // Event dispatch runs inside a snapshot zone in the real loop
     // (`render_surface`, lib.rs), so it is wrapped here too. The audit answers
     // "what will a user see in their console", and that question is only
@@ -230,6 +225,29 @@ fn a_text_inheriting_through_a_plain_container_is_quiet() {
 
     assert_quiet(
         "a text inheriting across a container that declares nothing",
+        diagnostics_from_full_lifecycle(widget),
+    );
+}
+
+/// The state layer now feeds the text through a derived created at
+/// registration, outside any tracking scope of its own. If that closure read
+/// something it should have snapshotted — or read it where nobody could
+/// subscribe — this is where it shows up.
+#[test]
+fn a_hover_driven_text_colour_is_quiet() {
+    let n = create_signal(0.0f32);
+
+    let widget = container()
+        .width(50.0)
+        .height(50.0)
+        .text_color(move || Color::WHITE.with_alpha(n.get().max(0.5)))
+        .hover_state(|s| s.text_color(Color::RED))
+        .pressed_state(|s| s.text_color(Color::BLUE))
+        .focused_state(|s| s.text_color(Color::GREEN))
+        .child(container().child(text("ciao")));
+
+    assert_quiet(
+        "a text whose colour comes from a state layer",
         diagnostics_from_full_lifecycle(widget),
     );
 }

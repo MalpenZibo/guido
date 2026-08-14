@@ -109,7 +109,7 @@ impl Container {
     /// value its signal actually holds, not the one captured at construction.
     ///
     /// See the module docs for why this cannot wait for the first paint.
-    pub(super) fn seed_animations(&mut self, tree: &Tree, id: WidgetId) {
+    pub(super) fn seed_animations(&mut self, id: WidgetId) {
         // Written out one by one: each property animates a different type, so
         // there is no single accessor to loop over.
         let anims = self.anims.as_ref();
@@ -136,13 +136,13 @@ impl Container {
                     let _ = self.padding.get_or(Padding::default());
                 }
                 if bw_init {
-                    let _ = self.effective_border_width_target(tree);
+                    let _ = self.effective_border_width_target(id);
                 }
                 (
-                    bg_init.then(|| self.effective_background_target(tree)),
-                    cr_init.then(|| self.effective_corner_radius_target(tree)),
-                    bc_init.then(|| self.effective_border_color_target(tree)),
-                    tf_init.then(|| self.effective_transform_target(tree)),
+                    bg_init.then(|| self.effective_background_target(id)),
+                    cr_init.then(|| self.effective_corner_radius_target(id)),
+                    bc_init.then(|| self.effective_border_color_target(id)),
+                    tf_init.then(|| self.effective_transform_target(id)),
                 )
             });
 
@@ -176,7 +176,7 @@ impl Container {
     /// This is the pull half of the invariant. It keeps the subscriptions
     /// current through conditional closure branches and state-layer overrides,
     /// and it converges any write that landed before the subscription existed.
-    pub(super) fn resync_animation_targets(&self, tree: &Tree, id: WidgetId) {
+    pub(super) fn resync_animation_targets(&self, id: WidgetId) {
         if !self.has_signal_animated_props() {
             return;
         }
@@ -197,31 +197,31 @@ impl Container {
             if let Some(a) = &anims.border_width {
                 drift |= moved(
                     a.is_initial(),
-                    *a.target() == self.effective_border_width_target(tree),
+                    *a.target() == self.effective_border_width_target(id),
                 );
             }
             if let Some(a) = &anims.background {
                 drift |= moved(
                     a.is_initial(),
-                    *a.target() == self.effective_background_target(tree),
+                    *a.target() == self.effective_background_target(id),
                 );
             }
             if let Some(a) = &anims.corner_radius {
                 drift |= moved(
                     a.is_initial(),
-                    *a.target() == self.effective_corner_radius_target(tree),
+                    *a.target() == self.effective_corner_radius_target(id),
                 );
             }
             if let Some(a) = &anims.border_color {
                 drift |= moved(
                     a.is_initial(),
-                    *a.target() == self.effective_border_color_target(tree),
+                    *a.target() == self.effective_border_color_target(id),
                 );
             }
             if let Some(a) = &anims.transform {
                 drift |= moved(
                     a.is_initial(),
-                    *a.target() == self.effective_transform_target(tree),
+                    *a.target() == self.effective_transform_target(id),
                 );
             }
             drift

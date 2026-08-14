@@ -80,6 +80,37 @@ container()
     .pressed_state(|s| s.ripple().darker(0.05))
 ```
 
+## Text Colour
+
+A state layer can change the colour of the text below the container, not just
+the box around it:
+
+```rust
+container()
+    .text_color(theme.text_weak)
+    .hover_state(|s| s.text_color(theme.text))
+    .child(text("Label"))
+```
+
+This works the same way the ordinary declaration does — the container publishes
+its text colour to descendants, and here what it publishes folds in the hover.
+A text that declares its own colour nearer down is unaffected, and a container
+with no state layer mentioning text creates nothing extra.
+
+The base it returns to when the state ends is the colour that would have been
+inherited anyway, so a container can override on hover without restating what
+its ancestors already said:
+
+```rust
+container()
+    .text_color(theme.text_weak)              // set once, further up
+    .child(
+        container()
+            .hover_state(|s| s.text_color(theme.text))
+            .child(text("Label")),            // weak, then strong, then weak
+    )
+```
+
 ## Combining Multiple Overrides
 
 Each state can override multiple properties:

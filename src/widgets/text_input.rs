@@ -1057,7 +1057,7 @@ impl Widget for TextInput {
                 if bounds.contains(*x, *y) && *button == MouseButton::Left =>
             {
                 // Request focus and start cursor blink animation
-                request_focus(id);
+                request_focus(tree, id);
                 request_job(id, JobRequest::Animation(RequiredJob::Paint));
 
                 // Set cursor position
@@ -1103,7 +1103,7 @@ impl Widget for TextInput {
                 if bounds.contains(*x, *y) && *button == MouseButton::Middle =>
             {
                 // Middle-click paste from the primary selection
-                request_focus(id);
+                request_focus(tree, id);
                 let char_index = self.char_index_at_x(*x, bounds);
                 self.selection = Selection::new(char_index);
                 if let Some(text) = primary_paste() {

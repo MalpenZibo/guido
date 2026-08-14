@@ -26,8 +26,8 @@ use crate::backdrop::{BackdropBlur, BackdropSources};
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
-    IntoSignal, OptionSignalExt, Signal, create_derived, create_stored, focused_widget,
-    with_signal_tracking,
+    IntoSignal, OptionSignalExt, OwnerId, RwSignal, Signal, create_derived, create_signal,
+    create_stored, dispose_owner_now, focus_path, with_owner, with_signal_tracking,
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
@@ -155,6 +155,15 @@ pub(super) struct ContainerAnims {
     pub(super) transform: Option<AnimationState<Transform>>,
 }
 
+bitflags::bitflags! {
+    /// What the pointer is doing to this container.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub(super) struct InteractionFlags: u8 {
+        const HOVERED = 1;
+        const PRESSED = 2;
+    }
+}
+
 /// Interaction state (callbacks, hover/press tracking, state styles, ripple).
 /// Only allocated when `.on_click()`, `.hover_state()`, `.pressed_state()`, etc. are called.
 pub(super) struct InteractionState {
@@ -167,8 +176,19 @@ pub(super) struct InteractionState {
     pub(super) on_pointer_move: Option<PointerMoveCallback>,
     pub(super) on_mouse_down: Option<MouseDownCallback>,
     pub(super) on_mouse_up: Option<MouseUpCallback>,
-    pub(super) is_hovered: bool,
-    pub(super) is_pressed: bool,
+    /// Hover and press, behind a signal so that *resolving a state layer
+    /// subscribes to them*.
+    ///
+    /// This is the whole point. The container's own paint subscribes, as
+    /// before — but so does any descendant text whose colour resolves through
+    /// this container, and that is what a plain `bool` plus a hand-written
+    /// `request_job(id, Paint)` could never do: it marked one widget, and the
+    /// text's cached paint node was reused with the old colour still in it.
+    ///
+    /// Read with `get_untracked` from event handling, where the value drives
+    /// *behaviour* (drag capture, ripple) and a subscription would be noise;
+    /// with `get` from style resolution, where the subscription is the point.
+    pub(super) flags: RwSignal<InteractionFlags>,
     pub(super) hover_state: Option<StateStyle>,
     pub(super) pressed_state: Option<StateStyle>,
     pub(super) focused_state: Option<StateStyle>,
@@ -187,13 +207,45 @@ impl Default for InteractionState {
             on_pointer_move: None,
             on_mouse_down: None,
             on_mouse_up: None,
-            is_hovered: false,
-            is_pressed: false,
+            flags: create_signal(InteractionFlags::empty()),
             hover_state: None,
             pressed_state: None,
             focused_state: None,
             ripple: RippleState::new(),
         }
+    }
+}
+
+impl InteractionState {
+    pub(super) fn is_hovered(&self) -> bool {
+        self.flags
+            .get_untracked()
+            .contains(InteractionFlags::HOVERED)
+    }
+
+    pub(super) fn is_pressed(&self) -> bool {
+        self.flags
+            .get_untracked()
+            .contains(InteractionFlags::PRESSED)
+    }
+
+    /// Set a flag, writing only on a real change so an unchanged pointer move
+    /// does not wake every subscriber.
+    pub(super) fn set_flag(&self, flag: InteractionFlags, on: bool) {
+        let current = self.flags.get_untracked();
+        let next = if on { current | flag } else { current - flag };
+        if next != current {
+            self.flags.set(next);
+        }
+    }
+
+    /// Whether any state layer is declared at all.
+    ///
+    /// Gates the subscription in style resolution: a container with only an
+    /// `on_click` has nothing to resolve, and must not start repainting on
+    /// every hover just because the flags became reactive.
+    pub(super) fn has_any_state(&self) -> bool {
+        self.hover_state.is_some() || self.pressed_state.is_some() || self.focused_state.is_some()
     }
 }
 
@@ -263,6 +315,11 @@ pub struct Container {
     // text and pay one pointer for the whole feature.
     pub(super) text: Option<Box<TextStyle>>,
 
+    // Owns the derived published in place of the text colour when a state
+    // layer declares one. Created at registration, so it belongs to no user
+    // scope and has to be torn down by hand when the container goes.
+    pub(super) text_owner: Option<OwnerId>,
+
     // Animation state (boxed to save ~400 bytes per non-animated container)
     pub(super) anims: Option<Box<ContainerAnims>>,
 
@@ -296,6 +353,7 @@ impl Container {
             widget_ref: None,
             backdrop_blur: None,
             text: None,
+            text_owner: None,
             anims: None,
             scroll_axis: ScrollAxis::None,
             scroll_data: None,
@@ -926,6 +984,21 @@ impl Default for Container {
     }
 }
 
+impl Drop for Container {
+    /// Tear down the owner holding the published text derived.
+    ///
+    /// That derived is the one reactive resource a container creates outside
+    /// any user scope — at registration, where the ambient owner is the
+    /// surface's and would hold it until the app exits. A container removed by
+    /// a dynamic-children update would leak one derived per rebuild.
+    ///
+    /// Every other signal a container holds was created in the builder chain,
+    /// inside the caller's own scope, and is freed with it.
+    fn drop(&mut self) {
+        self.dispose_text_owner();
+    }
+}
+
 impl Widget for Container {
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         // Use advance_animations_self for this widget's animations
@@ -956,11 +1029,11 @@ impl Widget for Container {
             ) = crate::reactive::diagnostics::snapshot_zone(|| {
                 (
                     self.padding.get_or(Padding::default()),
-                    self.effective_border_width_target(tree),
-                    self.effective_background_target(tree),
-                    self.effective_corner_radius_target(tree),
-                    self.effective_border_color_target(tree),
-                    self.effective_transform_target(tree),
+                    self.effective_border_width_target(id),
+                    self.effective_background_target(id),
+                    self.effective_corner_radius_target(id),
+                    self.effective_border_color_target(id),
+                    self.effective_transform_target(id),
                 )
             });
             let anims = self.anims.as_mut().unwrap();
@@ -1058,7 +1131,8 @@ impl Widget for Container {
         // by walking up. The signals themselves are stable ids, so a value
         // change needs no rewrite — only a rebuilt container does, and that
         // re-registers anyway.
-        tree.set_text_style(id, self.text.as_deref().copied());
+        let published = self.published_text_style(tree, id);
+        tree.set_text_style(id, published);
 
         // Register pending children
         self.children_source.register_pending(tree, id);
@@ -1145,7 +1219,7 @@ impl Widget for Container {
         }
 
         self.update_size_targets(tree, id, &lengths, content_size);
-        self.seed_animations(tree, id);
+        self.seed_animations(id);
 
         let size = self.resolve_size(&lengths, constraints, content_size);
 
@@ -1178,8 +1252,8 @@ impl Widget for Container {
 
         let hit = HitContext {
             bounds: tree.get_bounds(id).unwrap_or_default(),
-            corner_radius: self.animated_corner_radius(tree),
-            transform: self.animated_transform(tree),
+            corner_radius: self.animated_corner_radius(id),
+            transform: self.animated_transform(id),
             transform_origin: self.transform_origin.get_or(TransformOrigin::CENTER),
         };
 
@@ -1238,13 +1312,6 @@ impl Widget for Container {
         self.handle_own_event(id, &hit, event, &local_event)
     }
 
-    fn has_focus_descendant(&self, tree: &Tree, focused_id: WidgetId) -> bool {
-        if !self.visible.get_or(true) {
-            return false;
-        }
-        self.widget_has_focus(tree, focused_id)
-    }
-
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
         let is_visible = with_signal_tracking(id, JobType::Paint, || self.visible.get_or(true));
         if !is_visible {
@@ -1268,18 +1335,18 @@ impl Widget for Container {
             border_color,
         ) = with_signal_tracking(id, JobType::Paint, || {
             (
-                self.animated_background(tree),
-                self.animated_corner_radius(tree),
+                self.animated_background(id),
+                self.animated_corner_radius(id),
                 self.corner_curvature.get_or(1.0),
-                self.effective_elevation(tree),
-                self.animated_transform(tree),
+                self.effective_elevation(id),
+                self.animated_transform(id),
                 self.transform_origin.get_or(TransformOrigin::CENTER),
-                self.animated_border_width(tree),
-                self.animated_border_color(tree),
+                self.animated_border_width(id),
+                self.animated_border_color(id),
             )
         });
 
-        self.resync_animation_targets(tree, id);
+        self.resync_animation_targets(id);
 
         // Per-corner radii override the uniform (animated) radius for
         // drawing. Clip, blur region and rounded hit testing stay uniform,

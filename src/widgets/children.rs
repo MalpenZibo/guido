@@ -519,8 +519,4 @@ impl Widget for OwnedWidget {
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
         self.inner.event(tree, id, event)
     }
-
-    fn has_focus_descendant(&self, tree: &Tree, focused_id: WidgetId) -> bool {
-        self.inner.has_focus_descendant(tree, focused_id)
-    }
 }

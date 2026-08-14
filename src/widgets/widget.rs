@@ -627,13 +627,6 @@ pub trait Widget {
         EventResponse::Ignored
     }
 
-    /// Check if this widget has a descendant with the given ID.
-    /// Used by containers to check if a child has focus.
-    /// Default implementation returns false (leaf widgets have no children).
-    fn has_focus_descendant(&self, _tree: &Tree, _id: WidgetId) -> bool {
-        false
-    }
-
     /// Register this widget's pending children with the arena.
     ///
     /// Called during widget tree registration to recursively register all
@@ -682,9 +675,6 @@ impl Widget for Box<dyn Widget> {
     }
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
         (**self).event(tree, id, event)
-    }
-    fn has_focus_descendant(&self, tree: &Tree, id: WidgetId) -> bool {
-        (**self).has_focus_descendant(tree, id)
     }
     fn register_children(&mut self, tree: &mut Tree, id: WidgetId) {
         (**self).register_children(tree, id)

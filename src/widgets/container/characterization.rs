@@ -61,9 +61,16 @@ impl H {
 
     fn send(&mut self, event: Event) -> EventResponse {
         let root = self.root;
-        self.tree
-            .with_widget_mut(root, |w, id, t| w.event(t, id, &event))
-            .expect("root is registered")
+        // Event dispatch runs inside a snapshot zone in the real loop
+        // (`render_surface`, lib.rs): hit testing reads animated values for
+        // *this* event and must not subscribe to them. Outside the zone those
+        // reads trip the non-reactive-read diagnostic, which would be the
+        // harness reporting on itself.
+        crate::reactive::diagnostics::snapshot_zone(|| {
+            self.tree
+                .with_widget_mut(root, |w, id, t| w.event(t, id, &event))
+                .expect("root is registered")
+        })
     }
 
     fn children(&self) -> Vec<WidgetId> {
@@ -794,3 +801,255 @@ fn visibility_invalidates_layout() {
 // invalidate its container too — is covered by
 // `tests::a_layout_property_invalidates_its_container` in `mod.rs`, where it
 // carries the history of the bug it regressed on.
+
+// ---------------------------------------------------------------------------
+// A state layer reaching the text
+// ---------------------------------------------------------------------------
+
+/// Lay out, run the queued jobs, paint, and report the first text colour.
+///
+/// The job drain is what turns the flag write into `needs_paint` on the text
+/// that subscribed to it; without it this would be measuring the paint cache.
+fn painted_text_color(h: &mut H) -> Color {
+    h.drain_jobs();
+    h.fit(400.0, 400.0);
+    let node = h.paint();
+
+    fn find(node: &RenderNode) -> Option<Color> {
+        for cmd in &node.commands {
+            if let DrawCommand::Text { color, .. } = &**cmd {
+                return Some(*color);
+            }
+        }
+        node.children.iter().find_map(|child| find(child))
+    }
+    find(&node).expect("a text command")
+}
+
+fn set_hover(h: &mut H, inside: bool) {
+    let (x, y) = if inside { (5.0, 5.0) } else { (-50.0, -50.0) };
+    h.send(Event::MouseMove { x, y });
+}
+
+/// The failure this guards against is cache-shaped and silent: the container
+/// repaints with its new background while the text's cached render node is
+/// reused with the old colour still inside its draw commands.
+#[test]
+fn a_hover_state_reaches_the_text() {
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(40.0)
+            .text_color(Color::rgb(0.5, 0.5, 0.5))
+            .hover_state(|s| s.text_color(Color::WHITE))
+            .child(crate::widgets::text("Label")),
+    );
+
+    assert_eq!(painted_text_color(&mut h), Color::rgb(0.5, 0.5, 0.5));
+    set_hover(&mut h, true);
+    assert_eq!(painted_text_color(&mut h), Color::WHITE);
+    set_hover(&mut h, false);
+    assert_eq!(painted_text_color(&mut h), Color::rgb(0.5, 0.5, 0.5));
+}
+
+#[test]
+fn a_hover_state_reaches_text_below_a_plain_container() {
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(40.0)
+            .text_color(Color::rgb(0.5, 0.5, 0.5))
+            .hover_state(|s| s.text_color(Color::WHITE))
+            .child(
+                container()
+                    .layout(Flex::row())
+                    .child(crate::widgets::text("Label")),
+            ),
+    );
+
+    assert_eq!(painted_text_color(&mut h), Color::rgb(0.5, 0.5, 0.5));
+    set_hover(&mut h, true);
+    assert_eq!(painted_text_color(&mut h), Color::WHITE);
+}
+
+/// The hovered container declares no colour of its own, so releasing the hover
+/// has to land on what an ancestor said. That base is resolved by a walk done
+/// once at registration — a derived closure has no tree to walk.
+#[test]
+fn a_state_colour_falls_back_to_the_inherited_base() {
+    let mut h = H::new(
+        container().text_color(Color::RED).child(
+            container()
+                .width(100.0)
+                .height(40.0)
+                .hover_state(|s| s.text_color(Color::WHITE))
+                .child(crate::widgets::text("Label")),
+        ),
+    );
+
+    assert_eq!(painted_text_color(&mut h), Color::RED);
+    set_hover(&mut h, true);
+    assert_eq!(painted_text_color(&mut h), Color::WHITE);
+    set_hover(&mut h, false);
+    assert_eq!(painted_text_color(&mut h), Color::RED);
+}
+
+#[test]
+fn a_nearer_declaration_wins_over_an_outer_hover() {
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(40.0)
+            .text_color(Color::rgb(0.5, 0.5, 0.5))
+            .hover_state(|s| s.text_color(Color::WHITE))
+            .child(
+                container()
+                    .text_color(Color::BLUE)
+                    .child(crate::widgets::text("Label")),
+            ),
+    );
+
+    painted_text_color(&mut h);
+    set_hover(&mut h, true);
+    assert_eq!(
+        painted_text_color(&mut h),
+        Color::BLUE,
+        "a text told its own colour must not follow someone else's hover"
+    );
+}
+
+/// Nothing is created when no state layer mentions text, so a hover cannot
+/// disturb the published colour at all.
+#[test]
+fn a_container_with_no_state_text_colour_publishes_the_base_signal() {
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(40.0)
+            .text_color(Color::RED)
+            .hover_state(|s| s.lighter(0.1))
+            .child(crate::widgets::text("Label")),
+    );
+
+    painted_text_color(&mut h);
+    set_hover(&mut h, true);
+    assert_eq!(painted_text_color(&mut h), Color::RED);
+}
+
+// ---------------------------------------------------------------------------
+// The published derived must not outlive its container
+// ---------------------------------------------------------------------------
+
+/// The one reactive resource a container creates outside any user scope.
+///
+/// Everything else is built in the builder chain and freed with the caller's
+/// scope. The published derived is created at *registration*, where the
+/// ambient owner is the surface's and outlives any single container — so
+/// without the explicit teardown in `Drop`, a dynamic-children update that
+/// replaces this container leaks one derived per rebuild.
+///
+/// The shape below is what makes this test able to fail: the builder runs in
+/// a short-lived scope that is disposed each round, while registration happens
+/// under a long-lived one that is not. Building and dropping inside a single
+/// scope would free the derived as a side effect of freeing its parent, and
+/// the test would pass with the teardown removed.
+#[test]
+fn the_published_text_derived_is_freed_with_its_container() {
+    use crate::reactive::owner::{dispose_owner_now, with_owner};
+    use crate::reactive::storage::live_signal_count;
+
+    fn round() {
+        // Builder signals belong to this scope, as a component's would.
+        let (widget, item) = with_owner(|| {
+            container()
+                .text_color(Color::RED)
+                .hover_state(|s| s.text_color(Color::WHITE))
+                .child(crate::widgets::text("x"))
+        });
+        // Registration happens under the surrounding (surface) owner.
+        let mut h = H::new(widget);
+        h.fit(100.0, 100.0);
+        drop(h);
+        dispose_owner_now(item);
+    }
+
+    let (counts, surface) = with_owner(|| {
+        round(); // warm whatever is allocated lazily
+        let before = live_signal_count();
+        for _ in 0..50 {
+            round();
+        }
+        (before, live_signal_count())
+    });
+    dispose_owner_now(surface);
+
+    let (before, after) = counts;
+    assert_eq!(
+        after,
+        before,
+        "50 build-and-drop rounds leaked {} signals",
+        after as i64 - before as i64
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Focus, now that it is stored state
+// ---------------------------------------------------------------------------
+
+/// Focus used to be a bare generational id, which made this self-correcting:
+/// a dead widget stopped matching any live one and `focused_state` resolved to
+/// false on its own. The focus *path* is stored state and has no such
+/// property — its ancestors would go on answering "the focus is inside me" for
+/// a widget that no longer exists.
+#[test]
+fn unregistering_a_focused_widget_releases_the_focus() {
+    use crate::reactive::{focus_path, request_focus};
+
+    let mut h = H::new(
+        container()
+            .width(50.0)
+            .height(50.0)
+            .child(box_of(10.0, 10.0)),
+    );
+    h.fit(100.0, 100.0);
+    let child = h.children()[0];
+
+    request_focus(&h.tree, child);
+    assert!(focus_path().contains(child));
+    assert!(
+        focus_path().contains(h.root),
+        "the ancestor is on the path, which is what focused_state asks about"
+    );
+
+    h.tree.unregister(child);
+    assert!(
+        !focus_path().contains(h.root),
+        "an ancestor must stop claiming focus once the focused widget is gone"
+    );
+}
+
+/// A container resolves `focused_state` by asking the path, not by walking its
+/// descendants — that is what lets the same question be answered from inside a
+/// derived closure, which has no tree.
+#[test]
+fn a_focused_state_applies_while_a_descendant_holds_focus() {
+    use crate::reactive::focus::clear_focus;
+    use crate::reactive::request_focus;
+
+    let mut h = H::new(
+        container()
+            .width(50.0)
+            .height(50.0)
+            .background(Color::RED)
+            .focused_state(|s| s.background(Color::BLUE))
+            .child(box_of(10.0, 10.0)),
+    );
+    h.fit(100.0, 100.0);
+    let child = h.children()[0];
+
+    assert_eq!(rects(&h.paint())[0].1, Color::RED);
+    request_focus(&h.tree, child);
+    assert_eq!(rects(&h.paint())[0].1, Color::BLUE);
+    clear_focus();
+    assert_eq!(rects(&h.paint())[0].1, Color::RED);
+}

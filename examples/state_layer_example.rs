@@ -57,9 +57,11 @@ fn create_lighter_button() -> Container {
         .padding(16.0)
         .background(Color::rgb(0.2, 0.2, 0.3))
         .corner_radius(8.0)
-        .hover_state(|s| s.lighter(0.1))
-        .text_color(Color::rgb(0.9, 0.9, 0.95))
-        .child(text("Hover me (lighter)"))
+        .hover_state(|s| s.lighter(0.1).text_color(Color::WHITE))
+        // The state layer reaches the glyphs, not just the box: the label
+        // brightens with the background.
+        .text_color(Color::rgb(0.6, 0.6, 0.66))
+        .child(text("Hover me (lighter + text)"))
 }
 
 /// Button with explicit hover and pressed colors
