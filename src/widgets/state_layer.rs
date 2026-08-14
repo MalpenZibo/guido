@@ -80,6 +80,12 @@ pub struct StateStyle {
     pub transform: Option<Transform>,
     /// Elevation (shadow) override
     pub elevation: Option<f32>,
+    /// Colour of the text below this container while the state is active.
+    ///
+    /// Reaches the glyphs, not just the box: the container publishes its text
+    /// colour to descendants as a derived over the interaction flags, so a
+    /// text that inherited it is subscribed to the flip.
+    pub text_color: Option<Color>,
     /// Override the background alpha channel (applied after background override)
     pub alpha: Option<f32>,
     /// Ripple effect configuration (typically used in pressed_state)
@@ -95,6 +101,19 @@ impl StateStyle {
     /// Set an explicit background color for this state.
     pub fn background(mut self, color: impl Into<Color>) -> Self {
         self.background = Some(BackgroundOverride::Exact(color.into()));
+        self
+    }
+
+    /// Set the colour of the text below this container for this state.
+    ///
+    /// ```ignore
+    /// container()
+    ///     .text_color(theme.text_weak)
+    ///     .hover_state(|s| s.text_color(theme.text))
+    ///     .child(text("Label"))
+    /// ```
+    pub fn text_color(mut self, color: impl Into<Color>) -> Self {
+        self.text_color = Some(color.into());
         self
     }
 

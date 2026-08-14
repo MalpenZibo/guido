@@ -355,6 +355,21 @@ pub(crate) fn reset_storage() {
 /// Check if a signal exists in the current thread's storage.
 /// Used by `WriteSignal` to determine if we can write directly (same thread)
 /// or must queue the write for the main thread.
+/// How many signal slots currently hold a value.
+///
+/// For leak tests: build something, tear it down, and the count has to come
+/// back to where it started.
+pub fn live_signal_count() -> usize {
+    STORAGE.with(|storage| {
+        storage
+            .borrow()
+            .slots
+            .iter()
+            .filter(|slot| slot.value.is_some())
+            .count()
+    })
+}
+
 pub fn has_signal(id: SignalId) -> bool {
     STORAGE.with(|storage| {
         let storage = storage.borrow();

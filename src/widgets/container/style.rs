@@ -26,26 +26,12 @@ impl Container {
     // -----------------------------------------------------------------------
 
     /// Whether the focused widget is this container or one of its descendants.
-    pub(super) fn has_child_focus(&self, tree: &Tree) -> bool {
-        match focused_widget() {
-            Some(focused_id) => self.widget_has_focus(tree, focused_id),
-            None => false,
-        }
-    }
-
-    pub(super) fn widget_has_focus(&self, tree: &Tree, focused_id: WidgetId) -> bool {
-        for &child_id in self.children_source.get() {
-            if child_id == focused_id {
-                return true;
-            }
-            if tree.with_widget(child_id, |child| {
-                child.has_focus_descendant(tree, focused_id)
-            }) == Some(true)
-            {
-                return true;
-            }
-        }
-        false
+    ///
+    /// Asks the focus path rather than walking the tree, so it can be called
+    /// from a `create_derived` closure — which has no tree, and is where a
+    /// container resolves the text colour it publishes to its descendants.
+    pub(super) fn has_child_focus(id: WidgetId) -> bool {
+        focus_path().contains(id)
     }
 
     // -----------------------------------------------------------------------
@@ -56,27 +42,36 @@ impl Container {
     /// Priority is pressed > focused > hovered.
     fn resolve_state_value<T: Clone>(
         &self,
-        tree: &Tree,
+        id: WidgetId,
         base: T,
         extractor: impl Fn(&StateStyle) -> Option<T>,
     ) -> T {
         let Some(ref ix) = self.interaction else {
             return base;
         };
-        if ix.is_pressed
+        // Ask "does anything declare a state?" before touching the signals.
+        // Reading them first would make every interactive container — a bare
+        // `on_click`, say — subscribe to its own hover and start repainting on
+        // every pointer move, for a state layer it does not have.
+        if !ix.has_any_state() {
+            return base;
+        }
+
+        let flags = ix.flags.get();
+        if flags.contains(InteractionFlags::PRESSED)
             && let Some(ref state) = ix.pressed_state
             && let Some(value) = extractor(state)
         {
             return value;
         }
         if ix.focused_state.is_some()
-            && self.has_child_focus(tree)
+            && Self::has_child_focus(id)
             && let Some(ref state) = ix.focused_state
             && let Some(value) = extractor(state)
         {
             return value;
         }
-        if ix.is_hovered
+        if flags.contains(InteractionFlags::HOVERED)
             && let Some(ref state) = ix.hover_state
             && let Some(value) = extractor(state)
         {
@@ -87,9 +82,9 @@ impl Container {
 
     /// The background a state layer resolves to: its own colour if it declares
     /// one, its own alpha if it declares one, otherwise the base.
-    pub(super) fn effective_background_target(&self, tree: &Tree) -> Color {
+    pub(super) fn effective_background_target(&self, id: WidgetId) -> Color {
         let base = self.background.get_or(Color::TRANSPARENT);
-        self.resolve_state_value(tree, base, |state| {
+        self.resolve_state_value(id, base, |state| {
             let bg_color = state
                 .background
                 .as_ref()
@@ -110,30 +105,119 @@ impl Container {
         })
     }
 
-    pub(super) fn effective_border_width_target(&self, tree: &Tree) -> f32 {
+    pub(super) fn effective_border_width_target(&self, id: WidgetId) -> f32 {
         let base = self.border_width.get_or(0.0);
-        self.resolve_state_value(tree, base, |state| state.border_width)
+        self.resolve_state_value(id, base, |state| state.border_width)
     }
 
-    pub(super) fn effective_border_color_target(&self, tree: &Tree) -> Color {
+    pub(super) fn effective_border_color_target(&self, id: WidgetId) -> Color {
         let base = self.border_color.get_or(Color::TRANSPARENT);
-        self.resolve_state_value(tree, base, |state| state.border_color)
+        self.resolve_state_value(id, base, |state| state.border_color)
     }
 
-    pub(super) fn effective_corner_radius_target(&self, tree: &Tree) -> f32 {
+    pub(super) fn effective_corner_radius_target(&self, id: WidgetId) -> f32 {
         let base = self.corner_radius.get_or(0.0);
-        self.resolve_state_value(tree, base, |state| state.corner_radius)
+        self.resolve_state_value(id, base, |state| state.corner_radius)
     }
 
-    pub(super) fn effective_transform_target(&self, tree: &Tree) -> Transform {
+    pub(super) fn effective_transform_target(&self, id: WidgetId) -> Transform {
         let base = self.transform.get_or(Transform::IDENTITY);
-        self.resolve_state_value(tree, base, |state| state.transform)
+        self.resolve_state_value(id, base, |state| state.transform)
     }
 
     /// Elevation is never animated, so the target *is* the drawn value.
-    pub(super) fn effective_elevation(&self, tree: &Tree) -> f32 {
+    pub(super) fn effective_elevation(&self, id: WidgetId) -> f32 {
         let base = self.elevation.get_or(0.0);
-        self.resolve_state_value(tree, base, |state| state.elevation)
+        self.resolve_state_value(id, base, |state| state.elevation)
+    }
+
+    // -----------------------------------------------------------------------
+    // What descendants are told about text
+    // -----------------------------------------------------------------------
+
+    /// Whether any state layer declares a text colour.
+    fn has_state_text_color(&self) -> bool {
+        self.interaction.as_ref().is_some_and(|ix| {
+            [&ix.hover_state, &ix.pressed_state, &ix.focused_state]
+                .into_iter()
+                .flatten()
+                .any(|s| s.text_color.is_some())
+        })
+    }
+
+    /// The text style this container publishes to its descendants.
+    ///
+    /// Usually exactly what the builder was handed. When a state layer
+    /// declares a text colour, the *colour* published is instead a derived
+    /// folding the base and the interaction flags together — so a descendant
+    /// that reads it subscribes to this container's hover, and a flip reaches
+    /// the glyphs instead of stopping at the box.
+    ///
+    /// Nothing is created when no state layer mentions text, which is almost
+    /// always: the cost of the feature is paid only where it is used.
+    pub(super) fn published_text_style(&mut self, tree: &Tree, id: WidgetId) -> Option<TextStyle> {
+        let declared = self.text.as_deref().copied();
+        if !self.has_state_text_color() {
+            return declared;
+        }
+
+        let ix = self
+            .interaction
+            .as_ref()
+            .expect("has_state_text_color implies interaction");
+        let flags = ix.flags;
+        let pressed = ix.pressed_state.as_ref().and_then(|s| s.text_color);
+        let focused = ix.focused_state.as_ref().and_then(|s| s.text_color);
+        let hovered = ix.hover_state.as_ref().and_then(|s| s.text_color);
+
+        // What a descendant would have inherited without us — this container's
+        // own declaration, or the nearest ancestor's. Walked once, here: a
+        // derived closure has no tree, and which ancestor declares what cannot
+        // change without the subtree being rebuilt, which re-registers and
+        // re-walks.
+        let base = declared
+            .and_then(|s| s.color)
+            .or_else(|| tree.inherited_text_style(id).color);
+
+        let (color, owner) = with_owner(|| {
+            create_derived(move || {
+                let flags = flags.get();
+                if flags.contains(InteractionFlags::PRESSED)
+                    && let Some(color) = pressed
+                {
+                    return color;
+                }
+                // `focused` first: with no focused state there is nothing to
+                // resolve, and no reason to subscribe to the focus path.
+                if let Some(color) = focused
+                    && Self::has_child_focus(id)
+                {
+                    return color;
+                }
+                if flags.contains(InteractionFlags::HOVERED)
+                    && let Some(color) = hovered
+                {
+                    return color;
+                }
+                base.map(|base| base.get()).unwrap_or(Color::WHITE)
+            })
+        });
+
+        // Re-registration replaces the previous derived; without this the old
+        // one would outlive its container.
+        self.dispose_text_owner();
+        self.text_owner = Some(owner);
+
+        let mut style = declared.unwrap_or_default();
+        style.color = Some(color);
+        Some(style)
+    }
+
+    /// Tear down the owner holding the published derived, if there is one.
+    pub(super) fn dispose_text_owner(&mut self) {
+        if let Some(owner) = self.text_owner.take() {
+            dispose_owner_now(owner);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -146,38 +230,38 @@ impl Container {
         })
     }
 
-    pub(super) fn animated_background(&self, tree: &Tree) -> Color {
+    pub(super) fn animated_background(&self, id: WidgetId) -> Color {
         get_animated_value(
             self.anims.as_ref().and_then(|a| a.background.as_ref()),
-            || self.effective_background_target(tree),
+            || self.effective_background_target(id),
         )
     }
 
-    pub(super) fn animated_corner_radius(&self, tree: &Tree) -> f32 {
+    pub(super) fn animated_corner_radius(&self, id: WidgetId) -> f32 {
         get_animated_value(
             self.anims.as_ref().and_then(|a| a.corner_radius.as_ref()),
-            || self.effective_corner_radius_target(tree),
+            || self.effective_corner_radius_target(id),
         )
     }
 
-    pub(super) fn animated_border_width(&self, tree: &Tree) -> f32 {
+    pub(super) fn animated_border_width(&self, id: WidgetId) -> f32 {
         get_animated_value(
             self.anims.as_ref().and_then(|a| a.border_width.as_ref()),
-            || self.effective_border_width_target(tree),
+            || self.effective_border_width_target(id),
         )
     }
 
-    pub(super) fn animated_border_color(&self, tree: &Tree) -> Color {
+    pub(super) fn animated_border_color(&self, id: WidgetId) -> Color {
         get_animated_value(
             self.anims.as_ref().and_then(|a| a.border_color.as_ref()),
-            || self.effective_border_color_target(tree),
+            || self.effective_border_color_target(id),
         )
     }
 
-    pub(super) fn animated_transform(&self, tree: &Tree) -> Transform {
+    pub(super) fn animated_transform(&self, id: WidgetId) -> Transform {
         get_animated_value(
             self.anims.as_ref().and_then(|a| a.transform.as_ref()),
-            || self.effective_transform_target(tree),
+            || self.effective_transform_target(id),
         )
     }
 

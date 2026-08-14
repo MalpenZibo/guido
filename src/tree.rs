@@ -221,6 +221,12 @@ impl Tree {
             None => return, // Invalid or stale ID
         };
 
+        // A widget leaving the tree takes the focus with it. The focus path is
+        // stored state, so unlike the bare generational id it used to be, it
+        // does not stop matching on its own: its ancestors would go on
+        // answering "the focus is inside me" for a widget that is gone.
+        crate::reactive::release_focus_if_within(id);
+
         // First, remove from parent's children list (before modifying dense array)
         if let Some(parent_id) = self.dense[dense_index].parent
             && let Some(parent_dense) = self.get_dense_index(parent_id)

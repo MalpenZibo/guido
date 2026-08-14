@@ -29,7 +29,9 @@ pub use context::{
 pub(crate) use cursor::take_cursor_change;
 pub use cursor::{CursorIcon, set_cursor};
 pub use effect::{Effect, create_effect};
-pub(crate) use focus::{focused_widget, has_focus, release_focus, request_focus};
+pub(crate) use focus::{
+    focus_path, has_focus, release_focus, release_focus_if_within, request_focus,
+};
 #[doc(hidden)]
 pub use into_signal::{
     ClosureMarker, LossyMarker, MemoMarker, RwSignalMarker, SignalMarker, ValueMarker,

@@ -431,10 +431,6 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 self.__inner.borrow_mut().as_mut().unwrap().event(tree, id, event)
             }
 
-            fn has_focus_descendant(&self, tree: &::guido::tree::Tree, focused_id: ::guido::tree::WidgetId) -> bool {
-                self.ensure_built();
-                self.__inner.borrow().as_ref().unwrap().has_focus_descendant(tree, focused_id)
-            }
         }
 
         #vis fn #fn_name() -> #struct_name {

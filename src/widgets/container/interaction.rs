@@ -80,13 +80,18 @@ pub(super) fn local_point(
 }
 
 impl Container {
-    /// Repaint after a hover/press change, as an Animation job when a state
-    /// layer animation has to pick the new target up.
+    /// Let a state-layer animation pick up its new target after a hover or
+    /// press change.
+    ///
+    /// The *repaint* needs no request: the flag write is a signal write, and
+    /// whatever resolved a state layer — this container, and any descendant
+    /// text whose colour resolves through it — subscribed to that signal and
+    /// is marked by it. What a signal write cannot do is drive the clock, so a
+    /// container with animated state properties still asks for its Animation
+    /// job here.
     pub(super) fn request_state_change_repaint(&self, id: WidgetId) {
         if self.has_animated_state_properties() {
             request_job(id, JobRequest::Animation(RequiredJob::Paint));
-        } else {
-            request_job(id, JobRequest::Paint);
         }
     }
 
@@ -98,17 +103,17 @@ impl Container {
         let Some(ref mut ix) = self.interaction else {
             return;
         };
+        // See `request_state_change_repaint`: the flag write invalidates, this
+        // only advances an animation.
         let request_repaint = |id: WidgetId| {
             if has_animated {
                 request_job(id, JobRequest::Animation(RequiredJob::Paint));
-            } else {
-                request_job(id, JobRequest::Paint);
             }
         };
 
         match event {
-            Event::MouseEnter { x, y } if hit.contains(*x, *y) && !ix.is_hovered => {
-                ix.is_hovered = true;
+            Event::MouseEnter { x, y } if hit.contains(*x, *y) && !ix.is_hovered() => {
+                ix.set_flag(InteractionFlags::HOVERED, true);
                 if ix.hover_state.is_some() {
                     request_repaint(id);
                 }
@@ -120,21 +125,21 @@ impl Container {
                 // A pressed container keeps receiving moves that leave it —
                 // that implicit capture is what makes dragging work.
                 if let Some(ref callback) = ix.on_pointer_move
-                    && (hit.contains(*x, *y) || ix.is_pressed)
+                    && (hit.contains(*x, *y) || ix.is_pressed())
                 {
                     let (lx, ly) = hit.rebase(*x, *y);
                     callback(lx, ly);
                 }
 
-                let was_hovered = ix.is_hovered;
-                ix.is_hovered = hit.contains(*x, *y);
+                let was_hovered = ix.is_hovered();
+                ix.set_flag(InteractionFlags::HOVERED, hit.contains(*x, *y));
 
-                if was_hovered != ix.is_hovered {
+                if was_hovered != ix.is_hovered() {
                     if ix.hover_state.is_some() {
                         request_repaint(id);
                     }
                     if let Some(ref callback) = ix.on_hover {
-                        callback(ix.is_hovered);
+                        callback(ix.is_hovered());
                     }
                 }
             }
@@ -182,8 +187,8 @@ impl Container {
                     && *button == MouseButton::Left
                     && let Some(ref mut ix) = self.interaction
                 {
-                    let was_pressed = ix.is_pressed;
-                    ix.is_pressed = true;
+                    let was_pressed = ix.is_pressed();
+                    ix.set_flag(InteractionFlags::PRESSED, true);
 
                     let has_ripple = ix
                         .pressed_state
@@ -218,11 +223,11 @@ impl Container {
 
             Event::MouseUp { x, y, button } => {
                 if let Some(ref mut ix) = self.interaction
-                    && ix.is_pressed
+                    && ix.is_pressed()
                     && *button == MouseButton::Left
                 {
-                    let was_pressed = ix.is_pressed;
-                    ix.is_pressed = false;
+                    let was_pressed = ix.is_pressed();
+                    ix.set_flag(InteractionFlags::PRESSED, false);
 
                     if ix.ripple.is_active() {
                         let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
@@ -260,15 +265,15 @@ impl Container {
 
             Event::MouseLeave => {
                 if let Some(ref mut ix) = self.interaction {
-                    let was_hovered = ix.is_hovered;
-                    let was_pressed = ix.is_pressed;
-                    if ix.is_hovered {
-                        ix.is_hovered = false;
+                    let was_hovered = ix.is_hovered();
+                    let was_pressed = ix.is_pressed();
+                    if ix.is_hovered() {
+                        ix.set_flag(InteractionFlags::HOVERED, false);
                         if let Some(ref callback) = ix.on_hover {
                             callback(false);
                         }
                     }
-                    ix.is_pressed = false;
+                    ix.set_flag(InteractionFlags::PRESSED, false);
 
                     // The pointer left without a release, so the ripple has no
                     // exit point to fade toward — it collapses to the centre.
