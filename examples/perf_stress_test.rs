@@ -63,9 +63,10 @@ fn main() {
             .padding(20.0)
             .layout(Flex::column().spacing(20.0))
             .child(
-                text("Performance Stress Test")
-                    .color(Color::WHITE)
-                    .font_size(28.0),
+                container()
+                    .text_color(Color::WHITE)
+                    .font_size(28.0)
+                    .child(text("Performance Stress Test")),
             )
             .child(create_add_button(item_ids, store_for_button))
             .child(
@@ -114,7 +115,9 @@ fn create_add_button(
             });
             item_ids.update(|ids| ids.push(id));
         })
-        .child(text("Add Item").color(Color::WHITE).font_size(14.0))
+        .text_color(Color::WHITE)
+        .font_size(14.0)
+        .child(text("Add Item"))
 }
 
 fn create_item_row(
@@ -158,17 +161,15 @@ fn create_toggle_button(enabled: RwSignal<bool>) -> Container {
         .on_click(move || {
             enabled.update(|e| *e = !*e);
         })
-        .child(
-            text(move || {
-                if enabled.get() {
-                    "Enabled".to_string()
-                } else {
-                    "Disabled".to_string()
-                }
-            })
-            .color(Color::WHITE)
-            .font_size(12.0),
-        )
+        .text_color(Color::WHITE)
+        .font_size(12.0)
+        .child(text(move || {
+            if enabled.get() {
+                "Enabled".to_string()
+            } else {
+                "Disabled".to_string()
+            }
+        }))
 }
 
 fn create_info_section(
@@ -179,16 +180,23 @@ fn create_info_section(
     container()
         .width(at_least(200.0))
         .layout(Flex::column().spacing(4.0))
-        .child(text(name).color(Color::WHITE).font_size(18.0))
         .child(
-            text(description)
-                .color(Color::rgb(0.7, 0.7, 0.8))
-                .font_size(14.0),
+            container()
+                .text_color(Color::WHITE)
+                .font_size(18.0)
+                .child(text(name)),
         )
         .child(
-            text(move || format!("Input: {}", input_value.get()))
-                .color(Color::rgb(0.6, 0.6, 0.7))
-                .font_size(12.0),
+            container()
+                .text_color(Color::rgb(0.7, 0.7, 0.8))
+                .font_size(14.0)
+                .child(text(description)),
+        )
+        .child(
+            container()
+                .text_color(Color::rgb(0.6, 0.6, 0.7))
+                .font_size(12.0)
+                .child(text(move || format!("Input: {}", input_value.get()))),
         )
 }
 
@@ -200,11 +208,9 @@ fn create_text_input_field(input_value: RwSignal<String>) -> Container {
         .border(1.0, Color::rgb(0.3, 0.3, 0.4))
         .corner_radius(6.0)
         .focused_state(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
-        .child(
-            text_input(input_value)
-                .text_color(Color::WHITE)
-                .cursor_color(Color::rgb(0.4, 0.8, 1.0))
-                .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
-                .font_size(14.0),
-        )
+        .text_color(Color::WHITE)
+        .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+        .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
+        .font_size(14.0)
+        .child(text_input(input_value))
 }

@@ -72,8 +72,8 @@ fn elevated_card() -> Container {
         .pressed_state(|s| s.elevation(2.0).darker(0.05))
         .layout(Flex::column().spacing(8.0))
         .children([
-            text("Card Title").font_size(18.0).bold().color(Color::WHITE),
-            text("Card content goes here").color(Color::rgb(0.7, 0.7, 0.75)),
+            container().font_size(18.0).bold().text_color(Color::WHITE).child(text("Card Title")),
+            container().text_color(Color::rgb(0.7, 0.7, 0.75)).child(text("Card content goes here")),
         ])
 }
 ```

@@ -99,9 +99,15 @@ fn create_child_widget(id: u64) -> impl Widget {
         .padding(12.0)
         .background(Color::rgb(0.2, 0.2, 0.3))
         .corner_radius(8.0)
-        .child(text(format!("Child {}", id)).color(Color::WHITE))
         .child(
-            text(move || format!("Ticks: {}", tick_signal.get())).color(Color::rgb(0.6, 0.8, 1.0)),
+            container()
+                .text_color(Color::WHITE)
+                .child(text(format!("Child {}", id))),
+        )
+        .child(
+            container()
+                .text_color(Color::rgb(0.6, 0.8, 1.0))
+                .child(text(move || format!("Ticks: {}", tick_signal.get()))),
         )
 }
 
@@ -126,15 +132,13 @@ fn main() {
                 container()
                     .layout(Flex::column().spacing(4.0))
                     .child(
-                        text("Effect Cleanup Test (Automatic Ownership)").color(Color::WHITE),
+                        container().text_color(Color::WHITE).child(text("Effect Cleanup Test (Automatic Ownership)")),
                     )
                     .child(
-                        text("Watch the console: each child logs every 2 seconds.")
-                            .color(Color::rgb(0.7, 0.7, 0.7)),
+                        container().text_color(Color::rgb(0.7, 0.7, 0.7)).child(text("Watch the console: each child logs every 2 seconds.")),
                     )
                     .child(
-                        text("When removed, on_cleanup runs and effect logs STOP.")
-                            .color(Color::rgb(0.7, 0.7, 0.7)),
+                        container().text_color(Color::rgb(0.7, 0.7, 0.7)).child(text("When removed, on_cleanup runs and effect logs STOP.")),
                     ),
             )
             .child(
@@ -153,7 +157,7 @@ fn main() {
                                 log::info!("[Child {}] Adding to list", id);
                                 children_ids.update(|list| list.push(id));
                             })
-                            .child(text("Add Child").color(Color::WHITE)),
+                            .text_color(Color::WHITE).child(text("Add Child")),
                     )
                     .child(
                         container()
@@ -172,7 +176,7 @@ fn main() {
                                     }
                                 });
                             })
-                            .child(text("Remove Last").color(Color::WHITE)),
+                            .text_color(Color::WHITE).child(text("Remove Last")),
                     )
                     .child(
                         container()
@@ -190,16 +194,15 @@ fn main() {
                                     list.clear();
                                 });
                             })
-                            .child(text("Remove All").color(Color::WHITE)),
+                            .text_color(Color::WHITE).child(text("Remove All")),
                     ),
             )
             .child(
                 // Status display
-                text(move || {
+                container().text_color(Color::WHITE).child(text(move || {
                     let count = children_ids.get().len();
                     format!("Active children: {}", count)
-                })
-                .color(Color::WHITE),
+                })),
             )
             .child(
                 // Children container with dynamic children — the builder runs

@@ -140,7 +140,15 @@ The container has:
 text("Hello World!")
 ```
 
-The `text()` function creates a text widget. Text inherits styling from its container by default, with white text color.
+The `text()` function creates a text widget. It carries the content and nothing
+else: colour, size, family and weight are declared on an enclosing container and
+inherited from the nearest one that sets them.
+
+```rust
+container().font_size(24.0).text_color(Color::WHITE).child(text("Hello World!"))
+```
+
+With nothing declared above it, text is white at 14 logical pixels.
 
 ## Adding Interactivity
 

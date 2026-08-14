@@ -15,9 +15,8 @@ use crate::default_font_family;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
-    CursorIcon, IntoSignal, OptionSignalExt, RwSignal, Signal, clipboard_copy, clipboard_paste,
-    has_focus, primary_copy, primary_paste, release_focus, request_focus, set_cursor,
-    with_signal_tracking,
+    CursorIcon, OptionSignalExt, RwSignal, clipboard_copy, clipboard_paste, has_focus,
+    primary_copy, primary_paste, release_focus, request_focus, set_cursor, with_signal_tracking,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled};
 use crate::tree::{Tree, WidgetId};
@@ -207,13 +206,8 @@ pub struct TextInput {
     /// Whether measurements need to be recalculated
     measurements_dirty: bool,
 
-    // Styling
-    text_color: Option<Signal<Color>>,
-    cursor_color: Option<Signal<Color>>,
-    selection_color: Option<Signal<Color>>,
-    font_size: Option<Signal<f32>>,
-    font_family: Option<Signal<FontFamily>>,
-    font_weight: Option<Signal<FontWeight>>,
+    // Metrics resolved from the enclosing container's style. Cached because a
+    // change to any of them invalidates the glyph measurements below.
     cached_font_size: f32,
     cached_font_family: FontFamily,
     cached_font_weight: FontWeight,
@@ -269,12 +263,6 @@ impl TextInput {
             cached_text_width: 0.0,
             cached_glyph_positions: Vec::new(),
             measurements_dirty: true,
-            text_color: None,
-            cursor_color: None,
-            selection_color: None,
-            font_size: None,
-            font_family: None,
-            font_weight: None,
             cached_font_size: 14.0,
             cached_font_family: default_family,
             cached_font_weight: FontWeight::NORMAL,
@@ -293,64 +281,6 @@ impl TextInput {
             on_change: None,
             on_submit: None,
         }
-    }
-
-    /// Set the text color
-    pub fn text_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.text_color = Some(color.into_signal());
-        self
-    }
-
-    /// Set the cursor color
-    pub fn cursor_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.cursor_color = Some(color.into_signal());
-        self
-    }
-
-    /// Set the selection highlight color
-    pub fn selection_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.selection_color = Some(color.into_signal());
-        self
-    }
-
-    /// Set the font size
-    pub fn font_size<M>(mut self, size: impl IntoSignal<f32, M>) -> Self {
-        self.font_size = Some(size.into_signal());
-        self
-    }
-
-    /// Set the font family.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// text_input(signal).font_family(FontFamily::Monospace)
-    /// ```
-    pub fn font_family<M>(mut self, family: impl IntoSignal<FontFamily, M>) -> Self {
-        self.font_family = Some(family.into_signal());
-        self
-    }
-
-    /// Set the font weight.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// text_input(signal).font_weight(FontWeight::BOLD)
-    /// ```
-    pub fn font_weight<M>(mut self, weight: impl IntoSignal<FontWeight, M>) -> Self {
-        self.font_weight = Some(weight.into_signal());
-        self
-    }
-
-    /// Shorthand for bold text (FontWeight::BOLD).
-    pub fn bold(self) -> Self {
-        self.font_weight(FontWeight::BOLD)
-    }
-
-    /// Shorthand for monospace font (FontFamily::Monospace).
-    pub fn mono(self) -> Self {
-        self.font_family(FontFamily::Monospace)
     }
 
     /// Enable password mode (masks text with bullet characters)
@@ -453,17 +383,19 @@ impl TextInput {
         (byte_start, byte_end)
     }
 
-    /// Refresh cached values from reactive properties.
-    /// Uses signal tracking to register layout dependencies so the widget
-    /// is re-laid out when any of these signals change.
-    fn refresh(&mut self, id: WidgetId) {
+    /// Refresh cached values from the bound signal and the inherited style.
+    ///
+    /// The reads happen in this widget's tracking scope, so whichever ancestor
+    /// supplied a metric is the one whose change re-lays-out this input.
+    fn refresh(&mut self, tree: &Tree, id: WidgetId) {
         let (new_value, new_font_size, new_font_family, new_font_weight) =
             with_signal_tracking(id, JobType::Layout, || {
+                let style = tree.inherited_text_style(id);
                 (
                     self.value.get(),
-                    self.font_size.get_or(14.0),
-                    self.font_family.get_or_else(default_font_family),
-                    self.font_weight.get_or(FontWeight::NORMAL),
+                    style.font_size.get_or(14.0),
+                    style.font_family.get_or_else(default_font_family),
+                    style.font_weight.get_or(FontWeight::NORMAL),
                 )
             });
 
@@ -1003,7 +935,7 @@ impl Widget for TextInput {
 
         // Refresh cached values from reactive properties
         // This reads signals and registers layout dependencies
-        self.refresh(id);
+        self.refresh(tree, id);
 
         // Handle key repeat for held keys
         self.handle_key_repeat(tree, id);
@@ -1047,13 +979,20 @@ impl Widget for TextInput {
         let display = self.display_text_cached();
         let is_focused = has_focus(id);
 
-        // Read color signals with tracking so changes trigger repaint
+        // Read the inherited colours with tracking so a change on whichever
+        // ancestor supplied them repaints this input and nothing else.
         let (text_color, selection_color, cursor_color) =
             with_signal_tracking(id, JobType::Paint, || {
+                let style = tree.inherited_text_style(id);
+                let text_color = style.color.get_or(Color::WHITE);
                 (
-                    self.text_color.get_or(Color::WHITE),
-                    self.selection_color.get_or(Color::rgba(0.4, 0.6, 1.0, 0.4)),
-                    self.cursor_color.get_or(Color::rgb(0.4, 0.8, 1.0)),
+                    text_color,
+                    style
+                        .selection_color
+                        .get_or(Color::rgba(0.4, 0.6, 1.0, 0.4)),
+                    // The caret defaults to the text colour: an input that
+                    // only sets `text_color` should not sprout a blue cursor.
+                    style.cursor_color.get_or(text_color),
                 )
             });
 

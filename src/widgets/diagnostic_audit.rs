@@ -200,18 +200,36 @@ fn a_fully_reactive_text_is_quiet() {
     let n = create_signal(0.0f32);
     let label = create_signal(String::from("ciao"));
 
-    let widget = text(move || label.get())
-        .color(move || {
+    // The style is reactive on the container and read by the text as it walks
+    // up, so this also covers the inherited path being resolved inside the
+    // text's own tracking scope rather than someone else's.
+    let widget = container()
+        .text_color(move || {
             if n.get() > 0.0 {
                 Color::RED
             } else {
                 Color::WHITE
             }
         })
-        .font_size(move || n.get() + 12.0);
+        .font_size(move || n.get() + 12.0)
+        .child(text(move || label.get()));
 
     assert_quiet(
         "a fully reactive text",
+        diagnostics_from_full_lifecycle(widget),
+    );
+}
+
+#[test]
+fn a_text_inheriting_through_a_plain_container_is_quiet() {
+    let n = create_signal(0.0f32);
+
+    let widget = container()
+        .font_size(move || n.get() + 12.0)
+        .child(container().child(text("ciao")));
+
+    assert_quiet(
+        "a text inheriting across a container that declares nothing",
         diagnostics_from_full_lifecycle(widget),
     );
 }
@@ -221,7 +239,7 @@ fn a_fully_reactive_text_input_is_quiet() {
     let value = create_signal(String::from("ciao"));
     let n = create_signal(0.0f32);
 
-    let widget = text_input(value)
+    let widget = container()
         .text_color(move || {
             if n.get() > 0.0 {
                 Color::RED
@@ -230,7 +248,8 @@ fn a_fully_reactive_text_input_is_quiet() {
             }
         })
         .cursor_color(move || Color::WHITE.with_alpha(n.get().max(0.5)))
-        .font_size(move || n.get() + 12.0);
+        .font_size(move || n.get() + 12.0)
+        .child(text_input(value));
 
     assert_quiet(
         "a fully reactive text input",

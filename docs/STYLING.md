@@ -206,14 +206,45 @@ container()
 
 ## Text Styling
 
+Text carries content; how it looks is declared on the container, alongside
+every other visual property:
+
 ```rust
-text("Hello")
+container()
     .font_size(16.0)
-    .color(Color::WHITE)
-    .bold()              // Font weight
-    .italic()            // Font style
-    .nowrap()            // Prevent wrapping
+    .text_color(Color::WHITE)
+    .bold()                          // font weight
+    .child(text("Hello").nowrap())   // nowrap is about wrapping, not looks
 ```
+
+Each property is inherited by everything below the container, until a nearer
+one overrides that property — and only that one:
+
+```rust
+container()
+    .text_color(theme.text)
+    .font_size(14.0)
+    .layout(Flex::column().spacing(8.0))
+    .child(text("inherits both"))
+    .child(
+        // Overrides the size; the colour still comes from above.
+        container().font_size(21.0).child(text("bigger, same colour")),
+    )
+```
+
+The same declarations style a `text_input`, which additionally reads
+`cursor_color` and `selection_color`:
+
+```rust
+container()
+    .mono()
+    .text_color(Color::WHITE)
+    .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+    .child(text_input(value))
+```
+
+Properties nothing declares fall back to white, 14 logical pixels, the
+registered default family and normal weight.
 
 ## Layout Styling
 
@@ -268,13 +299,8 @@ fn styled_card(title: &str, content: &str) -> Container {
         .hover_state(|s| s.lighter(0.05).elevation(6.0))
         // Children
         .children([
-            text(title)
-                .font_size(18.0)
-                .bold()
-                .color(Color::WHITE),
-            text(content)
-                .font_size(14.0)
-                .color(Color::rgb(0.7, 0.7, 0.75)),
+            container().font_size(18.0).bold().text_color(Color::WHITE).child(text(title)),
+            container().font_size(14.0).text_color(Color::rgb(0.7, 0.7, 0.75)).child(text(content)),
         ])
 }
 ```

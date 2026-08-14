@@ -125,7 +125,7 @@ container()
     .hover_state(|s| s.lighter(0.1))
     .pressed_state(|s| s.ripple())
     .on_click(|| println!("Clicked!"))
-    .child(text("Click me").color(Color::WHITE))
+    .child(container().text_color(Color::WHITE).child(text("Click me")))
 ```
 
 ### Outlined Button
@@ -138,7 +138,7 @@ container()
     .border(1.0, Color::rgb(0.5, 0.5, 0.6))
     .hover_state(|s| s.background(Color::rgba(1.0, 1.0, 1.0, 0.1)))
     .pressed_state(|s| s.ripple())
-    .child(text("Outlined").color(Color::WHITE))
+    .child(container().text_color(Color::WHITE).child(text("Outlined")))
 ```
 
 ### Card with Lift

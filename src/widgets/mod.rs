@@ -11,6 +11,7 @@ pub mod scroll;
 pub mod state_layer;
 pub mod text;
 pub mod text_input;
+pub mod text_style;
 pub mod widget;
 
 pub use crate::renderer::CornerRadii;
@@ -25,6 +26,7 @@ pub use scroll::{ScrollAxis, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibil
 pub use state_layer::{BackgroundOverride, RippleConfig, StateStyle};
 pub use text::{Text, text};
 pub use text_input::{Selection, TextInput, text_input};
+pub use text_style::TextStyle;
 pub use widget::{
     AnyWidget, Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding,
     Rect, ScrollSource, Widget,

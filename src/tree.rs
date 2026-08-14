@@ -115,6 +115,11 @@ struct Node {
     sparse_index: u32,
     /// Cached paint output from last frame
     cached_paint: Option<std::rc::Rc<crate::renderer::RenderNode>>,
+    /// Text style this node declares for its direct children, if any.
+    ///
+    /// Boxed because most nodes declare nothing: the miss costs a null check
+    /// instead of the ~96 bytes the struct would add to every node.
+    text_style: Option<Box<crate::widgets::TextStyle>>,
 }
 
 /// Central tree for widget storage using arena-based sparse-set architecture.
@@ -185,6 +190,7 @@ impl Tree {
             origin: (0.0, 0.0),
             sparse_index,
             cached_paint: None,
+            text_style: None,
         });
 
         // Update sparse map
@@ -316,6 +322,49 @@ impl Tree {
     pub fn get_parent(&self, id: WidgetId) -> Option<WidgetId> {
         self.get_dense_index(id)
             .and_then(|idx| self.dense[idx].parent)
+    }
+
+    /// Record the text style a node declares for its descendants.
+    ///
+    /// Containers call this as they enter the tree. An empty style clears the
+    /// slot rather than storing a box of nothing, which is what lets the walk
+    /// pass through layout-only containers at the cost of a null check.
+    pub fn set_text_style(&mut self, id: WidgetId, style: Option<crate::widgets::TextStyle>) {
+        if let Some(idx) = self.get_dense_index(id) {
+            self.dense[idx].text_style = style.filter(|s| !s.is_empty()).map(Box::new);
+        }
+    }
+
+    /// Resolve the text style that applies to a widget, per property.
+    ///
+    /// Walks the ancestors outwards and takes each property from the nearest
+    /// one that declares it, so a container overriding the size does not
+    /// disturb a colour set further up. Stops as soon as everything is
+    /// resolved.
+    ///
+    /// The result holds signals, not values: it is the caller that reads them,
+    /// which is what makes a text subscribe to the ancestors it actually
+    /// depended on. Callers must therefore `get()` inside their own
+    /// [`with_signal_tracking`](crate::reactive::with_signal_tracking) scope —
+    /// see [`TextStyle`](crate::widgets::TextStyle).
+    pub fn inherited_text_style(&self, id: WidgetId) -> crate::widgets::TextStyle {
+        let mut resolved = crate::widgets::TextStyle::default();
+        let mut cursor = self.get_parent(id);
+
+        while let Some(ancestor) = cursor {
+            let Some(idx) = self.get_dense_index(ancestor) else {
+                break;
+            };
+            if let Some(declared) = self.dense[idx].text_style.as_deref() {
+                resolved.inherit_from(declared);
+                if resolved.is_complete() {
+                    break;
+                }
+            }
+            cursor = self.dense[idx].parent;
+        }
+
+        resolved
     }
 
     /// Get the children of a widget (returns a slice to avoid heap allocation).
@@ -1141,5 +1190,149 @@ mod tests {
             !tree.needs_paint(a),
             "a widget that only moved keeps its cached paint"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Inherited text style
+    // -----------------------------------------------------------------------
+
+    use crate::reactive::create_stored;
+    use crate::widgets::{Color, FontWeight, TextStyle};
+
+    /// Build a chain root → … → leaf, returning every id in order.
+    fn chain(tree: &mut Tree, depth: usize) -> Vec<WidgetId> {
+        let mut ids = Vec::with_capacity(depth);
+        for i in 0..depth {
+            let id = tree.register(Box::new(MockWidget::new()));
+            if i > 0 {
+                tree.set_parent(id, ids[i - 1]);
+            }
+            ids.push(id);
+        }
+        ids
+    }
+
+    fn colored(color: Color) -> TextStyle {
+        TextStyle {
+            color: Some(create_stored(color)),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn inherited_style_is_empty_without_declarations() {
+        let mut tree = Tree::new();
+        let ids = chain(&mut tree, 3);
+        assert!(tree.inherited_text_style(ids[2]).is_empty());
+    }
+
+    #[test]
+    fn inherited_style_crosses_containers_that_declare_nothing() {
+        let mut tree = Tree::new();
+        let ids = chain(&mut tree, 4);
+        tree.set_text_style(ids[0], Some(colored(Color::RED)));
+
+        // Two undeclared ancestors in between must be transparent, which is the
+        // whole reason the lookup is a walk and not a parent read.
+        let resolved = tree.inherited_text_style(ids[3]);
+        assert_eq!(resolved.color.map(|c| c.get()), Some(Color::RED));
+    }
+
+    #[test]
+    fn nearest_declaration_wins() {
+        let mut tree = Tree::new();
+        let ids = chain(&mut tree, 3);
+        tree.set_text_style(ids[0], Some(colored(Color::RED)));
+        tree.set_text_style(ids[1], Some(colored(Color::BLUE)));
+
+        let resolved = tree.inherited_text_style(ids[2]);
+        assert_eq!(resolved.color.map(|c| c.get()), Some(Color::BLUE));
+    }
+
+    #[test]
+    fn resolution_is_per_property() {
+        let mut tree = Tree::new();
+        let ids = chain(&mut tree, 3);
+        tree.set_text_style(
+            ids[0],
+            Some(TextStyle {
+                color: Some(create_stored(Color::RED)),
+                font_size: Some(create_stored(30.0)),
+                ..Default::default()
+            }),
+        );
+        // The nearer container speaks only about size.
+        tree.set_text_style(
+            ids[1],
+            Some(TextStyle {
+                font_size: Some(create_stored(12.0)),
+                ..Default::default()
+            }),
+        );
+
+        let resolved = tree.inherited_text_style(ids[2]);
+        assert_eq!(resolved.font_size.map(|s| s.get()), Some(12.0));
+        assert_eq!(
+            resolved.color.map(|c| c.get()),
+            Some(Color::RED),
+            "overriding the size must not drop the colour set further up"
+        );
+    }
+
+    #[test]
+    fn a_node_does_not_inherit_its_own_declaration() {
+        // The container declares for what is inside it, not for itself; a
+        // container is not a text, so reading its own style would only ever
+        // confuse the widget that does the resolving.
+        let mut tree = Tree::new();
+        let ids = chain(&mut tree, 2);
+        tree.set_text_style(ids[1], Some(colored(Color::RED)));
+        assert!(tree.inherited_text_style(ids[1]).is_empty());
+    }
+
+    #[test]
+    fn empty_declarations_are_not_stored() {
+        let mut tree = Tree::new();
+        let ids = chain(&mut tree, 2);
+        tree.set_text_style(ids[0], Some(TextStyle::default()));
+        assert!(
+            tree.dense[tree.get_dense_index(ids[0]).unwrap()]
+                .text_style
+                .is_none(),
+            "a container declaring nothing must cost a null check, not a box"
+        );
+    }
+
+    #[test]
+    fn declarations_can_be_cleared() {
+        let mut tree = Tree::new();
+        let ids = chain(&mut tree, 2);
+        tree.set_text_style(ids[0], Some(colored(Color::RED)));
+        tree.set_text_style(ids[0], None);
+        assert!(tree.inherited_text_style(ids[1]).is_empty());
+    }
+
+    #[test]
+    fn walk_stops_once_everything_is_resolved() {
+        // A fully-declaring container shields whatever sits above it, so a deep
+        // tree does not pay for ancestors that can no longer contribute.
+        let mut tree = Tree::new();
+        let ids = chain(&mut tree, 3);
+        tree.set_text_style(ids[0], Some(colored(Color::RED)));
+        tree.set_text_style(
+            ids[1],
+            Some(TextStyle {
+                color: Some(create_stored(Color::BLUE)),
+                font_size: Some(create_stored(12.0)),
+                font_family: Some(create_stored(Default::default())),
+                font_weight: Some(create_stored(FontWeight::BOLD)),
+                cursor_color: Some(create_stored(Color::WHITE)),
+                selection_color: Some(create_stored(Color::BLACK)),
+            }),
+        );
+
+        let resolved = tree.inherited_text_style(ids[2]);
+        assert!(resolved.is_complete());
+        assert_eq!(resolved.color.map(|c| c.get()), Some(Color::BLUE));
     }
 }

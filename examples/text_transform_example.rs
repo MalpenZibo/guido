@@ -41,11 +41,10 @@ async fn main() {
             .padding(30.0)
             .children([
                 // Title
-                container().child(
-                    text("Text Transform Demo")
-                        .font_size(24.0)
-                        .color(Color::WHITE),
-                ),
+                container()
+                    .font_size(24.0)
+                    .text_color(Color::WHITE)
+                    .child(text("Text Transform Demo")),
                 // Row 1: Basic transforms (rotation, scale, translation)
                 container()
                     .layout(
@@ -67,7 +66,9 @@ async fn main() {
                                     .cross_alignment(CrossAlignment::Center),
                             )
                             .rotate(15.0)
-                            .child(text("Rotate 15°").font_size(13.0).color(Color::WHITE)),
+                            .font_size(13.0)
+                            .text_color(Color::WHITE)
+                            .child(text("Rotate 15°")),
                         // Scale
                         container()
                             .width(110.0)
@@ -80,7 +81,9 @@ async fn main() {
                                     .cross_alignment(CrossAlignment::Center),
                             )
                             .scale(1.2)
-                            .child(text("Scale 1.2x").font_size(13.0).color(Color::WHITE)),
+                            .font_size(13.0)
+                            .text_color(Color::WHITE)
+                            .child(text("Scale 1.2x")),
                         // Translation
                         container()
                             .width(110.0)
@@ -93,7 +96,9 @@ async fn main() {
                                     .cross_alignment(CrossAlignment::Center),
                             )
                             .translate(10.0, -10.0)
-                            .child(text("Translate").font_size(13.0).color(Color::WHITE)),
+                            .font_size(13.0)
+                            .text_color(Color::WHITE)
+                            .child(text("Translate")),
                         // Rotation + Scale
                         container()
                             .width(110.0)
@@ -107,7 +112,9 @@ async fn main() {
                             )
                             .rotate(-20.0)
                             .scale(0.9)
-                            .child(text("Rot + Scale").font_size(13.0).color(Color::WHITE)),
+                            .font_size(13.0)
+                            .text_color(Color::WHITE)
+                            .child(text("Rot + Scale")),
                     ]),
                 // Row 2: Combined transforms and custom origin
                 container()
@@ -132,7 +139,9 @@ async fn main() {
                             .rotate(10.0)
                             .scale(1.1)
                             .translate(5.0, 5.0)
-                            .child(text("All Combined").font_size(13.0).color(Color::WHITE)),
+                            .font_size(13.0)
+                            .text_color(Color::WHITE)
+                            .child(text("All Combined")),
                         // Custom origin: top-left
                         container()
                             .width(130.0)
@@ -146,7 +155,9 @@ async fn main() {
                             )
                             .transform_origin(TransformOrigin::TOP_LEFT)
                             .rotate(15.0)
-                            .child(text("Origin: Top-Left").font_size(12.0).color(Color::WHITE)),
+                            .font_size(12.0)
+                            .text_color(Color::WHITE)
+                            .child(text("Origin: Top-Left")),
                         // Custom origin: bottom-right
                         container()
                             .width(130.0)
@@ -160,11 +171,9 @@ async fn main() {
                             )
                             .transform_origin(TransformOrigin::BOTTOM_RIGHT)
                             .rotate(15.0)
-                            .child(
-                                text("Origin: Bot-Right")
-                                    .font_size(12.0)
-                                    .color(Color::WHITE),
-                            ),
+                            .font_size(12.0)
+                            .text_color(Color::WHITE)
+                            .child(text("Origin: Bot-Right")),
                         // Custom origin with scale
                         container()
                             .width(130.0)
@@ -179,7 +188,9 @@ async fn main() {
                             .transform_origin(TransformOrigin::TOP_RIGHT)
                             .scale(1.15)
                             .rotate(-10.0)
-                            .child(text("Origin + Scale").font_size(12.0).color(Color::WHITE)),
+                            .font_size(12.0)
+                            .text_color(Color::WHITE)
+                            .child(text("Origin + Scale")),
                     ]),
                 // Row 3: Nested transforms
                 container()
@@ -213,7 +224,9 @@ async fn main() {
                                             .main_alignment(MainAlignment::Center)
                                             .cross_alignment(CrossAlignment::Center),
                                     )
-                                    .child(text("Nested").font_size(14.0).color(Color::WHITE)),
+                                    .font_size(14.0)
+                                    .text_color(Color::WHITE)
+                                    .child(text("Nested")),
                             ),
                         // Double nested with additional rotation
                         container()
@@ -239,11 +252,9 @@ async fn main() {
                                             .cross_alignment(CrossAlignment::Center),
                                     )
                                     .rotate(15.0)
-                                    .child(
-                                        text("30° Total")
-                                            .font_size(13.0)
-                                            .color(Color::rgb(0.1, 0.1, 0.1)),
-                                    ),
+                                    .font_size(13.0)
+                                    .text_color(Color::rgb(0.1, 0.1, 0.1))
+                                    .child(text("30° Total")),
                             ),
                         // Nested with scale + translation
                         container()
@@ -270,11 +281,9 @@ async fn main() {
                                             .cross_alignment(CrossAlignment::Center),
                                     )
                                     .rotate(-10.0)
-                                    .child(
-                                        text("Scale+Trans")
-                                            .font_size(12.0)
-                                            .color(Color::rgb(0.1, 0.1, 0.1)),
-                                    ),
+                                    .font_size(12.0)
+                                    .text_color(Color::rgb(0.1, 0.1, 0.1))
+                                    .child(text("Scale+Trans")),
                             ),
                         // Animated rotating text
                         container()
@@ -288,7 +297,9 @@ async fn main() {
                                     .cross_alignment(CrossAlignment::Center),
                             )
                             .rotate(move || angle.get())
-                            .child(text("Spinning!").font_size(14.0).color(Color::WHITE)),
+                            .font_size(14.0)
+                            .text_color(Color::WHITE)
+                            .child(text("Spinning!")),
                     ]),
             ]);
 

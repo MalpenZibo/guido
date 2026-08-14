@@ -36,12 +36,14 @@ use crate::tree::{Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
 
 use super::children::ChildrenSource;
+use super::font::{FontFamily, FontWeight};
 use super::into_child::{IntoChild, IntoChildren};
 use super::paint_children::{ChildPaintOptions, paint_children};
 use super::scroll::{
     ScrollAxis, ScrollState, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibility,
 };
 use super::state_layer::{StateStyle, resolve_background};
+use super::text_style::TextStyle;
 use super::widget::{
     Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding, Rect,
     ScrollSource, Widget,
@@ -257,6 +259,10 @@ pub struct Container {
     // Backdrop blur: this surface's own content, the compositor's, or both.
     pub(super) backdrop_blur: Option<BackdropBlur>,
 
+    // How text inside this container looks. Boxed: most containers hold no
+    // text and pay one pointer for the whole feature.
+    pub(super) text: Option<Box<TextStyle>>,
+
     // Animation state (boxed to save ~400 bytes per non-animated container)
     pub(super) anims: Option<Box<ContainerAnims>>,
 
@@ -289,6 +295,7 @@ impl Container {
             interaction: None,
             widget_ref: None,
             backdrop_blur: None,
+            text: None,
             anims: None,
             scroll_axis: ScrollAxis::None,
             scroll_data: None,
@@ -381,6 +388,79 @@ impl Container {
     /// ```
     pub fn background<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
         self.background = Some(color.into_signal());
+        self
+    }
+
+    // -----------------------------------------------------------------------
+    // Text
+    //
+    // Text widgets carry content, not style; how they look is declared here.
+    // Each property is inherited by descendants until a nearer container
+    // overrides it — see [`TextStyle`](crate::widgets::TextStyle).
+    // -----------------------------------------------------------------------
+
+    fn text_mut(&mut self) -> &mut TextStyle {
+        self.text.get_or_insert_with(Box::default)
+    }
+
+    /// Set the colour of text in this container and its descendants.
+    ///
+    /// Named `text_color` rather than `color` because `color` on a box reads
+    /// as its fill — that one is [`background`](Self::background).
+    ///
+    /// ```ignore
+    /// container().text_color(theme.text).child(text("Hello"))
+    /// ```
+    pub fn text_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.text_mut().color = Some(color.into_signal());
+        self
+    }
+
+    /// Set the font size of text in this container and its descendants, in
+    /// logical pixels.
+    pub fn font_size<M>(mut self, size: impl IntoSignal<f32, M>) -> Self {
+        self.text_mut().font_size = Some(size.into_signal());
+        self
+    }
+
+    /// Set the font family of text in this container and its descendants.
+    ///
+    /// ```ignore
+    /// container().font_family(FontFamily::Name("Inter".into()))
+    /// ```
+    pub fn font_family<M>(mut self, family: impl IntoSignal<FontFamily, M>) -> Self {
+        self.text_mut().font_family = Some(family.into_signal());
+        self
+    }
+
+    /// Set the font weight of text in this container and its descendants, on
+    /// the CSS 100-900 scale.
+    pub fn font_weight<M>(mut self, weight: impl IntoSignal<FontWeight, M>) -> Self {
+        self.text_mut().font_weight = Some(weight.into_signal());
+        self
+    }
+
+    /// Shorthand for [`font_weight(FontWeight::BOLD)`](Self::font_weight).
+    pub fn bold(self) -> Self {
+        self.font_weight(FontWeight::BOLD)
+    }
+
+    /// Shorthand for [`font_family(FontFamily::Monospace)`](Self::font_family).
+    pub fn mono(self) -> Self {
+        self.font_family(FontFamily::Monospace)
+    }
+
+    /// Set the caret colour of any [`TextInput`](crate::widgets::TextInput)
+    /// below this container. Defaults to the text colour.
+    pub fn cursor_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.text_mut().cursor_color = Some(color.into_signal());
+        self
+    }
+
+    /// Set the selection highlight colour of any
+    /// [`TextInput`](crate::widgets::TextInput) below this container.
+    pub fn selection_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.text_mut().selection_color = Some(color.into_signal());
         self
     }
 
@@ -950,6 +1030,12 @@ impl Widget for Container {
     fn register_children(&mut self, tree: &mut Tree, id: WidgetId) {
         // Set container_id for children source
         self.children_source.set_container_id(id);
+
+        // Publish the declared text style on the node so descendants find it
+        // by walking up. The signals themselves are stable ids, so a value
+        // change needs no rewrite — only a rebuilt container does, and that
+        // re-registers anyway.
+        tree.set_text_style(id, self.text.as_deref().copied());
 
         // Register pending children
         self.children_source.register_pending(tree, id);

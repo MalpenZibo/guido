@@ -38,20 +38,23 @@ async fn main() {
                     .padding(8.0)
                     .background(Color::rgb(0.2, 0.2, 0.3))
                     .rotate(rotation)
-                    .child(text("Rotating").color(Color::WHITE)),
+                    .text_color(Color::WHITE)
+                    .child(text("Rotating")),
             )
             // Static containers (should have layout skipped after first frame)
             .child(
                 container()
                     .padding(8.0)
                     .background(Color::rgb(0.2, 0.3, 0.2))
-                    .child(text("Static text 1").color(Color::WHITE)),
+                    .text_color(Color::WHITE)
+                    .child(text("Static text 1")),
             )
             .child(
                 container()
                     .padding(8.0)
                     .background(Color::rgb(0.3, 0.2, 0.2))
-                    .child(text("Static text 2").color(Color::WHITE)),
+                    .text_color(Color::WHITE)
+                    .child(text("Static text 2")),
             );
 
         app.add_surface(

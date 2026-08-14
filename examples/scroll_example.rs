@@ -17,7 +17,11 @@ fn main() {
         .child(
             container()
                 .layout(Flex::column().spacing(4.0))
-                .child(text("Vertical Scroll").color(Color::WHITE))
+                .child(
+                    container()
+                        .text_color(Color::WHITE)
+                        .child(text("Vertical Scroll")),
+                )
                 .child(
                     container()
                         .width(200.0)
@@ -37,10 +41,8 @@ fn main() {
                                                 .background(Color::rgb(0.25, 0.25, 0.35))
                                                 .corner_radius(4.0)
                                                 .hover_state(|s| s.lighter(0.05))
-                                                .child(
-                                                    text(format!("Item {}", i + 1))
-                                                        .color(Color::WHITE),
-                                                )
+                                                .text_color(Color::WHITE)
+                                                .child(text(format!("Item {}", i + 1)))
                                         })
                                         .collect::<Vec<_>>(),
                                 ),
@@ -51,7 +53,11 @@ fn main() {
         .child(
             container()
                 .layout(Flex::column().spacing(4.0))
-                .child(text("Horizontal Scroll").color(Color::WHITE))
+                .child(
+                    container()
+                        .text_color(Color::WHITE)
+                        .child(text("Horizontal Scroll")),
+                )
                 .child(
                     container()
                         .width(200.0)
@@ -81,9 +87,8 @@ fn main() {
                                                         .main_alignment(MainAlignment::Center)
                                                         .cross_alignment(CrossAlignment::Center),
                                                 )
-                                                .child(
-                                                    text(format!("{}", i + 1)).color(Color::WHITE),
-                                                )
+                                                .text_color(Color::WHITE)
+                                                .child(text(format!("{}", i + 1)))
                                         })
                                         .collect::<Vec<_>>(),
                                 ),
@@ -94,7 +99,11 @@ fn main() {
         .child(
             container()
                 .layout(Flex::column().spacing(4.0))
-                .child(text("Custom Scrollbar").color(Color::WHITE))
+                .child(
+                    container()
+                        .text_color(Color::WHITE)
+                        .child(text("Custom Scrollbar")),
+                )
                 .child(
                     container()
                         .width(200.0)
@@ -122,10 +131,8 @@ fn main() {
                                                 .background(Color::rgb(0.2, 0.3, 0.45))
                                                 .corner_radius(4.0)
                                                 .hover_state(|s| s.lighter(0.05))
-                                                .child(
-                                                    text(format!("Blue Item {}", i + 1))
-                                                        .color(Color::WHITE),
-                                                )
+                                                .text_color(Color::WHITE)
+                                                .child(text(format!("Blue Item {}", i + 1)))
                                         })
                                         .collect::<Vec<_>>(),
                                 ),
@@ -136,7 +143,11 @@ fn main() {
         .child(
             container()
                 .layout(Flex::column().spacing(4.0))
-                .child(text("Hidden Scrollbar").color(Color::WHITE))
+                .child(
+                    container()
+                        .text_color(Color::WHITE)
+                        .child(text("Hidden Scrollbar")),
+                )
                 .child(
                     container()
                         .width(200.0)
@@ -157,10 +168,8 @@ fn main() {
                                                 .background(Color::rgb(0.3, 0.25, 0.2))
                                                 .corner_radius(4.0)
                                                 .hover_state(|s| s.lighter(0.05))
-                                                .child(
-                                                    text(format!("Hidden {}", i + 1))
-                                                        .color(Color::WHITE),
-                                                )
+                                                .text_color(Color::WHITE)
+                                                .child(text(format!("Hidden {}", i + 1)))
                                         })
                                         .collect::<Vec<_>>(),
                                 ),

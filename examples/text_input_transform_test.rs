@@ -20,18 +20,20 @@ fn main() {
             .padding(32.0)
             .layout(Flex::column().spacing(32.0))
             .child(
-                text("TextInput Transform Test")
-                    .color(Color::WHITE)
-                    .font_size(18.0),
+                container()
+                    .text_color(Color::WHITE)
+                    .font_size(18.0)
+                    .child(text("TextInput Transform Test")),
             )
             // 1. Normal (no transform) - baseline
             .child(
                 container()
                     .layout(Flex::column().spacing(4.0))
                     .child(
-                        text("No transform (baseline)")
-                            .color(Color::rgb(0.6, 0.6, 0.7))
-                            .font_size(12.0),
+                        container()
+                            .text_color(Color::rgb(0.6, 0.6, 0.7))
+                            .font_size(12.0)
+                            .child(text("No transform (baseline)")),
                     )
                     .child(
                         container()
@@ -40,12 +42,10 @@ fn main() {
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.3, 0.8, 0.3))
                             .corner_radius(6.0)
-                            .child(
-                                text_input(input1)
-                                    .text_color(Color::WHITE)
-                                    .cursor_color(Color::rgb(0.4, 0.8, 1.0))
-                                    .font_size(14.0),
-                            ),
+                            .text_color(Color::WHITE)
+                            .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                            .font_size(14.0)
+                            .child(text_input(input1)),
                     ),
             )
             // 2. Rotated container
@@ -53,9 +53,10 @@ fn main() {
                 container()
                     .layout(Flex::column().spacing(4.0))
                     .child(
-                        text("Rotated 15°")
-                            .color(Color::rgb(0.6, 0.6, 0.7))
-                            .font_size(12.0),
+                        container()
+                            .text_color(Color::rgb(0.6, 0.6, 0.7))
+                            .font_size(12.0)
+                            .child(text("Rotated 15°")),
                     )
                     .child(
                         container()
@@ -65,12 +66,10 @@ fn main() {
                             .border(1.0, Color::rgb(0.8, 0.5, 0.3))
                             .corner_radius(6.0)
                             .rotate(15.0)
-                            .child(
-                                text_input(input2)
-                                    .text_color(Color::WHITE)
-                                    .cursor_color(Color::rgb(0.4, 0.8, 1.0))
-                                    .font_size(14.0),
-                            ),
+                            .text_color(Color::WHITE)
+                            .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                            .font_size(14.0)
+                            .child(text_input(input2)),
                     ),
             )
             // 3. Scaled container
@@ -78,9 +77,10 @@ fn main() {
                 container()
                     .layout(Flex::column().spacing(4.0))
                     .child(
-                        text("Scaled 1.2x")
-                            .color(Color::rgb(0.6, 0.6, 0.7))
-                            .font_size(12.0),
+                        container()
+                            .text_color(Color::rgb(0.6, 0.6, 0.7))
+                            .font_size(12.0)
+                            .child(text("Scaled 1.2x")),
                     )
                     .child(
                         container()
@@ -90,12 +90,10 @@ fn main() {
                             .border(1.0, Color::rgb(0.3, 0.5, 0.8))
                             .corner_radius(6.0)
                             .scale(1.2)
-                            .child(
-                                text_input(input3)
-                                    .text_color(Color::WHITE)
-                                    .cursor_color(Color::rgb(0.4, 0.8, 1.0))
-                                    .font_size(14.0),
-                            ),
+                            .text_color(Color::WHITE)
+                            .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                            .font_size(14.0)
+                            .child(text_input(input3)),
                     ),
             )
             // 4. Translated container
@@ -103,9 +101,10 @@ fn main() {
                 container()
                     .layout(Flex::column().spacing(4.0))
                     .child(
-                        text("Translated (50, 10)")
-                            .color(Color::rgb(0.6, 0.6, 0.7))
-                            .font_size(12.0),
+                        container()
+                            .text_color(Color::rgb(0.6, 0.6, 0.7))
+                            .font_size(12.0)
+                            .child(text("Translated (50, 10)")),
                     )
                     .child(
                         container()
@@ -115,12 +114,10 @@ fn main() {
                             .border(1.0, Color::rgb(0.8, 0.8, 0.3))
                             .corner_radius(6.0)
                             .translate(50.0, 10.0)
-                            .child(
-                                text_input(input4)
-                                    .text_color(Color::WHITE)
-                                    .cursor_color(Color::rgb(0.4, 0.8, 1.0))
-                                    .font_size(14.0),
-                            ),
+                            .text_color(Color::WHITE)
+                            .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                            .font_size(14.0)
+                            .child(text_input(input4)),
                     ),
             )
             // 5. All transforms combined: translate + rotate + scale
@@ -128,9 +125,10 @@ fn main() {
                 container()
                     .layout(Flex::column().spacing(4.0))
                     .child(
-                        text("Translate(20,5) + Rotate(-10°) + Scale(0.9)")
-                            .color(Color::rgb(0.6, 0.6, 0.7))
-                            .font_size(12.0),
+                        container()
+                            .text_color(Color::rgb(0.6, 0.6, 0.7))
+                            .font_size(12.0)
+                            .child(text("Translate(20,5) + Rotate(-10°) + Scale(0.9)")),
                     )
                     .child(
                         container()
@@ -144,19 +142,18 @@ fn main() {
                                     .then(&Transform::rotate_degrees(-10.0))
                                     .then(&Transform::scale(0.9)),
                             )
-                            .child(
-                                text_input(input5)
-                                    .text_color(Color::WHITE)
-                                    .cursor_color(Color::rgb(0.4, 0.8, 1.0))
-                                    .font_size(14.0),
-                            ),
+                            .text_color(Color::WHITE)
+                            .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                            .font_size(14.0)
+                            .child(text_input(input5)),
                     ),
             )
             // Instructions
             .child(
-                text("Click in each input to test cursor positioning")
-                    .color(Color::rgb(0.5, 0.5, 0.6))
-                    .font_size(11.0),
+                container()
+                    .text_color(Color::rgb(0.5, 0.5, 0.6))
+                    .font_size(11.0)
+                    .child(text("Click in each input to test cursor positioning")),
             );
 
         app.add_surface(

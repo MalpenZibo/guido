@@ -16,7 +16,12 @@ fn main() {
         container()
             .layout(Flex::column().spacing(8.0))
             .child(widget)
-            .child(text(label).font_size(11.0).color(Color::rgb(0.7, 0.7, 0.7)))
+            .child(
+                container()
+                    .font_size(11.0)
+                    .text_color(Color::rgb(0.7, 0.7, 0.7))
+                    .child(text(label)),
+            )
     }
 
     // Helper to create a clipped container with visible border
@@ -47,18 +52,22 @@ fn main() {
         .padding(24.0)
         .layout(Flex::column().spacing(24.0))
         .child(
-            text("Image Clipping Test")
+            container()
                 .font_size(20.0)
-                .color(Color::WHITE),
+                .text_color(Color::WHITE)
+                .child(text("Image Clipping Test")),
         )
         // Row 1: Clipping comparison
         .child(
             container()
                 .layout(Flex::column().spacing(12.0))
                 .child(
-                    text("Clipping: 120x120 container with 257x248 image (ContentFit::None)")
+                    container()
                         .font_size(13.0)
-                        .color(Color::rgb(0.7, 0.7, 0.7)),
+                        .text_color(Color::rgb(0.7, 0.7, 0.7))
+                        .child(text(
+                            "Clipping: 120x120 container with 257x248 image (ContentFit::None)",
+                        )),
                 )
                 .child(
                     container()
@@ -86,9 +95,10 @@ fn main() {
             container()
                 .layout(Flex::column().spacing(12.0))
                 .child(
-                    text("Clipped containers at different sizes")
+                    container()
                         .font_size(13.0)
-                        .color(Color::rgb(0.7, 0.7, 0.7)),
+                        .text_color(Color::rgb(0.7, 0.7, 0.7))
+                        .child(text("Clipped containers at different sizes")),
                 )
                 .child(
                     container()
@@ -136,9 +146,10 @@ fn main() {
             container()
                 .layout(Flex::column().spacing(12.0))
                 .child(
-                    text("Intrinsic size layout (no explicit dimensions)")
+                    container()
                         .font_size(13.0)
-                        .color(Color::rgb(0.7, 0.7, 0.7)),
+                        .text_color(Color::rgb(0.7, 0.7, 0.7))
+                        .child(text("Intrinsic size layout (no explicit dimensions)")),
                 )
                 .child(labeled(
                     "ContentFit::None at intrinsic size (~257x248)",

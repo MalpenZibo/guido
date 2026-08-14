@@ -102,9 +102,9 @@ fn main() {
             .layout(Flex::column().spacing(8.0))
             .padding(16.0)
             .children([
-                text(move || format!("CPU: {:.1}%", cpu_usage.get())).color(Color::WHITE),
-                text(move || format!("Memory: {:.1}%", memory_usage.get())).color(Color::WHITE),
-                text(move || format!("Time: {}", time.get())).color(Color::WHITE),
+                container().text_color(Color::WHITE).child(text(move || format!("CPU: {:.1}%", cpu_usage.get()))),
+                container().text_color(Color::WHITE).child(text(move || format!("Memory: {:.1}%", memory_usage.get()))),
+                container().text_color(Color::WHITE).child(text(move || format!("Time: {}", time.get()))),
             ]);
 
         app.add_surface(
@@ -196,7 +196,7 @@ let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
 
 let view = container()
     .padding(20.0)
-    .child(text(move || time.get()).font_size(48.0).color(Color::WHITE));
+    .child(container().font_size(48.0).text_color(Color::WHITE).child(text(move || time.get())));
 ```
 
 ## Reading UI State From a Task: `watch()`

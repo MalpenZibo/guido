@@ -123,7 +123,7 @@ fn transform_demo() -> impl Widget {
                 .background(Color::rgb(0.8, 0.3, 0.3))
                 .corner_radius(8.0)
                 .rotate(45.0)
-                .child(text("45°").color(Color::WHITE)),
+                .child(container().text_color(Color::WHITE).child(text("45°"))),
 
             // Click to rotate
             container()
@@ -134,7 +134,7 @@ fn transform_demo() -> impl Widget {
                 .rotate(rotation)
                 .hover_state(|s| s.lighter(0.1))
                 .on_click(move || rotation.update(|r| *r += 45.0))
-                .child(text("Click").color(Color::WHITE)),
+                .child(container().text_color(Color::WHITE).child(text("Click"))),
 
             // Click to scale
             container()
@@ -148,7 +148,7 @@ fn transform_demo() -> impl Widget {
                     let new = if scale_factor.get() > 1.0 { 1.0 } else { 1.3 };
                     scale_factor.set(new);
                 })
-                .child(text("Scale").color(Color::WHITE)),
+                .child(container().text_color(Color::WHITE).child(text("Scale"))),
         ])
 }
 ```

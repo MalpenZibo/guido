@@ -108,7 +108,7 @@ fn ripple_button(label: &str, color: Color) -> Container {
         .pressed_state(|s| s.ripple().transform(Transform::scale(0.98)))
 
         .on_click(|| println!("Clicked!"))
-        .child(text(label).color(Color::WHITE))
+        .child(container().text_color(Color::WHITE).child(text(label)))
 }
 
 // Usage
