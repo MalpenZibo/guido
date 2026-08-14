@@ -125,6 +125,17 @@ impl Container {
         self.resolve_state_value(id, base, |state| state.transform)
     }
 
+    /// The text colour a descendant should see, before any animation.
+    pub(super) fn effective_text_color_target(&self, id: WidgetId) -> Color {
+        let base = self
+            .text
+            .as_ref()
+            .and_then(|t| t.color)
+            .map(|c| c.get())
+            .unwrap_or(Color::WHITE);
+        self.resolve_state_value(id, base, |state| state.text_color)
+    }
+
     /// Elevation is never animated, so the target *is* the drawn value.
     pub(super) fn effective_elevation(&self, id: WidgetId) -> f32 {
         let base = self.elevation.get_or(0.0);
@@ -157,18 +168,22 @@ impl Container {
     /// always: the cost of the feature is paid only where it is used.
     pub(super) fn published_text_style(&mut self, tree: &Tree, id: WidgetId) -> Option<TextStyle> {
         let declared = self.text.as_deref().copied();
-        if !self.has_state_text_color() {
+        let animated = self.animated_text;
+        if !self.has_state_text_color() && animated.is_none() {
             return declared;
         }
 
-        let ix = self
-            .interaction
-            .as_ref()
-            .expect("has_state_text_color implies interaction");
-        let flags = ix.flags;
-        let pressed = ix.pressed_state.as_ref().and_then(|s| s.text_color);
-        let focused = ix.focused_state.as_ref().and_then(|s| s.text_color);
-        let hovered = ix.hover_state.as_ref().and_then(|s| s.text_color);
+        let ix = self.interaction.as_ref();
+        let flags = ix.map(|ix| ix.flags);
+        let pressed = ix
+            .and_then(|ix| ix.pressed_state.as_ref())
+            .and_then(|s| s.text_color);
+        let focused = ix
+            .and_then(|ix| ix.focused_state.as_ref())
+            .and_then(|s| s.text_color);
+        let hovered = ix
+            .and_then(|ix| ix.hover_state.as_ref())
+            .and_then(|s| s.text_color);
 
         // What a descendant would have inherited without us — this container's
         // own declaration, or the nearest ancestor's. Walked once, here: a
@@ -181,7 +196,16 @@ impl Container {
 
         let (color, owner) = with_owner(|| {
             create_derived(move || {
-                let flags = flags.get();
+                // An animation in flight speaks for the whole fold: it is
+                // already travelling from the old resolved colour to the new
+                // one. Reading it here is also what subscribes the text, so it
+                // repaints on every step.
+                if let Some(animated) = animated
+                    && let Some(color) = animated.get()
+                {
+                    return color;
+                }
+                let flags = flags.map(|f| f.get()).unwrap_or_default();
                 if flags.contains(InteractionFlags::PRESSED)
                     && let Some(color) = pressed
                 {
@@ -274,6 +298,7 @@ impl Container {
                 || a.corner_radius.is_some()
                 || a.border_color.is_some()
                 || a.transform.is_some()
+                || a.text_color.is_some()
         })
     }
 
@@ -289,6 +314,7 @@ impl Container {
                 || a.corner_radius.is_some()
                 || a.border_color.is_some()
                 || a.transform.is_some()
+                || a.text_color.is_some()
         })
     }
 }
