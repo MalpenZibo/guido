@@ -153,6 +153,7 @@ pub(super) struct ContainerAnims {
     pub(super) border_width: Option<AnimationState<f32>>,
     pub(super) border_color: Option<AnimationState<Color>>,
     pub(super) transform: Option<AnimationState<Transform>>,
+    pub(super) text_color: Option<AnimationState<Color>>,
 }
 
 bitflags::bitflags! {
@@ -320,6 +321,13 @@ pub struct Container {
     // scope and has to be torn down by hand when the container goes.
     pub(super) text_owner: Option<OwnerId>,
 
+    // The in-flight value of an animated text colour, `None` while nothing is
+    // animating. Every other animated property is consumed by the paint of the
+    // container that owns it; this one is drawn by a *different* widget, so
+    // the value has to leave through a signal — a write per frame, which is
+    // what a per-frame repaint of the text costs under any design.
+    pub(super) animated_text: Option<RwSignal<Option<Color>>>,
+
     // Animation state (boxed to save ~400 bytes per non-animated container)
     pub(super) anims: Option<Box<ContainerAnims>>,
 
@@ -354,6 +362,7 @@ impl Container {
             backdrop_blur: None,
             text: None,
             text_owner: None,
+            animated_text: None,
             anims: None,
             scroll_axis: ScrollAxis::None,
             scroll_data: None,
@@ -906,6 +915,27 @@ impl Container {
     }
 
     /// Enable animation for border color changes
+    /// Animate the text colour of this container and its descendants.
+    ///
+    /// ```ignore
+    /// container()
+    ///     .text_color(theme.text_weak)
+    ///     .hover_state(|s| s.text_color(theme.text))
+    ///     .animate_text_color(Transition::new(200.0, TimingFunction::EaseOut))
+    /// ```
+    ///
+    /// A transition declared on two levels — an animated colour whose own base
+    /// is inherited from an ancestor that is itself animating — currently
+    /// retargets every frame, giving a damped chase rather than a transition
+    /// with its own curve. CSS starts the inner one once, towards the outer's
+    /// *final* value; that is the rule to adopt if it ever comes up. The chase
+    /// converges either way.
+    pub fn animate_text_color(mut self, transition: impl Into<TransitionConfig>) -> Self {
+        self.anims_mut().text_color = Some(AnimationState::new(Color::WHITE, transition.into()));
+        self.animated_text = Some(create_signal(None));
+        self
+    }
+
     pub fn animate_border_color(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.border_color.get_or_untracked(Color::TRANSPARENT);
         self.anims_mut().border_color = Some(AnimationState::new(initial, transition));
@@ -1036,7 +1066,34 @@ impl Widget for Container {
                     self.effective_transform_target(id),
                 )
             });
+            let text_color_target = crate::reactive::diagnostics::snapshot_zone(|| {
+                self.effective_text_color_target(id)
+            });
+            let animated_text = self.animated_text;
             let anims = self.anims.as_mut().unwrap();
+
+            // Text colour, by hand rather than through `advance_anim!`: every
+            // other animated property is consumed by this container's own
+            // paint, but this one is drawn by a descendant, so each step has
+            // to leave through a signal. The write is what wakes the text.
+            if let Some(ref mut anim) = anims.text_color {
+                anim.animate_to(text_color_target);
+                if anim.is_animating() {
+                    any_animating = true;
+                    let required = if anim.advance().is_changed() {
+                        crate::jobs::RequiredJob::Paint
+                    } else {
+                        crate::jobs::RequiredJob::None
+                    };
+                    request_job(id, JobRequest::Animation(required));
+                }
+                if let Some(signal) = animated_text {
+                    // `None` once settled, so the derived goes back to the
+                    // ordinary fold rather than pinning the last frame.
+                    let current = anim.is_animating().then(|| anim.displayed());
+                    signal.set(current);
+                }
+            }
             // Layout-affecting animations: width, height, padding
             advance_anim!(anims, width, id, any_animating, layout);
             advance_anim!(anims, height, id, any_animating, layout);

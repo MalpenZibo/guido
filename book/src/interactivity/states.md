@@ -111,6 +111,22 @@ container()
     )
 ```
 
+It can be animated like any other container property:
+
+```rust
+container()
+    .text_color(theme.text_weak)
+    .hover_state(|s| s.text_color(theme.text))
+    .animate_text_color(Transition::new(200.0, TimingFunction::EaseOut))
+    .child(text("Label"))
+```
+
+A transition declared on two levels — an animated colour whose own base comes
+from an ancestor that is itself animating — currently retargets every frame,
+which gives a damped chase rather than a transition with its own curve. It
+converges either way; CSS instead starts the inner one once, towards the
+outer's final value.
+
 ## Combining Multiple Overrides
 
 Each state can override multiple properties:

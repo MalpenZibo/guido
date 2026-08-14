@@ -14,6 +14,7 @@
 use rustc_hash::FxHashSet;
 
 use super::*;
+use crate::animation::{TimingFunction, Transition};
 use crate::jobs::{self, JobType};
 use crate::layout::{Constraints, Flex, at_least, at_most, fill, fraction};
 use crate::reactive::create_signal;
@@ -1052,4 +1053,90 @@ fn a_focused_state_applies_while_a_descendant_holds_focus() {
     assert_eq!(rects(&h.paint())[0].1, Color::BLUE);
     clear_focus();
     assert_eq!(rects(&h.paint())[0].1, Color::RED);
+}
+
+// ---------------------------------------------------------------------------
+// An animated text colour
+// ---------------------------------------------------------------------------
+
+/// Advance until nothing is animating, or `limit` frames pass.
+///
+/// Animations step against the wall clock, so a tight loop would advance them
+/// by microseconds and never arrive — the frames have to take real time.
+fn settle(h: &mut H, limit: usize) -> usize {
+    for frame in 0..limit {
+        std::thread::sleep(std::time::Duration::from_millis(4));
+        let root = h.root;
+        let animating = h
+            .tree
+            .with_widget_mut(root, |w, id, t| w.advance_animations(t, id))
+            .unwrap_or(false);
+        painted_text_color(h);
+        if !animating {
+            return frame;
+        }
+    }
+    limit
+}
+
+/// The in-flight value has to reach a widget that is not the one animating.
+/// Every other animated property is consumed by the paint of the container
+/// that owns it; this one is drawn by a descendant, so each step leaves
+/// through a signal — and if that write did not happen, the text would simply
+/// jump to the final colour on the first frame while the box eased.
+#[test]
+fn an_animated_text_colour_passes_through_intermediate_values() {
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(40.0)
+            .text_color(Color::BLACK)
+            .hover_state(|s| s.text_color(Color::WHITE))
+            .animate_text_color(Transition::new(80.0, TimingFunction::Linear))
+            .child(crate::widgets::text("Label")),
+    );
+
+    assert_eq!(painted_text_color(&mut h), Color::BLACK);
+
+    set_hover(&mut h, true);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let root = h.root;
+    h.tree
+        .with_widget_mut(root, |w, id, t| w.advance_animations(t, id));
+    let mid = painted_text_color(&mut h);
+    assert!(
+        mid != Color::BLACK && mid != Color::WHITE,
+        "expected a value between the two, got {mid:?}"
+    );
+
+    settle(&mut h, 80);
+    assert_eq!(
+        painted_text_color(&mut h),
+        Color::WHITE,
+        "and it has to arrive"
+    );
+}
+
+/// Once settled the derived goes back to the ordinary fold, so the animation
+/// is not left pinning its last frame.
+#[test]
+fn a_settled_animation_releases_the_colour_back_to_the_fold() {
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(40.0)
+            .text_color(Color::BLACK)
+            .hover_state(|s| s.text_color(Color::WHITE))
+            .animate_text_color(Transition::new(80.0, TimingFunction::Linear))
+            .child(crate::widgets::text("Label")),
+    );
+
+    painted_text_color(&mut h);
+    set_hover(&mut h, true);
+    settle(&mut h, 80);
+    assert_eq!(painted_text_color(&mut h), Color::WHITE);
+
+    set_hover(&mut h, false);
+    settle(&mut h, 80);
+    assert_eq!(painted_text_color(&mut h), Color::BLACK);
 }
