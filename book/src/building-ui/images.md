@@ -10,14 +10,16 @@ The `image()` function creates an image widget from a file path:
 use guido::prelude::*;
 
 // Load a PNG image
-image("./icon.png")
+container()
     .width(32.0)
     .height(32.0)
+    .child(image("./icon.png"))
 
 // Load an SVG (auto-detected by extension)
-image("./logo.svg")
+container()
     .width(100.0)
     .height(100.0)
+    .child(image("./logo.svg"))
 ```
 
 ## Image Sources
@@ -47,43 +49,49 @@ When using a string path with `image()`, the file extension determines the type 
 
 ## Sizing
 
-You can specify explicit dimensions or let the image use its intrinsic size:
+The box comes from the enclosing container, like every other size in guido; the
+image decides only how its pixels land inside it.
 
 ```rust
-// Explicit width and height
-image("./icon.png")
-    .width(32.0)
-    .height(32.0)
+// A 32x32 box
+container().width(32.0).height(32.0).child(image("./icon.png"))
 
-// Only width - height calculated from aspect ratio
-image("./banner.png")
-    .width(200.0)
+// Width fixed, height from the aspect ratio (the default fit is Contain)
+container().width(200.0).child(image("./banner.png"))
 
-// Only height - width calculated from aspect ratio
-image("./logo.svg")
-    .height(48.0)
-
-// No size - uses intrinsic dimensions
+// No box at all - the image reports its intrinsic size
 image("./icon.png")
 ```
 
 ## Content Fit Modes
 
-The `content_fit()` method controls how images fit within their bounds:
+The `content_fit()` method controls how the image maps into the box it is
+given:
 
 | Mode | Description |
 |------|-------------|
-| `ContentFit::Contain` | Fit within bounds, preserving aspect ratio (default) |
-| `ContentFit::Cover` | Cover the bounds, may crop, preserving aspect ratio |
+| `ContentFit::Contain` | Fit within the box, preserving aspect ratio (default) |
+| `ContentFit::Cover` | Fill the box, cropping, preserving aspect ratio |
 | `ContentFit::Fill` | Stretch to fill exactly, ignoring aspect ratio |
-| `ContentFit::None` | Use intrinsic size, ignoring widget bounds |
+| `ContentFit::None` | Intrinsic size, ignoring the box |
+
+`Cover` and `Fill` take all the room the container offers; they differ in how
+the pixels land. `Contain` takes only the largest rect of the image's own
+aspect ratio that fits, so the empty strip is left to the parent's alignment
+rather than painted.
 
 ```rust
-// Cover mode - fills the space, may crop
-image("./photo.jpg")
+// Cover a 200x150 box, cropping what does not fit
+container()
     .width(200.0)
     .height(150.0)
-    .content_fit(ContentFit::Cover)
+    .child(image("./photo.jpg").content_fit(ContentFit::Cover))
+
+// A wallpaper: cover the whole surface
+container()
+    .width(fill())
+    .height(fill())
+    .child(image(wallpaper).content_fit(ContentFit::Cover))
 ```
 
 ## Transform Composition
@@ -95,18 +103,20 @@ Images inherit transforms from parent containers, just like text:
 container()
     .rotate(15.0)
     .child(
-        image("./badge.svg")
+        container()
             .width(32.0)
             .height(32.0)
+            .child(image("./badge.svg"))
     )
 
 // Scaled image
 container()
     .scale(1.5)
     .child(
-        image("./icon.png")
+        container()
             .width(24.0)
             .height(24.0)
+            .child(image("./icon.png"))
     )
 
 // Combined transforms
@@ -150,9 +160,10 @@ Image sources can be reactive, allowing dynamic image changes:
 let icon_source = create_signal(ImageSource::Path("./play.png".into()));
 
 // The image updates when the signal changes
-image(icon_source)
+container()
     .width(32.0)
     .height(32.0)
+    .child(image(icon_source))
 
 // Change the image on click
 container()
@@ -193,9 +204,10 @@ fn main() {
             .layout(Flex::row().spacing(16.0))
             .child(
                 // PNG image
-                image("./logo.png")
+                container()
                     .width(48.0)
                     .height(48.0)
+                    .child(image("./logo.png"))
             )
             .child(
                 // SVG from memory
@@ -208,9 +220,10 @@ fn main() {
                 container()
                     .rotate(15.0)
                     .child(
-                        image("./icon.svg")
+                        container()
                             .width(24.0)
                             .height(24.0)
+                            .child(image("./icon.svg"))
                     )
             );
 

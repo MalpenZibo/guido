@@ -260,13 +260,14 @@ fn a_fully_reactive_text_input_is_quiet() {
 #[test]
 fn an_image_is_quiet() {
     // Raw pixels: no file to find, no decoder to reach for.
-    let widget = image(ImageSource::Rgba {
-        width: 2,
-        height: 2,
-        pixels: std::sync::Arc::from(vec![255u8; 2 * 2 * 4].into_boxed_slice()),
-    })
-    .width(20.0)
-    .height(20.0);
+    let widget = container()
+        .width(20.0)
+        .height(20.0)
+        .child(image(ImageSource::Rgba {
+            width: 2,
+            height: 2,
+            pixels: std::sync::Arc::from(vec![255u8; 2 * 2 * 4].into_boxed_slice()),
+        }));
 
     assert_quiet("an image", diagnostics_from_full_lifecycle(widget));
 }

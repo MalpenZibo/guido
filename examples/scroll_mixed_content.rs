@@ -48,13 +48,10 @@ fn main() {
                     container()
                         .background(Color::rgb(0.2, 0.2, 0.25))
                         .corner_radius(8.0)
+                        .width(120.0)
+                        .height(90.0)
                         .hover_state(|s| s.lighter(0.05))
-                        .child(
-                            image(path)
-                                .width(120.0)
-                                .height(90.0)
-                                .content_fit(ContentFit::Cover),
-                        ),
+                        .child(image(path).content_fit(ContentFit::Cover)),
                 )
                 .child(
                     container()
@@ -107,11 +104,11 @@ fn main() {
                                             .child(
                                                 container()
                                                     .corner_radius(40.0)
+                                                    .width(80.0)
+                                                    .height(80.0)
                                                     .background(Color::rgb(0.25, 0.25, 0.3))
                                                     .child(
                                                         image("examples/assets/photo.webp")
-                                                            .width(80.0)
-                                                            .height(80.0)
                                                             .content_fit(ContentFit::Cover),
                                                     ),
                                             )
@@ -321,9 +318,12 @@ fn main() {
                                                                     ),
                                                             )
                                                             .child(
-                                                                image("examples/assets/logo.svg")
+                                                                container()
                                                                     .width(32.0)
-                                                                    .height(24.0),
+                                                                    .height(24.0)
+                                                                    .child(image(
+                                                                        "examples/assets/logo.svg",
+                                                                    )),
                                                             ),
                                                     )
                                                     .child(
