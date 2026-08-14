@@ -14,11 +14,17 @@
 
 use guido::prelude::*;
 
-fn photo() -> Image {
-    image(ImageSource::Path("examples/assets/photo.webp".into()))
-        .width(220.0)
-        .height(140.0)
-        .content_fit(ContentFit::Cover)
+/// The photo, in a box of its own. The panels are all 220x140, so `photo()`
+/// carries that size and `photo_of(w, h)` covers the one case that differs.
+fn photo() -> Container {
+    photo_of(220.0, 140.0)
+}
+
+fn photo_of(w: f32, h: f32) -> Container {
+    container().width(w).height(h).child(
+        image(ImageSource::Path("examples/assets/photo.webp".into()))
+            .content_fit(ContentFit::Cover),
+    )
 }
 
 fn panel(label: &'static str, content: Container) -> Container {
@@ -144,7 +150,7 @@ fn main() {
                             .width(fill())
                             .height(fill())
                             .layout(Flex::row().main_alignment(MainAlignment::End))
-                            .child(photo().width(120.0)),
+                            .child(photo_of(120.0, 140.0)),
                     ),
             ));
 

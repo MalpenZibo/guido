@@ -5,12 +5,17 @@
 use guido::prelude::*;
 
 fn main() {
-    // Helper to create a labeled image card
-    fn image_card(label: &'static str, img: Image) -> Container {
+    // Helper to create a labeled image card.
+    //
+    // The card decides the box; the image only decides how its pixels land in
+    // it. That is why the sizes moved here from the image calls below.
+    fn image_card(label: &'static str, (w, h): (f32, f32), img: Image) -> Container {
         container()
             .layout(Flex::column().spacing(8.0))
             .child(
                 container()
+                    .width(w)
+                    .height(h)
                     .background(Color::rgb(0.2, 0.2, 0.25))
                     .corner_radius(4.0)
                     .child(img),
@@ -24,11 +29,18 @@ fn main() {
     }
 
     // Helper to create a transformed image card
-    fn transformed_card(label: &'static str, img: Image, transform: Container) -> Container {
+    fn transformed_card(
+        label: &'static str,
+        (w, h): (f32, f32),
+        img: Image,
+        transform: Container,
+    ) -> Container {
         container()
             .layout(Flex::column().spacing(8.0))
             .child(
                 transform
+                    .width(w)
+                    .height(h)
                     .background(Color::rgb(0.2, 0.2, 0.25))
                     .corner_radius(4.0)
                     .child(img),
@@ -60,24 +72,18 @@ fn main() {
                         .layout(Flex::row().spacing(32.0))
                         .child(image_card(
                             "Contain",
-                            image("examples/assets/photo.webp")
-                                .width(90.0)
-                                .height(90.0)
-                                .content_fit(ContentFit::Contain),
+                            (90.0, 90.0),
+                            image("examples/assets/photo.webp").content_fit(ContentFit::Contain),
                         ))
                         .child(image_card(
                             "Cover",
-                            image("examples/assets/photo.webp")
-                                .width(90.0)
-                                .height(90.0)
-                                .content_fit(ContentFit::Cover),
+                            (90.0, 90.0),
+                            image("examples/assets/photo.webp").content_fit(ContentFit::Cover),
                         ))
                         .child(image_card(
                             "Fill",
-                            image("examples/assets/photo.webp")
-                                .width(90.0)
-                                .height(90.0)
-                                .content_fit(ContentFit::Fill),
+                            (90.0, 90.0),
+                            image("examples/assets/photo.webp").content_fit(ContentFit::Fill),
                         )),
                 )
                 .child(
@@ -85,18 +91,14 @@ fn main() {
                         .layout(Flex::row().spacing(48.0))
                         .child(transformed_card(
                             "Rotated 10°",
-                            image("examples/assets/photo.webp")
-                                .width(90.0)
-                                .height(90.0)
-                                .content_fit(ContentFit::Cover),
+                            (90.0, 90.0),
+                            image("examples/assets/photo.webp").content_fit(ContentFit::Cover),
                             container().rotate(10.0),
                         ))
                         .child(transformed_card(
                             "Scaled 1.5x",
-                            image("examples/assets/photo.webp")
-                                .width(90.0)
-                                .height(90.0)
-                                .content_fit(ContentFit::Cover),
+                            (90.0, 90.0),
+                            image("examples/assets/photo.webp").content_fit(ContentFit::Cover),
                             container().scale(1.5),
                         )),
                 ),
@@ -116,16 +118,19 @@ fn main() {
                         .layout(Flex::row().spacing(32.0))
                         .child(image_card(
                             "Normal",
-                            image("examples/assets/logo.svg").width(80.0).height(60.0),
+                            (80.0, 60.0),
+                            image("examples/assets/logo.svg"),
                         ))
                         .child(transformed_card(
                             "Rotated 15°",
-                            image("examples/assets/logo.svg").width(80.0).height(60.0),
+                            (80.0, 60.0),
+                            image("examples/assets/logo.svg"),
                             container().rotate(15.0),
                         ))
                         .child(transformed_card(
                             "Scaled 1.5x",
-                            image("examples/assets/logo.svg").width(80.0).height(60.0),
+                            (80.0, 60.0),
+                            image("examples/assets/logo.svg"),
                             container().scale(1.5),
                         )),
                 ),

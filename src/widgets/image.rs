@@ -93,10 +93,19 @@ pub enum ContentFit {
 }
 
 /// Image widget for displaying raster and SVG images.
+///
+/// The image carries the pixels and how they map into the box it is given;
+/// the box itself comes from the enclosing container, like every other size in
+/// guido:
+///
+/// ```ignore
+/// container()
+///     .width(fill())
+///     .height(fill())
+///     .child(image(source).content_fit(ContentFit::Cover))
+/// ```
 pub struct Image {
     source: Signal<ImageSource>,
-    width: Option<Signal<f32>>,
-    height: Option<Signal<f32>>,
     content_fit: ContentFit,
     /// Cached intrinsic size from the image source
     intrinsic_size: Option<(u32, u32)>,
@@ -109,24 +118,10 @@ impl Image {
     pub fn new<M>(source: impl IntoSignal<ImageSource, M>) -> Self {
         Self {
             source: source.into_signal(),
-            width: None,
-            height: None,
             content_fit: ContentFit::default(),
             intrinsic_size: None,
             cached_source: None,
         }
-    }
-
-    /// Set a fixed width for the image.
-    pub fn width<M>(mut self, width: impl IntoSignal<f32, M>) -> Self {
-        self.width = Some(width.into_signal());
-        self
-    }
-
-    /// Set a fixed height for the image.
-    pub fn height<M>(mut self, height: impl IntoSignal<f32, M>) -> Self {
-        self.height = Some(height.into_signal());
-        self
     }
 
     /// Set the content fit mode.
@@ -140,77 +135,65 @@ impl Image {
         self.intrinsic_size
     }
 
-    /// Calculate the display size based on intrinsic size, explicit dimensions, and fit mode.
-    fn calculate_size(
-        &self,
-        constraints: &Constraints,
-        explicit_width: Option<f32>,
-        explicit_height: Option<f32>,
-    ) -> Size {
-        // If we have both explicit dimensions, use them
-        if let (Some(w), Some(h)) = (explicit_width, explicit_height) {
-            return Size::new(
-                w.max(constraints.min_width).min(constraints.max_width),
-                h.max(constraints.min_height).min(constraints.max_height),
-            );
-        }
-
-        // Get intrinsic size or use a default
+    /// The box this image occupies, from the constraints and the fit mode.
+    ///
+    /// The fit modes disagree only about what to do with room that is offered
+    /// but not demanded:
+    ///
+    /// - `Fill` and `Cover` take all of it. They differ in how the pixels land
+    ///   inside — stretched or cropped — which is the renderer's job, not this
+    ///   one's. `Cover` sizing itself to the aspect ratio was the old bug: an
+    ///   image asked to cover its box would letterbox instead, because it had
+    ///   shrunk the box to the shape it was trying to cover.
+    /// - `Contain` promises the whole image is visible, so with room to spare
+    ///   it takes only the largest aspect-preserving rect that fits, leaving
+    ///   the letterboxing to the parent's alignment rather than painting it.
+    /// - `None` is the intrinsic pixels, clamped into whatever room there is.
+    ///
+    /// An axis whose constraint is unbounded has no room to take, so every
+    /// mode falls back to the intrinsic size there.
+    fn calculate_size(&self, constraints: &Constraints) -> Size {
         let (intrinsic_w, intrinsic_h) = self.intrinsic_size.unwrap_or((100, 100));
         let intrinsic_w = intrinsic_w as f32;
         let intrinsic_h = intrinsic_h as f32;
         let aspect = intrinsic_w / intrinsic_h;
 
-        match self.content_fit {
-            ContentFit::None => {
-                // Use intrinsic size directly
-                Size::new(
-                    intrinsic_w.max(constraints.min_width),
-                    intrinsic_h.max(constraints.min_height),
-                )
-            }
-            ContentFit::Fill => {
-                // Use explicit dimensions or fill available space
-                let width = explicit_width
-                    .unwrap_or(constraints.max_width)
-                    .max(constraints.min_width)
-                    .min(constraints.max_width);
-                let height = explicit_height
-                    .unwrap_or(constraints.max_height)
-                    .max(constraints.min_height)
-                    .min(constraints.max_height);
-                Size::new(width, height)
-            }
-            ContentFit::Contain | ContentFit::Cover => {
-                // If one dimension is explicit, calculate the other from aspect ratio
-                let (target_w, target_h) = match (explicit_width, explicit_height) {
-                    (Some(w), None) => (w, w / aspect),
-                    (None, Some(h)) => (h * aspect, h),
-                    (None, None) => {
-                        // Fit within constraints
-                        let max_w = constraints.max_width;
-                        let max_h = constraints.max_height;
-                        if max_w / max_h > aspect {
-                            // Height is the limiting factor
-                            (max_h * aspect, max_h)
+        let offered_w = if constraints.max_width.is_finite() {
+            constraints.max_width
+        } else {
+            intrinsic_w
+        };
+        let offered_h = if constraints.max_height.is_finite() {
+            constraints.max_height
+        } else {
+            intrinsic_h
+        };
+
+        let size = match self.content_fit {
+            ContentFit::None => Size::new(intrinsic_w, intrinsic_h),
+            ContentFit::Fill | ContentFit::Cover => Size::new(offered_w, offered_h),
+            ContentFit::Contain => {
+                // A tight axis is not room on offer, it is a decision already
+                // made; the other axis follows from the aspect ratio.
+                let tight_w = constraints.min_width == constraints.max_width;
+                let tight_h = constraints.min_height == constraints.max_height;
+                match (tight_w, tight_h) {
+                    (true, true) => Size::new(offered_w, offered_h),
+                    (true, false) => Size::new(offered_w, offered_w / aspect),
+                    (false, true) => Size::new(offered_h * aspect, offered_h),
+                    // Largest rect of this aspect that fits in what is offered.
+                    (false, false) => {
+                        if offered_w / offered_h > aspect {
+                            Size::new(offered_h * aspect, offered_h)
                         } else {
-                            // Width is the limiting factor
-                            (max_w, max_w / aspect)
+                            Size::new(offered_w, offered_w / aspect)
                         }
                     }
-                    (Some(w), Some(h)) => (w, h),
-                };
-
-                Size::new(
-                    target_w
-                        .max(constraints.min_width)
-                        .min(constraints.max_width),
-                    target_h
-                        .max(constraints.min_height)
-                        .min(constraints.max_height),
-                )
+                }
             }
-        }
+        };
+
+        constraints.constrain(size)
     }
 }
 
@@ -219,15 +202,8 @@ impl Widget for Image {
         // Images are never relayout boundaries
         tree.set_relayout_boundary(id, false);
 
-        // Read reactive properties with signal tracking so changes trigger re-layout
-        let (current_source, explicit_width, explicit_height) =
-            with_signal_tracking(id, JobType::Layout, || {
-                (
-                    self.source.get(),
-                    self.width.map(|w| w.get()),
-                    self.height.map(|h| h.get()),
-                )
-            });
+        // Read the source with signal tracking so a change triggers re-layout
+        let current_source = with_signal_tracking(id, JobType::Layout, || self.source.get());
 
         // Load intrinsic size if not cached or source changed
         let source_changed = self
@@ -243,7 +219,7 @@ impl Widget for Image {
         // Update cached source
         self.cached_source = Some(current_source);
 
-        let size = self.calculate_size(&constraints, explicit_width, explicit_height);
+        let size = self.calculate_size(&constraints);
 
         // Cache constraints and size for partial layout
         tree.cache_layout(id, constraints, size);
