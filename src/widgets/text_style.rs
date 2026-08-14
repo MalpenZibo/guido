@@ -54,10 +54,113 @@
 //! shape of the walk cannot change under a text without the container being
 //! rebuilt, and a rebuild re-registers the subtree anyway.
 
+use smallvec::SmallVec;
+
 use crate::reactive::Signal;
 
 use super::font::{FontFamily, FontWeight};
 use super::widget::Color;
+
+/// A contour drawn around the glyphs.
+///
+/// The legibility fix for text over an image, where no single colour works
+/// against both the light and dark parts of the picture.
+///
+/// It is drawn *under* the fill, like SVG's `paint-order: stroke fill` and
+/// unlike a naive implementation: painted over, a stroke eats half the weight
+/// of every stem and the text reads as thinner rather than outlined.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextStroke {
+    /// Half-width of the contour, in logical pixels — how far the stroke
+    /// reaches outwards from the glyph edge.
+    pub width: f32,
+    pub color: Color,
+}
+
+impl TextStroke {
+    pub fn new(width: f32, color: Color) -> Self {
+        Self { width, color }
+    }
+
+    /// The offsets to draw the glyphs at, in logical pixels.
+    ///
+    /// A ring of copies around the original. This is the classic approximation
+    /// and it costs nothing new: glyphon keys its atlas on glyph, size and
+    /// weight, and takes colour per draw, so the extra copies re-use the
+    /// rasterization already there and cost fill rate only.
+    ///
+    /// Its ceiling is the corners, which scallop once the gaps between samples
+    /// exceed a pixel — so the tap count grows with the width instead of being
+    /// fixed at the usual eight. Past a few pixels the honest fix is a dilate
+    /// on an offscreen mask, not more taps.
+    pub(crate) fn samples(&self) -> SmallVec<[(f32, f32); 24]> {
+        let taps = (self.width * 6.0).clamp(8.0, 24.0) as usize;
+        (0..taps)
+            .map(|i| {
+                let angle = std::f32::consts::TAU * i as f32 / taps as f32;
+                (self.width * angle.cos(), self.width * angle.sin())
+            })
+            .collect()
+    }
+}
+
+/// A soft shadow cast by the glyphs, as CSS `text-shadow`.
+///
+/// Usually the better of the two for legibility over a photograph: it darkens
+/// the neighbourhood the glyph sits in rather than only its edge, which is
+/// what actually separates the text from a busy background.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextShadow {
+    /// Offset in logical pixels, positive being right and down.
+    pub offset: (f32, f32),
+    /// How far the shadow spreads past the glyphs.
+    pub blur: f32,
+    pub color: Color,
+}
+
+impl TextShadow {
+    pub fn new(offset_x: f32, offset_y: f32, blur: f32, color: Color) -> Self {
+        Self {
+            offset: (offset_x, offset_y),
+            blur,
+            color,
+        }
+    }
+
+    /// The offsets and colours to draw the glyphs at, back to front.
+    ///
+    /// Same trick as the stroke, and the approximation lands far better here:
+    /// a shadow is already soft and low-contrast, so the banding a ring of
+    /// samples produces is invisible where a scalloped stroke would not be.
+    /// The rings composite with ordinary source-over blending, so they do not
+    /// sum to a gaussian — they saturate towards the centre, which is the
+    /// shape a shadow wants anyway.
+    pub(crate) fn samples(&self) -> SmallVec<[(f32, f32, Color); 25]> {
+        let (ox, oy) = self.offset;
+        let mut out = SmallVec::new();
+
+        if self.blur <= 0.0 {
+            out.push((ox, oy, self.color));
+            return out;
+        }
+
+        // Outermost first: the faint wide ring, then the tighter one, then the
+        // solid core on top.
+        let taps = (self.blur * 1.5).clamp(8.0, 12.0) as usize;
+        for (radius, alpha) in [(self.blur, 0.35), (self.blur * 0.5, 0.6)] {
+            for i in 0..taps {
+                let angle = std::f32::consts::TAU * i as f32 / taps as f32;
+                out.push((
+                    ox + radius * angle.cos(),
+                    oy + radius * angle.sin(),
+                    self.color.with_alpha(self.color.a * alpha),
+                ));
+            }
+        }
+        out.push((ox, oy, self.color));
+        out
+    }
+}
 
 /// The text style a container declares for its descendants.
 ///
@@ -76,6 +179,10 @@ pub struct TextStyle {
     pub font_family: Option<Signal<FontFamily>>,
     /// Font weight on the CSS 100-900 scale.
     pub font_weight: Option<Signal<FontWeight>>,
+    /// Contour drawn around the glyphs, under the fill.
+    pub stroke: Option<Signal<TextStroke>>,
+    /// Soft shadow cast by the glyphs.
+    pub shadow: Option<Signal<TextShadow>>,
     /// Caret colour. Only [`TextInput`](crate::widgets::TextInput) reads it.
     pub cursor_color: Option<Signal<Color>>,
     /// Selection highlight colour. Only
@@ -101,6 +208,8 @@ impl TextStyle {
         self.font_size = self.font_size.or(outer.font_size);
         self.font_family = self.font_family.or(outer.font_family);
         self.font_weight = self.font_weight.or(outer.font_weight);
+        self.stroke = self.stroke.or(outer.stroke);
+        self.shadow = self.shadow.or(outer.shadow);
         self.cursor_color = self.cursor_color.or(outer.cursor_color);
         self.selection_color = self.selection_color.or(outer.selection_color);
     }
@@ -111,6 +220,8 @@ impl TextStyle {
             && self.font_size.is_some()
             && self.font_family.is_some()
             && self.font_weight.is_some()
+            && self.stroke.is_some()
+            && self.shadow.is_some()
             && self.cursor_color.is_some()
             && self.selection_color.is_some()
     }

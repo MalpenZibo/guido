@@ -120,6 +120,13 @@ struct Node {
     /// Boxed because most nodes declare nothing: the miss costs a null check
     /// instead of the ~96 bytes the struct would add to every node.
     text_style: Option<Box<crate::widgets::TextStyle>>,
+    /// How far this widget paints outside its own bounds, in logical pixels.
+    ///
+    /// A shadow — a box's or a glyph's — lands outside the box that cast it,
+    /// and damage is computed from the bounds. Without this, repainting such a
+    /// widget tells the compositor to re-composite a rect that stops short of
+    /// the shadow, leaving the old one on screen as a fringe.
+    paint_overflow: f32,
 }
 
 /// Central tree for widget storage using arena-based sparse-set architecture.
@@ -191,6 +198,7 @@ impl Tree {
             sparse_index,
             cached_paint: None,
             text_style: None,
+            paint_overflow: 0.0,
         });
 
         // Update sparse map
@@ -365,6 +373,16 @@ impl Tree {
         }
 
         resolved
+    }
+
+    /// Declare how far this widget paints outside its own bounds.
+    ///
+    /// Widgets that cast a shadow or stroke set this during layout; it widens
+    /// the damage they report without touching the size they occupy.
+    pub fn set_paint_overflow(&mut self, id: WidgetId, overflow: f32) {
+        if let Some(idx) = self.get_dense_index(id) {
+            self.dense[idx].paint_overflow = overflow.max(0.0);
+        }
     }
 
     /// Get the children of a widget (returns a slice to avoid heap allocation).
@@ -568,7 +586,18 @@ impl Tree {
                 None => break,
             }
         }
-        Some((current, Rect::new(x, y, size.width, size.height)))
+        // Widen by whatever this widget paints outside itself, so a shadow is
+        // re-composited along with the thing that cast it.
+        let overflow = self.dense[idx].paint_overflow;
+        Some((
+            current,
+            Rect::new(
+                x - overflow,
+                y - overflow,
+                size.width + overflow * 2.0,
+                size.height + overflow * 2.0,
+            ),
+        ))
     }
 
     /// Find the surface root (topmost ancestor) of a widget.
@@ -1192,6 +1221,47 @@ mod tests {
         );
     }
 
+    /// Whatever a widget paints outside its own bounds — an elevation shadow,
+    /// a glyph shadow — has to be inside the damage it reports, or repainting
+    /// it re-composites a rect that stops short and the old one stays on
+    /// screen as a fringe.
+    #[test]
+    fn damage_covers_what_a_widget_paints_outside_its_bounds() {
+        let (mut tree, root, a, _b) = two_children_tree();
+        tree.set_paint_overflow(a, 8.0);
+
+        tree.mark_needs_paint(a);
+
+        match tree.take_damage(root) {
+            DamageRegion::Partial(rect) => {
+                assert!(
+                    rect.x <= -8.0 && rect.y <= -8.0,
+                    "damage must reach above and left of the widget, got {rect:?}"
+                );
+                assert!(
+                    rect.width >= 40.0 + 16.0 && rect.height >= 20.0 + 16.0,
+                    "and past its far edges, got {rect:?}"
+                );
+            }
+            other => panic!("expected partial damage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_widget_with_no_overflow_damages_exactly_its_bounds() {
+        let (mut tree, root, a, _b) = two_children_tree();
+
+        tree.mark_needs_paint(a);
+
+        match tree.take_damage(root) {
+            DamageRegion::Partial(rect) => {
+                assert_eq!((rect.x, rect.y), (0.0, 0.0));
+                assert_eq!((rect.width, rect.height), (40.0, 20.0));
+            }
+            other => panic!("expected partial damage, got {other:?}"),
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Inherited text style
     // -----------------------------------------------------------------------
@@ -1326,6 +1396,16 @@ mod tests {
                 font_size: Some(create_stored(12.0)),
                 font_family: Some(create_stored(Default::default())),
                 font_weight: Some(create_stored(FontWeight::BOLD)),
+                stroke: Some(create_stored(crate::widgets::TextStroke::new(
+                    1.0,
+                    Color::BLACK,
+                ))),
+                shadow: Some(create_stored(crate::widgets::TextShadow::new(
+                    0.0,
+                    1.0,
+                    2.0,
+                    Color::BLACK,
+                ))),
                 cursor_color: Some(create_stored(Color::WHITE)),
                 selection_color: Some(create_stored(Color::BLACK)),
             }),

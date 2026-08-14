@@ -387,8 +387,8 @@ impl TextInput {
     ///
     /// The reads happen in this widget's tracking scope, so whichever ancestor
     /// supplied a metric is the one whose change re-lays-out this input.
-    fn refresh(&mut self, tree: &Tree, id: WidgetId) {
-        let (new_value, new_font_size, new_font_family, new_font_weight) =
+    fn refresh(&mut self, tree: &Tree, id: WidgetId) -> f32 {
+        let (new_value, new_font_size, new_font_family, new_font_weight, overflow) =
             with_signal_tracking(id, JobType::Layout, || {
                 let style = tree.inherited_text_style(id);
                 (
@@ -396,6 +396,10 @@ impl TextInput {
                     style.font_size.get_or(14.0),
                     style.font_family.get_or_else(default_font_family),
                     style.font_weight.get_or(FontWeight::NORMAL),
+                    crate::widgets::text::decoration_overflow(
+                        style.stroke.map(|s| s.get()),
+                        style.shadow.map(|s| s.get()),
+                    ),
                 )
             });
 
@@ -423,6 +427,8 @@ impl TextInput {
             self.cached_font_weight = new_font_weight;
             self.measurements_dirty = true;
         }
+
+        overflow
     }
 
     /// Update cursor blink state.
@@ -935,7 +941,8 @@ impl Widget for TextInput {
 
         // Refresh cached values from reactive properties
         // This reads signals and registers layout dependencies
-        self.refresh(tree, id);
+        let overflow = self.refresh(tree, id);
+        tree.set_paint_overflow(id, overflow);
 
         // Handle key repeat for held keys
         self.handle_key_repeat(tree, id);
@@ -981,7 +988,7 @@ impl Widget for TextInput {
 
         // Read the inherited colours with tracking so a change on whichever
         // ancestor supplied them repaints this input and nothing else.
-        let (text_color, selection_color, cursor_color) =
+        let (text_color, selection_color, cursor_color, stroke, shadow) =
             with_signal_tracking(id, JobType::Paint, || {
                 let style = tree.inherited_text_style(id);
                 let text_color = style.color.get_or(Color::WHITE);
@@ -993,6 +1000,8 @@ impl Widget for TextInput {
                     // The caret defaults to the text colour: an input that
                     // only sets `text_color` should not sprout a blue cursor.
                     style.cursor_color.get_or(text_color),
+                    style.stroke.map(|s| s.get()),
+                    style.shadow.map(|s| s.get()),
                 )
             });
 
@@ -1015,13 +1024,15 @@ impl Widget for TextInput {
             self.cached_text_width.max(bounds.width),
             bounds.height,
         );
-        ctx.draw_text_styled(
+        ctx.draw_text_decorated(
             display,
             text_bounds,
             text_color,
             self.cached_font_size,
             self.cached_font_family.clone(),
             self.cached_font_weight,
+            stroke,
+            shadow,
         );
 
         // Draw cursor if focused and visible (LOCAL coords)

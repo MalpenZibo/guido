@@ -35,6 +35,38 @@ Containers that say nothing about text are transparent to this, so layout
 wrappers do not interrupt it. Properties nothing declares fall back to white,
 14 logical pixels, the registered default family and normal weight.
 
+## Legibility over an image
+
+Over a photograph no single text colour works, because the picture is light in
+some places and dark in others. Two declarations separate the glyphs from
+whatever is behind them:
+
+```rust
+container()
+    .text_color(Color::WHITE)
+    // A contour around the glyphs. CSS spells this `-webkit-text-stroke`;
+    // CSS `outline` is the contour of a box, which is why the name differs.
+    .text_stroke(TextStroke::new(1.5, Color::BLACK))
+    // As CSS `text-shadow`: offset x, offset y, blur, colour.
+    .text_shadow(TextShadow::new(0.0, 2.0, 10.0, Color::rgba(0.0, 0.0, 0.0, 0.75)))
+    .child(text("09:41"))
+```
+
+The shadow is usually the more effective of the two: it darkens the whole
+neighbourhood the glyph sits in rather than only its edge. Both are drawn
+*under* the fill, so a stroke outlines the text instead of eating into it.
+
+Both are approximated by re-drawing the glyphs at offsets, which costs fill
+rate but no extra rasterization — the glyph atlas is keyed on glyph, size and
+weight, and takes colour per draw. The approximation shows first in a thick
+stroke, whose corners begin to scallop past a few pixels; a shadow hides it
+completely, being soft and low-contrast to begin with.
+
+Neither changes how much room the text takes, so adding a shadow never moves
+its neighbours.
+
+`cargo run --example text_decoration_example` shows both against a control.
+
 ## Styling
 
 ### Font Size
