@@ -914,6 +914,8 @@ impl App {
     pub fn run(mut self, setup: impl FnOnce(&mut Self)) -> ExitReason {
         // Create root owner scope — all signals/effects created in setup are owned
         self.root_owner_id = Some(reactive::create_root_owner());
+        // Under the root owner, so it outlives every component scope.
+        reactive::init_focus();
         setup(&mut self);
 
         if self.surface_definitions.is_empty() {

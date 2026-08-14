@@ -22,6 +22,8 @@
 //! focus change, not just the two on the path — but it is bounded by a rare
 //! declaration, and it is what lets a focus change reach a descendant's text.
 
+use std::cell::RefCell;
+
 use smallvec::SmallVec;
 
 use crate::jobs::{JobRequest, request_job};
@@ -63,11 +65,28 @@ impl FocusPath {
 thread_local! {
     /// The focused widget and its ancestors. A signal, so that resolving a
     /// `focused_state` subscribes to it.
-    static FOCUS: RwSignal<FocusPath> = create_signal(FocusPath::default());
+    ///
+    /// Held as an `Option` rather than eagerly, because the handle has to be
+    /// *droppable*: `reset_reactive` wipes the signal storage at `App::drop`,
+    /// and a thread-local holding an id into the old arena would leave a
+    /// second `App` on the same thread with a focus that silently never
+    /// updates. As a plain `RefCell<Option<WidgetId>>` this was immune by
+    /// construction; as a signal it has to be released explicitly.
+    static FOCUS: RefCell<Option<RwSignal<FocusPath>>> = const { RefCell::new(None) };
 }
 
 fn focus() -> RwSignal<FocusPath> {
-    FOCUS.with(|f| *f)
+    FOCUS.with(|cell| {
+        *cell
+            .borrow_mut()
+            .get_or_insert_with(|| create_signal(FocusPath::default()))
+    })
+}
+
+/// Create the focus signal under the root owner, before anything can create it
+/// under a narrower one that might be disposed mid-run.
+pub(crate) fn init_focus() {
+    let _ = focus();
 }
 
 /// The current focus path. Reading this subscribes, like any other signal.
@@ -127,11 +146,12 @@ pub fn focused_widget() -> Option<WidgetId> {
     focus().get_untracked().widget()
 }
 
-/// Reset focus state (without paint jobs — used during App teardown).
+/// Release the focus signal (without paint jobs — used during App teardown).
 ///
-/// Called during `App::drop()` to clear focus state.
+/// Drops the handle rather than writing through it: the storage it points into
+/// is about to be replaced, and the next `App` has to get a fresh one.
 pub(crate) fn reset_focus() {
-    focus().set(FocusPath::default());
+    FOCUS.with(|cell| *cell.borrow_mut() = None);
 }
 
 /// Clear all focus (no widget will have focus).

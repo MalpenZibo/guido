@@ -30,7 +30,7 @@ pub(crate) use cursor::take_cursor_change;
 pub use cursor::{CursorIcon, set_cursor};
 pub use effect::{Effect, create_effect};
 pub(crate) use focus::{
-    focus_path, has_focus, release_focus, release_focus_if_within, request_focus,
+    focus_path, has_focus, init_focus, release_focus, release_focus_if_within, request_focus,
 };
 #[doc(hidden)]
 pub use into_signal::{
@@ -67,11 +67,15 @@ pub use signal::{
 pub(crate) fn reset_reactive() {
     owner::reset_owners();
     runtime::reset_runtime();
+    // Before `reset_storage`: the focus path lives in a signal now, held by a
+    // thread-local that outlives the storage. It releases the handle rather
+    // than writing through it, so the next `App` on this thread gets a fresh
+    // one instead of a silently dead signal.
+    focus::reset_focus();
     storage::reset_storage();
     invalidation::reset_invalidation();
     clipboard::reset_clipboard();
     cursor::reset_cursor();
-    focus::reset_focus();
     context::reset_contexts();
     diagnostics::reset();
 }
