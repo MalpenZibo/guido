@@ -22,6 +22,7 @@ use std::rc::Rc;
 
 use crate::advance_anim;
 use crate::animation::TransitionConfig;
+use crate::backdrop::{BackdropBlur, BackdropSources};
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
@@ -253,8 +254,8 @@ pub struct Container {
     // Widget ref for reactive bounds tracking
     pub(super) widget_ref: Option<WidgetRef>,
 
-    // Compositor-side background blur (ext-background-effect-v1)
-    pub(super) background_blur: bool,
+    // Backdrop blur: this surface's own content, the compositor's, or both.
+    pub(super) backdrop_blur: Option<BackdropBlur>,
 
     // Animation state (boxed to save ~400 bytes per non-animated container)
     pub(super) anims: Option<Box<ContainerAnims>>,
@@ -287,7 +288,7 @@ impl Container {
             transform_origin: None,
             interaction: None,
             widget_ref: None,
-            background_blur: false,
+            backdrop_blur: None,
             anims: None,
             scroll_axis: ScrollAxis::None,
             scroll_data: None,
@@ -426,23 +427,29 @@ impl Container {
         self
     }
 
-    /// Blur the compositor background behind this container
-    /// (`ext-background-effect-v1`), shaped by its bounds and corner radius.
+    /// Blur what is already behind this container.
     ///
-    /// Pair it with a translucent [`background()`](Self::background) so the
-    /// blurred content shows through. No-ops when the compositor doesn't
-    /// support the protocol.
-    ///
-    /// # Example
+    /// Both backdrops are filtered: what this surface has already drawn, and
+    /// what the compositor composites below it where the surface is
+    /// translucent. Pair it with a translucent
+    /// [`background()`](Self::background) so the result shows through.
     ///
     /// ```ignore
     /// container()
-    ///     .background(Color::rgba(0.1, 0.1, 0.15, 0.6))
     ///     .corner_radius(16.0)
-    ///     .background_blur()
+    ///     .backdrop_blur(32.0)
+    ///     .background(Color::rgba(0.1, 0.1, 0.15, 0.6))
     /// ```
-    pub fn background_blur(mut self) -> Self {
-        self.background_blur = true;
+    ///
+    /// Restrict it with [`BackdropSources`] when only one side should soften.
+    /// The compositor side needs `ext-background-effect-v1` — check
+    /// [`compositor_effects()`](crate::compositor::compositor_effects) — and
+    /// carries no radius of its own; the compositor picks one.
+    ///
+    /// See [`crate::backdrop`] for why both are filtered rather than one
+    /// being chosen.
+    pub fn backdrop_blur(mut self, blur: impl Into<BackdropBlur>) -> Self {
+        self.backdrop_blur = Some(blur.into());
         self
     }
 
@@ -1169,9 +1176,12 @@ impl Widget for Container {
         });
         let corner_radius = corner_radius.max(corner_radii.max());
 
-        // Publish the blur region: bounds are read fresh from the tree at
-        // frame sync, so only the (possibly animated) radius is recorded.
-        if self.background_blur {
+        // Publish the compositor blur region: bounds are read fresh from the
+        // tree at frame sync, so only the (possibly animated) radius is
+        // recorded here.
+        if let Some(blur) = self.backdrop_blur
+            && blur.sources.contains(BackdropSources::COMPOSITOR)
+        {
             crate::blur::register_blur(id, corner_radius);
         }
 
@@ -1183,6 +1193,16 @@ impl Widget for Container {
         // Compose our own transform on top of the position the parent set.
         if !user_transform.is_identity() {
             ctx.apply_transform_with_origin(user_transform, transform_origin);
+        }
+
+        // Before the decoration: the container paints over its own blurred
+        // backdrop, and the effect must read a target that does not yet
+        // include this container.
+        if let Some(blur) = self.backdrop_blur
+            && blur.sources.contains(BackdropSources::SURFACE)
+            && blur.radius > 0.0
+        {
+            ctx.draw_backdrop_blur(local_bounds, blur.radius, corner_radii, corner_curvature);
         }
 
         self.paint_decoration(

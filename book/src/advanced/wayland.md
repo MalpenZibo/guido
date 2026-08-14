@@ -497,34 +497,79 @@ create_effect(move || {
 Note: keyboard focus is unaffected — use `keyboard_interactivity` for
 that. Rectangles are rounded outward to whole pixels.
 
-## Background Blur
+## Backdrop Blur
 
-Containers can ask the compositor to blur whatever is behind the
-surface (`ext-background-effect-v1`), shaped by their bounds and corner
-radius. Pair it with a translucent background so the blurred content
-shows through:
+`backdrop_blur` blurs whatever is behind a container. There are two
+things behind it, on opposite sides of the Wayland surface, and both
+are filtered:
+
+- what **this surface** already drew — a wallpaper, a photo, the panel
+  under a card;
+- what the **compositor** composites below the surface, through
+  `ext-background-effect-v1`, wherever the surface is translucent.
 
 ```rust
 container()
     .background(Color::rgba(0.12, 0.12, 0.18, 0.55))
     .corner_radius(16.0)
-    .background_blur()
+    .backdrop_blur(32.0)
     .child(text("Frosted glass"))
 ```
 
-The blur region follows the container automatically: layout moves,
-resizes, and (animated) corner radius changes are picked up each frame.
-Rounded corners are tessellated into small rectangles because
-`wl_region` has no notion of curves.
+Filtering both is not a compromise between mechanisms. Blur is a linear
+operator, so over a region of uniform alpha `a`:
 
-On compositors without the protocol or its blur capability this
-renders a plain translucent container — no error, no fallback blur.
-Surfaces that never use `background_blur()` are left untouched, so
-compositor-side blur rules (e.g. blur by namespace) keep working; once
-a surface has used blur, an empty region ("blur nothing") is reported
-instead of withdrawing, to keep the region authoritative.
+```text
+blur(a·ours + (1−a)·theirs) = a·blur(ours) + (1−a)·blur(theirs)
+```
 
-See `examples/blur_example.rs`.
+Blurring each layer separately and compositing gives exactly the same
+result — which is why neither is chosen over the other. A translucent
+panel is neither "ours" nor "theirs" at any pixel, so a per-box choice
+could only be right for some of them.
+
+Restrict it when only one side should soften:
+
+```rust
+// Desktop behind the panel softens; the panel's own islands stay crisp.
+container().backdrop_blur(
+    BackdropBlur::new(24.0).sources(BackdropSources::COMPOSITOR),
+)
+```
+
+### What each side costs
+
+The **compositor** side is a region handed over once per change: the
+region follows the container automatically as layout moves, resizes and
+(animated) corner radii change. Rounded corners are tessellated into
+small rectangles because `wl_region` has no notion of curves, and the
+protocol carries no radius — the compositor picks its own, so `radius`
+does not apply there. Check availability with `compositor_effects()`.
+
+The **surface** side is guido's own: the frame is drawn into an
+offscreen target, each region is downsampled, blurred with a separable
+gaussian and composited back masked to the container's rounded shape.
+Frames with no backdrop blur skip all of it and draw straight to the
+swapchain.
+
+Two skips keep that honest, and both are unobservable — they drop work
+that could not have changed a pixel, so they may switch on and off
+between frames without anything showing:
+
+- a region with nothing drawn beneath it is not filtered at all;
+- surfaces that never asked for a compositor region are left untouched,
+  so compositor-side rules (e.g. blur by namespace) keep working.
+
+### The seam
+
+Where alpha *varies* within the blur radius — at the edges of opaque
+content inside the box — the two blurs do not bleed into each other:
+the desktop does not smear into the surface's own content or the other
+way round. That cannot be fixed from guido. `set_blur_region` is
+fire-and-forget: it takes a region and returns nothing, so the
+compositor's pixels are never ours to filter across.
+
+See `examples/blur_example.rs` and `examples/draw_order_example.rs`.
 
 ## Popups (Menus, Dropdowns)
 

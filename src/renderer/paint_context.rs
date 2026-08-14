@@ -321,6 +321,24 @@ impl<'a> PaintContext<'a> {
     }
 
     /// Draw a circle in local coordinates.
+    /// Blur whatever is already drawn beneath `rect`, masked to its rounded
+    /// shape. Emitted before the container's own background so it paints over
+    /// its blurred backdrop.
+    pub fn draw_backdrop_blur(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        corner_radii: impl Into<CornerRadii>,
+        curvature: f32,
+    ) {
+        self.node.commands.push(Rc::new(DrawCommand::BackdropBlur {
+            rect,
+            radius,
+            corner_radii: corner_radii.into(),
+            curvature,
+        }));
+    }
+
     pub fn draw_circle(&mut self, cx: f32, cy: f32, radius: f32, color: Color) {
         self.node.commands.push(Rc::new(DrawCommand::Circle {
             center: (cx, cy),

@@ -10,7 +10,7 @@ use smithay_client_toolkit::reexports::client::Connection;
 use crate::layout::Constraints;
 use crate::platform::{WaylandState, WaylandWindowWrapper};
 use crate::reactive::owner::{OwnerId, dispose_owner_now};
-use crate::renderer::{FlattenedCommand, GpuContext, RenderNode, SurfaceState};
+use crate::renderer::{CommandLayer, FlattenedCommand, GpuContext, RenderNode, SurfaceState};
 use crate::surface::{SurfaceConfig, SurfaceId};
 use crate::tree::{Tree, WidgetId};
 use crate::widgets::Widget;
@@ -36,6 +36,8 @@ pub struct ManagedSurface {
     pub root_node: RenderNode,
     /// Flattened commands buffer (reused across frames to avoid allocation)
     pub flattened_commands: Vec<FlattenedCommand>,
+    /// Draw groups over `flattened_commands`, in draw order.
+    pub command_layers: Vec<CommandLayer>,
 }
 
 impl ManagedSurface {
@@ -65,6 +67,7 @@ impl ManagedSurface {
             previous_scale_factor: 1.0,
             root_node: RenderNode::new(widget_id.as_u64()),
             flattened_commands: Vec::new(),
+            command_layers: Vec::new(),
         }
     }
 

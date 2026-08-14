@@ -173,7 +173,7 @@ The transform origin is resolved from the node's bounds and used to center the t
 
 ### RenderLayer Ordering
 
-Commands are sorted by layer for correct render order:
+Commands are bucketed by kind so that commands of a kind share a draw call:
 
 ```rust
 pub enum RenderLayer {
@@ -183,6 +183,73 @@ pub enum RenderLayer {
     Overlay = 3,  // Overlay effects (ripples, highlights)
 }
 ```
+
+### Draw groups
+
+Bucketing on its own reorders drawing: with one set of buckets for the whole
+frame, *every* shape is drawn before *every* image, so a container background
+painted over an image ends up underneath it however the tree is arranged.
+
+The flattener therefore emits a sequence of **draw groups**. Each group has its
+own four buckets, and a new group is opened whenever a command's layer would go
+backwards:
+
+```rust
+pub struct CommandLayer {
+    pub shapes: Range<usize>,
+    pub images: Range<usize>,
+    pub text: Range<usize>,
+    pub overlay: Range<usize>,
+}
+```
+
+The renderer walks the groups in order and draws each one bucket by bucket.
+Batching survives, ordering survives with it, and a tree that never paints a
+lower layer over a higher one produces exactly one group — the same single set
+of draw calls as before. The split is minimal by construction, so no merge pass
+is needed afterwards.
+
+A layer going backwards is only split on when the incoming command's world
+bounds actually intersect something already drawn above it in that group.
+Without that test the rule fires between every pair of sibling widgets — each
+paints a background then a label, so the next sibling's background regresses —
+and `examples/showcase.rs` alone went to 16 groups, every one of them carrying
+its own glyphon renderer. Siblings do not overlap, so those splits bought
+nothing. With the test, `status_bar` is one group and `showcase` is four.
+
+Each layer of a group tracks its commands' rects individually, not just their
+union: labels scattered across a panel union into a box spanning the gaps
+between them, and the next sibling's background lands in a gap and splits for
+nothing. Past `MAX_TRACKED_RECTS` the union decides alone, which can only
+over-split. With the exact test, `status_bar` and `showcase` are one group each
+— the same draw calls as before groups existed.
+
+Bounds are conservative: shapes grow by their shadow and border, text by half a
+font size for glyph overshoot, and anything under a rotation or scale counts as
+covering everything. Over-splitting costs a draw call; under-splitting would
+draw in the wrong order.
+
+glyphon draws everything a `TextRenderer` prepared in one call, so a group with
+directly-rendered text gets a renderer of its own from a pool that grows on
+demand. `examples/draw_order_example.rs` exercises the regressions.
+
+### Backdrop effects
+
+`RenderLayer::Backdrop` sits below `Shapes` so a backdrop command always opens
+a group: everything it reads must already have been drawn, which means it must
+land after the groups holding that content.
+
+A backdrop effect samples the render target, which a pass cannot do to its own
+attachment. When a frame contains one, it is drawn into an offscreen colour
+target instead of the swapchain; at each backdrop group the pass ends, the
+effect runs, and the pass resumes with `LoadOp::Load`. The target is blitted to
+the swapchain once at the end and released after enough idle frames.
+
+Per region: downsample into a quarter-size working texture (rendering into a
+smaller target with a linear sampler is already a box filter), two separable
+gaussian passes ping-ponging between two working textures, then a composite
+back over the scene masked by the container's rounded-rect SDF. See
+`src/renderer/backdrop_pass.rs`.
 
 ### FlattenedCommand
 

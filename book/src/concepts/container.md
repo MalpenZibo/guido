@@ -65,20 +65,21 @@ container()
 
 See [Building UI](../building-ui/README.md) for complete styling reference.
 
-### Background Blur
+### Backdrop Blur
 
-On Wayland compositors that support `ext-background-effect-v1`, a
-container can blur whatever is behind the surface, shaped by its bounds
-and corner radius:
+Blur whatever is behind the container — both what this surface already
+drew and, where the surface is translucent, what the compositor has
+below it. Pair it with a translucent background so the result shows
+through:
 
 ```rust
 container()
     .background(Color::rgba(0.12, 0.12, 0.18, 0.55)) // translucent
     .corner_radius(16.0)
-    .background_blur()
+    .backdrop_blur(32.0)
 ```
 
-See [Wayland Layer Shell — Background Blur](../advanced/wayland.md#background-blur).
+See [Wayland Layer Shell — Backdrop Blur](../advanced/wayland.md#backdrop-blur).
 
 ## Layout
 

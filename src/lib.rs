@@ -1,5 +1,7 @@
 pub mod animation;
+pub mod backdrop;
 mod blur;
+pub mod compositor;
 pub mod image_metadata;
 mod ingress;
 mod jobs;
@@ -145,6 +147,8 @@ pub fn quit_app() {
 
 pub mod prelude {
     pub use crate::animation::{SpringConfig, TimingFunction, Transition, TransitionConfig};
+    pub use crate::backdrop::{BackdropBlur, BackdropSources};
+    pub use crate::compositor::{CompositorEffects, compositor_effects};
     pub use crate::layout::{
         Axis, Constraints, CrossAlignment, Flex, IntoF32, Length, MainAlignment, Size, ZStack,
         at_least, at_most, fill, fraction,
@@ -722,11 +726,13 @@ fn render_surface(
             });
         });
 
-        // Flatten tree into reused buffer
-        let layer_boundaries;
+        // Flatten tree into reused buffers
         time_phase!(render_stats::Phase::Flatten, {
-            layer_boundaries =
-                flatten_root_into(&surface.root_node, &mut surface.flattened_commands);
+            flatten_root_into(
+                &surface.root_node,
+                &mut surface.flattened_commands,
+                &mut surface.command_layers,
+            );
         });
 
         // Re-arm the frame callback BEFORE presenting so the request rides
@@ -767,7 +773,7 @@ fn render_surface(
             presented = renderer.render(
                 wgpu_surface,
                 &surface.flattened_commands,
-                layer_boundaries,
+                &surface.command_layers,
                 surface.config.background_color,
             );
         });
@@ -1214,6 +1220,7 @@ impl Drop for App {
         surface::reset_popups();
         widget_ref::reset_widget_refs();
         outputs::reset_outputs();
+        compositor::reset_compositor_effects();
         blur::reset_blur();
         session_lock::reset_session_lock();
         FONTS_CONSUMED.with(|f| f.set(false));

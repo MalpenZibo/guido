@@ -175,6 +175,22 @@ pub enum DrawCommand {
         font_weight: FontWeight,
     },
 
+    /// Filter what has already been drawn beneath `rect`, in place.
+    ///
+    /// Ordered before the container's own background so the container paints
+    /// over its own blurred backdrop. See [`crate::backdrop`].
+    BackdropBlur {
+        /// Region to filter, in local coordinates.
+        rect: Rect,
+        /// Blur radius in logical pixels.
+        radius: f32,
+        /// Corner radii of the region, so the result is masked to the
+        /// container's shape rather than its bounding box.
+        corner_radii: CornerRadii,
+        /// Superellipse curvature of those corners.
+        curvature: f32,
+    },
+
     /// Draw an image.
     Image {
         /// Image source (path or bytes)

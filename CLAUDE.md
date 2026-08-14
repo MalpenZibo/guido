@@ -110,7 +110,9 @@ cargo test
 - Supports circles, gradients, and clipping
 - Text rendering via glyphon library
 - HiDPI-aware with automatic scaling
-- Layered rendering: shapes → text → overlay shapes (for effects like ripples)
+- Layered rendering: shapes → images → text → overlay, per draw group; a group is
+  split whenever the tree paints a lower layer over a higher one, so batching
+  never reorders drawing
 
 **`platform/`** - Wayland layer shell integration
 - Uses smithay-client-toolkit for Wayland protocol handling
@@ -182,7 +184,7 @@ animating surface renders once per callback, an idle surface renders nothing.
 8. `widget.paint(tree, ctx)` - Build render tree (clean children reuse Rc-shared cached `RenderNode`s — reuse is a refcount bump, not a clone)
 9. `flatten_root_into()` - Flatten render tree to draw commands (incremental: clean subtrees reuse cached commands)
 10. Re-arm the frame callback and report per-surface damage via `wl_surface.damage_buffer()` — both BEFORE presenting so they ride the commit performed inside `present()`
-11. GPU rendering with instanced SDF shapes, HiDPI scaling, layer ordering (shapes → images → text → overlay); on a lost/outdated swapchain the dirty state is kept and a retry frame is requested
+11. GPU rendering with instanced SDF shapes, HiDPI scaling, and per-group layer ordering (shapes → images → text → overlay, one group per draw-order regression); on a lost/outdated swapchain the dirty state is kept and a retry frame is requested
 12. `cache_paint_results()` - Rc-share paint output per widget, clear `needs_paint` flags (partial paints poison their ancestors and are never cached)
 
 ### Event System
@@ -394,7 +396,11 @@ This is a work-in-progress GUI library. Current implemented features:
 - Dynamic surface property modification (layer, keyboard interactivity, anchor, size, margins)
 - Multi-output support: reactive `outputs()` enumeration, per-output surface pinning, `surface_output()` tracking
 - Input regions: per-surface clickable rectangles / click-through surfaces (`input_region`, `click_through`, `set_input_region`)
-- Compositor background blur (`ext-background-effect-v1`) via `container().background_blur()`, shaped by bounds + corner radius
+- Backdrop blur via `container().backdrop_blur(radius)`: filters both the
+  surface's own drawn content (offscreen target, downsample + separable
+  gaussian, masked to the container's rounded shape) and the compositor's
+  backdrop (`ext-background-effect-v1`, shaped by bounds + corner radius).
+  Restrict with `BackdropSources`; check availability with `compositor_effects()`
 - Session lock (`ext-session-lock-v1`): `lock_session(factory)` / `unlock_session()` / reactive `lock_state()`, one lock surface per output with hotplug handling
 - Touch input (`wl_touch`): first finger drives the pointer pipeline — tap = click, works with hover/pressed state layers
 - Clipboard: async prefetch (paste never blocks the UI thread) + primary selection (select-to-copy, middle-click paste)

@@ -32,9 +32,15 @@ fn main() {
                             .cross_alignment(CrossAlignment::Center),
                     )
                     .child(
-                        // Blurred card: translucent background + blur behind
+                        // Blurred card: translucent background + blur behind.
+                        // Restricted to the compositor's backdrop, since this
+                        // example is about the desktop showing through a
+                        // translucent surface, not about blurring the surface's
+                        // own content.
                         container()
-                            .background_blur()
+                            .backdrop_blur(
+                                BackdropBlur::new(0.0).sources(BackdropSources::COMPOSITOR),
+                            )
                             .background(Color::rgba(0.12, 0.12, 0.18, 0.55))
                             .corner_radius(radius)
                             .padding(24.0)

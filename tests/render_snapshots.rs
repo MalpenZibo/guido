@@ -132,6 +132,23 @@ fn dump_node(node: &RenderNode, depth: usize, out: &mut String) {
 fn dump_command(cmd: &DrawCommand, depth: usize, kind: &str, out: &mut String) {
     let pad = "  ".repeat(depth);
     match cmd {
+        DrawCommand::BackdropBlur {
+            rect: r,
+            radius,
+            corner_radii,
+            curvature,
+        } => {
+            out.push_str(&format!(
+                "{pad}{kind} backdrop-blur {} radius={} corners={}/{}/{}/{} k={}\n",
+                rect(r),
+                n(*radius),
+                n(corner_radii.top_left),
+                n(corner_radii.top_right),
+                n(corner_radii.bottom_right),
+                n(corner_radii.bottom_left),
+                n(*curvature),
+            ));
+        }
         DrawCommand::RoundedRect {
             rect: r,
             color: c,

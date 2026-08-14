@@ -10,6 +10,7 @@
 //! - World transforms are computed automatically by walking the tree during flatten
 //! - Overlays (like ripples) naturally render after children
 
+mod backdrop_pass;
 mod commands;
 mod constants;
 mod flatten;
@@ -26,7 +27,7 @@ mod tree;
 mod types;
 
 pub use commands::{Border, CornerRadii, DrawCommand};
-pub use flatten::{FlattenedCommand, LayerBoundaries, flatten_root_into};
+pub use flatten::{CommandLayer, FlattenedCommand, flatten_root_into};
 pub use gpu_context::{GpuContext, SurfaceState};
 pub use paint_context::PaintContext;
 pub use render::Renderer;
