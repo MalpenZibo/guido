@@ -6,7 +6,20 @@ use crate::renderer::{PaintContext, measure_text_styled};
 use crate::tree::{Tree, WidgetId};
 
 use super::font::{FontFamily, FontWeight};
+use super::text_style::{TextShadow, TextStroke};
 use super::widget::{Color, EventResponse, Rect, Widget};
+
+/// How far a stroke and a shadow reach past the glyphs they decorate.
+///
+/// Used for the damage slop, not for layout: decoration must not change how
+/// much room the text takes, or a shadow would push its neighbours around.
+pub(crate) fn decoration_overflow(stroke: Option<TextStroke>, shadow: Option<TextShadow>) -> f32 {
+    let from_stroke = stroke.map(|s| s.width.max(0.0)).unwrap_or(0.0);
+    let from_shadow = shadow
+        .map(|s| s.blur.max(0.0) + s.offset.0.abs().max(s.offset.1.abs()))
+        .unwrap_or(0.0);
+    from_stroke.max(from_shadow)
+}
 
 /// A run of text.
 ///
@@ -58,14 +71,18 @@ impl Text {
     /// The signals are read here, inside this widget's tracking scope, so the
     /// text is re-laid-out when whichever ancestor supplied a metric changes
     /// it — and is left alone when an ancestor it does not depend on changes.
-    fn refresh(&mut self, tree: &Tree, id: WidgetId) {
+    ///
+    /// Returns how far the decoration reaches past the glyphs, which the
+    /// caller records as damage slop.
+    fn refresh(&mut self, tree: &Tree, id: WidgetId) -> f32 {
         with_signal_tracking(id, JobType::Layout, || {
             let style = tree.inherited_text_style(id);
             self.cached_text = self.content.get();
             self.cached_font_size = style.font_size.get_or(14.0);
             self.cached_font_family = style.font_family.get_or_else(default_font_family);
             self.cached_font_weight = style.font_weight.get_or(FontWeight::NORMAL);
-        });
+            decoration_overflow(style.stroke.map(|s| s.get()), style.shadow.map(|s| s.get()))
+        })
     }
 }
 
@@ -93,7 +110,8 @@ impl Widget for Text {
 
         // Refresh cached values from content and inherited style.
         // This reads signals and registers layout dependencies.
-        self.refresh(tree, id);
+        let overflow = self.refresh(tree, id);
+        tree.set_paint_overflow(id, overflow);
 
         // Determine the effective max_width for measurement
         // If nowrap is true, don't pass max_width so text won't wrap
@@ -139,18 +157,25 @@ impl Widget for Text {
         // Parent Container sets position transform
         let size = tree.cached_size(id).unwrap_or_default();
         let local_bounds = Rect::new(0.0, 0.0, size.width, size.height);
-        // Read colour with tracking so a change on whichever ancestor supplied
-        // it triggers a repaint of this text and nothing else.
-        let color = with_signal_tracking(id, JobType::Paint, || {
-            tree.inherited_text_style(id).color.get_or(Color::WHITE)
+        // Read the painted properties with tracking so a change on whichever
+        // ancestor supplied them repaints this text and nothing else.
+        let (color, stroke, shadow) = with_signal_tracking(id, JobType::Paint, || {
+            let style = tree.inherited_text_style(id);
+            (
+                style.color.get_or(Color::WHITE),
+                style.stroke.map(|s| s.get()),
+                style.shadow.map(|s| s.get()),
+            )
         });
-        ctx.draw_text_styled(
+        ctx.draw_text_decorated(
             &self.cached_text,
             local_bounds,
             color,
             self.cached_font_size,
             self.cached_font_family.clone(),
             self.cached_font_weight,
+            stroke,
+            shadow,
         );
     }
 

@@ -43,7 +43,7 @@ use super::scroll::{
     ScrollAxis, ScrollState, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibility,
 };
 use super::state_layer::{StateStyle, resolve_background};
-use super::text_style::TextStyle;
+use super::text_style::{TextShadow, TextStroke, TextStyle};
 use super::widget::{
     Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding, Rect,
     ScrollSource, Widget,
@@ -448,6 +448,29 @@ impl Container {
     /// Shorthand for [`font_family(FontFamily::Monospace)`](Self::font_family).
     pub fn mono(self) -> Self {
         self.font_family(FontFamily::Monospace)
+    }
+
+    /// Draw a contour around the glyphs, under the fill.
+    ///
+    /// Named `text_stroke` and not `text_outline` because CSS `outline` is the
+    /// contour of a *box* — this is the one CSS spells `-webkit-text-stroke`.
+    ///
+    /// ```ignore
+    /// container().text_color(Color::WHITE).text_stroke(1.5, Color::BLACK)
+    /// ```
+    pub fn text_stroke<M>(mut self, stroke: impl IntoSignal<TextStroke, M>) -> Self {
+        self.text_mut().stroke = Some(stroke.into_signal());
+        self
+    }
+
+    /// Cast a soft shadow from the glyphs, as CSS `text-shadow`.
+    ///
+    /// ```ignore
+    /// container().text_shadow(TextShadow::new(0.0, 2.0, 8.0, shadow_color))
+    /// ```
+    pub fn text_shadow<M>(mut self, shadow: impl IntoSignal<TextShadow, M>) -> Self {
+        self.text_mut().shadow = Some(shadow.into_signal());
+        self
     }
 
     /// Set the caret colour of any [`TextInput`](crate::widgets::TextInput)
@@ -1132,6 +1155,13 @@ impl Widget for Container {
 
         // Cache constraints and size for partial layout
         tree.cache_layout(id, constraints, size);
+
+        // An elevation shadow falls outside the box that casts it, so the
+        // damage this container reports has to reach past its own bounds.
+        // Snapshotted: a hover that only changes the elevation goes through
+        // paint, and this is here to size the damage, not to subscribe to it.
+        let elevation = self.elevation.get_or_untracked(0.0);
+        tree.set_paint_overflow(id, style::elevation_to_shadow(elevation).extent());
 
         // Register widget ref so update_widget_refs() can refresh bounds
         if let Some(ref wr) = self.widget_ref {

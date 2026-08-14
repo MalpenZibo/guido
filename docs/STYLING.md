@@ -246,6 +246,22 @@ container()
 Properties nothing declares fall back to white, 14 logical pixels, the
 registered default family and normal weight.
 
+### Stroke and shadow
+
+For text over an image, where no single colour works against the whole
+picture:
+
+```rust
+container()
+    .text_color(Color::WHITE)
+    .text_stroke(TextStroke::new(1.5, Color::BLACK))
+    .text_shadow(TextShadow::new(0.0, 2.0, 10.0, Color::rgba(0.0, 0.0, 0.0, 0.75)))
+    .child(text("09:41"))
+```
+
+Both are drawn under the fill — a stroke painted over it would eat half the
+weight of every stem. Neither affects layout.
+
 ## Layout Styling
 
 ### Flex Layout

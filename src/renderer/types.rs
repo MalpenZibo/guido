@@ -46,6 +46,17 @@ impl Shadow {
         }
     }
 
+    /// How far this shadow reaches past the box that casts it.
+    ///
+    /// The amount the damage rect has to grow by, so repainting the box also
+    /// re-composites the shadow instead of leaving the old one behind.
+    pub fn extent(&self) -> f32 {
+        if self.color.a <= 0.0 {
+            return 0.0;
+        }
+        self.blur + self.spread + self.offset.0.abs().max(self.offset.1.abs())
+    }
+
     /// Create a shadow with no spread
     pub fn simple(offset: (f32, f32), blur: f32, color: Color) -> Self {
         Self {

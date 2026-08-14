@@ -9,6 +9,7 @@ use crate::transform::Transform;
 use crate::transform_origin::TransformOrigin;
 use crate::widgets::font::{FontFamily, FontWeight};
 use crate::widgets::image::{ContentFit, ImageSource};
+use crate::widgets::text_style::{TextShadow, TextStroke};
 use crate::widgets::{Color, Rect};
 
 /// Painting context for the renderer.
@@ -385,6 +386,57 @@ impl<'a> PaintContext<'a> {
             font_family,
             font_weight,
         }));
+    }
+
+    /// Draw text with its decorations, back to front: shadow, stroke, fill.
+    ///
+    /// The order is the whole point of having this in one place. A stroke
+    /// painted *over* the fill eats half the weight of every stem, so the text
+    /// reads as thinner rather than outlined — the same reason SVG spells it
+    /// `paint-order: stroke fill`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_text_decorated(
+        &mut self,
+        text: &str,
+        rect: Rect,
+        color: Color,
+        font_size: f32,
+        font_family: FontFamily,
+        font_weight: FontWeight,
+        stroke: Option<TextStroke>,
+        shadow: Option<TextShadow>,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+
+        if let Some(shadow) = shadow {
+            for (dx, dy, sample_color) in shadow.samples() {
+                self.draw_text_styled(
+                    text,
+                    rect.offset(dx, dy),
+                    sample_color,
+                    font_size,
+                    font_family.clone(),
+                    font_weight,
+                );
+            }
+        }
+
+        if let Some(stroke) = stroke.filter(|s| s.width > 0.0) {
+            for (dx, dy) in stroke.samples() {
+                self.draw_text_styled(
+                    text,
+                    rect.offset(dx, dy),
+                    stroke.color,
+                    font_size,
+                    font_family.clone(),
+                    font_weight,
+                );
+            }
+        }
+
+        self.draw_text_styled(text, rect, color, font_size, font_family, font_weight);
     }
 
     // -------------------------------------------------------------------------
