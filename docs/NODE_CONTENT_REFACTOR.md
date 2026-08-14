@@ -23,8 +23,45 @@ the work can be paused and resumed (including across machines).
 | **Sizing method** | `measure` (not `layout`): a leaf measures itself, it never lays out children. |
 | **Content vs children** | Mutually exclusive, **enforced by construction**: `container()` exposes `.child()`/`.children()` and no public `.content()`; `text()`/`image()`/`text_input()` build content nodes with no `.child()`. To style a leaf you wrap it in a `container()`, as today. |
 | **Object safety** | `Content` stays object-safe (`Box<dyn Content>`): no generic or `Self`-returning methods. Leaf builder methods (`.nowrap()`, `.password()`, `.content_fit()`) remain inherent on the concrete leaf types, not on the trait. |
+| **Styling a leaf** | Leaves stay minimal: to style or click a text/image you wrap it in a `container()`, as today. Putting style directly on leaves is **deferred**, not rejected — see §2. |
 
-## 2. Why
+## 2. Deferred: style directly on leaves
+
+A leaf could instead carry its own box properties, so a button is one node
+rather than two:
+
+```rust
+text("Save").padding(8).background(blue).on_click(save)   // one node
+```
+
+**Deferred on purpose.** The change is *additive*: every existing form
+(`container().padding(8).child(text("x"))`) keeps working untouched, and none of
+the decisions above are invalidated by it — `Content`, `measure` and the
+content/children exclusivity all stand either way. So it can be decided later,
+with more information, at no cost in rework beyond the work itself.
+
+**If it is ever taken up, it must be the shared-trait route**, i.e. box
+properties written once as default methods of a `Styled` trait
+(`fn box_data(&mut self) -> &mut BoxData`), implemented by `Container` and the
+three leaves, with each leaf holding `Option<Box<BoxData>>` so an unstyled leaf
+pays one null pointer and no allocation. Leaf builders keep returning `Self`, so
+`.nowrap()` and `.background()` chain in any order. Critically, `.child()`,
+`.children()`, `.layout()` and `.scrollable()` stay **off** the shared trait —
+they remain inherent to `Container`.
+
+**Rejected: the auto-wrapping sugar.** Giving leaves convenience methods that
+build the wrapper for them (`Text::padding()` returning a `Container` that wraps
+`self`) is cheap but opens a hole in the API — from the second call onwards the
+caller holds a `Container`, so this type-checks and reads as nonsense:
+
+```rust
+text("ciao").padding(8).layout(Flex::row()).child(text("altro"))
+```
+
+A text with a row layout and a text inside it is not a thing. The shared-trait
+route does not have this flaw.
+
+## 3. Why
 
 The runtime has *already* drifted to a two-category world; only the type system
 still pretends everything is one uniform `Widget`.
@@ -51,7 +88,7 @@ The extension axis for *arrangement* is the `Layout` trait, not new widget
 types. Formalizing the split aligns the types with the runtime that already
 exists.
 
-## 3. The model
+## 4. The model
 
 Two axes, and they are **independent**. This is the key correction over an
 earlier, too-coarse framing ("a node is either a box with children or a leaf
@@ -89,7 +126,7 @@ still works — each leaf is a `Node` laid out among its siblings.
     (internal node)  (empty styled box)        (always a leaf)
 ```
 
-## 4. The `Content` trait
+## 5. The `Content` trait
 
 `Content` is the current `Widget` trait **minus** everything about children.
 
@@ -132,7 +169,7 @@ static instead of virtual: `layout`, `paint`, `event`, `advance_animations`,
 node these delegate to the `Content` payload where meaningful
 (`measure`/`paint`/`event`/`advance_animations`) and are no-ops for the rest.
 
-## 5. What this buys (and what it does not)
+## 6. What this buys (and what it does not)
 
 Grounded in the storage + dispatch analysis (`src/tree.rs`, `src/jobs.rs`,
 `src/widgets/paint_children.rs`).
@@ -178,7 +215,7 @@ sub-module/sub-struct decomposition (`InteractionState`, `ScrollData`,
 `ContainerAnims`, `TextStyle`) — an orthogonal axis. Keep the two efforts
 separate.
 
-## 6. Migration plan (atomic steps)
+## 7. Migration plan (atomic steps)
 
 Each step must compile and pass `cargo test` + `cargo clippy --all-targets
 --all-features -- -D warnings` on its own. Re-bless render snapshots only when a
