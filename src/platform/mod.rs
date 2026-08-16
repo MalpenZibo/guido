@@ -1,4 +1,5 @@
 pub mod input;
+pub mod outputs;
 pub mod selections;
 pub mod wayland;
 

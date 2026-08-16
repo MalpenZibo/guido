@@ -12,9 +12,9 @@ use smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_positi
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, Region},
     data_device_manager::DataDeviceManagerState,
-    delegate_compositor, delegate_layer, delegate_output, delegate_registry, delegate_session_lock,
+    delegate_compositor, delegate_layer, delegate_registry, delegate_session_lock,
     delegate_xdg_popup,
-    output::{OutputHandler, OutputState},
+    output::OutputState,
     primary_selection::PrimarySelectionManagerState,
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
@@ -46,9 +46,10 @@ use wayland_protocols::ext::background_effect::v1::client::{
 use std::collections::HashMap;
 
 use super::input::InputState;
+use super::outputs::OutputRegistry;
 use super::selections::Selections;
 use crate::blur::BlurRect;
-use crate::outputs::{self, OutputId, OutputInfo};
+use crate::outputs::{self, OutputId};
 use crate::surface::SurfaceId;
 use crate::widgets::{Event, Rect};
 
@@ -167,12 +168,8 @@ pub struct WaylandState {
     /// Which surface currently has keyboard focus
     pub current_keyboard_surface: Option<SurfaceId>,
 
-    // Output tracking
-    /// Stable OutputId for each wl_output global. Ids are never reused: a
-    /// reconnected monitor gets a fresh id.
-    output_ids: HashMap<ObjectId, OutputId>,
-    /// Next OutputId to allocate.
-    next_output_id: u32,
+    /// Stable identity for the compositor's outputs — see [`super::outputs`].
+    pub(super) outputs: OutputRegistry,
 
     // Background effect (blur)
     /// `None` where the protocol is unsupported — the feature simply no-ops.
@@ -316,8 +313,7 @@ pub fn create_wayland_app(
         surface_lookup: HashMap::new(),
         current_pointer_surface: None,
         current_keyboard_surface: None,
-        output_ids: HashMap::new(),
-        next_output_id: 0,
+        outputs: OutputRegistry::new(),
         bg_effect_manager,
         bg_effect_supports_blur: false,
         xdg_shell,
@@ -333,25 +329,6 @@ pub fn create_wayland_app(
 }
 
 impl WaylandState {
-    /// Get (or allocate) the stable OutputId for a wl_output.
-    fn ensure_output_id(&mut self, output: &wl_output::WlOutput) -> OutputId {
-        let object_id = output.id();
-        if let Some(id) = self.output_ids.get(&object_id) {
-            return *id;
-        }
-        let id = OutputId::from_raw(self.next_output_id);
-        self.next_output_id += 1;
-        self.output_ids.insert(object_id, id);
-        id
-    }
-
-    /// Find the wl_output for a stable OutputId, if still connected.
-    fn wl_output_for(&self, id: OutputId) -> Option<wl_output::WlOutput> {
-        self.output_state
-            .outputs()
-            .find(|o| self.output_ids.get(&o.id()) == Some(&id))
-    }
-
     /// Build a wl_region from logical-coordinate rects, rounded outward so a
     /// fractional widget bound never loses its edge pixels.
     fn build_region(&self, rects: &[Rect]) -> Option<Region> {
@@ -798,30 +775,6 @@ impl WaylandState {
         }
     }
 
-    /// Rebuild the reactive output list from current compositor state.
-    fn sync_outputs(&mut self) {
-        let wl_outputs: Vec<wl_output::WlOutput> = self.output_state.outputs().collect();
-        let mut list: Vec<OutputInfo> = wl_outputs
-            .iter()
-            .filter_map(|o| {
-                let id = self.ensure_output_id(o);
-                let info = self.output_state.info(o)?;
-                Some(OutputInfo {
-                    id,
-                    name: info.name,
-                    description: info.description,
-                    make: info.make,
-                    model: info.model,
-                    scale_factor: info.scale_factor,
-                    logical_size: info.logical_size,
-                    logical_position: info.logical_position,
-                })
-            })
-            .collect();
-        list.sort_by_key(|o| o.id);
-        outputs::sync_outputs(list);
-    }
-
     /// Create a layer surface with a specific SurfaceId.
     pub fn create_surface_with_id(
         &mut self,
@@ -1153,7 +1106,7 @@ impl CompositorHandler for WaylandState {
         output: &wl_output::WlOutput,
     ) {
         if let Some(surface_id) = self.surface_lookup.get(&surface.id()).copied()
-            && let Some(output_id) = self.output_ids.get(&output.id()).copied()
+            && let Some(output_id) = self.outputs.output_ids.get(&output.id()).copied()
         {
             log::debug!("Surface {:?} left output {:?}", surface_id, output_id);
             outputs::surface_left_output(surface_id, output_id);
@@ -1184,49 +1137,6 @@ impl CompositorHandler for WaylandState {
             // Wake the loop so a dirty surface renders promptly
             crate::jobs::request_frame();
         }
-    }
-}
-
-impl OutputHandler for WaylandState {
-    fn output_state(&mut self) -> &mut OutputState {
-        &mut self.output_state
-    }
-
-    fn new_output(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        output: wl_output::WlOutput,
-    ) {
-        let id = self.ensure_output_id(&output);
-        log::info!(
-            "Output {:?} connected: {:?}",
-            id,
-            self.output_state.info(&output).and_then(|i| i.name)
-        );
-        self.sync_outputs();
-    }
-
-    fn update_output(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
-    ) {
-        self.sync_outputs();
-    }
-
-    fn output_destroyed(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        output: wl_output::WlOutput,
-    ) {
-        if let Some(id) = self.output_ids.remove(&output.id()) {
-            log::info!("Output {:?} disconnected", id);
-            outputs::output_removed(id);
-        }
-        self.sync_outputs();
     }
 }
 
@@ -1493,6 +1403,5 @@ impl ProvidesRegistryState for WaylandState {
 }
 
 delegate_compositor!(WaylandState);
-delegate_output!(WaylandState);
 delegate_layer!(WaylandState);
 delegate_registry!(WaylandState);
