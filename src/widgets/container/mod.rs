@@ -1405,6 +1405,7 @@ impl Widget for Container {
             transform_origin,
             border_width,
             border_color,
+            per_corner_radii,
         ) = with_signal_tracking(id, JobType::Paint, || {
             (
                 self.animated_background(id),
@@ -1415,6 +1416,7 @@ impl Widget for Container {
                 self.transform_origin.get_or(TransformOrigin::CENTER),
                 self.animated_border_width(id),
                 self.animated_border_color(id),
+                self.corner_radii.as_ref().map(|s| s.get()),
             )
         });
 
@@ -1423,12 +1425,8 @@ impl Widget for Container {
         // Per-corner radii override the uniform (animated) radius for
         // drawing. Clip, blur region and rounded hit testing stay uniform,
         // approximated by the largest corner.
-        let corner_radii = with_signal_tracking(id, JobType::Paint, || {
-            self.corner_radii
-                .as_ref()
-                .map(|s| s.get())
-                .unwrap_or_else(|| crate::renderer::CornerRadii::uniform(corner_radius))
-        });
+        let corner_radii = per_corner_radii
+            .unwrap_or_else(|| crate::renderer::CornerRadii::uniform(corner_radius));
         let corner_radius = corner_radius.max(corner_radii.max());
 
         // Publish the compositor blur region: bounds are read fresh from the
