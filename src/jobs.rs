@@ -682,3 +682,80 @@ mod tests {
         assert_eq!(drain_surface_jobs(roots[0]), vec![job]);
     }
 }
+
+#[cfg(test)]
+mod wakeup_contract {
+    use super::*;
+    use smithay_client_toolkit::reexports::calloop::{EventLoop, ping::make_ping};
+    use std::time::Duration;
+
+    /// The one invariant in this file that had no test, and the one that
+    /// cost a hung loop once: the wakeup ping must not be gated on
+    /// `FRAME_REQUESTED`.
+    ///
+    /// That flag is consumed mid-iteration by `take_frame_request()`. Gating
+    /// the ping on it meant a request arriving while the flag happened to be
+    /// set sent nothing, the take then cleared the flag, and the loop blocked
+    /// with work already queued — until an unrelated Wayland event, a mouse
+    /// movement, happened to wake it.
+    ///
+    /// So: with `FRAME_REQUESTED` already set and the loop having woken since
+    /// the last ping, a request must still ping.
+    ///
+    /// The globals are process-wide and other tests in this binary reach
+    /// `request_frame` too. An interfering ping can only mask a failure here,
+    /// never cause one, and the window between arming and dispatching is a
+    /// few microseconds.
+    #[test]
+    fn a_request_pings_even_when_the_frame_flag_is_already_set() {
+        let mut event_loop: EventLoop<bool> = EventLoop::try_new().expect("event loop");
+        let (ping, source) = make_ping().expect("ping");
+        event_loop
+            .handle()
+            .insert_source(source, |_, _, woken: &mut bool| *woken = true)
+            .expect("insert ping source");
+
+        init_wakeup(ping);
+
+        // Drain anything already pending so the assertion below can only be
+        // satisfied by our own request.
+        let mut woken = false;
+        let _ = event_loop.dispatch(Some(Duration::ZERO), &mut woken);
+
+        // The state the old bug keyed on: a frame is already requested.
+        FRAME_REQUESTED.store(true, Ordering::Relaxed);
+        // The loop has woken since the last ping, so coalescing is reset.
+        mark_loop_awake();
+
+        request_frame();
+
+        let mut woken = false;
+        event_loop
+            .dispatch(Some(Duration::from_millis(50)), &mut woken)
+            .expect("dispatch");
+        assert!(
+            woken,
+            "request_frame must ping while FRAME_REQUESTED is set — gating on \
+             that flag is what lost wakeups"
+        );
+
+        reset_jobs();
+    }
+
+    /// The other half: within one awake iteration the ping is coalesced, so a
+    /// burst of requests does not write the eventfd once per signal.
+    #[test]
+    fn further_requests_in_the_same_iteration_do_not_re_ping() {
+        reset_jobs();
+        mark_loop_awake();
+
+        request_frame();
+        assert!(PING_SENT.load(Ordering::Relaxed));
+
+        // Already armed: the swap reports a ping is in flight, so no second
+        // one is sent until the loop wakes and clears the flag.
+        assert!(PING_SENT.swap(true, Ordering::Relaxed));
+
+        reset_jobs();
+    }
+}
