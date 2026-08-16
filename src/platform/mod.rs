@@ -1,3 +1,4 @@
+pub mod backdrop;
 pub mod input;
 pub mod lock;
 pub mod outputs;

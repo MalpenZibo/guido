@@ -4,7 +4,7 @@ use raw_window_handle::{
 };
 use smithay_client_toolkit::reexports::calloop::LoopHandle;
 use smithay_client_toolkit::reexports::client::{
-    Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum, delegate_noop,
+    Connection, EventQueue, Proxy, QueueHandle,
     globals::registry_queue_init,
     protocol::{wl_output, wl_surface},
 };
@@ -29,14 +29,13 @@ use smithay_client_toolkit::{
 };
 use wayland_backend::sys::client::ObjectId;
 use wayland_protocols::ext::background_effect::v1::client::{
-    ext_background_effect_manager_v1::{
-        self, Capability as BgCapability, ExtBackgroundEffectManagerV1,
-    },
+    ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1,
     ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1,
 };
 
 use std::collections::HashMap;
 
+use super::backdrop::Backdrop;
 use super::input::InputState;
 use super::lock::Lock;
 use super::outputs::OutputRegistry;
@@ -101,11 +100,11 @@ pub struct WaylandSurfaceState {
     pub pending_events: Vec<Event>,
     /// Blur proxy for this surface, created lazily on first use (asking the
     /// manager twice for the same surface is a protocol error).
-    bg_effect_surface: Option<ExtBackgroundEffectSurfaceV1>,
+    pub(super) bg_effect_surface: Option<ExtBackgroundEffectSurfaceV1>,
     /// Last blur rects pushed to the compositor. `None` means nothing has
     /// been pushed yet (also reset when the blur capability changes, so the
     /// region is re-sent if it comes back).
-    blur_region: Option<Vec<BlurRect>>,
+    pub(super) blur_region: Option<Vec<BlurRect>>,
     /// Height sent in an in-flight popup reposition (cleared by the popup
     /// configure), so repeated content measurements don't re-send it.
     pub(super) pending_popup_height: Option<u32>,
@@ -165,11 +164,8 @@ pub struct WaylandState {
     /// Stable identity for the compositor's outputs — see [`super::outputs`].
     pub(super) outputs: OutputRegistry,
 
-    // Background effect (blur)
-    /// `None` where the protocol is unsupported — the feature simply no-ops.
-    bg_effect_manager: Option<ExtBackgroundEffectManagerV1>,
-    /// Whether the compositor currently advertises the Blur capability.
-    bg_effect_supports_blur: bool,
+    /// Compositor-side backdrop blur — see [`super::backdrop`].
+    pub(super) backdrop: Backdrop,
 
     /// xdg popups anchored to a surface — see [`super::popups`].
     pub(super) popups: Popups,
@@ -299,8 +295,7 @@ pub fn create_wayland_app(
         current_pointer_surface: None,
         current_keyboard_surface: None,
         outputs: OutputRegistry::new(),
-        bg_effect_manager,
-        bg_effect_supports_blur: false,
+        backdrop: Backdrop::new(bg_effect_manager),
         popups: Popups::new(xdg_shell),
         lock: Lock::new(session_lock_state),
         input: InputState::new(cursor_shape_manager, loop_handle),
@@ -360,75 +355,6 @@ impl WaylandState {
             );
         }
     }
-
-    /// Push a surface's blur region to the compositor if it changed.
-    ///
-    /// The `set_blur_region` request is double-buffered: with `commit: false`
-    /// it rides the buffer commit performed inside the upcoming present, so
-    /// region and content change in the same frame. Pass `commit: true` on
-    /// paths that skip presenting (e.g. a capability change without repaint).
-    ///
-    /// Surfaces that never requested blur are left untouched — declaring an
-    /// empty region would override compositor-side blur rules (e.g. blur by
-    /// namespace). Once a surface has blurred, dropping to zero rects sends
-    /// an *empty* region, never NULL: NULL only withdraws our opinion and
-    /// lets such a rule blur the whole surface, where an empty region says
-    /// "blur exactly nothing".
-    pub(crate) fn sync_blur_region(
-        &mut self,
-        id: SurfaceId,
-        rects: Vec<BlurRect>,
-        qh: &QueueHandle<Self>,
-        commit: bool,
-    ) {
-        if !self.bg_effect_supports_blur {
-            return;
-        }
-        let Some(manager) = self.bg_effect_manager.clone() else {
-            return;
-        };
-        let Some(surface_state) = self.surfaces.get_mut(&id) else {
-            return;
-        };
-
-        // Never used blur and still doesn't — don't claim the surface.
-        if rects.is_empty()
-            && surface_state.blur_region.is_none()
-            && surface_state.bg_effect_surface.is_none()
-        {
-            return;
-        }
-
-        if surface_state.blur_region.as_deref() == Some(rects.as_slice()) {
-            return;
-        }
-
-        // Asking the manager twice for the same surface is a protocol error.
-        let effect = surface_state.bg_effect_surface.get_or_insert_with(|| {
-            manager.get_background_effect(&surface_state.wl_surface, qh, ())
-        });
-
-        let Ok(region) = Region::new(&self.compositor_state) else {
-            log::warn!("Failed to create wl_region for blur");
-            return;
-        };
-        for r in &rects {
-            region.add(r.x, r.y, r.width, r.height);
-        }
-        effect.set_blur_region(Some(region.wl_region()));
-
-        log::debug!(
-            "Surface {:?} blur region set to {} rect(s)",
-            id,
-            rects.len()
-        );
-        surface_state.blur_region = Some(rects);
-
-        if commit {
-            surface_state.wl_surface.commit();
-        }
-    }
-
     /// Create a layer surface with a specific SurfaceId.
     pub fn create_surface_with_id(
         &mut self,
@@ -847,42 +773,6 @@ impl LayerShellHandler for WaylandState {
         }
     }
 }
-
-impl Dispatch<ExtBackgroundEffectManagerV1, ()> for WaylandState {
-    fn event(
-        state: &mut Self,
-        _proxy: &ExtBackgroundEffectManagerV1,
-        event: ext_background_effect_manager_v1::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-    ) {
-        if let ext_background_effect_manager_v1::Event::Capabilities { flags } = event {
-            let blur = match flags {
-                WEnum::Value(c) => c.contains(BgCapability::Blur),
-                WEnum::Unknown(_) => false,
-            };
-            if blur == state.bg_effect_supports_blur {
-                return;
-            }
-            log::info!(
-                "Compositor blur capability {}",
-                if blur { "available" } else { "lost" }
-            );
-            state.bg_effect_supports_blur = blur;
-            crate::compositor::set_blur_capability(blur);
-
-            // The compositor drops its regions when the capability goes away:
-            // forget ours and wake the loop to push them again if it's back.
-            for surface_state in state.surfaces.values_mut() {
-                surface_state.blur_region = None;
-            }
-            crate::jobs::request_frame();
-        }
-    }
-}
-
-delegate_noop!(WaylandState: ignore ExtBackgroundEffectSurfaceV1);
 
 impl ProvidesRegistryState for WaylandState {
     fn registry(&mut self) -> &mut RegistryState {
