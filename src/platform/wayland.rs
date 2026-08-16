@@ -8,31 +8,23 @@ use smithay_client_toolkit::reexports::client::{
     globals::registry_queue_init,
     protocol::{wl_output, wl_surface},
 };
-use smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_positioner;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, Region},
     data_device_manager::DataDeviceManagerState,
-    delegate_compositor, delegate_layer, delegate_registry, delegate_session_lock,
-    delegate_xdg_popup,
+    delegate_compositor, delegate_layer, delegate_registry,
     output::OutputState,
     primary_selection::PrimarySelectionManagerState,
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     seat::{SeatState, pointer::cursor_shape::CursorShapeManager},
-    session_lock::{
-        SessionLock, SessionLockHandler, SessionLockState, SessionLockSurface,
-        SessionLockSurfaceConfigure,
-    },
+    session_lock::{SessionLockState, SessionLockSurface},
     shell::{
         WaylandSurface,
         wlr_layer::{
             Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
             LayerSurfaceConfigure,
         },
-        xdg::{
-            XdgPositioner, XdgShell,
-            popup::{Popup, PopupConfigure, PopupHandler},
-        },
+        xdg::{XdgShell, popup::Popup},
     },
 };
 use wayland_backend::sys::client::ObjectId;
@@ -46,10 +38,12 @@ use wayland_protocols::ext::background_effect::v1::client::{
 use std::collections::HashMap;
 
 use super::input::InputState;
+use super::lock::Lock;
 use super::outputs::OutputRegistry;
+use super::popups::Popups;
 use super::selections::Selections;
 use crate::blur::BlurRect;
-use crate::outputs::{self, OutputId};
+use crate::outputs::{self};
 use crate::surface::SurfaceId;
 use crate::widgets::{Event, Rect};
 
@@ -114,7 +108,7 @@ pub struct WaylandSurfaceState {
     blur_region: Option<Vec<BlurRect>>,
     /// Height sent in an in-flight popup reposition (cleared by the popup
     /// configure), so repeated content measurements don't re-send it.
-    pending_popup_height: Option<u32>,
+    pub(super) pending_popup_height: Option<u32>,
 }
 
 impl WaylandSurfaceState {
@@ -177,20 +171,11 @@ pub struct WaylandState {
     /// Whether the compositor currently advertises the Blur capability.
     bg_effect_supports_blur: bool,
 
-    // xdg shell (popups anchored to layer surfaces)
-    /// `None` where xdg_wm_base is unavailable — popups then fail with a log.
-    xdg_shell: Option<XdgShell>,
-    /// Monotonic token for xdg_popup.reposition requests.
-    reposition_token: u32,
+    /// xdg popups anchored to a surface — see [`super::popups`].
+    pub(super) popups: Popups,
 
-    // Session lock (ext-session-lock-v1)
-    session_lock_state: SessionLockState,
-    /// The active lock grant. Written when `start_session_lock` succeeds so a
-    /// synchronous double-lock check can reject a second call; cleared by
-    /// `finished` or `unlock_session`.
-    active_lock: Option<SessionLock>,
-    /// Lock lifecycle events, drained by the main loop.
-    lock_events: Vec<LockEvent>,
+    /// Session lock grant and events — see [`super::lock`].
+    pub(super) lock: Lock,
 
     /// Pointer, touch and keyboard — see [`super::input`].
     pub(super) input: InputState,
@@ -316,11 +301,8 @@ pub fn create_wayland_app(
         outputs: OutputRegistry::new(),
         bg_effect_manager,
         bg_effect_supports_blur: false,
-        xdg_shell,
-        reposition_token: 0,
-        session_lock_state,
-        active_lock: None,
-        lock_events: Vec::new(),
+        popups: Popups::new(xdg_shell),
+        lock: Lock::new(session_lock_state),
         input: InputState::new(cursor_shape_manager, loop_handle),
         selections: Selections::new(data_device_manager, primary_selection_manager),
     };
@@ -377,334 +359,6 @@ impl WaylandState {
                 }
             );
         }
-    }
-
-    /// Request a session lock from the compositor.
-    ///
-    /// Returns false when a lock is already active or the compositor lacks
-    /// ext-session-lock-v1. The grant (or denial) arrives asynchronously as
-    /// a [`LockEvent`].
-    pub fn start_session_lock(&mut self, qh: &QueueHandle<Self>) -> bool {
-        if self.active_lock.is_some() {
-            log::warn!("Session lock requested while a lock is already active");
-            return false;
-        }
-        match self.session_lock_state.lock(qh) {
-            Ok(lock) => {
-                self.active_lock = Some(lock);
-                log::info!("Session lock requested");
-                true
-            }
-            Err(e) => {
-                log::error!("Compositor does not support ext-session-lock-v1: {e}");
-                false
-            }
-        }
-    }
-
-    /// Unlock the session (no-op when not locked).
-    pub fn unlock_session(&mut self) {
-        if let Some(lock) = self.active_lock.take() {
-            lock.unlock();
-            log::info!("Session unlocked");
-        }
-    }
-
-    /// Whether a session lock is currently held and granted.
-    pub fn is_session_locked(&self) -> bool {
-        self.active_lock.as_ref().is_some_and(|l| l.is_locked())
-    }
-
-    /// Create a lock surface for `output` with a specific SurfaceId.
-    ///
-    /// The surface starts at 0×0 — its real size arrives with the first
-    /// lock-surface configure. Returns false without an active lock or when
-    /// the output disconnected.
-    pub fn create_lock_surface_with_id(
-        &mut self,
-        qh: &QueueHandle<Self>,
-        id: SurfaceId,
-        output: OutputId,
-    ) -> bool {
-        let Some(lock) = self.active_lock.clone() else {
-            log::warn!("Cannot create lock surface without an active session lock");
-            return false;
-        };
-        let Some(wl_output) = self.wl_output_for(output) else {
-            log::warn!(
-                "Cannot create lock surface: output {:?} is not connected",
-                output
-            );
-            return false;
-        };
-
-        let wl_surface = self.compositor_state.create_surface(qh);
-        let lock_surface = lock.create_lock_surface(wl_surface.clone(), &wl_output, qh);
-
-        self.surface_lookup.insert(wl_surface.id(), id);
-        let surface_state =
-            WaylandSurfaceState::new(SurfaceRole::Lock(lock_surface), wl_surface, 0, 0);
-        self.surfaces.insert(id, surface_state);
-
-        log::info!("Created lock surface {:?} on output {:?}", id, output);
-        true
-    }
-
-    /// Drain pending session-lock lifecycle events.
-    pub fn take_lock_events(&mut self) -> Vec<LockEvent> {
-        std::mem::take(&mut self.lock_events)
-    }
-
-    /// Build an xdg_positioner for a popup config at the given size.
-    fn build_popup_positioner(
-        xdg_shell: &XdgShell,
-        config: &crate::surface::PopupConfig,
-        size: (u32, u32),
-    ) -> Option<XdgPositioner> {
-        let positioner = match XdgPositioner::new(xdg_shell) {
-            Ok(p) => p,
-            Err(e) => {
-                log::error!("Failed to create xdg_positioner: {e}");
-                return None;
-            }
-        };
-        positioner.set_size(size.0.max(1) as i32, size.1.max(1) as i32);
-        let r = config.anchor_rect;
-        positioner.set_anchor_rect(
-            r.x.floor() as i32,
-            r.y.floor() as i32,
-            (r.width.ceil() as i32).max(1),
-            (r.height.ceil() as i32).max(1),
-        );
-        positioner.set_anchor(popup_point_to_anchor(config.anchor));
-        positioner.set_gravity(popup_point_to_gravity(config.gravity));
-        positioner.set_offset(config.offset.0, config.offset.1);
-        // Let the compositor keep the popup on screen: flip at the screen
-        // edge on either axis, slide where flipping doesn't help.
-        positioner.set_constraint_adjustment(
-            xdg_positioner::ConstraintAdjustment::FlipX
-                | xdg_positioner::ConstraintAdjustment::FlipY
-                | xdg_positioner::ConstraintAdjustment::SlideX
-                | xdg_positioner::ConstraintAdjustment::SlideY,
-        );
-        Some(positioner)
-    }
-
-    /// Create an xdg popup anchored to `parent` with a specific SurfaceId.
-    ///
-    /// `size` is the resolved popup size (config height, or the measured
-    /// content height for auto-height popups). The actual size/position
-    /// arrive with the popup configure (the compositor may flip/slide it to
-    /// stay on screen). Returns false when xdg_wm_base is missing or the
-    /// parent can't host popups.
-    pub fn create_popup_surface_with_id(
-        &mut self,
-        qh: &QueueHandle<Self>,
-        id: SurfaceId,
-        parent: SurfaceId,
-        config: &crate::surface::PopupConfig,
-        size: (u32, u32),
-    ) -> bool {
-        let Some(ref xdg_shell) = self.xdg_shell else {
-            log::error!("Cannot create popup: compositor lacks xdg_wm_base");
-            return false;
-        };
-        let Some(parent_state) = self.surfaces.get(&parent) else {
-            log::warn!("Cannot create popup: parent surface {:?} is gone", parent);
-            return false;
-        };
-
-        let Some(positioner) = Self::build_popup_positioner(xdg_shell, config, size) else {
-            return false;
-        };
-
-        let wl_surface = self.compositor_state.create_surface(qh);
-        let popup = match &parent_state.role {
-            SurfaceRole::Layer(layer_surface) => {
-                let popup =
-                    match Popup::from_surface(None, &positioner, qh, wl_surface.clone(), xdg_shell)
-                    {
-                        Ok(popup) => popup,
-                        Err(e) => {
-                            log::error!("Failed to create xdg popup: {e}");
-                            return false;
-                        }
-                    };
-                // Assign the layer surface as the popup parent BEFORE the
-                // initial commit (required for parentless xdg popups)
-                layer_surface.get_popup(popup.xdg_popup());
-                popup
-            }
-            SurfaceRole::Popup {
-                popup: parent_popup,
-                ..
-            } => {
-                // Nested popup (submenu): ordinary xdg parent
-                let parent_xdg = parent_popup.xdg_surface().clone();
-                match Popup::from_surface(
-                    Some(&parent_xdg),
-                    &positioner,
-                    qh,
-                    wl_surface.clone(),
-                    xdg_shell,
-                ) {
-                    Ok(popup) => popup,
-                    Err(e) => {
-                        log::error!("Failed to create nested xdg popup: {e}");
-                        return false;
-                    }
-                }
-            }
-            SurfaceRole::Lock(_) => {
-                log::warn!("Cannot anchor a popup to a session-lock surface");
-                return false;
-            }
-        };
-
-        // Menu semantics: an input grab dismisses the popup on outside
-        // click. Must be requested before mapping, with a recent serial.
-        if config.grab
-            && let Some(seat) = self.seat_state.seats().next()
-        {
-            popup
-                .xdg_popup()
-                .grab(&seat, self.input.latest_input_serial);
-        }
-
-        wl_surface.commit();
-
-        self.surface_lookup.insert(wl_surface.id(), id);
-        let surface_state = WaylandSurfaceState::new(
-            SurfaceRole::Popup {
-                popup,
-                config: config.clone(),
-                parent,
-            },
-            wl_surface,
-            size.0,
-            size.1,
-        );
-        self.surfaces.insert(id, surface_state);
-
-        log::info!(
-            "Created popup {:?} on parent {:?} ({}x{}, grab: {})",
-            id,
-            parent,
-            size.0,
-            size.1,
-            config.grab
-        );
-        true
-    }
-
-    /// Live popup descendants of `root`, deepest first — the order the
-    /// protocol demands for teardown (a popup must be destroyed before its
-    /// parent, or the compositor raises `not_the_topmost_popup`).
-    pub(crate) fn popup_descendants_bottom_up(&self, root: SurfaceId) -> Vec<SurfaceId> {
-        let mut out = Vec::new();
-        let mut frontier = vec![root];
-        while let Some(current) = frontier.pop() {
-            for (id, state) in &self.surfaces {
-                if let SurfaceRole::Popup { parent, .. } = &state.role
-                    && *parent == current
-                {
-                    out.push(*id);
-                    frontier.push(*id);
-                }
-            }
-        }
-        out.reverse(); // deepest first
-        out
-    }
-
-    /// Grabbing popups that would make a new grab on `new_parent` illegal:
-    /// xdg-shell requires a new grab to nest under the current grab holder,
-    /// so any live grabbing popup that is not `new_parent` itself (or one
-    /// of its ancestors) must be destroyed before the new popup is created.
-    /// Returned deepest-chain-first, ready for ordered teardown.
-    pub(crate) fn conflicting_grab_popups(&self, new_parent: SurfaceId) -> Vec<SurfaceId> {
-        // Ancestor chain of the new popup (surfaces a nested grab may sit on)
-        let mut ancestors = vec![new_parent];
-        let mut current = new_parent;
-        while let Some(state) = self.surfaces.get(&current) {
-            match &state.role {
-                SurfaceRole::Popup { parent, .. } => {
-                    ancestors.push(*parent);
-                    current = *parent;
-                }
-                _ => break,
-            }
-        }
-
-        let mut conflicts: Vec<SurfaceId> = self
-            .surfaces
-            .iter()
-            .filter(|(id, state)| {
-                matches!(&state.role, SurfaceRole::Popup { config, .. } if config.grab)
-                    && !ancestors.contains(id)
-            })
-            .map(|(id, _)| *id)
-            .collect();
-        // Close whole chains children-first: append descendants and dedup
-        let mut ordered = Vec::new();
-        for id in conflicts.drain(..) {
-            for d in self.popup_descendants_bottom_up(id) {
-                if !ordered.contains(&d) {
-                    ordered.push(d);
-                }
-            }
-            if !ordered.contains(&id) {
-                ordered.push(id);
-            }
-        }
-        ordered
-    }
-
-    /// For auto-height popups: the width to measure content at.
-    /// Returns `None` for non-popup surfaces or fixed-height popups.
-    pub(crate) fn popup_auto_width(&self, id: SurfaceId) -> Option<u32> {
-        match &self.surfaces.get(&id)?.role {
-            SurfaceRole::Popup { config, .. } if config.height.is_none() => Some(config.width),
-            _ => None,
-        }
-    }
-
-    /// Reposition an auto-height popup when its content height changed.
-    /// The compositor answers with a new configure carrying the final size.
-    pub(crate) fn reposition_popup_if_changed(
-        &mut self,
-        id: SurfaceId,
-        new_height: u32,
-        qh: &QueueHandle<Self>,
-    ) {
-        let _ = qh;
-        let Some(ref xdg_shell) = self.xdg_shell else {
-            return;
-        };
-        let Some(surface_state) = self.surfaces.get_mut(&id) else {
-            return;
-        };
-        if surface_state.height == new_height
-            || surface_state.pending_popup_height == Some(new_height)
-        {
-            return;
-        }
-        let SurfaceRole::Popup { popup, config, .. } = &surface_state.role else {
-            return;
-        };
-        // xdg_popup.reposition needs protocol v3
-        if popup.xdg_popup().version() < 3 {
-            return;
-        }
-        let Some(positioner) =
-            Self::build_popup_positioner(xdg_shell, config, (config.width, new_height))
-        else {
-            return;
-        };
-        self.reposition_token = self.reposition_token.wrapping_add(1);
-        popup.reposition(&positioner, self.reposition_token);
-        surface_state.pending_popup_height = Some(new_height);
-        log::debug!("Popup {:?} repositioning to height {}", id, new_height);
     }
 
     /// Push a surface's blur region to the compositor if it changed.
@@ -1193,170 +847,6 @@ impl LayerShellHandler for WaylandState {
         }
     }
 }
-
-/// Map guido's popup anchor point to the xdg_positioner anchor.
-fn popup_point_to_anchor(point: crate::surface::PopupAnchor) -> xdg_positioner::Anchor {
-    use crate::surface::PopupAnchor as P;
-    match point {
-        P::None => xdg_positioner::Anchor::None,
-        P::Top => xdg_positioner::Anchor::Top,
-        P::Bottom => xdg_positioner::Anchor::Bottom,
-        P::Left => xdg_positioner::Anchor::Left,
-        P::Right => xdg_positioner::Anchor::Right,
-        P::TopLeft => xdg_positioner::Anchor::TopLeft,
-        P::BottomLeft => xdg_positioner::Anchor::BottomLeft,
-        P::TopRight => xdg_positioner::Anchor::TopRight,
-        P::BottomRight => xdg_positioner::Anchor::BottomRight,
-    }
-}
-
-/// Map guido's popup gravity to the xdg_positioner gravity.
-fn popup_point_to_gravity(point: crate::surface::PopupAnchor) -> xdg_positioner::Gravity {
-    use crate::surface::PopupAnchor as P;
-    match point {
-        P::None => xdg_positioner::Gravity::None,
-        P::Top => xdg_positioner::Gravity::Top,
-        P::Bottom => xdg_positioner::Gravity::Bottom,
-        P::Left => xdg_positioner::Gravity::Left,
-        P::Right => xdg_positioner::Gravity::Right,
-        P::TopLeft => xdg_positioner::Gravity::TopLeft,
-        P::BottomLeft => xdg_positioner::Gravity::BottomLeft,
-        P::TopRight => xdg_positioner::Gravity::TopRight,
-        P::BottomRight => xdg_positioner::Gravity::BottomRight,
-    }
-}
-
-impl SessionLockHandler for WaylandState {
-    fn locked(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _session_lock: SessionLock) {
-        log::info!("Session lock granted by compositor");
-        self.lock_events.push(LockEvent::Locked);
-        crate::jobs::request_frame();
-    }
-
-    fn finished(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _session_lock: SessionLock,
-    ) {
-        log::info!("Session lock finished (denied or ended)");
-        self.active_lock = None;
-        self.lock_events.push(LockEvent::Finished);
-        crate::jobs::request_frame();
-    }
-
-    fn configure(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        surface: SessionLockSurface,
-        configure: SessionLockSurfaceConfigure,
-        _serial: u32,
-    ) {
-        // Route to the matching surface state, mirroring the layer-shell
-        // configure path so the same render machinery applies. sctk has
-        // already acked the configure.
-        let surface_id = self.surface_lookup.get(&surface.wl_surface().id()).copied();
-        if let Some(id) = surface_id
-            && let Some(surface_state) = self.surfaces.get_mut(&id)
-        {
-            let (width, height) = configure.new_size;
-            log::info!(
-                "Lock surface {:?} configure: {}x{} (current {}x{})",
-                id,
-                width,
-                height,
-                surface_state.width,
-                surface_state.height
-            );
-            if width > 0 {
-                surface_state.width = width;
-            }
-            if height > 0 {
-                surface_state.height = height;
-            }
-            surface_state.configured = true;
-            crate::jobs::request_frame();
-        }
-    }
-}
-
-delegate_session_lock!(WaylandState);
-
-impl PopupHandler for WaylandState {
-    fn configure(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        popup: &Popup,
-        config: PopupConfigure,
-    ) {
-        // Route to the matching surface state, like the layer-shell path.
-        // sctk has already acked; the compositor may have adjusted size and
-        // position to keep the popup on screen.
-        let surface_id = self.surface_lookup.get(&popup.wl_surface().id()).copied();
-        if let Some(id) = surface_id
-            && let Some(surface_state) = self.surfaces.get_mut(&id)
-        {
-            log::info!(
-                "Popup {:?} configure: {}x{} at {:?}",
-                id,
-                config.width,
-                config.height,
-                config.position
-            );
-            if config.width > 0 {
-                surface_state.width = config.width as u32;
-            }
-            if config.height > 0 {
-                surface_state.height = config.height as u32;
-            }
-            surface_state.pending_popup_height = None;
-            surface_state.configured = true;
-            crate::jobs::request_frame();
-        }
-    }
-
-    fn done(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, popup: &Popup) {
-        // Compositor dismissed the popup (outside click on a grab, parent
-        // gone). Flip the reactive dismissal signal and route through the
-        // normal close command for full teardown.
-        if let Some(id) = self.surface_lookup.get(&popup.wl_surface().id()).copied() {
-            log::info!("Popup {:?} dismissed by compositor", id);
-            crate::surface::mark_popup_dismissed(id);
-            crate::surface::push_surface_command(crate::surface::SurfaceCommand::Close(id));
-        }
-    }
-}
-
-// Not delegate_xdg_shell!: that macro (and sctk's decoration dispatches)
-// drag in WindowHandler bounds — guido has no toplevel windows. Popups need
-// only xdg_wm_base (ping/pong), plus an inert stub for the decoration
-// manager that XdgShell::bind insists on binding (the protocol object has
-// no events).
-smithay_client_toolkit::reexports::client::delegate_dispatch!(WaylandState: [
-    smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_wm_base::XdgWmBase: smithay_client_toolkit::globals::GlobalData
-] => XdgShell);
-
-impl
-    Dispatch<
-        smithay_client_toolkit::reexports::protocols::xdg::decoration::zv1::client::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
-        smithay_client_toolkit::globals::GlobalData,
-    > for WaylandState
-{
-    fn event(
-        _: &mut Self,
-        _: &smithay_client_toolkit::reexports::protocols::xdg::decoration::zv1::client::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
-        _: smithay_client_toolkit::reexports::protocols::xdg::decoration::zv1::client::zxdg_decoration_manager_v1::Event,
-        _: &smithay_client_toolkit::globals::GlobalData,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        unreachable!("zxdg_decoration_manager_v1 has no events");
-    }
-}
-
-delegate_xdg_popup!(WaylandState);
 
 impl Dispatch<ExtBackgroundEffectManagerV1, ()> for WaylandState {
     fn event(

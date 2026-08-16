@@ -1,11 +1,14 @@
 pub mod input;
+pub mod lock;
 pub mod outputs;
+pub mod popups;
 pub mod selections;
 pub mod wayland;
 
+pub use lock::LockEvent;
 pub use selections::SelectionKind;
 pub use wayland::{
-    LockEvent, PlatformError, SurfaceRole, WaylandState, WaylandSurfaceState, WaylandWindowWrapper,
+    PlatformError, SurfaceRole, WaylandState, WaylandSurfaceState, WaylandWindowWrapper,
     create_wayland_app,
 };
 
