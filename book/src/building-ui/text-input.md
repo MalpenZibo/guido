@@ -230,7 +230,9 @@ fn login_form() -> Container {
 - **Undo/Redo**: History with intelligent coalescing of rapid edits
 - **Scrolling**: Long text scrolls horizontally to keep cursor visible
 - **Cursor Blinking**: Standard blinking cursor when focused
-- **Key Repeat**: Hold keys for continuous input
+- **Key Repeat**: Hold keys for continuous input, at the rate and delay the
+  compositor reports — the same settings every other application on the
+  session obeys
 
 ## API Reference
 

@@ -174,6 +174,22 @@ Layer shell protocol implementation for desktop widgets.
 - Event loop via calloop
 - Dynamic surface property modification via `SurfaceHandle`
 
+**Module layout.** `wayland.rs` holds the connection, the surface registry and
+the layer shell; everything else is one file per concern, each owning its own
+state and the protocol handlers that drive it. The `delegate_*` macros need
+those handlers implemented on `WaylandState`, which is why the `impl` blocks
+live beside their state rather than all in one file.
+
+| File | Concern |
+|------|---------|
+| `platform/wayland.rs` | Connection, surfaces, layer shell, compositor handler |
+| `platform/input.rs` | Seat: pointer, touch, keyboard, cursor shape, key repeat |
+| `platform/selections.rs` | Clipboard and primary selection, async prefetch |
+| `platform/outputs.rs` | Stable `OutputId` per `wl_output`, hotplug |
+| `platform/popups.rs` | xdg popups: positioning, grabs, ordered teardown |
+| `platform/lock.rs` | `ext-session-lock-v1` grant and lifecycle events |
+| `platform/backdrop.rs` | `ext-background-effect-v1` compositor-side blur |
+
 ### `surface.rs` - Surface Management
 
 Handles surface creation, configuration, and runtime modification.
@@ -462,7 +478,8 @@ The feature has zero overhead when disabled (code is completely compiled out).
 | `src/renderer/shader.wgsl` | GPU shaders for instanced SDF rendering |
 | `src/reactive/signal.rs` | Signal implementation |
 | `src/transform.rs` | Transform matrix operations |
-| `src/platform/mod.rs` | Wayland layer shell integration |
+| `src/platform/wayland.rs` | Wayland connection, surfaces and layer shell |
+| `src/platform/input.rs` | Seat input: pointer, touch, keyboard |
 
 ## Adding New Features
 

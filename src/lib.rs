@@ -929,13 +929,21 @@ impl App {
             );
         }
 
-        let (connection, mut event_queue, mut wayland_state, qh) = match create_wayland_app() {
-            Ok(app) => app,
-            Err(e) => {
-                log::error!("Cannot start: {e}");
-                return ExitReason::Error(e);
-            }
-        };
+        // The loop is created before the connection because the keyboard is
+        // built during the first dispatch, and it needs the loop handle to arm
+        // its key-repeat timer.
+        let mut event_loop: EventLoop<platform::WaylandState> =
+            EventLoop::try_new().expect("Failed to create event loop");
+        let loop_handle = event_loop.handle();
+
+        let (connection, mut event_queue, mut wayland_state, qh) =
+            match create_wayland_app(loop_handle.clone()) {
+                Ok(app) => app,
+                Err(e) => {
+                    log::error!("Cannot start: {e}");
+                    return ExitReason::Error(e);
+                }
+            };
 
         // Create surfaces from add_surface() calls
         for def in &self.surface_definitions {
@@ -998,11 +1006,6 @@ impl App {
 
             surface_manager.add(managed);
         }
-
-        // Create calloop event loop for event-driven execution
-        let mut event_loop: EventLoop<platform::WaylandState> =
-            EventLoop::try_new().expect("Failed to create event loop");
-        let loop_handle = event_loop.handle();
 
         // Create ping mechanism for wakeup on signal changes
         let (ping, ping_source) = make_ping().expect("Failed to create ping");

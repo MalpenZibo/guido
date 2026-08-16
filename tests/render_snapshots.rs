@@ -524,3 +524,32 @@ fn bar_like_composition() {
 
     assert_snapshot("bar_like_composition", render(view, 600.0, 36.0));
 }
+
+/// After `examples/text_input_example.rs`: a text input narrower than its own
+/// content. The field is a viewport — the glyphs that do not fit are cut at
+/// its horizontal edges, and only there, so descenders and any glyph
+/// decoration survive.
+///
+/// This is the case that went unwatched: clipping was dropped from the input
+/// when the V2 renderer landed, and no snapshot covered the widget, so the
+/// text simply drew across whatever sat beside it.
+#[test]
+fn text_input_clips_overflowing_content() {
+    let value = create_signal("gggggggggggggggggggggggggggggggggggggg".to_string());
+
+    let view = container().padding(8.0).child(
+        container()
+            .width(180.0)
+            .padding(8.0)
+            .background(Color::rgb(0.18, 0.18, 0.24))
+            .corner_radius(6.0)
+            .text_color(Color::WHITE)
+            .font_size(14.0)
+            .child(text_input(value)),
+    );
+
+    assert_snapshot(
+        "text_input_clips_overflowing_content",
+        render(view, 400.0, 60.0),
+    );
+}
