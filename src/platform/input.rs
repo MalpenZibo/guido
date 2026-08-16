@@ -723,32 +723,46 @@ fn keysym_to_key(keysym: Keysym, utf8: Option<&str>, is_press: bool) -> Option<K
         _ => {}
     }
 
-    // Character input - use utf8 if available
+    // Character input: utf8 carries the composed result, so it wins whenever
+    // it holds something printable.
     if let Some(text) = utf8
         && let Some(c) = text.chars().next()
     {
-        // Only return printable characters or control characters we care about
         if !c.is_control() || c == '\n' || c == '\r' || c == '\t' {
             return Some(Key::Char(c));
         }
+
+        // A control character here means a modifier ate the letter: Ctrl+C
+        // arrives as U+0003, not as 'c'. The keysym still carries the letter,
+        // so fall through to it — otherwise every Ctrl chord is dropped and
+        // copy, cut and paste never reach a widget.
+        return keysym_char(keysym);
     }
 
-    // Fallback: convert keysym directly for release events where utf8 is always None.
-    // On press, utf8 = None means a compose sequence is in progress — don't insert anything.
+    // No utf8 on a press means a compose sequence is still open: there is
+    // nothing to insert yet. On release utf8 is always absent, so the keysym
+    // is all there is.
     if !is_press {
-        let raw = keysym.raw();
+        return keysym_char(keysym);
+    }
 
-        // Printable ASCII range (space through tilde): 0x20-0x7E
-        // XKB keysyms for these characters have the same value as ASCII
-        if (0x20..=0x7e).contains(&raw) {
-            return Some(Key::Char(char::from_u32(raw)?));
-        }
+    None
+}
 
-        // Handle keypad numbers (KP_0 through KP_9)
-        // XKB_KEY_KP_0 = 0xffb0, XKB_KEY_KP_9 = 0xffb9
-        if (0xffb0..=0xffb9).contains(&raw) {
-            return Some(Key::Char(char::from_u32(raw - 0xffb0 + 0x30)?)); // Convert to '0'-'9'
-        }
+/// The character a keysym stands for, ignoring any composition.
+fn keysym_char(keysym: Keysym) -> Option<Key> {
+    let raw = keysym.raw();
+
+    // Printable ASCII range (space through tilde): 0x20-0x7E
+    // XKB keysyms for these characters have the same value as ASCII
+    if (0x20..=0x7e).contains(&raw) {
+        return Some(Key::Char(char::from_u32(raw)?));
+    }
+
+    // Handle keypad numbers (KP_0 through KP_9)
+    // XKB_KEY_KP_0 = 0xffb0, XKB_KEY_KP_9 = 0xffb9
+    if (0xffb0..=0xffb9).contains(&raw) {
+        return Some(Key::Char(char::from_u32(raw - 0xffb0 + 0x30)?)); // Convert to '0'-'9'
     }
 
     None
@@ -758,3 +772,47 @@ delegate_seat!(WaylandState);
 delegate_pointer!(WaylandState);
 delegate_touch!(WaylandState);
 delegate_keyboard!(WaylandState);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A held modifier replaces the character xkb reports: Ctrl+C arrives as
+    /// U+0003, not as 'c'. The keysym still carries the letter, and dropping
+    /// the event here means copy, cut, paste, undo and select-all never reach
+    /// a widget at all.
+    #[test]
+    fn a_ctrl_chord_keeps_its_letter() {
+        let c = Keysym::new(0x63); // 'c'
+        assert_eq!(
+            keysym_to_key(c, Some("\u{3}"), true),
+            Some(Key::Char('c')),
+            "Ctrl+C must arrive as 'c'"
+        );
+    }
+
+    /// The case the control-character guard exists for: while a compose
+    /// sequence is open xkb reports no text, and nothing should be inserted
+    /// until it resolves.
+    #[test]
+    fn an_open_compose_sequence_inserts_nothing() {
+        let e = Keysym::new(0x65); // 'e'
+        assert_eq!(keysym_to_key(e, None, true), None);
+    }
+
+    /// Release events never carry text, so the keysym is all there is —
+    /// that is how a composed key is matched back to the press that made it.
+    #[test]
+    fn a_release_falls_back_to_the_keysym() {
+        let e = Keysym::new(0x65);
+        assert_eq!(keysym_to_key(e, None, false), Some(Key::Char('e')));
+    }
+
+    /// Ordinary typing still goes through the text, not the keysym: that is
+    /// what carries an accented or composed character.
+    #[test]
+    fn plain_typing_uses_the_composed_text() {
+        let e = Keysym::new(0x65); // 'e', composed into 'é'
+        assert_eq!(keysym_to_key(e, Some("é"), true), Some(Key::Char('é')));
+    }
+}
