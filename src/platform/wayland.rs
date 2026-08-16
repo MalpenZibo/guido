@@ -4,19 +4,9 @@ use raw_window_handle::{
 };
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, Region},
-    data_device_manager::{
-        data_device::{DataDevice, DataDeviceHandler},
-        data_offer::DataOfferHandler,
-        data_source::{CopyPasteSource, DataSourceHandler},
-        DataDeviceManagerState, ReadPipe,
-    },
-    delegate_primary_selection,
-    primary_selection::{
-        device::{PrimarySelectionDevice, PrimarySelectionDeviceHandler},
-        selection::{PrimarySelectionSource, PrimarySelectionSourceHandler},
-        PrimarySelectionManagerState,
-    },
-    delegate_compositor, delegate_data_device, delegate_keyboard, delegate_layer, delegate_output,
+    data_device_manager::DataDeviceManagerState,
+    primary_selection::PrimarySelectionManagerState,
+    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output,
     delegate_pointer, delegate_registry, delegate_seat,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
@@ -52,8 +42,7 @@ use smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_positi
 use smithay_client_toolkit::reexports::client::{
     globals::registry_queue_init,
     protocol::{
-        wl_data_device::WlDataDevice, wl_data_device_manager::DndAction,
-        wl_data_source::WlDataSource, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface,
+        wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface,
         wl_touch,
     },
     Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum, delegate_noop,
@@ -66,11 +55,8 @@ use wayland_protocols::ext::background_effect::v1::client::{
 };
 
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{Read, Write};
-use std::os::unix::io::OwnedFd;
-use std::time::{Duration, Instant};
 
+use super::selections::Selections;
 use crate::blur::BlurRect;
 use crate::outputs::{self, OutputId, OutputInfo};
 use crate::reactive::CursorIcon;
@@ -245,7 +231,7 @@ pub struct WaylandState {
     // Keyboard state
     keyboard: Option<wl_keyboard::WlKeyboard>,
     modifiers: Modifiers,
-    keyboard_serial: u32,
+    pub(super) keyboard_serial: u32,
     /// Track raw_code → Key for press/release matching (handles compose sequences)
     pressed_keys: HashMap<u32, Key>,
     /// Key repeat runs on a calloop timer owned by the toolkit, armed with the
@@ -253,34 +239,11 @@ pub struct WaylandState {
     /// seat capability callback, which has no other route to the loop.
     loop_handle: LoopHandle<'static, WaylandState>,
 
-    // Clipboard state
-    data_device_manager: Option<DataDeviceManagerState>,
-    data_device: Option<DataDevice>,
-    clipboard_content: Option<String>,
-    clipboard_source: Option<CopyPasteSource>,
+    /// Clipboard and primary selection — see [`super::selections`].
+    pub(super) selections: Selections,
 
-    // Primary selection (select-to-copy / middle-click paste)
-    primary_selection_manager: Option<PrimarySelectionManagerState>,
-    primary_selection_device: Option<PrimarySelectionDevice>,
-    primary_content: Option<String>,
-    primary_source: Option<PrimarySelectionSource>,
-
-    // Async clipboard prefetch: whenever a selection offer changes, a reader
-    // thread fetches its content and delivers it through the calloop ingress
-    // channel. Generation counters drop results made stale by a newer offer.
-    selection_generation: u64,
-    primary_generation: u64,
     /// Serial of the most recent input event, needed to claim selections.
-    latest_input_serial: u32,
-}
-
-/// Which system selection a prefetched content update belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelectionKind {
-    /// The regular clipboard (Ctrl+C / Ctrl+V).
-    Clipboard,
-    /// The primary selection (select-to-copy / middle-click paste).
-    Primary,
+    pub(super) latest_input_serial: u32,
 }
 
 /// Why the platform layer could not start or continue.
@@ -420,16 +383,7 @@ pub fn create_wayland_app(
         keyboard_serial: 0,
         pressed_keys: HashMap::new(),
         loop_handle,
-        data_device_manager,
-        data_device: None,
-        clipboard_content: None,
-        clipboard_source: None,
-        primary_selection_manager,
-        primary_selection_device: None,
-        primary_content: None,
-        primary_source: None,
-        selection_generation: 0,
-        primary_generation: 0,
+        selections: Selections::new(data_device_manager, primary_selection_manager),
         latest_input_serial: 0,
     };
 
@@ -1154,136 +1108,6 @@ impl WaylandState {
             .any(|s| !s.first_frame_presented || !s.scale_factor_received)
     }
 
-    /// Set clipboard content (copy)
-    pub fn set_clipboard(&mut self, text: String, qh: &QueueHandle<Self>) {
-        if let Some(ref manager) = self.data_device_manager {
-            // Create a data source for the clipboard
-            let source = manager.create_copy_paste_source(
-                qh,
-                vec!["text/plain;charset=utf-8", "UTF8_STRING", "TEXT", "STRING"],
-            );
-
-            // Store the text to write when compositor requests it
-            self.clipboard_content = Some(text);
-
-            // Set selection using the keyboard serial
-            if let Some(ref device) = self.data_device {
-                source.set_selection(device, self.keyboard_serial);
-                self.clipboard_source = Some(source);
-            }
-        }
-    }
-
-    /// Get clipboard content (paste)
-    /// Returns the content if available, or None if clipboard is empty
-    pub fn get_clipboard(&self) -> Option<String> {
-        self.clipboard_content.clone()
-    }
-
-    /// Set the primary selection content (select-to-copy).
-    pub fn set_primary(&mut self, text: String, qh: &QueueHandle<Self>) {
-        let Some(ref manager) = self.primary_selection_manager else {
-            return;
-        };
-        let Some(ref device) = self.primary_selection_device else {
-            return;
-        };
-
-        let source = manager.create_selection_source(
-            qh,
-            vec!["text/plain;charset=utf-8", "UTF8_STRING", "TEXT", "STRING"],
-        );
-        self.primary_content = Some(text);
-        source.set_selection(device, self.latest_input_serial);
-        self.primary_source = Some(source);
-    }
-
-    /// Apply a prefetched clipboard/primary content update (from the loop's
-    /// ingress channel callback). Reads made stale by a newer offer are
-    /// dropped via the generation check.
-    pub(crate) fn apply_clipboard_update(
-        &mut self,
-        kind: SelectionKind,
-        generation: u64,
-        content: Option<String>,
-    ) {
-        let current = match kind {
-            SelectionKind::Clipboard => self.selection_generation,
-            SelectionKind::Primary => self.primary_generation,
-        };
-        if generation != current {
-            log::debug!("Dropping stale {kind:?} content (gen {generation} != {current})");
-            return;
-        }
-        match kind {
-            SelectionKind::Clipboard => match content {
-                Some(text) => crate::reactive::set_system_clipboard(text),
-                None => crate::reactive::clear_system_clipboard(),
-            },
-            SelectionKind::Primary => crate::reactive::set_system_primary(content),
-        }
-    }
-
-    /// Start an async prefetch of an offer's content on a reader thread.
-    /// `receive` turns a chosen mime type into a read pipe. The result comes
-    /// back through the calloop ingress channel — the message itself wakes
-    /// the loop, no hand-rolled wakeup involved.
-    fn prefetch_selection<R>(&mut self, kind: SelectionKind, mimes: Vec<String>, receive: R)
-    where
-        R: FnOnce(&str) -> Option<ReadPipe>,
-    {
-        let generation = match kind {
-            SelectionKind::Clipboard => {
-                self.selection_generation += 1;
-                self.selection_generation
-            }
-            SelectionKind::Primary => {
-                self.primary_generation += 1;
-                self.primary_generation
-            }
-        };
-
-        // Preferred mime order; take the first one offered.
-        const PREFERRED: [&str; 5] = [
-            "text/plain;charset=utf-8",
-            "UTF8_STRING",
-            "text/plain",
-            "TEXT",
-            "STRING",
-        ];
-        let mime = PREFERRED
-            .iter()
-            .find(|m| mimes.iter().any(|t| t == *m))
-            .copied();
-
-        let Some(pipe) = mime.and_then(receive) else {
-            // Nothing readable as text — treat as cleared. We're on the main
-            // thread (called from a selection handler), so apply directly.
-            self.apply_clipboard_update(kind, generation, None);
-            return;
-        };
-
-        let Some(sender) = crate::ingress::sender() else {
-            // No running event loop to deliver the result to.
-            log::warn!("Selection prefetch skipped: no event loop running");
-            return;
-        };
-
-        if let Err(e) = std::thread::Builder::new()
-            .name("guido-clipboard-read".into())
-            .spawn(move || {
-                let content = read_pipe_with_deadline(pipe, Duration::from_secs(3));
-                let _ = sender.send(crate::ingress::IngressMessage::ClipboardUpdate {
-                    kind,
-                    generation,
-                    content,
-                });
-            })
-        {
-            log::warn!("Failed to spawn clipboard reader thread: {e}");
-        }
-    }
-
     /// Set the cursor shape
     pub fn set_cursor(&self, cursor: CursorIcon, qh: &QueueHandle<Self>) {
         let Some(ref manager) = self.cursor_shape_manager else {
@@ -1321,61 +1145,6 @@ impl WaylandState {
         let device = manager.get_shape_device(pointer, qh);
         device.set_shape(self.pointer_enter_serial, shape);
     }
-}
-
-/// Read a selection pipe to EOF with a total deadline. Runs on a reader
-/// thread — never on the UI thread.
-fn read_pipe_with_deadline(pipe: ReadPipe, deadline: Duration) -> Option<String> {
-    use std::os::unix::io::AsRawFd;
-
-    let fd = OwnedFd::from(pipe);
-    let mut file = File::from(fd);
-    let raw_fd = file.as_raw_fd();
-    let mut buf = Vec::new();
-    let end = Instant::now() + deadline;
-
-    loop {
-        let remaining = end.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            log::warn!("Clipboard read timed out after {:?}", deadline);
-            return None;
-        }
-
-        let mut poll_fd = libc::pollfd {
-            fd: raw_fd,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        let timeout_ms = remaining.as_millis().min(i32::MAX as u128) as i32;
-        let ret = unsafe { libc::poll(&mut poll_fd, 1, timeout_ms) };
-        if ret < 0 {
-            let err = std::io::Error::last_os_error();
-            if err.kind() == std::io::ErrorKind::Interrupted {
-                continue;
-            }
-            log::warn!("Clipboard read poll failed: {err}");
-            return None;
-        }
-        if ret == 0 {
-            log::warn!("Clipboard read timed out after {:?}", deadline);
-            return None;
-        }
-
-        // POLLIN or POLLHUP: data available or writer closed — read either way
-        let mut chunk = [0u8; 8192];
-        match file.read(&mut chunk) {
-            Ok(0) => break, // EOF
-            Ok(n) => buf.extend_from_slice(&chunk[..n]),
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => {
-                log::warn!("Clipboard read failed: {e}");
-                return None;
-            }
-        }
-    }
-
-    let text = String::from_utf8_lossy(&buf).into_owned();
-    (!text.is_empty()).then_some(text)
 }
 
 pub struct WaylandWindowWrapper {
@@ -1667,22 +1436,9 @@ impl SeatHandler for WaylandState {
             };
             self.keyboard = Some(keyboard);
 
-            // Create data device for clipboard when we have a seat
-            if self.data_device.is_none()
-                && let Some(ref manager) = self.data_device_manager
-            {
-                log::info!("Creating data device for clipboard");
-                let data_device = manager.get_data_device(qh, &seat);
-                self.data_device = Some(data_device);
-            }
-
-            // Create primary selection device alongside it
-            if self.primary_selection_device.is_none()
-                && let Some(ref manager) = self.primary_selection_manager
-            {
-                log::info!("Creating primary selection device");
-                self.primary_selection_device = Some(manager.get_selection_device(qh, &seat));
-            }
+            // Selections hang off the seat, so they cannot be created with
+            // their managers at startup.
+            self.selections.attach_devices(qh, &seat);
         }
     }
 
@@ -2445,241 +2201,6 @@ impl ProvidesRegistryState for WaylandState {
     registry_handlers![OutputState, SeatState];
 }
 
-impl DataDeviceHandler for WaylandState {
-    fn enter(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _data_device: &WlDataDevice,
-        _x: f64,
-        _y: f64,
-        _surface: &wl_surface::WlSurface,
-    ) {
-        // Drag and drop enter - not used for clipboard
-    }
-
-    fn leave(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _data_device: &WlDataDevice) {
-        // Drag and drop leave - not used for clipboard
-    }
-
-    fn motion(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _data_device: &WlDataDevice,
-        _x: f64,
-        _y: f64,
-    ) {
-        // Drag and drop motion - not used for clipboard
-    }
-
-    fn drop_performed(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _data_device: &WlDataDevice,
-    ) {
-        // Drag and drop performed - not used for clipboard
-    }
-
-    fn selection(
-        &mut self,
-        conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _data_device: &WlDataDevice,
-    ) {
-        log::debug!("Clipboard selection changed");
-        // Prefetch the new selection's content on a reader thread so paste
-        // is instant and never blocks the UI thread.
-        let offer = self
-            .data_device
-            .as_ref()
-            .and_then(|device| device.data().selection_offer());
-        match offer {
-            None => {
-                // Selection cleared — main thread, apply directly.
-                self.selection_generation += 1;
-                let generation = self.selection_generation;
-                self.apply_clipboard_update(SelectionKind::Clipboard, generation, None);
-            }
-            Some(offer) => {
-                let mimes = offer.with_mime_types(|t| t.to_vec());
-                self.prefetch_selection(SelectionKind::Clipboard, mimes, |mime| {
-                    offer
-                        .receive(mime.to_string())
-                        .map_err(|e| log::debug!("Failed to receive clipboard as {mime}: {e:?}"))
-                        .ok()
-                });
-                // Send the receive request out now so the source app starts
-                // writing before the next loop-iteration flush.
-                let _ = conn.flush();
-            }
-        }
-    }
-}
-
-impl PrimarySelectionDeviceHandler for WaylandState {
-    fn selection(
-        &mut self,
-        conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        device: &smithay_client_toolkit::reexports::protocols::wp::primary_selection::zv1::client::zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1,
-    ) {
-        log::debug!("Primary selection changed");
-        let offer = device
-            .data::<smithay_client_toolkit::primary_selection::device::PrimarySelectionDeviceData>()
-            .and_then(|data| data.selection_offer());
-        match offer {
-            None => {
-                // Primary selection cleared — main thread, apply directly.
-                self.primary_generation += 1;
-                let generation = self.primary_generation;
-                self.apply_clipboard_update(SelectionKind::Primary, generation, None);
-            }
-            Some(offer) => {
-                let mimes = offer.with_mime_types(|t| t.to_vec());
-                self.prefetch_selection(SelectionKind::Primary, mimes, |mime| {
-                    offer
-                        .receive(mime.to_string())
-                        .map_err(|e| log::debug!("Failed to receive primary as {mime}: {e:?}"))
-                        .ok()
-                });
-                let _ = conn.flush();
-            }
-        }
-    }
-}
-
-impl PrimarySelectionSourceHandler for WaylandState {
-    fn send_request(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _source: &smithay_client_toolkit::reexports::protocols::wp::primary_selection::zv1::client::zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1,
-        mime: String,
-        write_pipe: smithay_client_toolkit::data_device_manager::WritePipe,
-    ) {
-        log::debug!("Primary selection send request for mime type: {mime}");
-        if let Some(ref content) = self.primary_content {
-            let content = content.clone();
-            let owned_fd = OwnedFd::from(write_pipe);
-            if let Err(e) = std::thread::Builder::new()
-                .name("guido-primary-send".into())
-                .spawn(move || {
-                    let mut file = File::from(owned_fd);
-                    if let Err(e) = file.write_all(content.as_bytes()) {
-                        log::warn!("Failed to write primary selection content: {e}");
-                    }
-                })
-            {
-                log::warn!("Failed to spawn primary selection writer thread: {e}");
-            }
-        }
-    }
-
-    fn cancelled(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _source: &smithay_client_toolkit::reexports::protocols::wp::primary_selection::zv1::client::zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1,
-    ) {
-        log::debug!("Primary selection source cancelled");
-        self.primary_source = None;
-    }
-}
-
-impl DataOfferHandler for WaylandState {
-    fn source_actions(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _offer: &mut smithay_client_toolkit::data_device_manager::data_offer::DragOffer,
-        _actions: DndAction,
-    ) {
-        // Drag and drop actions - not used for clipboard
-    }
-
-    fn selected_action(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _offer: &mut smithay_client_toolkit::data_device_manager::data_offer::DragOffer,
-        _action: DndAction,
-    ) {
-        // Drag and drop selected action - not used for clipboard
-    }
-}
-
-impl DataSourceHandler for WaylandState {
-    fn accept_mime(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _source: &WlDataSource,
-        _mime: Option<String>,
-    ) {
-        // Mime type accepted notification
-    }
-
-    fn send_request(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _source: &WlDataSource,
-        mime: String,
-        fd: smithay_client_toolkit::data_device_manager::WritePipe,
-    ) {
-        log::debug!("Clipboard send request for mime type: {}", mime);
-
-        // Write clipboard content on a short-lived thread: a payload larger
-        // than the pipe buffer with a slow reader would otherwise block the
-        // UI thread indefinitely inside write_all.
-        if let Some(ref content) = self.clipboard_content {
-            let content = content.clone();
-            let owned_fd = OwnedFd::from(fd);
-            if let Err(e) = std::thread::Builder::new()
-                .name("guido-clipboard-send".into())
-                .spawn(move || {
-                    let mut file = File::from(owned_fd);
-                    if let Err(e) = file.write_all(content.as_bytes()) {
-                        log::warn!("Failed to write clipboard content: {}", e);
-                    }
-                })
-            {
-                log::warn!("Failed to spawn clipboard writer thread: {e}");
-            }
-        }
-    }
-
-    fn cancelled(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource) {
-        log::debug!("Clipboard source cancelled");
-        self.clipboard_source = None;
-    }
-
-    fn dnd_dropped(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource) {
-        // Drag and drop completed - not used for clipboard
-    }
-
-    fn dnd_finished(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _source: &WlDataSource,
-    ) {
-        // Drag and drop finished - not used for clipboard
-    }
-
-    fn action(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _source: &WlDataSource,
-        _action: DndAction,
-    ) {
-        // Action notification - not used for clipboard
-    }
-}
-
 delegate_compositor!(WaylandState);
 delegate_output!(WaylandState);
 delegate_layer!(WaylandState);
@@ -2687,6 +2208,4 @@ delegate_seat!(WaylandState);
 delegate_pointer!(WaylandState);
 delegate_touch!(WaylandState);
 delegate_keyboard!(WaylandState);
-delegate_data_device!(WaylandState);
-delegate_primary_selection!(WaylandState);
 delegate_registry!(WaylandState);

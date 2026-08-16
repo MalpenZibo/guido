@@ -31,7 +31,7 @@ pub(crate) enum IngressMessage {
     /// Applied by the channel callback (generation-checked against the
     /// current offer in `WaylandState::apply_clipboard_update`).
     ClipboardUpdate {
-        kind: crate::platform::wayland::SelectionKind,
+        kind: crate::platform::SelectionKind,
         generation: u64,
         content: Option<String>,
     },

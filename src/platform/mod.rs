@@ -1,5 +1,7 @@
+pub mod selections;
 pub mod wayland;
 
+pub use selections::SelectionKind;
 pub use wayland::{
     LockEvent, PlatformError, SurfaceRole, WaylandState, WaylandSurfaceState, WaylandWindowWrapper,
     create_wayland_app,
