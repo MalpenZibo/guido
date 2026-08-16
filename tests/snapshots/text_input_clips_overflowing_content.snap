@@ -1,0 +1,5 @@
+node 0,0 196x48.8
+  node 0,0 180x32.8 at 8,8
+    draw rect 0,0 180x32.8 fill=#2e2e3dff radius=6/6/6/6
+    node 0,0 164x16.8 at 8,8 clip(0,-14 164x44.8 r=0)
+      draw text <not snapshotted>

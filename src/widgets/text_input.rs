@@ -961,7 +961,20 @@ impl Widget for TextInput {
                 )
             });
 
-        // TODO: Clipping temporarily disabled - will be re-implemented in a future PR
+        // The text scrolls horizontally under a fixed viewport, so whatever
+        // slid past either edge has to be cut at the widget's bounds.
+        //
+        // Horizontally only: the vertical axis never scrolls, and closing it
+        // would trim descenders and any glyph stroke or shadow, which the
+        // viewport is not meant to touch. One em of slack each way is past
+        // anything a single line can reach.
+        let slack = self.cached_font_size;
+        ctx.set_clip_rect(Rect::new(
+            0.0,
+            -slack,
+            bounds.width,
+            bounds.height + slack * 2.0,
+        ));
 
         // Draw selection highlight if focused and has selection (LOCAL coords)
         if is_focused && self.selection.has_selection() {
