@@ -22,16 +22,10 @@ use crate::renderer::{PaintContext, char_index_from_x_styled};
 use crate::tree::{Tree, WidgetId};
 
 use super::font::{FontFamily, FontWeight};
-use super::widget::{Color, Event, EventResponse, Key, Modifiers, MouseButton, Rect, Widget};
+use super::widget::{Color, Event, EventResponse, Key, MouseButton, Rect, Widget};
 
 /// Cursor blink interval in milliseconds
 const CURSOR_BLINK_MS: u64 = 530;
-
-/// Key repeat delay (time before repeat starts) in milliseconds
-const KEY_REPEAT_DELAY_MS: u64 = 400;
-
-/// Key repeat interval (time between repeats) in milliseconds
-const KEY_REPEAT_INTERVAL_MS: u64 = 35;
 
 /// Maximum number of undo history entries
 const MAX_HISTORY_SIZE: usize = 100;
@@ -223,11 +217,6 @@ pub struct TextInput {
     cursor_visible: bool,
     last_cursor_toggle: Instant,
 
-    // Key repeat state
-    pressed_key: Option<(Key, Modifiers)>,
-    key_press_time: Instant,
-    last_repeat_time: Instant,
-
     // Mouse drag selection
     is_dragging: bool,
 
@@ -271,9 +260,6 @@ impl TextInput {
             selection: Selection::new(0),
             cursor_visible: true,
             last_cursor_toggle: Instant::now(),
-            pressed_key: None,
-            key_press_time: Instant::now(),
-            last_repeat_time: Instant::now(),
             is_dragging: false,
             is_hovered: false,
             history: History::new(),
@@ -453,33 +439,6 @@ impl TextInput {
     fn reset_cursor_blink(&mut self) {
         self.cursor_visible = true;
         self.last_cursor_toggle = Instant::now();
-    }
-
-    /// Handle key repeat for held keys
-    fn handle_key_repeat(&mut self, tree: &Tree, id: WidgetId) {
-        if !has_focus(id) {
-            self.pressed_key = None;
-            return;
-        }
-
-        if let Some((key, modifiers)) = self.pressed_key {
-            let now = Instant::now();
-            let since_press = now.duration_since(self.key_press_time);
-            let since_repeat = now.duration_since(self.last_repeat_time);
-
-            // Check if we're past the initial delay
-            if since_press >= Duration::from_millis(KEY_REPEAT_DELAY_MS) {
-                // Check if it's time for another repeat
-                if since_repeat >= Duration::from_millis(KEY_REPEAT_INTERVAL_MS) {
-                    let bounds_width = tree.cached_size(id).map(|s| s.width).unwrap_or(0.0);
-                    self.handle_key(&key, modifiers.ctrl, modifiers.shift, bounds_width);
-                    self.last_repeat_time = now;
-                }
-            }
-
-            // Keep requesting layout while a key is held so handle_key_repeat() runs each frame
-            request_job(id, JobRequest::Layout);
-        }
     }
 
     /// Get character index from x coordinate relative to text start.
@@ -944,9 +903,6 @@ impl Widget for TextInput {
         let overflow = self.refresh(tree, id);
         tree.set_paint_overflow(id, overflow);
 
-        // Handle key repeat for held keys
-        self.handle_key_repeat(tree, id);
-
         // Update measurement cache (has internal dirty check)
         self.update_measurements();
 
@@ -1114,25 +1070,11 @@ impl Widget for TextInput {
                 return EventResponse::Handled;
             }
             Event::KeyDown { key, modifiers } if has_focus(id) => {
-                // Track key for repeat
-                let now = Instant::now();
-                self.pressed_key = Some((*key, *modifiers));
-                self.key_press_time = now;
-                self.last_repeat_time = now;
-
                 let response = self.handle_key(key, modifiers.ctrl, modifiers.shift, bounds.width);
                 if response == EventResponse::Handled {
                     request_job(id, JobRequest::Paint);
                 }
                 return response;
-            }
-            Event::KeyUp { key, .. } => {
-                // Stop repeating when key is released
-                if let Some((pressed_key, _)) = self.pressed_key
-                    && pressed_key == *key
-                {
-                    self.pressed_key = None;
-                }
             }
             Event::FocusOut if has_focus(id) => {
                 release_focus(id);

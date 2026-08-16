@@ -47,6 +47,7 @@ use smithay_client_toolkit::{
         },
     },
 };
+use smithay_client_toolkit::reexports::calloop::LoopHandle;
 use smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_positioner;
 use smithay_client_toolkit::reexports::client::{
     globals::registry_queue_init,
@@ -247,6 +248,10 @@ pub struct WaylandState {
     keyboard_serial: u32,
     /// Track raw_code → Key for press/release matching (handles compose sequences)
     pressed_keys: HashMap<u32, Key>,
+    /// Key repeat runs on a calloop timer owned by the toolkit, armed with the
+    /// rate and delay the compositor reports. The keyboard is created inside a
+    /// seat capability callback, which has no other route to the loop.
+    loop_handle: LoopHandle<'static, WaylandState>,
 
     // Clipboard state
     data_device_manager: Option<DataDeviceManagerState>,
@@ -317,7 +322,9 @@ impl std::fmt::Display for PlatformError {
 impl std::error::Error for PlatformError {}
 
 #[allow(clippy::type_complexity)]
-pub fn create_wayland_app() -> Result<
+pub fn create_wayland_app(
+    loop_handle: LoopHandle<'static, WaylandState>,
+) -> Result<
     (
         Connection,
         EventQueue<WaylandState>,
@@ -412,6 +419,7 @@ pub fn create_wayland_app() -> Result<
         modifiers: Modifiers::default(),
         keyboard_serial: 0,
         pressed_keys: HashMap::new(),
+        loop_handle,
         data_device_manager,
         data_device: None,
         clipboard_content: None,
@@ -1643,7 +1651,14 @@ impl SeatHandler for WaylandState {
         // Handle keyboard capability
         if capability == Capability::Keyboard && self.keyboard.is_none() {
             log::info!("Keyboard capability available, creating keyboard");
-            let keyboard = match self.seat_state.get_keyboard(qh, &seat, None) {
+            let loop_handle = self.loop_handle.clone();
+            let keyboard = match self.seat_state.get_keyboard_with_repeat(
+                qh,
+                &seat,
+                None,
+                loop_handle,
+                Box::new(|state: &mut WaylandState, _kbd, event| state.emit_key_repeat(event)),
+            ) {
                 Ok(keyboard) => keyboard,
                 Err(e) => {
                     log::warn!("Failed to get keyboard: {e}");
@@ -2176,19 +2191,31 @@ impl KeyboardHandler for WaylandState {
         _serial: u32,
         event: KeyEvent,
     ) {
-        // Treat key repeat as a new key press
-        if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref(), true) {
-            let key_event = Event::KeyDown {
-                key,
-                modifiers: self.modifiers,
-            };
+        self.emit_key_repeat(event);
+    }
+}
 
-            // Route to the surface with keyboard focus
-            if let Some(id) = self.current_keyboard_surface
-                && let Some(surface_state) = self.surfaces.get_mut(&id)
-            {
-                surface_state.pending_events.push(key_event);
-            }
+impl WaylandState {
+    /// Deliver a repeated key as an ordinary press.
+    ///
+    /// Two sources reach here: the toolkit's calloop timer, armed from the
+    /// compositor's `repeat_info`, and the protocol's own repeated key state.
+    /// Neither is visible to widgets — a held key looks exactly like someone
+    /// pressing it very fast.
+    fn emit_key_repeat(&mut self, event: KeyEvent) {
+        let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref(), true) else {
+            return;
+        };
+        let key_event = Event::KeyDown {
+            key,
+            modifiers: self.modifiers,
+        };
+
+        // Route to the surface with keyboard focus
+        if let Some(id) = self.current_keyboard_surface
+            && let Some(surface_state) = self.surfaces.get_mut(&id)
+        {
+            surface_state.pending_events.push(key_event);
         }
     }
 }
