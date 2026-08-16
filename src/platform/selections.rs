@@ -129,7 +129,7 @@ impl WaylandState {
 
             // Set selection using the keyboard serial
             if let Some(ref device) = self.selections.data_device {
-                source.set_selection(device, self.keyboard_serial);
+                source.set_selection(device, self.input.keyboard_serial);
                 self.selections.clipboard_source = Some(source);
             }
         }
@@ -155,7 +155,7 @@ impl WaylandState {
             vec!["text/plain;charset=utf-8", "UTF8_STRING", "TEXT", "STRING"],
         );
         self.selections.primary_content = Some(text);
-        source.set_selection(device, self.latest_input_serial);
+        source.set_selection(device, self.input.latest_input_serial);
         self.selections.primary_source = Some(source);
     }
 
