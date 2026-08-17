@@ -27,6 +27,7 @@ use std::sync::{
     Mutex,
     atomic::{AtomicBool, AtomicU8, Ordering},
 };
+use std::time::Instant;
 
 use smallvec::SmallVec;
 use smithay_client_toolkit::reexports::calloop::ping::Ping;
@@ -144,6 +145,23 @@ impl JobQueues {
 // so no Mutex is needed.
 thread_local! {
     static PENDING_JOBS: RefCell<JobQueues> = RefCell::new(JobQueues::new());
+    /// Jobs waiting on a clock rather than on the next frame — see
+    /// [`request_job_at`]. Kept out of the queues so `has_pending_jobs` stays
+    /// "there is work for this frame": a scheduled job is work for *later*, and
+    /// treating it as pending is exactly what turns a blink into a poll.
+    static SCHEDULED_JOBS: RefCell<Vec<ScheduledJob>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A job to run at a point in time.
+///
+/// Keyed by [`Job`] — widget and job type — while carrying the whole
+/// [`JobRequest`], so re-scheduling replaces rather than accumulates and the
+/// follow-up work an animation asks for survives the wait.
+#[derive(Clone, Copy)]
+struct ScheduledJob {
+    at: Instant,
+    job: Job,
+    request: JobRequest,
 }
 
 /// Job types for reactive invalidation (stored in the queue)
@@ -181,6 +199,19 @@ pub enum JobRequest {
     Unregister,
     /// Animation with required follow-up job (Paint or Layout)
     Animation(RequiredJob),
+}
+
+impl JobRequest {
+    /// The job type this request is stored as.
+    fn job_type(self) -> JobType {
+        match self {
+            JobRequest::Layout => JobType::Layout,
+            JobRequest::Paint => JobType::Paint,
+            JobRequest::Reconcile => JobType::Reconcile,
+            JobRequest::Unregister => JobType::Unregister,
+            JobRequest::Animation(_) => JobType::Animation,
+        }
+    }
 }
 
 /// A reactive update job
@@ -236,6 +267,80 @@ pub fn request_job(widget_id: WidgetId, request: JobRequest) {
     wake_loop();
 }
 
+/// Request a job to run *at* a deadline, replacing any earlier schedule for the
+/// same widget and job type.
+///
+/// For work that is due at a time rather than on a frame. The blinking caret is
+/// the case it exists for: it changes state every 530 ms, and the only way to
+/// express that before was `JobRequest::Animation`, which means "advance me every
+/// frame" — so a focused input pinned the loop at 60 fps and repainted 113 frames
+/// out of 114 to no effect. On a lock screen, where a field is focused by
+/// definition, that runs all night.
+///
+/// Scheduled jobs do not make [`has_pending_jobs`] true, and the loop uses
+/// [`next_deadline`] to choose how long to block, so between deadlines it sleeps
+/// like an idle app rather than polling.
+pub fn request_job_at(widget_id: WidgetId, request: JobRequest, at: Instant) {
+    let job = Job {
+        widget_id,
+        job_type: request.job_type(),
+    };
+    SCHEDULED_JOBS.with(|scheduled| {
+        let mut scheduled = scheduled.borrow_mut();
+        match scheduled.iter_mut().find(|entry| entry.job == job) {
+            // Re-scheduling the same job moves it: a caret that just toggled
+            // wants the *next* toggle, not the one it already served.
+            Some(entry) => {
+                entry.at = at;
+                entry.request = request;
+            }
+            None => scheduled.push(ScheduledJob { at, job, request }),
+        }
+    });
+    // No ping: the loop is not late for this, it just has to stop blocking in
+    // time. Waking now would be a spurious frame.
+}
+
+/// When the earliest scheduled job is due, if any.
+pub fn next_deadline() -> Option<Instant> {
+    SCHEDULED_JOBS.with(|scheduled| scheduled.borrow().iter().map(|entry| entry.at).min())
+}
+
+/// Move every scheduled job whose deadline has passed into the pending queue.
+///
+/// Called by the loop before it decides whether there is work to do.
+pub fn promote_due_jobs() {
+    let due: SmallVec<[ScheduledJob; 4]> = SCHEDULED_JOBS.with(|scheduled| {
+        let now = Instant::now();
+        let mut scheduled = scheduled.borrow_mut();
+        let mut due = SmallVec::new();
+        scheduled.retain(|entry| {
+            if entry.at <= now {
+                due.push(*entry);
+                false
+            } else {
+                true
+            }
+        });
+        due
+    });
+    for entry in due {
+        // Through the ordinary path, so ownership resolution, dedup and the
+        // animation follow-up are the same as for any other job.
+        request_job(entry.job.widget_id, entry.request);
+    }
+}
+
+/// Forget a widget's scheduled jobs. Called when it leaves the tree, so a caret
+/// that is gone does not keep waking the loop.
+pub(crate) fn cancel_scheduled_jobs(widget_id: WidgetId) {
+    SCHEDULED_JOBS.with(|scheduled| {
+        scheduled
+            .borrow_mut()
+            .retain(|entry| entry.job.widget_id != widget_id)
+    });
+}
+
 /// Resolve job ownership: sort the inbox into per-surface queues.
 ///
 /// This is the ONLY place where a job's owning surface is determined
@@ -264,6 +369,7 @@ pub fn request_job(widget_id: WidgetId, request: JobRequest) {
 pub(crate) fn teardown_widget_subtree(tree: &mut crate::tree::Tree, root: WidgetId) {
     for id in tree.collect_subtree_post_order(root) {
         clear_widget_subscribers(id);
+        cancel_scheduled_jobs(id);
         tree.unregister(id);
     }
 }
@@ -374,6 +480,11 @@ pub fn process_jobs(jobs: &[Job], tree: &mut Tree, layout_roots: &mut Vec<Widget
     // Process in required order
     for id in unregister {
         clear_widget_subscribers(id);
+        // A deferred Unregister is the ordinary way a dynamic child leaves, so
+        // it has to drop the widget's deadlines too. Without this a blinking
+        // caret that scrolled out of a list keeps one, and the loop wakes once
+        // more for a widget that is not there to repaint.
+        cancel_scheduled_jobs(id);
         tree.unregister(id);
     }
     for id in animation {
@@ -409,9 +520,28 @@ pub fn has_pending_jobs() -> bool {
     PENDING_JOBS.with(|jobs| !jobs.borrow().is_empty())
 }
 
+/// The job types queued for one widget, for tests that assert *how* a widget
+/// asked to be woken — a scheduled wake and a per-frame animation are both
+/// "pending work" from the outside, and the difference is the whole point.
+#[cfg(test)]
+pub(crate) fn queued_job_types(widget_id: WidgetId) -> Vec<JobType> {
+    PENDING_JOBS.with(|pending| {
+        let pending = pending.borrow();
+        pending
+            .inbox
+            .vec
+            .iter()
+            .chain(pending.orphans.vec.iter())
+            .chain(pending.per_root.values().flat_map(|queue| queue.vec.iter()))
+            .filter(|job| job.widget_id == widget_id)
+            .map(|job| job.job_type)
+            .collect()
+    })
+}
+
 /// Clear all pending jobs (for testing)
 #[cfg(test)]
-fn clear_pending_jobs() {
+pub(crate) fn clear_pending_jobs() {
     PENDING_JOBS.with(|jobs| {
         *jobs.borrow_mut() = JobQueues::new();
     });
@@ -516,6 +646,7 @@ pub(crate) fn reset_jobs() {
     PENDING_JOBS.with(|jobs| {
         *jobs.borrow_mut() = JobQueues::new();
     });
+    SCHEDULED_JOBS.with(|scheduled| scheduled.borrow_mut().clear());
     WAKE_REQUESTED.store(false, Ordering::Relaxed);
     PING_SENT.store(false, Ordering::Relaxed);
     EXIT_REQUEST.store(ExitRequest::Running as u8, Ordering::Relaxed);
@@ -543,6 +674,8 @@ pub fn wake_request_pending() -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use crate::layout::{Constraints, Size};
     use crate::widgets::Widget;
@@ -578,6 +711,153 @@ mod tests {
         };
         PENDING_JOBS.with(|pending| pending.borrow_mut().inbox.push(job));
         job
+    }
+
+    fn clear_scheduled() {
+        SCHEDULED_JOBS.with(|scheduled| scheduled.borrow_mut().clear());
+    }
+
+    #[test]
+    fn a_scheduled_job_is_not_work_for_this_frame() {
+        clear_pending_jobs();
+        clear_scheduled();
+        let (mut tree, ..) = two_surface_tree();
+        let widget = tree.register(Box::new(TestWidget));
+
+        request_job_at(
+            widget,
+            JobRequest::Paint,
+            Instant::now() + Duration::from_secs(60),
+        );
+
+        assert!(
+            !has_pending_jobs(),
+            "a job due in a minute must not keep the loop polling for a minute"
+        );
+        assert!(
+            next_deadline().is_some(),
+            "but the loop has to know about it"
+        );
+    }
+
+    #[test]
+    fn a_due_job_becomes_an_ordinary_one() {
+        clear_pending_jobs();
+        clear_scheduled();
+        let (mut tree, ..) = two_surface_tree();
+        let widget = tree.register(Box::new(TestWidget));
+
+        request_job_at(widget, JobRequest::Paint, Instant::now());
+        promote_due_jobs();
+
+        assert!(has_pending_jobs());
+        assert!(
+            next_deadline().is_none(),
+            "and it is no longer scheduled, or it would fire every frame"
+        );
+    }
+
+    #[test]
+    fn rescheduling_moves_the_deadline_instead_of_adding_one() {
+        clear_pending_jobs();
+        clear_scheduled();
+        let (mut tree, ..) = two_surface_tree();
+        let widget = tree.register(Box::new(TestWidget));
+        let far = Instant::now() + Duration::from_secs(60);
+
+        // What a blinking caret does on every paint: ask again for the *next*
+        // toggle. Accumulating would leave one entry per frame behind.
+        request_job_at(widget, JobRequest::Paint, far);
+        request_job_at(widget, JobRequest::Paint, far);
+        request_job_at(widget, JobRequest::Paint, Instant::now());
+
+        promote_due_jobs();
+
+        assert!(has_pending_jobs());
+        assert!(next_deadline().is_none(), "three asks, one entry");
+    }
+
+    #[test]
+    fn an_animation_keeps_its_follow_up_across_the_wait() {
+        clear_pending_jobs();
+        clear_scheduled();
+        let (mut tree, ..) = two_surface_tree();
+        let widget = tree.register(Box::new(TestWidget));
+
+        request_job_at(
+            widget,
+            JobRequest::Animation(RequiredJob::Paint),
+            Instant::now(),
+        );
+        promote_due_jobs();
+
+        let queued: Vec<JobType> = PENDING_JOBS.with(|pending| {
+            pending
+                .borrow()
+                .inbox
+                .vec
+                .iter()
+                .filter(|job| job.widget_id == widget)
+                .map(|job| job.job_type)
+                .collect()
+        });
+        assert!(queued.contains(&JobType::Animation));
+        assert!(
+            queued.contains(&JobType::Paint),
+            "the caret has to be redrawn, not only advanced: {queued:?}"
+        );
+    }
+
+    #[test]
+    fn a_widget_leaving_the_tree_stops_waking_the_loop() {
+        clear_pending_jobs();
+        clear_scheduled();
+        let (mut tree, ..) = two_surface_tree();
+        let widget = tree.register(Box::new(TestWidget));
+        request_job_at(
+            widget,
+            JobRequest::Paint,
+            Instant::now() + Duration::from_secs(60),
+        );
+
+        teardown_widget_subtree(&mut tree, widget);
+
+        assert!(
+            next_deadline().is_none(),
+            "a caret that no longer exists must not keep the loop on a timer"
+        );
+    }
+
+    /// The other way out of the tree, and the ordinary one: a dynamic child
+    /// leaves through a deferred `Unregister` job rather than through
+    /// `teardown_widget_subtree`. Its deadlines have to go with it, or the
+    /// loop wakes once more to repaint a widget that is no longer there.
+    #[test]
+    fn a_deferred_unregister_takes_the_deadlines_with_it() {
+        clear_pending_jobs();
+        clear_scheduled();
+        let (mut tree, ..) = two_surface_tree();
+        let widget = tree.register(Box::new(TestWidget));
+        request_job_at(
+            widget,
+            JobRequest::Paint,
+            Instant::now() + Duration::from_secs(60),
+        );
+
+        let mut layout_roots = Vec::new();
+        process_jobs(
+            &[Job {
+                widget_id: widget,
+                job_type: JobType::Unregister,
+            }],
+            &mut tree,
+            &mut layout_roots,
+        );
+
+        assert!(
+            next_deadline().is_none(),
+            "a widget unregistered through the job queue must drop its deadlines too"
+        );
     }
 
     #[test]

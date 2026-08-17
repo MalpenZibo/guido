@@ -103,6 +103,23 @@ whichever was laid out last.
 The offer is made once. A relayout does not ask again, so a resize or a scale
 change cannot drag focus back from wherever the user has since put it.
 
+## No Caret
+
+```rust
+text_input(password)
+    .password(true)
+    .no_caret()
+```
+
+Keeps the focus and everything it carries — click to position, drag to select, the
+keyboard — and draws no caret. For a field where the caret says nothing: a masked
+one, where every character looks the same and you are always at the end. swaylock
+draws none for that reason.
+
+It is also the cheapest field there is. A blinking caret is the one thing a still
+screen redraws on its own, twice a second, for as long as it is focused; without
+one an idle surface asks the loop for nothing at all.
+
 ## Callbacks
 
 ### On Change
@@ -250,7 +267,10 @@ fn login_form() -> Container {
   input pastes the primary selection at the click position
 - **Undo/Redo**: History with intelligent coalescing of rapid edits
 - **Scrolling**: Long text scrolls horizontally to keep cursor visible
-- **Cursor Blinking**: Standard blinking cursor when focused
+- **Cursor Blinking**: Standard blinking cursor when focused. It asks the loop to
+  wake at its next toggle rather than animating, so a focused field costs two
+  wakeups a second instead of a frame at the compositor's rate; `no_caret()` drops
+  it entirely and costs nothing
 - **Key Repeat**: Hold keys for continuous input, at the rate and delay the
   compositor reports — the same settings every other application on the
   session obeys
@@ -264,6 +284,7 @@ impl TextInput {
     pub fn password(self, enabled: bool) -> Self;
     pub fn mask_char(self, c: char) -> Self;
     pub fn autofocus(self) -> Self;
+    pub fn no_caret(self) -> Self;
     pub fn on_change<F: Fn(&str) + 'static>(self, callback: F) -> Self;
     pub fn on_submit<F: Fn(&str) + 'static>(self, callback: F) -> Self;
 }
