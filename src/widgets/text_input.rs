@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use crate::default_font_family;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Size};
+use crate::reactive::focus::focused_widget;
 use crate::reactive::{
     CursorIcon, OptionSignalExt, RwSignal, clipboard_copy, clipboard_paste, has_focus,
     primary_copy, primary_paste, release_focus, request_focus, set_cursor, with_signal_tracking,
@@ -210,6 +211,11 @@ pub struct TextInput {
     is_password: bool,
     mask_char: char,
 
+    /// An unmade offer of the initial focus. Cleared once made, so autofocus is
+    /// a *first layout* behaviour rather than something that fights the user on
+    /// every relayout.
+    autofocus_pending: bool,
+
     // Selection state
     selection: Selection,
 
@@ -257,6 +263,7 @@ impl TextInput {
             cached_font_weight: FontWeight::NORMAL,
             is_password: false,
             mask_char: '•',
+            autofocus_pending: false,
             selection: Selection::new(0),
             cursor_visible: true,
             last_cursor_toggle: Instant::now(),
@@ -278,6 +285,30 @@ impl TextInput {
     /// Set custom mask character for password mode (default: '•')
     pub fn mask_char(mut self, c: char) -> Self {
         self.mask_char = c;
+        self
+    }
+
+    /// Take keyboard focus when this input first appears, if nothing else has it.
+    ///
+    /// For a screen that exists to be typed into — a lock screen, a search
+    /// overlay, a dialog with one field — where making the user click first is
+    /// the wrong answer, and where there is no cursor to click *with* on a
+    /// surface that has no pointer.
+    ///
+    /// The offer is made once, at the input's first layout, and only when no
+    /// widget holds focus. Both halves matter:
+    ///
+    /// - *once*, so a relayout does not drag focus back from wherever the user
+    ///   has since put it
+    /// - *only when free*, so two autofocusing inputs do not fight — the first
+    ///   laid out wins — and one on a second surface does not pull focus off the
+    ///   surface being typed into. That last case is what a lock screen with two
+    ///   monitors is: the same view built per output, all of them asking.
+    ///
+    /// The equivalent elsewhere: Flutter's `autofocus: true`, Floem's
+    /// `autofocus` focus-nav flag, `forward-focus` on a Slint window.
+    pub fn autofocus(mut self) -> Self {
+        self.autofocus_pending = true;
         self
     }
 
@@ -956,6 +987,16 @@ impl Widget for TextInput {
 
         // Clear needs_layout flag since layout is complete
         tree.clear_needs_layout(id);
+
+        // Here rather than at construction because focus needs the tree, and
+        // this is the first moment the input is in one — the same reason Flutter
+        // makes you wait for a post-frame callback to request focus by hand.
+        if self.autofocus_pending {
+            self.autofocus_pending = false;
+            if focused_widget().is_none() {
+                request_focus(tree, id);
+            }
+        }
 
         size
     }
