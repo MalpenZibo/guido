@@ -665,7 +665,12 @@ impl KeyboardHandler for WaylandState {
             alt: modifiers.alt,
             shift: modifiers.shift,
             logo: modifiers.logo,
+            caps_lock: modifiers.caps_lock,
         };
+        // Published as a signal as well: a latched modifier is a state
+        // something on screen may need to show with nothing pressed and no key
+        // event coming to carry it.
+        crate::keyboard::set_keyboard_modifiers(self.input.modifiers);
     }
 
     fn repeat_key(
