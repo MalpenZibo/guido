@@ -480,6 +480,11 @@ pub fn process_jobs(jobs: &[Job], tree: &mut Tree, layout_roots: &mut Vec<Widget
     // Process in required order
     for id in unregister {
         clear_widget_subscribers(id);
+        // A deferred Unregister is the ordinary way a dynamic child leaves, so
+        // it has to drop the widget's deadlines too. Without this a blinking
+        // caret that scrolled out of a list keeps one, and the loop wakes once
+        // more for a widget that is not there to repaint.
+        cancel_scheduled_jobs(id);
         tree.unregister(id);
     }
     for id in animation {
@@ -820,6 +825,38 @@ mod tests {
         assert!(
             next_deadline().is_none(),
             "a caret that no longer exists must not keep the loop on a timer"
+        );
+    }
+
+    /// The other way out of the tree, and the ordinary one: a dynamic child
+    /// leaves through a deferred `Unregister` job rather than through
+    /// `teardown_widget_subtree`. Its deadlines have to go with it, or the
+    /// loop wakes once more to repaint a widget that is no longer there.
+    #[test]
+    fn a_deferred_unregister_takes_the_deadlines_with_it() {
+        clear_pending_jobs();
+        clear_scheduled();
+        let (mut tree, ..) = two_surface_tree();
+        let widget = tree.register(Box::new(TestWidget));
+        request_job_at(
+            widget,
+            JobRequest::Paint,
+            Instant::now() + Duration::from_secs(60),
+        );
+
+        let mut layout_roots = Vec::new();
+        process_jobs(
+            &[Job {
+                widget_id: widget,
+                job_type: JobType::Unregister,
+            }],
+            &mut tree,
+            &mut layout_roots,
+        );
+
+        assert!(
+            next_deadline().is_none(),
+            "a widget unregistered through the job queue must drop its deadlines too"
         );
     }
 
