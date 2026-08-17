@@ -187,6 +187,7 @@ pub mod prelude {
 }
 
 use smithay_client_toolkit::reexports::client::QueueHandle;
+use smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface;
 
 use crate::{
     jobs::{get_exit_request, has_pending_jobs, init_wakeup, process_jobs, take_frame_request},
@@ -446,86 +447,161 @@ fn cache_paint_results(tree: &mut Tree, node: &std::rc::Rc<renderer::RenderNode>
     subtree_partial
 }
 
-/// Render a single surface using the hierarchical renderer.
-#[allow(clippy::too_many_arguments)]
-fn render_surface(
-    id: SurfaceId,
-    surface: &mut surface_manager::ManagedSurface,
-    wayland_state: &mut platform::WaylandState,
-    renderer: &mut Renderer,
-    qh: &QueueHandle<platform::WaylandState>,
+/// Deliver this surface's queued input to the widget tree.
+///
+/// Handlers read signals for their current value, not to subscribe — a click
+/// wants the value at click time — so the whole dispatch is a snapshot zone.
+///
+/// Jobs the handlers push (hover and pressed state changes, clicks) land in
+/// the inbox, and distributing them here is what keeps hover from lagging a
+/// frame behind the pointer: the drain later in this same frame picks them up.
+fn dispatch_events(
+    events: &[widgets::Event],
+    root: WidgetId,
     tree: &mut Tree,
-    layout_roots: &mut Vec<WidgetId>,
-    frame_requested: bool,
     active_roots: &rustc_hash::FxHashSet<WidgetId>,
 ) {
-    // Get wayland surface state
-    let Some(wayland_surface) = wayland_state.get_surface_mut(id) else {
-        return;
-    };
-
-    // Skip if not configured yet
-    if !wayland_surface.configured {
-        return;
-    }
-
-    // Get pending events for this surface
-    let events = wayland_surface.take_events();
-    let scale_factor = wayland_surface.scale_factor;
-    let width = wayland_surface.width;
-    let height = wayland_surface.height;
-    let first_frame_presented = wayland_surface.first_frame_presented;
-    let scale_factor_received = wayland_surface.scale_factor_received;
-    let frame_callback_pending = wayland_surface.frame_callback_pending;
-    let wl_surface = wayland_surface.wl_surface.clone();
-
-    // Skip if GPU not ready (will be initialized next frame)
-    if !surface.is_gpu_ready() {
-        return;
-    }
-
-    // Dispatch events to widget. Handlers read signals for their current
-    // value, not to subscribe — a click wants the value at click time — so
-    // the whole dispatch is a snapshot zone.
-    for event in &events {
+    for event in events {
         reactive::diagnostics::snapshot_zone(|| {
-            tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
+            tree.with_widget_mut(root, |widget, id, tree| {
                 widget.event(tree, id, event);
             });
         });
     }
 
-    // Jobs pushed by the event handlers above (hover/pressed state changes,
-    // clicks) land in the inbox: distribute now so this surface's drain
-    // below picks them up in the same frame (no 1-frame hover delay).
     jobs::distribute_jobs(tree, active_roots);
+}
 
-    // Sync clipboard to Wayland if it changed (copy operations)
+/// Push anything the widgets changed back out to the compositor: the
+/// clipboard after a copy, the primary selection after a select-to-copy, the
+/// cursor shape after a hover.
+fn sync_platform_state(
+    wayland_state: &mut platform::WaylandState,
+    qh: &QueueHandle<platform::WaylandState>,
+) {
     if let Some(text) = take_clipboard_change() {
         wayland_state.set_clipboard(text, qh);
     }
-
-    // Sync primary selection to Wayland if it changed (select-to-copy)
     if let Some(text) = reactive::take_primary_change() {
         wayland_state.set_primary(text, qh);
     }
-
-    // Sync cursor to Wayland if it changed
     if let Some(cursor) = take_cursor_change() {
         wayland_state.set_cursor(cursor, qh);
     }
+}
 
-    // Calculate physical pixel dimensions (for HiDPI)
-    let scale = scale_factor as u32;
-    let physical_width = width * scale;
-    let physical_height = height * scale;
+/// Run every job this surface owns, in the one order that works.
+///
+/// 1. Unregister — remove dead widgets first
+/// 2. Animation — advance animated values so layout and paint see current
+///    ones, not last frame's. May push Layout/Paint follow-ups.
+/// 3. Reconcile — create and remove dynamic children. May push Layout.
+/// 4. Layout — needs the advanced animations and the reconciled children
+/// 5. Paint — needs the final positions
+///
+/// Animations run here rather than at end-of-frame because a hover that
+/// retargets an animation must reach paint in the same frame; deferring it
+/// left every animated value one frame stale.
+///
+/// The drain is surface-owned: `distribute_jobs` already resolved ownership,
+/// so this returns only jobs belonging to this surface's subtree. That gives
+/// the pacing gate and the queue the same granularity — a gated surface's
+/// animation continuations sit untouched in its own queue until its frame
+/// callback fires, whatever the other surfaces do meanwhile.
+fn run_jobs(
+    root: WidgetId,
+    tree: &mut Tree,
+    layout_roots: &mut Vec<WidgetId>,
+    active_roots: &rustc_hash::FxHashSet<WidgetId>,
+) {
+    let jobs = jobs::drain_surface_jobs(root);
+    process_jobs(&jobs, tree, layout_roots);
+    jobs::recycle_job_buffer(jobs);
+
+    // Follow-ups from the animation advances and the reconciliation land in
+    // the inbox, so they need distributing before they can be drained.
+    jobs::distribute_jobs(tree, active_roots);
+    let followup = jobs::drain_surface_non_animation_jobs(root);
+    if !followup.is_empty() {
+        process_jobs(&followup, tree, layout_roots);
+    }
+    jobs::recycle_job_buffer(followup);
+}
+
+/// What this surface tells us about itself, read once at the top of a frame.
+///
+/// Copying it frees the borrow on `wayland_state`, which the phases below
+/// need mutably — and nothing the compositor sends can change it before this
+/// frame ends anyway.
+struct Frame {
+    events: Vec<widgets::Event>,
+    scale_factor: f32,
+    width: u32,
+    height: u32,
+    /// A `wl_surface.frame` callback is still in flight: the compositor has
+    /// not shown the previous frame yet.
+    frame_callback_pending: bool,
+    /// No first frame at a known scale yet. Such a surface bypasses the
+    /// pacing gate and repaints in full — it has nothing on screen to pace
+    /// against.
+    force_render_surface: bool,
+    wl_surface: WlSurface,
+}
+
+/// The physical size, and what about it changed since the last frame.
+struct Geometry {
+    physical_width: u32,
+    physical_height: u32,
+    needs_resize: bool,
+    scale_changed: bool,
+}
+
+/// Read the surface's state and take its queued input, or give up on this
+/// frame: an unconfigured surface has no size to render at, and one whose GPU
+/// state has not been built yet gets it on the next iteration.
+fn open_frame(ctx: &mut FrameContext) -> Option<Frame> {
+    let surface = &*ctx.surface;
+    let wayland_surface = ctx.wayland_state.get_surface_mut(ctx.id)?;
+    if !wayland_surface.configured {
+        return None;
+    }
+
+    // Taken before the GPU check, not after: a surface still building its GPU
+    // state drops this frame *and* the input queued for it. Holding the input
+    // instead would deliver a burst of stale events — a pointer position from
+    // several frames ago among them — on the first frame that renders.
+    let events = wayland_surface.take_events();
+    let fully_initialized =
+        wayland_surface.first_frame_presented && wayland_surface.scale_factor_received;
+    let frame = Frame {
+        events,
+        scale_factor: wayland_surface.scale_factor,
+        width: wayland_surface.width,
+        height: wayland_surface.height,
+        frame_callback_pending: wayland_surface.frame_callback_pending,
+        force_render_surface: !fully_initialized,
+        wl_surface: wayland_surface.wl_surface.clone(),
+    };
+
+    surface.is_gpu_ready().then_some(frame)
+}
+
+/// Resolve the physical size and bring the swapchain in line with it.
+///
+/// Runs after input rather than with the rest of the snapshot: dispatching
+/// events cannot change the surface size, but resizing the swapchain before
+/// the widgets have been told anything would reorder the frame for no gain.
+fn resolve_geometry(ctx: &mut FrameContext, frame: &Frame) -> Geometry {
+    let id = ctx.id;
+    let surface = &mut *ctx.surface;
+    let scale = frame.scale_factor as u32;
+    let physical_width = frame.width * scale;
+    let physical_height = frame.height * scale;
 
     let wgpu_surface = surface.wgpu_surface.as_mut().unwrap();
-
-    // Check for resize or scale change
     let needs_resize =
         wgpu_surface.width() != physical_width || wgpu_surface.height() != physical_height;
-    let scale_changed = scale_factor != surface.previous_scale_factor;
+    let scale_changed = frame.scale_factor != surface.previous_scale_factor;
 
     if needs_resize {
         log::info!(
@@ -543,272 +619,338 @@ fn render_surface(
             "Surface {:?} scale factor changed: {} -> {}",
             id,
             surface.previous_scale_factor,
-            scale_factor
+            frame.scale_factor
         );
-        surface.previous_scale_factor = scale_factor;
+        surface.previous_scale_factor = frame.scale_factor;
     }
 
-    // Frame pacing: while a wl_surface.frame callback is in flight the
-    // compositor hasn't shown the previous frame — rendering another one
-    // would only queue behind it (previously this was "throttled" by
-    // blocking the whole event loop on the Fifo swapchain). Return BEFORE
-    // draining jobs: animation continuations must stay queued, otherwise
-    // each loop iteration would advance them, re-ping the wakeup, and spin
-    // the loop flat-out between frame callbacks. Input events (dispatched
-    // above) are not delayed. Init and resizes bypass the gate.
-    let fully_initialized = first_frame_presented && scale_factor_received;
-    let force_render_surface = !fully_initialized;
-    if frame_callback_pending && !force_render_surface && !needs_resize && !scale_changed {
+    Geometry {
+        physical_width,
+        physical_height,
+        needs_resize,
+        scale_changed,
+    }
+}
+
+/// Bring the tree's geometry up to date, and let a content-sized surface
+/// tell the compositor how big it wants to be.
+///
+/// Partial layout is the normal path: only the subtrees that marked
+/// themselves re-run, from their relayout boundaries. A full layout from the
+/// root happens only on a resize, because that is the one change no widget
+/// can have noticed on its own.
+fn layout_pass(
+    ctx: &mut FrameContext,
+    frame: &Frame,
+    geometry: &Geometry,
+    has_pending_layouts: bool,
+    layout_roots: &mut Vec<WidgetId>,
+) {
+    let id = ctx.id;
+    let surface = &mut *ctx.surface;
+    let wayland_state = &mut *ctx.wayland_state;
+    let renderer = &mut *ctx.renderer;
+    let tree = &mut *ctx.tree;
+    let qh = ctx.qh;
+
+    // Update renderer for this surface
+    renderer.set_screen_size(
+        geometry.physical_width as f32,
+        geometry.physical_height as f32,
+    );
+    renderer.set_scale_factor(frame.scale_factor);
+
+    // Re-layout using partial layout from boundaries when available
+    let constraints = Constraints::new(0.0, 0.0, frame.width as f32, frame.height as f32);
+    if !layout_roots.is_empty() {
+        // Partial layout: only update dirty subtrees starting from boundaries
+        let mut roots = Vec::new();
+        std::mem::swap(&mut roots, layout_roots);
+        for root_id in &roots {
+            // Use cached constraints for boundaries, or fall back to parent constraints
+            let cached = tree.cached_constraints(*root_id).unwrap_or(constraints);
+
+            tree.with_widget_mut(*root_id, |widget, id, tree| {
+                widget.layout(tree, id, cached);
+            });
+        }
+        // Paint invalidation is per widget, not per subtree: every widget
+        // that actually ran its layout marked itself (and its ancestors)
+        // inside Tree::cache_layout, and Tree::set_origin damaged what
+        // moved. Marking the whole subtree here instead would repaint
+        // every descendant of the layout root — which in a
+        // content-sized tree is the whole surface — and throw away the
+        // paint and flatten caches the layout pass just earned.
+    } else if geometry.needs_resize {
+        // Full layout from root only when explicitly needed (first frame, resize, etc.)
+        tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
+            widget.layout(tree, id, constraints);
+        });
+        tree.mark_subtree_needs_paint(surface.widget_id);
+    }
+    // If neither condition is true, skip layout entirely - nothing is dirty
+
+    // Auto-height popups follow their content: when this surface had
+    // layout activity, re-measure the natural height and ask the
+    // compositor to reposition if it changed (submenus expanding, lists
+    // growing). The measure pass runs under different constraints, so
+    // the real layout is restored right after.
+    if has_pending_layouts && let Some(popup_width) = wayland_state.popup_auto_width(id) {
+        let natural = measure_popup_height(tree, surface.widget_id, popup_width, id);
+        tree.with_widget_mut(surface.widget_id, |widget, wid, tree| {
+            widget.layout(tree, wid, constraints);
+        });
+        wayland_state.reposition_popup_if_changed(id, natural, qh);
+    } else if (has_pending_layouts || frame.force_render_surface)
+        && (surface.config.width.is_content() || surface.config.height.is_content())
+    {
+        // Initialization included: a freshly spawned surface reaches
+        // its first frames through the full-layout path, not
+        // layout_roots — without measuring here a single-toast spawn
+        // would stay at its 1px initial size until the NEXT content
+        // change.
+        // Content-sized layer surface (toast stacks, OSDs): measure
+        // the natural size and follow it — the layer counterpart of
+        // the popup reposition above. Without this a content-sized
+        // surface is stuck at its initial size: the real layout
+        // clamps to the surface, so a measured rect can never exceed
+        // it. The measure reads animation TARGETS, so an animated
+        // growth resizes once and the animation plays inside.
+        let fixed_w = (!surface.config.width.is_content()).then_some(frame.width);
+        let fixed_h = (!surface.config.height.is_content()).then_some(frame.height);
+        let (nw, nh) = measure_natural_size(tree, surface.widget_id, fixed_w, fixed_h, id);
+        tree.with_widget_mut(surface.widget_id, |widget, wid, tree| {
+            widget.layout(tree, wid, constraints);
+        });
+        if (nw, nh) != (frame.width, frame.height) {
+            wayland_state.set_surface_size(id, nw, nh);
+            // Auto reservations follow automatic resizes too; every
+            // other policy never moves
+            if surface.config.exclusive_zone == surface::ExclusiveZone::Auto {
+                let zone = surface.config.exclusive_zone.resolve(
+                    surface.config.anchor,
+                    surface.config.margin,
+                    nw,
+                    nh,
+                );
+                wayland_state.set_surface_exclusive_zone(id, zone);
+            }
+        }
+    }
+
+    // Update widget ref signals with current bounds after layout
+    widget_ref::update_widget_refs(tree);
+}
+
+/// Paint, flatten, hand the frame to the GPU, and re-arm the pacing gate.
+///
+/// The order at the end is not free-form: the frame callback and the damage
+/// are both requested BEFORE presenting, because presenting is what commits
+/// the surface. Anything set afterwards would ride an empty second commit
+/// the compositor cannot use.
+fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry) {
+    let id = ctx.id;
+    let surface = &mut *ctx.surface;
+    let wayland_state = &mut *ctx.wayland_state;
+    let renderer = &mut *ctx.renderer;
+    let tree = &mut *ctx.tree;
+    let qh = ctx.qh;
+
+    // Force full repaint on resize, scale change, or during initialization
+    if frame.force_render_surface || geometry.needs_resize || geometry.scale_changed {
+        tree.mark_subtree_needs_paint(surface.widget_id);
+    }
+
+    // Collect this surface's blur region from registered widgets (post
+    // layout, so bounds are current).
+    let blur_rects = blur::collect_for_surface(tree, surface.widget_id);
+
+    // Skip frame if nothing needs paint
+    if !tree.needs_paint(surface.widget_id) {
+        // A blur-region change without a repaint (e.g. the compositor's
+        // blur capability arriving) still needs its own commit.
+        wayland_state.sync_blur_region(id, blur_rects, qh, true);
+        render_stats::record_frame_skipped();
+        render_stats::end_frame(&DamageRegion::None);
+        return;
+    }
+
+    // Set the blur region now so it rides the buffer commit performed
+    // inside present() — region and content change in the same frame.
+    wayland_state.sync_blur_region(id, blur_rects, qh, false);
+
+    // Clear and reuse the root node (preserves capacity)
+    surface.root_node.clear();
+    surface.root_node.bounds =
+        widgets::Rect::new(0.0, 0.0, frame.width as f32, frame.height as f32);
+
+    time_phase!(render_stats::Phase::Paint, {
+        tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
+            let mut ctx = PaintContext::new(&mut surface.root_node);
+            widget.paint(tree, id, &mut ctx);
+        });
+    });
+
+    // Flatten tree into reused buffers
+    time_phase!(render_stats::Phase::Flatten, {
+        flatten_root_into(
+            &surface.root_node,
+            &mut surface.flattened_commands,
+            &mut surface.command_layers,
+        );
+    });
+
+    // Re-arm the frame callback BEFORE presenting so the request rides
+    // the same commit as the buffer (present() commits internally). The
+    // callback's arrival is the signal that this surface may render its
+    // next frame. Previously the callback was requested exactly once at
+    // startup and never again — the only pacing was the event loop
+    // blocking inside the Fifo swapchain.
+    frame.wl_surface.frame(qh, frame.wl_surface.clone());
+
+    // Report damage BEFORE presenting: presenting attaches the buffer and
+    // commits the frame.wl_surface (inside wgpu/the driver's Wayland path), so
+    // pending damage set now is part of that commit. The previous code
+    // damaged + committed AFTER present, attaching the damage to an empty
+    // second commit the compositor could not use.
+    let damage = tree.take_damage(surface.widget_id);
+    match damage {
+        DamageRegion::None => {
+            // Shouldn't happen since we're rendering, but report full damage to be safe
+            frame.wl_surface.damage_buffer(
+                0,
+                0,
+                geometry.physical_width as i32,
+                geometry.physical_height as i32,
+            );
+        }
+        DamageRegion::Partial(rect) => {
+            let scale = frame.scale_factor;
+            frame.wl_surface.damage_buffer(
+                (rect.x * scale) as i32,
+                (rect.y * scale) as i32,
+                (rect.width * scale).ceil() as i32,
+                (rect.height * scale).ceil() as i32,
+            );
+        }
+        DamageRegion::Full => {
+            frame.wl_surface.damage_buffer(
+                0,
+                0,
+                geometry.physical_width as i32,
+                geometry.physical_height as i32,
+            );
+        }
+    }
+
+    let presented;
+    time_phase!(render_stats::Phase::GpuRender, {
+        presented = renderer.render(
+            surface.wgpu_surface.as_mut().unwrap(),
+            &surface.flattened_commands,
+            &surface.command_layers,
+            surface.config.background_color,
+        );
+    });
+
+    if !presented {
+        // Nothing reached the screen (lost/outdated swapchain — common
+        // right after a resize). Keep all dirty flags so the content is
+        // repainted next frame instead of staying stale, restore full
+        // damage, and request that frame.
+        tree.set_full_damage(surface.widget_id);
+        jobs::request_frame();
+        return;
+    }
+
+    // Cache paint results AFTER flatten so cached_flatten data is preserved.
+    // This enables incremental flatten for paint-cached nodes on subsequent
+    // frames. The surface root itself is never cache-reused (it always
+    // repaints), so only its children are cached.
+    time_phase!(render_stats::Phase::CachePaintResults, {
+        for child in &surface.root_node.children {
+            cache_paint_results(tree, child);
+        }
+        tree.clear_needs_paint(surface.widget_id);
+    });
+
+    // Track render stats (when compiled with --features render-stats)
+    render_stats::record_frame_painted();
+    render_stats::end_frame(&damage);
+
+    // The frame callback requested before present is now committed;
+    // rendering for this surface is gated until it fires.
+    if let Some(ws) = wayland_state.get_surface_mut(id) {
+        ws.frame_callback_pending = true;
+    }
+}
+
+/// The borrows a frame needs from start to finish, in one place.
+///
+/// They are distinct objects in the caller, so bundling them costs nothing —
+/// and it spares every phase below the parameter list that had already grown
+/// past what anyone reads. Each phase reborrows what it uses, so its body
+/// reads as if it still owned the arguments.
+struct FrameContext<'a> {
+    id: SurfaceId,
+    surface: &'a mut surface_manager::ManagedSurface,
+    wayland_state: &'a mut platform::WaylandState,
+    renderer: &'a mut Renderer,
+    tree: &'a mut Tree,
+    qh: &'a QueueHandle<platform::WaylandState>,
+}
+
+/// One surface, one frame, in the order the phases have to run.
+fn render_surface(
+    ctx: &mut FrameContext,
+    layout_roots: &mut Vec<WidgetId>,
+    frame_requested: bool,
+    active_roots: &rustc_hash::FxHashSet<WidgetId>,
+) {
+    let Some(frame) = open_frame(ctx) else {
+        return;
+    };
+
+    let root = ctx.surface.widget_id;
+    dispatch_events(&frame.events, root, ctx.tree, active_roots);
+    sync_platform_state(ctx.wayland_state, ctx.qh);
+
+    let geometry = resolve_geometry(ctx, &frame);
+
+    // Frame pacing: while a `wl_surface.frame` callback is in flight the
+    // compositor has not shown the previous frame, so another one would only
+    // queue behind it.
+    //
+    // This returns BEFORE draining jobs, and that is the whole point:
+    // animation continuations have to stay queued. Advancing them on every
+    // loop iteration would re-ping the wakeup each time and spin the loop
+    // flat out between frame callbacks. Input was dispatched above, so it is
+    // never delayed by the gate; initialisation and resizes bypass it.
+    if frame.frame_callback_pending
+        && !frame.force_render_surface
+        && !geometry.needs_resize
+        && !geometry.scale_changed
+    {
         render_stats::record_frame_skipped();
         return;
     }
 
-    // Process ALL pending jobs BEFORE paint.
-    // This includes Animation jobs which were previously deferred to end-of-frame.
-    // Processing animations here ensures hover/pressed state changes update animation
-    // targets before paint, eliminating the 1-frame delay where animated values were
-    // stale because advance_animations() hadn't run yet.
-    //
-    // Order matters:
-    // 1. Unregister — cleanup removed widgets first
-    // 2. Animation — advance animated values (width/height/bg) so layout and paint
-    //    see current values. May push Layout/Paint follow-up jobs.
-    // 3. Reconcile — create/remove dynamic children. May push Layout follow-ups.
-    // 4. Layout — needs updated animation values + reconciled children
-    // 5. Paint — needs final layout positions
-    //
-    // Scheduling is surface-owned: distribute_jobs resolved ownership and
-    // this drain returns ONLY jobs belonging to this surface's subtree, so
-    // the pacing gate above and the queue have the same granularity — a
-    // gated surface's animation continuations sit untouched in its own
-    // queue until its frame callback fires, regardless of what other
-    // surfaces do in between.
-    let jobs = jobs::drain_surface_jobs(surface.widget_id);
-    process_jobs(&jobs, tree, layout_roots);
-    jobs::recycle_job_buffer(jobs);
+    run_jobs(root, ctx.tree, layout_roots, active_roots);
 
-    // Process follow-up jobs from animation advances and reconciliation
-    // (they land in the inbox — re-distribute before draining)
-    jobs::distribute_jobs(tree, active_roots);
-    let followup = jobs::drain_surface_non_animation_jobs(surface.widget_id);
-    if !followup.is_empty() {
-        process_jobs(&followup, tree, layout_roots);
-    }
-    jobs::recycle_job_buffer(followup);
-
-    // Check render conditions
+    // Nothing moved and nothing is starting up: there is no frame to draw.
     let has_pending_layouts = !layout_roots.is_empty();
-
-    // Only render if something changed (or during initialization)
-    if force_render_surface
+    if !(frame.force_render_surface
         || frame_requested
         || has_pending_layouts
-        || needs_resize
-        || scale_changed
-        || tree.needs_paint(surface.widget_id)
+        || geometry.needs_resize
+        || geometry.scale_changed
+        || ctx.tree.needs_paint(root))
     {
-        // Update renderer for this surface
-        renderer.set_screen_size(physical_width as f32, physical_height as f32);
-        renderer.set_scale_factor(scale_factor);
-
-        // Re-layout using partial layout from boundaries when available
-        let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
-        if !layout_roots.is_empty() {
-            // Partial layout: only update dirty subtrees starting from boundaries
-            let mut roots = Vec::new();
-            std::mem::swap(&mut roots, layout_roots);
-            for root_id in &roots {
-                // Use cached constraints for boundaries, or fall back to parent constraints
-                let cached = tree.cached_constraints(*root_id).unwrap_or(constraints);
-
-                tree.with_widget_mut(*root_id, |widget, id, tree| {
-                    widget.layout(tree, id, cached);
-                });
-            }
-            // Paint invalidation is per widget, not per subtree: every widget
-            // that actually ran its layout marked itself (and its ancestors)
-            // inside Tree::cache_layout, and Tree::set_origin damaged what
-            // moved. Marking the whole subtree here instead would repaint
-            // every descendant of the layout root — which in a
-            // content-sized tree is the whole surface — and throw away the
-            // paint and flatten caches the layout pass just earned.
-        } else if needs_resize {
-            // Full layout from root only when explicitly needed (first frame, resize, etc.)
-            tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
-                widget.layout(tree, id, constraints);
-            });
-            tree.mark_subtree_needs_paint(surface.widget_id);
-        }
-        // If neither condition is true, skip layout entirely - nothing is dirty
-
-        // Auto-height popups follow their content: when this surface had
-        // layout activity, re-measure the natural height and ask the
-        // compositor to reposition if it changed (submenus expanding, lists
-        // growing). The measure pass runs under different constraints, so
-        // the real layout is restored right after.
-        if has_pending_layouts && let Some(popup_width) = wayland_state.popup_auto_width(id) {
-            let natural = measure_popup_height(tree, surface.widget_id, popup_width, id);
-            tree.with_widget_mut(surface.widget_id, |widget, wid, tree| {
-                widget.layout(tree, wid, constraints);
-            });
-            wayland_state.reposition_popup_if_changed(id, natural, qh);
-        } else if (has_pending_layouts || force_render_surface)
-            && (surface.config.width.is_content() || surface.config.height.is_content())
-        {
-            // Initialization included: a freshly spawned surface reaches
-            // its first frames through the full-layout path, not
-            // layout_roots — without measuring here a single-toast spawn
-            // would stay at its 1px initial size until the NEXT content
-            // change.
-            // Content-sized layer surface (toast stacks, OSDs): measure
-            // the natural size and follow it — the layer counterpart of
-            // the popup reposition above. Without this a content-sized
-            // surface is stuck at its initial size: the real layout
-            // clamps to the surface, so a measured rect can never exceed
-            // it. The measure reads animation TARGETS, so an animated
-            // growth resizes once and the animation plays inside.
-            let fixed_w = (!surface.config.width.is_content()).then_some(width);
-            let fixed_h = (!surface.config.height.is_content()).then_some(height);
-            let (nw, nh) = measure_natural_size(tree, surface.widget_id, fixed_w, fixed_h, id);
-            tree.with_widget_mut(surface.widget_id, |widget, wid, tree| {
-                widget.layout(tree, wid, constraints);
-            });
-            if (nw, nh) != (width, height) {
-                wayland_state.set_surface_size(id, nw, nh);
-                // Auto reservations follow automatic resizes too; every
-                // other policy never moves
-                if surface.config.exclusive_zone == surface::ExclusiveZone::Auto {
-                    let zone = surface.config.exclusive_zone.resolve(
-                        surface.config.anchor,
-                        surface.config.margin,
-                        nw,
-                        nh,
-                    );
-                    wayland_state.set_surface_exclusive_zone(id, zone);
-                }
-            }
-        }
-
-        // Update widget ref signals with current bounds after layout
-        widget_ref::update_widget_refs(tree);
-
-        // Force full repaint on resize, scale change, or during initialization
-        if force_render_surface || needs_resize || scale_changed {
-            tree.mark_subtree_needs_paint(surface.widget_id);
-        }
-
-        // Collect this surface's blur region from registered widgets (post
-        // layout, so bounds are current).
-        let blur_rects = blur::collect_for_surface(tree, surface.widget_id);
-
-        // Skip frame if nothing needs paint
-        if !tree.needs_paint(surface.widget_id) {
-            // A blur-region change without a repaint (e.g. the compositor's
-            // blur capability arriving) still needs its own commit.
-            wayland_state.sync_blur_region(id, blur_rects, qh, true);
-            render_stats::record_frame_skipped();
-            render_stats::end_frame(&DamageRegion::None);
-            return;
-        }
-
-        // Set the blur region now so it rides the buffer commit performed
-        // inside present() — region and content change in the same frame.
-        wayland_state.sync_blur_region(id, blur_rects, qh, false);
-
-        // Clear and reuse the root node (preserves capacity)
-        surface.root_node.clear();
-        surface.root_node.bounds = widgets::Rect::new(0.0, 0.0, width as f32, height as f32);
-
-        time_phase!(render_stats::Phase::Paint, {
-            tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
-                let mut ctx = PaintContext::new(&mut surface.root_node);
-                widget.paint(tree, id, &mut ctx);
-            });
-        });
-
-        // Flatten tree into reused buffers
-        time_phase!(render_stats::Phase::Flatten, {
-            flatten_root_into(
-                &surface.root_node,
-                &mut surface.flattened_commands,
-                &mut surface.command_layers,
-            );
-        });
-
-        // Re-arm the frame callback BEFORE presenting so the request rides
-        // the same commit as the buffer (present() commits internally). The
-        // callback's arrival is the signal that this surface may render its
-        // next frame. Previously the callback was requested exactly once at
-        // startup and never again — the only pacing was the event loop
-        // blocking inside the Fifo swapchain.
-        wl_surface.frame(qh, wl_surface.clone());
-
-        // Report damage BEFORE presenting: presenting attaches the buffer and
-        // commits the wl_surface (inside wgpu/the driver's Wayland path), so
-        // pending damage set now is part of that commit. The previous code
-        // damaged + committed AFTER present, attaching the damage to an empty
-        // second commit the compositor could not use.
-        let damage = tree.take_damage(surface.widget_id);
-        match damage {
-            DamageRegion::None => {
-                // Shouldn't happen since we're rendering, but report full damage to be safe
-                wl_surface.damage_buffer(0, 0, physical_width as i32, physical_height as i32);
-            }
-            DamageRegion::Partial(rect) => {
-                let scale = scale_factor;
-                wl_surface.damage_buffer(
-                    (rect.x * scale) as i32,
-                    (rect.y * scale) as i32,
-                    (rect.width * scale).ceil() as i32,
-                    (rect.height * scale).ceil() as i32,
-                );
-            }
-            DamageRegion::Full => {
-                wl_surface.damage_buffer(0, 0, physical_width as i32, physical_height as i32);
-            }
-        }
-
-        let presented;
-        time_phase!(render_stats::Phase::GpuRender, {
-            presented = renderer.render(
-                wgpu_surface,
-                &surface.flattened_commands,
-                &surface.command_layers,
-                surface.config.background_color,
-            );
-        });
-
-        if !presented {
-            // Nothing reached the screen (lost/outdated swapchain — common
-            // right after a resize). Keep all dirty flags so the content is
-            // repainted next frame instead of staying stale, restore full
-            // damage, and request that frame.
-            tree.set_full_damage(surface.widget_id);
-            jobs::request_frame();
-            return;
-        }
-
-        // Cache paint results AFTER flatten so cached_flatten data is preserved.
-        // This enables incremental flatten for paint-cached nodes on subsequent
-        // frames. The surface root itself is never cache-reused (it always
-        // repaints), so only its children are cached.
-        time_phase!(render_stats::Phase::CachePaintResults, {
-            for child in &surface.root_node.children {
-                cache_paint_results(tree, child);
-            }
-            tree.clear_needs_paint(surface.widget_id);
-        });
-
-        // Track render stats (when compiled with --features render-stats)
-        render_stats::record_frame_painted();
-        render_stats::end_frame(&damage);
-
-        // The frame callback requested before present is now committed;
-        // rendering for this surface is gated until it fires.
-        if let Some(ws) = wayland_state.get_surface_mut(id) {
-            ws.frame_callback_pending = true;
-        }
+        return;
     }
+
+    layout_pass(ctx, &frame, &geometry, has_pending_layouts, layout_roots);
+    paint_and_present(ctx, &frame, &geometry);
 }
 
 pub struct App {
@@ -1178,17 +1320,15 @@ impl App {
                         continue;
                     };
                     let layout_roots = self.layout_roots.entry(surface.widget_id).or_default();
-                    render_surface(
+                    let mut ctx = FrameContext {
                         id,
                         surface,
-                        &mut wayland_state,
+                        wayland_state: &mut wayland_state,
                         renderer,
-                        &qh,
-                        &mut self.tree,
-                        layout_roots,
-                        frame_requested,
-                        &active_roots,
-                    );
+                        tree: &mut self.tree,
+                        qh: &qh,
+                    };
+                    render_surface(&mut ctx, layout_roots, frame_requested, &active_roots);
                 }
             }
 
