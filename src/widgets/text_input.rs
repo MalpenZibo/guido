@@ -1099,8 +1099,12 @@ impl Widget for TextInput {
             shadow,
         );
 
-        // Draw cursor if focused and visible (LOCAL coords)
-        if is_focused && self.cursor_visible {
+        // Draw cursor if focused and visible (LOCAL coords).
+        //
+        // `self.caret` gates the *drawing*, not only the blink: stopping the blink
+        // leaves `cursor_visible` at whatever it last was — true, from the
+        // constructor — and a field asked for no caret got a permanent one.
+        if self.caret && is_focused && self.cursor_visible {
             let cursor_x = self.cached_width_at_char(self.selection.cursor) - self.scroll_offset;
             let cursor_rect = Rect::new(
                 cursor_x,
