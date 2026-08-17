@@ -1,27 +1,49 @@
 # Refactoring
 
-Everything on the table for the library, in one place:
+Working notes for the library's architecture: what landed, what is still open,
+and where this document turned out to be wrong.
 
-- **[Part I](#part-i--node--content)** — the Node/Content refactor: decisions
-  settled, design fixed, migration plan in atomic steps. This one is *decided*
-  and ready to execute.
-- **[Part II](#part-ii--backlog)** — an architecture review of the rest of the
-  library: independent items, ranked by value-for-risk, not yet decided.
+| Item | State |
+|---|---|
+| I. Node/Content split | **Closed via salvage** (#172) — the split itself was not carried out |
+| II.1 Split `WaylandState` | **Done** (#169) |
+| II.2 Break up `render_surface` | **Done** (#170) |
+| II.3 Unify the global side channels | **Closed, solved differently** (#171) — see §IV.2 |
+| II.4 Collapse the two quad renderers | **Done** (#171) |
+| II.5 (a) `mark_needs_paint` walk order | Open |
+| II.5 (b) `distribute_jobs` root resolution | Open |
+| II.5 (c) damage as a `HashMap` | Open |
+| II.5 (d) untested wakeup invariant | **Done** (#171) |
+| II.6 Three tracking scopes in one paint | Open |
+| II.7 Container collecting one-widget properties | Open |
 
-**Caveat on every performance claim in this document.** None of it was measured:
-the environment this review ran in cannot build the crate (`wayland-client`
-missing), so all numbers are counted from source, not observed. Everything is
-justified as a *maintainability* change with a plausible performance
-side-effect. If the goal is speed, the first move is on neither list — it is to
-run a real example under the `render-stats` feature and read the numbers. The
-infrastructure exists (`src/render_stats.rs`, 749 lines) for exactly that.
+**Caveat on every performance claim below.** None of it was measured — the
+environment this review ran in cannot build the crate — so numbers are counted
+from source, not observed. Everything is argued as a *maintainability* change
+with a plausible performance side-effect. For speed, the first move is neither
+list: run a real example under `render-stats` and read the numbers.
 
 ---
 
 # Part I — Node / Content
 
-**Status:** design settled — not yet implemented.
-**Goal:** replace the single `Widget` trait with two honest concepts — a **Node**
+**Status: closed via salvage (#172). The split was not carried out.**
+
+Three things were taken out of this design and landed on their own, which is
+most of what it was actually worth:
+
+- **The dead `event` overrides on `Text` and `Image` were deleted.** Both
+  returned `EventResponse::Ignored`, which is the trait default — twelve lines
+  saying nothing. This was §I.4's evidence, and removing it needed no refactor.
+- **`tree::Node` was renamed `tree::Slot`** (§I.1's decision), because "node"
+  already meant two other things in the codebase.
+- **Baseline alignment** came out of §I.6's discussion — and disproved part of
+  it in the process; see §IV.1.
+
+What remains below is the design record, kept because the *reasoning* is still
+the reference for how leaves and boxes relate, not because it is a live plan.
+
+**Goal (as designed):** replace the single `Widget` trait with two concepts — a **Node**
 (the concrete type you compose and the tree stores) and **Content** (a leaf
 payload that declares and draws something: text, image, text input). A **Block**
 is the box kind of Node (style, layout, interaction, transform, animation,
@@ -293,82 +315,23 @@ functional gain.
 
 Independent of Part I, ranked by value-for-risk.
 
-## II.1 Split `WaylandState` — the real god object
+## II.1–II.4 — landed
 
-`src/platform/wayland.rs`, 2665 lines, one struct with **45+ fields**.
+Four items from the original review are merged; the reasoning now lives in the
+commits, which are the better record.
 
-Unlike `Container`, whose forty-odd methods at least all describe one thing (a
-box), this one holds concerns that share nothing but the word "Wayland":
-registry and compositor state, output enumeration, layer shell, xdg popups,
-session lock, pointer, touch, keyboard, cursor shape, clipboard, primary
-selection, background-effect blur, input regions.
-
-**Proposed split:** `OutputRegistry` (output ids, hotplug), `InputState`
-(pointer, touch, keyboard, modifiers, cursor), `Selections` (clipboard, primary,
-prefetch generations, serials), `ShellObjects` (layer shell, xdg shell, session
-lock).
-
-The smithay `*Handler` traits must be implemented on a single type, but that is
-not an obstacle: the `impl` blocks stay on `WaylandState` and delegate; only the
-*state* moves into sub-structs.
-
-**Value:** high — it makes the largest file in the project navigable.
-**Risk:** low — moving fields, almost no logic touched.
-**Verdict:** best value-for-risk in the codebase. Start here.
-
-## II.2 Break up `render_surface`
-
-`src/lib.rs:451`, ~360 lines, **9 parameters**, running fourteen phases in
-sequence: event dispatch → distribute jobs → clipboard sync → primary sync →
-cursor sync → resize → scale change → frame-pacing gate → drain jobs → layout →
-skip check → paint → flatten → damage → present → cache.
-
-The nine parameters are the symptom of a missing `FrameContext`. Split into
-named phases (`sync_platform_state`, `pace_frame`, `run_jobs`, `layout_pass`,
-`paint_pass`, `present_and_cache`).
-
-The point is not tidiness. The *order* of these phases is the delicate part —
-several lines carry comments explaining why they sit where they sit — and right
-now that order can only be learned by reading 360 lines top to bottom.
-
-**Value:** high for maintainability. **Risk:** low.
-
-## II.3 Unify the per-feature global side channels
-
-There are **24 `thread_local!` blocks across 20 files** and **8 global
-`take_*`/`flush_*` drains**: frame request, background writes, pending effects,
-dirty segments, cursor, owner disposals, clipboard, primary selection.
-
-Thread-local ambient state is idiomatic for a single-threaded reactive UI
-library (Floem and Leptos do the same) and is not the problem. The problem is
-that the *drain protocol is ad-hoc, eight times over*: every feature adds a
-queue, a drain call at a specific point in the loop, and an obligation to wake
-the loop correctly.
-
-This is not hypothetical. `ARCHITECTURE.md` documents two bugs that came from
-exactly this seam: the loop spinning at ~260k iterations/s, and a lost wakeup
-that left the loop blocked with work queued.
-
-**Proposed:** one `FrameSideEffects` struct with a single `drain()` at one
-defined point, or promote each to a real calloop source. The win is that
-feature N+1 can no longer get the ordering wrong.
-
-**Value:** high (removes a bug class). **Risk:** medium.
-
-## II.4 Collapse the two textured-quad renderers
-
-`src/renderer/image_quad.rs` (888 lines) and `src/renderer/text_quad.rs` (622)
-are structurally parallel: `Prepared*Quad`, `Cached*Texture`, `*CacheKey`,
-`new(device, format)` building a pipeline, `set_screen_size`, `prepare`,
-`render`, each with its own texture cache and eviction. Roughly **1500 lines for
-"draw a textured quad", implemented twice.**
-
-A shared `TexturedQuadPipeline`, generic over the cache key and over how the
-texture is produced, would collapse a good part of it.
-
-**Value:** medium-high. **Risk:** medium — GPU code, needs on-screen
-verification (`grim` screenshots), so it wants a machine that can run the
-examples.
+- **II.1 Split `WaylandState`** (#169). 2665 lines and 45+ fields covering
+  concerns that shared nothing but the word "Wayland", split by concern.
+- **II.2 Break up `render_surface`** (#170). The ~360-line, nine-parameter
+  frame pipeline became named phases.
+- **II.3 Unify the global side channels** (#171) — **not** as proposed here.
+  The single-drain idea did not survive contact with the code; the bug class was
+  real and was closed another way. See §IV.2.
+- **II.4 Collapse the two textured-quad renderers** (#171). With debug labels
+  neutralised the two wgpu pipelines were identical byte for byte: same shader,
+  vertex format, blend state, sampler. Now one shared pipeline, with only
+  texture *production* kept separate. The point was never the ~100 lines — it
+  was that the blend state could have drifted on one side with nothing to say so.
 
 ## II.5 Jobs / damage / paint-cache — reviewed on request
 
@@ -439,14 +402,20 @@ frame. A widget's surface root only changes on reparenting, so it is cacheable.
 handful of surfaces. A `SmallVec<[(WidgetId, DamageRegion); 4]>` would be faster
 and simpler to read.
 
-**(d) One invariant is documented but untested.** `ARCHITECTURE.md` explains at
-length why the wakeup ping must *not* be coalesced through `FRAME_REQUESTED`
-(doing so once lost wakeups entirely). Every other documented bug in this
-subsystem has a regression test; this one does not — it needs a live event loop,
-which makes it the hardest and therefore the most likely to silently regress.
+**(d) One invariant is documented but untested — DONE (#171).** The wakeup
+contract is now *checked* rather than only described: `queued_but_unwoken()`
+names every queue the loop drains, and debug builds assert none is outstanding
+when about to block indefinitely. Sound rather than arbitrary — each queue is
+drained unconditionally once per iteration, so anything still queued was
+produced after its own drain, and only a frame request brings the loop back.
+A non-empty queue at that moment means nobody asked to be woken, which is the
+exact shape of both historical bugs. Verified in both directions: six examples
+idling four seconds each without a false positive, and stubbing out one drain
+panics on the next idle, naming the queue.
 
-**Value:** (a)–(c) are small, contained wins. (d) is the one worth real effort.
-**Risk:** low for (b)/(c), medium for (a), medium for (d).
+**Still open:** (a), (b), (c) — all three are unchanged on `main`.
+**Value:** small, contained wins. **Risk:** low for (b)/(c), medium for (a) —
+its damage/bounds interaction needs deciding, not just moving.
 
 ## II.6 Minor: `Container::paint` opens three tracking scopes
 
@@ -550,3 +519,56 @@ per re-read, O(N²) per frame for something like a theme colour. Leave it alone.
 **Inlining widget data into the tree slot.** Covered in §I.7 — it would bloat
 the array that is walked constantly for metadata alone, to remove vtable calls
 the job system and paint cache already skip on most frames.
+
+---
+
+# Part IV — Where this document was wrong
+
+Two recommendations here did not survive contact with the code. Both are worth
+keeping written down: the reasoning that produced them looks sound in the
+abstract and is the kind of mistake that repeats.
+
+## IV.1 The `Measured` return type was unnecessary (§I.6)
+
+This document proposed making `Content::measure` "pure" by returning
+`Measured { size, overflow }` instead of writing through the tree, on the
+argument that a new per-leaf fact added later would otherwise mean touching
+every leaf.
+
+That argument was wrong, and adding baseline alignment (#172) is what showed it.
+The tree **already** carries per-widget facts a leaf reports during layout —
+`set_paint_overflow` is exactly that shape — so `set_baseline` slotted in beside
+it and the `Widget` trait did not move at all.
+
+The lesson inverts the original claim: the tree write-back is the *extensible*
+pattern, and the "pure" return type is the one that would have needed growing
+for every new fact. Purity was being valued for its own sake, against a codebase
+that already had a working idiom for the same job.
+
+## IV.2 One drain point was the one thing that could not be done (§II.3)
+
+This document proposed collapsing the eight `take_*`/`flush_*` drains into a
+single `FrameSideEffects::drain()`.
+
+It does not survive the code (#171). The drains are **not interchangeable** —
+each sits where it does for a reason written beside it: owner disposals run
+where no user closure is on the stack, background writes must land before
+`take_frame_request()` consumes the flag, orphan jobs need ownership resolved
+first. And the clipboard, primary and cursor syncs are not even the same kind of
+thing, being outbound and per-surface. Moving them all to one point was the only
+option genuinely unavailable.
+
+But the *bug class* behind the request was real and had bitten twice. It was
+never about where the drains sit; it is that a producer must also guarantee a
+wakeup and nothing enforced it — `clipboard_copy` and `set_cursor` set a flag
+and return, working only because a drain happens a few lines later in the same
+iteration. An accident of ordering, not a contract.
+
+So the fix was to **enforce the contract instead of moving the code**: assert at
+the one moment where breaking it is fatal (§II.5 (d)).
+
+The lesson: this review correctly identified a bug class from its symptoms —
+repeated ad-hoc drains, two historical bugs at the same seam — and then reached
+for the wrong remedy, tidiness, because the symptom *looked* like duplication.
+When several things that resemble each other each carry a written reason for
+sitting where they do, the reasons are the design, and unifying them deletes it.
