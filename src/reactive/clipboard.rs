@@ -139,3 +139,10 @@ pub(crate) fn reset_clipboard() {
     PRIMARY_CHANGED.with(|c| *c.borrow_mut() = false);
     SYSTEM_PRIMARY.with(|c| *c.borrow_mut() = None);
 }
+
+/// Whether a copy is queued for the compositor and not yet handed over.
+///
+/// Part of the loop's wakeup check — see `queued_but_unwoken` in `lib.rs`.
+pub(crate) fn selection_change_pending() -> bool {
+    CLIPBOARD_CHANGED.with(|c| *c.borrow()) || PRIMARY_CHANGED.with(|c| *c.borrow())
+}

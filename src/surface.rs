@@ -854,3 +854,10 @@ where
 pub fn surface_handle(id: SurfaceId) -> SurfaceHandle {
     SurfaceHandle { id }
 }
+
+/// Whether any surface command (spawn, close, property change) is queued.
+///
+/// Part of the loop's wakeup check — see `queued_but_unwoken` in `lib.rs`.
+pub(crate) fn surface_commands_pending() -> bool {
+    SURFACE_COMMANDS.with(|cmds| !cmds.borrow().is_empty())
+}
