@@ -233,7 +233,7 @@ pub fn request_job(widget_id: WidgetId, request: JobRequest) {
             }
         }
     });
-    request_frame();
+    wake_loop();
 }
 
 /// Resolve job ownership: sort the inbox into per-surface queues.
@@ -453,8 +453,8 @@ pub(crate) fn get_exit_request() -> ExitRequest {
     }
 }
 
-/// Global flag to indicate a frame is requested
-static FRAME_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// Someone poked the loop: make a pass even though no dirty flag says so.
+static WAKE_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// Whether a wakeup ping is already in flight for the current blocked/idle
 /// period. Cleared by `mark_loop_awake()` right after dispatch returns.
 static PING_SENT: AtomicBool = AtomicBool::new(false);
@@ -470,12 +470,23 @@ pub fn init_wakeup(ping: Ping) {
     }
 }
 
-/// Request that the main event loop process a frame
-pub(crate) fn request_frame() {
-    FRAME_REQUESTED.store(true, Ordering::Relaxed);
+/// Wake the main loop and have it make a full pass.
+///
+/// Named for what it does. It used to be `request_frame`, which promised more
+/// than it delivers on both counts: a pass produces a frame only if something
+/// actually needs painting, and four of its five callers — a queued job, a
+/// disposal, a surface command, a copy — want the loop to *turn*, not to
+/// draw. The flag it raises means "someone poked us, do a pass even though no
+/// dirty flag says so"; the loop then skips the paint on its own if there is
+/// nothing to show.
+///
+/// Producers call this from the same function that queues the work, so
+/// queueing and waking are one gesture and the second cannot be forgotten.
+pub(crate) fn wake_loop() {
+    WAKE_REQUESTED.store(true, Ordering::Relaxed);
     // Coalesce pings per loop iteration via a dedicated flag, NOT via
-    // FRAME_REQUESTED: the frame flag is consumed mid-iteration by
-    // take_frame_request(), so gating the ping on it lost wakeups — a
+    // WAKE_REQUESTED: that flag is consumed mid-iteration by
+    // take_wake_request(), so gating the ping on it lost wakeups — a
     // request landing while the flag happened to be set sent no ping, the
     // take then cleared the flag, and the loop blocked indefinitely with
     // work queued (only an unrelated Wayland event like mouse movement
@@ -491,7 +502,7 @@ pub(crate) fn request_frame() {
     }
 }
 
-/// Reset ping coalescing after the event loop woke up. Any `request_frame`
+/// Reset ping coalescing after the event loop woke up. Any `wake_loop`
 /// from here until the next dispatch sends (at most) one fresh ping, which
 /// keeps the eventfd readable so that dispatch returns immediately.
 pub(crate) fn mark_loop_awake() {
@@ -505,7 +516,7 @@ pub(crate) fn reset_jobs() {
     PENDING_JOBS.with(|jobs| {
         *jobs.borrow_mut() = JobQueues::new();
     });
-    FRAME_REQUESTED.store(false, Ordering::Relaxed);
+    WAKE_REQUESTED.store(false, Ordering::Relaxed);
     PING_SENT.store(false, Ordering::Relaxed);
     EXIT_REQUEST.store(ExitRequest::Running as u8, Ordering::Relaxed);
     if let Ok(mut guard) = WAKEUP_PING.lock() {
@@ -513,21 +524,21 @@ pub(crate) fn reset_jobs() {
     }
 }
 
-/// Check if a frame has been requested and clear the flag
-pub fn take_frame_request() -> bool {
-    FRAME_REQUESTED.swap(false, Ordering::Relaxed)
+/// Take the pending wake request, clearing it.
+pub fn take_wake_request() -> bool {
+    WAKE_REQUESTED.swap(false, Ordering::Relaxed)
 }
 
-/// Peek the frame-request flag without clearing it.
+/// Peek the wake request without clearing it.
 ///
 /// Used by the main loop before blocking: a request that landed after this
-/// iteration's `take_frame_request()` (e.g. from a background thread) leaves
-/// the flag set, and `request_frame`'s ping-on-first-request optimization
+/// iteration's `take_wake_request()` (e.g. from a background thread) leaves
+/// the flag set, and `wake_loop`'s ping-on-first-request optimization
 /// then suppresses every later ping — blocking indefinitely on a set flag
 /// would make the app deaf to background wakeups until an unrelated Wayland
 /// event (mouse movement) arrives.
-pub fn frame_request_pending() -> bool {
-    FRAME_REQUESTED.load(Ordering::Relaxed)
+pub fn wake_request_pending() -> bool {
+    WAKE_REQUESTED.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]
@@ -691,9 +702,9 @@ mod wakeup_contract {
 
     /// The one invariant in this file that had no test, and the one that cost
     /// a hung loop once: the wakeup ping must not be gated on
-    /// `FRAME_REQUESTED`.
+    /// `WAKE_REQUESTED`.
     ///
-    /// That flag is consumed mid-iteration by `take_frame_request()`. Gating
+    /// That flag is consumed mid-iteration by `take_wake_request()`. Gating
     /// the ping on it meant a request arriving while the flag happened to be
     /// set sent nothing, the take then cleared the flag, and the loop blocked
     /// with work already queued — until an unrelated Wayland event, a mouse
@@ -725,10 +736,10 @@ mod wakeup_contract {
             let _ = event_loop.dispatch(Some(Duration::ZERO), &mut drained);
 
             // The state the old bug keyed on, set immediately before the call.
-            FRAME_REQUESTED.store(true, Ordering::Relaxed);
+            WAKE_REQUESTED.store(true, Ordering::Relaxed);
             PING_SENT.store(false, Ordering::Relaxed);
 
-            request_frame();
+            wake_loop();
 
             let mut woken = false;
             let _ = event_loop.dispatch(Some(Duration::from_millis(20)), &mut woken);
@@ -747,7 +758,7 @@ mod wakeup_contract {
 
         reset_jobs();
         panic!(
-            "request_frame must ping while FRAME_REQUESTED is set — gating on \
+            "wake_loop must ping while WAKE_REQUESTED is set — gating on \
              that flag is what lost wakeups"
         );
     }

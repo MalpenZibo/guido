@@ -241,7 +241,7 @@ fn register_subscriber_impl(
 /// Notify all subscribers of a signal change by creating jobs.
 ///
 /// Iterates under the registry borrow: `request_job` only touches the job
-/// queue and frame-request state, never the registry, so no re-entrant
+/// queue and wake state, never the registry, so no re-entrant
 /// borrow is possible and no snapshot allocation is needed.
 pub fn notify_signal_change(signal_id: SignalId) {
     REGISTRY.with(|reg| {

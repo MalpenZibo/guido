@@ -583,6 +583,13 @@ pub fn batch<R>(f: impl FnOnce() -> R) -> R {
     result
 }
 
+/// Whether a background thread has queued a signal write not yet flushed.
+///
+/// Part of the loop's wakeup check — see `queued_but_unwoken` in `lib.rs`.
+pub(crate) fn bg_writes_pending() -> bool {
+    WRITE_QUEUE.lock().map(|q| !q.is_empty()).unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

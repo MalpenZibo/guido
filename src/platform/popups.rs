@@ -353,7 +353,7 @@ impl PopupHandler for WaylandState {
             }
             surface_state.pending_popup_height = None;
             surface_state.configured = true;
-            crate::jobs::request_frame();
+            crate::jobs::wake_loop();
         }
     }
 

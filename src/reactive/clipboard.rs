@@ -9,8 +9,10 @@ thread_local! {
     /// Internal clipboard buffer
     static CLIPBOARD: RefCell<Option<String>> = const { RefCell::new(None) };
 
-    /// Flag indicating clipboard was changed and needs to be synced to Wayland
-    static CLIPBOARD_CHANGED: RefCell<bool> = const { RefCell::new(false) };
+    /// A copy waiting to be handed to the compositor. Being empty *is* the
+    /// "nothing to sync" state — there is no separate dirty flag to keep in
+    /// step with the value.
+    static OUTGOING_CLIPBOARD: RefCell<Option<String>> = const { RefCell::new(None) };
 
     /// System clipboard contents (prefetched from the Wayland selection offer)
     static SYSTEM_CLIPBOARD: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -18,36 +20,28 @@ thread_local! {
     /// Internal primary-selection buffer (our outgoing content)
     static PRIMARY: RefCell<Option<String>> = const { RefCell::new(None) };
 
-    /// Flag indicating the primary selection changed and needs syncing
-    static PRIMARY_CHANGED: RefCell<bool> = const { RefCell::new(false) };
+    /// A select-to-copy waiting to be handed to the compositor.
+    static OUTGOING_PRIMARY: RefCell<Option<String>> = const { RefCell::new(None) };
 
     /// System primary-selection contents (prefetched from other apps)
     static SYSTEM_PRIMARY: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
-/// Copy text to the clipboard
+/// Copy text to the clipboard.
 pub fn clipboard_copy(text: &str) {
     CLIPBOARD.with(|c| {
         *c.borrow_mut() = Some(text.to_string());
     });
-    CLIPBOARD_CHANGED.with(|changed| {
-        *changed.borrow_mut() = true;
+    OUTGOING_CLIPBOARD.with(|out| {
+        *out.borrow_mut() = Some(text.to_string());
     });
+    // Queueing and waking are one gesture — see `jobs::wake_loop`.
+    crate::jobs::wake_loop();
 }
 
-/// Take pending clipboard change (returns text if clipboard was changed since last call)
+/// Take the copy waiting to go out to the compositor, if any.
 pub fn take_clipboard_change() -> Option<String> {
-    let changed = CLIPBOARD_CHANGED.with(|c| {
-        let was_changed = *c.borrow();
-        *c.borrow_mut() = false;
-        was_changed
-    });
-
-    if changed {
-        CLIPBOARD.with(|c| c.borrow().clone())
-    } else {
-        None
-    }
+    OUTGOING_CLIPBOARD.with(|out| out.borrow_mut().take())
 }
 
 /// Paste text from the clipboard
@@ -91,24 +85,15 @@ pub fn primary_copy(text: &str) {
     PRIMARY.with(|c| {
         *c.borrow_mut() = Some(text.to_string());
     });
-    PRIMARY_CHANGED.with(|changed| {
-        *changed.borrow_mut() = true;
+    OUTGOING_PRIMARY.with(|out| {
+        *out.borrow_mut() = Some(text.to_string());
     });
+    crate::jobs::wake_loop();
 }
 
-/// Take pending primary-selection change (for syncing to Wayland)
+/// Take the select-to-copy waiting to go out to the compositor, if any.
 pub(crate) fn take_primary_change() -> Option<String> {
-    let changed = PRIMARY_CHANGED.with(|c| {
-        let was_changed = *c.borrow();
-        *c.borrow_mut() = false;
-        was_changed
-    });
-
-    if changed {
-        PRIMARY.with(|c| c.borrow().clone())
-    } else {
-        None
-    }
+    OUTGOING_PRIMARY.with(|out| out.borrow_mut().take())
 }
 
 /// Paste text from the primary selection (middle-click paste).
@@ -133,9 +118,17 @@ pub(crate) fn set_system_primary(text: Option<String>) {
 /// Called during `App::drop()` to wipe clipboard buffers.
 pub(crate) fn reset_clipboard() {
     CLIPBOARD.with(|c| *c.borrow_mut() = None);
-    CLIPBOARD_CHANGED.with(|c| *c.borrow_mut() = false);
+    OUTGOING_CLIPBOARD.with(|o| *o.borrow_mut() = None);
     SYSTEM_CLIPBOARD.with(|c| *c.borrow_mut() = None);
     PRIMARY.with(|c| *c.borrow_mut() = None);
-    PRIMARY_CHANGED.with(|c| *c.borrow_mut() = false);
+    OUTGOING_PRIMARY.with(|o| *o.borrow_mut() = None);
     SYSTEM_PRIMARY.with(|c| *c.borrow_mut() = None);
+}
+
+/// Whether a copy is queued for the compositor and not yet handed over.
+///
+/// Part of the loop's wakeup check — see `queued_but_unwoken` in `lib.rs`.
+pub(crate) fn selection_change_pending() -> bool {
+    OUTGOING_CLIPBOARD.with(|o| o.borrow().is_some())
+        || OUTGOING_PRIMARY.with(|o| o.borrow().is_some())
 }

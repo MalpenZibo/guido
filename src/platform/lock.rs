@@ -135,7 +135,7 @@ impl SessionLockHandler for WaylandState {
     fn locked(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _session_lock: SessionLock) {
         log::info!("Session lock granted by compositor");
         self.lock.lock_events.push(LockEvent::Locked);
-        crate::jobs::request_frame();
+        crate::jobs::wake_loop();
     }
 
     fn finished(
@@ -147,7 +147,7 @@ impl SessionLockHandler for WaylandState {
         log::info!("Session lock finished (denied or ended)");
         self.lock.active_lock = None;
         self.lock.lock_events.push(LockEvent::Finished);
-        crate::jobs::request_frame();
+        crate::jobs::wake_loop();
     }
 
     fn configure(
@@ -181,7 +181,7 @@ impl SessionLockHandler for WaylandState {
                 surface_state.height = height;
             }
             surface_state.configured = true;
-            crate::jobs::request_frame();
+            crate::jobs::wake_loop();
         }
     }
 }

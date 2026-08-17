@@ -190,7 +190,7 @@ use smithay_client_toolkit::reexports::client::QueueHandle;
 use smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface;
 
 use crate::{
-    jobs::{get_exit_request, has_pending_jobs, init_wakeup, process_jobs, take_frame_request},
+    jobs::{get_exit_request, has_pending_jobs, init_wakeup, process_jobs, take_wake_request},
     tree::{DamageRegion, Tree, WidgetId},
 };
 
@@ -528,6 +528,36 @@ fn run_jobs(
     jobs::recycle_job_buffer(followup);
 }
 
+/// Deferred work that is queued and still waiting for the loop to drain it.
+///
+/// The wakeup contract says a producer that queues work must also guarantee a
+/// wakeup that survives until its consumer runs. This is that contract as a
+/// check instead of as prose — prose does not fail a test run.
+///
+/// Why an empty result is the only correct answer at the blocking point: each
+/// of these is drained unconditionally, once per iteration. Anything still
+/// queued was therefore produced *after* its own drain, and the only thing
+/// that can bring the loop back to drain it is a wake request — which would
+/// have kept it from blocking in the first place. So a non-empty queue here
+/// means nobody asked to be woken, and the app is about to go deaf until an
+/// unrelated compositor event happens along. That is precisely the shape of
+/// the lost-wakeup bug this contract exists to prevent.
+///
+/// Returns the name of the offender, because the point is the message.
+fn queued_but_unwoken() -> Option<&'static str> {
+    [
+        ("widget jobs", has_pending_jobs()),
+        ("a wake request", jobs::wake_request_pending()),
+        ("background signal writes", reactive::bg_writes_pending()),
+        ("owner disposals", reactive::owner::disposals_pending()),
+        ("surface commands", surface::surface_commands_pending()),
+        ("a selection change", reactive::selection_change_pending()),
+        ("a cursor change", reactive::cursor_change_pending()),
+    ]
+    .into_iter()
+    .find_map(|(name, pending)| pending.then_some(name))
+}
+
 /// What this surface tells us about itself, read once at the top of a frame.
 ///
 /// Copying it frees the borrow on `wayland_state`, which the phases below
@@ -859,7 +889,7 @@ fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry)
         // repainted next frame instead of staying stale, restore full
         // damage, and request that frame.
         tree.set_full_damage(surface.widget_id);
-        jobs::request_frame();
+        jobs::wake_loop();
         return;
     }
 
@@ -904,7 +934,7 @@ struct FrameContext<'a> {
 fn render_surface(
     ctx: &mut FrameContext,
     layout_roots: &mut Vec<WidgetId>,
-    frame_requested: bool,
+    woken: bool,
     active_roots: &rustc_hash::FxHashSet<WidgetId>,
 ) {
     let Some(frame) = open_frame(ctx) else {
@@ -940,7 +970,7 @@ fn render_surface(
     // Nothing moved and nothing is starting up: there is no frame to draw.
     let has_pending_layouts = !layout_roots.is_empty();
     if !(frame.force_render_surface
-        || frame_requested
+        || woken
         || has_pending_layouts
         || geometry.needs_resize
         || geometry.scale_changed
@@ -1196,11 +1226,11 @@ impl App {
             let force_render = any_surface_needs_init;
 
             // Check if we need to actively poll: jobs pushed during the
-            // previous frame, or a frame request that landed after this
+            // previous frame, or a wake request that landed after this
             // iteration consumed the flag (blocking on a set flag would
-            // suppress all later pings — see frame_request_pending).
+            // suppress all later pings — see wake_request_pending).
             let has_pending = has_pending_jobs();
-            let needs_polling = has_pending || force_render || jobs::frame_request_pending();
+            let needs_polling = has_pending || force_render || jobs::wake_request_pending();
 
             // Dispatch events from calloop:
             // - If polling needed (animations/callbacks/init), use timeout
@@ -1208,6 +1238,16 @@ impl App {
             let timeout = if needs_polling {
                 Some(std::time::Duration::from_millis(16)) // ~60fps for animations
             } else {
+                // About to block with nothing left to wake us but the
+                // compositor. Every queue must be empty by now — see
+                // `queued_but_unwoken`.
+                debug_assert!(
+                    queued_but_unwoken().is_none(),
+                    "the loop is about to block indefinitely with {} still queued — \
+                     whatever produced it owes a wakeup. See the Event Loop Wakeup \
+                     Contract in docs/ARCHITECTURE.md.",
+                    queued_but_unwoken().unwrap_or_default()
+                );
                 None // Block indefinitely until event
             };
 
@@ -1218,7 +1258,7 @@ impl App {
                 return ExitReason::Error(platform::PlatformError::ConnectionLost);
             }
 
-            // Reset ping coalescing: the first request_frame from here on
+            // Reset ping coalescing: the first wake_loop from here on
             // sends a fresh ping so the next dispatch can't block on
             // work queued during this iteration.
             jobs::mark_loop_awake();
@@ -1279,12 +1319,12 @@ impl App {
             }
 
             // Flush background-thread signal writes once per frame (queued via WriteSignal).
-            // Must run before take_frame_request() so that signal changes from bg writes
-            // are processed into jobs before we check the frame request flag.
+            // Must run before take_wake_request() so that signal changes from bg writes
+            // are processed into jobs before we check the wake request.
             reactive::flush_bg_writes();
 
-            // Check frame request once for all surfaces (not per-surface)
-            let frame_requested = take_frame_request();
+            // Take the wake request once for all surfaces (not per-surface)
+            let woken = take_wake_request();
 
             // Render each surface (no renderer yet means no surface has a
             // GPU state — nothing can be rendered this iteration)
@@ -1328,7 +1368,7 @@ impl App {
                         tree: &mut self.tree,
                         qh: &qh,
                     };
-                    render_surface(&mut ctx, layout_roots, frame_requested, &active_roots);
+                    render_surface(&mut ctx, layout_roots, woken, &active_roots);
                 }
             }
 
@@ -1397,5 +1437,48 @@ mod font_registry_tests {
             after_second + 1,
             "a different font must still register"
         );
+    }
+}
+
+#[cfg(test)]
+mod wakeup_contract_coverage {
+    use super::*;
+
+    /// A probe that never reports anything would make the check in
+    /// `queued_but_unwoken` silently useless, so each one is pinned to the
+    /// drain it speaks for: queue, see it, drain, see it gone.
+    #[test]
+    fn each_probe_tracks_its_own_queue() {
+        // Clipboard and primary share one probe.
+        let _ = reactive::take_clipboard_change();
+        let _ = reactive::take_primary_change();
+        assert!(!reactive::selection_change_pending());
+
+        reactive::clipboard_copy("queued");
+        assert!(
+            reactive::selection_change_pending(),
+            "a copy must be visible to the wakeup check"
+        );
+        let _ = reactive::take_clipboard_change();
+        assert!(!reactive::selection_change_pending());
+
+        reactive::primary_copy("queued");
+        assert!(
+            reactive::selection_change_pending(),
+            "a primary-selection copy must be visible too"
+        );
+        let _ = reactive::take_primary_change();
+        assert!(!reactive::selection_change_pending());
+
+        // Cursor.
+        let _ = reactive::take_cursor_change();
+        assert!(!reactive::cursor_change_pending());
+        reactive::set_cursor(reactive::CursorIcon::Text);
+        assert!(
+            reactive::cursor_change_pending(),
+            "a cursor change must be visible to the wakeup check"
+        );
+        let _ = reactive::take_cursor_change();
+        assert!(!reactive::cursor_change_pending());
     }
 }

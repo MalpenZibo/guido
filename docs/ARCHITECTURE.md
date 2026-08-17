@@ -118,7 +118,7 @@ Hardware-accelerated rendering using wgpu.
 
 *Main loop (once per iteration):*
 1. `flush_bg_writes()` - Drain queued background-thread signal writes
-2. `take_frame_request()` - Check if a frame was requested
+2. `take_wake_request()` - Take the pending wake request
 
 *Per-surface rendering:*
 3. Dispatch events to widgets (queued `MouseMove`s are coalesced to the latest position)
@@ -294,23 +294,37 @@ calloop guarantees a send wakes the next dispatch — the message's existence
 *is* the wakeup, so a lost-wakeup is impossible by construction. Messages
 either carry their payload or act as doorbells for data queued elsewhere
 (e.g. `BgWritesQueued` for the reactive write queue, drained at the loop's
-flush point). Never call `jobs::request_frame()` directly from a background
+flush point). Never call `jobs::wake_loop()` directly from a background
 thread as the *only* wakeup for queued work.
 
-**Main thread → `jobs::request_frame()`.**
+**Main thread → `jobs::wake_loop()`.**
 The frame-request ping is coalesced per loop iteration through a dedicated
 `PING_SENT` flag cleared once per wakeup (`mark_loop_awake`, right after
-dispatch returns). It is intentionally NOT coalesced via `FRAME_REQUESTED`:
+dispatch returns). It is intentionally NOT coalesced via `WAKE_REQUESTED`:
 that flag is consumed mid-iteration by `take_frame_request()`, and gating
 the ping on it once lost wakeups entirely (a request landing while the flag
 was set sent no ping and was then absorbed by the take — the loop blocked
 with work queued until an unrelated Wayland event arrived). Additionally,
-the loop refuses to block indefinitely while `FRAME_REQUESTED` is still set
+the loop refuses to block indefinitely while `WAKE_REQUESTED` is still set
 at iteration start (`frame_request_pending`).
 
 When adding a new deferred-work queue, either drain it in the loop after
 the flush point AND wake through one of the two mechanisms above, or make
 it a calloop source of its own.
+
+**The contract is checked, not just written down.** Debug builds assert it at
+the one moment where breaking it is fatal: `queued_but_unwoken()` in
+`src/lib.rs` names every queue the loop drains, and nothing may be
+outstanding when the loop is about to block indefinitely. The reasoning is
+that each queue is drained unconditionally once per iteration, so anything
+still queued was produced *after* its own drain — and the only thing that
+brings the loop back is a frame request, which would have kept it from
+blocking. A non-empty queue there means nobody asked to be woken.
+
+So a new queue needs one line in `queued_but_unwoken()` alongside its drain.
+Forget the wakeup and the next idle moment panics with the queue's name,
+instead of the app going quietly deaf until an unrelated compositor event
+happens along. Two of the bugs documented above were exactly that.
 
 ## Widget Trait
 

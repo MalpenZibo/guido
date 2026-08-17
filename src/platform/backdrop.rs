@@ -136,7 +136,7 @@ impl Dispatch<ExtBackgroundEffectManagerV1, ()> for WaylandState {
             for surface_state in state.surfaces.values_mut() {
                 surface_state.blur_region = None;
             }
-            crate::jobs::request_frame();
+            crate::jobs::wake_loop();
         }
     }
 }
