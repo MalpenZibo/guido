@@ -702,15 +702,40 @@ impl TextInput {
         }
     }
 
+    /// The selection, when it is allowed to leave the widget.
+    ///
+    /// `None` in password mode. What a masked field holds must not reach the
+    /// clipboard or the primary selection, and the leak that matters is not
+    /// Ctrl+C — it is the primary selection, which an ordinary mouse drag fills
+    /// with no keystroke at all, ready for a middle-click anywhere else. GTK4's
+    /// `GtkPasswordEntry` refuses to export for the same reason; GTK3 exported
+    /// the mask instead, which is a row of bullets that is no use to paste.
+    ///
+    /// Pasting *into* the field stays allowed. Blocking that is the security
+    /// theatre banking sites are mocked for: it stops password managers, not
+    /// attackers, and pushes people towards passwords they can type.
+    fn exportable_selection(&self) -> Option<String> {
+        if self.is_password {
+            return None;
+        }
+        self.get_selected_text()
+    }
+
     /// Copy selected text to clipboard
     fn copy_selection(&self) {
-        if let Some(text) = self.get_selected_text() {
+        if let Some(text) = self.exportable_selection() {
             clipboard_copy(&text);
         }
     }
 
     /// Cut selected text (copy and delete)
     fn cut_selection(&mut self, bounds_width: f32) {
+        // A cut that cannot copy is not a cut. Refusing the gesture outright is
+        // what GtkPasswordEntry does, and it keeps Ctrl+X from quietly becoming
+        // a delete while the user believes the clipboard was filled.
+        if self.is_password {
+            return;
+        }
         if self.selection.has_selection() {
             self.copy_selection();
             self.delete(false, bounds_width); // Delete the selection
@@ -1063,7 +1088,7 @@ impl Widget for TextInput {
                 self.is_dragging = false;
                 // Select-to-copy: a completed mouse selection becomes the
                 // primary selection (middle-click paste elsewhere)
-                if let Some(text) = self.get_selected_text() {
+                if let Some(text) = self.exportable_selection() {
                     primary_copy(&text);
                 }
                 return EventResponse::Handled;
