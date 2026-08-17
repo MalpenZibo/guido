@@ -487,11 +487,6 @@ impl TextInput {
             self.cursor_visible = !self.cursor_visible;
             self.last_cursor_toggle = now;
         }
-        request_job_at(
-            id,
-            JobRequest::Animation(RequiredJob::Paint),
-            self.last_cursor_toggle + period,
-        );
         true
     }
 
@@ -1099,20 +1094,35 @@ impl Widget for TextInput {
             shadow,
         );
 
-        // Draw cursor if focused and visible (LOCAL coords).
+        // The caret, and the wake that keeps it blinking.
         //
         // `self.caret` gates the *drawing*, not only the blink: stopping the blink
         // leaves `cursor_visible` at whatever it last was — true, from the
         // constructor — and a field asked for no caret got a permanent one.
-        if self.caret && is_focused && self.cursor_visible {
-            let cursor_x = self.cached_width_at_char(self.selection.cursor) - self.scroll_offset;
-            let cursor_rect = Rect::new(
-                cursor_x,
-                0.0,
-                1.5, // cursor width
-                bounds.height,
+        if self.caret && is_focused {
+            // The toggle happens in `advance_animations`, and this is what asks
+            // for the wake that runs it. It has to be here, not at the moment
+            // focus arrives: focus comes from a click, from `autofocus`, or from
+            // `WidgetRef::focus()`, and all three only queue a repaint. Asking
+            // from the repaint covers every one of them, and covers the half of
+            // the cycle where the caret is hidden and there is nothing to draw.
+            request_job_at(
+                id,
+                JobRequest::Animation(RequiredJob::Paint),
+                self.last_cursor_toggle + Duration::from_millis(CURSOR_BLINK_MS),
             );
-            ctx.draw_rounded_rect(cursor_rect, cursor_color, 0.0);
+
+            if self.cursor_visible {
+                let cursor_x =
+                    self.cached_width_at_char(self.selection.cursor) - self.scroll_offset;
+                let cursor_rect = Rect::new(
+                    cursor_x,
+                    0.0,
+                    1.5, // cursor width
+                    bounds.height,
+                );
+                ctx.draw_rounded_rect(cursor_rect, cursor_color, 0.0);
+            }
         }
     }
 
@@ -1220,13 +1230,14 @@ pub fn text_input(signal: RwSignal<String>) -> TextInput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jobs::{clear_pending_jobs, next_deadline, queued_job_types};
+    use crate::jobs::{clear_pending_jobs, clear_scheduled_jobs, next_deadline, queued_job_types};
     use crate::layout::Constraints;
     use crate::reactive::create_signal;
 
     /// A laid-out input, focused unless told otherwise.
     fn field(input: TextInput, focused: bool) -> (Tree, WidgetId) {
         clear_pending_jobs();
+        clear_scheduled_jobs();
         crate::reactive::focus::clear_focus();
 
         let mut tree = Tree::new();
@@ -1247,21 +1258,84 @@ mod tests {
             .unwrap_or(false)
     }
 
+    fn paint_once(tree: &mut Tree, id: WidgetId) {
+        let mut node = crate::renderer::RenderNode::new(id.as_u64());
+        tree.with_widget_mut(id, |w, id, t| {
+            let mut ctx = crate::renderer::PaintContext::new(&mut node);
+            w.paint(t, id, &mut ctx);
+        });
+    }
+
     #[test]
-    fn a_blinking_caret_asks_to_be_woken_rather_than_polled() {
+    fn painting_a_focused_caret_asks_for_the_wake_that_toggles_it() {
+        // The regression: the toggle lives in `advance_animations`, which the loop
+        // only calls for an Animation job, and *nothing* asked for one — focus from
+        // a click, from `autofocus` or from `WidgetRef::focus()` all queue a plain
+        // repaint. So the caret never blinked at all, while the tests that called
+        // `advance_animations` by hand were happy: they skipped the broken part.
+        let (mut tree, id) = field(text_input(create_signal(String::new())), true);
+        assert_eq!(next_deadline(), None, "nothing has been drawn yet");
+
+        paint_once(&mut tree, id);
+
+        assert!(
+            next_deadline().is_some(),
+            "a caret on screen has to ask to be woken, or it stays as it is forever"
+        );
+    }
+
+    #[test]
+    fn the_blink_keeps_asking_after_each_toggle() {
+        // One wake is a blink that stops after half a cycle.
+        let (mut tree, id) = field(text_input(create_signal(String::new())), true);
+        paint_once(&mut tree, id);
+
+        advance(&mut tree, id);
+        clear_pending_jobs();
+        clear_scheduled_jobs();
+        paint_once(&mut tree, id);
+
+        assert!(next_deadline().is_some());
+    }
+
+    #[test]
+    fn painting_a_field_without_a_caret_asks_for_nothing() {
+        let (mut tree, id) = field(text_input(create_signal(String::new())).no_caret(), true);
+
+        paint_once(&mut tree, id);
+
+        assert_eq!(
+            next_deadline(),
+            None,
+            "no caret, no wake — this is what a lock screen costs while nobody \
+             touches it"
+        );
+    }
+
+    #[test]
+    fn painting_an_unfocused_field_asks_for_nothing() {
+        let (mut tree, id) = field(text_input(create_signal(String::new())), false);
+
+        paint_once(&mut tree, id);
+
+        assert_eq!(next_deadline(), None);
+    }
+
+    #[test]
+    fn advancing_a_blinking_caret_never_asks_for_a_frame() {
+        // The division of labour: `advance_animations` applies the toggle, `paint`
+        // asks for the next wake. What neither may do is request an animation job,
+        // which means "advance me every frame" and is what pinned the loop at
+        // 60 fps to redraw the same pixels 113 frames out of 114.
         let (mut tree, id) = field(text_input(create_signal(String::new())), true);
 
         let blinking = advance(&mut tree, id);
 
-        assert!(blinking);
-        assert!(
-            next_deadline().is_some(),
-            "the caret has to schedule its next toggle"
-        );
+        assert!(blinking, "a focused caret is a blinking one");
         assert!(
             !queued_job_types(id).contains(&JobType::Animation),
-            "and must not queue an animation job, which is what pinned the loop \
-             at 60 fps to redraw the same pixels 113 frames out of 114"
+            "queued: {:?}",
+            queued_job_types(id)
         );
     }
 

@@ -539,6 +539,12 @@ pub(crate) fn queued_job_types(widget_id: WidgetId) -> Vec<JobType> {
     })
 }
 
+/// Forget every scheduled job (for testing).
+#[cfg(test)]
+pub(crate) fn clear_scheduled_jobs() {
+    SCHEDULED_JOBS.with(|scheduled| scheduled.borrow_mut().clear());
+}
+
 /// Clear all pending jobs (for testing)
 #[cfg(test)]
 pub(crate) fn clear_pending_jobs() {
