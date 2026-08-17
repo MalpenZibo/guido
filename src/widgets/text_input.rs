@@ -16,8 +16,9 @@ use crate::jobs::{JobRequest, JobType, RequiredJob, request_job, request_job_at}
 use crate::layout::{Constraints, Size};
 use crate::reactive::focus::focused_widget;
 use crate::reactive::{
-    CursorIcon, OptionSignalExt, RwSignal, clipboard_copy, clipboard_paste, has_focus,
-    primary_copy, primary_paste, release_focus, request_focus, set_cursor, with_signal_tracking,
+    CursorIcon, IntoSignal, OptionSignalExt, RwSignal, Signal, clipboard_copy, clipboard_paste,
+    has_focus, primary_copy, primary_paste, release_focus, request_focus, set_cursor,
+    with_signal_tracking,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled};
 use crate::tree::{Tree, WidgetId};
@@ -28,6 +29,10 @@ use super::widget::{Color, Event, EventResponse, Key, MouseButton, Rect, Widget}
 
 /// Cursor blink interval in milliseconds
 const CURSOR_BLINK_MS: u64 = 530;
+
+/// How much of the text colour a placeholder keeps when nothing overrides it.
+/// A placeholder is the same text, quieter — not a different colour to pick.
+const PLACEHOLDER_ALPHA: f32 = 0.45;
 
 /// Maximum number of undo history entries
 const MAX_HISTORY_SIZE: usize = 100;
@@ -218,6 +223,9 @@ pub struct TextInput {
 
     /// Handle for application code to reach this input — to focus it, mostly.
     widget_ref: Option<WidgetRef>,
+    /// Shown while the value is empty. Reactive: a prompt that changes — PAM
+    /// asking a different question — changes what the empty field says.
+    placeholder: Option<Signal<String>>,
 
     /// An unmade offer of the initial focus. Cleared once made, so autofocus is
     /// a *first layout* behaviour rather than something that fights the user on
@@ -273,6 +281,7 @@ impl TextInput {
             mask_char: '•',
             caret: true,
             widget_ref: None,
+            placeholder: None,
             autofocus_pending: false,
             selection: Selection::new(0),
             cursor_visible: true,
@@ -310,6 +319,20 @@ impl TextInput {
     /// ```
     pub fn widget_ref(mut self, widget_ref: WidgetRef) -> Self {
         self.widget_ref = Some(widget_ref);
+        self
+    }
+
+    /// Text to show while the field is empty.
+    ///
+    /// Drawn in the placeholder colour — the inherited text colour at reduced
+    /// alpha unless a container declares
+    /// [`placeholder_color`](crate::widgets::Container::placeholder_color) — and
+    /// never masked, since it is a label rather than a value: a password field
+    /// with a placeholder shows the word, not bullets.
+    ///
+    /// Reactive, so a prompt that changes changes the empty field with it.
+    pub fn placeholder<M>(mut self, text: impl IntoSignal<String, M>) -> Self {
+        self.placeholder = Some(text.into_signal());
         self
     }
 
@@ -1058,10 +1081,25 @@ impl Widget for TextInput {
 
         // Read the inherited colours with tracking so a change on whichever
         // ancestor supplied them repaints this input and nothing else.
-        let (text_color, selection_color, cursor_color, stroke, shadow) =
+        let (text_color, selection_color, cursor_color, stroke, shadow, placeholder) =
             with_signal_tracking(id, JobType::Paint, || {
                 let style = tree.inherited_text_style(id);
                 let text_color = style.color.get_or(Color::WHITE);
+                // Only when there is nothing to show instead. Read inside the
+                // tracking scope like every other paint input, so a prompt that
+                // changes repaints the field.
+                let placeholder = self
+                    .placeholder
+                    .filter(|_| self.cached_value.is_empty())
+                    .map(|signal| {
+                        let color = style.placeholder_color.get_or(Color::rgba(
+                            text_color.r,
+                            text_color.g,
+                            text_color.b,
+                            text_color.a * PLACEHOLDER_ALPHA,
+                        ));
+                        (signal.get(), color)
+                    });
                 (
                     text_color,
                     style
@@ -1072,6 +1110,7 @@ impl Widget for TextInput {
                     style.cursor_color.get_or(text_color),
                     style.stroke.map(|s| s.get()),
                     style.shadow.map(|s| s.get()),
+                    placeholder,
                 )
             });
 
@@ -1107,10 +1146,16 @@ impl Widget for TextInput {
             self.cached_text_width.max(bounds.width),
             bounds.height,
         );
+        // The placeholder stands in for the text, never beside it: it is only
+        // resolved when the value is empty, so there is nothing to overlap.
+        let (drawn, drawn_color) = match &placeholder {
+            Some((text, color)) => (text.as_str(), *color),
+            None => (display, text_color),
+        };
         ctx.draw_text_decorated(
-            display,
+            drawn,
             text_bounds,
-            text_color,
+            drawn_color,
             self.cached_font_size,
             self.cached_font_family.clone(),
             self.cached_font_weight,

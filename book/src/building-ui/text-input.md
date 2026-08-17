@@ -103,6 +103,36 @@ whichever was laid out last.
 The offer is made once. A relayout does not ask again, so a resize or a scale
 change cannot drag focus back from wherever the user has since put it.
 
+## Placeholder
+
+What the field says while it is empty:
+
+```rust
+text_input(password)
+    .password(true)
+    .placeholder("Password")
+```
+
+It is a **label, not a value**: never masked, so a password field shows the word
+rather than eight bullets, and it stands *in place of* the text rather than beside
+it — there is nothing to overlap, because it is only drawn when the value is empty.
+
+Reactive, so a prompt that changes changes the empty field with it:
+
+```rust
+text_input(answer).placeholder(move || prompt.get())
+```
+
+The colour is the inherited text colour at reduced alpha — a placeholder is the
+same text, quieter. Declare `placeholder_color` on a container to override it:
+
+```rust
+container()
+    .text_color(theme.text)
+    .placeholder_color(theme.text_weak)
+    .child(text_input(value).placeholder("Search"))
+```
+
 ## No Caret
 
 ```rust
@@ -285,6 +315,7 @@ impl TextInput {
     pub fn mask_char(self, c: char) -> Self;
     pub fn autofocus(self) -> Self;
     pub fn no_caret(self) -> Self;
+    pub fn placeholder<M>(self, text: impl IntoSignal<String, M>) -> Self;
     pub fn on_change<F: Fn(&str) + 'static>(self, callback: F) -> Self;
     pub fn on_submit<F: Fn(&str) + 'static>(self, callback: F) -> Self;
 }
