@@ -11,9 +11,12 @@
 //! the blend state could drift on one side and nothing would say so.
 
 use wgpu::util::DeviceExt;
-use wgpu::{BindGroupLayout, Buffer as WgpuBuffer, Device, RenderPipeline, Sampler, TextureFormat};
+use wgpu::{
+    BindGroup, BindGroupLayout, Buffer as WgpuBuffer, Device, RenderPass, RenderPipeline, Sampler,
+    TextureFormat, TextureView,
+};
 
-use super::textured_vertex::TexturedVertex;
+use super::textured_vertex::{TexturedVertex, to_ndc};
 
 /// Pipeline, bind group layout, sampler and index buffer for textured quads.
 pub(super) struct TexturedQuadPipeline {
@@ -22,6 +25,23 @@ pub(super) struct TexturedQuadPipeline {
     pub(super) sampler: Sampler,
     /// Two triangles, shared by every quad — only the vertices are per-quad.
     pub(super) index_buffer: WgpuBuffer,
+
+    /// The surface size the vertices are projected against. Every quad's
+    /// geometry is computed in screen pixels and converted here, so this is
+    /// part of drawing a quad rather than of producing its texture.
+    screen_width: f32,
+    screen_height: f32,
+}
+
+/// A quad ready to draw: the texture to sample, and the four corners its
+/// geometry resolved to.
+///
+/// The two renderers reach the bind group differently — one owns it per quad,
+/// the other shares it through a cached texture — which was the only reason
+/// they each wrote out the same render loop.
+pub(super) trait QuadDraw {
+    fn bind_group(&self) -> &BindGroup;
+    fn vertex_buffer(&self) -> &WgpuBuffer;
 }
 
 impl TexturedQuadPipeline {
@@ -132,6 +152,63 @@ impl TexturedQuadPipeline {
             bind_group_layout,
             sampler,
             index_buffer,
+            screen_width: 800.0,
+            screen_height: 600.0,
+        }
+    }
+
+    /// Update the surface size the vertices are projected against.
+    pub(super) fn set_screen_size(&mut self, width: f32, height: f32) {
+        self.screen_width = width;
+        self.screen_height = height;
+    }
+
+    /// Screen pixels to normalised device coordinates.
+    pub(super) fn to_ndc(&self, x: f32, y: f32) -> [f32; 2] {
+        to_ndc(x, y, self.screen_width, self.screen_height)
+    }
+
+    /// Bind a texture for sampling, with this pipeline's layout and sampler.
+    pub(super) fn bind_texture(
+        &self,
+        device: &Device,
+        view: &TextureView,
+        label: &str,
+    ) -> BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        })
+    }
+
+    /// Draw prepared quads: one pipeline and index buffer for all of them,
+    /// then a bind group and vertex buffer per quad.
+    pub(super) fn draw<'a, Q: QuadDraw>(
+        &'a self,
+        render_pass: &mut RenderPass<'a>,
+        quads: &'a [Q],
+    ) {
+        if quads.is_empty() {
+            return;
+        }
+
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+
+        for quad in quads {
+            render_pass.set_bind_group(0, quad.bind_group(), &[]);
+            render_pass.set_vertex_buffer(0, quad.vertex_buffer().slice(..));
+            render_pass.draw_indexed(0..6, 0, 0..1);
         }
     }
 }

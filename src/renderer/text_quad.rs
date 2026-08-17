@@ -21,8 +21,8 @@ use wgpu::{
 
 use super::constants::{TEXT_BUFFER_MARGIN_MULTIPLIER, TEXT_TEXTURE_PADDING};
 use super::gpu::NO_CLIP_RECT;
-use super::textured_quad::TexturedQuadPipeline;
-use super::textured_vertex::{TexturedVertex, to_ndc};
+use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
+use super::textured_vertex::TexturedVertex;
 use super::types::TextEntry;
 use crate::widgets::font::FontWeight;
 
@@ -37,6 +37,16 @@ pub struct PreparedTextQuad {
     cached: std::rc::Rc<CachedTextTexture>,
     /// Vertex buffer with pre-computed vertices in NDC
     vertex_buffer: WgpuBuffer,
+}
+
+impl QuadDraw for PreparedTextQuad {
+    fn bind_group(&self) -> &BindGroup {
+        &self.cached.bind_group
+    }
+
+    fn vertex_buffer(&self) -> &WgpuBuffer {
+        &self.vertex_buffer
+    }
 }
 
 /// A rasterized text texture, reused across frames.
@@ -85,10 +95,6 @@ pub struct TextQuadRenderer {
 
     // Texture format
     format: TextureFormat,
-
-    // Screen dimensions for NDC conversion
-    screen_width: f32,
-    screen_height: f32,
 }
 
 impl TextQuadRenderer {
@@ -118,15 +124,12 @@ impl TextQuadRenderer {
             text_renderer,
             viewport,
             format,
-            screen_width: 800.0,
-            screen_height: 600.0,
         }
     }
 
     /// Update screen dimensions for NDC conversion.
     pub fn set_screen_size(&mut self, width: f32, height: f32) {
-        self.screen_width = width;
-        self.screen_height = height;
+        self.quad.set_screen_size(width, height);
     }
 
     /// Prepare text entries for rendering as textured quads.
@@ -325,20 +328,9 @@ impl TextQuadRenderer {
         queue.submit(std::iter::once(encoder.finish()));
 
         // Create bind group
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Text Texture Bind Group"),
-            layout: &self.quad.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.quad.sampler),
-                },
-            ],
-        });
+        let bind_group = self
+            .quad
+            .bind_texture(device, &view, "Text Texture Bind Group");
 
         let cached = std::rc::Rc::new(CachedTextTexture {
             texture,
@@ -433,48 +425,28 @@ impl TextQuadRenderer {
         // Convert to NDC and create vertices with clip data
         let vertices = [
             TexturedVertex {
-                position: to_ndc(
-                    screen_corners[0].0,
-                    screen_corners[0].1,
-                    self.screen_width,
-                    self.screen_height,
-                ),
+                position: self.quad.to_ndc(screen_corners[0].0, screen_corners[0].1),
                 uv: [0.0, 0.0],
                 screen_pos: [screen_corners[0].0, screen_corners[0].1],
                 clip_rect,
                 clip_params,
             },
             TexturedVertex {
-                position: to_ndc(
-                    screen_corners[1].0,
-                    screen_corners[1].1,
-                    self.screen_width,
-                    self.screen_height,
-                ),
+                position: self.quad.to_ndc(screen_corners[1].0, screen_corners[1].1),
                 uv: [1.0, 0.0],
                 screen_pos: [screen_corners[1].0, screen_corners[1].1],
                 clip_rect,
                 clip_params,
             },
             TexturedVertex {
-                position: to_ndc(
-                    screen_corners[2].0,
-                    screen_corners[2].1,
-                    self.screen_width,
-                    self.screen_height,
-                ),
+                position: self.quad.to_ndc(screen_corners[2].0, screen_corners[2].1),
                 uv: [0.0, 1.0],
                 screen_pos: [screen_corners[2].0, screen_corners[2].1],
                 clip_rect,
                 clip_params,
             },
             TexturedVertex {
-                position: to_ndc(
-                    screen_corners[3].0,
-                    screen_corners[3].1,
-                    self.screen_width,
-                    self.screen_height,
-                ),
+                position: self.quad.to_ndc(screen_corners[3].0, screen_corners[3].1),
                 uv: [1.0, 1.0],
                 screen_pos: [screen_corners[3].0, screen_corners[3].1],
                 clip_rect,
@@ -497,17 +469,6 @@ impl TextQuadRenderer {
 
     /// Render the prepared text quads.
     pub fn render<'a>(&'a self, render_pass: &mut RenderPass<'a>, quads: &'a [PreparedTextQuad]) {
-        if quads.is_empty() {
-            return;
-        }
-
-        render_pass.set_pipeline(&self.quad.pipeline);
-        render_pass.set_index_buffer(self.quad.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-
-        for quad in quads {
-            render_pass.set_bind_group(0, &quad.cached.bind_group, &[]);
-            render_pass.set_vertex_buffer(0, quad.vertex_buffer.slice(..));
-            render_pass.draw_indexed(0..6, 0, 0..1);
-        }
+        self.quad.draw(render_pass, quads);
     }
 }
