@@ -110,6 +110,10 @@ where
 }
 
 /// Whether a widget tracking scope is currently active (layout/paint/reconcile).
+///
+/// Only the non-reactive-read diagnostic asks, and that lives behind
+/// `debug_assertions` — so does this, or release builds warn about it.
+#[cfg(debug_assertions)]
 pub(crate) fn widget_tracking_active() -> bool {
     TRACKING_CONTEXT.with(|ctx| !ctx.borrow().is_empty())
 }

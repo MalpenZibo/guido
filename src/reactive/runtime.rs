@@ -129,6 +129,10 @@ fn vec_remove<T: PartialEq>(vec: &mut Vec<T>, value: &T) {
 }
 
 /// Whether an effect (or memo) is currently executing and collecting reads.
+///
+/// Behind `debug_assertions` like its only caller, the non-reactive-read
+/// diagnostic; without that, release builds warn about it.
+#[cfg(debug_assertions)]
 pub(crate) fn effect_tracking_active() -> bool {
     EFFECT_TRACKING.with(|stack| stack.try_borrow().map(|s| !s.is_empty()).unwrap_or(true))
 }
