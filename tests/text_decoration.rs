@@ -186,6 +186,82 @@ fn a_blurred_shadow_spreads_around_the_offset() {
     assert!(shadow.iter().any(|(_, _, c)| c.a < core.2.a));
 }
 
+/// Every copy of a black shadow, as offsets from the glyph.
+fn shadow_copies(blur: f32) -> Vec<(f32, f32)> {
+    draws(
+        container()
+            .text_color(Color::WHITE)
+            .text_shadow(TextShadow::new(0.0, 0.0, blur, Color::BLACK))
+            .child(text("hi")),
+    )
+    .into_iter()
+    .filter(|(_, _, c)| c.r == 0.0 && c.g == 0.0 && c.b == 0.0)
+    .map(|(x, y, _)| (x, y))
+    .collect()
+}
+
+#[test]
+fn a_blurred_shadow_leaves_no_gaps_between_its_copies() {
+    // The regression: two rings of twelve taps left five-pixel gaps at blur 10,
+    // and the copies then read as a mosaic of separate rectangles instead of one
+    // halo — worst on the square features of a glyph, a colon's dots or the stem
+    // of a 4. Round glyphs hid it, which is how it shipped.
+    let copies = shadow_copies(10.0);
+    assert!(copies.len() > 40, "got {} copies", copies.len());
+
+    for (x, y) in &copies {
+        let nearest = copies
+            .iter()
+            .filter(|copy| *copy != &(*x, *y))
+            .map(|(ox, oy)| (ox - x).hypot(oy - y))
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            nearest <= 3.0,
+            "the copy at ({x}, {y}) is {nearest} from its nearest neighbour; \
+             wider than a couple of pixels and the copies stop blending"
+        );
+    }
+}
+
+#[test]
+fn a_blurred_shadow_fills_the_disc_rather_than_ringing_it() {
+    // Rings at the radius and at half of it leave the space between them empty,
+    // which is a shadow with a hole in it.
+    let copies = shadow_copies(10.0);
+    for band in 0..5 {
+        let (near, far) = (band as f32 * 2.0, band as f32 * 2.0 + 2.0);
+        assert!(
+            copies
+                .iter()
+                .any(|(x, y)| (near..=far).contains(&x.hypot(*y))),
+            "nothing between {near} and {far} from the glyph"
+        );
+    }
+    assert!(
+        copies.iter().all(|(x, y)| x.hypot(*y) <= 10.0 + 1e-3),
+        "no copy may reach past the blur radius, which is what the damage slop \
+         is computed from"
+    );
+}
+
+#[test]
+fn a_huge_blur_spreads_the_budget_instead_of_spending_more() {
+    // Filling a disc at a fixed spacing would cost hundreds of draws at a large
+    // radius. Past the budget the spacing widens, so the count levels off.
+    let counts: Vec<usize> = [10.0, 20.0, 40.0, 80.0]
+        .iter()
+        .map(|blur| shadow_copies(*blur).len())
+        .collect();
+    assert!(
+        counts.iter().all(|count| *count < 200),
+        "counts were {counts:?}"
+    );
+    assert!(
+        counts[3] <= counts[1] + 8,
+        "the count has to level off, not keep climbing: {counts:?}"
+    );
+}
+
 #[test]
 fn a_zero_width_stroke_draws_nothing_extra() {
     assert_eq!(

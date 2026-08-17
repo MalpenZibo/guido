@@ -56,11 +56,16 @@ The shadow is usually the more effective of the two: it darkens the whole
 neighbourhood the glyph sits in rather than only its edge. Both are drawn
 *under* the fill, so a stroke outlines the text instead of eating into it.
 
-Both are approximated by re-drawing the glyphs at offsets, which costs fill
-rate but no extra rasterization — the glyph atlas is keyed on glyph, size and
-weight, and takes colour per draw. The approximation shows first in a thick
-stroke, whose corners begin to scallop past a few pixels; a shadow hides it
-completely, being soft and low-contrast to begin with.
+Both are approximated by re-drawing the glyphs at offsets, which costs fill rate
+but no extra rasterization — the glyph atlas is keyed on glyph, size and weight,
+and takes colour per draw. What decides whether the approximation shows is the
+*spacing* between copies: more than a couple of pixels apart and they stop
+blending, so the square features of a glyph — a colon's dots, the stem of a 4 —
+read as separate copies rather than one halo. The shadow therefore fills a disc
+whose sample count grows with the radius (about a hundred copies at blur 10), and
+a very wide blur spreads a fixed budget thinner instead of costing more. A thick
+stroke is the case with a visible ceiling: its corners begin to scallop past a
+few pixels, where the honest fix is a dilate on an offscreen mask, not more taps.
 
 Neither changes how much room the text takes, so adding a shadow never moves
 its neighbours.
