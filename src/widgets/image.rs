@@ -12,7 +12,7 @@ use crate::reactive::{IntoSignal, Signal, with_signal_tracking};
 use crate::renderer::PaintContext;
 use crate::tree::{Tree, WidgetId};
 
-use super::widget::{EventResponse, Rect, Widget};
+use super::widget::{Rect, Widget};
 
 /// Source for an image - can be a file path or in-memory bytes.
 #[derive(Debug, Clone, PartialEq)]
@@ -238,15 +238,6 @@ impl Widget for Image {
             let local_bounds = Rect::new(0.0, 0.0, size.width, size.height);
             ctx.draw_image(source.clone(), local_bounds, self.content_fit);
         }
-    }
-
-    fn event(
-        &mut self,
-        _tree: &mut Tree,
-        _id: WidgetId,
-        _event: &super::widget::Event,
-    ) -> EventResponse {
-        EventResponse::Ignored
     }
 }
 

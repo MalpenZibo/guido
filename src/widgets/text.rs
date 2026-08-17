@@ -7,7 +7,7 @@ use crate::tree::{Tree, WidgetId};
 
 use super::font::{FontFamily, FontWeight};
 use super::text_style::{TextShadow, TextStroke};
-use super::widget::{Color, EventResponse, Rect, Widget};
+use super::widget::{Color, Rect, Widget};
 
 /// How far a stroke and a shadow reach past the glyphs they decorate.
 ///
@@ -177,15 +177,6 @@ impl Widget for Text {
             stroke,
             shadow,
         );
-    }
-
-    fn event(
-        &mut self,
-        _tree: &mut Tree,
-        _id: WidgetId,
-        _event: &super::widget::Event,
-    ) -> EventResponse {
-        EventResponse::Ignored
     }
 }
 
