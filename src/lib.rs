@@ -772,6 +772,10 @@ fn layout_pass(
 
     // Update widget ref signals with current bounds after layout
     widget_ref::update_widget_refs(tree);
+
+    // A `WidgetRef::focus()` from application code lands here: after layout, so a
+    // handle attached this very frame has resolved to a widget.
+    reactive::focus::apply_pending_focus(tree);
 }
 
 /// Paint, flatten, hand the frame to the GPU, and re-arm the pacing gate.
@@ -1419,6 +1423,7 @@ impl Drop for App {
         outputs::reset_outputs();
         compositor::reset_compositor_effects();
         keyboard::reset_keyboard_modifiers();
+        reactive::focus::reset_pending_focus();
         blur::reset_blur();
         session_lock::reset_session_lock();
         FONTS_CONSUMED.with(|f| f.set(false));

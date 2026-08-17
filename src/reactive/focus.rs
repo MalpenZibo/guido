@@ -113,6 +113,51 @@ pub fn request_focus(tree: &Tree, id: WidgetId) {
     request_job(id, JobRequest::Paint);
 }
 
+thread_local! {
+    /// A focus request from application code, waiting for a tree.
+    ///
+    /// One slot, not a queue: two requests in the same frame are two answers to
+    /// "where should the keyboard be", and the last one is the one the caller
+    /// meant.
+    static PENDING: RefCell<Option<crate::widget_ref::WidgetRef>> = const { RefCell::new(None) };
+}
+
+/// Ask for the focus to move to whatever `widget_ref` names, on the next frame.
+///
+/// The caller has no tree — see
+/// [`WidgetRef::focus`](crate::widget_ref::WidgetRef::focus) — so the request is
+/// parked here and applied by the loop. It is stored as the *handle* rather than
+/// an id so that asking before the widget's first layout works: the id does not
+/// exist yet, and by the time the loop applies the request, it does.
+pub(crate) fn request_focus_deferred(widget_ref: crate::widget_ref::WidgetRef) {
+    PENDING.with(|pending| *pending.borrow_mut() = Some(widget_ref));
+    // The loop may be blocked with nothing else to do, and a focus change is work.
+    crate::jobs::wake_loop();
+}
+
+/// Apply a parked focus request. Called by the loop after layout, where the tree
+/// is complete and a handle attached during this frame has resolved.
+///
+/// Public for the same reason [`request_focus`] is: anything driving frames needs
+/// it, and it is only meaningful with a laid-out tree in hand.
+pub fn apply_pending_focus(tree: &Tree) {
+    let Some(widget_ref) = PENDING.with(|pending| *pending.borrow()) else {
+        return;
+    };
+    // A request naming a widget that is still not in the tree stays parked: the
+    // app asked for a field that has not been built yet, which is the ordinary
+    // shape of `focus()` called from a startup effect.
+    if let Some(id) = widget_ref.widget() {
+        PENDING.with(|pending| *pending.borrow_mut() = None);
+        request_focus(tree, id);
+    }
+}
+
+/// Drop any parked request. Called during `App::drop()`.
+pub(crate) fn reset_pending_focus() {
+    PENDING.with(|pending| *pending.borrow_mut() = None);
+}
+
 /// Release keyboard focus from a widget.
 /// Only releases if the given widget currently has focus, and repaints it.
 pub fn release_focus(id: WidgetId) {
