@@ -8,6 +8,7 @@
 
 use std::cell::RefCell;
 
+use crate::reactive::owner::with_root_owner;
 use crate::reactive::{RwSignal, Signal, create_signal};
 
 /// Compositor-side effects currently on offer.
@@ -31,7 +32,7 @@ fn effects_signal() -> RwSignal<CompositorEffects> {
     EFFECTS.with(|cell| {
         *cell
             .borrow_mut()
-            .get_or_insert_with(|| create_signal(CompositorEffects::default()))
+            .get_or_insert_with(|| with_root_owner(|| create_signal(CompositorEffects::default())))
     })
 }
 

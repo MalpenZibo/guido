@@ -34,7 +34,7 @@
 //! // All signals, effects, and cleanup callbacks are now disposed
 //! ```
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use super::invalidation::clear_signal_subscribers;
@@ -149,6 +149,8 @@ impl OwnerArena {
 thread_local! {
     static CURRENT_OWNER: RefCell<Option<OwnerId>> = const { RefCell::new(None) };
     static OWNERS: RefCell<OwnerArena> = RefCell::new(OwnerArena::new());
+    /// Remembered so [`with_root_owner`] can reach it from any depth.
+    static ROOT_OWNER: Cell<Option<OwnerId>> = const { Cell::new(None) };
 }
 
 /// Create a root owner and set it as the current owner.
@@ -159,6 +161,7 @@ thread_local! {
 pub(crate) fn create_root_owner() -> OwnerId {
     let id = OWNERS.with(|owners| owners.borrow_mut().allocate(None));
     CURRENT_OWNER.with(|current| *current.borrow_mut() = Some(id));
+    ROOT_OWNER.with(|root| root.set(Some(id)));
     id
 }
 
@@ -168,7 +171,31 @@ pub(crate) fn create_root_owner() -> OwnerId {
 /// reactive graph. This wipes the arena so the next `App` run starts fresh.
 pub(crate) fn reset_owners() {
     CURRENT_OWNER.with(|c| *c.borrow_mut() = None);
+    ROOT_OWNER.with(|root| root.set(None));
     OWNERS.with(|o| *o.borrow_mut() = OwnerArena::new());
+}
+
+/// Run `f` under the root owner instead of whatever scope is current.
+///
+/// For process-wide state built on first use — the modifier state, the output
+/// list, the compositor's capabilities. Each lives in a thread-local behind a
+/// lazily created signal, and *whoever reads it first* decides the owner. When
+/// that first reader is a widget's reactive closure, the signal belongs to a
+/// scope that is disposed on the closure's next run, while the thread-local goes
+/// on holding the dead handle: the read after that panics with "signal was
+/// disposed". Anchoring the creation at the root makes the lifetime match what
+/// the thing actually is.
+///
+/// With no `App` — unit tests — there is no root, and the current scope is used
+/// as before.
+pub(crate) fn with_root_owner<T>(f: impl FnOnce() -> T) -> T {
+    let Some(root) = ROOT_OWNER.with(|root| root.get()) else {
+        return f();
+    };
+    let previous = CURRENT_OWNER.with(|current| current.replace(Some(root)));
+    let value = f();
+    CURRENT_OWNER.with(|current| current.replace(previous));
+    value
 }
 
 /// Execute a closure within a new owner scope.

@@ -21,6 +21,7 @@
 
 use std::cell::RefCell;
 
+use crate::reactive::owner::with_root_owner;
 use crate::reactive::{RwSignal, Signal, create_signal};
 use crate::widgets::Modifiers;
 
@@ -34,7 +35,7 @@ fn modifiers_signal() -> RwSignal<Modifiers> {
     MODIFIERS.with(|cell| {
         *cell
             .borrow_mut()
-            .get_or_insert_with(|| create_signal(Modifiers::default()))
+            .get_or_insert_with(|| with_root_owner(|| create_signal(Modifiers::default())))
     })
 }
 
@@ -79,6 +80,33 @@ mod tests {
         set_keyboard_modifiers(latched);
 
         assert_eq!(keyboard_modifiers().get_untracked(), latched);
+    }
+
+    #[test]
+    fn the_first_reader_does_not_get_to_own_it() {
+        // The crash this pins: allock's caps-lock indicator reads this from
+        // inside a widget's reactive closure, which on that screen is the first
+        // read in the process. The signal was created under the closure's owner,
+        // died with it, and the read after that panicked with "signal was
+        // disposed" — the thread-local was still holding the dead handle.
+        use crate::reactive::owner::{create_root_owner, dispose_owner_now, with_owner};
+
+        create_root_owner();
+        reset_keyboard_modifiers();
+
+        let (_, scope) = with_owner(|| keyboard_modifiers().get_untracked());
+        dispose_owner_now(scope);
+
+        assert_eq!(
+            keyboard_modifiers().get_untracked(),
+            Modifiers::default(),
+            "the state has to outlive whichever scope happened to read it first"
+        );
+        set_keyboard_modifiers(Modifiers {
+            caps_lock: true,
+            ..Default::default()
+        });
+        assert!(keyboard_modifiers().get_untracked().caps_lock);
     }
 
     #[test]
