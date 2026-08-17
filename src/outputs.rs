@@ -22,6 +22,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use crate::reactive::owner::with_root_owner;
 use crate::reactive::{RwSignal, Signal, create_signal};
 use crate::surface::SurfaceId;
 
@@ -79,7 +80,7 @@ fn outputs_signal() -> RwSignal<Vec<OutputInfo>> {
     OUTPUTS.with(|cell| {
         *cell
             .borrow_mut()
-            .get_or_insert_with(|| create_signal(Vec::new()))
+            .get_or_insert_with(|| with_root_owner(|| create_signal(Vec::new())))
     })
 }
 
@@ -87,7 +88,7 @@ fn surface_outputs_signal() -> RwSignal<HashMap<SurfaceId, OutputId>> {
     SURFACE_OUTPUTS.with(|cell| {
         *cell
             .borrow_mut()
-            .get_or_insert_with(|| create_signal(HashMap::new()))
+            .get_or_insert_with(|| with_root_owner(|| create_signal(HashMap::new())))
     })
 }
 
