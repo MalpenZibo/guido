@@ -22,6 +22,7 @@ mod render;
 mod text;
 mod text_measurer;
 mod text_quad;
+mod textured_quad;
 mod textured_vertex;
 mod tree;
 mod types;

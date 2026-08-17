@@ -15,13 +15,13 @@ use glyphon::{
 };
 use wgpu::util::DeviceExt;
 use wgpu::{
-    BindGroup, BindGroupLayout, Buffer as WgpuBuffer, Device, Extent3d, MultisampleState, Queue,
-    RenderPass, RenderPipeline, Sampler, Texture, TextureDescriptor, TextureDimension,
-    TextureFormat, TextureUsages,
+    BindGroup, Buffer as WgpuBuffer, Device, Extent3d, MultisampleState, Queue, RenderPass,
+    Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
 };
 
 use super::constants::{TEXT_BUFFER_MARGIN_MULTIPLIER, TEXT_TEXTURE_PADDING};
 use super::gpu::NO_CLIP_RECT;
+use super::textured_quad::TexturedQuadPipeline;
 use super::textured_vertex::{TexturedVertex, to_ndc};
 use super::types::TextEntry;
 use crate::widgets::font::FontWeight;
@@ -79,13 +79,9 @@ pub struct TextQuadRenderer {
     text_renderer: TextRenderer,
     viewport: Viewport,
 
-    // Quad rendering pipeline
-    pipeline: RenderPipeline,
-    bind_group_layout: BindGroupLayout,
-    sampler: Sampler,
-
-    // Shared index buffer (vertices are per-quad)
-    index_buffer: WgpuBuffer,
+    /// Pipeline, layout, sampler and index buffer — shared with the image
+    /// renderer, which draws the same quad from a different texture.
+    quad: TexturedQuadPipeline,
 
     // Texture format
     format: TextureFormat,
@@ -111,109 +107,8 @@ impl TextQuadRenderer {
             TextRenderer::new(&mut atlas, device, MultisampleState::default(), None);
         let viewport = Viewport::new(device, &cache);
 
-        // Load shader from dedicated file
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("TextQuad Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("textured_quad_shader.wgsl").into()),
-        });
-
-        // Create texture bind group layout
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("TextQuad Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        // Create pipeline layout
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("TextQuad Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            immediate_size: 0,
-        });
-
-        // Create render pipeline
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("TextQuad Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[TexturedVertex::desc()],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        // Create sampler
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("TextQuad Sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
-
-        // Create index buffer
-        let indices: [u16; 6] = [0, 1, 2, 1, 3, 2];
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("TextQuad Index Buffer"),
-            contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
         Self {
+            quad: TexturedQuadPipeline::new(device, format, "TextQuad"),
             font_system,
             text_cache: std::collections::HashMap::new(),
             frame_gen: 0,
@@ -222,10 +117,6 @@ impl TextQuadRenderer {
             atlas,
             text_renderer,
             viewport,
-            pipeline,
-            bind_group_layout,
-            sampler,
-            index_buffer,
             format,
             screen_width: 800.0,
             screen_height: 600.0,
@@ -436,7 +327,7 @@ impl TextQuadRenderer {
         // Create bind group
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Text Texture Bind Group"),
-            layout: &self.bind_group_layout,
+            layout: &self.quad.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -444,7 +335,7 @@ impl TextQuadRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    resource: wgpu::BindingResource::Sampler(&self.quad.sampler),
                 },
             ],
         });
@@ -610,8 +501,8 @@ impl TextQuadRenderer {
             return;
         }
 
-        render_pass.set_pipeline(&self.pipeline);
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        render_pass.set_pipeline(&self.quad.pipeline);
+        render_pass.set_index_buffer(self.quad.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 
         for quad in quads {
             render_pass.set_bind_group(0, &quad.cached.bind_group, &[]);
