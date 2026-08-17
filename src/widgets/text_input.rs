@@ -21,6 +21,7 @@ use crate::reactive::{
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled};
 use crate::tree::{Tree, WidgetId};
+use crate::widget_ref::{WidgetRef, register_widget_ref};
 
 use super::font::{FontFamily, FontWeight};
 use super::widget::{Color, Event, EventResponse, Key, MouseButton, Rect, Widget};
@@ -215,6 +216,9 @@ pub struct TextInput {
     /// nothing to wake the loop for.
     caret: bool,
 
+    /// Handle for application code to reach this input — to focus it, mostly.
+    widget_ref: Option<WidgetRef>,
+
     /// An unmade offer of the initial focus. Cleared once made, so autofocus is
     /// a *first layout* behaviour rather than something that fights the user on
     /// every relayout.
@@ -268,6 +272,7 @@ impl TextInput {
             is_password: false,
             mask_char: '•',
             caret: true,
+            widget_ref: None,
             autofocus_pending: false,
             selection: Selection::new(0),
             cursor_visible: true,
@@ -290,6 +295,21 @@ impl TextInput {
     /// Set custom mask character for password mode (default: '•')
     pub fn mask_char(mut self, c: char) -> Self {
         self.mask_char = c;
+        self
+    }
+
+    /// Attach a handle, so application code can move the keyboard here.
+    ///
+    /// The container has the same builder; put the ref on the *input* when what
+    /// you mean is "focus this field", since a container cannot take focus.
+    ///
+    /// ```ignore
+    /// let field = create_widget_ref();
+    /// // ...
+    /// container().on_click(move || field.focus())
+    /// ```
+    pub fn widget_ref(mut self, widget_ref: WidgetRef) -> Self {
+        self.widget_ref = Some(widget_ref);
         self
     }
 
@@ -1011,6 +1031,10 @@ impl Widget for TextInput {
 
         // Clear needs_layout flag since layout is complete
         tree.clear_needs_layout(id);
+
+        if let Some(widget_ref) = self.widget_ref {
+            register_widget_ref(id, widget_ref);
+        }
 
         // Here rather than at construction because focus needs the tree, and
         // this is the first moment the input is in one — the same reason Flutter

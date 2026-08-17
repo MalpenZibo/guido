@@ -1,6 +1,8 @@
 # Widget Ref
 
-The **WidgetRef** API provides reactive access to a widget's layout bounds. This is useful when you need to position one widget relative to another — for example, centering a popup menu under a status bar module.
+A **WidgetRef** is a handle from application code to one widget in the tree. It
+answers two questions the composed view cannot answer on its own: where that
+widget ended up, and where the keyboard should go.
 
 ## Creating a WidgetRef
 
@@ -64,6 +66,49 @@ let popup = container()
     )
     .child(popup_content());
 ```
+
+## Moving the Keyboard
+
+Attach the ref to the widget that takes focus — a `text_input`, since a container
+cannot hold focus — and ask:
+
+```rust
+let field = create_widget_ref();
+
+container()
+    .layout(Flex::column().spacing(8.0))
+    .child(text_input(value).widget_ref(field))
+    .child(
+        container()
+            .on_click(move || field.focus())
+            .child(text("Edit")),
+    )
+```
+
+`focus()` lands on the next frame, not inside the call. Focus is resolved against
+the tree — that is where a widget's ancestors are, and `focused_state` needs them
+— and the composing code has no tree. Every toolkit arrives at the same shape:
+Compose's `FocusRequester` must be called from an effect, iced's
+`text_input::focus(id)` returns a `Task` for the runtime to run, and Flutter tells
+you to request from a post-frame callback because during `initState` the widget is
+not mounted.
+
+Because of that, **asking early is allowed**: a request that names a widget which
+has not been laid out yet waits for it rather than being dropped, so `focus()` in a
+startup effect does what it looks like. Two requests in one frame are two answers
+to the same question, and the later one wins.
+
+The rest of the verb:
+
+```rust
+field.blur();          // give the keyboard back, if this widget has it
+field.is_focused();    // reactive when read in a tracked scope
+field.widget();        // Some(WidgetId) once laid out, None before
+```
+
+For a field that should simply be ready when the screen appears, there is no need
+for a handle at all — use
+[`autofocus()`](../building-ui/text-input.md#initial-focus).
 
 ## When Not to Use It
 
