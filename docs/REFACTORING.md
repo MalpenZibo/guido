@@ -15,7 +15,8 @@ and where this document turned out to be wrong.
 | II.5 (c) damage as a `HashMap` | Open |
 | II.5 (d) untested wakeup invariant | **Done** (#171) |
 | II.6 Three tracking scopes in one paint | Open |
-| II.7 Container collecting one-widget properties | Open |
+| II.7 Style ownership (leaf style, provider nodes, animation) | Open — designed, ready |
+| II.8 States on leaves | Open — one question unanswered on purpose |
 
 **Caveat on every performance claim below.** None of it was measured — the
 environment this review ran in cannot build the crate — so numbers are counted
@@ -426,10 +427,20 @@ paid twice per scope. One scope would do.
 
 **Value:** low but free. **Risk:** none.
 
-## II.7 The container is collecting properties that belong to one widget
+## II.7 Style ownership: each widget declares what it draws
 
-`TextStyle` now holds three properties whose own doc comments admit what they
-are (`src/widgets/text_style.rs`):
+**The rule.** A widget declares the properties it draws. A container draws a box
+— padding, background, border, corner, shadow — and declares those. A text draws
+glyphs and declares their colour and metrics. An input draws a caret, a
+selection and a placeholder and declares those.
+
+Stated once, the rule makes the current drift **impossible by construction**:
+`placeholder_color` cannot land on the container, because the container does not
+draw the placeholder.
+
+### What is wrong today
+
+`TextStyle` carries three properties whose own doc comments admit what they are:
 
 ```rust
 /// Caret colour. Only `TextInput` reads it.
@@ -440,75 +451,290 @@ pub selection_color: Option<Signal<Color>>,
 pub placeholder_color: Option<Signal<Color>>,
 ```
 
-`placeholder_color` did not start this; it is the third, and the one where it
-became visible.
+And one feature now lives in two types: the placeholder text is declared on the
+widget — `text_input(v).placeholder("Search")` — while its colour is declared on
+an ancestor — `container().placeholder_color(gray)`. Nothing about "placeholder"
+tells a reader to look in two places for it.
 
-**The smell in its purest form:** one feature now lives in two places. The text
-is declared on the widget — `text_input(v).placeholder("Search")` — and its
-colour on an ancestor — `container().placeholder_color(gray)`. Nothing about
-"placeholder" tells a reader to look in two different types for it.
+Two forces produced this, neither of them carelessness:
 
-### The line being crossed
-
-`TextStyle` mixes two different kinds of thing:
-
-- **Genuinely inherited.** `color`, `font_size`, `font_family`, `font_weight`,
-  `stroke`, `shadow`. *Any* text-bearing descendant reads them — `Text`,
-  `TextInput`, and whatever text-bearing leaf comes next. This is the CSS
-  cascade and it is a sound concept.
-- **A remote control for one widget.** `cursor_color`, `selection_color`,
-  `placeholder_color`. There is no cascade: exactly one widget type reads them.
-  They sit on the container only so they can be set from a distance.
-
-Two tests separate them:
-
-1. **Does more than one kind of descendant read it?**
-2. **Does it participate in the container's state-layer and animation
-   machinery?** This is the *original* justification, from `text_style.rs`'s own
-   module docs: text colour lives on the container so it reaches
-   `hover_state(|s| s.text_color(…))` and `animate_text_color` instead of
-   needing a second copy of both. Nobody animates a placeholder colour on hover.
-   **The justification that legitimises `text_color` does not transfer.**
-
-### Why it happened
-
-Two forces, neither of them carelessness:
-
-- **A forced move.** Leaves carry no style of their own (§I.3), so when a
-  `TextInput` property is needed, the container is the only place it can go. The
-  constraint leaks into the API. This is the second time that deferred decision
-  has presented a bill; a third occurrence is grounds to reopen it.
+- **A forced move.** Leaves carry no style of their own, so a `TextInput`
+  property has nowhere else to go. The constraint leaks into the API.
 - **Convention pressure.** `placeholder_color` went to the container *to match
-  the existing convention*. The convention itself now generates the wrong
-  addition, automatically, for whatever property comes next.
+  the existing convention*. The convention now generates the wrong addition
+  automatically, for whatever property comes next.
 
-### Proposed
+### The vocabulary, written once
 
-1. **Close the inherited set** at the six that genuinely cascade. A deliberately
-   small closed set, as CSS itself keeps it.
-2. **Widget-specific properties go on the widget**:
-   `text_input(v).placeholder_color(gray)`. Today, styling an input's
-   placeholder means looking on the *container* — nobody guesses that.
-3. **Serve "set it once for the whole app" with context, not with the
-   container.** That need is *theming*, not cascade, and
-   `src/reactive/context.rs` already exists with theming as its documented use
-   case. `TextInput` would resolve: own declaration → theme from context →
-   default (today's fallback, text colour at reduced alpha, is already a good
-   default and removes most of the need). This scales to toggle, checkbox and
-   slider without any of their properties reaching the container.
-4. **Move `cursor_color` and `selection_color` too.** Moving only the placeholder
-   leaves an inconsistent API and the same pressure to add the next one. The
-   force that created the problem is consistency; it has to be turned around.
+```rust
+pub trait TextStyled: Sized {
+    #[doc(hidden)]
+    fn text_style_mut(&mut self) -> &mut TextStyle;
 
-**Honest tradeoff:** context in guido is app-global, not per-subtree, so this
-gives up per-branch overrides for these properties. Unlikely to matter for a
-caret or a placeholder, but it is a real thing given up, not a free win.
+    fn color<M>(mut self, c: impl IntoSignal<Color, M>) -> Self {
+        self.text_style_mut().color = Some(c.into_signal());
+        self
+    }
+    fn font_size<M>(…) -> Self { … }
+    fn font_family<M>(…) -> Self { … }
+    fn font_weight<M>(…) -> Self { … }
+    fn bold(self) -> Self { self.font_weight(FontWeight::BOLD) }
+    fn mono(self) -> Self { self.font_family(FontFamily::Monospace) }
+    fn text_stroke<M>(…) -> Self { … }
+    fn text_shadow<M>(…) -> Self { … }
+}
 
-**Value:** high — it stops an unbounded growth axis on the container (leaf types
-× their properties) before toggle/checkbox/slider arrive. **Risk:** low, and it
-is independent of Part I.
+pub trait InputStyled: Sized {
+    fn input_style_mut(&mut self) -> &mut InputStyle;
 
-## II.8 Explicitly not recommended
+    fn cursor_color<M>(…) -> Self { … }
+    fn selection_color<M>(…) -> Self { … }
+    fn placeholder_color<M>(…) -> Self { … }
+}
+```
+
+Every method takes `impl IntoSignal<T, M>`, like the rest of the library — these
+are reactive properties, not snapshots.
+
+| | `TextStyled` | `InputStyled` |
+|---|---|---|
+| `Text` | ✅ | — |
+| `TextInput` | ✅ | ✅ |
+| `text_style()` (provider node) | ✅ | — |
+| `input_style()` (provider node) | — | ✅ |
+| `Container` | ❌ | ❌ |
+
+The two ❌ are the point of the whole item. Each implementation is three lines —
+hand back a reference to its own style struct — and the vocabulary itself is
+written once as default methods. This is the shape of Floem's `Decorators`
+trait, so it is not a gamble.
+
+`InputStyle` as a separate struct is how the three misplaced properties leave
+`TextStyle`: they belong to a different trait, implemented by whoever draws
+them. The §II.7 problem does not need a separate fix — it falls out.
+
+### Three places, one grammar
+
+```rust
+text("Save").color(theme.weak)                       // on the widget
+text("Save").hover_state(|s| s.color(theme.strong))  // as a state override
+text_style().color(theme.weak).child(…)              // on the provider node
+```
+
+`s` in that closure is the same builder: `TextStyled`'s methods. `TextStyle` is
+*already* a partial style — every field is `Option<Signal<T>>` — so a state
+override is simply another one layered on top. No second vocabulary.
+
+### The provider nodes
+
+Inheritance survives; what changes is **who provides it**. Today any container
+can be a style source, so answering "what colour is this text?" means walking
+ten ancestors and checking each. A dedicated node makes the source visible and
+intentional — which is *more* fiscal than today, not less.
+
+Prior art: this is Flutter's `DefaultTextStyle`, a widget whose only job is
+providing a default text style to its subtree.
+
+Three settled decisions:
+
+1. **`text_color` becomes `color`.** The old name existed only to disambiguate
+   from a box's fill. Off the box, `text("x").color(red)` has one reading.
+2. **A provider takes exactly one child.** It is a decorator, not a layout: no
+   spacing, no arrangement decisions. To dress a group, wrap the group's
+   container. Give it multiple children and you have rebuilt a container.
+3. **It is layout-transparent.** Constraints pass through, it takes the child's
+   size. If it adds a single pixel it becomes "that wrapper that is only there
+   for style but shifts everything", and you will hate it within months.
+
+The migration is cheap because the hard part is not in `Container`. Resolution
+already lives in the tree — the slot holds `text_style: Option<Box<TextStyle>>`,
+`tree.inherited_text_style(id)` does the walk, and `Container` merely *populates*
+it. Only the populating changes. The walk, the per-property resolution, the
+subscription correctness under skipped layout, the `is_empty()` skip: untouched.
+
+### Resolution is a chain
+
+Per property, first declaration wins:
+
+```
+active state overrides (last declared first)
+  → the widget's own declaration
+    → walk up to the provider nodes
+      → default
+```
+
+Two steps in front of today's walk; the delicate part — the walk starting *at
+the text*, so subscriptions land correctly when layout is skipped — is unchanged.
+
+### Animation lives with the declaration
+
+```rust
+text("Save").color(weak).hover_state(|s| s.color(strong))
+    .animate_color(Transition::new(200.0, TimingFunction::EaseOut))
+
+text_style().color(theme.text)
+    .animate_color(Transition::new(200.0, TimingFunction::EaseOut))
+    .child(/* ten texts */)
+```
+
+Declared on the text → the text holds the `AnimationState<Color>` and consumes
+it in its own paint, exactly as a container does for `background`. Declared on a
+provider → **the provider animates once and publishes the displayed value**, and
+its subtree follows. That is also the efficient choice: ten texts each animating
+their resolved value would run ten identical interpolations that can drift a
+frame apart.
+
+Same for `input_style()` on a caret or selection colour.
+
+### What this deletes
+
+Today the container carries, solely because the animated property is drawn by a
+*different* widget:
+
+```rust
+animated_text: Option<RwSignal<Option<Color>>>,  // one signal write per frame
+text_owner:    Option<OwnerId>,                  // plus a dedicated impl Drop
+text_base:     Option<Signal<Color>>,
+```
+
+Three fields, a `Drop`, a published derived and an owner torn down by hand. When
+the declaration and the paint live in the same widget, the value never crosses a
+boundary and all of it goes.
+
+A provider publishing an animated signal is *not* the same wart: publishing
+style to its subtree is its entire job. The per-frame repaint of the text
+remains, and is unavoidable — the current code says so itself: *"a write per
+frame, which is what a per-frame repaint of the text costs under any design"*.
+
+### A separate bug this fixes on the way
+
+State overrides are **not reactive today**:
+
+```rust
+pub struct StateStyle {
+    pub border_color: Option<Color>,   // Color, not Signal<Color>
+    …
+}
+pub fn text_color(mut self, color: impl Into<Color>) -> Self   // not IntoSignal
+```
+
+Base properties take signals; state overrides take fixed values. So
+`container().background(theme_signal)` follows the theme and
+`hover_state(|s| s.background(…))` does not. Making a state override the same
+partial-style type as the base fixes this for free.
+
+Two details to keep in mind while doing it:
+
+- **The ripple** is the one thing in `StateStyle` that is an effect with a life
+  of its own rather than a property. It stays on the box.
+- **`BackgroundOverride::Lighter/Darker`** are relative to the base value, so in
+  a layered chain they must resolve *after* the base is found, not during. This
+  works today only because there is a single level.
+
+**Value:** high — it closes an unbounded growth axis on the container (leaf
+kinds × their properties) before toggle, checkbox and slider arrive.
+**Risk:** low. Independent of Part I.
+
+## II.8 States on leaves — open, and the one genuinely novel bit
+
+Everything above concerns *style*. Putting **states** on leaves —
+`text("x").hover_state(…)` — is a separate step, and it is where guido would be
+doing something no comparable library does. Worth taking deliberately.
+
+### The question that has no default answer
+
+When a `text` declares `hover_state`, hover **of what**? The text is not the
+thing the pointer is aimed at. Three possible answers, tested against two
+scenarios:
+
+*A — a button label.* Pointer over the button's padding, not over the glyphs.
+The label should light up.
+
+*B — a sibling button.* A row that highlights on hover contains a button that
+also highlights. Pointer over the row, away from the button. The button's label
+should **not** light up.
+
+| | A (must light) | B (must not) |
+|---|---|---|
+| hover **of myself** | ✗ pointer is on the padding | ✓ |
+| hover of **any ancestor** | ✓ | ✗ the row is hovered, so the label lights |
+| hover of the **nearest source** | ✓ finds the button, hovered | ✓ finds the button, not hovered |
+
+Only the third is right in both. "Source" already has a definition in the code:
+a container with `InteractionState` allocated — exactly what `track_pointer`
+checks before tracking anything. Pure layout wrappers are not sources and are
+skipped, like the style walk skips containers that declare nothing.
+
+### Why no one else needs this rule
+
+Because **everyone else inherits resolved values, not states.** In Floem the
+style pass propagates inherited properties (colour, font size) down the tree;
+the button resolves *its own* style including hover, and the resolved colour
+descends. CSS is the same: `color` inherits the computed value, and the computed
+value of `.button:hover` already includes the hover rule. **Guido does this
+today.** The label knows nothing about hover — it reads a colour that changed.
+
+So "hover of what?" never arises: nobody inherits a state.
+
+CSS *can* express the other model — `.button:hover .label {}` — but the ancestor
+is named in the selector. Without selectors, the library has to guess it, and
+the nearest-source rule is the stand-in for the selector guido does not have.
+
+| | inherit **values**<br>(CSS, Floem, guido today) | inherit **states**<br>(proposed) |
+|---|---|---|
+| "hover of what?" | never arises | needs a rule |
+| who declares the hover text colour | the interactive ancestor | the text itself |
+| must the ancestor know it contains text | **yes** | no |
+| trodden path | yes | no |
+
+The bottom-left cell is the real argument for the new model: today a button must
+declare "my text is white on hover", so it has to know its subtree contains
+text. With state propagation the button says only "I am hovered" and each
+descendant decides. That is genuinely more composable.
+
+### The costs, honestly
+
+- **A rule nobody else has to document.** The walk itself is one function of the
+  same shape as the style walk; the cost is that two behaviours become yours to
+  define and explain, and no user will have met them elsewhere.
+- **You cannot reach past a nearer source.** A text inside a button that wants
+  to react to the enclosing *card* cannot say so. CSS would use a selector.
+- **A silent no-op.** Declaring a state on a leaf with no source above it does
+  nothing and says nothing. Needs a decision: leave it silent, or let a widget
+  with a state style become a source for itself (hit-testing itself).
+
+### Not to be settled on paper
+
+The style work above stands on its own and does not depend on any of this. The
+state question should be answered with the first half in place and tried against
+a real case — the Wayland lockscreen, where an input is focused essentially
+always and a wrong password must show an error — because half an hour of use
+will say whether "nearest source" reads as obvious or as maddening, and no
+amount of reasoning will.
+
+### Also in scope when this is taken up
+
+- **Two families of state, by who knows.** `hover`/`pressed`/`focus` are
+  detected by the framework — it knows, you only declare the look.
+  Error, selected, checked are known only by the app. They need different API
+  shapes: `error_state(|s| …)` alone cannot work, because nothing would turn it
+  on.
+- **One generic primitive rather than a list of names.** `.state(condition, |s| …)`
+  covers error, warning, selected, checked and whatever comes next, without the
+  framework enumerating any of them. Naming a state per case is the same
+  dynamic that put `placeholder_color` on the container.
+- **`disabled` is not just appearance** — it must block clicks, hover and focus.
+  That is the framework's job, so it gets `.disabled(cond)` plus
+  `.disabled_state(|s| …)` rather than falling out of the generic primitive.
+- **`focus_visible`.** The lockscreen case makes it obvious: a field focused
+  essentially always shows a permanent focus ring. The web separates focus
+  arrived at by keyboard from focus arrived at by pointer; it only needs
+  remembering *how* focus arrived.
+- **Precedence: last declared wins.** CSS's rule at equal specificity, so
+  nothing new to learn — write the error state after the focus state and a
+  focused field in error shows the error.
+
+## II.9 Explicitly not recommended
 
 **The reactive subscriber registry** (`src/reactive/invalidation.rs`). Expected
 to be sloppy, it is not: a forward index (signal → subscribers), a reverse index
