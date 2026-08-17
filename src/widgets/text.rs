@@ -2,7 +2,7 @@ use crate::default_font_family;
 use crate::jobs::JobType;
 use crate::layout::{Constraints, Size};
 use crate::reactive::{IntoSignal, OptionSignalExt, Signal, with_signal_tracking};
-use crate::renderer::{PaintContext, measure_text_styled};
+use crate::renderer::{PaintContext, measure_text_full};
 use crate::tree::{Tree, WidgetId};
 
 use super::font::{FontFamily, FontWeight};
@@ -124,7 +124,7 @@ impl Widget for Text {
         };
 
         // Measure text (TextMeasurer caches results internally)
-        let measured = measure_text_styled(
+        let measured = measure_text_full(
             &self.cached_text,
             self.cached_font_size,
             max_width,
@@ -132,12 +132,18 @@ impl Widget for Text {
             self.cached_font_weight,
         );
 
+        // A parent aligning on the baseline needs this; it comes out of the
+        // same shaping pass, so reporting it is free.
+        tree.set_baseline(id, measured.baseline);
+
         let size = Size::new(
             measured
+                .size
                 .width
                 .max(constraints.min_width)
                 .min(constraints.max_width),
             measured
+                .size
                 .height
                 .max(constraints.min_height)
                 .min(constraints.max_height),

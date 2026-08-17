@@ -1281,6 +1281,21 @@ impl Widget for Container {
             Size::zero()
         };
 
+        // A box sits on the baseline of its content, as CSS has it: without
+        // this a styled label reports nothing, and a parent aligning on the
+        // baseline falls back to its bottom edge — which is how the idiomatic
+        // `container().child(text(..))` would silently miss the alignment it
+        // asked for.
+        // Child origins are stored relative to their parent, so the child's
+        // own offset is all that has to be added.
+        if let Some((child_id, child_baseline)) = children
+            .iter()
+            .find_map(|&cid| tree.baseline(cid).map(|b| (cid, b)))
+            && let Some((_, child_y)) = tree.get_origin(child_id)
+        {
+            tree.set_baseline(id, child_y + child_baseline);
+        }
+
         if self.scroll_axis != ScrollAxis::None {
             let sd = self.scroll_mut();
             sd.scroll_state.content_width = content_size.width + padding.horizontal();

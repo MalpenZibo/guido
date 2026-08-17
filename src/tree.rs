@@ -126,6 +126,10 @@ struct Slot {
     /// Boxed because most nodes declare nothing: the miss costs a null check
     /// instead of the ~96 bytes the struct would add to every node.
     text_style: Option<Box<crate::widgets::TextStyle>>,
+    /// Distance from this widget's top edge to the baseline of its first line
+    /// of text, if it has one. Reported by leaves during layout and read by a
+    /// parent aligning on `CrossAlignment::Baseline`.
+    baseline: Option<f32>,
     /// How far this widget paints outside its own bounds, in logical pixels.
     ///
     /// A shadow — a box's or a glyph's — lands outside the box that cast it,
@@ -204,6 +208,7 @@ impl Tree {
             sparse_index,
             cached_paint: None,
             text_style: None,
+            baseline: None,
             paint_overflow: 0.0,
         });
 
@@ -391,6 +396,23 @@ impl Tree {
     ///
     /// Widgets that cast a shadow or stroke set this during layout; it widens
     /// the damage they report without touching the size they occupy.
+    /// Report where this widget's text sits on its baseline.
+    ///
+    /// Only leaves that draw text have one. A parent aligning on
+    /// `CrossAlignment::Baseline` shifts its children so these coincide;
+    /// anything without a baseline is aligned by its bottom edge, as CSS does.
+    pub fn set_baseline(&mut self, id: WidgetId, baseline: f32) {
+        if let Some(idx) = self.get_dense_index(id) {
+            self.dense[idx].baseline = Some(baseline);
+        }
+    }
+
+    /// The widget's baseline, if it reported one.
+    pub fn baseline(&self, id: WidgetId) -> Option<f32> {
+        self.get_dense_index(id)
+            .and_then(|idx| self.dense[idx].baseline)
+    }
+
     pub fn set_paint_overflow(&mut self, id: WidgetId, overflow: f32) {
         if let Some(idx) = self.get_dense_index(id) {
             self.dense[idx].paint_overflow = overflow.max(0.0);
