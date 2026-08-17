@@ -5,6 +5,7 @@ pub mod compositor;
 pub mod image_metadata;
 mod ingress;
 mod jobs;
+pub mod keyboard;
 pub mod layout;
 pub mod outputs;
 pub mod reactive;
@@ -149,6 +150,7 @@ pub mod prelude {
     pub use crate::animation::{SpringConfig, TimingFunction, Transition, TransitionConfig};
     pub use crate::backdrop::{BackdropBlur, BackdropSources};
     pub use crate::compositor::{CompositorEffects, compositor_effects};
+    pub use crate::keyboard::keyboard_modifiers;
     pub use crate::layout::{
         Axis, Constraints, CrossAlignment, Flex, IntoF32, Length, MainAlignment, Size, ZStack,
         at_least, at_most, fill, fraction,
@@ -1406,6 +1408,7 @@ impl Drop for App {
         widget_ref::reset_widget_refs();
         outputs::reset_outputs();
         compositor::reset_compositor_effects();
+        keyboard::reset_keyboard_modifiers();
         blur::reset_blur();
         session_lock::reset_session_lock();
         FONTS_CONSUMED.with(|f| f.set(false));

@@ -71,6 +71,30 @@ container()
 `on_key_down` fires while the surface has keyboard focus — a layer surface
 with `KeyboardInteractivity` set, or a popup holding a grab.
 
+## Latched Modifiers
+
+The `Modifiers` a key event carries describe *that keystroke*, which is what a
+shortcut needs. Caps lock is a different question: it is latched, so it stays
+on with nothing pressed, and something on screen may need to say so before
+anything has been typed — a password field warning that what goes in will be
+upper case.
+
+That cannot be answered from a key event. The compositor sends the modifier
+update *after* the key that toggled it, so the press of caps lock reports the
+state it had before. Read the signal instead:
+
+```rust
+container().child(move || {
+    keyboard_modifiers()
+        .get()
+        .caps_lock
+        .then(|| text("Caps lock is on"))
+})
+```
+
+Everything is false until the compositor sends the first update, which it does
+when a surface takes keyboard focus.
+
 ## Scroll Events
 
 ```rust

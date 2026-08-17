@@ -451,6 +451,13 @@ pub struct Modifiers {
     pub alt: bool,
     pub shift: bool,
     pub logo: bool,
+    /// Caps lock, which is latched rather than held: it stays on with nothing
+    /// pressed. To say so on screen, read
+    /// [`keyboard_modifiers()`](crate::keyboard::keyboard_modifiers) instead of
+    /// the copy a key event carries — that one describes the keystroke it came
+    /// with, and the compositor reports the latch only *after* the key that
+    /// toggled it.
+    pub caps_lock: bool,
 }
 
 /// Named keys for special keyboard keys
