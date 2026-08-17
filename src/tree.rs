@@ -91,8 +91,14 @@ struct SparseSlot {
     generation: u32,
 }
 
-/// A node in the tree, containing a widget and its metadata.
-struct Node {
+/// One widget's slot in the arena: the widget itself plus everything the tree
+/// knows about it.
+///
+/// Called a slot rather than a node because "node" already means two other
+/// things here — the render tree's `RenderNode`, and informally any widget.
+/// This is neither: it is the arena record, and a widget composed but not yet
+/// registered has none.
+struct Slot {
     /// The widget stored at this node
     widget: Box<dyn Widget>,
     /// Parent widget ID (None for root)
@@ -136,7 +142,7 @@ struct Node {
 /// prevent use-after-free bugs.
 pub struct Tree {
     /// Dense array of nodes (widgets + metadata)
-    dense: Vec<Node>,
+    dense: Vec<Slot>,
     /// Sparse map from index to dense position + generation
     sparse: Vec<SparseSlot>,
     /// Free list of reusable sparse indices
@@ -185,7 +191,7 @@ impl Tree {
         let id = WidgetId::new(sparse_index, generation);
 
         // Create the node (widget ID is passed to methods, not stored in widget)
-        self.dense.push(Node {
+        self.dense.push(Slot {
             widget,
             parent: None,
             children: ChildrenVec::new(),
