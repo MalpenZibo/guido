@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use crate::default_font_family;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job, request_job_at};
 use crate::layout::{Constraints, Size};
+use crate::reactive::focus::focused_widget;
 use crate::reactive::{
     CursorIcon, OptionSignalExt, RwSignal, clipboard_copy, clipboard_paste, has_focus,
     primary_copy, primary_paste, release_focus, request_focus, set_cursor, with_signal_tracking,
@@ -214,6 +215,11 @@ pub struct TextInput {
     /// nothing to wake the loop for.
     caret: bool,
 
+    /// An unmade offer of the initial focus. Cleared once made, so autofocus is
+    /// a *first layout* behaviour rather than something that fights the user on
+    /// every relayout.
+    autofocus_pending: bool,
+
     // Selection state
     selection: Selection,
 
@@ -262,6 +268,7 @@ impl TextInput {
             is_password: false,
             mask_char: '•',
             caret: true,
+            autofocus_pending: false,
             selection: Selection::new(0),
             cursor_visible: true,
             last_cursor_toggle: Instant::now(),
@@ -298,6 +305,30 @@ impl TextInput {
     /// idle surface wakes the loop for nothing at all.
     pub fn no_caret(mut self) -> Self {
         self.caret = false;
+        self
+    }
+
+    /// Take keyboard focus when this input first appears, if nothing else has it.
+    ///
+    /// For a screen that exists to be typed into — a lock screen, a search
+    /// overlay, a dialog with one field — where making the user click first is
+    /// the wrong answer, and where there is no cursor to click *with* on a
+    /// surface that has no pointer.
+    ///
+    /// The offer is made once, at the input's first layout, and only when no
+    /// widget holds focus. Both halves matter:
+    ///
+    /// - *once*, so a relayout does not drag focus back from wherever the user
+    ///   has since put it
+    /// - *only when free*, so two autofocusing inputs do not fight — the first
+    ///   laid out wins — and one on a second surface does not pull focus off the
+    ///   surface being typed into. That last case is what a lock screen with two
+    ///   monitors is: the same view built per output, all of them asking.
+    ///
+    /// The equivalent elsewhere: Flutter's `autofocus: true`, Floem's
+    /// `autofocus` focus-nav flag, `forward-focus` on a Slint window.
+    pub fn autofocus(mut self) -> Self {
+        self.autofocus_pending = true;
         self
     }
 
@@ -731,15 +762,40 @@ impl TextInput {
         }
     }
 
+    /// The selection, when it is allowed to leave the widget.
+    ///
+    /// `None` in password mode. What a masked field holds must not reach the
+    /// clipboard or the primary selection, and the leak that matters is not
+    /// Ctrl+C — it is the primary selection, which an ordinary mouse drag fills
+    /// with no keystroke at all, ready for a middle-click anywhere else. GTK4's
+    /// `GtkPasswordEntry` refuses to export for the same reason; GTK3 exported
+    /// the mask instead, which is a row of bullets that is no use to paste.
+    ///
+    /// Pasting *into* the field stays allowed. Blocking that is the security
+    /// theatre banking sites are mocked for: it stops password managers, not
+    /// attackers, and pushes people towards passwords they can type.
+    fn exportable_selection(&self) -> Option<String> {
+        if self.is_password {
+            return None;
+        }
+        self.get_selected_text()
+    }
+
     /// Copy selected text to clipboard
     fn copy_selection(&self) {
-        if let Some(text) = self.get_selected_text() {
+        if let Some(text) = self.exportable_selection() {
             clipboard_copy(&text);
         }
     }
 
     /// Cut selected text (copy and delete)
     fn cut_selection(&mut self, bounds_width: f32) {
+        // A cut that cannot copy is not a cut. Refusing the gesture outright is
+        // what GtkPasswordEntry does, and it keeps Ctrl+X from quietly becoming
+        // a delete while the user believes the clipboard was filled.
+        if self.is_password {
+            return;
+        }
         if self.selection.has_selection() {
             self.copy_selection();
             self.delete(false, bounds_width); // Delete the selection
@@ -961,6 +1017,16 @@ impl Widget for TextInput {
         // Clear needs_layout flag since layout is complete
         tree.clear_needs_layout(id);
 
+        // Here rather than at construction because focus needs the tree, and
+        // this is the first moment the input is in one — the same reason Flutter
+        // makes you wait for a post-frame callback to request focus by hand.
+        if self.autofocus_pending {
+            self.autofocus_pending = false;
+            if focused_widget().is_none() {
+                request_focus(tree, id);
+            }
+        }
+
         size
     }
 
@@ -1093,7 +1159,7 @@ impl Widget for TextInput {
                 self.is_dragging = false;
                 // Select-to-copy: a completed mouse selection becomes the
                 // primary selection (middle-click paste elsewhere)
-                if let Some(text) = self.get_selected_text() {
+                if let Some(text) = self.exportable_selection() {
                     primary_copy(&text);
                 }
                 return EventResponse::Handled;
