@@ -48,9 +48,17 @@ impl MeasureCacheKey {
 /// lifetime (e.g. one entry per text-input prefix ever measured).
 const MEASURE_CACHE_CAP: usize = 8192;
 
+/// What one shaping pass tells us about a piece of text.
+#[derive(Clone, Copy, Debug)]
+pub struct Measured {
+    pub size: Size,
+    /// Distance from the top edge to the baseline of the first line.
+    pub baseline: f32,
+}
+
 pub struct TextMeasurer {
     font_system: FontSystem,
-    measure_cache: FxHashMap<MeasureCacheKey, Size>,
+    measure_cache: FxHashMap<MeasureCacheKey, Measured>,
 }
 
 impl TextMeasurer {
@@ -85,21 +93,41 @@ impl TextMeasurer {
         font_family: &FontFamily,
         font_weight: FontWeight,
     ) -> Size {
+        self.measure_full(text, font_size, max_width, font_family, font_weight)
+            .size
+    }
+
+    /// Measure, and also report where the first line sits on its baseline.
+    ///
+    /// Both come out of the same shaping pass and share one cache entry — a
+    /// baseline is not worth re-shaping for.
+    pub fn measure_full(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        max_width: Option<f32>,
+        font_family: &FontFamily,
+        font_weight: FontWeight,
+    ) -> Measured {
         let cache_key = MeasureCacheKey::new(text, font_size, max_width, font_family, font_weight);
 
         // Check cache first (no allocation on this path)
-        if let Some(&cached_size) = self.measure_cache.get(&cache_key) {
-            return cached_size;
+        if let Some(&cached) = self.measure_cache.get(&cache_key) {
+            return cached;
         }
 
-        let size = {
+        let measured = {
             let buffer = self.shape(text, font_size, max_width, font_family, font_weight);
 
             let mut width = 0.0f32;
             let mut height = 0.0f32;
+            // Where the first line sits: everything a baseline alignment
+            // needs, since that is the line a parent lines its children up on.
+            let mut baseline = None;
             for run in buffer.layout_runs() {
                 width = width.max(run.line_w);
                 height += run.line_height;
+                baseline.get_or_insert(run.line_y);
             }
 
             // Ensure minimum height for empty text
@@ -107,16 +135,21 @@ impl TextMeasurer {
                 height = font_size * 1.2;
             }
 
-            Size::new(width, height)
+            Measured {
+                size: Size::new(width, height),
+                // Empty text still sits on a line, so a lone label in a
+                // baseline row does not jump when its content clears.
+                baseline: baseline.unwrap_or(font_size),
+            }
         };
 
         // Cache the result, with wholesale eviction at the cap
         if self.measure_cache.len() >= MEASURE_CACHE_CAP {
             self.measure_cache.clear();
         }
-        self.measure_cache.insert(cache_key, size);
+        self.measure_cache.insert(cache_key, measured);
 
-        size
+        measured
     }
 
     /// Shape text into a fresh buffer.
@@ -330,6 +363,18 @@ pub fn measure_text_styled(
         .with_borrow_mut(|m| m.measure_styled(text, font_size, max_width, font_family, font_weight))
 }
 
+/// Measure text and report where its first line sits on the baseline.
+pub fn measure_text_full(
+    text: &str,
+    font_size: f32,
+    max_width: Option<f32>,
+    font_family: &FontFamily,
+    font_weight: FontWeight,
+) -> Measured {
+    TEXT_MEASURER
+        .with_borrow_mut(|m| m.measure_full(text, font_size, max_width, font_family, font_weight))
+}
+
 /// Measure text width up to a specific character index (for cursor positioning)
 pub fn measure_text_to_char(text: &str, font_size: f32, char_index: usize) -> f32 {
     TEXT_MEASURER.with_borrow_mut(|m| m.measure_to_char(text, font_size, char_index))
@@ -375,4 +420,34 @@ pub fn char_index_from_x_styled(
 ) -> usize {
     TEXT_MEASURER
         .with_borrow_mut(|m| m.char_from_x_styled(text, font_size, x, font_family, font_weight))
+}
+
+#[cfg(test)]
+mod baseline_tests {
+    use super::*;
+
+    /// A baseline sits below the ascenders and above the descenders — never
+    /// at the very bottom of the line box, which is what "align by the bottom
+    /// edge" would be. If this ever holds `height`, baseline alignment has
+    /// quietly degenerated into bottom alignment and every descender hangs
+    /// below the line the row was supposed to share.
+    #[test]
+    fn a_baseline_sits_inside_the_line_box() {
+        for font_size in [12.0f32, 16.0, 24.0, 48.0] {
+            let m = measure_text_full(
+                "Hxgjp",
+                font_size,
+                None,
+                &FontFamily::default(),
+                FontWeight::NORMAL,
+            );
+            assert!(
+                m.baseline > m.size.height * 0.5 && m.baseline < m.size.height,
+                "at {font_size}px the baseline is {} of a {} line — \
+                 that is not a baseline",
+                m.baseline,
+                m.size.height
+            );
+        }
+    }
 }

@@ -553,3 +553,30 @@ fn text_input_clips_overflowing_content() {
         render(view, 400.0, 60.0),
     );
 }
+
+/// Texts of different sizes in a row, aligned on their baselines.
+///
+/// `Start` puts every child's top edge on the same line, so a 24px label and
+/// a 12px one float at unrelated heights. `Baseline` puts them on the line
+/// they are written on, which is what reads as one sentence. The two are
+/// snapshotted together so the difference is visible as geometry, not prose.
+#[test]
+fn baseline_alignment_lines_text_up() {
+    let row = |align: CrossAlignment| {
+        container()
+            .layout(Flex::row().spacing(8.0).cross_alignment(align))
+            .child(container().font_size(24.0).child(text("Big")))
+            .child(container().font_size(12.0).child(text("small")))
+            .child(container().font_size(16.0).child(text("mid")))
+            // A box reports no baseline: it aligns by its bottom edge.
+            .child(swatch(20.0, 30.0, Color::CYAN))
+    };
+
+    let view = container()
+        .layout(Flex::column().spacing(10.0))
+        .padding(8.0)
+        .child(row(CrossAlignment::Start))
+        .child(row(CrossAlignment::Baseline));
+
+    assert_snapshot("baseline_alignment", render(view, 400.0, 160.0));
+}

@@ -147,6 +147,22 @@ cargo run --example flex_layout_test
 
 ---
 
+### baseline_alignment
+
+The four cross alignments on the same row, so the difference is visible.
+
+```bash
+cargo run --example baseline_alignment
+```
+
+**Features demonstrated:**
+- `CrossAlignment::Baseline`: text of different sizes reading as one line
+- The pair worth comparing is `End` and `Baseline` — one aligns the boxes,
+  the other the line the text is written on
+- A box carries no baseline, so it aligns by its bottom edge
+
+---
+
 ### component_example
 
 Creating reusable components with the `#[component]` macro.

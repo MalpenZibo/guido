@@ -338,6 +338,19 @@ impl Flex {
             Axis::Vertical => origin.1,
         } + initial_offset;
 
+        // Baseline alignment needs the deepest baseline in the row before it
+        // can place anything: every child shifts down by the difference
+        // between it and its own.
+        let max_baseline = if cross_align == CrossAlignment::Baseline && axis == Axis::Horizontal {
+            children
+                .iter()
+                .enumerate()
+                .map(|(i, &id)| baseline_of(tree, id, self.child_sizes[i].cross_axis(axis)))
+                .fold(0.0f32, f32::max)
+        } else {
+            0.0
+        };
+
         let mut prev_nonzero = false;
         for (i, &child_id) in children.iter().enumerate() {
             let child_size = self.child_sizes[i];
@@ -364,6 +377,13 @@ impl Flex {
                 },
                 CrossAlignment::Stretch => match axis {
                     Axis::Horizontal => origin.1,
+                    Axis::Vertical => origin.0,
+                },
+                CrossAlignment::Baseline => match axis {
+                    Axis::Horizontal => {
+                        origin.1 + max_baseline - baseline_of(tree, child_id, child_cross)
+                    }
+                    // A column has no shared line to sit on.
                     Axis::Vertical => origin.0,
                 },
             };
@@ -396,4 +416,13 @@ impl Layout for Flex {
         let direction = self.direction.get();
         self.layout_axis(tree, children, constraints, origin, direction)
     }
+}
+
+/// Where a child sits on its baseline, for the purpose of lining a row up.
+///
+/// Leaves that draw text report one during layout. Anything else — a box, an
+/// image — is treated as sitting on its own bottom edge, which is how CSS
+/// aligns a baseline-less box among text.
+fn baseline_of(tree: &Tree, id: WidgetId, cross_size: f32) -> f32 {
+    tree.baseline(id).unwrap_or(cross_size)
 }

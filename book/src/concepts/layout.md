@@ -86,6 +86,27 @@ Flex::row().cross_alignment(CrossAlignment::Center)
 | `Center` | Center on cross axis |
 | `End` | Align to end of cross axis |
 | `Stretch` | Stretch to fill cross axis |
+| `Baseline` | Line children up on the baseline of their text |
+
+### Baseline
+
+Text of different sizes in a row does not read as one line when the tops are
+aligned — a 24px label and a 12px one float at unrelated heights. `Baseline`
+puts them on the line they are written on:
+
+```rust
+container()
+    .layout(Flex::row().spacing(8.0).cross_alignment(CrossAlignment::Baseline))
+    .children([
+        container().font_size(24.0).child(text("28")),
+        container().font_size(12.0).child(text("°C")),
+    ])
+```
+
+A box reports no baseline of its own, so it is aligned by its bottom edge,
+which is what CSS does with it. A container takes the baseline of its
+content, so wrapping a text for styling does not lose the alignment. In a
+column there is no shared line to sit on, and `Baseline` behaves as `Start`.
 
 ### Visual Example (Row)
 

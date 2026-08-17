@@ -1,0 +1,25 @@
+node 0,0 160.52x86
+  node 0,0 144.52x30 at 8,8
+    node 0,0 38.37x28.8
+      node 0,0 38.37x28.8
+        draw text <not snapshotted>
+    node 0,0 31.96x14.4 at 46.37,0
+      node 0,0 31.96x14.4
+        draw text <not snapshotted>
+    node 0,0 30.19x19.2 at 86.33,0
+      node 0,0 30.19x19.2
+        draw text <not snapshotted>
+    node 0,0 20x30 at 124.52,0
+      draw rect 0,0 20x30 fill=#00ffffff radius=0/0/0/0
+  node 0,0 144.52x30 at 8,48
+    node 0,0 38.37x28.8 at 0,7.29
+      node 0,0 38.37x28.8
+        draw text <not snapshotted>
+    node 0,0 31.96x14.4 at 46.37,18.65
+      node 0,0 31.96x14.4
+        draw text <not snapshotted>
+    node 0,0 30.19x19.2 at 86.33,14.86
+      node 0,0 30.19x19.2
+        draw text <not snapshotted>
+    node 0,0 20x30 at 124.52,0
+      draw rect 0,0 20x30 fill=#00ffffff radius=0/0/0/0

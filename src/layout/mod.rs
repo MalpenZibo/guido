@@ -311,4 +311,12 @@ pub enum CrossAlignment {
     Center,
     End,
     Stretch,
+    /// Line the children up on the baseline of their first line of text, so
+    /// labels of different sizes read as one line instead of floating at
+    /// unrelated heights.
+    ///
+    /// Only meaningful across a row; in a column it behaves as `Start`.
+    /// A child that reports no baseline — a box, an image — is aligned by its
+    /// bottom edge, which is what CSS does with it.
+    Baseline,
 }
