@@ -457,7 +457,89 @@ paid twice per scope. One scope would do.
 
 **Value:** low but free. **Risk:** none.
 
-## II.7 Explicitly not recommended
+## II.7 The container is collecting properties that belong to one widget
+
+`TextStyle` now holds three properties whose own doc comments admit what they
+are (`src/widgets/text_style.rs`):
+
+```rust
+/// Caret colour. Only `TextInput` reads it.
+pub cursor_color: Option<Signal<Color>>,
+/// Selection highlight colour. Only `TextInput` reads it.
+pub selection_color: Option<Signal<Color>>,
+/// Colour of an input's placeholder. Only `TextInput` reads it, …
+pub placeholder_color: Option<Signal<Color>>,
+```
+
+`placeholder_color` did not start this; it is the third, and the one where it
+became visible.
+
+**The smell in its purest form:** one feature now lives in two places. The text
+is declared on the widget — `text_input(v).placeholder("Search")` — and its
+colour on an ancestor — `container().placeholder_color(gray)`. Nothing about
+"placeholder" tells a reader to look in two different types for it.
+
+### The line being crossed
+
+`TextStyle` mixes two different kinds of thing:
+
+- **Genuinely inherited.** `color`, `font_size`, `font_family`, `font_weight`,
+  `stroke`, `shadow`. *Any* text-bearing descendant reads them — `Text`,
+  `TextInput`, and whatever text-bearing leaf comes next. This is the CSS
+  cascade and it is a sound concept.
+- **A remote control for one widget.** `cursor_color`, `selection_color`,
+  `placeholder_color`. There is no cascade: exactly one widget type reads them.
+  They sit on the container only so they can be set from a distance.
+
+Two tests separate them:
+
+1. **Does more than one kind of descendant read it?**
+2. **Does it participate in the container's state-layer and animation
+   machinery?** This is the *original* justification, from `text_style.rs`'s own
+   module docs: text colour lives on the container so it reaches
+   `hover_state(|s| s.text_color(…))` and `animate_text_color` instead of
+   needing a second copy of both. Nobody animates a placeholder colour on hover.
+   **The justification that legitimises `text_color` does not transfer.**
+
+### Why it happened
+
+Two forces, neither of them carelessness:
+
+- **A forced move.** Leaves carry no style of their own (§I.3), so when a
+  `TextInput` property is needed, the container is the only place it can go. The
+  constraint leaks into the API. This is the second time that deferred decision
+  has presented a bill; a third occurrence is grounds to reopen it.
+- **Convention pressure.** `placeholder_color` went to the container *to match
+  the existing convention*. The convention itself now generates the wrong
+  addition, automatically, for whatever property comes next.
+
+### Proposed
+
+1. **Close the inherited set** at the six that genuinely cascade. A deliberately
+   small closed set, as CSS itself keeps it.
+2. **Widget-specific properties go on the widget**:
+   `text_input(v).placeholder_color(gray)`. Today, styling an input's
+   placeholder means looking on the *container* — nobody guesses that.
+3. **Serve "set it once for the whole app" with context, not with the
+   container.** That need is *theming*, not cascade, and
+   `src/reactive/context.rs` already exists with theming as its documented use
+   case. `TextInput` would resolve: own declaration → theme from context →
+   default (today's fallback, text colour at reduced alpha, is already a good
+   default and removes most of the need). This scales to toggle, checkbox and
+   slider without any of their properties reaching the container.
+4. **Move `cursor_color` and `selection_color` too.** Moving only the placeholder
+   leaves an inconsistent API and the same pressure to add the next one. The
+   force that created the problem is consistency; it has to be turned around.
+
+**Honest tradeoff:** context in guido is app-global, not per-subtree, so this
+gives up per-branch overrides for these properties. Unlikely to matter for a
+caret or a placeholder, but it is a real thing given up, not a free win.
+
+**Value:** high — it stops an unbounded growth axis on the container (leaf types
+× their properties) before toggle/checkbox/slider arrive. **Risk:** low, and it
+is independent of Part I.
+
+## II.8 Explicitly not recommended
 
 **The reactive subscriber registry** (`src/reactive/invalidation.rs`). Expected
 to be sloppy, it is not: a forward index (signal → subscribers), a reverse index
