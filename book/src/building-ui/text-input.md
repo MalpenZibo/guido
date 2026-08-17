@@ -82,6 +82,27 @@ text_input(password)
     .mask_char('*')
 ```
 
+## Initial Focus
+
+A screen that exists to be typed into should not make the user click first — and
+on a surface with no pointer there may be nothing to click *with*:
+
+```rust
+text_input(password)
+    .password(true)
+    .autofocus()
+```
+
+The input takes the keyboard at its first layout, and only if no widget already
+holds focus. That second condition is what makes it safe: an input appearing
+later never pulls focus off the one being typed into, two autofocusing inputs do
+not fight (the first laid out wins), and the same view built once per output — a
+lock screen with two monitors — ends up with one focused field rather than
+whichever was laid out last.
+
+The offer is made once. A relayout does not ask again, so a resize or a scale
+change cannot drag focus back from wherever the user has since put it.
+
 ## Callbacks
 
 ### On Change
@@ -240,16 +261,9 @@ fn login_form() -> Container {
 text_input(signal: Signal<String>) -> TextInput
 
 impl TextInput {
-    pub fn text_color<M>(self, color: impl IntoSignal<Color, M>) -> Self;
-    pub fn cursor_color<M>(self, color: impl IntoSignal<Color, M>) -> Self;
-    pub fn selection_color<M>(self, color: impl IntoSignal<Color, M>) -> Self;
-    pub fn font_size<M>(self, size: impl IntoSignal<f32, M>) -> Self;
-    pub fn font_family<M>(self, family: impl IntoSignal<FontFamily, M>) -> Self;
-    pub fn font_weight<M>(self, weight: impl IntoSignal<FontWeight, M>) -> Self;
-    pub fn bold(self) -> Self;      // Shorthand for FontWeight::BOLD
-    pub fn mono(self) -> Self;      // Shorthand for FontFamily::Monospace
     pub fn password(self, enabled: bool) -> Self;
     pub fn mask_char(self, c: char) -> Self;
+    pub fn autofocus(self) -> Self;
     pub fn on_change<F: Fn(&str) + 'static>(self, callback: F) -> Self;
     pub fn on_submit<F: Fn(&str) + 'static>(self, callback: F) -> Self;
 }
