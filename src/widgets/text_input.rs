@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::default_font_family;
-use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
+use crate::jobs::{JobRequest, JobType, RequiredJob, request_job, request_job_at};
 use crate::layout::{Constraints, Size};
 use crate::reactive::{
     CursorIcon, OptionSignalExt, RwSignal, clipboard_copy, clipboard_paste, has_focus,
@@ -210,6 +210,10 @@ pub struct TextInput {
     is_password: bool,
     mask_char: char,
 
+    /// Whether a caret is drawn at all. Off costs nothing: no caret, no blink,
+    /// nothing to wake the loop for.
+    caret: bool,
+
     // Selection state
     selection: Selection,
 
@@ -257,6 +261,7 @@ impl TextInput {
             cached_font_weight: FontWeight::NORMAL,
             is_password: false,
             mask_char: '•',
+            caret: true,
             selection: Selection::new(0),
             cursor_visible: true,
             last_cursor_toggle: Instant::now(),
@@ -278,6 +283,21 @@ impl TextInput {
     /// Set custom mask character for password mode (default: '•')
     pub fn mask_char(mut self, c: char) -> Self {
         self.mask_char = c;
+        self
+    }
+
+    /// Draw no caret, keeping the focus and everything it carries — click to
+    /// position, drag to select, the keyboard.
+    ///
+    /// For a field where the caret says nothing: a masked one, where every
+    /// character looks the same and you are always at the end. swaylock draws no
+    /// caret for that reason.
+    ///
+    /// It is also the cheapest field there is. A blinking caret is the one thing
+    /// a still screen redraws on its own, twice a second, forever; without it an
+    /// idle surface wakes the loop for nothing at all.
+    pub fn no_caret(mut self) -> Self {
+        self.caret = false;
         self
     }
 
@@ -417,22 +437,31 @@ impl TextInput {
         overflow
     }
 
-    /// Update cursor blink state.
-    /// Returns true if the cursor is actively blinking (widget is focused).
+    /// Advance the blink, and ask to be woken when it next changes.
+    ///
+    /// Returns whether the caret is drawn at all.
+    ///
+    /// The wake is *scheduled*, not animated. Asking for an animation frame —
+    /// which is what this did — pins the loop at 60 fps for a square wave that
+    /// changes twice a second, so 113 frames out of 114 repaint the same pixels.
+    /// A focused field is the normal state of a lock screen, and that ran all
+    /// night.
     fn update_cursor_blink(&mut self, id: WidgetId) -> bool {
-        if has_focus(id) {
-            let now = Instant::now();
-            if now.duration_since(self.last_cursor_toggle) >= Duration::from_millis(CURSOR_BLINK_MS)
-            {
-                self.cursor_visible = !self.cursor_visible;
-                self.last_cursor_toggle = now;
-            }
-            // Keep requesting animation frames for blinking
-            request_job(id, JobRequest::Animation(RequiredJob::Paint));
-            true
-        } else {
-            false
+        if !self.caret || !has_focus(id) {
+            return false;
         }
+        let period = Duration::from_millis(CURSOR_BLINK_MS);
+        let now = Instant::now();
+        if now.duration_since(self.last_cursor_toggle) >= period {
+            self.cursor_visible = !self.cursor_visible;
+            self.last_cursor_toggle = now;
+        }
+        request_job_at(
+            id,
+            JobRequest::Animation(RequiredJob::Paint),
+            self.last_cursor_toggle + period,
+        );
+        true
     }
 
     /// Reset cursor to visible (called on input)
@@ -1025,9 +1054,10 @@ impl Widget for TextInput {
             Event::MouseDown { x, y, button }
                 if bounds.contains(*x, *y) && *button == MouseButton::Left =>
             {
-                // Request focus and start cursor blink animation
+                // Focus, then repaint to show the caret where the click landed.
+                // The blink schedules its own next wake from `paint`.
                 request_focus(tree, id);
-                request_job(id, JobRequest::Animation(RequiredJob::Paint));
+                request_job(id, JobRequest::Paint);
 
                 // Set cursor position
                 let char_index = self.char_index_at_x(*x, bounds);
@@ -1115,4 +1145,78 @@ impl Widget for TextInput {
 /// ```
 pub fn text_input(signal: RwSignal<String>) -> TextInput {
     TextInput::new(signal)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::jobs::{clear_pending_jobs, next_deadline, queued_job_types};
+    use crate::layout::Constraints;
+    use crate::reactive::create_signal;
+
+    /// A laid-out input, focused unless told otherwise.
+    fn field(input: TextInput, focused: bool) -> (Tree, WidgetId) {
+        clear_pending_jobs();
+        crate::reactive::focus::clear_focus();
+
+        let mut tree = Tree::new();
+        let id = tree.register(Box::new(input));
+        tree.with_widget_mut(id, |w, id, t| w.register_children(t, id));
+        tree.with_widget_mut(id, |w, id, t| {
+            w.layout(t, id, Constraints::new(0.0, 0.0, 200.0, 40.0))
+        });
+        if focused {
+            request_focus(&tree, id);
+        }
+        clear_pending_jobs();
+        (tree, id)
+    }
+
+    fn advance(tree: &mut Tree, id: WidgetId) -> bool {
+        tree.with_widget_mut(id, |w, id, t| w.advance_animations(t, id))
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn a_blinking_caret_asks_to_be_woken_rather_than_polled() {
+        let (mut tree, id) = field(text_input(create_signal(String::new())), true);
+
+        let blinking = advance(&mut tree, id);
+
+        assert!(blinking);
+        assert!(
+            next_deadline().is_some(),
+            "the caret has to schedule its next toggle"
+        );
+        assert!(
+            !queued_job_types(id).contains(&JobType::Animation),
+            "and must not queue an animation job, which is what pinned the loop \
+             at 60 fps to redraw the same pixels 113 frames out of 114"
+        );
+    }
+
+    #[test]
+    fn a_field_without_a_caret_asks_for_nothing() {
+        let (mut tree, id) = field(text_input(create_signal(String::new())).no_caret(), true);
+
+        let blinking = advance(&mut tree, id);
+
+        assert!(!blinking);
+        assert_eq!(
+            next_deadline(),
+            None,
+            "no caret, no blink, nothing to wake the loop for — this is what a \
+             lock screen costs while nobody touches it"
+        );
+    }
+
+    #[test]
+    fn an_unfocused_field_asks_for_nothing() {
+        let (mut tree, id) = field(text_input(create_signal(String::new())), false);
+
+        let blinking = advance(&mut tree, id);
+
+        assert!(!blinking);
+        assert_eq!(next_deadline(), None);
+    }
 }

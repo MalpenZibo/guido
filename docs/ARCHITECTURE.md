@@ -312,6 +312,20 @@ When adding a new deferred-work queue, either drain it in the loop after
 the flush point AND wake through one of the two mechanisms above, or make
 it a calloop source of its own.
 
+**Main thread, but due later → `jobs::request_job_at()`.**
+Work owed to a *clock* rather than to a frame — the blinking caret — is held in
+`SCHEDULED_JOBS`, outside the queues, and deliberately does not make
+`has_pending_jobs()` true. The wakeup is the dispatch timeout itself: the loop
+asks `jobs::next_deadline()`, blocks exactly that long, and `promote_due_jobs()`
+turns whatever is due into an ordinary job at the top of the next iteration.
+
+This is why a scheduled job is not named in `queued_but_unwoken()`: nobody owes it
+a ping, because the loop is not late — it is waiting on purpose, with a bounded
+timeout. The alternative is what the caret used to do: ask for an animation frame,
+which means "advance me every frame", pinning the loop at 60 fps for a square wave
+that changes twice a second and repainting the same pixels 113 frames out of 114.
+A focused input is the resting state of a lock screen, so that ran all night.
+
 **The contract is checked, not just written down.** Debug builds assert it at
 the one moment where breaking it is fatal: `queued_but_unwoken()` in
 `src/lib.rs` names every queue the loop drains, and nothing may be

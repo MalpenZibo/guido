@@ -1227,6 +1227,9 @@ impl App {
             let any_surface_needs_init = wayland_state.any_surface_needs_render();
             let force_render = any_surface_needs_init;
 
+            // Anything whose deadline has arrived becomes ordinary pending work.
+            jobs::promote_due_jobs();
+
             // Check if we need to actively poll: jobs pushed during the
             // previous frame, or a wake request that landed after this
             // iteration consumed the flag (blocking on a set flag would
@@ -1236,9 +1239,16 @@ impl App {
 
             // Dispatch events from calloop:
             // - If polling needed (animations/callbacks/init), use timeout
+            // - If something is due later (a blinking caret), sleep until then
             // - Otherwise block until event (Wayland or ping wakeup)
             let timeout = if needs_polling {
                 Some(std::time::Duration::from_millis(16)) // ~60fps for animations
+            } else if let Some(deadline) = jobs::next_deadline() {
+                // Not polling — waiting. A caret blinks twice a second, so this
+                // sleeps ~530 ms and wakes once, where treating the schedule as
+                // pending work would spin at 60 fps to repaint nothing 113 times
+                // out of 114.
+                Some(deadline.saturating_duration_since(std::time::Instant::now()))
             } else {
                 // About to block with nothing left to wake us but the
                 // compositor. Every queue must be empty by now — see
