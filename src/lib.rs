@@ -190,7 +190,7 @@ use smithay_client_toolkit::reexports::client::QueueHandle;
 use smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface;
 
 use crate::{
-    jobs::{get_exit_request, has_pending_jobs, init_wakeup, process_jobs, take_frame_request},
+    jobs::{get_exit_request, has_pending_jobs, init_wakeup, process_jobs, take_wake_request},
     tree::{DamageRegion, Tree, WidgetId},
 };
 
@@ -537,7 +537,7 @@ fn run_jobs(
 /// Why an empty result is the only correct answer at the blocking point: each
 /// of these is drained unconditionally, once per iteration. Anything still
 /// queued was therefore produced *after* its own drain, and the only thing
-/// that can bring the loop back to drain it is a frame request — which would
+/// that can bring the loop back to drain it is a wake request — which would
 /// have kept it from blocking in the first place. So a non-empty queue here
 /// means nobody asked to be woken, and the app is about to go deaf until an
 /// unrelated compositor event happens along. That is precisely the shape of
@@ -547,7 +547,7 @@ fn run_jobs(
 fn queued_but_unwoken() -> Option<&'static str> {
     [
         ("widget jobs", has_pending_jobs()),
-        ("a frame request", jobs::frame_request_pending()),
+        ("a wake request", jobs::wake_request_pending()),
         ("background signal writes", reactive::bg_writes_pending()),
         ("owner disposals", reactive::owner::disposals_pending()),
         ("surface commands", surface::surface_commands_pending()),
@@ -889,7 +889,7 @@ fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry)
         // repainted next frame instead of staying stale, restore full
         // damage, and request that frame.
         tree.set_full_damage(surface.widget_id);
-        jobs::request_frame();
+        jobs::wake_loop();
         return;
     }
 
@@ -934,7 +934,7 @@ struct FrameContext<'a> {
 fn render_surface(
     ctx: &mut FrameContext,
     layout_roots: &mut Vec<WidgetId>,
-    frame_requested: bool,
+    woken: bool,
     active_roots: &rustc_hash::FxHashSet<WidgetId>,
 ) {
     let Some(frame) = open_frame(ctx) else {
@@ -970,7 +970,7 @@ fn render_surface(
     // Nothing moved and nothing is starting up: there is no frame to draw.
     let has_pending_layouts = !layout_roots.is_empty();
     if !(frame.force_render_surface
-        || frame_requested
+        || woken
         || has_pending_layouts
         || geometry.needs_resize
         || geometry.scale_changed
@@ -1226,11 +1226,11 @@ impl App {
             let force_render = any_surface_needs_init;
 
             // Check if we need to actively poll: jobs pushed during the
-            // previous frame, or a frame request that landed after this
+            // previous frame, or a wake request that landed after this
             // iteration consumed the flag (blocking on a set flag would
-            // suppress all later pings — see frame_request_pending).
+            // suppress all later pings — see wake_request_pending).
             let has_pending = has_pending_jobs();
-            let needs_polling = has_pending || force_render || jobs::frame_request_pending();
+            let needs_polling = has_pending || force_render || jobs::wake_request_pending();
 
             // Dispatch events from calloop:
             // - If polling needed (animations/callbacks/init), use timeout
@@ -1258,7 +1258,7 @@ impl App {
                 return ExitReason::Error(platform::PlatformError::ConnectionLost);
             }
 
-            // Reset ping coalescing: the first request_frame from here on
+            // Reset ping coalescing: the first wake_loop from here on
             // sends a fresh ping so the next dispatch can't block on
             // work queued during this iteration.
             jobs::mark_loop_awake();
@@ -1319,12 +1319,12 @@ impl App {
             }
 
             // Flush background-thread signal writes once per frame (queued via WriteSignal).
-            // Must run before take_frame_request() so that signal changes from bg writes
-            // are processed into jobs before we check the frame request flag.
+            // Must run before take_wake_request() so that signal changes from bg writes
+            // are processed into jobs before we check the wake request.
             reactive::flush_bg_writes();
 
-            // Check frame request once for all surfaces (not per-surface)
-            let frame_requested = take_frame_request();
+            // Take the wake request once for all surfaces (not per-surface)
+            let woken = take_wake_request();
 
             // Render each surface (no renderer yet means no surface has a
             // GPU state — nothing can be rendered this iteration)
@@ -1368,7 +1368,7 @@ impl App {
                         tree: &mut self.tree,
                         qh: &qh,
                     };
-                    render_surface(&mut ctx, layout_roots, frame_requested, &active_roots);
+                    render_surface(&mut ctx, layout_roots, woken, &active_roots);
                 }
             }
 

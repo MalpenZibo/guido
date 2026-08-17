@@ -48,38 +48,36 @@ thread_local! {
     /// Current requested cursor
     static CURRENT_CURSOR: RefCell<CursorIcon> = const { RefCell::new(CursorIcon::Default) };
 
-    /// Flag indicating cursor was changed and needs to be synced to Wayland
-    static CURSOR_CHANGED: RefCell<bool> = const { RefCell::new(false) };
+    /// A shape waiting to be handed to the compositor. Being empty *is* the
+    /// "nothing to sync" state — no separate dirty flag to keep in step.
+    static OUTGOING_CURSOR: RefCell<Option<CursorIcon>> = const { RefCell::new(None) };
 }
 
 /// Set the cursor to display.
 /// This should be called by widgets when they want to change the cursor appearance.
 pub fn set_cursor(cursor: CursorIcon) {
-    CURRENT_CURSOR.with(|c| {
+    let changed = CURRENT_CURSOR.with(|c| {
         let current = *c.borrow();
-        if current != cursor {
-            *c.borrow_mut() = cursor;
-            CURSOR_CHANGED.with(|changed| {
-                *changed.borrow_mut() = true;
-            });
+        if current == cursor {
+            return false;
         }
+        *c.borrow_mut() = cursor;
+        true
     });
+    if changed {
+        OUTGOING_CURSOR.with(|out| {
+            *out.borrow_mut() = Some(cursor);
+        });
+        // Queueing and waking are one gesture — see `jobs::wake_loop`.
+        crate::jobs::wake_loop();
+    }
 }
 
-/// Take pending cursor change (returns cursor if it was changed since last call).
-/// Called by the main event loop to sync cursor to Wayland.
+/// Take the shape waiting to go out to the compositor, if any.
+///
+/// Called by the main event loop to sync the cursor to Wayland.
 pub fn take_cursor_change() -> Option<CursorIcon> {
-    let changed = CURSOR_CHANGED.with(|c| {
-        let was_changed = *c.borrow();
-        *c.borrow_mut() = false;
-        was_changed
-    });
-
-    if changed {
-        Some(CURRENT_CURSOR.with(|c| *c.borrow()))
-    } else {
-        None
-    }
+    OUTGOING_CURSOR.with(|out| out.borrow_mut().take())
 }
 
 /// Reset cursor state to defaults.
@@ -87,7 +85,7 @@ pub fn take_cursor_change() -> Option<CursorIcon> {
 /// Called during `App::drop()` to clear cursor state.
 pub(crate) fn reset_cursor() {
     CURRENT_CURSOR.with(|c| *c.borrow_mut() = CursorIcon::Default);
-    CURSOR_CHANGED.with(|c| *c.borrow_mut() = false);
+    OUTGOING_CURSOR.with(|o| *o.borrow_mut() = None);
 }
 
 /// Get the current cursor without clearing the change flag.
@@ -99,5 +97,5 @@ pub fn get_current_cursor() -> CursorIcon {
 ///
 /// Part of the loop's wakeup check — see `queued_but_unwoken` in `lib.rs`.
 pub(crate) fn cursor_change_pending() -> bool {
-    CURSOR_CHANGED.with(|c| *c.borrow())
+    OUTGOING_CURSOR.with(|o| o.borrow().is_some())
 }

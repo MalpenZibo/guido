@@ -109,13 +109,13 @@ where
         lock.factory = Some(Box::new(move |info| Box::new(widget_fn(info))));
         lock.lock_requested = true;
     });
-    crate::jobs::request_frame();
+    crate::jobs::wake_loop();
 }
 
 /// Unlock the session and drop all lock surfaces.
 pub fn unlock_session() {
     LOCK.with(|lock| lock.borrow_mut().unlock_requested = true);
-    crate::jobs::request_frame();
+    crate::jobs::wake_loop();
 }
 
 /// Drive the session-lock state machine. Called once per main-loop

@@ -8,11 +8,11 @@
 //! suppressed because some flag was already set, then absorbed by an
 //! unrelated consumer) cannot occur by construction.
 //!
-//! Main-thread code keeps using `jobs::request_frame()`, whose ping is
+//! Main-thread code keeps using `jobs::wake_loop()`, whose ping is
 //! coalesced once per loop iteration (see `jobs::mark_loop_awake`).
 //!
 //! When no loop is running (setup phase, tests, teardown) [`notify`] falls
-//! back to the frame-request ping, which degrades to a plain flag there.
+//! back to the wake ping, which degrades to a plain flag there.
 
 use std::sync::Mutex;
 
@@ -52,7 +52,7 @@ pub(crate) fn sender() -> Option<Sender<IngressMessage>> {
     INGRESS_SENDER.lock().ok().and_then(|g| g.as_ref().cloned())
 }
 
-/// Send a message to the main loop, falling back to the frame-request ping
+/// Send a message to the main loop, falling back to the wake ping
 /// when no loop is running.
 pub(crate) fn notify(message: IngressMessage) {
     match sender() {
@@ -60,10 +60,10 @@ pub(crate) fn notify(message: IngressMessage) {
             if tx.send(message).is_err() {
                 // Receiver died (loop shutting down) — fall back so pending
                 // work is at least flagged for a future loop.
-                crate::jobs::request_frame();
+                crate::jobs::wake_loop();
             }
         }
-        None => crate::jobs::request_frame(),
+        None => crate::jobs::wake_loop(),
     }
 }
 

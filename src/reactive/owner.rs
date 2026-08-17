@@ -398,7 +398,7 @@ pub fn dispose_owner(id: OwnerId) {
     PENDING_DISPOSALS.with(|v| v.borrow_mut().push(id));
     // Wake the loop so a disposal requested in a quiet moment (compositor
     // dismissal with no other activity) is not postponed indefinitely
-    crate::jobs::request_frame();
+    crate::jobs::wake_loop();
 }
 
 /// Run every pending deferred disposal. Called by the main loop at a safe

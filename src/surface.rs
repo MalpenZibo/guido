@@ -661,7 +661,7 @@ pub(crate) fn push_surface_command(cmd: SurfaceCommand) {
     SURFACE_COMMANDS.with(|cmds| {
         cmds.borrow_mut().push(cmd);
     });
-    crate::jobs::request_frame();
+    crate::jobs::wake_loop();
 }
 
 /// Reset the surface command queue.

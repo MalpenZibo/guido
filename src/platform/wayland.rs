@@ -715,7 +715,7 @@ impl CompositorHandler for WaylandState {
                 surface_state.first_frame_presented = true;
             }
             // Wake the loop so a dirty surface renders promptly
-            crate::jobs::request_frame();
+            crate::jobs::wake_loop();
         }
     }
 }
