@@ -1442,6 +1442,7 @@ mod tests {
                 ))),
                 cursor_color: Some(create_stored(Color::WHITE)),
                 selection_color: Some(create_stored(Color::BLACK)),
+                placeholder_color: Some(create_stored(Color::WHITE)),
             }),
         );
 

@@ -563,6 +563,16 @@ impl Container {
         self
     }
 
+    /// Set the placeholder colour of any
+    /// [`TextInput`](crate::widgets::TextInput) below this container.
+    ///
+    /// Defaults to the inherited text colour at reduced alpha, which is what a
+    /// placeholder is: the same text, quieter.
+    pub fn placeholder_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.text_mut().placeholder_color = Some(color.into_signal());
+        self
+    }
+
     /// Set the corner radius in logical pixels.
     ///
     /// Combined with [`corner_curvature()`](Self::corner_curvature) to control corner shape.
