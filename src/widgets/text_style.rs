@@ -104,6 +104,18 @@ impl TextStroke {
     }
 }
 
+/// How far apart neighbouring shadow copies may land, in logical pixels.
+///
+/// Wider than this and the copies stop blending into one halo — see
+/// [`TextShadow::samples`].
+const SAMPLE_SPACING: f32 = 2.0;
+
+/// Roughly the most copies one shadow may cost. The spacing is derived from it,
+/// so a larger radius spreads the same budget thinner instead of costing more —
+/// the realised count lands about a third above this, since each ring rounds its
+/// tap count up and none goes below eight.
+const SAMPLE_BUDGET: usize = 128;
+
 /// A soft shadow cast by the glyphs, as CSS `text-shadow`.
 ///
 /// Usually the better of the two for legibility over a photograph: it darkens
@@ -129,13 +141,25 @@ impl TextShadow {
 
     /// The offsets and colours to draw the glyphs at, back to front.
     ///
-    /// Same trick as the stroke, and the approximation lands far better here:
-    /// a shadow is already soft and low-contrast, so the banding a ring of
-    /// samples produces is invisible where a scalloped stroke would not be.
-    /// The rings composite with ordinary source-over blending, so they do not
-    /// sum to a gaussian — they saturate towards the centre, which is the
-    /// shape a shadow wants anyway.
-    pub(crate) fn samples(&self) -> SmallVec<[(f32, f32, Color); 25]> {
+    /// Same trick as the stroke, applied to a *disc* rather than a couple of
+    /// rings: rings every [`SAMPLE_SPACING`] out to the radius, each with enough
+    /// taps that neighbouring copies land that far apart along it too. Alpha
+    /// falls off with distance, and the copies composite with ordinary
+    /// source-over blending, so they do not sum to a gaussian — they saturate
+    /// towards the centre, which is the shape a shadow wants anyway.
+    ///
+    /// The spacing is the whole game. Two rings of twelve taps — what this used
+    /// to be — leaves five-pixel gaps at blur 10, and then the copies stop
+    /// reading as one halo: a glyph's square features, a colon's dots or the
+    /// stem of a 4, come out as a mosaic of separate rectangles. Round glyphs
+    /// hide it, which is why it survived review. Filling the disc costs about
+    /// four times the draws (fill rate only — every copy re-uses the same glyph
+    /// rasters, only the position differs), and past [`SAMPLE_BUDGET`] the
+    /// spacing widens rather than the count growing without bound, so a very
+    /// large radius degrades towards the old look instead of costing hundreds of
+    /// draws. That ceiling is where the honest fix takes over: a dilate and blur
+    /// on an offscreen mask, not more taps.
+    pub(crate) fn samples(&self) -> SmallVec<[(f32, f32, Color); 32]> {
         let (ox, oy) = self.offset;
         let mut out = SmallVec::new();
 
@@ -144,21 +168,39 @@ impl TextShadow {
             return out;
         }
 
-        // Outermost first: the faint wide ring, then the tighter one, then the
-        // solid core on top.
-        let taps = (self.blur * 1.5).clamp(8.0, 12.0) as usize;
-        for (radius, alpha) in [(self.blur, 0.35), (self.blur * 0.5, 0.6)] {
+        // A disc of radius r at this spacing holds about πr²/spacing² samples,
+        // so this is the spacing that fits the budget for the radius asked for.
+        let spacing =
+            SAMPLE_SPACING.max(self.blur * (std::f32::consts::PI / SAMPLE_BUDGET as f32).sqrt());
+        let rings = (self.blur / spacing).ceil().max(1.0);
+
+        // Outermost first: each copy paints over the ones before it, so the
+        // faint wide ones have to go down before the core.
+        for ring in (1..=rings as usize).rev() {
+            let radius = self.blur * ring as f32 / rings;
+            let taps = ((std::f32::consts::TAU * radius / spacing).ceil() as usize).max(8);
+            let color = self.color.with_alpha(self.ring_alpha(radius, rings));
             for i in 0..taps {
                 let angle = std::f32::consts::TAU * i as f32 / taps as f32;
-                out.push((
-                    ox + radius * angle.cos(),
-                    oy + radius * angle.sin(),
-                    self.color.with_alpha(self.color.a * alpha),
-                ));
+                out.push((ox + radius * angle.cos(), oy + radius * angle.sin(), color));
             }
         }
+        // The core keeps the colour as asked, unscaled: it sits under the fill,
+        // so it is not what the eye reads as the shadow's strength, and dimming
+        // it only made a tight blur weaker than the same shadow with none.
         out.push((ox, oy, self.color));
         out
+    }
+
+    /// How opaque one copy on the ring at `radius` is.
+    ///
+    /// A gaussian in the distance, divided by how many rings there are to stack:
+    /// without that, a wide blur — many more rings, all overlapping — would come
+    /// out as a slab where a tight one is a halo.
+    fn ring_alpha(&self, radius: f32, rings: f32) -> f32 {
+        const PEAK: f32 = 0.6;
+        let t = radius / self.blur;
+        (self.color.a * PEAK / rings.sqrt() * (-2.0 * t * t).exp()).min(self.color.a)
     }
 }
 
