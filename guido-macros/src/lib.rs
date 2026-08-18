@@ -10,7 +10,7 @@ use syn::{DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro
 ///
 /// # Attributes on parameters
 /// - No attribute — standard prop, `Signal<T>`, default = `create_stored(Default::default())`
-/// - `#[prop(default = "expr")]` — standard prop with custom default
+/// - `#[prop(default = <expr>)]` — standard prop with custom default
 /// - `#[prop(callback)]` — callback prop. Use `()` for `Fn()`, or `fn(T1, T2)` for typed params
 /// - `#[prop(children)]` — children support via `ChildrenSource`
 /// - `#[prop(slot)]` — named widget slot
@@ -20,9 +20,9 @@ use syn::{DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro
 /// #[component]
 /// pub fn button(
 ///     label: String,
-///     #[prop(default = "Color::rgb(0.3, 0.3, 0.4)")]
+///     #[prop(default = Color::rgb(0.3, 0.3, 0.4))]
 ///     background: Color,
-///     #[prop(default = "8.0")]
+///     #[prop(default = 8.0)]
 ///     padding: f32,
 ///     #[prop(callback)]
 ///     on_click: (),
@@ -107,29 +107,12 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 } else if meta.path().is_ident("slot") {
                     is_slot = true;
                 } else if meta.path().is_ident("default") {
+                    // The value is an ordinary Rust expression. It used to be
+                    // accepted quoted as well, which made a string literal
+                    // unspellable: `default = "Guest"` parsed its own contents
+                    // and asked for a variable called Guest.
                     if let Meta::NameValue(nv) = meta {
-                        // If the value is a string literal, parse its contents as an expression.
-                        // This supports `#[prop(default = "Color::RED")]` syntax where the string
-                        // contains arbitrary Rust expressions.
-                        if let Expr::Lit(syn::ExprLit {
-                            lit: syn::Lit::Str(lit_str),
-                            ..
-                        }) = &nv.value
-                        {
-                            match lit_str.parse::<Expr>() {
-                                Ok(expr) => default_value = Some(expr),
-                                Err(e) => {
-                                    return syn::Error::new_spanned(
-                                        lit_str,
-                                        format!("failed to parse default value: {e}"),
-                                    )
-                                    .to_compile_error()
-                                    .into();
-                                }
-                            }
-                        } else {
-                            default_value = Some(nv.value.clone());
-                        }
+                        default_value = Some(nv.value.clone());
                     } else {
                         return syn::Error::new_spanned(meta, "expected `default = <expr>`")
                             .to_compile_error()

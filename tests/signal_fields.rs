@@ -237,3 +237,17 @@ fn test_where_clause_generic() {
     });
     assert_eq!(signals.data.get(), vec![1, 2, 3]);
 }
+
+/// A string literal is a default like any other. It used to be impossible:
+/// the quoted form was parsed as Rust source, so `default = "Guest"` compiled
+/// to a reference to a variable named `Guest`.
+#[test]
+fn a_component_prop_can_default_to_a_string_literal() {
+    #[guido::component]
+    fn greeting(#[prop(default = "Guest".to_owned())] who: String) -> impl Widget {
+        text(move || format!("hello {}", who.get()))
+    }
+
+    let w = greeting();
+    assert_eq!(w.who.get(), "Guest");
+}

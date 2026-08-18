@@ -4,8 +4,8 @@ use guido::prelude::*;
 #[component]
 pub fn button(
     label: String,
-    #[prop(default = "Color::rgb(0.3, 0.3, 0.4)")] background: Color,
-    #[prop(default = "Padding::all(8.0)")] padding: Padding,
+    #[prop(default = Color::rgb(0.3, 0.3, 0.4))] background: Color,
+    #[prop(default = Padding::all(8.0))] padding: Padding,
     #[prop(callback)] on_click: (),
 ) -> impl Widget {
     container()
@@ -23,7 +23,7 @@ pub fn button(
 #[component]
 pub fn card(
     title: String,
-    #[prop(default = "Color::rgb(0.18, 0.18, 0.22)")] background: Color,
+    #[prop(default = Color::rgb(0.18, 0.18, 0.22))] background: Color,
     #[prop(children)] children: (),
 ) -> impl Widget {
     container()
