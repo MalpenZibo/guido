@@ -57,25 +57,17 @@ impl Container {
             return base;
         }
 
-        let flags = ix.flags.get();
-        if flags.contains(InteractionFlags::PRESSED)
-            && let Some(ref state) = ix.pressed_state
-            && let Some(value) = extractor(state)
-        {
-            return value;
-        }
-        if ix.focused_state.is_some()
-            && Self::has_child_focus(id)
-            && let Some(ref state) = ix.focused_state
-            && let Some(value) = extractor(state)
-        {
-            return value;
-        }
-        if flags.contains(InteractionFlags::HOVERED)
-            && let Some(ref state) = ix.hover_state
-            && let Some(value) = extractor(state)
-        {
-            return value;
+        // Backwards: the last layer declared wins. A layer that says nothing
+        // about *this* property is passed over rather than ending the search,
+        // so `hover_state(|s| s.lighter(0.1))` still lightens under a pressed
+        // layer that only scales.
+        for (when, state) in ix.states.iter().rev() {
+            let Some(value) = extractor(state) else {
+                continue;
+            };
+            if ix.is_active(id, when) {
+                return value;
+            }
         }
         base
     }
@@ -89,7 +81,7 @@ impl Container {
                 .background
                 .as_ref()
                 .map(|bg| resolve_background(base, bg));
-            match (bg_color, state.alpha) {
+            match (bg_color, state.alpha.map(|s| s.get())) {
                 (Some(mut c), Some(a)) => {
                     c.a = a;
                     Some(c)
@@ -107,22 +99,22 @@ impl Container {
 
     pub(super) fn effective_border_width_target(&self, id: WidgetId) -> f32 {
         let base = self.border_width.get_or(0.0);
-        self.resolve_state_value(id, base, |state| state.border_width)
+        self.resolve_state_value(id, base, |state| state.border_width.map(|s| s.get()))
     }
 
     pub(super) fn effective_border_color_target(&self, id: WidgetId) -> Color {
         let base = self.border_color.get_or(Color::TRANSPARENT);
-        self.resolve_state_value(id, base, |state| state.border_color)
+        self.resolve_state_value(id, base, |state| state.border_color.map(|s| s.get()))
     }
 
     pub(super) fn effective_corner_radius_target(&self, id: WidgetId) -> f32 {
         let base = self.corner_radius.get_or(0.0);
-        self.resolve_state_value(id, base, |state| state.corner_radius)
+        self.resolve_state_value(id, base, |state| state.corner_radius.map(|s| s.get()))
     }
 
     pub(super) fn effective_transform_target(&self, id: WidgetId) -> Transform {
         let base = self.transform.get_or(Transform::IDENTITY);
-        self.resolve_state_value(id, base, |state| state.transform)
+        self.resolve_state_value(id, base, |state| state.transform.map(|s| s.get()))
     }
 
     /// The text colour a descendant should see, before any animation.
@@ -138,13 +130,13 @@ impl Container {
             .or_else(|| self.text.as_ref().and_then(|t| t.color))
             .map(|color| color.get())
             .unwrap_or(Color::WHITE);
-        self.resolve_state_value(id, base, |state| state.text_color)
+        self.resolve_state_value(id, base, |state| state.text_color.map(|s| s.get()))
     }
 
     /// Elevation is never animated, so the target *is* the drawn value.
     pub(super) fn effective_elevation(&self, id: WidgetId) -> f32 {
         let base = self.elevation.get_or(0.0);
-        self.resolve_state_value(id, base, |state| state.elevation)
+        self.resolve_state_value(id, base, |state| state.elevation.map(|s| s.get()))
     }
 
     // -----------------------------------------------------------------------
@@ -153,12 +145,9 @@ impl Container {
 
     /// Whether any state layer declares a text colour.
     fn has_state_text_color(&self) -> bool {
-        self.interaction.as_ref().is_some_and(|ix| {
-            [&ix.hover_state, &ix.pressed_state, &ix.focused_state]
-                .into_iter()
-                .flatten()
-                .any(|s| s.text_color.is_some())
-        })
+        self.interaction
+            .as_ref()
+            .is_some_and(|ix| ix.states.iter().any(|(_, s)| s.text_color.is_some()))
     }
 
     /// The text style this container publishes to its descendants.
@@ -180,15 +169,17 @@ impl Container {
 
         let ix = self.interaction.as_ref();
         let flags = ix.map(|ix| ix.flags);
-        let pressed = ix
-            .and_then(|ix| ix.pressed_state.as_ref())
-            .and_then(|s| s.text_color);
-        let focused = ix
-            .and_then(|ix| ix.focused_state.as_ref())
-            .and_then(|s| s.text_color);
-        let hovered = ix
-            .and_then(|ix| ix.hover_state.as_ref())
-            .and_then(|s| s.text_color);
+        // Only the layers that speak about text, in declaration order. A
+        // derived closure has no container to ask later, so the fold below
+        // walks this instead of `states`.
+        let text_states: Vec<(StateWhen, Signal<Color>)> = ix
+            .map(|ix| {
+                ix.states
+                    .iter()
+                    .filter_map(|(when, s)| s.text_color.map(|c| (*when, c)))
+                    .collect()
+            })
+            .unwrap_or_default();
 
         // What a descendant would have inherited without us — this container's
         // own declaration, or the nearest ancestor's. Walked once, here: a
@@ -212,23 +203,26 @@ impl Container {
                 {
                     return color;
                 }
-                let flags = flags.map(|f| f.get()).unwrap_or_default();
-                if flags.contains(InteractionFlags::PRESSED)
-                    && let Some(color) = pressed
-                {
-                    return color;
-                }
-                // `focused` first: with no focused state there is nothing to
-                // resolve, and no reason to subscribe to the focus path.
-                if let Some(color) = focused
-                    && Self::has_child_focus(id)
-                {
-                    return color;
-                }
-                if flags.contains(InteractionFlags::HOVERED)
-                    && let Some(color) = hovered
-                {
-                    return color;
+                // Backwards, and each trigger read only when a layer uses it:
+                // with no focused layer there is no reason to subscribe to the
+                // focus path, and with no hover layer none to subscribe to the
+                // flags.
+                for (when, color) in text_states.iter().rev() {
+                    let active = match when {
+                        StateWhen::Hovered => flags
+                            .map(|f| f.get())
+                            .unwrap_or_default()
+                            .contains(InteractionFlags::HOVERED),
+                        StateWhen::Pressed => flags
+                            .map(|f| f.get())
+                            .unwrap_or_default()
+                            .contains(InteractionFlags::PRESSED),
+                        StateWhen::Focused => Self::has_child_focus(id),
+                        StateWhen::When(condition) => condition.get(),
+                    };
+                    if active {
+                        return color.get();
+                    }
                 }
                 base.map(|base| base.get()).unwrap_or(Color::WHITE)
             })

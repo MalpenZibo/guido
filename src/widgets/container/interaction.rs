@@ -114,7 +114,7 @@ impl Container {
         match event {
             Event::MouseEnter { x, y } if hit.contains(*x, *y) && !ix.is_hovered() => {
                 ix.set_flag(InteractionFlags::HOVERED, true);
-                if ix.hover_state.is_some() {
+                if ix.declares(|w| matches!(w, StateWhen::Hovered)) {
                     request_repaint(id);
                 }
                 if let Some(ref callback) = ix.on_hover {
@@ -135,7 +135,7 @@ impl Container {
                 ix.set_flag(InteractionFlags::HOVERED, hit.contains(*x, *y));
 
                 if was_hovered != ix.is_hovered() {
-                    if ix.hover_state.is_some() {
+                    if ix.declares(|w| matches!(w, StateWhen::Hovered)) {
                         request_repaint(id);
                     }
                     if let Some(ref callback) = ix.on_hover {
@@ -191,9 +191,9 @@ impl Container {
                     ix.set_flag(InteractionFlags::PRESSED, true);
 
                     let has_ripple = ix
-                        .pressed_state
-                        .as_ref()
-                        .is_some_and(|s| s.ripple.is_some());
+                        .states
+                        .iter()
+                        .any(|(w, s)| matches!(w, StateWhen::Pressed) && s.ripple.is_some());
                     if has_ripple {
                         let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
                         let (local_x, local_y) = hit.local(screen_x, screen_y);
@@ -201,7 +201,7 @@ impl Container {
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
-                    if !was_pressed && ix.pressed_state.is_some() {
+                    if !was_pressed && ix.declares(|w| matches!(w, StateWhen::Pressed)) {
                         self.request_state_change_repaint(id);
                     }
                     if let Some(ref ix) = self.interaction
@@ -236,7 +236,7 @@ impl Container {
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
-                    if was_pressed && ix.pressed_state.is_some() {
+                    if was_pressed && ix.declares(|w| matches!(w, StateWhen::Pressed)) {
                         self.request_state_change_repaint(id);
                     }
 
@@ -283,8 +283,8 @@ impl Container {
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
-                    if (was_hovered && ix.hover_state.is_some())
-                        || (was_pressed && ix.pressed_state.is_some())
+                    if (was_hovered && ix.declares(|w| matches!(w, StateWhen::Hovered)))
+                        || (was_pressed && ix.declares(|w| matches!(w, StateWhen::Pressed)))
                     {
                         self.request_state_change_repaint(id);
                     }

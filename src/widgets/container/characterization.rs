@@ -125,6 +125,20 @@ fn rects(node: &RenderNode) -> Vec<(Rect, Color)> {
         .collect()
 }
 
+/// The width and colour of every border drawn, in paint order.
+fn borders(node: &RenderNode) -> Vec<(f32, Color)> {
+    node.commands
+        .iter()
+        .filter_map(|c| match &**c {
+            DrawCommand::RoundedRect {
+                border: Some(border),
+                ..
+            } => Some((border.width, border.color)),
+            _ => None,
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Sizing — the box model matrix
 // ---------------------------------------------------------------------------
@@ -1068,6 +1082,199 @@ fn a_focused_state_applies_while_a_descendant_holds_focus() {
     request_focus(&h.tree, child);
     assert_eq!(rects(&h.paint())[0].1, Color::BLUE);
     clear_focus();
+    assert_eq!(rects(&h.paint())[0].1, Color::RED);
+}
+
+/// A state layer *overrides* the base; it does not rank against it.
+///
+/// Which is the whole answer to "why would a field not use `focused_state` for
+/// its focus ring". A border that already carries a meaning — an error colour
+/// here — puts that meaning in the base, and the base is exactly what the layer
+/// replaces. On a field that holds the focus essentially all the time, that is
+/// an error colour that never appears.
+#[test]
+fn a_focused_state_replaces_the_base_rather_than_ranking_against_it() {
+    use crate::reactive::focus::clear_focus;
+    use crate::reactive::request_focus;
+    use crate::widgets::text_input;
+
+    clear_focus();
+    let mut h = H::new(
+        container()
+            .width(50.0)
+            .height(50.0)
+            .border(1.5, Color::RED)
+            .focused_state(|s| s.border(1.5, Color::BLUE))
+            .child(text_input(create_signal(String::new()))),
+    );
+    h.fit(100.0, 100.0);
+    let input = h.children()[0];
+
+    assert_eq!(borders(&h.paint())[0].1, Color::RED);
+
+    request_focus(&h.tree, input);
+    assert_eq!(
+        borders(&h.paint())[0].1,
+        Color::BLUE,
+        "the layer wins, and the base has no way to say it should not"
+    );
+}
+
+/// The other way to follow the focus, for when it has to rank *below* something:
+/// a colour that asks a handle instead of a state layer that overrides.
+///
+/// It works because the closure is read inside paint's tracking scope — asking
+/// about the focus is what subscribes the container to it, with no
+/// `focused_state` declared anywhere.
+#[test]
+fn a_border_colour_that_asks_a_handle_follows_the_focus() {
+    use crate::reactive::focus::clear_focus;
+    use crate::reactive::request_focus;
+    use crate::widget_ref::create_widget_ref;
+    use crate::widgets::text_input;
+
+    clear_focus();
+    let handle = create_widget_ref();
+    let mut h = H::new(
+        container()
+            .width(50.0)
+            .height(50.0)
+            .border(2.0, move || {
+                if handle.is_focused() {
+                    Color::BLUE
+                } else {
+                    Color::RED
+                }
+            })
+            .child(text_input(create_signal(String::new())).widget_ref(handle)),
+    );
+    h.fit(100.0, 100.0);
+    let input = h.children()[0];
+
+    assert_eq!(borders(&h.paint())[0], (2.0, Color::RED));
+
+    request_focus(&h.tree, input);
+    assert_eq!(borders(&h.paint())[0], (2.0, Color::BLUE));
+
+    // And the container has to *hear* about a focus change. Nothing else would
+    // repaint a border whose colour is a closure: the two repaints
+    // `request_focus` asks for name the input and the widget losing the focus,
+    // neither of which is this container.
+    let queued = h.jobs_from(clear_focus);
+    assert!(
+        queued.contains(&JobType::Paint),
+        "asking about the focus has to subscribe to it, got {queued:?}"
+    );
+    assert_eq!(borders(&h.paint())[0], (2.0, Color::RED));
+}
+
+/// A state override holds a signal, so it follows a theme the way the base does.
+///
+/// Before this it held a plain `Color`, taken once when the builder ran. A
+/// themed button tracked the theme through `background(..)` and stopped
+/// tracking it the moment the pointer arrived, because the layer covering the
+/// base had no way to say it depended on anything.
+#[test]
+fn a_state_override_follows_the_signal_it_was_given() {
+    let accent = create_signal(Color::RED);
+    let mut h = H::new(
+        box_of(50.0, 50.0)
+            .background(Color::BLACK)
+            .hover_state(move |s: StateStyle| s.background(accent)),
+    );
+    h.fit(100.0, 100.0);
+
+    set_hover(&mut h, true);
+    assert_eq!(rects(&h.paint())[0].1, Color::RED);
+
+    // Reading the override is what subscribes to it: nothing else would tell
+    // this container that a colour it draws has moved.
+    let queued = h.jobs_from(|| accent.set(Color::BLUE));
+    assert!(
+        queued.contains(&JobType::Paint),
+        "the active override has to subscribe, got {queued:?}"
+    );
+    assert_eq!(rects(&h.paint())[0].1, Color::BLUE);
+}
+
+/// A state the app owns needs no mechanism: it is a signal, read where the
+/// style is resolved.
+#[test]
+fn a_state_layer_may_hang_on_a_condition_the_app_owns() {
+    let wrong = create_signal(false);
+    let mut h = H::new(
+        box_of(50.0, 50.0)
+            .background(Color::BLACK)
+            .state(wrong, |s| s.background(Color::RED)),
+    );
+    h.fit(100.0, 100.0);
+
+    assert_eq!(rects(&h.paint())[0].1, Color::BLACK);
+
+    let queued = h.jobs_from(|| wrong.set(true));
+    assert!(
+        queued.contains(&JobType::Paint),
+        "the condition has to subscribe, got {queued:?}"
+    );
+    assert_eq!(rects(&h.paint())[0].1, Color::RED);
+}
+
+/// The answer to the field whose focus ring hid its error: declaration order
+/// decides, so the error written last outranks the focus.
+#[test]
+fn the_last_layer_declared_wins_over_the_ones_before_it() {
+    use crate::reactive::focus::clear_focus;
+    use crate::reactive::request_focus;
+    use crate::widgets::text_input;
+
+    clear_focus();
+    let wrong = create_signal(false);
+    let mut h = H::new(
+        container()
+            .width(50.0)
+            .height(50.0)
+            .border(1.5, Color::WHITE)
+            .focused_state(|s| s.border(1.5, Color::BLUE))
+            .state(wrong, |s| s.border(1.5, Color::RED))
+            .child(text_input(create_signal(String::new()))),
+    );
+    h.fit(100.0, 100.0);
+    let input = h.children()[0];
+
+    request_focus(&h.tree, input);
+    assert_eq!(borders(&h.paint())[0].1, Color::BLUE);
+
+    wrong.set(true);
+    assert_eq!(
+        borders(&h.paint())[0].1,
+        Color::RED,
+        "declared after the focused layer, so it outranks it"
+    );
+
+    // And it is the order, not the kind: the focus is still held.
+    wrong.set(false);
+    assert_eq!(borders(&h.paint())[0].1, Color::BLUE);
+}
+
+/// A layer is passed over for a property it says nothing about, rather than
+/// ending the search — otherwise a pressed layer that only scales would drop
+/// the hover's background on the way down.
+#[test]
+fn a_layer_silent_on_a_property_does_not_shadow_the_one_below_it() {
+    let mut h = H::new(
+        box_of(50.0, 50.0)
+            .background(Color::BLACK)
+            .hover_state(|s| s.background(Color::RED))
+            .pressed_state(|s| s.transform(Transform::scale(0.5))),
+    );
+    h.fit(100.0, 100.0);
+
+    set_hover(&mut h, true);
+    h.send(Event::MouseDown {
+        x: 5.0,
+        y: 5.0,
+        button: MouseButton::Left,
+    });
     assert_eq!(rects(&h.paint())[0].1, Color::RED);
 }
 
