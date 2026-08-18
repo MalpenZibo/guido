@@ -153,6 +153,8 @@ impl RippleState {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     #[test]
@@ -248,6 +250,45 @@ mod tests {
 
         state.reset();
         assert!(!state.is_active());
+    }
+
+    /// What a real click looks like today, in numbers.
+    ///
+    /// A mouse click lasts 60-150ms against a 400ms expansion, so the release
+    /// always lands mid-growth — and the release *reverses* the growth. The
+    /// disc reaches about half the container and is then pulled back in, while
+    /// the ease-in opacity keeps it bright for exactly as long as it takes to
+    /// collapse.
+    #[test]
+    fn a_click_reverses_the_expansion_before_it_covers_anything() {
+        let cfg = RippleConfig::default();
+        let mut state = RippleState::new();
+        state.start(10.0, 10.0);
+
+        // 80ms of press: `1 - (1 - 80/400)^3`.
+        state.start_time = Some(Instant::now() - Duration::from_millis(80));
+        state.advance(&cfg);
+        let at_release = state.progress;
+        assert!(
+            (0.45..0.55).contains(&at_release),
+            "a click reaches about half the radius, got {at_release}"
+        );
+
+        state.start_fade(10.0, 10.0);
+        state.fade_start_time = Some(Instant::now() - Duration::from_millis(150));
+        state.advance(&cfg);
+
+        assert!(
+            state.progress < at_release,
+            "the radius goes backwards after the release: {} -> {}",
+            at_release,
+            state.progress
+        );
+        assert!(
+            state.opacity > 0.5,
+            "and it is still bright while it collapses, got {}",
+            state.opacity
+        );
     }
 
     #[test]
