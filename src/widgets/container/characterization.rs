@@ -1168,6 +1168,35 @@ fn a_border_colour_that_asks_a_handle_follows_the_focus() {
     assert_eq!(borders(&h.paint())[0], (2.0, Color::RED));
 }
 
+/// A state override holds a signal, so it follows a theme the way the base does.
+///
+/// Before this it held a plain `Color`, taken once when the builder ran. A
+/// themed button tracked the theme through `background(..)` and stopped
+/// tracking it the moment the pointer arrived, because the layer covering the
+/// base had no way to say it depended on anything.
+#[test]
+fn a_state_override_follows_the_signal_it_was_given() {
+    let accent = create_signal(Color::RED);
+    let mut h = H::new(
+        box_of(50.0, 50.0)
+            .background(Color::BLACK)
+            .hover_state(move |s: StateStyle| s.background(accent)),
+    );
+    h.fit(100.0, 100.0);
+
+    set_hover(&mut h, true);
+    assert_eq!(rects(&h.paint())[0].1, Color::RED);
+
+    // Reading the override is what subscribes to it: nothing else would tell
+    // this container that a colour it draws has moved.
+    let queued = h.jobs_from(|| accent.set(Color::BLUE));
+    assert!(
+        queued.contains(&JobType::Paint),
+        "the active override has to subscribe, got {queued:?}"
+    );
+    assert_eq!(rects(&h.paint())[0].1, Color::BLUE);
+}
+
 // ---------------------------------------------------------------------------
 // An animated text colour
 // ---------------------------------------------------------------------------

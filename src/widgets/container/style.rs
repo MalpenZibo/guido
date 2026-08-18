@@ -89,7 +89,7 @@ impl Container {
                 .background
                 .as_ref()
                 .map(|bg| resolve_background(base, bg));
-            match (bg_color, state.alpha) {
+            match (bg_color, state.alpha.map(|s| s.get())) {
                 (Some(mut c), Some(a)) => {
                     c.a = a;
                     Some(c)
@@ -107,22 +107,22 @@ impl Container {
 
     pub(super) fn effective_border_width_target(&self, id: WidgetId) -> f32 {
         let base = self.border_width.get_or(0.0);
-        self.resolve_state_value(id, base, |state| state.border_width)
+        self.resolve_state_value(id, base, |state| state.border_width.map(|s| s.get()))
     }
 
     pub(super) fn effective_border_color_target(&self, id: WidgetId) -> Color {
         let base = self.border_color.get_or(Color::TRANSPARENT);
-        self.resolve_state_value(id, base, |state| state.border_color)
+        self.resolve_state_value(id, base, |state| state.border_color.map(|s| s.get()))
     }
 
     pub(super) fn effective_corner_radius_target(&self, id: WidgetId) -> f32 {
         let base = self.corner_radius.get_or(0.0);
-        self.resolve_state_value(id, base, |state| state.corner_radius)
+        self.resolve_state_value(id, base, |state| state.corner_radius.map(|s| s.get()))
     }
 
     pub(super) fn effective_transform_target(&self, id: WidgetId) -> Transform {
         let base = self.transform.get_or(Transform::IDENTITY);
-        self.resolve_state_value(id, base, |state| state.transform)
+        self.resolve_state_value(id, base, |state| state.transform.map(|s| s.get()))
     }
 
     /// The text colour a descendant should see, before any animation.
@@ -138,13 +138,13 @@ impl Container {
             .or_else(|| self.text.as_ref().and_then(|t| t.color))
             .map(|color| color.get())
             .unwrap_or(Color::WHITE);
-        self.resolve_state_value(id, base, |state| state.text_color)
+        self.resolve_state_value(id, base, |state| state.text_color.map(|s| s.get()))
     }
 
     /// Elevation is never animated, so the target *is* the drawn value.
     pub(super) fn effective_elevation(&self, id: WidgetId) -> f32 {
         let base = self.elevation.get_or(0.0);
-        self.resolve_state_value(id, base, |state| state.elevation)
+        self.resolve_state_value(id, base, |state| state.elevation.map(|s| s.get()))
     }
 
     // -----------------------------------------------------------------------
@@ -216,19 +216,19 @@ impl Container {
                 if flags.contains(InteractionFlags::PRESSED)
                     && let Some(color) = pressed
                 {
-                    return color;
+                    return color.get();
                 }
                 // `focused` first: with no focused state there is nothing to
                 // resolve, and no reason to subscribe to the focus path.
                 if let Some(color) = focused
                     && Self::has_child_focus(id)
                 {
-                    return color;
+                    return color.get();
                 }
                 if flags.contains(InteractionFlags::HOVERED)
                     && let Some(color) = hovered
                 {
-                    return color;
+                    return color.get();
                 }
                 base.map(|base| base.get()).unwrap_or(Color::WHITE)
             })
