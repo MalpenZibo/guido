@@ -340,6 +340,37 @@ impl<'a> PaintContext<'a> {
         }));
     }
 
+    /// Blur whatever is already drawn beneath the glyphs of `text`, so the
+    /// text can be painted over its own blurred backdrop.
+    ///
+    /// Emitted before the text and its decorations. The arguments have to be
+    /// the ones the text is drawn with: the mask is shaped from them, and a
+    /// mask shaped differently is a halo.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_text_backdrop_blur(
+        &mut self,
+        text: &str,
+        rect: Rect,
+        radius: f32,
+        font_size: f32,
+        font_family: FontFamily,
+        font_weight: FontWeight,
+    ) {
+        if text.is_empty() || radius <= 0.0 {
+            return;
+        }
+        self.node
+            .commands
+            .push(Rc::new(DrawCommand::TextBackdropBlur {
+                text: text.to_owned(),
+                rect,
+                radius,
+                font_size,
+                font_family,
+                font_weight,
+            }));
+    }
+
     pub fn draw_circle(&mut self, cx: f32, cy: f32, radius: f32, color: Color) {
         self.node.commands.push(Rc::new(DrawCommand::Circle {
             center: (cx, cy),

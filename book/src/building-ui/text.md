@@ -103,6 +103,50 @@ its neighbours.
 
 `cargo run --example text_decoration_example` shows both against a control.
 
+## Frosted glass
+
+The third way to sit a text on a picture is to make the letters a window onto
+it, blurred:
+
+```rust
+text("09:41")
+    .font_size(76.0)
+    // The tint over the glass; without one the glyphs are the blur alone.
+    .color(Color::rgba(1.0, 1.0, 1.0, 0.35))
+    .backdrop_blur(16.0)
+```
+
+This is the same effect a container gets from
+[`backdrop_blur`](../concepts/container.md), with the shape of the letters in
+place of the shape of the box — CSS's `backdrop-filter` together with
+`background-clip: text`. The renderer rasterizes the glyphs into a coverage
+mask, blurs the region they cover, and composites the result back through the
+mask; the text is then drawn over its own frost, which is why the colour reads
+as a tint.
+
+It filters what *this surface* has already drawn — a wallpaper, a photo, the
+panel underneath. A container's blur can also reach what the compositor puts
+behind the surface, through `ext-background-effect-v1`; that protocol takes a
+region, and regions are rectangles, so glyphs cannot be expressed in it.
+
+Three things to know before reaching for it:
+
+- **It is not inherited.** Every other text property can be declared on a
+  container for the subtree below it; this one cannot, because each frosted
+  text ends the render pass to filter the target. It is asked for one text at
+  a time on purpose.
+- **It is not legibility, and it does not combine with what is.** Frost softens
+  the background where a shadow darkens it, so over a busy photograph a shadow
+  still does more — but you cannot have both. A stroke and a shadow are drawn
+  as copies of the glyphs *under* the fill, so they cover the letter's own area
+  and not only its edge: invisible under an opaque fill, and an opaque letter
+  over frost, which is the one thing the frost was cut out of. What holds a
+  frosted text together is its tint.
+- **Rotation and scale skip it**, since the mask is rasterized square. A frost
+  sitting beside its own letters would be worse than none.
+
+`cargo run --example frosted_text` puts it beside a shadow and a control.
+
 ## Styling
 
 ### Font Size

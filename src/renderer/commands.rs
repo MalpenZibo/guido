@@ -191,6 +191,30 @@ pub enum DrawCommand {
         curvature: f32,
     },
 
+    /// Filter what has already been drawn beneath the glyphs of `text`.
+    ///
+    /// The rectangular sibling above filters a box; this one filters the shape
+    /// of the letters, which no formula describes — the renderer rasterizes
+    /// them into a coverage mask. Ordered before the text itself, so the glyphs
+    /// are painted over their own blurred backdrop.
+    ///
+    /// Everything needed to shape the mask is repeated here, because the mask
+    /// has to come out identical to the text drawn after it.
+    TextBackdropBlur {
+        /// The text whose coverage is the mask.
+        text: String,
+        /// The text's layout box in local coordinates.
+        rect: Rect,
+        /// Blur radius in logical pixels.
+        radius: f32,
+        /// The font size in logical pixels.
+        font_size: f32,
+        /// The font family.
+        font_family: FontFamily,
+        /// The font weight.
+        font_weight: FontWeight,
+    },
+
     /// Draw an image.
     Image {
         /// Image source (path or bytes)

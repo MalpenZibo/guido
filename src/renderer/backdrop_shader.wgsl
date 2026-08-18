@@ -19,11 +19,16 @@ struct Params {
     // Corner radii in physical pixels: top-left, top-right, bottom-right,
     // bottom-left.
     radii: vec4<f32>,
+    // Sub-rectangle of the coverage mask this viewport covers, normalised.
+    mask_rect: vec4<f32>,
 }
 
 @group(0) @binding(0) var t_source: texture_2d<f32>;
 @group(0) @binding(1) var s_source: sampler;
 @group(0) @binding(2) var<uniform> params: Params;
+// Coverage mask for `fs_composite_mask`, one texel per destination pixel.
+// Declared for every entry point, bound only by the pipeline that reads it.
+@group(0) @binding(3) var t_mask: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -111,4 +116,17 @@ fn fs_composite(in: VertexOutput) -> @location(0) vec4<f32> {
     let mask = 1.0 - smoothstep(-0.5, 0.5, distance);
 
     return vec4<f32>(blurred.rgb, blurred.a * mask);
+}
+
+// The same composite, shaped by a coverage mask instead of a rectangle: what
+// the glyphs cover shows the blurred backdrop, everything else is left alone.
+// The mask lines up one texel per destination pixel, so it is read with the
+// destination uv rather than the source rect.
+@fragment
+fn fs_composite_mask(in: VertexOutput) -> @location(0) vec4<f32> {
+    let blurred = textureSample(t_source, s_source, source_uv(in.uv));
+    let mask_uv = params.mask_rect.xy + in.uv * params.mask_rect.zw;
+    let coverage = textureSample(t_mask, s_source, mask_uv).a;
+
+    return vec4<f32>(blurred.rgb, blurred.a * coverage);
 }

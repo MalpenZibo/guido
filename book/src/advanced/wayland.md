@@ -550,7 +550,10 @@ The **surface** side is guido's own: the frame is drawn into an
 offscreen target, each region is downsampled, blurred with a separable
 gaussian and composited back masked to the container's rounded shape.
 Frames with no backdrop blur skip all of it and draw straight to the
-swapchain.
+swapchain. A text can ask for the same thing with the shape of its
+glyphs as the mask — see [Frosted glass](../building-ui/text.md#frosted-glass)
+— and that one is surface-side only, since a `wl_region` cannot hold a
+letter.
 
 Two skips keep that honest, and both are unobservable — they drop work
 that could not have changed a pixel, so they may switch on and off
