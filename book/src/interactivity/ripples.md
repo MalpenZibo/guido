@@ -50,15 +50,64 @@ Combine ripples with other pressed state changes:
 
 ## How Ripples Work
 
-1. **Click** - Ripple starts at the click point
-2. **Expand** - Ripple grows to fill the container bounds
-3. **Release** - Ripple contracts toward the release point
-4. **Fade** - Ripple fades out
+1. **Press** - a disc appears at the click point, already at about a third of
+   its final size, and starts spreading
+2. **Release** - the press happened, so the remaining expansion is *completed*
+   rather than interrupted, while the disc fades out
+3. **Or leave without releasing** - nothing was activated, so there is nothing
+   to complete: the disc just fades, quickly
+
+Two properties are worth stating outright, because they are what makes the
+effect read as an acknowledgement rather than a hesitation:
+
+- **The radius never goes backwards.** The exit is a fade, never a contraction.
+- **A short press does not truncate the expansion.** A click lasts 60-150ms
+  against a growth measured in hundreds, so the release finishes the growth
+  instead of abandoning it half-way.
+
+The disc's centre also drifts toward the container's own centre as it grows, so
+a press near a corner settles onto the button instead of staying lopsided.
 
 The ripple:
 - Respects corner radius and container shape
 - Works correctly with transformed containers (rotated, scaled)
 - Renders in the overlay layer (on top of content)
+
+## Several at once
+
+Each press is its own ripple, and they overlap:
+
+```rust
+container()
+    .when_pressed(|s| s.ripple())
+    .on_click(increment)
+```
+
+Clicking this repeatedly layers one disc over the next, because two clicks are
+two events — the second does not erase the first. Up to four are alive at a
+time; past that the oldest is dropped, which is the one furthest through its
+own fade.
+
+## Timing
+
+| Phase | Duration |
+|---|---|
+| Opacity rise on contact | 75ms |
+| Growth while held | 1s |
+| Growth remaining after release | 225ms |
+| Fade after a release | 375ms |
+| Fade after leaving without releasing | 75ms |
+
+`expand_speed` and `fade_speed` on `RippleConfig` scale the growth and the fade
+respectively:
+
+```rust
+.when_pressed(|s| s.ripple_config(RippleConfig {
+    color: Color::rgba(1.0, 1.0, 1.0, 0.3),
+    expand_speed: 1.5,   // faster growth
+    fade_speed: 1.0,
+}))
+```
 
 ## Ripples on Transformed Containers
 

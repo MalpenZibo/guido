@@ -171,7 +171,14 @@ Note that a layer *replaces* the base value rather than ranking against it. A pr
 
 ## Ripple Effects
 
-Ripple effects provide Material Design-style touch feedback. The ripple expands from the click point and contracts toward the release point.
+Ripple effects provide Material Design-style touch feedback. The disc appears at
+the click point already at about a third of its final size and spreads from
+there; a release **completes** the expansion while fading the disc out, and the
+pointer leaving without a release fades it quickly without completing anything.
+
+The radius never goes backwards, and a short press does not truncate the growth
+— those two are the whole feel of the effect. Each press is its own ripple and
+they overlap; up to four are alive at a time.
 
 ### Default Ripple
 
