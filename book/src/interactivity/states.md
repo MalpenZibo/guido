@@ -2,6 +2,10 @@
 
 Define visual changes for different interaction states.
 
+Every value inside a state layer is reactive, like the base property it covers.
+`hover_state(|s| s.background(theme.accent))` follows the theme; it does not
+take a snapshot of it when the widget is built.
+
 ## Hover State
 
 Applied when the mouse cursor is over the widget:
@@ -126,6 +130,61 @@ from an ancestor that is itself animating — currently retargets every frame,
 which gives a damped chase rather than a transition with its own curve. It
 converges either way; CSS instead starts the inner one once, towards the
 outer's final value.
+
+## States Your App Owns
+
+Hover, pressed and focus are noticed by the container. The rest — the last
+submit failed, this row is selected, this value is out of range — are
+conditions your app already holds, so there is nothing to propagate: pass the
+signal and it is read where the style is resolved.
+
+```rust
+let wrong_password = create_signal(false);
+
+container()
+    .border(1.0, theme.line)
+    .state(wrong_password, |s| s.border(2.0, theme.error))
+    .child(text_input(password))
+```
+
+Because it is just a signal, anything else that needs it reads the same one,
+independently — a label beside the field does not have to be told:
+
+```rust
+container()
+    .state(wrong_password, |s| s.border(2.0, theme.error))
+    .child(text("Wrong password"))
+```
+
+## Which Layer Wins
+
+Layers are resolved in reverse declaration order, one property at a time: the
+last one you wrote that is active and speaks about that property wins.
+
+This is what lets a field say that its error outranks its focus ring — which
+matters on a password field, where the focus is held essentially all the time:
+
+```rust
+container()
+    .border(1.0, theme.line)
+    .focused_state(|s| s.border(2.0, theme.accent))
+    .state(wrong_password, |s| s.border(2.0, theme.error))   // written after,
+    .child(text_input(password))                             // so it wins
+```
+
+Swap the two lines and the focus ring wins instead. A layer that says nothing
+about a property is skipped rather than ending the search, so the pressed layer
+below only takes over the transform and leaves the hover's background alone:
+
+```rust
+container()
+    .hover_state(|s| s.lighter(0.1))
+    .pressed_state(|s| s.transform(Transform::scale(0.98)))
+```
+
+Keep in mind that a layer *replaces* the base rather than ranking against it. A
+border that already carries a meaning does not belong in the base — put it in a
+layer with a condition, where the ordering above can speak about it.
 
 ## Combining Multiple Overrides
 

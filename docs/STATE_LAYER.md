@@ -8,8 +8,11 @@ State layers allow containers to define how they should look when:
 - **Hovered**: Mouse cursor is over the widget
 - **Pressed**: Mouse button is held down on the widget
 - **Focused**: Any child widget has keyboard focus (e.g., text input)
+- **A condition the app owns**: `state(condition, |s| ...)` — the last submit failed, this row is selected
 
 Style changes are defined declaratively using builder methods, and the framework handles all state transitions, animations, and rendering automatically.
+
+Every value inside a state layer is a signal, exactly like the base property it covers, so a state override follows a theme instead of taking a snapshot of it.
 
 ## Basic Usage
 
@@ -35,6 +38,36 @@ container()
     .focused_state(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))  // Highlight when focused
     .child(text_input(value))
 ```
+
+### App-Declared States
+
+The first three states are noticed by the container. The fourth is a condition the app already holds, so it needs no propagation — the container just reads the signal:
+
+```rust
+let wrong_password = create_signal(false);
+
+container()
+    .border(1.0, theme.line)
+    .state(wrong_password, |s| s.border(2.0, theme.error))
+    .child(text_input(password))
+```
+
+The same signal can be read anywhere else that needs it, independently. That is why there is one generic `state` rather than a named method per case.
+
+## Precedence: last declared wins
+
+Layers are resolved in reverse declaration order, per property. Writing the error after the focus is what makes an error outrank a focus ring on a field that holds the focus essentially always:
+
+```rust
+container()
+    .border(1.0, theme.line)
+    .focused_state(|s| s.border(2.0, theme.accent))
+    .state(wrong_password, |s| s.border(2.0, theme.error))  // wins while it holds
+```
+
+A layer that says nothing about a property is passed over rather than ending the search, so a pressed layer that only scales still lets the hover's background through.
+
+Note that a layer *replaces* the base value rather than ranking against it. A property that already carries a meaning of its own belongs in a layer with a condition, not in the base.
 
 ## State Style Methods
 
@@ -170,14 +203,29 @@ The `StateStyle` struct holds all possible overrides:
 ```rust
 pub struct StateStyle {
     pub background: Option<BackgroundOverride>,
-    pub border_width: Option<f32>,
-    pub border_color: Option<Color>,
-    pub corner_radius: Option<f32>,
-    pub transform: Option<Transform>,
-    pub elevation: Option<f32>,
+    pub border_width: Option<Signal<f32>>,
+    pub border_color: Option<Signal<Color>>,
+    pub corner_radius: Option<Signal<f32>>,
+    pub transform: Option<Signal<Transform>>,
+    pub elevation: Option<Signal<f32>>,
+    pub text_color: Option<Signal<Color>>,
+    pub alpha: Option<Signal<f32>>,
     pub ripple: Option<RippleConfig>,
 }
 ```
+
+Each layer is stored with the trigger that turns it on, in declaration order:
+
+```rust
+pub enum StateWhen {
+    Hovered,
+    Pressed,
+    Focused,
+    When(Signal<bool>),
+}
+```
+
+A trigger is read only where a layer uses it, so a container carrying a single `state(..)` subscribes to neither the pointer flags nor the focus path.
 
 ### BackgroundOverride Enum
 
@@ -185,9 +233,9 @@ Background can be set absolutely or relatively:
 
 ```rust
 pub enum BackgroundOverride {
-    Exact(Color),      // Use this exact color
-    Lighter(f32),      // Blend toward white by amount (0.0-1.0)
-    Darker(f32),       // Blend toward black by amount (0.0-1.0)
+    Exact(Signal<Color>),   // Use this exact color
+    Lighter(Signal<f32>),   // Blend toward white by amount (0.0-1.0)
+    Darker(Signal<f32>),    // Blend toward black by amount (0.0-1.0)
 }
 ```
 
