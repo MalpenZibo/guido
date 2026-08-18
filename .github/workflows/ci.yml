@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - main
+  # Every pull request, whatever it is aimed at. Filtering on `main` left a
+  # pull request stacked on another branch with no checks at all — the two
+  # workflows that do not filter, Labeler and Release Drafter, were the only
+  # thing that ran on it, which looks like a green tick from a distance.
   pull_request:
-    branches:
-      - main
 
 env:
   CARGO_TERM_COLOR: always
