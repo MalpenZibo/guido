@@ -12,6 +12,11 @@
 //! gaussian passes, then composite back masked by the container's rounded
 //! shape. Working at a quarter resolution is what keeps a wide radius cheap —
 //! the same reason compositors downsample before blurring.
+//!
+//! The mask is the only part a caller can replace. [`apply`](BackdropRenderer::apply)
+//! shapes the result with the region's own corners; [`apply_masked`](BackdropRenderer::apply_masked)
+//! takes a coverage texture instead, which is what lets glyphs be the window
+//! rather than a box — see [`text_mask`](super::text_mask).
 
 use wgpu::util::DeviceExt;
 
@@ -43,6 +48,10 @@ struct Params {
     curvature: f32,
     _pad: f32,
     radii: [f32; 4],
+    /// Sub-rectangle of the coverage mask this viewport covers, in normalised
+    /// UV. The whole mask unless the region runs off the target, where the
+    /// viewport is clipped and the mask must be read clipped with it.
+    mask_rect: [f32; 4],
 }
 
 /// A blur to apply, resolved to physical pixels.
@@ -95,9 +104,13 @@ pub struct BackdropRenderer {
     format: wgpu::TextureFormat,
     sampler: wgpu::Sampler,
     bind_group_layout: wgpu::BindGroupLayout,
+    /// The same three bindings plus the coverage texture the masked composite
+    /// reads. Kept apart so the three shape passes bind nothing they never use.
+    mask_bind_group_layout: wgpu::BindGroupLayout,
     downsample: wgpu::RenderPipeline,
     blur: wgpu::RenderPipeline,
     composite: wgpu::RenderPipeline,
+    composite_mask: wgpu::RenderPipeline,
     blit: wgpu::RenderPipeline,
     targets: Option<Targets>,
     idle_frames: u32,
@@ -154,16 +167,69 @@ impl BackdropRenderer {
             ],
         });
 
+        // The masked composite reads one more texture; everything else would
+        // only be declaring a binding it never touches.
+        let mask_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Backdrop Mask Bind Group Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Backdrop Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
             immediate_size: 0,
         });
+        let mask_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Backdrop Mask Pipeline Layout"),
+            bind_group_layouts: &[&mask_bind_group_layout],
+            immediate_size: 0,
+        });
 
-        let pipeline = |label: &str, entry: &str, blend: Option<wgpu::BlendState>| {
+        let build = |label: &str,
+                     entry: &str,
+                     blend: Option<wgpu::BlendState>,
+                     layout: &wgpu::PipelineLayout| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
-                layout: Some(&layout),
+                layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some("vs_main"),
@@ -186,6 +252,9 @@ impl BackdropRenderer {
                 multiview_mask: None,
                 cache: None,
             })
+        };
+        let pipeline = |label: &str, entry: &str, blend: Option<wgpu::BlendState>| {
+            build(label, entry, blend, &layout)
         };
 
         // The composite is the only step that blends: it lays the blurred
@@ -210,8 +279,15 @@ impl BackdropRenderer {
             downsample: pipeline("Backdrop Downsample", "fs_downsample", None),
             blur: pipeline("Backdrop Blur", "fs_blur", None),
             composite: pipeline("Backdrop Composite", "fs_composite", Some(composite_blend)),
+            composite_mask: build(
+                "Backdrop Composite Mask",
+                "fs_composite_mask",
+                Some(composite_blend),
+                &mask_layout,
+            ),
             blit: pipeline("Backdrop Blit", "fs_downsample", None),
             bind_group_layout,
+            mask_bind_group_layout,
             targets: None,
             idle_frames: 0,
         }
@@ -283,6 +359,43 @@ impl BackdropRenderer {
         })
     }
 
+    /// The same bindings plus a coverage texture, for the masked composite.
+    fn bind_masked(
+        &self,
+        device: &wgpu::Device,
+        view: &wgpu::TextureView,
+        mask: &wgpu::TextureView,
+        params: Params,
+    ) -> wgpu::BindGroup {
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Backdrop Params"),
+            contents: bytemuck::cast_slice(&[params]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Backdrop Mask Bind Group"),
+            layout: &self.mask_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(mask),
+                },
+            ],
+        })
+    }
+
     /// Run one full-screen-triangle pass into `target` over `viewport`.
     #[allow(clippy::too_many_arguments)]
     fn pass(
@@ -318,12 +431,38 @@ impl BackdropRenderer {
         pass.draw(0..3, 0..1);
     }
 
-    /// Blur one region of the scene target, in place.
+    /// Blur one region of the scene target, in place, cut out by the region's
+    /// own corners.
     pub fn apply(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         region: &BackdropRegion,
+    ) {
+        self.filter(device, encoder, region, None);
+    }
+
+    /// The same, cut out by `mask`'s alpha instead of the corners.
+    ///
+    /// The mask covers the region one texel per destination pixel, so what it
+    /// leaves opaque is what shows the blur — glyph coverage, in the only
+    /// caller. The region's radii are ignored: the shape is entirely the mask's.
+    pub fn apply_masked(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        region: &BackdropRegion,
+        mask: &wgpu::TextureView,
+    ) {
+        self.filter(device, encoder, region, Some(mask));
+    }
+
+    fn filter(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        region: &BackdropRegion,
+        mask: Option<&wgpu::TextureView>,
     ) {
         let Some(targets) = &self.targets else {
             return;
@@ -356,6 +495,16 @@ impl BackdropRenderer {
             work_height as f32 / targets.work_height as f32,
         ];
 
+        // The mask covers the region; the viewport covers whatever of it is on
+        // the target. When a text runs off the edge they differ, and reading
+        // the whole mask across a clipped viewport would squash the letters.
+        let mask_rect = [
+            (x as f32 - region.rect.x) / region.rect.width.max(1.0),
+            (y as f32 - region.rect.y) / region.rect.height.max(1.0),
+            width as f32 / region.rect.width.max(1.0),
+            height as f32 / region.rect.height.max(1.0),
+        ];
+
         let base = Params {
             src_rect: scene_rect,
             direction: [0.0, 0.0],
@@ -365,6 +514,7 @@ impl BackdropRenderer {
             curvature: region.curvature,
             _pad: 0.0,
             radii: region.radii.to_array(),
+            mask_rect,
         };
 
         // 1. Scene region → working[0], shrunk.
@@ -405,23 +555,31 @@ impl BackdropRenderer {
             );
         }
 
-        // 3. Back over the scene, masked to the container's shape.
-        let bind = self.bind(
-            device,
-            &targets.working_views[0],
-            Params {
-                src_rect: work_rect,
-                ..base
-            },
-        );
+        // 3. Back over the scene, cut out by the shape or by the mask.
+        let params = Params {
+            src_rect: work_rect,
+            ..base
+        };
+        let (pipeline, bind, label) = match mask {
+            Some(mask) => (
+                &self.composite_mask,
+                self.bind_masked(device, &targets.working_views[0], mask, params),
+                "Backdrop Composite Mask",
+            ),
+            None => (
+                &self.composite,
+                self.bind(device, &targets.working_views[0], params),
+                "Backdrop Composite",
+            ),
+        };
         self.pass(
             encoder,
-            &self.composite,
+            pipeline,
             &targets.scene_view,
             wgpu::LoadOp::Load,
             &bind,
             (x, y, width, height),
-            "Backdrop Composite",
+            label,
         );
     }
 
@@ -447,6 +605,7 @@ impl BackdropRenderer {
                 curvature: 1.0,
                 _pad: 0.0,
                 radii: [0.0; 4],
+                mask_rect: [0.0, 0.0, 1.0, 1.0],
             },
         );
         self.pass(
