@@ -86,7 +86,7 @@ container()
 ```
 
 `focus()` lands on the next frame, not inside the call. Focus is resolved against
-the tree — that is where a widget's ancestors are, and `focused_state` needs them
+the tree — that is where a widget's ancestors are, and `when_focused` needs them
 — and the composing code has no tree. Every toolkit arrives at the same shape:
 Compose's `FocusRequester` must be called from an effect, iced's
 `text_input::focus(id)` returns a `Task` for the runtime to run, and Flutter tells

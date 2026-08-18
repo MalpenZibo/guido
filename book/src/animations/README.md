@@ -15,7 +15,7 @@ Animations in Guido work by:
 container()
     .background(Color::rgb(0.3, 0.5, 0.8))
     .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
-    .hover_state(|s| s.lighter(0.15))
+    .when_hovered(|s| s.lighter(0.15))
 ```
 
 When the hover state changes, the background animates smoothly over 200ms.

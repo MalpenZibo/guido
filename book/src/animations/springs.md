@@ -147,7 +147,7 @@ fn spring_button() -> Container {
         // Duration for color - smooth transition
         .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
 
-        .hover_state(|s| s.lighter(0.1))
+        .when_hovered(|s| s.lighter(0.1))
         .on_click(move || {
             pressed.set(true);
             // In real app: trigger action and reset

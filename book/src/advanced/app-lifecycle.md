@@ -12,7 +12,7 @@ use guido::prelude::*;
 container()
     .padding([8.0, 16.0])
     .background(Color::rgb(0.3, 0.3, 0.4))
-    .hover_state(|s| s.lighter(0.1))
+    .when_hovered(|s| s.lighter(0.1))
     .on_click(|| quit_app())
     .child(text("Quit"))
 ```

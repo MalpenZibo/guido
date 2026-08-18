@@ -47,8 +47,8 @@ fn main() {
                             .padding(8.0)
                             .background(Color::rgb(0.2, 0.2, 0.3))
                             .corner_radius(4.0)
-                            .hover_state(|s| s.lighter(0.1))
-                            .pressed_state(|s| s.ripple())
+                            .when_hovered(|s| s.lighter(0.1))
+                            .when_pressed(|s| s.ripple())
                             .on_click(move || {
                                 count.update(|c| *c += 10);
                             })
@@ -61,7 +61,7 @@ fn main() {
                             .padding(8.0)
                             .background(Color::rgb(0.2, 0.3, 0.2))
                             .corner_radius(4.0)
-                            .hover_state(|s| s.lighter(0.05))
+                            .when_hovered(|s| s.lighter(0.05))
                             .on_scroll(move |_dx, dy, _source| {
                                 scroll_offset.update(|offset| {
                                     *offset += dy;
@@ -78,7 +78,7 @@ fn main() {
                             .padding(8.0)
                             .background(Color::rgb(0.15, 0.15, 0.2))
                             .border(2.0, Color::rgb(0.4, 0.6, 0.8))
-                            .hover_state(|s| s.lighter(0.1))
+                            .when_hovered(|s| s.lighter(0.1))
                             .text_color(Color::WHITE)
                             .child(text("With border")),
                     )
@@ -91,7 +91,7 @@ fn main() {
                                 Color::rgb(0.1, 0.3, 0.5),
                             )
                             .corner_radius(4.0)
-                            .hover_state(|s| s.lighter(0.1))
+                            .when_hovered(|s| s.lighter(0.1))
                             .text_color(Color::WHITE)
                             .child(text("Gradient!")),
                     )

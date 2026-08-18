@@ -98,8 +98,8 @@ container()
     .border(1.0, Color::rgb(0.3, 0.3, 0.4))
     .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
     .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))
-    .hover_state(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
-    .pressed_state(|s| s.border(3.0, Color::rgb(0.7, 0.7, 0.8)))
+    .when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
+    .when_pressed(|s| s.border(3.0, Color::rgb(0.7, 0.7, 0.8)))
 ```
 
 ## Borders with Different Curvatures
@@ -136,7 +136,7 @@ fn card_with_border() -> Container {
         .border(1.0, Color::rgb(0.2, 0.2, 0.25))
         .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
         .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))
-        .hover_state(|s| s
+        .when_hovered(|s| s
             .border(2.0, Color::rgb(0.4, 0.6, 0.9))
             .lighter(0.03)
         )

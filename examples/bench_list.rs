@@ -67,7 +67,7 @@ fn bench_row(i: usize) -> Container {
                         Color::rgb(0.18, 0.18, 0.24)
                     }
                 })
-                .hover_state(|s| s.lighter(0.08))
+                .when_hovered(|s| s.lighter(0.08))
                 .on_click(move || checked.update(|c| *c = !*c))
                 .text_color(Color::WHITE)
                 .font_size(12.0)
@@ -81,7 +81,7 @@ fn bench_row(i: usize) -> Container {
                 .padding(6.0)
                 .background(Color::rgb(0.18, 0.18, 0.24))
                 .corner_radius(4.0)
-                .focused_state(|s| s.border(1.5, Color::rgb(0.4, 0.8, 1.0)))
+                .when_focused(|s| s.border(1.5, Color::rgb(0.4, 0.8, 1.0)))
                 .text_color(Color::WHITE)
                 .font_size(13.0)
                 .child(text_input(value)),

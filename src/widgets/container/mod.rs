@@ -44,7 +44,7 @@ use super::paint_children::{ChildPaintOptions, paint_children};
 use super::scroll::{
     ScrollAxis, ScrollState, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibility,
 };
-use super::state_layer::{RippleConfig, StateStyle, StateWhen, resolve_background};
+use super::state_layer::{RippleConfig, StateStyle, StateWhen, Stateful, resolve_background};
 use super::text_style::{TextShadow, TextStroke, TextStyle};
 use super::widget::{
     Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding, Rect,
@@ -168,7 +168,7 @@ bitflags::bitflags! {
 }
 
 /// Interaction state (callbacks, hover/press tracking, state styles, ripple).
-/// Only allocated when `.on_click()`, `.hover_state()`, `.pressed_state()`, etc. are called.
+/// Only allocated when `.on_click()`, `.when_hovered()`, `.when_pressed()`, etc. are called.
 pub(super) struct InteractionState {
     pub(super) on_click: Option<ClickCallback>,
     pub(super) on_right_click: Option<ClickCallback>,
@@ -986,7 +986,7 @@ impl Container {
     /// ```ignore
     /// container()
     ///     .text_color(theme.text_weak)
-    ///     .hover_state(|s| s.text_color(theme.text))
+    ///     .when_hovered(|s| s.text_color(theme.text))
     ///     .animate_text_color(Transition::new(200.0, TimingFunction::EaseOut))
     /// ```
     ///
@@ -1033,69 +1033,6 @@ impl Container {
         let initial = self.transform.get_or_untracked(Transform::IDENTITY);
         self.anims_mut().transform =
             Some(AnimationState::new(initial, transition).with_enter_from(enter_from));
-        self
-    }
-
-    /// Set style overrides for the hover state.
-    pub fn hover_state<F>(mut self, f: F) -> Self
-    where
-        F: FnOnce(StateStyle) -> StateStyle,
-    {
-        self.push_state(StateWhen::Hovered, f);
-        self
-    }
-
-    /// Set style overrides for the pressed state.
-    pub fn pressed_state<F>(mut self, f: F) -> Self
-    where
-        F: FnOnce(StateStyle) -> StateStyle,
-    {
-        self.push_state(StateWhen::Pressed, f);
-        self
-    }
-
-    /// Set style overrides for when any child widget has focus.
-    ///
-    /// This is useful for styling input containers when their child text input is focused.
-    ///
-    /// # Example
-    /// ```ignore
-    /// container()
-    ///     .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-    ///     .focused_state(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
-    ///     .child(text_input(value))
-    /// ```
-    pub fn focused_state<F>(mut self, f: F) -> Self
-    where
-        F: FnOnce(StateStyle) -> StateStyle,
-    {
-        self.push_state(StateWhen::Focused, f);
-        self
-    }
-
-    /// Set style overrides for while `condition` holds.
-    ///
-    /// For the states the app owns rather than the pointer: the last submit
-    /// failed, this row is selected, this value is out of range. The condition
-    /// is an ordinary signal, so nothing propagates and nothing is inferred —
-    /// whoever draws the style reads the same signal the app already has.
-    ///
-    /// Declaration order decides ties, so writing this after `focused_state`
-    /// is how an error keeps its colour on a field that holds the focus.
-    ///
-    /// # Example
-    /// ```ignore
-    /// container()
-    ///     .border(1.0, theme.line)
-    ///     .focused_state(|s| s.border(2.0, theme.accent))
-    ///     .state(wrong_password, |s| s.border(2.0, theme.error))
-    ///     .child(text_input(password))
-    /// ```
-    pub fn state<M, F>(mut self, condition: impl IntoSignal<bool, M>, f: F) -> Self
-    where
-        F: FnOnce(StateStyle) -> StateStyle,
-    {
-        self.push_state(StateWhen::When(condition.into_signal()), f);
         self
     }
 
@@ -1148,14 +1085,19 @@ impl Container {
                 || ix.on_mouse_up.is_some()
         })
     }
+}
 
-    fn push_state<F>(&mut self, when: StateWhen, f: F)
-    where
-        F: FnOnce(StateStyle) -> StateStyle,
-    {
-        self.interact_mut()
-            .states
-            .push((when, f(StateStyle::new())));
+/// The same four declarations a leaf has, in the box's own vocabulary.
+///
+/// One trait for both means `when_hovered` reads the same on a button and on
+/// its label — which is the point of the name: it promises nothing about
+/// *whose* hover, because the unit that can be hovered is the control you
+/// belong to.
+impl Stateful for Container {
+    type Style = StateStyle;
+
+    fn push_state_style(&mut self, when: StateWhen, style: StateStyle) {
+        self.interact_mut().states.push((when, style));
     }
 }
 

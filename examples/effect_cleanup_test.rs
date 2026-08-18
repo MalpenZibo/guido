@@ -150,8 +150,8 @@ fn main() {
                             .padding(10.0)
                             .background(Color::rgb(0.2, 0.5, 0.3))
                             .corner_radius(6.0)
-                            .hover_state(|s| s.lighter(0.1))
-                            .pressed_state(|s| s.ripple())
+                            .when_hovered(|s| s.lighter(0.1))
+                            .when_pressed(|s| s.ripple())
                             .on_click(move || {
                                 let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
                                 log::info!("[Child {}] Adding to list", id);
@@ -164,8 +164,8 @@ fn main() {
                             .padding(10.0)
                             .background(Color::rgb(0.5, 0.2, 0.2))
                             .corner_radius(6.0)
-                            .hover_state(|s| s.lighter(0.1))
-                            .pressed_state(|s| s.ripple())
+                            .when_hovered(|s| s.lighter(0.1))
+                            .when_pressed(|s| s.ripple())
                             .on_click(move || {
                                 children_ids.update(|list| {
                                     if let Some(id) = list.pop() {
@@ -183,8 +183,8 @@ fn main() {
                             .padding(10.0)
                             .background(Color::rgb(0.5, 0.3, 0.2))
                             .corner_radius(6.0)
-                            .hover_state(|s| s.lighter(0.1))
-                            .pressed_state(|s| s.ripple())
+                            .when_hovered(|s| s.lighter(0.1))
+                            .when_pressed(|s| s.ripple())
                             .on_click(move || {
                                 children_ids.update(|list| {
                                     log::info!(

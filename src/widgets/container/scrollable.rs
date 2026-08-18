@@ -10,6 +10,7 @@ use crate::widgets::widget::{Event, EventResponse, MouseButton, Rect, ScrollSour
 
 use super::Container;
 use super::animations::AnimationState;
+use crate::widgets::state_layer::Stateful;
 
 impl Container {
     /// Initialize scrollbar containers if scrolling is enabled and they don't exist yet.
@@ -83,8 +84,8 @@ impl Container {
             .background(handle_color)
             .corner_radius(handle_corner_radius)
             .corner_curvature(handle_corner_curvature)
-            .hover_state(move |s: StateStyle| s.background(handle_hover_color))
-            .pressed_state(move |s: StateStyle| s.background(handle_pressed_color).ripple());
+            .when_hovered(move |s: StateStyle| s.background(handle_hover_color))
+            .when_pressed(move |s: StateStyle| s.background(handle_pressed_color).ripple());
 
         // Scale animation for hover expansion (starts at 1.0 = normal size)
         // Custom spring: high stiffness (fast) + low damping (bouncy)

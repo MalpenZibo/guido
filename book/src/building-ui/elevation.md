@@ -28,8 +28,8 @@ Elevation can change on interaction for tactile feedback:
 ```rust
 container()
     .elevation(2.0)
-    .hover_state(|s| s.elevation(4.0))     // Lift on hover
-    .pressed_state(|s| s.elevation(1.0))   // Press down on click
+    .when_hovered(|s| s.elevation(4.0))     // Lift on hover
+    .when_pressed(|s| s.elevation(1.0))   // Press down on click
 ```
 
 This creates a "lifting" effect on hover and a "pressing" effect on click.
@@ -42,7 +42,7 @@ Smooth elevation transitions:
 container()
     .elevation(2.0)
     .animate_elevation(Transition::new(200.0, TimingFunction::EaseOut))
-    .hover_state(|s| s.elevation(6.0))
+    .when_hovered(|s| s.elevation(6.0))
 ```
 
 ## Elevation with Corner Radius
@@ -68,8 +68,8 @@ fn elevated_card() -> Container {
         .elevation(4.0)
         .animate_background(Transition::new(150.0, TimingFunction::EaseOut))
         .animate_elevation(Transition::new(200.0, TimingFunction::EaseOut))
-        .hover_state(|s| s.elevation(8.0).lighter(0.05))
-        .pressed_state(|s| s.elevation(2.0).darker(0.05))
+        .when_hovered(|s| s.elevation(8.0).lighter(0.05))
+        .when_pressed(|s| s.elevation(2.0).darker(0.05))
         .layout(Flex::column().spacing(8.0))
         .children([
             container().font_size(18.0).bold().text_color(Color::WHITE).child(text("Card Title")),
@@ -104,8 +104,8 @@ fn elevated_card() -> Container {
 ```rust
 container()
     .elevation(4.0)
-    .hover_state(|s| s.elevation(8.0))    // +4 on hover
-    .pressed_state(|s| s.elevation(2.0))  // -2 on press
+    .when_hovered(|s| s.elevation(8.0))    // +4 on hover
+    .when_pressed(|s| s.elevation(2.0))  // -2 on press
 ```
 
 ## Elevation with Light/Dark Themes
@@ -116,5 +116,5 @@ On dark backgrounds, elevation is subtle but effective. Pair with slight backgro
 container()
     .background(Color::rgb(0.12, 0.12, 0.16))
     .elevation(4.0)
-    .hover_state(|s| s.elevation(8.0).lighter(0.03))
+    .when_hovered(|s| s.elevation(8.0).lighter(0.03))
 ```

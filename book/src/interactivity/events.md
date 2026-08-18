@@ -42,11 +42,11 @@ The callback receives a boolean indicating hover state.
 
 ### Hover with State Layer
 
-For visual hover effects, use `hover_state` instead:
+For visual hover effects, use `when_hovered` instead:
 
 ```rust
 // Preferred for visual effects
-container().hover_state(|s| s.lighter(0.1))
+container().when_hovered(|s| s.lighter(0.1))
 
 // Use on_hover for side effects only
 container().on_hover(|hovered| {
@@ -124,8 +124,8 @@ container()
 ## Touch Input
 
 Touchscreens work out of the box: the first finger down drives the same
-pointer pipeline as the mouse, so `on_click`, `hover_state`,
-`pressed_state` (including ripples), and scroll all respond to touch. A
+pointer pipeline as the mouse, so `on_click`, `when_hovered`,
+`when_pressed` (including ripples), and scroll all respond to touch. A
 tap is a click; lifting the finger clears hover state. No code changes
 are needed.
 
@@ -140,8 +140,8 @@ let hovered = create_signal(false);
 container()
     .on_click(move || count.update(|c| *c += 1))
     .on_hover(move |h| hovered.set(h))
-    .hover_state(|s| s.lighter(0.1))
-    .pressed_state(|s| s.ripple())
+    .when_hovered(|s| s.lighter(0.1))
+    .when_pressed(|s| s.ripple())
 ```
 
 ## Event Propagation
@@ -183,8 +183,8 @@ fn interactive_counter() -> impl Widget {
                 .padding(12.0)
                 .background(Color::rgb(0.3, 0.5, 0.8))
                 .corner_radius(8.0)
-                .hover_state(|s| s.lighter(0.1))
-                .pressed_state(|s| s.ripple())
+                .when_hovered(|s| s.lighter(0.1))
+                .when_pressed(|s| s.ripple())
                 .on_click(move || count.update(|c| *c += 1))
                 .child(
                     container().text_color(Color::WHITE).child(text(move || format!("Clicked {} times", count.get())))
@@ -195,7 +195,7 @@ fn interactive_counter() -> impl Widget {
                 .padding(12.0)
                 .background(Color::rgb(0.2, 0.3, 0.2))
                 .corner_radius(8.0)
-                .hover_state(|s| s.lighter(0.05))
+                .when_hovered(|s| s.lighter(0.05))
                 .on_scroll(move |_dx, dy, _source| {
                     scroll_offset.update(|o| *o += dy);
                 })

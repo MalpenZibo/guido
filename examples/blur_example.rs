@@ -44,7 +44,7 @@ fn main() {
                             .background(Color::rgba(0.12, 0.12, 0.18, 0.55))
                             .corner_radius(radius)
                             .padding(24.0)
-                            .hover_state(|s| s.lighter(0.05))
+                            .when_hovered(|s| s.lighter(0.05))
                             .on_click(move || {
                                 // Cycle the radius to show the region follows it
                                 radius.update(|r| *r = if *r >= 48.0 { 0.0 } else { *r + 12.0 });

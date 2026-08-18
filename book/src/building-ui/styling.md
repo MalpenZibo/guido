@@ -151,7 +151,7 @@ fn styled_card(title: &str, content: &str) -> Container {
 
         // State layers
         .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
-        .hover_state(|s| s.lighter(0.05).elevation(6.0))
+        .when_hovered(|s| s.lighter(0.05).elevation(6.0))
 
         // Children
         .children([

@@ -38,8 +38,8 @@ fn main() {
                             .padding([10.0, 24.0])
                             .background(Color::rgba(0.15, 0.15, 0.25, 0.95))
                             .corner_radius(20.0)
-                            .hover_state(|s| s.lighter(0.1))
-                            .pressed_state(|s| s.ripple())
+                            .when_hovered(|s| s.lighter(0.1))
+                            .when_pressed(|s| s.ripple())
                             .on_click(move || count.update(|c| *c += 1))
                             .child(text(move || {
                                 format!(

@@ -9,8 +9,8 @@
 //! ```ignore
 //! container()
 //!     .background(Color::rgb(0.2, 0.2, 0.3))
-//!     .hover_state(|s| s.lighter(0.1))
-//!     .pressed_state(|s| s.darker(0.1).transform(Transform::scale(0.98)))
+//!     .when_hovered(|s| s.lighter(0.1))
+//!     .when_pressed(|s| s.darker(0.1).transform(Transform::scale(0.98)))
 //!     .child(text("Interactive button"))
 //! ```
 
@@ -111,7 +111,7 @@ pub struct StateStyle {
     pub text_color: Option<Signal<Color>>,
     /// Override the background alpha channel (applied after background override)
     pub alpha: Option<Signal<f32>>,
-    /// Ripple effect configuration (typically used in pressed_state)
+    /// Ripple effect configuration (typically used in a pressed layer)
     pub ripple: Option<RippleConfig>,
 }
 
@@ -132,7 +132,7 @@ impl StateStyle {
     /// ```ignore
     /// container()
     ///     .text_color(theme.text_weak)
-    ///     .hover_state(|s| s.text_color(theme.text))
+    ///     .when_hovered(|s| s.text_color(theme.text))
     ///     .child(text("Label"))
     /// ```
     pub fn text_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
@@ -149,7 +149,7 @@ impl StateStyle {
     /// ```ignore
     /// container()
     ///     .background(Color::rgb(0.2, 0.2, 0.3))
-    ///     .hover_state(|s| s.lighter(0.1)) // 10% lighter on hover
+    ///     .when_hovered(|s| s.lighter(0.1)) // 10% lighter on hover
     /// ```
     pub fn lighter<M>(mut self, amount: impl IntoSignal<f32, M>) -> Self {
         self.background = Some(BackgroundOverride::Lighter(amount.into_signal()));
@@ -162,7 +162,7 @@ impl StateStyle {
     /// ```ignore
     /// container()
     ///     .background(Color::rgb(0.2, 0.2, 0.3))
-    ///     .pressed_state(|s| s.darker(0.1)) // 10% darker on press
+    ///     .when_pressed(|s| s.darker(0.1)) // 10% darker on press
     /// ```
     pub fn darker<M>(mut self, amount: impl IntoSignal<f32, M>) -> Self {
         self.background = Some(BackgroundOverride::Darker(amount.into_signal()));
@@ -205,7 +205,7 @@ impl StateStyle {
     /// # Example
     /// ```ignore
     /// container()
-    ///     .pressed_state(|s| s.transform(Transform::scale(0.98)))
+    ///     .when_pressed(|s| s.transform(Transform::scale(0.98)))
     /// ```
     pub fn transform<M>(mut self, transform: impl IntoSignal<Transform, M>) -> Self {
         self.transform = Some(transform.into_signal());
@@ -227,7 +227,7 @@ impl StateStyle {
     /// ```ignore
     /// container()
     ///     .background(Color::rgba(1.0, 0.5, 0.0, 0.4))
-    ///     .hover_state(|s| s.lighter(0.1).alpha(0.7)) // boost alpha on hover
+    ///     .when_hovered(|s| s.lighter(0.1).alpha(0.7)) // boost alpha on hover
     /// ```
     pub fn alpha<M>(mut self, alpha: impl IntoSignal<f32, M>) -> Self {
         self.alpha = Some(alpha.into_signal());
@@ -241,7 +241,7 @@ impl StateStyle {
     /// # Example
     /// ```ignore
     /// container()
-    ///     .pressed_state(|s| s.ripple())
+    ///     .when_pressed(|s| s.ripple())
     ///     .child(text("Click for ripple"))
     /// ```
     pub fn ripple(mut self) -> Self {
@@ -254,7 +254,7 @@ impl StateStyle {
     /// # Example
     /// ```ignore
     /// container()
-    ///     .pressed_state(|s| s.ripple_with_color(Color::rgba(1.0, 0.5, 0.0, 0.3)))
+    ///     .when_pressed(|s| s.ripple_with_color(Color::rgba(1.0, 0.5, 0.0, 0.3)))
     ///     .child(text("Orange ripple"))
     /// ```
     pub fn ripple_with_color(mut self, color: Color) -> Self {

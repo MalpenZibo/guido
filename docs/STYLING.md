@@ -77,7 +77,7 @@ container()
     .border(1.0, Color::rgb(0.3, 0.3, 0.4))
     .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
     .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))
-    .hover_state(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
+    .when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
 ```
 
 ## Corner Radius
@@ -163,8 +163,8 @@ container().elevation(16.0)  // Strong shadow
 ```rust
 container()
     .elevation(2.0)
-    .hover_state(|s| s.elevation(4.0))
-    .pressed_state(|s| s.elevation(1.0))
+    .when_hovered(|s| s.elevation(4.0))
+    .when_pressed(|s| s.elevation(1.0))
 ```
 
 ## Padding
@@ -357,7 +357,7 @@ fn styled_card(title: &str, content: &str) -> Container {
         .layout(Flex::column().spacing(12.0))
         // State layers
         .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
-        .hover_state(|s| s.lighter(0.05).elevation(6.0))
+        .when_hovered(|s| s.lighter(0.05).elevation(6.0))
         // Children
         .children([
             container().font_size(18.0).bold().text_color(Color::WHITE).child(text(title)),

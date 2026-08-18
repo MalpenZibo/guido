@@ -105,8 +105,8 @@ fn create_add_button(
         .padding([8.0, 16.0])
         .background(Color::rgb(0.2, 0.4, 0.6))
         .corner_radius(6.0)
-        .hover_state(|s| s.lighter(0.1))
-        .pressed_state(|s| s.ripple())
+        .when_hovered(|s| s.lighter(0.1))
+        .when_pressed(|s| s.ripple())
         .on_click(move || {
             let id = item_store.borrow().len() as u64;
             item_store.borrow_mut().push(ItemData {
@@ -156,8 +156,8 @@ fn create_toggle_button(enabled: RwSignal<bool>) -> Container {
             }
         })
         .corner_radius(4.0)
-        .hover_state(|s| s.lighter(0.1))
-        .pressed_state(|s| s.ripple())
+        .when_hovered(|s| s.lighter(0.1))
+        .when_pressed(|s| s.ripple())
         .on_click(move || {
             enabled.update(|e| *e = !*e);
         })
@@ -207,7 +207,7 @@ fn create_text_input_field(input_value: RwSignal<String>) -> Container {
         .background(Color::rgb(0.15, 0.15, 0.2))
         .border(1.0, Color::rgb(0.3, 0.3, 0.4))
         .corner_radius(6.0)
-        .focused_state(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
+        .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
         .text_color(Color::WHITE)
         .cursor_color(Color::rgb(0.4, 0.8, 1.0))
         .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))

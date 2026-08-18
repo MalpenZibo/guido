@@ -46,7 +46,7 @@ fn main() {
                             .border(1.0, Color::rgb(0.3, 0.3, 0.4))
                             .corner_radius(6.0)
                             // Highlight border when text input is focused
-                            .focused_state(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
+                            .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
                             .text_color(Color::WHITE)
                             .cursor_color(Color::rgb(0.4, 0.8, 1.0))
                             .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
@@ -72,7 +72,7 @@ fn main() {
                             .border(1.0, Color::rgb(0.3, 0.3, 0.4))
                             .corner_radius(6.0)
                             // Highlight border when text input is focused
-                            .focused_state(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
+                            .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
                             .text_color(Color::WHITE)
                             .cursor_color(Color::rgb(0.4, 0.8, 1.0))
                             .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))

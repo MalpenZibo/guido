@@ -15,8 +15,8 @@ pub fn button(label: String) -> impl Widget {
         .padding(12.0)
         .background(Color::rgb(0.3, 0.5, 0.8))
         .corner_radius(6.0)
-        .hover_state(|s| s.lighter(0.1))
-        .pressed_state(|s| s.ripple())
+        .when_hovered(|s| s.lighter(0.1))
+        .when_pressed(|s| s.ripple())
         .child(container().text_color(Color::WHITE).child(text(label)))
 }
 ```
@@ -265,8 +265,8 @@ pub fn button(
         .padding(padding)
         .background(background)
         .corner_radius(6.0)
-        .hover_state(|s| s.lighter(0.1))
-        .pressed_state(|s| s.ripple())
+        .when_hovered(|s| s.lighter(0.1))
+        .when_pressed(|s| s.ripple())
         .on_click_option(on_click)
         .child(container().text_color(Color::WHITE).child(text(label)))
 }

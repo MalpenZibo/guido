@@ -138,7 +138,7 @@ Apply transforms on interaction:
 
 ```rust
 container()
-    .pressed_state(|s| s.transform(Transform::scale(0.98)))
+    .when_pressed(|s| s.transform(Transform::scale(0.98)))
 ```
 
 ## Hit Testing

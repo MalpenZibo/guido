@@ -119,7 +119,7 @@ fn item_widget(item: Item) -> impl Widget {
 
     container()
         .padding(8.0)
-        .hover_state(|s| s.lighter(0.1))
+        .when_hovered(|s| s.lighter(0.1))
         .on_click(move || clicks.update(|c| *c += 1))
         .child(text(move || format!("{} (clicks: {})", item.name, clicks.get())))
 }
@@ -187,8 +187,8 @@ fn button(label: &str, on_click: impl Fn() + 'static) -> Container {
         .padding(8.0)
         .background(Color::rgb(0.3, 0.3, 0.4))
         .corner_radius(4.0)
-        .hover_state(|s| s.lighter(0.1))
-        .pressed_state(|s| s.ripple())
+        .when_hovered(|s| s.lighter(0.1))
+        .when_pressed(|s| s.ripple())
         .on_click(on_click)
         .child(container().text_color(Color::WHITE).child(text(label)))
 }

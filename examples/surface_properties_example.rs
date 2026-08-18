@@ -189,8 +189,8 @@ fn layer_button(
         .padding([8.0, 12.0])
         .background(Color::rgb(0.25, 0.25, 0.35))
         .corner_radius(6.0)
-        .hover_state(|s| s.lighter(0.1))
-        .pressed_state(|s| s.ripple())
+        .when_hovered(|s| s.lighter(0.1))
+        .when_pressed(|s| s.ripple())
         .on_click(move || {
             if let Some(id) = surface_id_signal.get() {
                 let handle = surface_handle(id);
@@ -213,8 +213,8 @@ fn keyboard_button(
         .padding([8.0, 12.0])
         .background(Color::rgb(0.25, 0.3, 0.35))
         .corner_radius(6.0)
-        .hover_state(|s| s.lighter(0.1))
-        .pressed_state(|s| s.ripple())
+        .when_hovered(|s| s.lighter(0.1))
+        .when_pressed(|s| s.ripple())
         .on_click(move || {
             if let Some(id) = surface_id_signal.get() {
                 let handle = surface_handle(id);
