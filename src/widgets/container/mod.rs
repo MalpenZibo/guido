@@ -14,7 +14,7 @@ mod characterization;
 pub(crate) use animations::with_measure_final;
 pub use animations::{AdvanceResult, AnimationState, get_animated_value};
 use interaction::{HitContext, untransform_point};
-pub use ripple::RippleState;
+pub use ripple::{RIPPLE_START_RADIUS, RippleState};
 use style::Decoration;
 
 use std::borrow::Cow;
@@ -1232,7 +1232,7 @@ impl Widget for Container {
             && ix.ripple.is_active()
             && let Some(config) = ix.ripple_config()
         {
-            let ripple_animating = ix.ripple.advance(&config);
+            let ripple_animating = ix.ripple.advance(&config, std::time::Instant::now());
             if ripple_animating {
                 // Ripple is paint-only, request animation continuation with paint
                 request_job(id, JobRequest::Animation(RequiredJob::Paint));
@@ -1686,29 +1686,47 @@ impl Widget for Container {
             self.paint_scrollbar_containers(tree, id, ctx);
         }
 
-        // Draw ripple effect as overlay (ripple.center is already in local coordinates)
+        // Ripples, oldest first, in local coordinates. The state holds the
+        // press point and how far along each one is; the geometry is the
+        // container's, so it is resolved here.
         if let Some(ref ix) = self.interaction
-            && let Some((local_cx, local_cy)) = ix.ripple.center
+            && ix.ripple.is_active()
             && let Some(ripple_config) = ix.ripple_config()
-            && ix.ripple.opacity > 0.0
         {
-            // Set overlay clip to container bounds with rounded corners
-            // This clips the ripple without affecting children
+            // Clips the ripples without affecting children.
             ctx.set_overlay_clip(local_bounds, corner_radius, corner_curvature);
+            let (mid_x, mid_y) = (bounds.width / 2.0, bounds.height / 2.0);
 
-            let max_dist_x = local_cx.max(bounds.width - local_cx);
-            let max_dist_y = local_cy.max(bounds.height - local_cy);
-            let max_radius = (max_dist_x * max_dist_x + max_dist_y * max_dist_y).sqrt();
-            let current_radius = max_radius * ix.ripple.progress;
+            for ripple in ix.ripple.iter() {
+                let opacity = ripple.opacity();
+                if opacity <= 0.0 {
+                    continue;
+                }
+                let (origin_x, origin_y) = ripple.origin();
+                let growth = ripple.growth();
 
-            let ripple_color = Color::rgba(
-                ripple_config.color.r,
-                ripple_config.color.g,
-                ripple_config.color.b,
-                ripple_config.color.a * ix.ripple.opacity,
-            );
+                // Far enough to reach the corner furthest from where the
+                // pointer went down, so a full ripple covers the box.
+                let max_dist_x = origin_x.max(bounds.width - origin_x);
+                let max_dist_y = origin_y.max(bounds.height - origin_y);
+                let max_radius = (max_dist_x * max_dist_x + max_dist_y * max_dist_y).sqrt();
+                let radius =
+                    max_radius * (RIPPLE_START_RADIUS + (1.0 - RIPPLE_START_RADIUS) * growth);
 
-            ctx.draw_overlay_circle(local_cx, local_cy, current_radius, ripple_color);
+                // The centre settles onto the container as the disc grows,
+                // which is what stops a corner press from looking lopsided.
+                let center_x = origin_x + (mid_x - origin_x) * growth;
+                let center_y = origin_y + (mid_y - origin_y) * growth;
+
+                let ripple_color = Color::rgba(
+                    ripple_config.color.r,
+                    ripple_config.color.g,
+                    ripple_config.color.b,
+                    ripple_config.color.a * opacity,
+                );
+
+                ctx.draw_overlay_circle(center_x, center_y, radius, ripple_color);
+            }
         }
     }
 }

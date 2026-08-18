@@ -15,6 +15,8 @@
 //! [`track_pointer`]: Container::track_pointer
 //! [`handle_own_event`]: Container::handle_own_event
 
+use std::time::Instant;
+
 use super::*;
 
 /// The geometry an event is resolved against: where the container ended up,
@@ -197,7 +199,7 @@ impl Container {
                     if has_ripple {
                         let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
                         let (local_x, local_y) = hit.local(screen_x, screen_y);
-                        ix.ripple.start(local_x, local_y);
+                        ix.ripple.start(local_x, local_y, Instant::now());
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
@@ -229,10 +231,11 @@ impl Container {
                     let was_pressed = ix.is_pressed();
                     ix.set_flag(InteractionFlags::PRESSED, false);
 
+                    // Released inside: the press happened, so the ripple
+                    // finishes its expansion on the way out. Where the pointer
+                    // ended up does not enter into it.
                     if ix.ripple.is_active() {
-                        let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
-                        let (local_x, local_y) = hit.local(screen_x, screen_y);
-                        ix.ripple.start_fade(local_x, local_y);
+                        ix.ripple.release(Instant::now());
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
@@ -275,11 +278,11 @@ impl Container {
                     }
                     ix.set_flag(InteractionFlags::PRESSED, false);
 
-                    // The pointer left without a release, so the ripple has no
-                    // exit point to fade toward — it collapses to the centre.
+                    // The pointer left without releasing, so nothing was
+                    // activated and there is nothing to complete: the ripple
+                    // just goes.
                     if ix.ripple.is_active() {
-                        ix.ripple
-                            .start_fade_to_center(hit.bounds.width, hit.bounds.height);
+                        ix.ripple.cancel(Instant::now());
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
