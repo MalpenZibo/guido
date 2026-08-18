@@ -56,7 +56,7 @@
 
 use smallvec::SmallVec;
 
-use crate::reactive::Signal;
+use crate::reactive::{IntoSignal, Signal};
 
 use super::font::{FontFamily, FontWeight};
 use super::widget::Color;
@@ -257,5 +257,72 @@ impl TextStyle {
             && self.font_weight.is_some()
             && self.stroke.is_some()
             && self.shadow.is_some()
+    }
+}
+
+/// The vocabulary for declaring text style, written once.
+///
+/// Implemented by whoever *draws* glyphs — [`Text`](crate::widgets::Text) and
+/// [`TextInput`](crate::widgets::TextInput). A container declares text style
+/// for its descendants through setters of its own, and deliberately does not
+/// implement this trait: it draws a box, and the rule that keeps properties
+/// where they belong is that a widget declares what it draws.
+///
+/// A declaration here is the nearest one there is, so it wins over every
+/// ancestor:
+///
+/// ```ignore
+/// container().text_color(theme.weak)
+///     .child(text("quiet"))
+///     .child(text("loud").color(theme.strong))
+/// ```
+pub trait TextStyled: Sized {
+    #[doc(hidden)]
+    fn text_style_mut(&mut self) -> &mut TextStyle;
+
+    /// Colour of the glyphs.
+    fn color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.text_style_mut().color = Some(color.into_signal());
+        self
+    }
+
+    /// Font size in logical pixels.
+    fn font_size<M>(mut self, size: impl IntoSignal<f32, M>) -> Self {
+        self.text_style_mut().font_size = Some(size.into_signal());
+        self
+    }
+
+    /// Font family.
+    fn font_family<M>(mut self, family: impl IntoSignal<FontFamily, M>) -> Self {
+        self.text_style_mut().font_family = Some(family.into_signal());
+        self
+    }
+
+    /// Font weight on the CSS 100-900 scale.
+    fn font_weight<M>(mut self, weight: impl IntoSignal<FontWeight, M>) -> Self {
+        self.text_style_mut().font_weight = Some(weight.into_signal());
+        self
+    }
+
+    /// Shorthand for [`font_weight`](Self::font_weight) at `FontWeight::BOLD`.
+    fn bold(self) -> Self {
+        self.font_weight(FontWeight::BOLD)
+    }
+
+    /// Shorthand for [`font_family`](Self::font_family) at the monospace family.
+    fn mono(self) -> Self {
+        self.font_family(FontFamily::Monospace)
+    }
+
+    /// Contour drawn around the glyphs, under the fill.
+    fn text_stroke<M>(mut self, stroke: impl IntoSignal<TextStroke, M>) -> Self {
+        self.text_style_mut().stroke = Some(stroke.into_signal());
+        self
+    }
+
+    /// Soft shadow cast by the glyphs.
+    fn text_shadow<M>(mut self, shadow: impl IntoSignal<TextShadow, M>) -> Self {
+        self.text_style_mut().shadow = Some(shadow.into_signal());
+        self
     }
 }

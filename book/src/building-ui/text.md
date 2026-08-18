@@ -8,19 +8,23 @@ The Text widget renders text content with support for reactive updates.
 text("Hello, World!")
 ```
 
-## Where styling lives
+## Styling
 
-Guido has one styling widget. A `text` carries the string and nothing else —
-how it looks is declared on an enclosing container, next to that container's
-background, border and animations:
+A text declares how it looks:
 
 ```rust
-container().font_size(24.0).text_color(theme.text).child(text("Hello"))
+text("Hello").font_size(24.0).color(theme.text).bold()
 ```
 
-Each property is inherited by everything below, until a nearer container
-overrides it. Resolution is per property, so overriding the size leaves a
-colour set further up alone:
+The methods come from the `TextStyled` trait — `color`, `font_size`,
+`font_family`, `font_weight`, `bold`, `mono`, `text_stroke`, `text_shadow` —
+implemented by the two widgets that draw glyphs, `Text` and `TextInput`.
+
+### Dressing a whole subtree
+
+The same properties can be declared on a container instead, where everything
+below inherits them. Resolution is per property, so overriding the size leaves
+a colour set further up alone:
 
 ```rust
 container()
@@ -32,8 +36,35 @@ container()
 ```
 
 Containers that say nothing about text are transparent to this, so layout
-wrappers do not interrupt it. Properties nothing declares fall back to white,
-14 logical pixels, the registered default family and normal weight.
+wrappers do not interrupt it. A declaration on the text itself is the nearest
+one there is, so it wins over every container above it:
+
+```rust
+container().text_color(theme.weak)
+    .child(text("quiet"))
+    .child(text("loud").color(theme.strong))
+```
+
+Properties nothing declares fall back to white, 14 logical pixels, the
+registered default family and normal weight.
+
+### Repeating a style
+
+For "the same kind of label, many times", write a function rather than reaching
+for a wrapper:
+
+```rust
+let label = |s: &str| text(s).color(theme.weak).font_size(12.0);
+
+container()
+    .layout(Flex::row().spacing(8.0))
+    .children([label("one"), label("two"), label("three")])
+```
+
+The style keeps a name, stays next to the widget that draws it, and costs no
+extra node. A container's inherited declaration is the right tool when the
+texts are not yours to write — inside a component you are calling — or when
+there are too many to name.
 
 ## Legibility over an image
 

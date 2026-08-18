@@ -20,7 +20,7 @@ pub use children::ChildrenSource;
 pub use container::{Border, Container, GradientDirection, LinearGradient, Overflow, container};
 pub use font::{FontFamily, FontWeight};
 pub use image::{ContentFit, Image, ImageSource, image};
-pub use input_style::InputStyle;
+pub use input_style::{InputStyle, InputStyled};
 pub use into_child::{
     DynamicChildren, IntoChild, IntoChildren, IntoDynChild, KeyedChildren, StaticChildren, keyed,
 };
@@ -28,7 +28,7 @@ pub use scroll::{ScrollAxis, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibil
 pub use state_layer::{BackgroundOverride, RippleConfig, StateStyle, StateWhen};
 pub use text::{Text, text};
 pub use text_input::{Selection, TextInput, text_input};
-pub use text_style::{TextShadow, TextStroke, TextStyle};
+pub use text_style::{TextShadow, TextStroke, TextStyle, TextStyled};
 pub use widget::{
     AnyWidget, Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding,
     Rect, ScrollSource, Widget,

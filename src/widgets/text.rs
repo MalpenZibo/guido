@@ -6,7 +6,7 @@ use crate::renderer::{PaintContext, measure_text_full};
 use crate::tree::{Tree, WidgetId};
 
 use super::font::{FontFamily, FontWeight};
-use super::text_style::{TextShadow, TextStroke};
+use super::text_style::{TextShadow, TextStroke, TextStyle, TextStyled};
 use super::widget::{Color, Rect, Widget};
 
 /// How far a stroke and a shadow reach past the glyphs they decorate.
@@ -23,16 +23,20 @@ pub(crate) fn decoration_overflow(stroke: Option<TextStroke>, shadow: Option<Tex
 
 /// A run of text.
 ///
-/// Content only: colour, size, family and weight are declared on an enclosing
-/// container and inherited from the nearest one that sets them — see
-/// [`TextStyle`](super::TextStyle).
+/// Style may be declared here — [`TextStyled`](super::TextStyled) — or on an
+/// enclosing container, in which case it is inherited from the nearest one
+/// that sets each property. A declaration on the text itself is the nearest
+/// there is, so it wins.
 ///
 /// ```ignore
-/// container().font_size(21.0).text_color(theme.text)
-///     .child(text("Hello"))
+/// text("Hello").font_size(21.0).color(theme.text)
+/// container().font_size(21.0).child(text("Hello"))   // same, for a group
 /// ```
 pub struct Text {
     content: Signal<String>,
+    /// What this text declares about itself. Boxed and absent by default: a
+    /// text that says nothing pays a null check, not a struct.
+    style: Option<Box<TextStyle>>,
     /// If true, text won't wrap and will be clipped by parent container
     nowrap: bool,
     /// Cached values for painting (avoid re-reading signals)
@@ -51,6 +55,7 @@ impl Text {
         let default_family = default_font_family();
         Self {
             content,
+            style: None,
             nowrap: false,
             cached_text: String::new(), // Will be set during first layout
             cached_font_size: 14.0,
@@ -66,6 +71,19 @@ impl Text {
         self
     }
 
+    /// This text's own declaration, completed by the ancestors' for whatever
+    /// it leaves out. The walk is skipped when nothing is left to find.
+    ///
+    /// Called inside the caller's tracking scope, like the walk it wraps: the
+    /// signals come back unread, and reading them is what subscribes.
+    fn resolved_style(&self, tree: &Tree, id: WidgetId) -> TextStyle {
+        let mut style = self.style.as_deref().copied().unwrap_or_default();
+        if !style.is_complete() {
+            style.inherit_from(&tree.inherited_text_style(id));
+        }
+        style
+    }
+
     /// Refresh cached values from the inherited style.
     ///
     /// The signals are read here, inside this widget's tracking scope, so the
@@ -76,13 +94,19 @@ impl Text {
     /// caller records as damage slop.
     fn refresh(&mut self, tree: &Tree, id: WidgetId) -> f32 {
         with_signal_tracking(id, JobType::Layout, || {
-            let style = tree.inherited_text_style(id);
+            let style = self.resolved_style(tree, id);
             self.cached_text = self.content.get();
             self.cached_font_size = style.font_size.get_or(14.0);
             self.cached_font_family = style.font_family.get_or_else(default_font_family);
             self.cached_font_weight = style.font_weight.get_or(FontWeight::NORMAL);
             decoration_overflow(style.stroke.map(|s| s.get()), style.shadow.map(|s| s.get()))
         })
+    }
+}
+
+impl TextStyled for Text {
+    fn text_style_mut(&mut self) -> &mut TextStyle {
+        self.style.get_or_insert_with(Box::default)
     }
 }
 
@@ -166,7 +190,7 @@ impl Widget for Text {
         // Read the painted properties with tracking so a change on whichever
         // ancestor supplied them repaints this text and nothing else.
         let (color, stroke, shadow) = with_signal_tracking(id, JobType::Paint, || {
-            let style = tree.inherited_text_style(id);
+            let style = self.resolved_style(tree, id);
             (
                 style.color.get_or(Color::WHITE),
                 style.stroke.map(|s| s.get()),
@@ -213,6 +237,7 @@ mod tests {
     use crate::reactive::create_signal;
     use crate::renderer::{DrawCommand, RenderNode};
     use crate::widgets::container;
+    use crate::widgets::text_style::TextStyled;
 
     /// Lay out and paint, returning the first text command's colour and size.
     ///
@@ -281,5 +306,38 @@ mod tests {
             "a change to an inherited declaration must re-measure and repaint \
              the text that read it"
         );
+    }
+
+    /// A declaration on the text is the nearest one there is, per property:
+    /// the size below comes from the text, the colour from the container.
+    #[test]
+    fn a_texts_own_declaration_wins_over_its_ancestors() {
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            container()
+                .font_size(10.0)
+                .text_color(Color::RED)
+                .child(text("hi").font_size(40.0)),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        assert_eq!(frame(&mut tree, root), (Color::RED, 40.0));
+    }
+
+    /// And it is reactive on the same terms as an inherited one: the signal is
+    /// read where the style is resolved, inside the text's own scope.
+    #[test]
+    fn a_texts_own_declaration_follows_its_signal() {
+        let color = create_signal(Color::RED);
+
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            container().child(text("hi").color(move || color.get())),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        assert_eq!(frame(&mut tree, root).0, Color::RED);
+        color.set(Color::BLUE);
+        assert_eq!(frame(&mut tree, root).0, Color::BLUE);
     }
 }
