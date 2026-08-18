@@ -198,11 +198,34 @@ container()
 
 ```rust
 container()
-    .min_width(50.0)
-    .max_width(200.0)
-    .min_height(30.0)
-    .max_height(100.0)
+    .width(at_least(50.0).at_most(200.0))
+    .height(at_least(30.0).at_most(100.0))
 ```
+
+## Static or Reactive
+
+Every property that survives to paint takes a signal, a closure, or a plain
+value — the same `IntoSignal` shape everywhere, so which spelling you use is
+never the API's decision:
+
+```rust
+container()
+    .background(theme.surface)                       // a constant
+    .background(surface_color)                       // a signal
+    .background(move || if hot.get() { HOT } else { COOL })   // a closure
+    .gradient(move || palette.get().header())
+    .backdrop_blur(move || if frosted.get() { 24.0 } else { 0.0 })
+    .overflow(move || if collapsed.get() { Overflow::Hidden } else { Overflow::Visible })
+```
+
+A blur radius of `0.0` is "no blur", on a container and on a text alike, which
+is what lets one signal switch the effect on and off rather than forcing the
+caller to rebuild the widget in a Rust branch.
+
+**What is not reactive** is structural: `.layout(..)`, `.scrollable(..)`,
+`.scrollbar(..)`, `.control()`, and the `.animate_*()` declarations. These say
+what kind of thing the container *is*; change one and you are describing a
+different widget, so declare it in the closure that builds the widget instead.
 
 ## Text Styling
 

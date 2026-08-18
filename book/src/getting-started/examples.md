@@ -195,7 +195,7 @@ cargo run --example children_example
 - `.child()` for single children
 - `.children([...])` for multiple children
 - `.maybe_child()` for conditional rendering
-- `.children_dyn()` for reactive lists
+- `.children(keyed(..))` for reactive lists
 
 ---
 

@@ -89,7 +89,8 @@ cargo test
 - `RwSignal<T>`: Read-write reactive signal (8 bytes). Created via `create_signal` (requires Clone+PartialEq+Send). Has `.get()`, `.set()`, `.update()`, `.writer()`. Converts to `Signal<T>` via `.read_only()` or `.into()`
 - `Signal<T>`: Read-only reactive signal (12 bytes). Created via `create_stored` (static, requires Clone) or `create_derived` (closure-backed). Has `.get()`, `.with()` — no mutation methods. Widget props accept `Signal<T>` via `IntoSignal<T, M>` (marker-type disambiguation — integers accepted where `f32`/`Length`/`Padding` expected)
 - `Memo<T>`: Eager computed values that recompute when dependencies change, only notify on actual changes (`PartialEq`)
-- `Effect`: Side effects that re-run when tracked signals change
+- `create_effect`: side effects that re-run when tracked signals change. Returns nothing — an effect's lifetime is its scope's
+- `create_task` / `create_service`: async background work, aborted with the scope. `create_task` for push-only, `create_service` when the UI sends commands
 - `Owner`: Ownership system for automatic resource cleanup (signals, effects, custom callbacks)
 - Runtime uses thread-local storage for automatic dependency tracking on the main thread
 - Container paint/layout auto-tracks signal reads via `with_signal_tracking()` — closures work as reactive properties
@@ -97,7 +98,8 @@ cargo test
 
 **`widgets/`** - Composable UI primitives implementing the `Widget` trait
 - `Container`: Handles padding, background colors, gradients, borders, corner radius, and event handlers (click, hover, scroll)
-- `Row` / `Column`: Flexbox-style layouts with alignment and spacing
+- **Reactivity rule**: everything that survives to paint takes `impl IntoSignal<T, M>` (background, gradient, backdrop_blur, overflow, corners, border, transform, …); structural declarations do not (`layout`, `scrollable`, `scrollbar`, `control`, `animate_*`)
+- `Flex` / `ZStack`: layouts plugged into a container via `.layout(Flex::row())`; the `Layout` trait is public, so an app can write its own
 - `Text`: Text rendering with reactive content and styling
 - `AnyWidget`: Type alias for `Box<dyn Widget>` with `Widget::into_any()` for type erasure
 - All widget properties can be static values or reactive (via `IntoSignal` trait)
@@ -130,7 +132,7 @@ cargo test
 **`layout/`** - Constraint-based layout system
 - `Constraints`: min/max width/height bounds for sizing
 - `Size`: layout results
-- Flexbox layout logic for Row/Column widgets
+- `Flex` (row/column) and `ZStack` layout implementations
 
 ### Reactive System Details
 
@@ -158,12 +160,15 @@ Both `Signal<T>` and `RwSignal<T>` are main-thread only (`!Send`). Background th
 
 ### Widget Trait
 
-All widgets implement:
-- `layout(constraints) -> Size`: Calculate size given constraints
-- `paint(ctx)`: Draw to the PaintContext
-- `event(event) -> EventResponse`: Handle input events
-- `set_origin(x, y)`: Position the widget
-- `bounds() -> Rect`: Get bounding box for hit testing
+Two methods are required, the rest have defaults:
+- `layout(&mut self, tree, id, constraints) -> Size`: measure, then `tree.cache_layout(..)`
+- `paint(&self, tree, id, ctx)`: draw into the PaintContext
+- `event(&mut self, tree, id, event) -> EventResponse`: handle input (defaults to `Ignored`)
+- `advance_animations`, `reconcile_children`, `layout_hints`, `register_children`: defaults
+
+Position and bounds live in the `Tree`, not on the widget. Writing one from
+outside the crate needs `guido::widget_prelude::*` alongside the ordinary
+prelude — see `tests/external_widget.rs`.
 
 ### Rendering Pipeline
 
@@ -194,7 +199,12 @@ Events flow from Wayland → platform layer → widgets:
 - `MouseDown`, `MouseUp`: Button clicks with coordinates
 - `Scroll`: Wheel or touchpad scrolling with delta values
 
-Containers provide callback builders (`.on_click()`, `.on_hover()`, `.on_scroll()`) that widgets can use to respond to events.
+Containers provide callback builders (`.on_click()`, `.on_hover()`, `.on_scroll()`) that widgets can use to respond to events. `on_click` accepts a closure, a `Callback`, or the `Option<Callback>` a `#[component]` prop holds.
+
+### Preludes
+
+- `guido::prelude` — applications
+- `guido::widget_prelude` — implementing `Widget` or `Layout` (`Tree`, `WidgetId`, `Constraints`, `PaintContext`, `RenderNode`, `LayoutHints`, `with_signal_tracking`, `JobType`). Import alongside the ordinary prelude; see `tests/external_widget.rs` and `book/src/advanced/custom-widgets.md`
 
 ## Important Patterns
 
@@ -206,8 +216,8 @@ Use the state layer API for hover and pressed visual feedback:
 container()
     .background(Color::rgb(0.2, 0.2, 0.3))
     .corner_radius(8.0)
-    .hover_state(|s| s.lighter(0.1))      // Lighten on hover
-    .pressed_state(|s| s.ripple())         // Ripple on press
+    .when_hovered(|s| s.lighter(0.1))      // Lighten on hover
+    .when_pressed(|s| s.ripple())         // Ripple on press
     .on_click(move || count.update(|c| *c += 1))
     .child(text("Click me"))
 ```
@@ -224,8 +234,8 @@ let view = container()
         text(move || format!("Count: {}", count.get())),
         container()
             .background(Color::rgb(0.3, 0.3, 0.4))
-            .hover_state(|s| s.lighter(0.1))
-            .pressed_state(|s| s.ripple())
+            .when_hovered(|s| s.lighter(0.1))
+            .when_pressed(|s| s.ripple())
             .on_click(move || count.update(|c| *c += 1))
             .child(text("Click me"))
     ]);
@@ -272,14 +282,14 @@ handle.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
 
 ### Integrating Background Tasks
 
-Use `create_service` for async background tasks that are automatically cleaned up. Use `.writer()` to get a `WriteSignal<T>` that is `Send` and can be moved into the async task:
+Use `create_task` for async background work that only pushes, `create_service` when the UI also sends commands. Both are cleaned up automatically. Use `.writer()` to get a `WriteSignal<T>` that is `Send` and can be moved into the async task:
 
 ```rust
 let data = create_signal(String::new());
 let data_w = data.writer();  // WriteSignal<T> — Send, for background tasks
 
-// Read-only service (ignore receiver)
-let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+// Push-only: no command type, no receiver
+create_task(move |ctx| async move {
     while ctx.is_running() {
         data_w.set(fetch_data());
         tokio::time::sleep(Duration::from_secs(1)).await;

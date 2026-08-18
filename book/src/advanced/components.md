@@ -54,9 +54,9 @@ button().label("Required")
 #[component]
 pub fn button(
     label: String,
-    #[prop(default = "Color::rgb(0.3, 0.3, 0.4)")]
+    #[prop(default = Color::rgb(0.3, 0.3, 0.4))]
     background: Color,
-    #[prop(default = "Padding::all(8.0)")]
+    #[prop(default = Padding::all(8.0))]
     padding: Padding,
 ) -> impl Widget {
     container()
@@ -82,7 +82,7 @@ pub fn button(
     #[prop(callback)] on_click: (),
 ) -> impl Widget {
     container()
-        .on_click_option(on_click)
+        .on_click(on_click)
         .child(text(label))
 }
 ```
@@ -123,14 +123,14 @@ In the function body, each prop is a read-only `Signal<T>` (which is `Copy`). Pa
 #[component]
 pub fn button(
     label: String,
-    #[prop(default = "Padding::all(8.0)")] padding: Padding,
-    #[prop(default = "Color::rgb(0.3, 0.3, 0.4)")] background: Color,
+    #[prop(default = Padding::all(8.0))] padding: Padding,
+    #[prop(default = Color::rgb(0.3, 0.3, 0.4))] background: Color,
     #[prop(callback)] on_click: (),
 ) -> impl Widget {
     container()
         .padding(padding)                  // Pass Signal<Padding> directly (Copy, keeps reactivity)
         .background(background)            // Pass Signal<Color> directly (Copy, keeps reactivity)
-        .on_click_option(on_click)         // Copy handle, no clone
+        .on_click(on_click)         // Copy handle, no clone
         .child(text(label))
 }
 ```
@@ -257,8 +257,8 @@ use guido::prelude::*;
 #[component]
 pub fn button(
     label: String,
-    #[prop(default = "Color::rgb(0.3, 0.3, 0.4)")] background: Color,
-    #[prop(default = "Padding::all(8.0)")] padding: Padding,
+    #[prop(default = Color::rgb(0.3, 0.3, 0.4))] background: Color,
+    #[prop(default = Padding::all(8.0))] padding: Padding,
     #[prop(callback)] on_click: (),
 ) -> impl Widget {
     container()
@@ -267,14 +267,14 @@ pub fn button(
         .corner_radius(6.0)
         .when_hovered(|s| s.lighter(0.1))
         .when_pressed(|s| s.ripple())
-        .on_click_option(on_click)
+        .on_click(on_click)
         .child(container().text_color(Color::WHITE).child(text(label)))
 }
 
 #[component]
 pub fn card(
     title: String,
-    #[prop(default = "Color::rgb(0.18, 0.18, 0.22)")] background: Color,
+    #[prop(default = Color::rgb(0.18, 0.18, 0.22))] background: Color,
     #[prop(children)] children: (),
 ) -> impl Widget {
     container()

@@ -45,8 +45,7 @@ All styling is done in Rust code, not external CSS files. This provides type saf
 
 // Spacing
 .padding(16.0)
-.padding_horizontal(20.0)
-.padding_vertical(10.0)
+.padding([10.0, 20.0])   // [vertical, horizontal]
 
 // Size
 .width(100.0)

@@ -201,9 +201,7 @@ container()
 ### Minimum/Maximum
 
 ```rust
-container()
-    .min_width(100.0)
-    .max_width(300.0)
+container().width(at_least(100.0).at_most(300.0))
 ```
 
 ### At Least

@@ -319,14 +319,15 @@ impl SurfaceHandle {
     /// Change anchor edges
     pub fn set_anchor(&self, anchor: Anchor);
 
-    /// Change surface size
-    pub fn set_size(&self, width: u32, height: u32);
+    /// Change surface size — same vocabulary as `SurfaceConfig::width`,
+    /// so an axis can be handed back to `content()`
+    pub fn set_size(&self, width: impl Into<SurfaceExtent>, height: impl Into<SurfaceExtent>);
 
-    /// Change exclusive zone
-    pub fn set_exclusive_zone(&self, zone: i32);
+    /// Change the screen-space reservation policy
+    pub fn set_exclusive_zone(&self, zone: impl Into<ExclusiveZone>);
 
-    /// Change margins
-    pub fn set_margin(&self, top: i32, right: i32, bottom: i32, left: i32);
+    /// Change margins — CSS shorthands, as `padding` takes
+    pub fn set_margin(&self, margin: impl Into<Margin>);
 }
 ```
 
@@ -602,8 +603,7 @@ create_effect(move || {
     if popup.dismissed() {
         menu_open.set(false);
     }
-})
-.detach();
+});
 ```
 
 `popup.close()` closes it programmatically. Popups render their own
@@ -676,7 +676,7 @@ fn main() {
                 .height(32)
                 .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
                 .layer(Layer::Top)
-                .exclusive_zone(Some(32))
+                .exclusive_zone(32u32)
                 .namespace("status-bar")
                 .background_color(Color::rgb(0.1, 0.1, 0.15)),
             || {
@@ -708,7 +708,7 @@ fn main() {
                 .height(64)
                 .anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT)
                 .layer(Layer::Top)
-                .exclusive_zone(Some(64))
+                .exclusive_zone(64u32)
                 .namespace("dock")
                 .background_color(Color::rgba(0.1, 0.1, 0.15, 0.9)),
             || {
@@ -772,7 +772,7 @@ impl SurfaceConfig {
     pub fn exclusive_zone(self, zone: Option<i32>) -> Self;
     pub fn namespace(self, namespace: impl Into<String>) -> Self;
     pub fn background_color(self, color: Color) -> Self;
-    pub fn margin(self, top: i32, right: i32, bottom: i32, left: i32) -> Self;
+    pub fn margin(self, margin: impl Into<Margin>) -> Self;
     pub fn output(self, output: OutputId) -> Self;
     pub fn input_region(self, rects: impl Into<Vec<Rect>>) -> Self;
     pub fn click_through(self) -> Self;
@@ -835,9 +835,9 @@ impl SurfaceHandle {
     pub fn set_layer(&self, layer: Layer);
     pub fn set_keyboard_interactivity(&self, mode: KeyboardInteractivity);
     pub fn set_anchor(&self, anchor: Anchor);
-    pub fn set_size(&self, width: u32, height: u32);
-    pub fn set_exclusive_zone(&self, zone: i32);
-    pub fn set_margin(&self, top: i32, right: i32, bottom: i32, left: i32);
+    pub fn set_size(&self, width: impl Into<SurfaceExtent>, height: impl Into<SurfaceExtent>);
+    pub fn set_exclusive_zone(&self, zone: impl Into<ExclusiveZone>);
+    pub fn set_margin(&self, margin: impl Into<Margin>);
     pub fn set_input_region(&self, rects: Option<Vec<Rect>>);
 }
 ```

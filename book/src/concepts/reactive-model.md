@@ -186,7 +186,7 @@ Use `.writers()` to get `Send` handles for background task updates:
 ```rust
 let writers = state.writers();
 
-let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+create_task(move |ctx| async move {
     while ctx.is_running() {
         // Each field is set individually with PartialEq change detection.
         // Effects that depend on multiple fields run only once (batched).

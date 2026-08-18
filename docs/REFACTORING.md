@@ -19,6 +19,62 @@ and why, and the one design still open.
 | Three tracking scopes in one paint | **Closed** — see below |
 | Container as a style source | Open — direction settled, not scheduled |
 | Interaction groups | **Done** (#188), as `control()`; names unified in #189 |
+| Public API audit: reactivity, symmetry, preludes | **Done** — see below |
+
+---
+
+## The API audit
+
+An audit of the whole public surface, read against a real application written
+on top of it. What it found was not missing features but *inconsistency*: the
+same idea spelled two ways, or reactive in one place and constant in the
+neighbouring one, so nothing about the API could be predicted from the rest of
+it.
+
+**Reactivity had no rule.** `background` took a signal and `gradient` did not;
+`corner_radius` did and `backdrop_blur` did not; `visible` did and `overflow`
+did not. Worse, `backdrop_blur` was reactive on `Text` and constant on
+`Container` — one name, two contracts. All four are reactive now, and the rule
+is stated: **anything that survives to paint takes a signal; anything
+structural — the layout, whether a container scrolls — does not.**
+
+**Two spellings for one idea.** `Padding::symmetric(horizontal, vertical)`
+against the `[vertical, horizontal]` shorthand every call site uses; a border
+that could only be set as a pair while its state-layer counterpart had
+`border_width` and `border_color` apart; `on_click_option` beside `on_click`
+because a `#[component]` prop is an `Option<Callback>`; `Transform::identity()`
+beside `Transform::IDENTITY`. In each case one spelling survives, and it is the
+one already used everywhere else.
+
+**A handle that did not speak its config's language.** `SurfaceConfig` takes an
+`ExclusiveZone` and a `SurfaceExtent`; `SurfaceHandle` took an `i32` and a
+`u32`, so a policy could never be changed to another policy and an axis pinned
+once could never go back to `content()`. Margins get a `Margin` type with the
+conversions `Padding` has.
+
+**A guard whose Drop depended on ambient state.** `create_effect` returned an
+`Effect` that disposed itself unless an owner had claimed it — invisible at the
+call site either way. It returns nothing now; an effect's lifetime is its
+scope's.
+
+**One prelude for two audiences.** 133 names, mixing what an application needs
+with what a widget author does — and failing the widget author anyway, since
+`Tree`, `WidgetId`, `RenderNode` and `Layout` were not in it. Split into
+`prelude` and `widget_prelude`. `IntoSignal` and `IntoVal` moved the other way:
+they look internal and are not, being what makes a custom type usable as a
+`#[component]` prop.
+
+Also: `create_task` for the very common push-only service, `keyed()` accepting
+any `Hash` key rather than insisting on a `u64`, and `#[prop(default = expr)]`
+unquoted, which is what makes a string literal spellable as a default.
+
+The documentation was audited against the code in the same pass. It described
+`.children_dyn()`, `.padding_horizontal()`, `.min_width()`, `.gradient_diagonal()`
+and `.animate_elevation()`, none of which existed; `Row` and `Column` widgets,
+which have never existed; the pre-`Tree` `Widget` signatures; and
+`hover_state`/`pressed_state`, renamed in #189. Of that list `gradient_diagonal`
+and `animate_elevation` turned out to be worth having and were implemented
+rather than deleted from the docs.
 
 ---
 
@@ -202,9 +258,9 @@ The third row needed no mechanism, which is why it shipped ahead of the rest.
 
 ### Also settled
 
-- **`when_hovered` becomes `when_hovered`.** The old name reads as "*my* hover
-  state", which is false on a label. `when_hovered` promises nothing about
-  whose.
+- **`hover_state` becomes `when_hovered`** (shipped in #189). The old name
+  reads as "*my* hover state", which is false on a label. `when_hovered`
+  promises nothing about whose.
 - **Precedence is already last-declared-wins** (#183), which is what this
   design needs.
 
@@ -219,10 +275,6 @@ The third row needed no mechanism, which is why it shipped ahead of the rest.
 
 ### Still open
 
-- **`when_hovered`/`when_pressed`/`when_focused` on `Container`** should
-  become `when_hovered`/`when_pressed`/`when_focused` to match the leaves. A
-  mechanical rename across ~290 call sites, deliberately kept out of #188 so
-  the mechanism could be reviewed on its own.
 - **`focus_visible`.** Needed: where an input holds focus essentially always, a
   permanent focus ring is noise. Separate question — it is about how the focus
   arrived, not about who resolves it.
