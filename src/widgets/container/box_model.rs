@@ -168,8 +168,8 @@ impl Container {
             constraints.max_height,
         );
 
-        let mut max_width = (layout_width - padding.horizontal()).max(0.0);
-        let mut max_height = (layout_height - padding.vertical()).max(0.0);
+        let mut max_width = (layout_width - padding.horizontal_total()).max(0.0);
+        let mut max_height = (layout_height - padding.vertical_total()).max(0.0);
 
         // A reserved gutter is space the content never gets, scrollbar shown
         // or not — that is the point of reserving it.
@@ -192,7 +192,9 @@ impl Container {
             max_width
         } else {
             let effective = lengths.width.min.unwrap_or(0.0).max(constraints.min_width);
-            (effective - padding.horizontal()).max(0.0).min(max_width)
+            (effective - padding.horizontal_total())
+                .max(0.0)
+                .min(max_width)
         };
         let min_height = if lengths.height.exact.is_some() || lengths.height.fill {
             max_height
@@ -202,7 +204,9 @@ impl Container {
                 .min
                 .unwrap_or(0.0)
                 .max(constraints.min_height);
-            (effective - padding.vertical()).max(0.0).min(max_height)
+            (effective - padding.vertical_total())
+                .max(0.0)
+                .min(max_height)
         };
 
         // The visible extent, captured before the scrolled axis is opened up.
@@ -257,7 +261,7 @@ impl Container {
                 Axis::Horizontal,
                 &lengths.width,
                 lengths.overflow,
-                content.width + lengths.padding.horizontal(),
+                content.width + lengths.padding.horizontal_total(),
                 constraints.min_width,
                 constraints.max_width,
             ),
@@ -265,7 +269,7 @@ impl Container {
                 Axis::Vertical,
                 &lengths.height,
                 lengths.overflow,
-                content.height + lengths.padding.vertical(),
+                content.height + lengths.padding.vertical_total(),
                 constraints.min_height,
                 constraints.max_height,
             ),

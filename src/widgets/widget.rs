@@ -291,43 +291,36 @@ impl Padding {
         }
     }
 
-    pub fn symmetric(horizontal: f32, vertical: f32) -> Self {
-        Self {
-            top: vertical,
-            right: horizontal,
-            bottom: vertical,
-            left: horizontal,
-        }
-    }
-
-    pub fn horizontal(&self) -> f32 {
+    /// How much width the padding takes: `left + right`.
+    pub fn horizontal_total(&self) -> f32 {
         self.left + self.right
     }
 
-    pub fn vertical(&self) -> f32 {
+    /// How much height the padding takes: `top + bottom`.
+    pub fn vertical_total(&self) -> f32 {
         self.top + self.bottom
     }
 
     /// Override the top padding value.
-    pub fn top(mut self, v: f32) -> Self {
+    pub fn with_top(mut self, v: f32) -> Self {
         self.top = v;
         self
     }
 
     /// Override the bottom padding value.
-    pub fn bottom(mut self, v: f32) -> Self {
+    pub fn with_bottom(mut self, v: f32) -> Self {
         self.bottom = v;
         self
     }
 
     /// Override the left padding value.
-    pub fn left(mut self, v: f32) -> Self {
+    pub fn with_left(mut self, v: f32) -> Self {
         self.left = v;
         self
     }
 
     /// Override the right padding value.
-    pub fn right(mut self, v: f32) -> Self {
+    pub fn with_right(mut self, v: f32) -> Self {
         self.right = v;
         self
     }
@@ -994,9 +987,10 @@ mod tests {
         assert_eq!(padding.left, 10.0);
     }
 
+    /// The two-value shorthand is CSS's: vertical first, then horizontal.
     #[test]
-    fn test_padding_symmetric() {
-        let padding = Padding::symmetric(20.0, 30.0);
+    fn test_padding_two_value_shorthand() {
+        let padding = Padding::from([30.0, 20.0]);
         assert_eq!(padding.top, 30.0);
         assert_eq!(padding.right, 20.0);
         assert_eq!(padding.bottom, 30.0);
@@ -1004,15 +998,10 @@ mod tests {
     }
 
     #[test]
-    fn test_padding_horizontal() {
-        let padding = Padding::symmetric(15.0, 10.0);
-        assert_eq!(padding.horizontal(), 30.0); // left + right = 15 + 15
-    }
-
-    #[test]
-    fn test_padding_vertical() {
-        let padding = Padding::symmetric(15.0, 10.0);
-        assert_eq!(padding.vertical(), 20.0); // top + bottom = 10 + 10
+    fn test_padding_totals_are_sums() {
+        let padding = Padding::from([10.0, 15.0]);
+        assert_eq!(padding.horizontal_total(), 30.0);
+        assert_eq!(padding.vertical_total(), 20.0);
     }
 
     #[test]
@@ -1026,7 +1015,7 @@ mod tests {
 
     #[test]
     fn test_padding_builder_methods() {
-        let padding = Padding::all(8.0).top(20.0).left(0.0);
+        let padding = Padding::all(8.0).with_top(20.0).with_left(0.0);
         assert_eq!(padding.top, 20.0);
         assert_eq!(padding.right, 8.0);
         assert_eq!(padding.bottom, 8.0);

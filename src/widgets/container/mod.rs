@@ -488,7 +488,7 @@ impl Container {
     /// - `padding(8.0)` or `padding(8)` — uniform on all sides
     /// - `padding([8.0, 16.0])` — `[vertical, horizontal]` (CSS 2-value shorthand)
     /// - `padding([1.0, 2.0, 3.0, 4.0])` — `[top, right, bottom, left]` (CSS 4-value)
-    /// - `padding(Padding::all(8.0).top(20.0))` — builder pattern
+    /// - `padding(Padding::all(8.0).with_top(20.0))` — builder pattern
     /// - `padding(signal)` or `padding(move || ...)` — reactive
     pub fn padding<M>(mut self, value: impl IntoSignal<Padding, M>) -> Self {
         self.padding = Some(value.into_signal());
@@ -1505,8 +1505,8 @@ impl Widget for Container {
 
         if self.scroll_axis != ScrollAxis::None {
             let sd = self.scroll_mut();
-            sd.scroll_state.content_width = content_size.width + padding.horizontal();
-            sd.scroll_state.content_height = content_size.height + padding.vertical();
+            sd.scroll_state.content_width = content_size.width + padding.horizontal_total();
+            sd.scroll_state.content_height = content_size.height + padding.vertical_total();
             sd.scroll_state.viewport_width = child.viewport.width;
             sd.scroll_state.viewport_height = child.viewport.height;
             sd.scroll_state.clamp_offsets();

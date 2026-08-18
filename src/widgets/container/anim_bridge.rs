@@ -55,13 +55,13 @@ impl Container {
                 lengths.width.exact,
                 lengths.width.min,
                 lengths.width.max,
-                content.width + lengths.padding.horizontal(),
+                content.width + lengths.padding.horizontal_total(),
             ),
             (
                 lengths.height.exact,
                 lengths.height.min,
                 lengths.height.max,
-                content.height + lengths.padding.vertical(),
+                content.height + lengths.padding.vertical_total(),
             ),
         ];
         let Some(ref mut anims) = self.anims else {
