@@ -173,7 +173,7 @@ pub mod prelude {
         LockState, lock_session, lock_state, session_locked, unlock_session,
     };
     pub use crate::surface::{
-        ExclusiveZone, PopupAnchor, PopupConfig, PopupGravity, PopupHandle, SurfaceConfig,
+        ExclusiveZone, Margin, PopupAnchor, PopupConfig, PopupGravity, PopupHandle, SurfaceConfig,
         SurfaceExtent, SurfaceHandle, SurfaceId, content, spawn_popup, spawn_surface,
         surface_handle,
     };
@@ -230,6 +230,36 @@ fn close_surface_now(
     wayland_state.destroy_surface(id);
 }
 
+/// Push the surface's reservation policy to the compositor, resolved against
+/// what it is anchored to and how big it currently is.
+///
+/// [`ExclusiveZone::Auto`] is a policy, not a number, so it has to be
+/// re-resolved after anything it follows — the size, the margin, the policy
+/// itself — has moved.
+fn resync_exclusive_zone(
+    id: SurfaceId,
+    surface_manager: &SurfaceManager,
+    wayland_state: &mut platform::WaylandState,
+) {
+    let Some(surface) = surface_manager.get(id) else {
+        return;
+    };
+    let (width, height) = match wayland_state.get_surface(id) {
+        Some(s) => (s.width, s.height),
+        None => (
+            surface.config.width.initial(),
+            surface.config.height.initial(),
+        ),
+    };
+    let zone = surface.config.exclusive_zone.resolve(
+        surface.config.anchor,
+        surface.config.margin,
+        width,
+        height,
+    );
+    wayland_state.set_surface_exclusive_zone(id, zone);
+}
+
 /// Process dynamic surface commands (create, close, property changes).
 /// Returns false if all surfaces have been closed and the app should exit.
 fn process_surface_commands(
@@ -282,19 +312,29 @@ fn process_surface_commands(
                 wayland_state.set_surface_anchor(id, anchor);
             }
             SurfaceCommand::SetSize { id, width, height } => {
-                wayland_state.set_surface_size(id, width, height);
+                // Recorded on the config as well as sent: the content-sizing
+                // pass reads it every frame to decide which axes it owns, so
+                // an axis handed back to `content()` has to be visible there.
+                if let Some(surface) = surface_manager.get_mut(id) {
+                    surface.config.width = width;
+                    surface.config.height = height;
+                }
+                wayland_state.set_surface_size(id, width.initial(), height.initial());
+                resync_exclusive_zone(id, surface_manager, wayland_state);
             }
             SurfaceCommand::SetExclusiveZone { id, zone } => {
-                wayland_state.set_surface_exclusive_zone(id, zone);
+                if let Some(surface) = surface_manager.get_mut(id) {
+                    surface.config.exclusive_zone = zone;
+                }
+                resync_exclusive_zone(id, surface_manager, wayland_state);
             }
-            SurfaceCommand::SetMargin {
-                id,
-                top,
-                right,
-                bottom,
-                left,
-            } => {
-                wayland_state.set_surface_margin(id, top, right, bottom, left);
+            SurfaceCommand::SetMargin { id, margin } => {
+                if let Some(surface) = surface_manager.get_mut(id) {
+                    surface.config.margin = margin;
+                }
+                wayland_state.set_surface_margin(id, margin);
+                // An `Auto` reservation counts the anchored edge's margin.
+                resync_exclusive_zone(id, surface_manager, wayland_state);
             }
             SurfaceCommand::SetInputRegion { id, rects } => {
                 wayland_state.set_surface_input_region(id, rects.as_deref());

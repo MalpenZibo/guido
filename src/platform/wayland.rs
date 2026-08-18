@@ -416,9 +416,9 @@ impl WaylandState {
         );
         layer_surface.set_exclusive_zone(zone);
 
-        let (top, right, bottom, left) = config.margin;
-        if (top, right, bottom, left) != (0, 0, 0, 0) {
-            layer_surface.set_margin(top, right, bottom, left);
+        let margin = config.margin;
+        if !margin.is_zero() {
+            layer_surface.set_margin(margin.top, margin.right, margin.bottom, margin.left);
         }
 
         if let Some(rects) = &config.input_region {
@@ -536,23 +536,11 @@ impl WaylandState {
     }
 
     /// Set the margin for a surface.
-    pub fn set_surface_margin(
-        &mut self,
-        id: SurfaceId,
-        top: i32,
-        right: i32,
-        bottom: i32,
-        left: i32,
-    ) {
-        self.with_layer_surface(id, |ls| ls.set_margin(top, right, bottom, left));
-        log::info!(
-            "Surface {:?} margin set to top={}, right={}, bottom={}, left={}",
-            id,
-            top,
-            right,
-            bottom,
-            left
-        );
+    pub fn set_surface_margin(&mut self, id: SurfaceId, margin: crate::surface::Margin) {
+        self.with_layer_surface(id, |ls| {
+            ls.set_margin(margin.top, margin.right, margin.bottom, margin.left)
+        });
+        log::info!("Surface {:?} margin set to {:?}", id, margin);
     }
 
     /// Get a surface state by SurfaceId.

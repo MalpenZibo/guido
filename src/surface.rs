@@ -91,14 +91,88 @@ pub struct SurfaceConfig {
     pub background_color: Color,
     /// Screen-space reservation policy (see [`ExclusiveZone`]).
     pub exclusive_zone: ExclusiveZone,
-    /// Margins from the anchored screen edges (top, right, bottom, left).
-    pub margin: (i32, i32, i32, i32),
+    /// Margins from the anchored screen edges.
+    pub margin: Margin,
     /// Output (monitor) to show the surface on. None lets the compositor choose.
     pub output: Option<OutputId>,
     /// Input region in logical surface coordinates. `None` means the whole
     /// surface accepts input; `Some(rects)` limits input to those rectangles
     /// (an empty list makes the surface fully click-through).
     pub input_region: Option<Vec<Rect>>,
+}
+
+/// Margins from the anchored screen edges, in logical pixels.
+///
+/// The same shorthands a [`Padding`](crate::widgets::Padding) takes, in the
+/// same order — one value for every edge, `[vertical, horizontal]`, or the
+/// full `[top, right, bottom, left]`:
+///
+/// ```ignore
+/// SurfaceConfig::new().margin(8)                   // all four edges
+/// SurfaceConfig::new().margin([0, 12])             // none top/bottom, 12 aside
+/// SurfaceConfig::new().margin([8, 12, 0, 12])      // top, right, bottom, left
+/// ```
+///
+/// Negative values are allowed: layer-shell reads them as pushing the surface
+/// past its anchored edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Margin {
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+    pub left: i32,
+}
+
+impl Margin {
+    /// The same margin on every edge.
+    pub fn all(value: i32) -> Self {
+        Self {
+            top: value,
+            right: value,
+            bottom: value,
+            left: value,
+        }
+    }
+
+    pub(crate) fn is_zero(self) -> bool {
+        self == Self::default()
+    }
+}
+
+impl From<i32> for Margin {
+    fn from(v: i32) -> Self {
+        Margin::all(v)
+    }
+}
+
+impl From<u32> for Margin {
+    fn from(v: u32) -> Self {
+        Margin::all(v as i32)
+    }
+}
+
+/// `[vertical, horizontal]` — CSS-style 2-value shorthand.
+impl From<[i32; 2]> for Margin {
+    fn from(v: [i32; 2]) -> Self {
+        Margin {
+            top: v[0],
+            right: v[1],
+            bottom: v[0],
+            left: v[1],
+        }
+    }
+}
+
+/// `[top, right, bottom, left]` — CSS-style 4-value shorthand.
+impl From<[i32; 4]> for Margin {
+    fn from(v: [i32; 4]) -> Self {
+        Margin {
+            top: v[0],
+            right: v[1],
+            bottom: v[2],
+            left: v[3],
+        }
+    }
 }
 
 /// Per-axis sizing for layer surfaces.
@@ -198,28 +272,22 @@ pub enum ExclusiveZone {
 impl ExclusiveZone {
     /// Protocol value. [`Auto`](ExclusiveZone::Auto) resolves against the
     /// surface extent on the anchored axis plus that edge's margin.
-    pub(crate) fn resolve(
-        self,
-        anchor: Anchor,
-        margin: (i32, i32, i32, i32),
-        width: u32,
-        height: u32,
-    ) -> i32 {
+    pub(crate) fn resolve(self, anchor: Anchor, margin: Margin, width: u32, height: u32) -> i32 {
         match self {
             ExclusiveZone::Auto => match Self::follow_axis(anchor) {
                 Some(FollowAxis::Height) => {
                     let edge_margin = if anchor.contains(Anchor::TOP) {
-                        margin.0
+                        margin.top
                     } else {
-                        margin.2
+                        margin.bottom
                     };
                     height as i32 + edge_margin
                 }
                 Some(FollowAxis::Width) => {
                     let edge_margin = if anchor.contains(Anchor::LEFT) {
-                        margin.3
+                        margin.left
                     } else {
-                        margin.1
+                        margin.right
                     };
                     width as i32 + edge_margin
                 }
@@ -276,7 +344,7 @@ impl Default for SurfaceConfig {
             namespace: "guido-surface".to_string(),
             background_color: Color::rgb(0.1, 0.1, 0.15),
             exclusive_zone: ExclusiveZone::None,
-            margin: (0, 0, 0, 0),
+            margin: Margin::default(),
             output: None,
             input_region: None,
         }
@@ -344,9 +412,9 @@ impl SurfaceConfig {
 
     /// Set the margins from the anchored screen edges, applied at creation.
     ///
-    /// Use `SurfaceHandle::set_margin` to change them at runtime.
-    pub fn margin(mut self, top: i32, right: i32, bottom: i32, left: i32) -> Self {
-        self.margin = (top, right, bottom, left);
+    /// Use [`SurfaceHandle::set_margin`] to change them at runtime.
+    pub fn margin(mut self, margin: impl Into<Margin>) -> Self {
+        self.margin = margin.into();
         self
     }
 
@@ -553,38 +621,38 @@ impl SurfaceHandle {
         });
     }
 
-    /// Set the size of this surface in logical pixels.
+    /// Set the size of this surface, in the same vocabulary
+    /// [`SurfaceConfig::width`] takes — so an axis can be handed back to
+    /// [`content()`] at runtime, not only pinned to a number.
     ///
-    /// Note: When anchored to both edges on an axis (e.g., LEFT and RIGHT),
+    /// Note: when anchored to both edges on an axis (e.g. LEFT and RIGHT),
     /// the compositor may override that dimension.
-    pub fn set_size(&self, width: u32, height: u32) {
+    pub fn set_size(&self, width: impl Into<SurfaceExtent>, height: impl Into<SurfaceExtent>) {
         push_surface_command(SurfaceCommand::SetSize {
             id: self.id,
-            width,
-            height,
+            width: width.into(),
+            height: height.into(),
         });
     }
 
-    /// Set the exclusive zone for this surface.
+    /// Set the screen-space reservation for this surface, in the same
+    /// vocabulary [`SurfaceConfig::exclusive_zone`] takes.
     ///
-    /// The exclusive zone reserves screen space so other windows don't
-    /// overlap. Pass 0 for no exclusive zone, or a positive value for
-    /// the number of pixels to reserve.
-    pub fn set_exclusive_zone(&self, zone: i32) {
-        push_surface_command(SurfaceCommand::SetExclusiveZone { id: self.id, zone });
+    /// [`ExclusiveZone::Auto`] keeps following the surface's extent from here
+    /// on, exactly as it would had it been declared at creation.
+    pub fn set_exclusive_zone(&self, zone: impl Into<ExclusiveZone>) {
+        push_surface_command(SurfaceCommand::SetExclusiveZone {
+            id: self.id,
+            zone: zone.into(),
+        });
     }
 
-    /// Set the margin for this surface.
-    ///
-    /// Margins add space between the surface and the screen edge it's
-    /// anchored to.
-    pub fn set_margin(&self, top: i32, right: i32, bottom: i32, left: i32) {
+    /// Set the margins from the anchored screen edges, in the same vocabulary
+    /// [`SurfaceConfig::margin`] takes.
+    pub fn set_margin(&self, margin: impl Into<Margin>) {
         push_surface_command(SurfaceCommand::SetMargin {
             id: self.id,
-            top,
-            right,
-            bottom,
-            left,
+            margin: margin.into(),
         });
     }
 
@@ -623,19 +691,14 @@ pub(crate) enum SurfaceCommand {
     /// Set the size of a surface.
     SetSize {
         id: SurfaceId,
-        width: u32,
-        height: u32,
+        width: SurfaceExtent,
+        height: SurfaceExtent,
     },
-    /// Set the exclusive zone for a surface.
-    SetExclusiveZone { id: SurfaceId, zone: i32 },
+    /// Set the screen-space reservation for a surface. Resolved to a protocol
+    /// value by the loop, which is where the anchor and the current extent are.
+    SetExclusiveZone { id: SurfaceId, zone: ExclusiveZone },
     /// Set the margin for a surface.
-    SetMargin {
-        id: SurfaceId,
-        top: i32,
-        right: i32,
-        bottom: i32,
-        left: i32,
-    },
+    SetMargin { id: SurfaceId, margin: Margin },
     /// Set the input region for a surface.
     SetInputRegion {
         id: SurfaceId,
@@ -860,4 +923,60 @@ pub fn surface_handle(id: SurfaceId) -> SurfaceHandle {
 /// Part of the loop's wakeup check — see `queued_but_unwoken` in `lib.rs`.
 pub(crate) fn surface_commands_pending() -> bool {
     SURFACE_COMMANDS.with(|cmds| !cmds.borrow().is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shorthands are the ones `Padding` takes, in the same order.
+    #[test]
+    fn margin_shorthands_follow_css_order() {
+        assert_eq!(Margin::from(8), Margin::all(8));
+        assert_eq!(
+            Margin::from([4, 12]),
+            Margin {
+                top: 4,
+                right: 12,
+                bottom: 4,
+                left: 12
+            }
+        );
+        assert_eq!(
+            Margin::from([1, 2, 3, 4]),
+            Margin {
+                top: 1,
+                right: 2,
+                bottom: 3,
+                left: 4
+            }
+        );
+    }
+
+    /// An `Auto` reservation counts the margin on the edge it is anchored to,
+    /// and only that one.
+    #[test]
+    fn an_auto_zone_adds_the_anchored_edges_margin() {
+        let margin = Margin::from([6, 20, 9, 20]);
+        let top = ExclusiveZone::Auto.resolve(Anchor::TOP, margin, 800, 32);
+        assert_eq!(top, 32 + 6);
+
+        let bottom = ExclusiveZone::Auto.resolve(Anchor::BOTTOM, margin, 800, 32);
+        assert_eq!(bottom, 32 + 9);
+
+        let left = ExclusiveZone::Auto.resolve(Anchor::LEFT, margin, 48, 600);
+        assert_eq!(left, 48 + 20);
+    }
+
+    /// The other policies are numbers, and never consult anything.
+    #[test]
+    fn the_other_zone_policies_ignore_the_surface() {
+        let m = Margin::all(10);
+        assert_eq!(ExclusiveZone::None.resolve(Anchor::TOP, m, 800, 32), 0);
+        assert_eq!(ExclusiveZone::Ignore.resolve(Anchor::TOP, m, 800, 32), -1);
+        assert_eq!(
+            ExclusiveZone::from(34u32).resolve(Anchor::TOP, m, 800, 32),
+            34
+        );
+    }
 }

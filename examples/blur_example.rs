@@ -17,7 +17,7 @@ fn main() {
                 .width(420)
                 .height(260)
                 .anchor(Anchor::TOP)
-                .margin(120, 0, 0, 0)
+                .margin([120, 0, 0, 0])
                 .layer(Layer::Overlay)
                 .exclusive_zone(ExclusiveZone::None)
                 .background_color(Color::TRANSPARENT),
