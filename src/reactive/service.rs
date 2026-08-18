@@ -125,22 +125,8 @@ impl<Cmd: 'static> Service<Cmd> {
 /// service.send(Cmd::SwitchWorkspace(2));
 /// ```
 ///
-/// # Example: Read-Only Service
-///
-/// For services that only push data to signals (no commands), use `()` as
-/// the command type and ignore the receiver:
-///
-/// ```ignore
-/// let time = create_signal(String::new());
-/// let time_w = time.writer();
-///
-/// let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
-///     while ctx.is_running() {
-///         time_w.set(chrono::Local::now().format("%H:%M").to_string());
-///         tokio::time::sleep(Duration::from_secs(1)).await;
-///     }
-/// });
-/// ```
+/// A task with nothing to command is [`create_task`], which has no receiver
+/// and no turbofish.
 pub fn create_service<Cmd, F, Fut>(f: F) -> Service<Cmd>
 where
     Cmd: Send + 'static,
@@ -166,6 +152,31 @@ where
     });
 
     Service { sender }
+}
+
+/// Create a background task tied to the current Owner.
+///
+/// The half of [`create_service`] that only pushes: no commands, so no
+/// receiver, no command type to name, and no handle to keep. It is aborted
+/// when the scope that created it is disposed, exactly as a service is.
+///
+/// ```ignore
+/// let time = create_signal(String::new());
+/// let time_w = time.writer();
+///
+/// create_task(move |ctx| async move {
+///     while ctx.is_running() {
+///         time_w.set(chrono::Local::now().format("%H:%M").to_string());
+///         tokio::time::sleep(Duration::from_secs(1)).await;
+///     }
+/// });
+/// ```
+pub fn create_task<F, Fut>(f: F)
+where
+    F: FnOnce(ServiceContext) -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    create_service::<(), _, _>(move |_rx, ctx| f(ctx));
 }
 
 /// Get a runtime handle for spawning service tasks.
@@ -242,7 +253,7 @@ mod tests {
         let counter_clone = counter.clone();
 
         let (_, owner_id) = with_owner(|| {
-            let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+            create_task(move |ctx| async move {
                 while ctx.is_running() {
                     counter_clone.fetch_add(1, Ordering::SeqCst);
                     tokio::time::sleep(Duration::from_millis(10)).await;

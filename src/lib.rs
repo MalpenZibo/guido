@@ -146,6 +146,12 @@ pub fn quit_app() {
     jobs::set_exit_request(jobs::ExitRequest::Quit);
 }
 
+/// Everything an application needs, and nothing it does not.
+///
+/// Writing a *widget* or a *layout* rather than an application is a different
+/// job with a different vocabulary — the tree, the paint context, the tracking
+/// scope. That lives in [`widget_prelude`](crate::widget_prelude), and is not
+/// re-exported here.
 pub mod prelude {
     pub use crate::animation::{
         Keyframes, SpringConfig, TimingFunction, Transition, TransitionConfig,
@@ -154,21 +160,18 @@ pub mod prelude {
     pub use crate::compositor::{CompositorEffects, compositor_effects};
     pub use crate::keyboard::keyboard_modifiers;
     pub use crate::layout::{
-        Axis, Constraints, CrossAlignment, Flex, IntoF32, Length, MainAlignment, Size, ZStack,
-        at_least, at_most, fill, fraction,
+        Axis, CrossAlignment, Flex, Length, MainAlignment, Size, ZStack, at_least, at_most, fill,
+        fraction,
     };
     pub use crate::outputs::{OutputId, OutputInfo, outputs, surface_output};
     pub use crate::platform::{Anchor, KeyboardInteractivity, Layer};
     pub use crate::reactive::{
-        Callback, CursorIcon, Memo, OptionSignalExt, RwSignal, Service, Signal, Trigger,
+        Callback, CursorIcon, IntoSignal, IntoVal, Memo, RwSignal, Service, Signal, Trigger,
         WriteSignal, create_derived, create_effect, create_memo, create_service, create_signal,
-        create_stored, create_trigger, expect_context, has_context, on_cleanup, provide_context,
-        provide_signal_context, set_cursor, use_context, with_context,
+        create_stored, create_task, create_trigger, expect_context, has_context, on_cleanup,
+        provide_context, provide_signal_context, set_cursor, use_context, with_context,
     };
-    // For widgets written outside the crate: the scope that makes a widget's
-    // own signal reads its own.
-    pub use crate::reactive::{JobType, with_signal_tracking};
-    pub use crate::renderer::{PaintContext, Shadow, measure_text};
+    pub use crate::renderer::{Shadow, measure_text};
     pub use crate::session_lock::{
         LockState, lock_session, lock_state, session_locked, unlock_session,
     };
@@ -192,6 +195,30 @@ pub mod prelude {
         App, ExitReason, SignalFields, component, default_font_family, load_font, quit_app,
         restart_app, set_default_font_family,
     };
+}
+
+/// What a widget or a layout written outside the crate needs, on top of
+/// [`prelude`].
+///
+/// The two are meant to be imported together:
+///
+/// ```ignore
+/// use guido::prelude::*;
+/// use guido::widget_prelude::*;
+/// ```
+///
+/// [`Widget`](crate::widgets::Widget) has two required methods, `layout` and
+/// `paint`; [`Layout`](crate::layout::Layout) has one. Everything else here is
+/// what those signatures name, plus
+/// [`with_signal_tracking`](crate::reactive::with_signal_tracking) — the scope
+/// that makes a widget's signal reads *its own*, so a change to its content
+/// re-runs it rather than the nearest ancestor that happened to open a scope.
+pub mod widget_prelude {
+    pub use crate::layout::{Constraints, IntoF32, Layout};
+    pub use crate::reactive::{JobType, OptionSignalExt, with_signal_tracking};
+    pub use crate::renderer::{PaintContext, RenderNode};
+    pub use crate::tree::{Tree, WidgetId};
+    pub use crate::widgets::{LayoutHints, Widget};
 }
 
 use smithay_client_toolkit::reexports::client::QueueHandle;

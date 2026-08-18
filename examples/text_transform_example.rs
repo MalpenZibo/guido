@@ -22,7 +22,7 @@ async fn main() {
         // Animation service - updates the angle signal continuously
         let start_time = std::time::Instant::now();
         let angle_w = angle.writer();
-        let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+        create_task(move |ctx| async move {
             while ctx.is_running() {
                 let elapsed = start_time.elapsed().as_secs_f32();
                 let new_angle = (elapsed * PI / 2.0).to_degrees() % 360.0;

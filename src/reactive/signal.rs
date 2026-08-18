@@ -317,7 +317,7 @@ impl<T: Clone + Send + Sync + 'static> RwSignal<T> {
     /// let wide = create_memo(move || menu.get() == Some(Menu::SystemInfo));
     /// let mut wide_rx = wide.watch();
     ///
-    /// create_service::<(), _, _>(move |_rx, ctx| async move {
+    /// create_task(move |ctx| async move {
     ///     while ctx.is_running() {
     ///         let scope = if *wide_rx.borrow() { Scope::All } else { Scope::Bar };
     ///         sample(scope);
@@ -367,7 +367,7 @@ impl<T: Clone + 'static> From<RwSignal<T>> for Signal<T> {
 /// let time = create_signal(get_current_time());
 /// let time_w = time.writer();
 ///
-/// let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+/// create_task(move |ctx| async move {
 ///     while ctx.is_running() {
 ///         time_w.set(get_current_time()); // queued for main thread
 ///         tokio::time::sleep(Duration::from_secs(1)).await;

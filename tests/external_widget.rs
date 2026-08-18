@@ -7,13 +7,12 @@
 //! register against the nearest ancestor that opened a scope, so a change to
 //! its own content re-lays-out every sibling it has.
 //!
-//! This file covers the first: everything below uses `guido::prelude` and the
-//! public `tree`, `layout` and `renderer` modules, nothing else.
+//! This file covers the first: the two preludes are the only imports, which is
+//! the point of `widget_prelude` existing — the tree, the paint context and the
+//! tracking scope used to have to be reached for one module at a time.
 
-use guido::layout::{Constraints, Size};
 use guido::prelude::*;
-use guido::renderer::RenderNode;
-use guido::tree::{Tree, WidgetId};
+use guido::widget_prelude::*;
 
 /// A box whose size follows a signal. Deliberately minimal: `layout` and
 /// `paint` are the only required methods, and the tracking scope is the only
