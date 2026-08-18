@@ -130,7 +130,7 @@ fn test_writers_set_batches_effects() {
 
     // Effect reads both fields — should run once on creation.
     // Hold the effect so it doesn't get disposed on drop.
-    let _effect = create_effect(move || {
+    create_effect(move || {
         let _ = signals.count.get();
         let _ = signals.name.get();
         unsafe { &*run_count_ptr }.set(unsafe { &*run_count_ptr }.get() + 1);

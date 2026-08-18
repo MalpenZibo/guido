@@ -98,8 +98,7 @@ fn main() {
                                     if popup.dismissed() {
                                         menu_open.set(false);
                                     }
-                                })
-                                .detach();
+                                });
 
                                 *popup_slot.borrow_mut() = Some(popup);
                             })

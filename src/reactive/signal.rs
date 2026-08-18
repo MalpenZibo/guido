@@ -573,16 +573,12 @@ fn watch_value<T: Clone + Send + Sync + 'static>(
     read: impl Fn() -> T + 'static,
 ) -> tokio::sync::watch::Receiver<T> {
     let (tx, rx) = tokio::sync::watch::channel(initial);
-    let effect = super::effect::create_effect(move || {
+    // Owned by the scope that asked for the channel: disposing it drops the
+    // sender, which is how the task on the other end learns the UI is gone
+    // (`changed()` returns Err).
+    super::effect::create_effect(move || {
         let _ = tx.send(read());
     });
-    if super::owner::current_owner().is_some() {
-        // Owned: the scope disposes it, and dropping the sender is how the
-        // task learns the UI is gone (`changed()` returns Err)
-        drop(effect);
-    } else {
-        effect.detach();
-    }
     rx
 }
 
@@ -860,8 +856,7 @@ mod tests {
         create_effect(move || {
             let _ = sig.get();
             counter.set(counter.get() + 1);
-        })
-        .detach();
+        });
         assert_eq!(runs.get(), 1);
 
         sig.set(7); // equal: state write deduplicates

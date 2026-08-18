@@ -29,7 +29,7 @@ pub use context::{
 };
 pub use cursor::{CursorIcon, set_cursor};
 pub(crate) use cursor::{cursor_change_pending, take_cursor_change};
-pub use effect::{Effect, create_effect};
+pub use effect::create_effect;
 pub(crate) use focus::{
     focus_path, has_focus, init_focus, release_focus, release_focus_if_within, request_focus,
 };
