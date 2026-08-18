@@ -251,6 +251,15 @@ gaussian passes ping-ponging between two working textures, then a composite
 back over the scene masked by the container's rounded-rect SDF. See
 `src/renderer/backdrop_pass.rs`.
 
+The mask is the one part a caller replaces. `Text::backdrop_blur` emits
+`DrawCommand::TextBackdropBlur`, which resolves to the same blur with a
+coverage texture in place of the SDF: the glyphs are rasterized into it by
+`src/renderer/text_mask.rs`, shaped exactly as `TextRenderState` shapes the
+text drawn afterwards, one texel per pixel of a region snapped to the pixel
+grid. Sub-pixel position is handed to the mask as its glyph origin rather than
+rounded away, and a text under a rotation or scale is skipped — the mask is
+axis-aligned.
+
 ### FlattenedCommand
 
 The output of tree flattening:
