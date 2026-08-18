@@ -156,19 +156,6 @@ pub(super) struct ContainerAnims {
     pub(super) border_color: Option<AnimationState<Color>>,
     pub(super) transform: Option<AnimationState<Transform>>,
     pub(super) text_color: Option<AnimationState<Color>>,
-    /// What plays the transform's timeline, and the last count seen from it.
-    pub(super) transform_plays: Option<PlayTrigger>,
-}
-
-/// A signal whose every change plays a timeline once, and the value this
-/// container last saw from it.
-///
-/// A count rather than a flag, because two refusals in a row are two events
-/// and a signal that stays equal notifies nobody. It is the shape SwiftUI's
-/// keyframe animator takes too: play when a value the caller owns changes.
-pub(super) struct PlayTrigger {
-    pub(super) signal: Signal<u32>,
-    pub(super) last: u32,
 }
 
 bitflags::bitflags! {
@@ -1024,7 +1011,13 @@ impl Container {
     /// Enable animation for transform changes
     pub fn animate_transform(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.transform.get_or_untracked(Transform::IDENTITY);
-        self.anims_mut().transform = Some(AnimationState::new(initial, transition));
+        // Whatever sequence is already here comes along: a fresh state would
+        // throw it away, and the order the two builders were written in would
+        // decide whether it exists — silently, with the trigger still firing.
+        let previous = self.anims_mut().transform.take();
+        let mut anim = AnimationState::new(initial, transition);
+        anim.adopt_timeline_of(previous);
+        self.anims_mut().transform = Some(anim);
         self
     }
 
@@ -1073,10 +1066,7 @@ impl Container {
                 )
             });
         anim.set_timeline(keyframes);
-
-        let signal = plays.into_signal();
-        let last = signal.get_untracked();
-        self.anims_mut().transform_plays = Some(PlayTrigger { signal, last });
+        anim.set_play_trigger(plays.into_signal());
         self
     }
 
@@ -1096,8 +1086,10 @@ impl Container {
         transition: impl Into<TransitionConfig>,
     ) -> Self {
         let initial = self.transform.get_or_untracked(Transform::IDENTITY);
-        self.anims_mut().transform =
-            Some(AnimationState::new(initial, transition).with_enter_from(enter_from));
+        let previous = self.anims_mut().transform.take();
+        let mut anim = AnimationState::new(initial, transition).with_enter_from(enter_from);
+        anim.adopt_timeline_of(previous);
+        self.anims_mut().transform = Some(anim);
         self
     }
 
@@ -1290,16 +1282,13 @@ impl Widget for Container {
                 paint
             );
             // A trigger that has moved starts the sequence, before the frame
-            // that will show its first value.
-            if let Some(trigger) = anims.transform_plays.as_mut() {
-                let plays =
-                    crate::reactive::diagnostics::snapshot_zone(|| trigger.signal.get_untracked());
-                if plays != trigger.last {
-                    trigger.last = plays;
-                    if let Some(anim) = anims.transform.as_mut() {
-                        anim.play();
-                    }
-                }
+            // that will show its first value. The read is a snapshot: the
+            // subscription belongs to `resync_animation_targets`, which asks
+            // the same question inside its tracking scope.
+            if let Some(anim) = anims.transform.as_mut()
+                && crate::reactive::diagnostics::snapshot_zone(|| anim.take_play())
+            {
+                anim.play();
             }
             advance_anim!(anims, transform, transform_target, id, any_animating, paint);
         }

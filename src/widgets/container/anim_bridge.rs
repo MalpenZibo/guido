@@ -243,9 +243,10 @@ impl Container {
             }
             // The timeline's trigger, read here for the same reason as the
             // targets: reading it is the subscription, so a container that
-            // plays on a signal is woken by it.
-            if let Some(trigger) = &anims.transform_plays {
-                drift |= trigger.signal.get() != trigger.last;
+            // plays on a signal is woken by it. Asking and committing are the
+            // same comparison in the same place — see `take_play`.
+            if let Some(anim) = &anims.transform {
+                drift |= anim.wants_play();
             }
             drift
         });
