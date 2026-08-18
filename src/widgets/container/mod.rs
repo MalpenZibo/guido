@@ -92,7 +92,7 @@ impl From<GradientDirection> for GradientDir {
 }
 
 /// Linear gradient definition
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LinearGradient {
     pub start_color: Color,
     pub end_color: Color,
@@ -151,6 +151,7 @@ pub(super) struct ContainerAnims {
     pub(super) height: Option<AnimationState<f32>>,
     pub(super) background: Option<AnimationState<Color>>,
     pub(super) corner_radius: Option<AnimationState<f32>>,
+    pub(super) elevation: Option<AnimationState<f32>>,
     pub(super) padding: Option<AnimationState<Padding>>,
     pub(super) border_width: Option<AnimationState<f32>>,
     pub(super) border_color: Option<AnimationState<Color>>,
@@ -321,7 +322,7 @@ pub struct Container {
     // Styling properties
     pub(super) padding: Option<Signal<Padding>>,
     pub(super) background: Option<Signal<Color>>,
-    pub(super) gradient: Option<LinearGradient>,
+    pub(super) gradient: Option<Signal<LinearGradient>>,
     pub(super) corner_radius: Option<Signal<f32>>,
     pub(super) corner_radii: Option<Signal<crate::renderer::CornerRadii>>,
     pub(super) corner_curvature: Option<Signal<f32>>,
@@ -330,7 +331,7 @@ pub struct Container {
     pub(super) elevation: Option<Signal<f32>>,
     pub(super) width: Option<Signal<Length>>,
     pub(super) height: Option<Signal<Length>>,
-    pub(super) overflow: Overflow,
+    pub(super) overflow: Option<Signal<Overflow>>,
     pub(super) visible: Option<Signal<bool>>,
     pub(super) transform: Option<Signal<Transform>>,
     pub(super) transform_origin: Option<Signal<TransformOrigin>>,
@@ -343,7 +344,7 @@ pub struct Container {
     pub(super) widget_ref: Option<WidgetRef>,
 
     // Backdrop blur: this surface's own content, the compositor's, or both.
-    pub(super) backdrop_blur: Option<BackdropBlur>,
+    pub(super) backdrop_blur: Option<Signal<BackdropBlur>>,
 
     // How text inside this container looks. Boxed: most containers hold no
     // text and pay one pointer for the whole feature.
@@ -402,7 +403,7 @@ impl Container {
             elevation: None,
             width: None,
             height: None,
-            overflow: Overflow::Visible,
+            overflow: None,
             visible: None,
             transform: None,
             transform_origin: None,
@@ -684,8 +685,11 @@ impl Container {
     ///
     /// See [`crate::backdrop`] for why both are filtered rather than one
     /// being chosen.
-    pub fn backdrop_blur(mut self, blur: impl Into<BackdropBlur>) -> Self {
-        self.backdrop_blur = Some(blur.into());
+    /// A radius of `0.0` is "no blur", so a blur can be switched off by the
+    /// same signal that switches it on — the shape
+    /// [`Text::backdrop_blur`](crate::widgets::Text::backdrop_blur) already has.
+    pub fn backdrop_blur<M>(mut self, blur: impl IntoSignal<BackdropBlur, M>) -> Self {
+        self.backdrop_blur = Some(blur.into_signal());
         self
     }
 
@@ -707,7 +711,7 @@ impl Container {
         self
     }
 
-    /// Set a border with the given width and color
+    /// Set a border with the given width and colour.
     pub fn border<M1, M2>(
         mut self,
         width: impl IntoSignal<f32, M1>,
@@ -718,22 +722,54 @@ impl Container {
         self
     }
 
-    /// Set a linear gradient background
-    pub fn gradient(mut self, gradient: LinearGradient) -> Self {
-        self.gradient = Some(gradient);
+    /// Set only the border width, leaving the colour as declared.
+    pub fn border_width<M>(mut self, width: impl IntoSignal<f32, M>) -> Self {
+        self.border_width = Some(width.into_signal());
         self
     }
 
-    /// Convenience: horizontal gradient
-    pub fn gradient_horizontal(mut self, start: Color, end: Color) -> Self {
-        self.gradient = Some(LinearGradient::horizontal(start, end));
+    /// Set only the border colour, leaving the width as declared.
+    pub fn border_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.border_color = Some(color.into_signal());
         self
     }
 
-    /// Convenience: vertical gradient
-    pub fn gradient_vertical(mut self, start: Color, end: Color) -> Self {
-        self.gradient = Some(LinearGradient::vertical(start, end));
+    /// Set a linear gradient background. Replaces the solid fill.
+    pub fn gradient<M>(mut self, gradient: impl IntoSignal<LinearGradient, M>) -> Self {
+        self.gradient = Some(gradient.into_signal());
         self
+    }
+
+    /// Convenience: horizontal gradient.
+    pub fn gradient_horizontal<M1, M2>(
+        self,
+        start: impl IntoSignal<Color, M1>,
+        end: impl IntoSignal<Color, M2>,
+    ) -> Self {
+        let (start, end) = (start.into_signal(), end.into_signal());
+        self.gradient(move || LinearGradient::horizontal(start.get(), end.get()))
+    }
+
+    /// Convenience: vertical gradient.
+    pub fn gradient_vertical<M1, M2>(
+        self,
+        start: impl IntoSignal<Color, M1>,
+        end: impl IntoSignal<Color, M2>,
+    ) -> Self {
+        let (start, end) = (start.into_signal(), end.into_signal());
+        self.gradient(move || LinearGradient::vertical(start.get(), end.get()))
+    }
+
+    /// Convenience: diagonal gradient, top-left to bottom-right.
+    pub fn gradient_diagonal<M1, M2>(
+        self,
+        start: impl IntoSignal<Color, M1>,
+        end: impl IntoSignal<Color, M2>,
+    ) -> Self {
+        let (start, end) = (start.into_signal(), end.into_signal());
+        self.gradient(move || {
+            LinearGradient::new(start.get(), end.get(), GradientDirection::Diagonal)
+        })
     }
 
     /// Set the width of the container.
@@ -748,9 +784,9 @@ impl Container {
         self
     }
 
-    /// Set the overflow behavior for content that exceeds container bounds
-    pub fn overflow(mut self, overflow: Overflow) -> Self {
-        self.overflow = overflow;
+    /// Set the overflow behaviour for content that exceeds the container bounds.
+    pub fn overflow<M>(mut self, overflow: impl IntoSignal<Overflow, M>) -> Self {
+        self.overflow = Some(overflow.into_signal());
         self
     }
 
@@ -1002,6 +1038,14 @@ impl Container {
         self
     }
 
+    /// Animate elevation changes — the Material lift on hover, in motion
+    /// rather than as a jump.
+    pub fn animate_elevation(mut self, transition: impl Into<TransitionConfig>) -> Self {
+        let initial = self.elevation.get_or_untracked(0.0);
+        self.anims_mut().elevation = Some(AnimationState::new(initial, transition));
+        self
+    }
+
     pub fn animate_border_color(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.border_color.get_or_untracked(Color::TRANSPARENT);
         self.anims_mut().border_color = Some(AnimationState::new(initial, transition));
@@ -1204,6 +1248,7 @@ impl Widget for Container {
                 border_width_target,
                 bg_target,
                 corner_radius_target,
+                elevation_target,
                 border_color_target,
                 transform_target,
             ) = crate::reactive::diagnostics::snapshot_zone(|| {
@@ -1212,6 +1257,7 @@ impl Widget for Container {
                     self.effective_border_width_target(id),
                     self.effective_background_target(id),
                     self.effective_corner_radius_target(id),
+                    self.effective_elevation_target(id),
                     self.effective_border_color_target(id),
                     self.effective_transform_target(id),
                 )
@@ -1273,6 +1319,7 @@ impl Widget for Container {
                 any_animating,
                 paint
             );
+            advance_anim!(anims, elevation, elevation_target, id, any_animating, paint);
             advance_anim!(
                 anims,
                 border_color,
@@ -1538,8 +1585,8 @@ impl Widget for Container {
         // Children clipped away by hidden overflow or scrolling are invisible,
         // and an invisible child must not steal a click from a sibling drawn
         // below it (a collapsed submenu used to do exactly that).
-        let clips_children =
-            self.overflow == Overflow::Hidden || self.scroll_axis != ScrollAxis::None;
+        let clips_children = self.overflow.get_or(Overflow::Visible) == Overflow::Hidden
+            || self.scroll_axis != ScrollAxis::None;
         let skip_child_dispatch = clips_children
             && local_event
                 .coords()
@@ -1581,17 +1628,23 @@ impl Widget for Container {
             border_width,
             border_color,
             per_corner_radii,
+            gradient,
+            backdrop_blur,
+            overflow,
         ) = with_signal_tracking(id, JobType::Paint, || {
             (
                 self.animated_background(id),
                 self.animated_corner_radius(id),
                 self.corner_curvature.get_or(1.0),
-                self.effective_elevation(id),
+                self.animated_elevation(id),
                 self.animated_transform(id),
                 self.transform_origin.get_or(TransformOrigin::CENTER),
                 self.animated_border_width(id),
                 self.animated_border_color(id),
                 self.corner_radii.as_ref().map(|s| s.get()),
+                self.gradient.as_ref().map(|g| g.get()),
+                self.backdrop_blur.as_ref().map(|b| b.get()),
+                self.overflow.get_or(Overflow::Visible),
             )
         });
 
@@ -1607,7 +1660,7 @@ impl Widget for Container {
         // Publish the compositor blur region: bounds are read fresh from the
         // tree at frame sync, so only the (possibly animated) radius is
         // recorded here.
-        if let Some(blur) = self.backdrop_blur
+        if let Some(blur) = backdrop_blur
             && blur.sources.contains(BackdropSources::COMPOSITOR)
         {
             crate::blur::register_blur(id, corner_radius);
@@ -1626,7 +1679,7 @@ impl Widget for Container {
         // Before the decoration: the container paints over its own blurred
         // backdrop, and the effect must read a target that does not yet
         // include this container.
-        if let Some(blur) = self.backdrop_blur
+        if let Some(blur) = backdrop_blur
             && blur.sources.contains(BackdropSources::SURFACE)
             && blur.radius > 0.0
         {
@@ -1638,6 +1691,7 @@ impl Widget for Container {
             local_bounds,
             &Decoration {
                 background,
+                gradient,
                 corner_radii,
                 corner_curvature,
                 elevation: elevation_level,
@@ -1651,7 +1705,7 @@ impl Widget for Container {
 
         // Set clip region for scrollable or overflow:hidden containers
         // This clips all children to the container bounds
-        if is_scrollable || self.overflow == Overflow::Hidden {
+        if is_scrollable || overflow == Overflow::Hidden {
             ctx.set_clip(local_bounds, corner_radius, corner_curvature);
         }
 

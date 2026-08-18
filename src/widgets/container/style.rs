@@ -133,8 +133,7 @@ impl Container {
         self.resolve_state_value(id, base, |state| state.text_color.map(|s| s.get()))
     }
 
-    /// Elevation is never animated, so the target *is* the drawn value.
-    pub(super) fn effective_elevation(&self, id: WidgetId) -> f32 {
+    pub(super) fn effective_elevation_target(&self, id: WidgetId) -> f32 {
         let base = self.elevation.get_or(0.0);
         self.resolve_state_value(id, base, |state| state.elevation.map(|s| s.get()))
     }
@@ -283,6 +282,13 @@ impl Container {
         )
     }
 
+    pub(super) fn animated_elevation(&self, id: WidgetId) -> f32 {
+        get_animated_value(
+            self.anims.as_ref().and_then(|a| a.elevation.as_ref()),
+            || self.effective_elevation_target(id),
+        )
+    }
+
     pub(super) fn animated_transform(&self, id: WidgetId) -> Transform {
         get_animated_value(
             self.anims.as_ref().and_then(|a| a.transform.as_ref()),
@@ -297,6 +303,7 @@ impl Container {
         self.anims.as_ref().is_some_and(|a| {
             a.background.is_some()
                 || a.corner_radius.is_some()
+                || a.elevation.is_some()
                 || a.border_color.is_some()
                 || a.transform.is_some()
                 || a.text_color.is_some()
@@ -313,6 +320,7 @@ impl Container {
                 || a.border_width.is_some()
                 || a.background.is_some()
                 || a.corner_radius.is_some()
+                || a.elevation.is_some()
                 || a.border_color.is_some()
                 || a.transform.is_some()
                 || a.text_color.is_some()
@@ -323,6 +331,7 @@ impl Container {
 /// The container's own surface, resolved for one frame.
 pub(super) struct Decoration {
     pub background: Color,
+    pub gradient: Option<LinearGradient>,
     pub corner_radii: crate::renderer::CornerRadii,
     pub corner_curvature: f32,
     pub elevation: f32,
@@ -338,7 +347,7 @@ impl Container {
     /// has already positioned the node.
     pub(super) fn paint_decoration(&self, ctx: &mut PaintContext, bounds: Rect, d: &Decoration) {
         // A gradient replaces the solid fill rather than layering over it.
-        if let Some(ref gradient) = self.gradient {
+        if let Some(ref gradient) = d.gradient {
             ctx.draw_gradient_rect(
                 bounds,
                 crate::renderer::Gradient {

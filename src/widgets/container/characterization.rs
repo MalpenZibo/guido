@@ -1511,3 +1511,195 @@ fn an_animated_colour_starts_from_the_inherited_base() {
         "and come back to it"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Reactivity — properties that used to accept only a constant
+// ---------------------------------------------------------------------------
+
+/// A gradient follows its signal, and does so as a repaint: nothing about the
+/// fill can move the box.
+#[test]
+fn a_gradient_is_reactive_and_paint_only() {
+    let warm = create_signal(true);
+    let mut h = H::new(container().width(20.0).height(20.0).gradient(move || {
+        if warm.get() {
+            LinearGradient::horizontal(Color::RED, Color::YELLOW)
+        } else {
+            LinearGradient::horizontal(Color::BLUE, Color::CYAN)
+        }
+    }));
+    h.fit(100.0, 100.0);
+    assert_eq!(gradient_ends(&h.paint()), Some((Color::RED, Color::YELLOW)));
+
+    let queued = h.jobs_from(|| warm.set(false));
+    assert_eq!(queued, vec![JobType::Paint], "got {queued:?}");
+    assert_eq!(gradient_ends(&h.paint()), Some((Color::BLUE, Color::CYAN)));
+}
+
+/// The endpoints are reactive on their own, so the common case needs no
+/// closure building a whole gradient.
+#[test]
+fn gradient_endpoints_are_reactive_one_by_one() {
+    let end = create_signal(Color::YELLOW);
+    let mut h = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .gradient_vertical(Color::RED, end),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(gradient_ends(&h.paint()), Some((Color::RED, Color::YELLOW)));
+
+    end.set(Color::GREEN);
+    assert_eq!(gradient_ends(&h.paint()), Some((Color::RED, Color::GREEN)));
+}
+
+/// `overflow` decides both whether children are clipped and whether the box may
+/// shrink below its content, so a write to it has to reach layout as well as
+/// paint.
+#[test]
+fn overflow_is_reactive_and_invalidates_layout() {
+    let clipped = create_signal(false);
+    let mut h = H::new(
+        container()
+            .width(50.0)
+            .height(20.0)
+            .overflow(move || {
+                if clipped.get() {
+                    Overflow::Hidden
+                } else {
+                    Overflow::Visible
+                }
+            })
+            .child(box_of(400.0, 10.0)),
+    );
+    h.fit(500.0, 500.0);
+    assert!(h.paint().clip.is_none());
+
+    let queued = h.jobs_from(|| clipped.set(true));
+    assert!(
+        queued.contains(&JobType::Layout) && queued.contains(&JobType::Paint),
+        "got {queued:?}"
+    );
+    h.fit(500.0, 500.0);
+    assert!(h.paint().clip.is_some());
+}
+
+/// A blur can be switched off by the same signal that switches it on: a radius
+/// of zero draws no blur command, which is the contract `Text` already had.
+#[test]
+fn a_backdrop_blur_is_reactive_and_zero_means_off() {
+    let radius = create_signal(0.0f32);
+    let mut h = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .backdrop_blur(move || radius.get()),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(blur_radii(&h.paint()), Vec::<f32>::new());
+
+    let queued = h.jobs_from(|| radius.set(12.0));
+    assert_eq!(queued, vec![JobType::Paint], "got {queued:?}");
+    assert_eq!(blur_radii(&h.paint()), vec![12.0]);
+
+    radius.set(0.0);
+    assert_eq!(blur_radii(&h.paint()), Vec::<f32>::new());
+}
+
+/// The border's two halves can be declared apart, so a state layer that only
+/// recolours it does not have to restate the width.
+#[test]
+fn border_width_and_colour_are_separately_declarable() {
+    let danger = create_signal(false);
+    let mut h = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .border_width(2.0)
+            .border_color(move || {
+                if danger.get() {
+                    Color::RED
+                } else {
+                    Color::GRAY
+                }
+            }),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(borders(&h.paint()), vec![(2.0, Color::GRAY)]);
+
+    danger.set(true);
+    assert_eq!(borders(&h.paint()), vec![(2.0, Color::RED)]);
+}
+
+/// Elevation transitions like every other paint property now, instead of
+/// jumping.
+#[test]
+fn elevation_animates_towards_its_state_layer() {
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .elevation(0.0)
+            .when_hovered(|s| s.elevation(8.0))
+            .animate_elevation(Transition::new(80.0, TimingFunction::Linear)),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    assert_eq!(shadow_count(&h.paint()), 0, "flat on the surface at rest");
+
+    set_hover(&mut h, true);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    pump(&mut h);
+    h.fit(100.0, 100.0);
+    assert_eq!(
+        shadow_count(&h.paint()),
+        1,
+        "it casts a shadow while it rises"
+    );
+
+    settle(&mut h, 80);
+    set_hover(&mut h, false);
+    settle(&mut h, 80);
+    assert_eq!(shadow_count(&h.paint()), 0, "and settles back down");
+}
+
+/// Every `BackdropBlur` radius drawn by a node.
+fn blur_radii(node: &RenderNode) -> Vec<f32> {
+    node.commands
+        .iter()
+        .filter_map(|c| match &**c {
+            DrawCommand::BackdropBlur { radius, .. } => Some(*radius),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The endpoints of the first gradient drawn by a node.
+fn gradient_ends(node: &RenderNode) -> Option<(Color, Color)> {
+    node.commands.iter().find_map(|c| match &**c {
+        DrawCommand::RoundedRect {
+            gradient: Some(gradient),
+            ..
+        } => Some((gradient.start_color, gradient.end_color)),
+        _ => None,
+    })
+}
+
+/// How many of the node's rects carry a shadow.
+fn shadow_count(node: &RenderNode) -> usize {
+    node.commands
+        .iter()
+        .filter(|c| {
+            matches!(
+                &***c,
+                DrawCommand::RoundedRect {
+                    shadow: Some(_),
+                    ..
+                }
+            )
+        })
+        .count()
+}
