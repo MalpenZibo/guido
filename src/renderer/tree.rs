@@ -93,8 +93,9 @@ pub struct RenderNode {
 
     /// Overlay commands - drawn AFTER all children (for ripples, effects).
     /// These are also in local coordinates.
-    /// SmallVec: most nodes have 0-1 overlay commands (ripple only).
-    pub overlay_commands: SmallVec<[Rc<DrawCommand>; 1]>,
+    /// SmallVec sized for `MAX_LIVE_RIPPLES`: presses overlap, so a container
+    /// being clicked repeatedly holds one command per live ripple.
+    pub overlay_commands: SmallVec<[Rc<DrawCommand>; 4]>,
 
     /// Optional clip region that applies to this node and children.
     /// The clip rect is in local coordinates (0,0 = node origin).

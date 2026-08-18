@@ -14,7 +14,7 @@ mod characterization;
 pub(crate) use animations::with_measure_final;
 pub use animations::{AdvanceResult, AnimationState, get_animated_value};
 use interaction::{HitContext, untransform_point};
-pub use ripple::RippleState;
+pub use ripple::{MAX_LIVE_RIPPLES, Ripple, RippleState};
 use style::Decoration;
 
 use std::borrow::Cow;
@@ -1232,7 +1232,7 @@ impl Widget for Container {
             && ix.ripple.is_active()
             && let Some(config) = ix.ripple_config()
         {
-            let ripple_animating = ix.ripple.advance(&config);
+            let ripple_animating = ix.ripple.advance(&config, std::time::Instant::now());
             if ripple_animating {
                 // Ripple is paint-only, request animation continuation with paint
                 request_job(id, JobRequest::Animation(RequiredJob::Paint));
@@ -1686,29 +1686,32 @@ impl Widget for Container {
             self.paint_scrollbar_containers(tree, id, ctx);
         }
 
-        // Draw ripple effect as overlay (ripple.center is already in local coordinates)
+        // Ripples, oldest first. The state holds how far along each one is;
+        // the geometry it resolves against is the container's.
         if let Some(ref ix) = self.interaction
-            && let Some((local_cx, local_cy)) = ix.ripple.center
             && let Some(ripple_config) = ix.ripple_config()
-            && ix.ripple.opacity > 0.0
+            && ix.ripple.iter().any(|r| r.opacity() > 0.0)
         {
-            // Set overlay clip to container bounds with rounded corners
-            // This clips the ripple without affecting children
+            // Clips the ripples without affecting children.
             ctx.set_overlay_clip(local_bounds, corner_radius, corner_curvature);
 
-            let max_dist_x = local_cx.max(bounds.width - local_cx);
-            let max_dist_y = local_cy.max(bounds.height - local_cy);
-            let max_radius = (max_dist_x * max_dist_x + max_dist_y * max_dist_y).sqrt();
-            let current_radius = max_radius * ix.ripple.progress;
+            for ripple in ix.ripple.iter() {
+                let opacity = ripple.opacity();
+                if opacity <= 0.0 {
+                    continue;
+                }
+                let (center_x, center_y) = ripple.center(bounds.width, bounds.height);
+                let radius = ripple.radius(bounds.width, bounds.height);
 
-            let ripple_color = Color::rgba(
-                ripple_config.color.r,
-                ripple_config.color.g,
-                ripple_config.color.b,
-                ripple_config.color.a * ix.ripple.opacity,
-            );
+                let ripple_color = Color::rgba(
+                    ripple_config.color.r,
+                    ripple_config.color.g,
+                    ripple_config.color.b,
+                    ripple_config.color.a * opacity,
+                );
 
-            ctx.draw_overlay_circle(local_cx, local_cy, current_radius, ripple_color);
+                ctx.draw_overlay_circle(center_x, center_y, radius, ripple_color);
+            }
         }
     }
 }
