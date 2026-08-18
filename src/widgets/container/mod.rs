@@ -36,6 +36,7 @@ use crate::tree::{Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
 
 use super::children::ChildrenSource;
+use super::control::Control;
 use super::font::{FontFamily, FontWeight};
 use super::input_style::InputStyle;
 use super::into_child::{IntoChild, IntoChildren};
@@ -160,7 +161,7 @@ pub(super) struct ContainerAnims {
 bitflags::bitflags! {
     /// What the pointer is doing to this container.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-    pub(super) struct InteractionFlags: u8 {
+    pub(crate) struct InteractionFlags: u8 {
         const HOVERED = 1;
         const PRESSED = 2;
     }
@@ -352,6 +353,10 @@ pub struct Container {
     /// `text` because a text cannot draw any of it.
     pub(super) input: Option<Box<InputStyle>>,
 
+    /// Declared with `control()`. A container is an interaction unit for other
+    /// reasons too — see `is_control` — so this is only the explicit half.
+    pub(super) declared_control: bool,
+
     // Owns the derived published in place of the text colour when a state
     // layer declares one. Created at registration, so it belongs to no user
     // scope and has to be torn down by hand when the container goes.
@@ -406,6 +411,7 @@ impl Container {
             backdrop_blur: None,
             text: None,
             input: None,
+            declared_control: false,
             text_owner: None,
             animated_text: None,
             text_base: None,
@@ -1093,6 +1099,56 @@ impl Container {
         self
     }
 
+    /// Declare this container an interaction unit.
+    ///
+    /// Everything inside resolves hover, press and focus from here, until a
+    /// nested `control` takes over. That is what lets a button's label light
+    /// up while the pointer is on the button's padding, and what lets a label
+    /// react to the focus of the input beside it.
+    ///
+    /// Rarely written by hand: anything the pointer can act on is a unit by
+    /// necessity, so `on_click`, `on_hover`, `on_scroll`, `scrollable` and a
+    /// declared state layer all imply it. Write it where the boundary is real
+    /// but nothing else announces it — a form field's label and input, a row
+    /// whose highlight belongs to the row.
+    ///
+    /// # Example
+    /// ```ignore
+    /// container().control()
+    ///     .child(text("Password").when_focused(|s| s.color(theme.accent)))
+    ///     .child(text_input(password))
+    /// ```
+    pub fn control(mut self) -> Self {
+        self.declared_control = true;
+        // The flags a descendant subscribes to live here, so they have to
+        // exist even for a unit that declares no state of its own.
+        self.interact_mut();
+        self
+    }
+
+    /// Whether this container is an interaction unit.
+    ///
+    /// A pointer target *is* one — it has to know whether it is being pointed
+    /// at — so every behaviour implies it rather than merely allowing it. So
+    /// does declaring a state layer, which is what keeps every container
+    /// resolving its own states exactly as it did before controls existed.
+    pub(super) fn is_control(&self) -> bool {
+        if self.declared_control || self.scroll_axis != ScrollAxis::None {
+            return true;
+        }
+        self.interaction.as_ref().is_some_and(|ix| {
+            ix.has_any_state()
+                || ix.on_click.is_some()
+                || ix.on_right_click.is_some()
+                || ix.on_middle_click.is_some()
+                || ix.on_hover.is_some()
+                || ix.on_scroll.is_some()
+                || ix.on_pointer_move.is_some()
+                || ix.on_mouse_down.is_some()
+                || ix.on_mouse_up.is_some()
+        })
+    }
+
     fn push_state<F>(&mut self, when: StateWhen, f: F)
     where
         F: FnOnce(StateStyle) -> StateStyle,
@@ -1291,6 +1347,16 @@ impl Widget for Container {
         let published = self.published_text_style(tree, id);
         tree.set_text_style(id, published);
         tree.set_input_style(id, self.input.as_deref().copied());
+        tree.set_control(
+            id,
+            self.is_control()
+                .then(|| {
+                    self.interaction
+                        .as_ref()
+                        .map(|ix| Control::new(id, ix.flags))
+                })
+                .flatten(),
+        );
 
         // Register pending children
         self.children_source.register_pending(tree, id);

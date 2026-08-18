@@ -1,13 +1,16 @@
 use crate::default_font_family;
 use crate::jobs::JobType;
 use crate::layout::{Constraints, Size};
+use crate::reactive::signal::{RwSignal, create_signal};
 use crate::reactive::{IntoSignal, OptionSignalExt, Signal, with_signal_tracking};
 use crate::renderer::{PaintContext, measure_text_full};
 use crate::tree::{Tree, WidgetId};
 
+use super::control::Control;
 use super::font::{FontFamily, FontWeight};
+use super::state_layer::{StateWhen, Stateful};
 use super::text_style::{TextShadow, TextStroke, TextStyle, TextStyled};
-use super::widget::{Color, Rect, Widget};
+use super::widget::{Color, Event, EventResponse, Rect, Widget};
 
 /// How far a stroke and a shadow reach past the glyphs they decorate.
 ///
@@ -37,6 +40,13 @@ pub struct Text {
     /// What this text declares about itself. Boxed and absent by default: a
     /// text that says nothing pays a null check, not a struct.
     style: Option<Box<TextStyle>>,
+    /// Overrides that apply while this text's control is in a state, in
+    /// declaration order. Empty for almost every text there is.
+    states: Vec<(StateWhen, TextStyle)>,
+    /// Set only once a pointer state is declared, and read only when no
+    /// control encloses this text — the case where it is its own unit and has
+    /// to notice the pointer itself.
+    own_hover: Option<RwSignal<bool>>,
     /// If true, text won't wrap and will be clipped by parent container
     nowrap: bool,
     /// Cached values for painting (avoid re-reading signals)
@@ -56,6 +66,8 @@ impl Text {
         Self {
             content,
             style: None,
+            states: Vec::new(),
+            own_hover: None,
             nowrap: false,
             cached_text: String::new(), // Will be set during first layout
             cached_font_size: 14.0,
@@ -77,11 +89,43 @@ impl Text {
     /// Called inside the caller's tracking scope, like the walk it wraps: the
     /// signals come back unread, and reading them is what subscribes.
     fn resolved_style(&self, tree: &Tree, id: WidgetId) -> TextStyle {
-        let mut style = self.style.as_deref().copied().unwrap_or_default();
+        let mut style = TextStyle::default();
+        // Active overrides first, last declared first, so they outrank the
+        // text's own declaration — and `inherit_from` takes only what is still
+        // missing, which is what makes the whole chain resolve per property.
+        if !self.states.is_empty() {
+            let control = tree.nearest_control(id);
+            for (when, override_) in self.states.iter().rev() {
+                if self.is_state_active(id, control.as_ref(), when) {
+                    style.inherit_from(override_);
+                }
+            }
+        }
+        if let Some(own) = self.style.as_deref() {
+            style.inherit_from(own);
+        }
         if !style.is_complete() {
             style.inherit_from(&tree.inherited_text_style(id));
         }
         style
+    }
+
+    /// Whether an override applies. Reading the answer is what subscribes the
+    /// text to the control, so it is asked only for a state it declares.
+    fn is_state_active(&self, id: WidgetId, control: Option<&Control>, when: &StateWhen) -> bool {
+        match (when, control) {
+            (StateWhen::When(condition), _) => condition.get(),
+            (StateWhen::Hovered, Some(control)) => control.is_hovered(),
+            (StateWhen::Pressed, Some(control)) => control.is_pressed(),
+            (StateWhen::Focused, Some(control)) => control.has_focus(),
+            // No control above: this text is its own unit. It can notice the
+            // pointer over its own bounds, and it can hold the focus if
+            // something gave it — but it cannot be pressed, because being
+            // pressed means being activated and it has nothing to activate.
+            (StateWhen::Hovered, None) => self.own_hover.is_some_and(|h| h.get()),
+            (StateWhen::Focused, None) => crate::reactive::focus::focus_path().contains(id),
+            (StateWhen::Pressed, None) => false,
+        }
     }
 
     /// Refresh cached values from the inherited style.
@@ -101,6 +145,17 @@ impl Text {
             self.cached_font_weight = style.font_weight.get_or(FontWeight::NORMAL);
             decoration_overflow(style.stroke.map(|s| s.get()), style.shadow.map(|s| s.get()))
         })
+    }
+}
+
+impl Stateful for Text {
+    type Style = TextStyle;
+
+    fn push_state_style(&mut self, when: StateWhen, style: TextStyle) {
+        if matches!(when, StateWhen::Hovered) && self.own_hover.is_none() {
+            self.own_hover = Some(create_signal(false));
+        }
+        self.states.push((when, style));
     }
 }
 
@@ -180,6 +235,34 @@ impl Widget for Text {
         tree.clear_needs_layout(id);
 
         size
+    }
+
+    /// Notice the pointer, but only for a text that is its own interaction
+    /// unit. Inside a control it is the control that tracks, and asking twice
+    /// would light this text on its own glyphs rather than on the button whose
+    /// label it is.
+    fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
+        let Some(hover) = self.own_hover else {
+            return EventResponse::Ignored;
+        };
+        if tree.nearest_control(id).is_some() {
+            return EventResponse::Ignored;
+        }
+
+        let inside = match event {
+            Event::MouseMove { x, y } | Event::MouseEnter { x, y } => tree
+                .get_bounds(id)
+                .is_some_and(|bounds| bounds.contains(*x, *y)),
+            Event::MouseLeave => false,
+            _ => return EventResponse::Ignored,
+        };
+        // Written only on a change: an unchanged pointer move must not wake
+        // every subscriber.
+        if hover.get_untracked() != inside {
+            hover.set(inside);
+        }
+        // Never handled: noticing the pointer is not consuming it.
+        EventResponse::Ignored
     }
 
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {

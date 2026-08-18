@@ -18,7 +18,7 @@ and why, and the one design still open.
 | `distribute_jobs` root resolution, damage as a `HashMap` | **Closed** — see below |
 | Three tracking scopes in one paint | **Closed** — see below |
 | Container as a style source | Open — direction settled, not scheduled |
-| **Interaction groups** | **Open — designed, one decision left** |
+| Interaction groups | **Done** (#188), as `control()` |
 
 ---
 
@@ -89,11 +89,14 @@ widget that draws it: see `docs/STYLING.md`.
 
 ---
 
-## Open: interaction groups
+## Shipped: interaction controls
 
 Everything above concerns style. Putting *states* on leaves —
-`text("x").when_hovered(..)` — raises a question style does not, and this is the
-design that answers it. One decision is left: the name.
+`text("x").when_hovered(..)` — raised a question style does not. This is the
+design that answers it, shipped in #188 under the name `control()`: it says
+what the thing *is* rather than what it does, and it is the word accessibility
+uses for the same boundary, which is likely where the role, label and Tab order
+will eventually attach.
 
 ### The question
 
@@ -205,14 +208,21 @@ The third row needed no mechanism, which is why it shipped ahead of the rest.
 - **Precedence is already last-declared-wins** (#183), which is what this
   design needs.
 
+### Settled while building it
+
+- **No enclosing unit**: the widget becomes its own, and notices the pointer
+  over its own bounds — silent declarations are the failure mode this design
+  exists to avoid. It is never *pressed*, though, because being pressed means
+  being activated and it has nothing to activate.
+- **A leaf's state style** is the same partial style it is built with, since
+  `TextStyle` implements `TextStyled`. One vocabulary, three places.
+
 ### Still open
 
-- **The name.** `group()`, `interaction_scope()`, `control()`. To be settled
-  against real call sites, since it will be written everywhere.
-- **No enclosing unit.** A `when_hovered` with nothing above it: silent no-op,
-  or does the widget become its own unit? Probably the latter — silent
-  declarations are the failure mode this design exists to avoid — with the
-  existing reactive diagnostics as the place to warn.
+- **`hover_state`/`pressed_state`/`focused_state` on `Container`** should
+  become `when_hovered`/`when_pressed`/`when_focused` to match the leaves. A
+  mechanical rename across ~290 call sites, deliberately kept out of #188 so
+  the mechanism could be reviewed on its own.
 - **`focus_visible`.** Needed: where an input holds focus essentially always, a
   permanent focus ring is noise. Separate question — it is about how the focus
   arrived, not about who resolves it.

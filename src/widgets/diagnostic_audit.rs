@@ -27,7 +27,9 @@ use crate::renderer::{PaintContext, RenderNode};
 use crate::tree::Tree;
 use crate::widgets::widget::{Event, Key, Modifiers, MouseButton, ScrollSource};
 use crate::widgets::{Color, ImageSource, ScrollAxis};
-use crate::widgets::{InputStyled, TextStyled, Widget, container, image, text, text_input};
+use crate::widgets::{
+    InputStyled, Stateful, TextStyled, Widget, container, image, text, text_input,
+};
 
 /// Put a widget through the whole `Widget` trait and return how many reads the
 /// library performed with no reactive scope.
@@ -267,6 +269,43 @@ fn an_input_that_styles_itself_is_quiet() {
 
     assert_quiet(
         "an input that declares its own caret and placeholder",
+        diagnostics_from_full_lifecycle(widget),
+    );
+}
+
+/// State overrides on a leaf: the control's flags, the focus path and an
+/// app-owned condition are all signal reads, and all three have to happen
+/// inside the leaf's own scope.
+#[test]
+fn a_text_with_state_overrides_is_quiet() {
+    let wrong = create_signal(false);
+
+    let widget = container().control().on_click(|| {}).child(
+        text("ciao")
+            .color(Color::WHITE)
+            .when_hovered(|s| s.color(Color::RED))
+            .when_focused(|s| s.color(Color::GREEN))
+            .state(wrong, |s| s.color(Color::BLUE)),
+    );
+
+    assert_quiet(
+        "a text with state overrides",
+        diagnostics_from_full_lifecycle(widget),
+    );
+}
+
+/// The same with nothing marked above it, which takes the other branch: the
+/// text is its own unit and reads its own hover instead of a control's.
+#[test]
+fn a_text_that_is_its_own_unit_is_quiet() {
+    let widget = container().child(
+        text("ciao")
+            .color(Color::WHITE)
+            .when_hovered(|s| s.color(Color::RED)),
+    );
+
+    assert_quiet(
+        "a text with no control above it",
         diagnostics_from_full_lifecycle(widget),
     );
 }

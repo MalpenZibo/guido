@@ -280,3 +280,68 @@ pub fn resolve_background(base: Color, override_: &BackgroundOverride) -> Color 
         BackgroundOverride::Darker(amount) => base.darker(amount.get()),
     }
 }
+
+/// Declaring how a widget looks while its control is in a state.
+///
+/// The unit that holds the state is the widget's
+/// [`Control`](crate::widgets::Control) — the nearest enclosing container
+/// marked as one — so a button's label reacts to the button being hovered, and
+/// a form label reacts to the focus of the input beside it. A widget with no
+/// control above it is its own unit, and notices the pointer over its own
+/// bounds.
+///
+/// The closure receives the same partial style the widget itself is built
+/// with, because an override *is* another partial style:
+///
+/// ```ignore
+/// text("Save").color(theme.weak).when_hovered(|s| s.color(theme.strong))
+/// ```
+///
+/// Layers resolve in reverse declaration order, per property, exactly as a
+/// container's do.
+pub trait Stateful: Sized {
+    /// The partial style an override is written in.
+    type Style: Default;
+
+    #[doc(hidden)]
+    fn push_state_style(&mut self, when: StateWhen, style: Self::Style);
+
+    /// While the pointer is inside the control.
+    fn when_hovered(mut self, f: impl FnOnce(Self::Style) -> Self::Style) -> Self {
+        self.push_state_style(StateWhen::Hovered, f(Self::Style::default()));
+        self
+    }
+
+    /// While the pointer is down on the control.
+    ///
+    /// A widget with no control above it is never pressed: being pressed means
+    /// being activated, and a widget that is its own unit has nothing to
+    /// activate.
+    fn when_pressed(mut self, f: impl FnOnce(Self::Style) -> Self::Style) -> Self {
+        self.push_state_style(StateWhen::Pressed, f(Self::Style::default()));
+        self
+    }
+
+    /// While the keyboard focus is inside the control.
+    ///
+    /// This is the one the direction of the old mechanism could not express:
+    /// the focus is in a *sibling*, and both belong to the same control.
+    fn when_focused(mut self, f: impl FnOnce(Self::Style) -> Self::Style) -> Self {
+        self.push_state_style(StateWhen::Focused, f(Self::Style::default()));
+        self
+    }
+
+    /// While `condition` holds — a state the app owns, needing no control at
+    /// all, since the signal is one the caller already has.
+    fn state<M>(
+        mut self,
+        condition: impl IntoSignal<bool, M>,
+        f: impl FnOnce(Self::Style) -> Self::Style,
+    ) -> Self {
+        self.push_state_style(
+            StateWhen::When(condition.into_signal()),
+            f(Self::Style::default()),
+        );
+        self
+    }
+}

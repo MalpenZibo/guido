@@ -156,6 +156,50 @@ container()
     .child(text("Wrong password"))
 ```
 
+## Whose Hover?
+
+A label inside a button has to light up while the pointer is on the button's
+*padding*, nowhere near the glyphs. And it has to stay dark while the pointer
+is over a different button in the same row. So neither "my own bounds" nor "any
+ancestor" is the answer.
+
+The answer is the nearest enclosing **control** — the interaction unit the
+widget belongs to:
+
+```rust
+container()
+    .padding(12.0)
+    .on_click(save)
+    .child(text("Save").color(theme.weak).when_hovered(|s| s.color(theme.strong)))
+```
+
+`on_click` makes that container a control, because anything the pointer can act
+on is a unit by necessity. So do `on_hover`, `on_scroll`, `scrollable` and any
+declared state layer. Write `control()` yourself where the boundary is real but
+nothing else announces it:
+
+```rust
+container().control()
+    .child(text("Password").when_focused(|s| s.color(theme.accent)))
+    .child(text_input(password))
+```
+
+That is the case the old rule could not express at all: the focus is in a
+*sibling*, not below the label. Both belong to the same unit, so the label can
+ask about it.
+
+Leaves get `when_hovered`, `when_pressed`, `when_focused` and `state` from the
+`Stateful` trait, and the closure hands back the same builder the widget itself
+uses.
+
+**Nesting scopes resolution, not state.** A list row stays hovered while the
+pointer is over a button nested in it — the pointer is plainly still on the
+row. What the nested control changes is only who a descendant asks.
+
+**With nothing marked above it**, a widget is its own unit and notices the
+pointer over its own bounds. It is never pressed: being pressed means being
+activated, and it has nothing to activate.
+
 ## Which Layer Wins
 
 Layers are resolved in reverse declaration order, one property at a time: the
