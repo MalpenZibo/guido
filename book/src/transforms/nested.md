@@ -121,8 +121,8 @@ fn nested_transforms_demo() -> impl Widget {
                         .background(Color::rgb(0.3, 0.5, 0.8))
                         .corner_radius(8.0)
                         .scale(0.9)
-                        .hover_state(|s| s.lighter(0.1))
-                        .pressed_state(|s| s.ripple())
+                        .when_hovered(|s| s.lighter(0.1))
+                        .when_pressed(|s| s.ripple())
                         .layout(Flex::column().main_alignment(MainAlignment::Center).cross_alignment(CrossAlignment::Center))
                         .child(
                             container().text_color(Color::WHITE).font_size(10.0).child(text("Child (scaled 0.9)"))

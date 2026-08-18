@@ -11,8 +11,8 @@ Guido uses a declarative **state layer** system for interaction feedback. Instea
 ```rust
 container()
     .background(Color::rgb(0.2, 0.2, 0.3))
-    .hover_state(|s| s.lighter(0.1))      // Lighten on hover
-    .pressed_state(|s| s.ripple())         // Ripple on press
+    .when_hovered(|s| s.lighter(0.1))      // Lighten on hover
+    .when_pressed(|s| s.ripple())         // Ripple on press
 ```
 
 The framework handles:
@@ -52,7 +52,7 @@ With state layers:
 // New way (clean)
 container()
     .background(Color::rgb(0.2, 0.2, 0.3))
-    .hover_state(|s| s.lighter(0.1))
+    .when_hovered(|s| s.lighter(0.1))
 ```
 
 Benefits:

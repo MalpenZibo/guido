@@ -104,8 +104,8 @@ Colors integrate with the state layer API for hover effects:
 ```rust
 container()
     .background(Color::rgb(0.2, 0.2, 0.3))
-    .hover_state(|s| s.lighter(0.1))   // Lighten on hover
-    .pressed_state(|s| s.darker(0.1))  // Darken on press
+    .when_hovered(|s| s.lighter(0.1))   // Lighten on hover
+    .when_pressed(|s| s.darker(0.1))  // Darken on press
 ```
 
 Or use explicit colors:
@@ -113,8 +113,8 @@ Or use explicit colors:
 ```rust
 container()
     .background(Color::rgb(0.3, 0.5, 0.8))
-    .hover_state(|s| s.background(Color::rgb(0.4, 0.6, 0.9)))
-    .pressed_state(|s| s.background(Color::rgb(0.2, 0.4, 0.7)))
+    .when_hovered(|s| s.background(Color::rgb(0.4, 0.6, 0.9)))
+    .when_pressed(|s| s.background(Color::rgb(0.2, 0.4, 0.7)))
 ```
 
 ## Reactive Colors
@@ -161,13 +161,13 @@ For hover states, lightening by 5-15% works well:
 
 ```rust
 // Subtle hover
-.hover_state(|s| s.lighter(0.05))
+.when_hovered(|s| s.lighter(0.05))
 
 // Noticeable hover
-.hover_state(|s| s.lighter(0.1))
+.when_hovered(|s| s.lighter(0.1))
 
 // Strong hover
-.hover_state(|s| s.lighter(0.15))
+.when_hovered(|s| s.lighter(0.15))
 ```
 
 ### Transparency

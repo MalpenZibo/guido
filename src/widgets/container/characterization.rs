@@ -866,13 +866,13 @@ fn set_hover(h: &mut H, inside: bool) {
 /// repaints with its new background while the text's cached render node is
 /// reused with the old colour still inside its draw commands.
 #[test]
-fn a_hover_state_reaches_the_text() {
+fn a_hover_layer_reaches_the_text() {
     let mut h = H::new(
         container()
             .width(100.0)
             .height(40.0)
             .text_color(Color::rgb(0.5, 0.5, 0.5))
-            .hover_state(|s| s.text_color(Color::WHITE))
+            .when_hovered(|s| s.text_color(Color::WHITE))
             .child(crate::widgets::text("Label")),
     );
 
@@ -884,13 +884,13 @@ fn a_hover_state_reaches_the_text() {
 }
 
 #[test]
-fn a_hover_state_reaches_text_below_a_plain_container() {
+fn a_hover_layer_reaches_text_below_a_plain_container() {
     let mut h = H::new(
         container()
             .width(100.0)
             .height(40.0)
             .text_color(Color::rgb(0.5, 0.5, 0.5))
-            .hover_state(|s| s.text_color(Color::WHITE))
+            .when_hovered(|s| s.text_color(Color::WHITE))
             .child(
                 container()
                     .layout(Flex::row())
@@ -913,7 +913,7 @@ fn a_state_colour_falls_back_to_the_inherited_base() {
             container()
                 .width(100.0)
                 .height(40.0)
-                .hover_state(|s| s.text_color(Color::WHITE))
+                .when_hovered(|s| s.text_color(Color::WHITE))
                 .child(crate::widgets::text("Label")),
         ),
     );
@@ -932,7 +932,7 @@ fn a_nearer_declaration_wins_over_an_outer_hover() {
             .width(100.0)
             .height(40.0)
             .text_color(Color::rgb(0.5, 0.5, 0.5))
-            .hover_state(|s| s.text_color(Color::WHITE))
+            .when_hovered(|s| s.text_color(Color::WHITE))
             .child(
                 container()
                     .text_color(Color::BLUE)
@@ -958,7 +958,7 @@ fn a_container_with_no_state_text_colour_publishes_the_base_signal() {
             .width(100.0)
             .height(40.0)
             .text_color(Color::RED)
-            .hover_state(|s| s.lighter(0.1))
+            .when_hovered(|s| s.lighter(0.1))
             .child(crate::widgets::text("Label")),
     );
 
@@ -994,7 +994,7 @@ fn the_published_text_derived_is_freed_with_its_container() {
         let (widget, item) = with_owner(|| {
             container()
                 .text_color(Color::RED)
-                .hover_state(|s| s.text_color(Color::WHITE))
+                .when_hovered(|s| s.text_color(Color::WHITE))
                 .child(crate::widgets::text("x"))
         });
         // Registration happens under the surrounding (surface) owner.
@@ -1028,7 +1028,7 @@ fn the_published_text_derived_is_freed_with_its_container() {
 // ---------------------------------------------------------------------------
 
 /// Focus used to be a bare generational id, which made this self-correcting:
-/// a dead widget stopped matching any live one and `focused_state` resolved to
+/// a dead widget stopped matching any live one and `when_focused` resolved to
 /// false on its own. The focus *path* is stored state and has no such
 /// property — its ancestors would go on answering "the focus is inside me" for
 /// a widget that no longer exists.
@@ -1049,7 +1049,7 @@ fn unregistering_a_focused_widget_releases_the_focus() {
     assert!(focus_path().contains(child));
     assert!(
         focus_path().contains(h.root),
-        "the ancestor is on the path, which is what focused_state asks about"
+        "the ancestor is on the path, which is what a focused layer asks about"
     );
 
     h.tree.unregister(child);
@@ -1059,11 +1059,11 @@ fn unregistering_a_focused_widget_releases_the_focus() {
     );
 }
 
-/// A container resolves `focused_state` by asking the path, not by walking its
+/// A container resolves `when_focused` by asking the path, not by walking its
 /// descendants — that is what lets the same question be answered from inside a
 /// derived closure, which has no tree.
 #[test]
-fn a_focused_state_applies_while_a_descendant_holds_focus() {
+fn a_focused_layer_applies_while_a_descendant_holds_focus() {
     use crate::reactive::focus::clear_focus;
     use crate::reactive::request_focus;
 
@@ -1072,7 +1072,7 @@ fn a_focused_state_applies_while_a_descendant_holds_focus() {
             .width(50.0)
             .height(50.0)
             .background(Color::RED)
-            .focused_state(|s| s.background(Color::BLUE))
+            .when_focused(|s| s.background(Color::BLUE))
             .child(box_of(10.0, 10.0)),
     );
     h.fit(100.0, 100.0);
@@ -1087,13 +1087,13 @@ fn a_focused_state_applies_while_a_descendant_holds_focus() {
 
 /// A state layer *overrides* the base; it does not rank against it.
 ///
-/// Which is the whole answer to "why would a field not use `focused_state` for
+/// Which is the whole answer to "why would a field not use `when_focused` for
 /// its focus ring". A border that already carries a meaning — an error colour
 /// here — puts that meaning in the base, and the base is exactly what the layer
 /// replaces. On a field that holds the focus essentially all the time, that is
 /// an error colour that never appears.
 #[test]
-fn a_focused_state_replaces_the_base_rather_than_ranking_against_it() {
+fn a_focused_layer_replaces_the_base_rather_than_ranking_against_it() {
     use crate::reactive::focus::clear_focus;
     use crate::reactive::request_focus;
     use crate::widgets::text_input;
@@ -1104,7 +1104,7 @@ fn a_focused_state_replaces_the_base_rather_than_ranking_against_it() {
             .width(50.0)
             .height(50.0)
             .border(1.5, Color::RED)
-            .focused_state(|s| s.border(1.5, Color::BLUE))
+            .when_focused(|s| s.border(1.5, Color::BLUE))
             .child(text_input(create_signal(String::new()))),
     );
     h.fit(100.0, 100.0);
@@ -1125,7 +1125,7 @@ fn a_focused_state_replaces_the_base_rather_than_ranking_against_it() {
 ///
 /// It works because the closure is read inside paint's tracking scope — asking
 /// about the focus is what subscribes the container to it, with no
-/// `focused_state` declared anywhere.
+/// `when_focused` declared anywhere.
 #[test]
 fn a_border_colour_that_asks_a_handle_follows_the_focus() {
     use crate::reactive::focus::clear_focus;
@@ -1180,7 +1180,7 @@ fn a_state_override_follows_the_signal_it_was_given() {
     let mut h = H::new(
         box_of(50.0, 50.0)
             .background(Color::BLACK)
-            .hover_state(move |s: StateStyle| s.background(accent)),
+            .when_hovered(move |s: StateStyle| s.background(accent)),
     );
     h.fit(100.0, 100.0);
 
@@ -1234,7 +1234,7 @@ fn the_last_layer_declared_wins_over_the_ones_before_it() {
             .width(50.0)
             .height(50.0)
             .border(1.5, Color::WHITE)
-            .focused_state(|s| s.border(1.5, Color::BLUE))
+            .when_focused(|s| s.border(1.5, Color::BLUE))
             .state(wrong, |s| s.border(1.5, Color::RED))
             .child(text_input(create_signal(String::new()))),
     );
@@ -1264,8 +1264,8 @@ fn a_layer_silent_on_a_property_does_not_shadow_the_one_below_it() {
     let mut h = H::new(
         box_of(50.0, 50.0)
             .background(Color::BLACK)
-            .hover_state(|s| s.background(Color::RED))
-            .pressed_state(|s| s.transform(Transform::scale(0.5))),
+            .when_hovered(|s| s.background(Color::RED))
+            .when_pressed(|s| s.transform(Transform::scale(0.5))),
     );
     h.fit(100.0, 100.0);
 
@@ -1317,7 +1317,7 @@ fn an_animated_text_colour_passes_through_intermediate_values() {
             .width(100.0)
             .height(40.0)
             .text_color(Color::BLACK)
-            .hover_state(|s| s.text_color(Color::WHITE))
+            .when_hovered(|s| s.text_color(Color::WHITE))
             .animate_text_color(Transition::new(80.0, TimingFunction::Linear))
             .child(crate::widgets::text("Label")),
     );
@@ -1348,7 +1348,7 @@ fn a_settled_animation_releases_the_colour_back_to_the_fold() {
             .width(100.0)
             .height(40.0)
             .text_color(Color::BLACK)
-            .hover_state(|s| s.text_color(Color::WHITE))
+            .when_hovered(|s| s.text_color(Color::WHITE))
             .animate_text_color(Transition::new(80.0, TimingFunction::Linear))
             .child(crate::widgets::text("Label")),
     );
@@ -1378,7 +1378,7 @@ fn an_animated_colour_starts_from_the_inherited_base() {
             container()
                 .width(100.0)
                 .height(40.0)
-                .hover_state(|s| s.text_color(Color::BLUE))
+                .when_hovered(|s| s.text_color(Color::BLUE))
                 .animate_text_color(Transition::new(80.0, TimingFunction::Linear))
                 .child(crate::widgets::text("Label")),
         ),

@@ -59,7 +59,7 @@ impl Container {
 
         // Backwards: the last layer declared wins. A layer that says nothing
         // about *this* property is passed over rather than ending the search,
-        // so `hover_state(|s| s.lighter(0.1))` still lightens under a pressed
+        // so `when_hovered(|s| s.lighter(0.1))` still lightens under a pressed
         // layer that only scales.
         for (when, state) in ix.states.iter().rev() {
             let Some(value) = extractor(state) else {

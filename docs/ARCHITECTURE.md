@@ -405,8 +405,8 @@ Declarative style overrides for interaction states:
 ```rust
 container()
     .background(base_color)
-    .hover_state(|s| s.lighter(0.1))     // Override on hover
-    .pressed_state(|s| s.ripple())        // Override on press
+    .when_hovered(|s| s.lighter(0.1))     // Override on hover
+    .when_pressed(|s| s.ripple())        // Override on press
 ```
 
 See [STATE_LAYER.md](./STATE_LAYER.md) for full documentation.
@@ -482,7 +482,7 @@ The paint system tracks which widgets need repainting:
 
 When focus changes between widgets, the focus system (`request_focus`, `release_focus`,
 `clear_focus`) automatically queues a Paint job for the previously focused widget. This
-ensures parent containers with `focused_state` styling repaint to drop their focused
+ensures parent containers with `when_focused` styling repaint to drop their focused
 border/background.
 
 ### Text Measurement Caching

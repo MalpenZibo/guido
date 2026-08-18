@@ -180,8 +180,8 @@ fn main() {
                             .padding(8.0)
                             .background(Color::rgb(0.2, 0.2, 0.3))
                             .corner_radius(4.0)
-                            .hover_state(|s| s.lighter(0.1))
-                            .pressed_state(|s| s.ripple())
+                            .when_hovered(|s| s.lighter(0.1))
+                            .when_pressed(|s| s.ripple())
                             .on_click(move || count.update(|c| *c += 1))
                             .child(text(move || format!("Clicks: {}", count.get()))),
                     )
@@ -202,8 +202,8 @@ fn main() {
 ### What Changed?
 
 1. **Signal** - `create_signal(0)` creates a reactive value
-2. **Hover state** - `.hover_state(|s| s.lighter(0.1))` lightens on hover
-3. **Pressed state** - `.pressed_state(|s| s.ripple())` adds a ripple effect
+2. **Hover state** - `.when_hovered(|s| s.lighter(0.1))` lightens on hover
+3. **Pressed state** - `.when_pressed(|s| s.ripple())` adds a ripple effect
 4. **Click handler** - `.on_click(...)` increments the counter
 5. **Reactive text** - `text(move || format!(...))` updates when the signal changes
 

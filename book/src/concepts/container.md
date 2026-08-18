@@ -116,8 +116,8 @@ Add hover and pressed visual feedback:
 ```rust
 container()
     .background(Color::rgb(0.2, 0.2, 0.3))
-    .hover_state(|s| s.lighter(0.1))
-    .pressed_state(|s| s.ripple())
+    .when_hovered(|s| s.lighter(0.1))
+    .when_pressed(|s| s.ripple())
 ```
 
 See [Interactivity](../interactivity/README.md) for the full state layer API.
@@ -228,8 +228,8 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
         .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
 
         // State layers
-        .hover_state(|s| s.lighter(0.1).border(2.0, Color::rgb(0.5, 0.7, 1.0)))
-        .pressed_state(|s| s.ripple().darker(0.05).transform(Transform::scale(0.98)))
+        .when_hovered(|s| s.lighter(0.1).border(2.0, Color::rgb(0.5, 0.7, 1.0)))
+        .when_pressed(|s| s.ripple().darker(0.05).transform(Transform::scale(0.98)))
 
         // Event
         .on_click(on_click)
@@ -276,8 +276,8 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 - `.on_scroll(handler)` - Scroll events
 
 ### State Layers
-- `.hover_state(|s| s...)` - Hover overrides
-- `.pressed_state(|s| s...)` - Pressed overrides
+- `.when_hovered(|s| s...)` - Hover overrides
+- `.when_pressed(|s| s...)` - Pressed overrides
 
 ### Transforms
 - `.translate(x, y)` - Move

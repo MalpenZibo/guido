@@ -5,7 +5,7 @@
 //!
 //! # Why the path and not just the id
 //!
-//! A container's `focused_state` applies when *it or anything below it* has
+//! A container's `when_focused` applies when *it or anything below it* has
 //! focus, so answering "is the focus inside me" used to mean walking the
 //! container's descendants with the tree in hand. That is fine at paint time
 //! and impossible anywhere else — in particular inside a `create_derived`
@@ -16,9 +16,9 @@
 //! the tree is right there, and stored alongside it. Asking becomes
 //! `path.contains(id)`: no tree, and cheap enough to call from a closure.
 //!
-//! Being a signal, it also means a container that declares `focused_state`
+//! Being a signal, it also means a container that declares `when_focused`
 //! subscribes by asking. That is a wider fan-out than the two `request_job`
-//! calls it replaces — every container declaring `focused_state` wakes on any
+//! calls it replaces — every container declaring `when_focused` wakes on any
 //! focus change, not just the two on the path — but it is bounded by a rare
 //! declaration, and it is what lets a focus change reach a descendant's text.
 
@@ -64,7 +64,7 @@ impl FocusPath {
 
 thread_local! {
     /// The focused widget and its ancestors. A signal, so that resolving a
-    /// `focused_state` subscribes to it.
+    /// `when_focused` subscribes to it.
     ///
     /// Held as an `Option` rather than eagerly, because the handle has to be
     /// *droppable*: `reset_reactive` wipes the signal storage at `App::drop`,
@@ -171,7 +171,7 @@ pub fn release_focus(id: WidgetId) {
 ///
 /// Called when a widget leaves the tree. Before the path existed this was not
 /// needed: focus was a generational id, so a dead widget simply stopped
-/// matching any live one and `focused_state` resolved to false on its own.
+/// matching any live one and `when_focused` resolved to false on its own.
 /// A stored path has no such self-correction — the ancestors would keep
 /// answering "the focus is inside me" for a widget that no longer exists.
 pub(crate) fn release_focus_if_within(id: WidgetId) {

@@ -90,8 +90,8 @@ async fn main() {
                                     }
                                 })
                                 .corner_radius(4.0)
-                                .hover_state(|s| s.lighter(0.1))
-                                .pressed_state(|s| s.ripple())
+                                .when_hovered(|s| s.lighter(0.1))
+                                .when_pressed(|s| s.ripple())
                                 .on_click(move || svc.send(WorkspaceCmd::Switch(id)))
                                 .child(
                                     container()

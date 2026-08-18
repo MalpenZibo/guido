@@ -43,8 +43,8 @@ fn create_width_animation_card(expanded: RwSignal<bool>) -> Container {
         .corner_radius(12.0)
         .padding(20.0)
         .animate_background(Transition::new(150.0, TimingFunction::EaseOut))
-        .hover_state(|s| s.lighter(0.08))
-        .pressed_state(|s| s.ripple())
+        .when_hovered(|s| s.lighter(0.08))
+        .when_pressed(|s| s.ripple())
         .on_click(move || expanded.update(|e| *e = !*e))
         .child(
             container().layout(Flex::column().spacing(8.0)).children([
@@ -75,8 +75,8 @@ fn create_color_animation_card() -> Container {
         .animate_background(Transition::spring(SpringConfig::DEFAULT))
         .corner_radius(12.0)
         .padding(20.0)
-        .hover_state(|s| s.background(Color::rgb(0.4, 0.25, 0.35)))
-        .pressed_state(|s| s.ripple())
+        .when_hovered(|s| s.background(Color::rgb(0.4, 0.25, 0.35)))
+        .when_pressed(|s| s.ripple())
         .child(
             container().layout(Flex::column().spacing(8.0)).children([
                 container()
@@ -104,8 +104,8 @@ fn create_combined_animation_card() -> Container {
         .corner_radius(move || if clicked.get() { 20.0 } else { 12.0 })
         .animate_corner_radius(Transition::new(250.0, TimingFunction::EaseInOut))
         .padding(20.0)
-        .hover_state(|s| s.lighter(0.1))
-        .pressed_state(|s| s.ripple())
+        .when_hovered(|s| s.lighter(0.1))
+        .when_pressed(|s| s.ripple())
         .on_click(move || clicked.update(|c| *c = !*c))
         .child(
             container().layout(Flex::column().spacing(8.0)).children([
@@ -144,8 +144,8 @@ fn create_border_animation_card() -> Container {
         .animate_border_color(Transition::new(300.0, TimingFunction::EaseOut))
         .corner_radius(12.0)
         .padding(20.0)
-        .hover_state(|s| s.border(3.0, Color::rgb(0.4, 0.8, 0.6)))
-        .pressed_state(|s| s.ripple())
+        .when_hovered(|s| s.border(3.0, Color::rgb(0.4, 0.8, 0.6)))
+        .when_pressed(|s| s.ripple())
         .on_click(move || clicked.update(|c| *c = !*c))
         .child(
             container().layout(Flex::column().spacing(8.0)).children([

@@ -3,7 +3,7 @@
 Define visual changes for different interaction states.
 
 Every value inside a state layer is reactive, like the base property it covers.
-`hover_state(|s| s.background(theme.accent))` follows the theme; it does not
+`when_hovered(|s| s.background(theme.accent))` follows the theme; it does not
 take a snapshot of it when the widget is built.
 
 ## Hover State
@@ -13,31 +13,31 @@ Applied when the mouse cursor is over the widget:
 ```rust
 container()
     .background(Color::rgb(0.2, 0.2, 0.3))
-    .hover_state(|s| s.lighter(0.1))
+    .when_hovered(|s| s.lighter(0.1))
 ```
 
 ### Common Hover Patterns
 
 **Lighten background:**
 ```rust
-.hover_state(|s| s.lighter(0.1))
+.when_hovered(|s| s.lighter(0.1))
 ```
 
 **Explicit color change:**
 ```rust
-.hover_state(|s| s.background(Color::rgb(0.4, 0.6, 0.9)))
+.when_hovered(|s| s.background(Color::rgb(0.4, 0.6, 0.9)))
 ```
 
 **Border highlight:**
 ```rust
 .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-.hover_state(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
+.when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
 ```
 
 **Elevation lift:**
 ```rust
 .elevation(2.0)
-.hover_state(|s| s.elevation(4.0))
+.when_hovered(|s| s.elevation(4.0))
 ```
 
 ## Pressed State
@@ -47,30 +47,30 @@ Applied when the mouse button is held down:
 ```rust
 container()
     .background(Color::rgb(0.2, 0.2, 0.3))
-    .pressed_state(|s| s.darker(0.1))
+    .when_pressed(|s| s.darker(0.1))
 ```
 
 ### Common Pressed Patterns
 
 **Darken background:**
 ```rust
-.pressed_state(|s| s.darker(0.1))
+.when_pressed(|s| s.darker(0.1))
 ```
 
 **Scale down (tactile feedback):**
 ```rust
-.pressed_state(|s| s.transform(Transform::scale(0.98)))
+.when_pressed(|s| s.transform(Transform::scale(0.98)))
 ```
 
 **Reduce elevation (press into surface):**
 ```rust
 .elevation(4.0)
-.pressed_state(|s| s.elevation(1.0))
+.when_pressed(|s| s.elevation(1.0))
 ```
 
 **Ripple effect:**
 ```rust
-.pressed_state(|s| s.ripple())
+.when_pressed(|s| s.ripple())
 ```
 
 ## Combining Hover and Pressed
@@ -80,8 +80,8 @@ Most interactive elements use both states:
 ```rust
 container()
     .background(Color::rgb(0.2, 0.2, 0.3))
-    .hover_state(|s| s.lighter(0.1))
-    .pressed_state(|s| s.ripple().darker(0.05))
+    .when_hovered(|s| s.lighter(0.1))
+    .when_pressed(|s| s.ripple().darker(0.05))
 ```
 
 ## Text Colour
@@ -92,7 +92,7 @@ the box around it:
 ```rust
 container()
     .text_color(theme.text_weak)
-    .hover_state(|s| s.text_color(theme.text))
+    .when_hovered(|s| s.text_color(theme.text))
     .child(text("Label"))
 ```
 
@@ -110,7 +110,7 @@ container()
     .text_color(theme.text_weak)              // set once, further up
     .child(
         container()
-            .hover_state(|s| s.text_color(theme.text))
+            .when_hovered(|s| s.text_color(theme.text))
             .child(text("Label")),            // weak, then strong, then weak
     )
 ```
@@ -120,7 +120,7 @@ It can be animated like any other container property:
 ```rust
 container()
     .text_color(theme.text_weak)
-    .hover_state(|s| s.text_color(theme.text))
+    .when_hovered(|s| s.text_color(theme.text))
     .animate_text_color(Transition::new(200.0, TimingFunction::EaseOut))
     .child(text("Label"))
 ```
@@ -211,7 +211,7 @@ matters on a password field, where the focus is held essentially all the time:
 ```rust
 container()
     .border(1.0, theme.line)
-    .focused_state(|s| s.border(2.0, theme.accent))
+    .when_focused(|s| s.border(2.0, theme.accent))
     .state(wrong_password, |s| s.border(2.0, theme.error))   // written after,
     .child(text_input(password))                             // so it wins
 ```
@@ -222,8 +222,8 @@ below only takes over the transform and leaves the hover's background alone:
 
 ```rust
 container()
-    .hover_state(|s| s.lighter(0.1))
-    .pressed_state(|s| s.transform(Transform::scale(0.98)))
+    .when_hovered(|s| s.lighter(0.1))
+    .when_pressed(|s| s.transform(Transform::scale(0.98)))
 ```
 
 Keep in mind that a layer *replaces* the base rather than ranking against it. A
@@ -235,13 +235,13 @@ layer with a condition, where the ordering above can speak about it.
 Each state can override multiple properties:
 
 ```rust
-.hover_state(|s| s
+.when_hovered(|s| s
     .lighter(0.1)
     .border(2.0, Color::rgb(0.5, 0.7, 1.0))
     .elevation(6.0)
 )
 
-.pressed_state(|s| s
+.when_pressed(|s| s
     .ripple()
     .darker(0.05)
     .transform(Transform::scale(0.98))
@@ -259,8 +259,8 @@ container()
     .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
     .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
     .animate_transform(Transition::spring(SpringConfig::SMOOTH))
-    .hover_state(|s| s.lighter(0.1).border(2.0, Color::WHITE))
-    .pressed_state(|s| s.darker(0.1).transform(Transform::scale(0.98)))
+    .when_hovered(|s| s.lighter(0.1).border(2.0, Color::WHITE))
+    .when_pressed(|s| s.darker(0.1).transform(Transform::scale(0.98)))
 ```
 
 ## Button Patterns
@@ -272,8 +272,8 @@ container()
     .padding(12.0)
     .background(Color::rgb(0.3, 0.5, 0.8))
     .corner_radius(6.0)
-    .hover_state(|s| s.lighter(0.1))
-    .pressed_state(|s| s.ripple())
+    .when_hovered(|s| s.lighter(0.1))
+    .when_pressed(|s| s.ripple())
     .on_click(|| println!("Clicked!"))
     .child(container().text_color(Color::WHITE).child(text("Click me")))
 ```
@@ -286,8 +286,8 @@ container()
     .background(Color::TRANSPARENT)
     .corner_radius(6.0)
     .border(1.0, Color::rgb(0.5, 0.5, 0.6))
-    .hover_state(|s| s.background(Color::rgba(1.0, 1.0, 1.0, 0.1)))
-    .pressed_state(|s| s.ripple())
+    .when_hovered(|s| s.background(Color::rgba(1.0, 1.0, 1.0, 0.1)))
+    .when_pressed(|s| s.ripple())
     .child(container().text_color(Color::WHITE).child(text("Outlined")))
 ```
 
@@ -300,8 +300,8 @@ container()
     .corner_radius(8.0)
     .elevation(2.0)
     .animate_elevation(Transition::new(200.0, TimingFunction::EaseOut))
-    .hover_state(|s| s.elevation(6.0).lighter(0.03))
-    .pressed_state(|s| s.elevation(1.0))
+    .when_hovered(|s| s.elevation(6.0).lighter(0.03))
+    .when_pressed(|s| s.elevation(1.0))
     .children([...])
 ```
 

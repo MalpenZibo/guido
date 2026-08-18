@@ -18,7 +18,7 @@ and why, and the one design still open.
 | `distribute_jobs` root resolution, damage as a `HashMap` | **Closed** — see below |
 | Three tracking scopes in one paint | **Closed** — see below |
 | Container as a style source | Open — direction settled, not scheduled |
-| Interaction groups | **Done** (#188), as `control()` |
+| Interaction groups | **Done** (#188), as `control()`; names unified in #189 |
 
 ---
 
@@ -202,7 +202,7 @@ The third row needed no mechanism, which is why it shipped ahead of the rest.
 
 ### Also settled
 
-- **`hover_state` becomes `when_hovered`.** The old name reads as "*my* hover
+- **`when_hovered` becomes `when_hovered`.** The old name reads as "*my* hover
   state", which is false on a label. `when_hovered` promises nothing about
   whose.
 - **Precedence is already last-declared-wins** (#183), which is what this
@@ -219,7 +219,7 @@ The third row needed no mechanism, which is why it shipped ahead of the rest.
 
 ### Still open
 
-- **`hover_state`/`pressed_state`/`focused_state` on `Container`** should
+- **`when_hovered`/`when_pressed`/`when_focused` on `Container`** should
   become `when_hovered`/`when_pressed`/`when_focused` to match the leaves. A
   mechanical rename across ~290 call sites, deliberately kept out of #188 so
   the mechanism could be reviewed on its own.

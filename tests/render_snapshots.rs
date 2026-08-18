@@ -492,7 +492,7 @@ fn bar_like_composition() {
             .padding([4.0, 8.0])
             .background(c)
             .corner_radius(10.0)
-            .hover_state(|s| s.lighter(0.1))
+            .when_hovered(|s| s.lighter(0.1))
             .child(swatch(w, 14.0, Color::WHITE.with_alpha(0.8)))
     };
 

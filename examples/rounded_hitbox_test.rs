@@ -63,8 +63,8 @@ fn make_box(
         .height(100.0)
         .background(base_color)
         .corner_radius(corner_radius)
-        .hover_state(|s| s.lighter(0.15))
-        .pressed_state(|s| s.ripple())
+        .when_hovered(|s| s.lighter(0.15))
+        .when_pressed(|s| s.ripple())
         .on_click(move || click_count.update(|c| *c += 1))
         .layout(
             Flex::column()

@@ -16,8 +16,8 @@ Changes are defined declaratively, and the framework handles state transitions, 
 container()
     .background(Color::rgb(0.2, 0.2, 0.3))
     .corner_radius(8.0)
-    .hover_state(|s| s.lighter(0.1))      // Style when hovered
-    .pressed_state(|s| s.ripple())         // Style when pressed
+    .when_hovered(|s| s.lighter(0.1))      // Style when hovered
+    .when_pressed(|s| s.ripple())         // Style when pressed
     .child(text("Click me"))
 ```
 
@@ -29,45 +29,45 @@ State layers can override these properties:
 
 ```rust
 // Explicit color
-.hover_state(|s| s.background(Color::rgb(0.4, 0.6, 0.9)))
+.when_hovered(|s| s.background(Color::rgb(0.4, 0.6, 0.9)))
 
 // Relative to base
-.hover_state(|s| s.lighter(0.1))   // 10% lighter
-.pressed_state(|s| s.darker(0.1))  // 10% darker
+.when_hovered(|s| s.lighter(0.1))   // 10% lighter
+.when_pressed(|s| s.darker(0.1))  // 10% darker
 ```
 
 ### Border
 
 ```rust
-.hover_state(|s| s.border(2.0, Color::WHITE))
-.hover_state(|s| s.border_width(2.0))
-.hover_state(|s| s.border_color(Color::WHITE))
+.when_hovered(|s| s.border(2.0, Color::WHITE))
+.when_hovered(|s| s.border_width(2.0))
+.when_hovered(|s| s.border_color(Color::WHITE))
 ```
 
 ### Transform
 
 ```rust
-.pressed_state(|s| s.transform(Transform::scale(0.98)))
+.when_pressed(|s| s.transform(Transform::scale(0.98)))
 ```
 
 ### Corner Radius
 
 ```rust
-.hover_state(|s| s.corner_radius(12.0))
+.when_hovered(|s| s.corner_radius(12.0))
 ```
 
 ### Elevation
 
 ```rust
-.hover_state(|s| s.elevation(8.0))
-.pressed_state(|s| s.elevation(2.0))
+.when_hovered(|s| s.elevation(8.0))
+.when_pressed(|s| s.elevation(2.0))
 ```
 
 ### Ripple
 
 ```rust
-.pressed_state(|s| s.ripple())
-.pressed_state(|s| s.ripple_with_color(Color::rgba(1.0, 0.8, 0.0, 0.4)))
+.when_pressed(|s| s.ripple())
+.when_pressed(|s| s.ripple_with_color(Color::rgba(1.0, 0.8, 0.0, 0.4)))
 ```
 
 ## Combining Overrides
@@ -75,13 +75,13 @@ State layers can override these properties:
 Chain multiple overrides in a single state:
 
 ```rust
-.hover_state(|s| s
+.when_hovered(|s| s
     .lighter(0.1)
     .border(2.0, Color::WHITE)
     .elevation(6.0)
 )
 
-.pressed_state(|s| s
+.when_pressed(|s| s
     .ripple()
     .darker(0.05)
     .transform(Transform::scale(0.98))
@@ -96,8 +96,8 @@ Add transitions for smooth state changes:
 container()
     .background(Color::rgb(0.3, 0.5, 0.8))
     .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
-    .hover_state(|s| s.lighter(0.15))
-    .pressed_state(|s| s.darker(0.1))
+    .when_hovered(|s| s.lighter(0.15))
+    .when_pressed(|s| s.darker(0.1))
 ```
 
 ## Complete Example
@@ -116,11 +116,11 @@ fn interactive_button(label: &str) -> Container {
         .animate_transform(Transition::spring(SpringConfig::SMOOTH))
 
         // State layers
-        .hover_state(|s| s
+        .when_hovered(|s| s
             .lighter(0.1)
             .border(2.0, Color::rgb(0.5, 0.7, 1.0))
         )
-        .pressed_state(|s| s
+        .when_pressed(|s| s
             .ripple()
             .darker(0.05)
             .transform(Transform::scale(0.98))

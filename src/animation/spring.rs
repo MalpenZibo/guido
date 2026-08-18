@@ -23,7 +23,7 @@
 //!
 //! container()
 //!     .transform(Transform::scale(1.0))
-//!     .hover_state(|s| s
+//!     .when_hovered(|s| s
 //!         .transform(Transform::scale(1.1))
 //!         .timing(TimingFunction::Spring(SpringConfig::BOUNCY)))
 //! ```

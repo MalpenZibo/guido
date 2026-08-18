@@ -57,7 +57,7 @@ fn create_lighter_button() -> Container {
         .padding(16.0)
         .background(Color::rgb(0.2, 0.2, 0.3))
         .corner_radius(8.0)
-        .hover_state(|s| s.lighter(0.1).text_color(Color::WHITE))
+        .when_hovered(|s| s.lighter(0.1).text_color(Color::WHITE))
         // The state layer reaches the glyphs, not just the box: the label
         // brightens with the background, and eases there with it.
         .text_color(Color::rgb(0.6, 0.6, 0.66))
@@ -72,8 +72,8 @@ fn create_explicit_colors_button() -> Container {
         .padding(16.0)
         .background(Color::rgb(0.3, 0.5, 0.8))
         .corner_radius(8.0)
-        .hover_state(|s| s.background(Color::rgb(0.4, 0.6, 0.9)))
-        .pressed_state(|s| s.background(Color::rgb(0.2, 0.4, 0.7)))
+        .when_hovered(|s| s.background(Color::rgb(0.4, 0.6, 0.9)))
+        .when_pressed(|s| s.background(Color::rgb(0.2, 0.4, 0.7)))
         .text_color(Color::WHITE)
         .child(text("Click me (explicit colors)"))
 }
@@ -84,8 +84,8 @@ fn create_transform_button() -> Container {
         .padding(16.0)
         .background(Color::rgb(0.8, 0.3, 0.3))
         .corner_radius(8.0)
-        .hover_state(|s| s.lighter(0.05))
-        .pressed_state(|s| s.darker(0.1).transform(Transform::scale(0.98)))
+        .when_hovered(|s| s.lighter(0.05))
+        .when_pressed(|s| s.darker(0.1).transform(Transform::scale(0.98)))
         .text_color(Color::WHITE)
         .child(text("Press me (scale down)"))
 }
@@ -97,8 +97,8 @@ fn create_animated_button() -> Container {
         .background(Color::rgb(0.3, 0.6, 0.4))
         .corner_radius(8.0)
         .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
-        .hover_state(|s| s.lighter(0.15))
-        .pressed_state(|s| s.darker(0.1))
+        .when_hovered(|s| s.lighter(0.15))
+        .when_pressed(|s| s.darker(0.1))
         .text_color(Color::WHITE)
         .child(text("Animated transitions"))
 }
@@ -112,8 +112,8 @@ fn create_border_button() -> Container {
         .border(1.0, Color::rgb(0.3, 0.3, 0.4))
         .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
         .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))
-        .hover_state(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
-        .pressed_state(|s| s.border(3.0, Color::rgb(0.7, 0.7, 0.8)))
+        .when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
+        .when_pressed(|s| s.border(3.0, Color::rgb(0.7, 0.7, 0.8)))
         .text_color(Color::rgb(0.8, 0.8, 0.85))
         .child(text("Border changes"))
 }
@@ -124,8 +124,8 @@ fn create_ripple_button() -> Container {
         .padding(16.0)
         .background(Color::rgb(0.2, 0.2, 0.3))
         .corner_radius(8.0)
-        .hover_state(|s| s.lighter(0.1))
-        .pressed_state(|s| s.ripple())
+        .when_hovered(|s| s.lighter(0.1))
+        .when_pressed(|s| s.ripple())
         .text_color(Color::rgb(0.9, 0.9, 0.95))
         .child(text("Default ripple"))
 }
@@ -136,8 +136,8 @@ fn create_colored_ripple_button() -> Container {
         .padding(16.0)
         .background(Color::rgb(0.3, 0.5, 0.8))
         .corner_radius(8.0)
-        .hover_state(|s| s.lighter(0.1))
-        .pressed_state(|s| s.ripple_with_color(Color::rgba(1.0, 0.8, 0.0, 0.4)))
+        .when_hovered(|s| s.lighter(0.1))
+        .when_pressed(|s| s.ripple_with_color(Color::rgba(1.0, 0.8, 0.0, 0.4)))
         .text_color(Color::WHITE)
         .child(text("Yellow ripple"))
 }
@@ -148,8 +148,8 @@ fn create_ripple_with_scale_button() -> Container {
         .padding(16.0)
         .background(Color::rgb(0.6, 0.3, 0.5))
         .corner_radius(8.0)
-        .hover_state(|s| s.lighter(0.1))
-        .pressed_state(|s| s.ripple().transform(Transform::scale(0.98)))
+        .when_hovered(|s| s.lighter(0.1))
+        .when_pressed(|s| s.ripple().transform(Transform::scale(0.98)))
         .text_color(Color::WHITE)
         .child(text("Ripple + scale"))
 }
@@ -161,8 +161,8 @@ fn create_rotated_ripple_button() -> Container {
         .background(Color::rgb(0.4, 0.6, 0.4))
         .corner_radius(8.0)
         .transform(Transform::rotate_degrees(5.0).then(&Transform::translate(10.0, 15.0)))
-        .hover_state(|s| s.lighter(0.1))
-        .pressed_state(|s| s.ripple_with_color(Color::rgba(1.0, 1.0, 1.0, 0.5)))
+        .when_hovered(|s| s.lighter(0.1))
+        .when_pressed(|s| s.ripple_with_color(Color::rgba(1.0, 1.0, 1.0, 0.5)))
         .text_color(Color::WHITE)
         .child(text("Rotated + translated"))
 }

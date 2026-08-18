@@ -64,7 +64,7 @@ fn lock_screen(output: OutputInfo) -> Container {
                 .padding(10.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
                 .corner_radius(8.0)
-                .focused_state(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
+                .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
                 .text_color(Color::WHITE)
                 .cursor_color(Color::rgb(0.4, 0.8, 1.0))
                 .child(text_input(attempt).password(true).on_submit(move |s| {
@@ -107,8 +107,8 @@ fn main() {
                             .padding([6.0, 16.0])
                             .background(Color::rgb(0.3, 0.2, 0.2))
                             .corner_radius(6.0)
-                            .hover_state(|s| s.lighter(0.1))
-                            .pressed_state(|s| s.ripple())
+                            .when_hovered(|s| s.lighter(0.1))
+                            .when_pressed(|s| s.ripple())
                             .on_click(|| lock_session(lock_screen))
                             .child(text("Lock session")),
                     )

@@ -31,7 +31,7 @@ fn main() {
                         .background(Color::rgb(0.18, 0.18, 0.24))
                         .border(1.0, Color::rgb(0.3, 0.3, 0.4))
                         .corner_radius(6.0)
-                        .focused_state(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
+                        .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
                         .text_color(Color::WHITE)
                         .cursor_color(Color::rgb(0.4, 0.8, 1.0))
                         .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
@@ -50,7 +50,7 @@ fn main() {
                         .corner_radius(8.0)
                         .width(120.0)
                         .height(90.0)
-                        .hover_state(|s| s.lighter(0.05))
+                        .when_hovered(|s| s.lighter(0.05))
                         .child(image(path).content_fit(ContentFit::Cover)),
                 )
                 .child(
@@ -157,8 +157,8 @@ fn main() {
                                                         .padding(12.0)
                                                         .background(Color::rgb(0.18, 0.18, 0.24))
                                                         .corner_radius(6.0)
-                                                        .hover_state(|s| s.lighter(0.05))
-                                                        .pressed_state(|s| s.ripple())
+                                                        .when_hovered(|s| s.lighter(0.05))
+                                                        .when_pressed(|s| s.ripple())
                                                         .text_color(Color::rgb(0.8, 0.8, 0.9))
                                                         .child(text(item))
                                                 })
@@ -306,8 +306,8 @@ fn main() {
                                                             .height(48.0)
                                                             .background(Color::rgb(0.2, 0.2, 0.28))
                                                             .corner_radius(8.0)
-                                                            .hover_state(|s| s.lighter(0.1))
-                                                            .pressed_state(|s| s.ripple())
+                                                            .when_hovered(|s| s.lighter(0.1))
+                                                            .when_pressed(|s| s.ripple())
                                                             .layout(
                                                                 Flex::column()
                                                                     .main_alignment(

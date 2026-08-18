@@ -91,8 +91,8 @@ fn main() {
                             .height(60.0)
                             .background(Color::rgb(0.5, 0.5, 0.5))
                             .corner_radius(8.0)
-                            .hover_state(|s| s.lighter(0.1))
-                            .pressed_state(|s| s.ripple())
+                            .when_hovered(|s| s.lighter(0.1))
+                            .when_pressed(|s| s.ripple())
                             .on_click(|| {
                                 println!("Clicked!");
                             }),

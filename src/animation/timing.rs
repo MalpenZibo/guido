@@ -20,7 +20,7 @@
 //!
 //! ```ignore
 //! container()
-//!     .hover_state(|s| s
+//!     .when_hovered(|s| s
 //!         .lighter(0.1)
 //!         .timing(TimingFunction::EaseOut)
 //!         .duration(Duration::from_millis(150)))

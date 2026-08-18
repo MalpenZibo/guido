@@ -145,9 +145,9 @@ fn a_fully_reactive_container_is_quiet() {
         .animate_width(t())
         .animate_height(t())
         .animate_transform(t())
-        .hover_state(|s| s.lighter(0.1))
-        .pressed_state(|s| s.ripple())
-        .focused_state(|s| s.border(2.0, Color::WHITE))
+        .when_hovered(|s| s.lighter(0.1))
+        .when_pressed(|s| s.ripple())
+        .when_focused(|s| s.border(2.0, Color::WHITE))
         .on_click(|| {})
         .child(container().width(20.0).height(20.0));
 
@@ -336,9 +336,9 @@ fn a_hover_driven_text_colour_is_quiet() {
         .width(50.0)
         .height(50.0)
         .text_color(move || Color::WHITE.with_alpha(n.get().max(0.5)))
-        .hover_state(|s| s.text_color(Color::RED))
-        .pressed_state(|s| s.text_color(Color::BLUE))
-        .focused_state(|s| s.text_color(Color::GREEN))
+        .when_hovered(|s| s.text_color(Color::RED))
+        .when_pressed(|s| s.text_color(Color::BLUE))
+        .when_focused(|s| s.text_color(Color::GREEN))
         .child(container().child(text("ciao")));
 
     assert_quiet(

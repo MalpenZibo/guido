@@ -157,8 +157,8 @@ fn main() {
                                         .padding(6.0)
                                         .background(Color::rgb(0.2, 0.4, 0.2))
                                         .corner_radius(4.0)
-                                        .hover_state(|s| s.lighter(0.1))
-                                        .pressed_state(|s| s.ripple())
+                                        .when_hovered(|s| s.lighter(0.1))
+                                        .when_pressed(|s| s.ripple())
                                         .on_click(move || {
                                             items.update(|list: &mut Vec<Item>| {
                                                 let id = list.len() as u64 + 1;
@@ -180,8 +180,8 @@ fn main() {
                                         .padding(6.0)
                                         .background(Color::rgb(0.4, 0.2, 0.2))
                                         .corner_radius(4.0)
-                                        .hover_state(|s| s.lighter(0.1))
-                                        .pressed_state(|s| s.ripple())
+                                        .when_hovered(|s| s.lighter(0.1))
+                                        .when_pressed(|s| s.ripple())
                                         .on_click(move || {
                                             items.update(|list: &mut Vec<Item>| {
                                                 if !list.is_empty() {
@@ -196,8 +196,8 @@ fn main() {
                                         .padding(6.0)
                                         .background(Color::rgb(0.2, 0.2, 0.4))
                                         .corner_radius(4.0)
-                                        .hover_state(|s| s.lighter(0.1))
-                                        .pressed_state(|s| s.ripple())
+                                        .when_hovered(|s| s.lighter(0.1))
+                                        .when_pressed(|s| s.ripple())
                                         .on_click(move || {
                                             items.update(|list: &mut Vec<Item>| {
                                                 list.reverse();
@@ -246,8 +246,8 @@ fn main() {
                                 .padding(6.0)
                                 .background(Color::rgb(0.3, 0.2, 0.4))
                                 .corner_radius(4.0)
-                                .hover_state(|s| s.lighter(0.1))
-                                .pressed_state(|s| s.ripple())
+                                .when_hovered(|s| s.lighter(0.1))
+                                .when_pressed(|s| s.ripple())
                                 .on_click(move || {
                                     show_optional.update(|v| *v = !*v);
                                 })
@@ -318,8 +318,8 @@ fn main() {
                                 .padding(6.0)
                                 .background(Color::rgb(0.3, 0.2, 0.4))
                                 .corner_radius(4.0)
-                                .hover_state(|s| s.lighter(0.1))
-                                .pressed_state(|s| s.ripple())
+                                .when_hovered(|s| s.lighter(0.1))
+                                .when_pressed(|s| s.ripple())
                                 .on_click(move || {
                                     show_optional2.update(|v| *v = !*v);
                                 })
