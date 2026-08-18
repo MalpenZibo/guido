@@ -367,6 +367,23 @@ pub trait Widget {
 
 **Note:** Widget bounds and origins are stored in the `Tree`, not on individual widgets. Use `tree.get_bounds(id)` to retrieve a widget's bounds and `tree.set_origin(id, x, y)` to position widgets during layout.
 
+### Widgets written outside the crate
+
+The trait is implementable from anywhere, and a leaf needs only `layout` and
+`paint`. What it also needs is `with_signal_tracking(id, JobType::Layout, ..)`
+around whatever it measures from, and the same with `JobType::Paint` around
+whatever it draws from — both exported from the prelude for this reason.
+
+Scopes nest and the innermost wins, so a widget that opens its own claims its
+reads back from its parent. One that does not is not unreactive: its reads
+register against the nearest ancestor that opened a scope, usually the enclosing
+container, so a change to its own content marks *that* for layout and every
+sibling is re-laid-out with it. Reactive, but imprecise, and silently so.
+
+`tests/external_widget.rs` is a leaf written against the public API only, and
+`the_innermost_scope_owns_the_read` in `reactive/invalidation.rs` pins the
+ownership rule.
+
 ## Event Flow
 
 ```

@@ -163,6 +163,9 @@ pub mod prelude {
         create_stored, create_trigger, expect_context, has_context, on_cleanup, provide_context,
         provide_signal_context, set_cursor, use_context, with_context,
     };
+    // For widgets written outside the crate: the scope that makes a widget's
+    // own signal reads its own.
+    pub use crate::reactive::{JobType, with_signal_tracking};
     pub use crate::renderer::{PaintContext, Shadow, measure_text};
     pub use crate::session_lock::{
         LockState, lock_session, lock_state, session_locked, unlock_session,

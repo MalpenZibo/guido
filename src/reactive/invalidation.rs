@@ -44,7 +44,27 @@ thread_local! {
 }
 
 /// Run a closure while tracking signal reads for a widget.
-/// Any signals read during this closure will register the widget as a subscriber.
+///
+/// Any signal read inside registers `widget_id` as a subscriber for
+/// `job_type`, so a later write to it queues exactly that job for exactly this
+/// widget. A widget implementing [`Widget`](crate::widgets::Widget) opens one
+/// around each of its own phases: `JobType::Layout` around what it measures
+/// from, `JobType::Paint` around what it draws from.
+///
+/// Scopes nest, and the innermost wins, so a widget that opens its own is
+/// claiming its reads back from its parent. One that does not is not
+/// unreactive — its reads land on whichever ancestor opened the enclosing
+/// scope — but it is *imprecise*: a change to its content marks the parent
+/// container for layout, which re-lays-out every sibling as well.
+///
+/// ```ignore
+/// fn layout(&mut self, tree: &mut Tree, id: WidgetId, c: Constraints) -> Size {
+///     with_signal_tracking(id, JobType::Layout, || {
+///         let text = self.content.get();   // subscribes this widget, not its parent
+///         measure(&text, c)
+///     })
+/// }
+/// ```
 pub fn with_signal_tracking<F, R>(widget_id: WidgetId, job_type: JobType, f: F) -> R
 where
     F: FnOnce() -> R,
@@ -359,6 +379,38 @@ mod tests {
 
     fn signal_id(n: u32) -> SignalId {
         SignalId::new(n, 0)
+    }
+
+    /// Which widget a read belongs to is decided by the innermost scope, and
+    /// a widget that opens none inherits its parent's — the whole reason
+    /// `with_signal_tracking` is public. A leaf that skips it is not
+    /// unreactive; it is imprecise, because its parent is what gets marked.
+    #[test]
+    fn the_innermost_scope_owns_the_read() {
+        let parent = widget_id(300);
+        let leaf = widget_id(301);
+
+        with_signal_tracking(parent, JobType::Layout, || {
+            // A leaf that opens its own scope claims the read back.
+            with_signal_tracking(leaf, JobType::Layout, || {
+                record_signal_read(signal_id(70));
+            });
+            // One that does not leaves it with the parent.
+            record_signal_read(signal_id(71));
+        });
+
+        let subscribers = |sig: u32| {
+            REGISTRY.with(|reg| {
+                let reg = reg.borrow();
+                reg.signal_to_widgets
+                    .get(sig as usize)
+                    .map(|s| s.iter().map(|e| e.widget_id).collect::<Vec<_>>())
+                    .unwrap_or_default()
+            })
+        };
+
+        assert_eq!(subscribers(70), vec![leaf]);
+        assert_eq!(subscribers(71), vec![parent]);
     }
 
     #[test]
