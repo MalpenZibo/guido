@@ -135,8 +135,13 @@ Three things to know before reaching for it:
   container for the subtree below it; this one cannot, because each frosted
   text ends the render pass to filter the target. It is asked for one text at
   a time on purpose.
-- **It is not legibility.** Frost softens the background where a shadow darkens
-  it, so over a busy photograph the shadow still does more. They compose.
+- **It is not legibility, and it does not combine with what is.** Frost softens
+  the background where a shadow darkens it, so over a busy photograph a shadow
+  still does more — but you cannot have both. A stroke and a shadow are drawn
+  as copies of the glyphs *under* the fill, so they cover the letter's own area
+  and not only its edge: invisible under an opaque fill, and an opaque letter
+  over frost, which is the one thing the frost was cut out of. What holds a
+  frosted text together is its tint.
 - **Rotation and scale skip it**, since the mask is rasterized square. A frost
   sitting beside its own letters would be worse than none.
 

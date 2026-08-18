@@ -8,9 +8,11 @@
 //! together with `background-clip: text`.
 //!
 //! The colour is the tint laid over the glass, which is why every panel here
-//! but the first is translucent. The last one is the honest comparison: frost
-//! softens the background, a shadow darkens it, and only the second is about
-//! legibility.
+//! but the first is translucent. The last panel is the trap: a stroke and a
+//! shadow are drawn as copies of the glyphs *under* the fill, so they cover the
+//! letter's own area and not only its edge. Under an opaque fill that is
+//! invisible and free; over frost it is an opaque letter where the picture
+//! should be.
 
 use guido::prelude::*;
 
@@ -74,7 +76,7 @@ fn main() {
                 text(LABEL).color(Color::TRANSPARENT).backdrop_blur(16.0),
             ))
             .child(panel(
-                "frost and shadow",
+                "frost under a shadow — buried",
                 text(LABEL)
                     .color(Color::rgba(1.0, 1.0, 1.0, 0.35))
                     .backdrop_blur(16.0)
