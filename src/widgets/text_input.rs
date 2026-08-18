@@ -1084,6 +1084,7 @@ impl Widget for TextInput {
         let (text_color, selection_color, cursor_color, stroke, shadow, placeholder) =
             with_signal_tracking(id, JobType::Paint, || {
                 let style = tree.inherited_text_style(id);
+                let input = tree.inherited_input_style(id);
                 let text_color = style.color.get_or(Color::WHITE);
                 // Only when there is nothing to show instead. Read inside the
                 // tracking scope like every other paint input, so a prompt that
@@ -1092,7 +1093,7 @@ impl Widget for TextInput {
                     .placeholder
                     .filter(|_| self.cached_value.is_empty())
                     .map(|signal| {
-                        let color = style.placeholder_color.get_or(Color::rgba(
+                        let color = input.placeholder_color.get_or(Color::rgba(
                             text_color.r,
                             text_color.g,
                             text_color.b,
@@ -1102,12 +1103,12 @@ impl Widget for TextInput {
                     });
                 (
                     text_color,
-                    style
+                    input
                         .selection_color
                         .get_or(Color::rgba(0.4, 0.6, 1.0, 0.4)),
                     // The caret defaults to the text colour: an input that
                     // only sets `text_color` should not sprout a blue cursor.
-                    style.cursor_color.get_or(text_color),
+                    input.cursor_color.get_or(text_color),
                     style.stroke.map(|s| s.get()),
                     style.shadow.map(|s| s.get()),
                     placeholder,

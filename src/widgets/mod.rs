@@ -2,6 +2,7 @@ pub mod children;
 pub mod container;
 pub mod font;
 pub mod image;
+pub mod input_style;
 pub mod into_child;
 mod paint_children;
 
@@ -19,6 +20,7 @@ pub use children::ChildrenSource;
 pub use container::{Border, Container, GradientDirection, LinearGradient, Overflow, container};
 pub use font::{FontFamily, FontWeight};
 pub use image::{ContentFit, Image, ImageSource, image};
+pub use input_style::InputStyle;
 pub use into_child::{
     DynamicChildren, IntoChild, IntoChildren, IntoDynChild, KeyedChildren, StaticChildren, keyed,
 };

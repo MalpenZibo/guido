@@ -37,6 +37,7 @@ use crate::widget_ref::{WidgetRef, register_widget_ref};
 
 use super::children::ChildrenSource;
 use super::font::{FontFamily, FontWeight};
+use super::input_style::InputStyle;
 use super::into_child::{IntoChild, IntoChildren};
 use super::paint_children::{ChildPaintOptions, paint_children};
 use super::scroll::{
@@ -347,6 +348,10 @@ pub struct Container {
     // text and pay one pointer for the whole feature.
     pub(super) text: Option<Box<TextStyle>>,
 
+    /// What this container declares for the inputs below it. Separate from
+    /// `text` because a text cannot draw any of it.
+    pub(super) input: Option<Box<InputStyle>>,
+
     // Owns the derived published in place of the text colour when a state
     // layer declares one. Created at registration, so it belongs to no user
     // scope and has to be torn down by hand when the container goes.
@@ -400,6 +405,7 @@ impl Container {
             widget_ref: None,
             backdrop_blur: None,
             text: None,
+            input: None,
             text_owner: None,
             animated_text: None,
             text_base: None,
@@ -510,6 +516,10 @@ impl Container {
         self.text.get_or_insert_with(Box::default)
     }
 
+    fn input_mut(&mut self) -> &mut InputStyle {
+        self.input.get_or_insert_with(Box::default)
+    }
+
     /// Set the colour of text in this container and its descendants.
     ///
     /// Named `text_color` rather than `color` because `color` on a box reads
@@ -583,14 +593,14 @@ impl Container {
     /// Set the caret colour of any [`TextInput`](crate::widgets::TextInput)
     /// below this container. Defaults to the text colour.
     pub fn cursor_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.text_mut().cursor_color = Some(color.into_signal());
+        self.input_mut().cursor_color = Some(color.into_signal());
         self
     }
 
     /// Set the selection highlight colour of any
     /// [`TextInput`](crate::widgets::TextInput) below this container.
     pub fn selection_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.text_mut().selection_color = Some(color.into_signal());
+        self.input_mut().selection_color = Some(color.into_signal());
         self
     }
 
@@ -600,7 +610,7 @@ impl Container {
     /// Defaults to the inherited text colour at reduced alpha, which is what a
     /// placeholder is: the same text, quieter.
     pub fn placeholder_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.text_mut().placeholder_color = Some(color.into_signal());
+        self.input_mut().placeholder_color = Some(color.into_signal());
         self
     }
 
@@ -1280,6 +1290,7 @@ impl Widget for Container {
         // re-registers anyway.
         let published = self.published_text_style(tree, id);
         tree.set_text_style(id, published);
+        tree.set_input_style(id, self.input.as_deref().copied());
 
         // Register pending children
         self.children_source.register_pending(tree, id);

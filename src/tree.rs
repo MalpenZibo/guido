@@ -126,6 +126,10 @@ struct Slot {
     /// Boxed because most nodes declare nothing: the miss costs a null check
     /// instead of the ~96 bytes the struct would add to every node.
     text_style: Option<Box<crate::widgets::TextStyle>>,
+    /// Input style this node declares for its descendants, if any. Boxed for
+    /// the same reason as `text_style`, and separate from it because only an
+    /// input can draw what it holds.
+    input_style: Option<Box<crate::widgets::InputStyle>>,
     /// Distance from this widget's top edge to the baseline of its first line
     /// of text, if it has one. Reported by leaves during layout and read by a
     /// parent aligning on `CrossAlignment::Baseline`.
@@ -208,6 +212,7 @@ impl Tree {
             sparse_index,
             cached_paint: None,
             text_style: None,
+            input_style: None,
             baseline: None,
             paint_overflow: 0.0,
         });
@@ -381,6 +386,41 @@ impl Tree {
                 break;
             };
             if let Some(declared) = self.dense[idx].text_style.as_deref() {
+                resolved.inherit_from(declared);
+                if resolved.is_complete() {
+                    break;
+                }
+            }
+            cursor = self.dense[idx].parent;
+        }
+
+        resolved
+    }
+
+    /// Record the input style a node declares for its descendants.
+    ///
+    /// The counterpart of [`set_text_style`](Self::set_text_style), with the
+    /// same empty-clears-the-slot rule.
+    pub fn set_input_style(&mut self, id: WidgetId, style: Option<crate::widgets::InputStyle>) {
+        if let Some(idx) = self.get_dense_index(id) {
+            self.dense[idx].input_style = style.filter(|s| !s.is_empty()).map(Box::new);
+        }
+    }
+
+    /// Resolve the input style that applies to a widget, per property.
+    ///
+    /// Same walk and same contract as
+    /// [`inherited_text_style`](Self::inherited_text_style): the result holds
+    /// signals, and the caller reads them inside its own tracking scope.
+    pub fn inherited_input_style(&self, id: WidgetId) -> crate::widgets::InputStyle {
+        let mut resolved = crate::widgets::InputStyle::default();
+        let mut cursor = self.get_parent(id);
+
+        while let Some(ancestor) = cursor {
+            let Some(idx) = self.get_dense_index(ancestor) else {
+                break;
+            };
+            if let Some(declared) = self.dense[idx].input_style.as_deref() {
                 resolved.inherit_from(declared);
                 if resolved.is_complete() {
                     break;
@@ -1342,6 +1382,50 @@ mod tests {
         assert_eq!(resolved.color.map(|c| c.get()), Some(Color::RED));
     }
 
+    /// The two walks are separate slots, so a container that dresses the text
+    /// does not have to answer for the caret, and the other way round.
+    #[test]
+    fn input_style_resolves_independently_of_text_style() {
+        let mut tree = Tree::new();
+        let ids = chain(&mut tree, 4);
+        tree.set_text_style(ids[0], Some(colored(Color::RED)));
+        tree.set_input_style(
+            ids[1],
+            Some(crate::widgets::InputStyle {
+                cursor_color: Some(create_stored(Color::BLUE)),
+                ..Default::default()
+            }),
+        );
+
+        let text = tree.inherited_text_style(ids[3]);
+        let input = tree.inherited_input_style(ids[3]);
+        assert_eq!(text.color.map(|c| c.get()), Some(Color::RED));
+        assert_eq!(input.cursor_color.map(|c| c.get()), Some(Color::BLUE));
+        // Neither walk sees the other's declaration.
+        assert!(input.placeholder_color.is_none());
+    }
+
+    #[test]
+    fn nearest_input_declaration_wins() {
+        let mut tree = Tree::new();
+        let ids = chain(&mut tree, 3);
+        for (id, color) in [(ids[0], Color::RED), (ids[1], Color::BLUE)] {
+            tree.set_input_style(
+                id,
+                Some(crate::widgets::InputStyle {
+                    placeholder_color: Some(create_stored(color)),
+                    ..Default::default()
+                }),
+            );
+        }
+
+        let resolved = tree.inherited_input_style(ids[2]);
+        assert_eq!(
+            resolved.placeholder_color.map(|c| c.get()),
+            Some(Color::BLUE)
+        );
+    }
+
     #[test]
     fn nearest_declaration_wins() {
         let mut tree = Tree::new();
@@ -1440,9 +1524,6 @@ mod tests {
                     2.0,
                     Color::BLACK,
                 ))),
-                cursor_color: Some(create_stored(Color::WHITE)),
-                selection_color: Some(create_stored(Color::BLACK)),
-                placeholder_color: Some(create_stored(Color::WHITE)),
             }),
         );
 
