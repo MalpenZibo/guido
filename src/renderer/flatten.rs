@@ -437,7 +437,9 @@ fn flatten_node(
         let layer = match &**cmd {
             DrawCommand::Text { .. } => RenderLayer::Text,
             DrawCommand::Image { .. } => RenderLayer::Images,
-            DrawCommand::BackdropBlur { .. } => RenderLayer::Backdrop,
+            DrawCommand::BackdropBlur { .. } | DrawCommand::TextBackdropBlur { .. } => {
+                RenderLayer::Backdrop
+            }
             _ => RenderLayer::Shapes,
         };
         out.push(FlattenedCommand {
@@ -557,6 +559,9 @@ fn world_bounds(cmd: &FlattenedCommand) -> Option<Rect> {
         DrawCommand::Image { rect, .. } => *rect,
         DrawCommand::BackdropBlur { rect, .. } => *rect,
         DrawCommand::Text {
+            rect, font_size, ..
+        }
+        | DrawCommand::TextBackdropBlur {
             rect, font_size, ..
         } => {
             // Glyphs overshoot their layout box — descenders, italics, marks.

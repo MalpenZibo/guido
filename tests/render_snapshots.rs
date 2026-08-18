@@ -212,6 +212,9 @@ fn dump_command(cmd: &DrawCommand, depth: usize, kind: &str, out: &mut String) {
         DrawCommand::Text { .. } => {
             let _ = writeln!(out, "{pad}{kind} text <not snapshotted>");
         }
+        DrawCommand::TextBackdropBlur { radius, .. } => {
+            let _ = writeln!(out, "{pad}{kind} text backdrop blur r={}", n(*radius));
+        }
         DrawCommand::Image { rect: r, .. } => {
             let _ = writeln!(out, "{pad}{kind} image {}", rect(r));
         }

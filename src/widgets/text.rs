@@ -49,6 +49,9 @@ pub struct Text {
     own_hover: Option<RwSignal<bool>>,
     /// If true, text won't wrap and will be clipped by parent container
     nowrap: bool,
+    /// Blur radius for the backdrop the glyphs cut out of what is behind them.
+    /// `None` for every text that is not made of glass.
+    backdrop_blur: Option<Signal<f32>>,
     /// Cached values for painting (avoid re-reading signals)
     cached_text: String,
     cached_font_size: f32,
@@ -69,6 +72,7 @@ impl Text {
             states: Vec::new(),
             own_hover: None,
             nowrap: false,
+            backdrop_blur: None,
             cached_text: String::new(), // Will be set during first layout
             cached_font_size: 14.0,
             cached_font_family: default_family,
@@ -80,6 +84,40 @@ impl Text {
     /// Use this for text inside animated containers to prevent re-wrapping during animation.
     pub fn nowrap(mut self) -> Self {
         self.nowrap = true;
+        self
+    }
+
+    /// Blur what is behind the glyphs, so the text reads as frosted glass.
+    ///
+    /// The letters become the window: what they cover is drawn blurred, and the
+    /// text's own colour is the tint laid over it — which is why this is usually
+    /// paired with a translucent one.
+    ///
+    /// ```ignore
+    /// text("09:41")
+    ///     .font_size(76.0)
+    ///     .color(Color::rgba(1.0, 1.0, 1.0, 0.35))
+    ///     .backdrop_blur(16.0)
+    /// ```
+    ///
+    /// It filters what *this surface* has already drawn — a wallpaper, a photo,
+    /// the panel underneath — and only that. A container's
+    /// [`backdrop_blur`](super::Container::backdrop_blur) can also reach the
+    /// desktop behind the surface, through `ext-background-effect-v1`; that
+    /// protocol takes a region, and regions are rectangles, so glyphs cannot be
+    /// expressed in it.
+    ///
+    /// Unlike the rest of a text's style this is not inherited from a container,
+    /// on purpose: each frosted text ends the render pass to filter the target,
+    /// so it is asked for one text at a time rather than dressed onto a subtree.
+    /// A rotated or scaled text ignores it — the mask is axis-aligned.
+    ///
+    /// Legibility is not what it buys. Frost softens the background instead of
+    /// darkening it, so over a busy photograph
+    /// [`text_shadow`](super::TextStyled::text_shadow) still does more; the two
+    /// compose.
+    pub fn backdrop_blur<M>(mut self, radius: impl IntoSignal<f32, M>) -> Self {
+        self.backdrop_blur = Some(radius.into_signal());
         self
     }
 
@@ -272,14 +310,26 @@ impl Widget for Text {
         let local_bounds = Rect::new(0.0, 0.0, size.width, size.height);
         // Read the painted properties with tracking so a change on whichever
         // ancestor supplied them repaints this text and nothing else.
-        let (color, stroke, shadow) = with_signal_tracking(id, JobType::Paint, || {
+        let (color, stroke, shadow, blur) = with_signal_tracking(id, JobType::Paint, || {
             let style = self.resolved_style(tree, id);
             (
                 style.color.get_or(Color::WHITE),
                 style.stroke.map(|s| s.get()),
                 style.shadow.map(|s| s.get()),
+                self.backdrop_blur.map(|radius| radius.get()),
             )
         });
+        // First, so the glyphs and their decorations land over the frost.
+        if let Some(radius) = blur {
+            ctx.draw_text_backdrop_blur(
+                &self.cached_text,
+                local_bounds,
+                radius,
+                self.cached_font_size,
+                self.cached_font_family.clone(),
+                self.cached_font_weight,
+            );
+        }
         ctx.draw_text_decorated(
             &self.cached_text,
             local_bounds,
@@ -360,6 +410,96 @@ mod tests {
             node.children.iter().find_map(|c| find(c))
         }
         find(&node).expect("a text command")
+    }
+
+    /// Every command a paint produced, in order, as short names.
+    fn commands(widget: impl Widget + 'static) -> Vec<&'static str> {
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(widget));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        tree.with_widget_mut(root, |w, id, t| {
+            w.layout(t, id, Constraints::new(0.0, 0.0, 800.0, 600.0))
+        });
+        let mut node = RenderNode::new(root.as_u64());
+        tree.with_widget_mut(root, |w, id, t| {
+            let mut ctx = PaintContext::new(&mut node);
+            w.paint(t, id, &mut ctx);
+        });
+        node.commands
+            .iter()
+            .map(|cmd| match &**cmd {
+                DrawCommand::Text { .. } => "text",
+                DrawCommand::TextBackdropBlur { .. } => "frost",
+                _ => "other",
+            })
+            .collect()
+    }
+
+    /// The frost filters what is already drawn, so it has to be asked for
+    /// before the glyphs that sit on it — and before their decorations, which
+    /// are glyphs too.
+    #[test]
+    fn a_frosted_text_asks_for_its_backdrop_before_it_draws() {
+        assert_eq!(
+            commands(text("hi").backdrop_blur(8.0)),
+            vec!["frost", "text"]
+        );
+        let stroked = commands(
+            text("hi")
+                .backdrop_blur(8.0)
+                .text_stroke(TextStroke::new(1.0, Color::BLACK)),
+        );
+        assert_eq!(stroked[0], "frost");
+        assert!(
+            stroked[1..].iter().all(|cmd| *cmd == "text"),
+            "a stroke is more glyphs, and they go over the frost too: {stroked:?}"
+        );
+    }
+
+    #[test]
+    fn a_text_asks_for_nothing_it_would_not_use() {
+        assert_eq!(commands(text("hi")), vec!["text"], "no blur, no command");
+        assert_eq!(
+            commands(text("hi").backdrop_blur(0.0)),
+            vec!["text"],
+            "a radius of zero is not an effect"
+        );
+        assert_eq!(
+            commands(text("").backdrop_blur(8.0)),
+            Vec::<&str>::new(),
+            "nothing to cut a hole in the shape of"
+        );
+    }
+
+    #[test]
+    fn the_frost_radius_is_reactive_like_every_other_declaration() {
+        let radius = create_signal(0.0f32);
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(text("hi").backdrop_blur(move || radius.get())));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let paint = |tree: &mut Tree| {
+            tree.with_widget_mut(root, |w, id, t| {
+                w.layout(t, id, Constraints::new(0.0, 0.0, 800.0, 600.0))
+            });
+            let mut node = RenderNode::new(root.as_u64());
+            tree.with_widget_mut(root, |w, id, t| {
+                let mut ctx = PaintContext::new(&mut node);
+                w.paint(t, id, &mut ctx);
+            });
+            node.commands
+                .iter()
+                .filter(|cmd| matches!(&***cmd, DrawCommand::TextBackdropBlur { .. }))
+                .count()
+        };
+
+        assert_eq!(paint(&mut tree), 0);
+        radius.set(12.0);
+        assert_eq!(
+            paint(&mut tree),
+            1,
+            "the radius is read where it is painted"
+        );
     }
 
     #[test]
