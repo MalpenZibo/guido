@@ -93,6 +93,12 @@ impl TextStroke {
     /// exceed a pixel — so the tap count grows with the width instead of being
     /// fixed at the usual eight. Past a few pixels the honest fix is a dilate
     /// on an offscreen mask, not more taps.
+    ///
+    /// That fix exists for one case: a text with a
+    /// [`backdrop_blur`](crate::widgets::Text::backdrop_blur) has a coverage
+    /// mask already, and takes its stroke as a contour dilated from it — which
+    /// it must, since copies under the fill would fill the glass as well as
+    /// ring it.
     pub(crate) fn samples(&self) -> SmallVec<[(f32, f32); 24]> {
         let taps = (self.width * 6.0).clamp(8.0, 24.0) as usize;
         (0..taps)

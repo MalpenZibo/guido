@@ -21,6 +21,13 @@ struct Params {
     radii: vec4<f32>,
     // Sub-rectangle of the coverage mask this viewport covers, normalised.
     mask_rect: vec4<f32>,
+    // Colour of the outline drawn by `fs_outline`, and how far it reaches out
+    // from the glyph edge in physical pixels.
+    stroke_color: vec4<f32>,
+    stroke_width: f32,
+    _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
 }
 
 @group(0) @binding(0) var t_source: texture_2d<f32>;
@@ -116,6 +123,40 @@ fn fs_composite(in: VertexOutput) -> @location(0) vec4<f32> {
     let mask = 1.0 - smoothstep(-0.5, 0.5, distance);
 
     return vec4<f32>(blurred.rgb, blurred.a * mask);
+}
+
+// A contour around the coverage, drawn outside it.
+//
+// The dilate is the largest coverage within `stroke_width` of the pixel;
+// subtracting the pixel's own coverage leaves a band that starts at the glyph
+// edge and reaches outwards, which is what a stroke is. Drawing copies of the
+// glyphs instead — the cheap approximation, and the right one under an opaque
+// fill — would fill the letter as well as ring it, and over frost the letter is
+// exactly what must stay clear.
+@fragment
+fn fs_outline(in: VertexOutput) -> @location(0) vec4<f32> {
+    let mask_uv = params.mask_rect.xy + in.uv * params.mask_rect.zw;
+    let own = textureSample(t_mask, s_source, mask_uv).a;
+
+    // One physical pixel, in mask uv.
+    let px = params.mask_rect.zw / max(params.dst_size, vec2<f32>(1.0));
+    let taps = 16;
+    let tau = 6.2831855;
+
+    var dilated = own;
+    // Two rings: the outer one decides how far the contour reaches, the inner
+    // one keeps a thick contour solid rather than hollow at the corners.
+    for (var ring = 1; ring <= 2; ring = ring + 1) {
+        let radius = params.stroke_width * f32(ring) * 0.5;
+        for (var i = 0; i < taps; i = i + 1) {
+            let angle = tau * f32(i) / f32(taps);
+            let offset = vec2<f32>(cos(angle), sin(angle)) * radius * px;
+            dilated = max(dilated, textureSample(t_mask, s_source, mask_uv + offset).a);
+        }
+    }
+
+    let contour = clamp(dilated - own, 0.0, 1.0);
+    return vec4<f32>(params.stroke_color.rgb, params.stroke_color.a * contour);
 }
 
 // The same composite, shaped by a coverage mask instead of a rectangle: what

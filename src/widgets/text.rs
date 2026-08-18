@@ -112,12 +112,15 @@ impl Text {
     /// so it is asked for one text at a time rather than dressed onto a subtree.
     /// A rotated or scaled text ignores it — the mask is axis-aligned.
     ///
-    /// Legibility is not what it buys, and the two decorations that would give
-    /// it cannot be added on top. A [`text_stroke`](super::TextStyled::text_stroke)
-    /// and a [`text_shadow`](super::TextStyled::text_shadow) are drawn as copies
-    /// of the glyphs *under* the fill, so they cover the letter's own area and
-    /// not only its edge — invisible under an opaque fill, and an opaque letter
-    /// over frost. A frosted text is held together by its tint instead.
+    /// Legibility is not what it buys on its own, and of the two decorations
+    /// that give it, one composes and one does not.
+    ///
+    /// A [`text_stroke`](super::TextStyled::text_stroke) does: over frost it is
+    /// drawn as a true contour — dilated from the same coverage mask, laid
+    /// outside the letter — rather than as copies of the glyphs under the fill.
+    /// A [`text_shadow`](super::TextStyled::text_shadow) does not: it is still
+    /// copies, so it covers the letter's own area as well as its edge, which is
+    /// invisible under an opaque fill and an opaque letter over glass.
     pub fn backdrop_blur<M>(mut self, radius: impl IntoSignal<f32, M>) -> Self {
         self.backdrop_blur = Some(radius.into_signal());
         self
@@ -321,12 +324,16 @@ impl Widget for Text {
                 self.backdrop_blur.map(|radius| radius.get()),
             )
         });
-        // First, so the glyphs and their decorations land over the frost.
+        // A frosted text takes its stroke as a contour instead: drawn from the
+        // same coverage mask, outside the letter rather than under it, so the
+        // glass keeps what the frost put in it.
+        let frosted = blur.filter(|radius| *radius > 0.0).is_some();
         if let Some(radius) = blur {
             ctx.draw_text_backdrop_blur(
                 &self.cached_text,
                 local_bounds,
                 radius,
+                stroke,
                 self.cached_font_size,
                 self.cached_font_family.clone(),
                 self.cached_font_weight,
@@ -339,7 +346,7 @@ impl Widget for Text {
             self.cached_font_size,
             self.cached_font_family.clone(),
             self.cached_font_weight,
-            stroke,
+            if frosted { None } else { stroke },
             shadow,
         );
     }
@@ -414,6 +421,25 @@ mod tests {
         find(&node).expect("a text command")
     }
 
+    /// The stroke carried by the paint's frost command, if there is one.
+    fn frost_stroke(widget: impl Widget + 'static) -> Option<TextStroke> {
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(widget));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        tree.with_widget_mut(root, |w, id, t| {
+            w.layout(t, id, Constraints::new(0.0, 0.0, 800.0, 600.0))
+        });
+        let mut node = RenderNode::new(root.as_u64());
+        tree.with_widget_mut(root, |w, id, t| {
+            let mut ctx = PaintContext::new(&mut node);
+            w.paint(t, id, &mut ctx);
+        });
+        node.commands.iter().find_map(|cmd| match &**cmd {
+            DrawCommand::TextBackdropBlur { stroke, .. } => *stroke,
+            _ => None,
+        })
+    }
+
     /// Every command a paint produced, in order, as short names.
     fn commands(widget: impl Widget + 'static) -> Vec<&'static str> {
         let mut tree = Tree::new();
@@ -446,15 +472,50 @@ mod tests {
             commands(text("hi").backdrop_blur(8.0)),
             vec!["frost", "text"]
         );
-        let stroked = commands(
-            text("hi")
-                .backdrop_blur(8.0)
-                .text_stroke(TextStroke::new(1.0, Color::BLACK)),
-        );
-        assert_eq!(stroked[0], "frost");
+        let shadowed = commands(text("hi").backdrop_blur(8.0).text_shadow(TextShadow::new(
+            0.0,
+            2.0,
+            4.0,
+            Color::BLACK,
+        )));
+        assert_eq!(shadowed[0], "frost");
         assert!(
-            stroked[1..].iter().all(|cmd| *cmd == "text"),
-            "a stroke is more glyphs, and they go over the frost too: {stroked:?}"
+            shadowed[1..].iter().all(|cmd| *cmd == "text"),
+            "a shadow is more glyphs, and they go over the frost too: {shadowed:?}"
+        );
+    }
+
+    /// The stroke of a frosted text is not more glyphs. Copies under the fill
+    /// ring the letter *and* fill it, which over frost is an opaque letter
+    /// where the picture should be — so it rides on the frost command instead
+    /// and is drawn from the same coverage mask.
+    #[test]
+    fn a_frosted_text_takes_its_stroke_as_a_contour() {
+        let stroke = TextStroke::new(2.0, Color::BLACK);
+        assert_eq!(
+            commands(text("hi").backdrop_blur(8.0).text_stroke(stroke)),
+            vec!["frost", "text"],
+            "one frost, one fill, and no copies in between"
+        );
+
+        assert_eq!(
+            frost_stroke(text("hi").backdrop_blur(8.0).text_stroke(stroke)).map(|s| s.width),
+            Some(2.0)
+        );
+        assert!(
+            frost_stroke(text("hi").backdrop_blur(8.0)).is_none(),
+            "and nothing is invented for a text that declared none"
+        );
+    }
+
+    /// Without frost the cheap stroke is still the right one: under an opaque
+    /// fill the copies are invisible, and they cost no rasterization.
+    #[test]
+    fn an_unfrosted_text_keeps_the_sampled_stroke() {
+        let drawn = commands(text("hi").text_stroke(TextStroke::new(1.0, Color::BLACK)));
+        assert!(
+            drawn.len() > 2 && drawn.iter().all(|cmd| *cmd == "text"),
+            "copies of the glyphs, no frost command: {drawn:?}"
         );
     }
 

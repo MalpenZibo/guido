@@ -3,6 +3,7 @@
 use super::types::{Gradient, Shadow};
 use crate::widgets::font::{FontFamily, FontWeight};
 use crate::widgets::image::{ContentFit, ImageSource};
+use crate::widgets::text_style::TextStroke;
 use crate::widgets::{Color, Rect};
 
 /// Border definition for shapes.
@@ -203,6 +204,12 @@ pub enum DrawCommand {
     TextBackdropBlur {
         /// The text whose coverage is the mask.
         text: String,
+        /// A contour to draw around that coverage, once the blur is composited
+        /// and before the glyphs land on it. Carried here because the mask it
+        /// needs is the one this command already rasterizes — and because the
+        /// cheap stroke, copies of the glyphs under the fill, would fill the
+        /// letter the frost just cut out.
+        stroke: Option<TextStroke>,
         /// The text's layout box in local coordinates.
         rect: Rect,
         /// Blur radius in logical pixels.

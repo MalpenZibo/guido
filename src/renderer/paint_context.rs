@@ -352,6 +352,7 @@ impl<'a> PaintContext<'a> {
         text: &str,
         rect: Rect,
         radius: f32,
+        stroke: Option<TextStroke>,
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
@@ -363,6 +364,7 @@ impl<'a> PaintContext<'a> {
             .commands
             .push(Rc::new(DrawCommand::TextBackdropBlur {
                 text: text.to_owned(),
+                stroke: stroke.filter(|s| s.width > 0.0),
                 rect,
                 radius,
                 font_size,
