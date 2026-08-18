@@ -11,12 +11,13 @@ use wgpu::{
 };
 
 use super::backdrop_pass::{BackdropRegion, BackdropRenderer};
-use super::commands::DrawCommand;
+use super::commands::{CornerRadii, DrawCommand};
 use super::flatten::{CommandLayer, FlattenedCommand};
 use super::gpu::{QUAD_INDICES, QUAD_VERTICES, QuadVertex, ShaderUniforms, ShapeInstance};
 use super::gpu_context::SurfaceState;
 use super::image_quad::{ImageQuadRenderer, PreparedImageQuad};
 use super::text::TextRenderState;
+use super::text_mask::{MaskSpec, TextMaskRenderer};
 use super::text_quad::{PreparedTextQuad, TextQuadRenderer};
 use super::types::TextEntry;
 use crate::widgets::{Color, Rect};
@@ -49,6 +50,9 @@ pub struct Renderer {
 
     // Transformed text rendering (renders text to textures for rotation/scale)
     text_quad_renderer: TextQuadRenderer,
+
+    /// Glyph coverage for texts that frost their own backdrop.
+    text_mask: TextMaskRenderer,
 
     // Image rendering
     image_quad_renderer: ImageQuadRenderer,
@@ -140,6 +144,7 @@ impl Renderer {
 
         // Initialize transformed text renderer
         let text_quad_renderer = TextQuadRenderer::new(&device, &queue, format);
+        let text_mask = TextMaskRenderer::new(&device, &queue, format);
 
         // Initialize image renderer
         let image_quad_renderer = ImageQuadRenderer::new(&device, format);
@@ -159,6 +164,7 @@ impl Renderer {
             instance_buffer_capacity: initial_capacity,
             text_state,
             text_quad_renderer,
+            text_mask,
             image_quad_renderer,
             shape_instance_buf: Vec::new(),
             text_entry_buf: Vec::new(),
@@ -355,6 +361,20 @@ impl Renderer {
                     for command in &commands[layers[index].backdrop.clone()] {
                         if let Some(region) = command_to_backdrop_region(command, scale) {
                             self.backdrop.apply(&self.device, &mut encoder, &region);
+                        } else if let Some(frost) = command_to_text_backdrop(command, scale) {
+                            // The mask is rasterized and submitted on its own
+                            // encoder, so it is ready by the time this frame's
+                            // encoder reaches the composite below.
+                            if let Some(mask) =
+                                self.text_mask.mask(&self.device, &self.queue, &frost.spec)
+                            {
+                                self.backdrop.apply_masked(
+                                    &self.device,
+                                    &mut encoder,
+                                    &frost.region,
+                                    &mask,
+                                );
+                            }
                         }
                     }
                     render_pass = begin_pass(&mut encoder, target, load);
@@ -418,6 +438,7 @@ impl Renderer {
         self.image_quads.clear();
         self.text_quads.clear();
         self.image_quad_renderer.begin_frame();
+        self.text_mask.begin_frame();
         self.text_state.begin_frame(
             &self.queue,
             (self.screen_width as u32, self.screen_height as u32),
@@ -595,6 +616,73 @@ fn command_to_backdrop_region(cmd: &FlattenedCommand, scale: f32) -> Option<Back
     })
 }
 
+/// A frosted text resolved to the region it filters and the mask that cuts it.
+struct TextBackdrop<'a> {
+    region: BackdropRegion,
+    spec: MaskSpec<'a>,
+}
+
+/// Resolve a text backdrop command to its region and the mask to shape it with.
+///
+/// The region is snapped to whole pixels so the mask is one texel per pixel of
+/// it; whatever the snap moved is handed back to the mask as the glyph origin,
+/// which is why a text half a pixel off the grid still frosts its own shape.
+fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBackdrop<'_>> {
+    let DrawCommand::TextBackdropBlur {
+        text,
+        rect,
+        radius,
+        font_size,
+        font_family,
+        font_weight,
+    } = &*cmd.command
+    else {
+        return None;
+    };
+
+    // A rotated or scaled text is drawn from a texture, at an angle an
+    // axis-aligned mask cannot follow. Skipping is the honest answer: a frost
+    // that sits beside its letters is worse than none.
+    if !cmd.world_transform.is_translation_only() {
+        return None;
+    }
+
+    let (world_x, world_y) = cmd.world_transform.transform_point(rect.x, rect.y);
+    // Glyphs overshoot their layout box — descenders, italics, marks — and the
+    // slack here is the one the flattener already uses for a text's bounds.
+    let slack = font_size * 0.5;
+    let left = (world_x - slack) * scale;
+    let top = (world_y - slack) * scale;
+    let right = (world_x + rect.width + slack) * scale;
+    let bottom = (world_y + rect.height + slack) * scale;
+
+    let x = left.floor();
+    let y = top.floor();
+    let width = (right.ceil() - x).max(1.0);
+    let height = (bottom.ceil() - y).max(1.0);
+
+    Some(TextBackdrop {
+        region: BackdropRegion {
+            rect: Rect::new(x, y, width, height),
+            radius: radius * scale,
+            // The shape is entirely the mask's; these are what the rectangular
+            // composite would have used.
+            radii: CornerRadii::uniform(0.0),
+            curvature: 1.0,
+        },
+        spec: MaskSpec {
+            text,
+            font_size: *font_size,
+            font_family,
+            font_weight: *font_weight,
+            logical: (rect.width, rect.height),
+            size: (width as u32, height as u32),
+            offset: (world_x * scale - x, world_y * scale - y),
+            scale_factor: scale,
+        },
+    })
+}
+
 /// Convert a single flattened command to a shape instance.
 fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstance> {
     match &*cmd.command {
@@ -663,7 +751,7 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
         DrawCommand::Text { .. } => None,
         // Filters the target rather than adding geometry; handled between
         // draw groups, not as an instance.
-        DrawCommand::BackdropBlur { .. } => None,
+        DrawCommand::BackdropBlur { .. } | DrawCommand::TextBackdropBlur { .. } => None,
         // Image commands are handled separately via ImageQuadRenderer
         DrawCommand::Image { .. } => None,
     }
@@ -696,5 +784,94 @@ fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
             })
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::rc::Rc;
+
+    use crate::renderer::flatten::RenderLayer;
+    use crate::transform::Transform;
+    use crate::widgets::FontFamily;
+
+    fn frosted(rect: Rect, transform: Transform) -> FlattenedCommand {
+        FlattenedCommand {
+            command: Rc::new(DrawCommand::TextBackdropBlur {
+                text: "09:41".to_owned(),
+                rect,
+                radius: 10.0,
+                font_size: 20.0,
+                font_family: FontFamily::default(),
+                font_weight: Default::default(),
+            }),
+            world_transform: transform,
+            world_transform_origin: None,
+            layer: RenderLayer::Backdrop,
+            clip: None,
+            clip_is_local: false,
+        }
+    }
+
+    /// The mask is one texel per pixel of the region, which only works if the
+    /// region lands on the pixel grid. What the snap moves has to come back as
+    /// the glyph origin, or the frost sits beside its own letters.
+    #[test]
+    fn the_region_is_snapped_and_the_remainder_goes_to_the_mask() {
+        let cmd = frosted(Rect::new(10.3, 20.6, 100.0, 30.0), Transform::IDENTITY);
+        let frost = command_to_text_backdrop(&cmd, 1.0).expect("a frost");
+
+        let rect = frost.region.rect;
+        assert_eq!(rect.x, rect.x.floor(), "x is a whole pixel, got {}", rect.x);
+        assert_eq!(rect.y, rect.y.floor(), "y is a whole pixel, got {}", rect.y);
+        assert_eq!(rect.width, rect.width.floor());
+        assert_eq!(rect.height, rect.height.floor());
+        assert_eq!(frost.spec.size, (rect.width as u32, rect.height as u32));
+
+        // The glyph origin, measured from the snapped corner, still lands on
+        // the text's own position.
+        assert!((rect.x + frost.spec.offset.0 - 10.3).abs() < 1e-3);
+        assert!((rect.y + frost.spec.offset.1 - 20.6).abs() < 1e-3);
+    }
+
+    /// Descenders and italics reach past the layout box, and so must the frost:
+    /// the same slack the flattener gives a text's bounds.
+    #[test]
+    fn the_region_covers_more_than_the_layout_box() {
+        let cmd = frosted(Rect::new(10.0, 20.0, 100.0, 30.0), Transform::IDENTITY);
+        let frost = command_to_text_backdrop(&cmd, 1.0).expect("a frost");
+        assert!(frost.region.rect.width >= 110.0, "{:?}", frost.region.rect);
+        assert!(frost.region.rect.height >= 40.0, "{:?}", frost.region.rect);
+    }
+
+    #[test]
+    fn the_scale_factor_reaches_the_region_and_the_radius() {
+        let cmd = frosted(Rect::new(10.0, 20.0, 100.0, 30.0), Transform::IDENTITY);
+        let one = command_to_text_backdrop(&cmd, 1.0).expect("a frost");
+        let two = command_to_text_backdrop(&cmd, 2.0).expect("a frost");
+        assert_eq!(two.region.radius, one.region.radius * 2.0);
+        assert!(two.region.rect.width >= one.region.rect.width * 2.0 - 1.0);
+        assert_eq!(two.spec.scale_factor, 2.0);
+    }
+
+    /// A translated text is still axis-aligned, so the mask can follow it.
+    #[test]
+    fn a_translated_text_is_frosted_where_it_ends_up() {
+        let cmd = frosted(
+            Rect::new(10.0, 20.0, 100.0, 30.0),
+            Transform::translate(40.0, 5.0),
+        );
+        let frost = command_to_text_backdrop(&cmd, 1.0).expect("a frost");
+        assert!((frost.region.rect.x + frost.spec.offset.0 - 50.0).abs() < 1e-3);
+        assert!((frost.region.rect.y + frost.spec.offset.1 - 25.0).abs() < 1e-3);
+    }
+
+    /// A rotated or scaled one is not: the mask is rasterized square, and a
+    /// frost beside its letters is worse than no frost.
+    #[test]
+    fn a_rotated_text_is_left_alone() {
+        let cmd = frosted(Rect::new(10.0, 20.0, 100.0, 30.0), Transform::rotate(0.4));
+        assert!(command_to_text_backdrop(&cmd, 1.0).is_none());
     }
 }
