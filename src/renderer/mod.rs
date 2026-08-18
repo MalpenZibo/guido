@@ -20,6 +20,7 @@ mod image_quad;
 mod paint_context;
 mod render;
 mod text;
+mod text_mask;
 mod text_measurer;
 mod text_quad;
 mod textured_quad;
