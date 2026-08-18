@@ -112,10 +112,12 @@ impl Text {
     /// so it is asked for one text at a time rather than dressed onto a subtree.
     /// A rotated or scaled text ignores it — the mask is axis-aligned.
     ///
-    /// Legibility is not what it buys. Frost softens the background instead of
-    /// darkening it, so over a busy photograph
-    /// [`text_shadow`](super::TextStyled::text_shadow) still does more; the two
-    /// compose.
+    /// Legibility is not what it buys, and the two decorations that would give
+    /// it cannot be added on top. A [`text_stroke`](super::TextStyled::text_stroke)
+    /// and a [`text_shadow`](super::TextStyled::text_shadow) are drawn as copies
+    /// of the glyphs *under* the fill, so they cover the letter's own area and
+    /// not only its edge — invisible under an opaque fill, and an opaque letter
+    /// over frost. A frosted text is held together by its tint instead.
     pub fn backdrop_blur<M>(mut self, radius: impl IntoSignal<f32, M>) -> Self {
         self.backdrop_blur = Some(radius.into_signal());
         self
