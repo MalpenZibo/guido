@@ -15,6 +15,8 @@
 //! [`track_pointer`]: Container::track_pointer
 //! [`handle_own_event`]: Container::handle_own_event
 
+use std::time::Instant;
+
 use super::*;
 
 /// The geometry an event is resolved against: where the container ended up,
@@ -100,6 +102,8 @@ impl Container {
     /// ancestors from tracking their own hover.
     pub(super) fn track_pointer(&mut self, id: WidgetId, hit: &HitContext, event: &Event) {
         let has_animated = self.has_animated_state_properties();
+        // Read before the mutable borrow: cancelling a ripple below needs it.
+        let ripple_config = self.interaction.as_ref().and_then(|ix| ix.ripple_config());
         let Some(ref mut ix) = self.interaction else {
             return;
         };
@@ -133,6 +137,19 @@ impl Container {
 
                 let was_hovered = ix.is_hovered();
                 ix.set_flag(InteractionFlags::HOVERED, hit.contains(*x, *y));
+
+                // Dragging off the container abandons the press. Only leaving
+                // the whole surface used to say so, which left a ripple
+                // growing at full brightness on a button the pointer had left
+                // several hundred pixels ago.
+                if was_hovered
+                    && !ix.is_hovered()
+                    && ix.ripple.is_active()
+                    && let Some(ref config) = ripple_config
+                {
+                    ix.ripple.cancel(config, Instant::now());
+                    request_job(id, JobRequest::Animation(RequiredJob::Paint));
+                }
 
                 if was_hovered != ix.is_hovered() {
                     if ix.declares(|w| matches!(w, StateWhen::Hovered)) {
@@ -197,7 +214,7 @@ impl Container {
                     if has_ripple {
                         let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
                         let (local_x, local_y) = hit.local(screen_x, screen_y);
-                        ix.ripple.start(local_x, local_y);
+                        ix.ripple.start(local_x, local_y, Instant::now());
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
@@ -229,10 +246,19 @@ impl Container {
                     let was_pressed = ix.is_pressed();
                     ix.set_flag(InteractionFlags::PRESSED, false);
 
-                    if ix.ripple.is_active() {
-                        let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
-                        let (local_x, local_y) = hit.local(screen_x, screen_y);
-                        ix.ripple.start_fade(local_x, local_y);
+                    // The ripple has to say the same thing `on_click` below
+                    // says: a release inside activated something and finishes
+                    // its expansion, a release that wandered off did not and
+                    // simply goes.
+                    if ix.ripple.is_active()
+                        && let Some(config) = ix.ripple_config()
+                    {
+                        let now = Instant::now();
+                        if hit.contains(*x, *y) {
+                            ix.ripple.release(&config, now);
+                        } else {
+                            ix.ripple.cancel(&config, now);
+                        }
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
@@ -275,11 +301,13 @@ impl Container {
                     }
                     ix.set_flag(InteractionFlags::PRESSED, false);
 
-                    // The pointer left without a release, so the ripple has no
-                    // exit point to fade toward — it collapses to the centre.
-                    if ix.ripple.is_active() {
-                        ix.ripple
-                            .start_fade_to_center(hit.bounds.width, hit.bounds.height);
+                    // The pointer left without releasing, so nothing was
+                    // activated and there is nothing to complete: the ripple
+                    // just goes.
+                    if ix.ripple.is_active()
+                        && let Some(config) = ix.ripple_config()
+                    {
+                        ix.ripple.cancel(&config, Instant::now());
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 

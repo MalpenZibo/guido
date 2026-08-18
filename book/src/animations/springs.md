@@ -157,6 +157,43 @@ fn spring_button() -> Container {
 }
 ```
 
+## Interruption
+
+A spring that is retargeted mid-flight keeps its momentum: the new segment
+starts with the speed the old one had, so a value sent back where it came from
+*turns around* rather than stopping first. That is what makes a spring feel
+physical when a hover reverses halfway, and it is also the cheapest wobble
+there is — send a value out and then back, and the overshoot on the way home
+is a shake nobody had to choreograph.
+
+It has to be two *different* frames, though. A press and its release are two,
+so a button shakes itself:
+
+```rust
+fn nudge(angle: RwSignal<f32>) -> Container {
+    container()
+        .transform(move || Transform::rotate_degrees(angle.get()))
+        .animate_transform(Transition::spring(SpringConfig::BOUNCY))
+        .on_mouse_down(move |_, _| angle.set(2.0))
+        .on_mouse_up(move |_, _| angle.set(0.0))
+        .child(text("shake me"))
+}
+```
+
+Two writes inside one frame would not do it: the loop reads the signal once, so
+it only ever sees the last of them and the spring is never sent anywhere.
+
+Timed transitions have no momentum to keep: a retarget there starts from the
+current value at whatever the curve says, as it always has.
+
+### What it carries, and what it does not
+
+The momentum that crosses into the new segment is the part of the old motion
+pointing along it. A translation interrupted by a pure scale change carries
+nothing, because the two have no direction in common — momentum stays in the
+channel it belonged to. And a spring that has already settled is at rest, so
+the next animation starts from a stop however small the residue was.
+
 ## API Reference
 
 ```rust

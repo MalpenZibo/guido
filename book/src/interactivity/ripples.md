@@ -50,15 +50,73 @@ Combine ripples with other pressed state changes:
 
 ## How Ripples Work
 
-1. **Click** - Ripple starts at the click point
-2. **Expand** - Ripple grows to fill the container bounds
-3. **Release** - Ripple contracts toward the release point
-4. **Fade** - Ripple fades out
+1. **Press** - a disc appears at the click point, already at about a third of
+   its final size, and starts spreading
+2. **Release inside** - the press happened, so the remaining expansion is
+   *completed* rather than interrupted, while the disc fades out
+3. **Release elsewhere, or drag off the button** - nothing was activated, and
+   the ripple says the same thing `on_click` does: the disc just fades, quickly
+
+Two properties are worth stating outright, because they are what makes the
+effect read as an acknowledgement rather than a hesitation:
+
+- **The radius never goes backwards.** The exit is a fade, never a contraction.
+- **A short press does not truncate the expansion.** A click lasts 60-150ms
+  against a growth measured in hundreds, so the release finishes the growth
+  instead of abandoning it half-way.
+- **No press is dimmer for being quicker.** The disc always finishes appearing
+  before it starts to leave, so a 20ms tap is as bright as a held one.
+
+The disc's centre also drifts toward the container's own centre as it grows, so
+a press near a corner settles onto the button instead of staying lopsided. Its
+final size comes from the container, not from where you pressed — every ripple
+on a given button is the same size, and a full one covers it exactly.
 
 The ripple:
 - Respects corner radius and container shape
 - Works correctly with transformed containers (rotated, scaled)
 - Renders in the overlay layer (on top of content)
+
+## Several at once
+
+Each press is its own ripple, and they overlap:
+
+```rust
+container()
+    .when_pressed(|s| s.ripple())
+    .on_click(increment)
+```
+
+Clicking this repeatedly layers one disc over the next, because two clicks are
+two events — the second does not erase the first. Up to four are alive at a
+time; past that the oldest is dropped, which is the one furthest through its
+own fade.
+
+## Timing
+
+| Phase | Duration | Scaled by |
+|---|---|---|
+| Opacity rise on contact | 75ms | `fade_speed` |
+| Growth while held | 1s | `expand_speed` |
+| Growth remaining after release | 225ms | `expand_speed` |
+| Fade after a release | 375ms | `fade_speed` |
+| Fade after an abandoned press | 75ms | `fade_speed` |
+
+The fade never starts before the rise has finished, and the growth after a
+release is never given longer than the fade it overlaps — so no combination of
+the two speeds can put the disc back where it started, half-grown and already
+invisible.
+
+Both speeds are clamped to a sane range, so a zero or a negative one degrades
+instead of stalling the frame loop:
+
+```rust
+.when_pressed(|s| s.ripple_config(RippleConfig {
+    color: Color::rgba(1.0, 1.0, 1.0, 0.3),
+    expand_speed: 1.5,   // faster growth
+    fade_speed: 1.0,
+}))
+```
 
 ## Ripples on Transformed Containers
 
