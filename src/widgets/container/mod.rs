@@ -1011,7 +1011,62 @@ impl Container {
     /// Enable animation for transform changes
     pub fn animate_transform(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.transform.get_or_untracked(Transform::IDENTITY);
-        self.anims_mut().transform = Some(AnimationState::new(initial, transition));
+        // Whatever sequence is already here comes along: a fresh state would
+        // throw it away, and the order the two builders were written in would
+        // decide whether it exists — silently, with the trigger still firing.
+        let previous = self.anims_mut().transform.take();
+        let mut anim = AnimationState::new(initial, transition);
+        anim.adopt_timeline_of(previous);
+        self.anims_mut().transform = Some(anim);
+        self
+    }
+
+    /// Play a sequence of transforms whenever `plays` changes.
+    ///
+    /// The other animations here move *towards* a value; this one has none. It
+    /// plays, and while it plays it replaces whatever `transform` declares,
+    /// handing the property back when it ends — the rule CSS gives an
+    /// animation over a normal declaration.
+    ///
+    /// ```ignore
+    /// container()
+    ///     .keyframes_transform(
+    ///         Keyframes::new(320.0)
+    ///             .at(0.0, Transform::IDENTITY)
+    ///             .at(0.2, Transform::rotate_degrees(1.5))
+    ///             .at(0.5, Transform::rotate_degrees(-1.0))
+    ///             .at(1.0, Transform::IDENTITY),
+    ///         rejections,
+    ///     )
+    /// ```
+    ///
+    /// The trigger is a count and not a flag on purpose: a second refusal has
+    /// to shake as loudly as the first, and a signal that stays equal notifies
+    /// nobody. The count it starts at is whatever it holds when the container
+    /// is built, so nothing plays on the first frame.
+    pub fn keyframes_transform<M>(
+        mut self,
+        keyframes: crate::animation::Keyframes<Transform>,
+        plays: impl IntoSignal<u32, M>,
+    ) -> Self {
+        let initial = self.transform.get_or_untracked(Transform::IDENTITY);
+        let anim = self
+            .anims_mut()
+            .transform
+            // A transition of no duration: the timeline speaks for this
+            // property while it plays, and outside it the declared value
+            // applies at once, exactly as it would with no animation at all.
+            .get_or_insert_with(|| {
+                AnimationState::new(
+                    initial,
+                    crate::animation::Transition::new(
+                        0.0,
+                        crate::animation::TimingFunction::Linear,
+                    ),
+                )
+            });
+        anim.set_timeline(keyframes);
+        anim.set_play_trigger(plays.into_signal());
         self
     }
 
@@ -1031,8 +1086,10 @@ impl Container {
         transition: impl Into<TransitionConfig>,
     ) -> Self {
         let initial = self.transform.get_or_untracked(Transform::IDENTITY);
-        self.anims_mut().transform =
-            Some(AnimationState::new(initial, transition).with_enter_from(enter_from));
+        let previous = self.anims_mut().transform.take();
+        let mut anim = AnimationState::new(initial, transition).with_enter_from(enter_from);
+        anim.adopt_timeline_of(previous);
+        self.anims_mut().transform = Some(anim);
         self
     }
 
@@ -1224,6 +1281,15 @@ impl Widget for Container {
                 any_animating,
                 paint
             );
+            // A trigger that has moved starts the sequence, before the frame
+            // that will show its first value. The read is a snapshot: the
+            // subscription belongs to `resync_animation_targets`, which asks
+            // the same question inside its tracking scope.
+            if let Some(anim) = anims.transform.as_mut()
+                && crate::reactive::diagnostics::snapshot_zone(|| anim.take_play())
+            {
+                anim.play();
+            }
             advance_anim!(anims, transform, transform_target, id, any_animating, paint);
         }
 

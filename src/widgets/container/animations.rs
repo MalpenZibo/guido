@@ -1,6 +1,29 @@
 use std::time::Instant;
 
-use crate::animation::{Animatable, SpringState, Transition, TransitionConfig, carry_velocity};
+use crate::animation::{
+    Animatable, Keyframes, SpringState, Transition, TransitionConfig, carry_velocity,
+};
+use crate::reactive::Signal;
+
+/// A sequence a property can be told to play, and the signal that tells it.
+///
+/// Unlike everything else in an `AnimationState` this has no target: while it
+/// runs it *replaces* the declared value, and when it ends the property is
+/// handed back — the rule CSS gives an animation over a normal declaration.
+struct Timeline<T> {
+    keyframes: Keyframes<T>,
+    /// When the current run started, if one is running.
+    playing: Option<Instant>,
+    /// A signal whose every change plays the sequence once, and the count last
+    /// acted on.
+    ///
+    /// A count rather than a flag, because two refusals in a row are two
+    /// events and a signal that stays equal notifies nobody. Reading it and
+    /// committing to it live in one place, so the pass that subscribes and the
+    /// pass that plays cannot disagree about what has been seen.
+    trigger: Option<Signal<u32>>,
+    last_play: u32,
+}
 
 /// Result of advancing an animation, indicating whether the value changed
 #[derive(Debug, Clone, PartialEq)]
@@ -45,6 +68,11 @@ pub struct AnimationState<T: Animatable> {
     /// Pending enter value: consumed at first layout to start an enter
     /// animation instead of snapping to the target
     enter_from: Option<T>,
+    /// A sequence to play on demand, and what plays it. Boxed and absent by
+    /// default: `ContainerAnims` holds nine of these states and only one
+    /// property can carry a sequence, so the rest pay a pointer rather than
+    /// the struct.
+    timeline: Option<Box<Timeline<T>>>,
 }
 
 impl<T: Animatable> AnimationState<T> {
@@ -71,6 +99,7 @@ impl<T: Animatable> AnimationState<T> {
             initialized: false, // Not yet initialized with real content-based value
             prev_value: None,
             enter_from: None,
+            timeline: None,
         }
     }
 
@@ -106,8 +135,23 @@ impl<T: Animatable> AnimationState<T> {
             0.0
         };
 
-        self.start = self.current;
         self.target = new_target;
+        self.begin_segment(self.current, carried);
+    }
+
+    /// Start a fresh run toward the current target, from rest.
+    fn begin_segment_from(&mut self, from: T) {
+        self.begin_segment(from, 0.0);
+    }
+
+    /// The bookkeeping every new segment shares.
+    fn begin_segment(&mut self, from: T, carried: f32) {
+        let is_spring = matches!(
+            self.active_transition().timing,
+            crate::animation::TimingFunction::Spring(_)
+        );
+        self.start = from;
+        self.current = from;
         self.progress = 0.0;
         self.start_time = Instant::now();
         self.spring_state = if is_spring {
@@ -149,6 +193,12 @@ impl<T: Animatable> AnimationState<T> {
 
     /// Advance the animation and return whether the value changed
     pub fn advance(&mut self) -> AdvanceResult<T> {
+        // A sequence speaks for the property while it runs, and nothing else
+        // does — the same rule the cascade gives a CSS animation over a normal
+        // declaration.
+        if let Some(result) = self.advance_timeline() {
+            return result;
+        }
         if self.progress >= 1.0 && self.spring_state.is_none() {
             return AdvanceResult::NoChange;
         }
@@ -252,7 +302,124 @@ impl<T: Animatable> AnimationState<T> {
 
     /// Check if animation is still running
     pub fn is_animating(&self) -> bool {
-        self.progress < 1.0 || (self.spring_state.is_some() && self.progress < 0.99)
+        self.timeline.as_ref().is_some_and(|t| t.playing.is_some())
+            || self.progress < 1.0
+            || (self.spring_state.is_some() && self.progress < 0.99)
+    }
+
+    /// Give this property a sequence to play, keeping whatever already plays
+    /// it.
+    pub(crate) fn set_timeline(&mut self, keyframes: Keyframes<T>) {
+        match &mut self.timeline {
+            Some(timeline) => timeline.keyframes = keyframes,
+            None => {
+                self.timeline = Some(Box::new(Timeline {
+                    keyframes,
+                    playing: None,
+                    trigger: None,
+                    last_play: 0,
+                }))
+            }
+        }
+    }
+
+    /// Give it the signal that plays it. Ignored without a sequence, which
+    /// cannot happen through the builders.
+    pub(crate) fn set_play_trigger(&mut self, trigger: Signal<u32>) {
+        if let Some(timeline) = &mut self.timeline {
+            timeline.last_play = trigger.get_untracked();
+            timeline.trigger = Some(trigger);
+        }
+    }
+
+    /// Carry a sequence over from the state this one replaces.
+    ///
+    /// The builders each construct a fresh `AnimationState`, so without this
+    /// the order `keyframes_*` and `animate_*` were written in would decide
+    /// whether the sequence survived at all — silently, since the trigger
+    /// would go on firing against a state that had nothing to play.
+    pub(crate) fn adopt_timeline_of(&mut self, previous: Option<Self>) {
+        if let Some(previous) = previous
+            && let Some(timeline) = previous.timeline
+        {
+            self.timeline = Some(timeline);
+        }
+    }
+
+    /// Whether the trigger has moved since the sequence last played.
+    ///
+    /// Reading the signal is the subscription, so the pass that asks this is
+    /// the pass that gets woken.
+    pub(crate) fn wants_play(&self) -> bool {
+        self.timeline
+            .as_ref()
+            .and_then(|t| t.trigger.map(|signal| signal.get() != t.last_play))
+            .unwrap_or(false)
+    }
+
+    /// The same question, answered once: `true` hands over the play and marks
+    /// it taken, so nothing can ask twice for the same change.
+    pub(crate) fn take_play(&mut self) -> bool {
+        let Some(timeline) = &mut self.timeline else {
+            return false;
+        };
+        let Some(trigger) = timeline.trigger else {
+            return false;
+        };
+        let now = trigger.get();
+        if now == timeline.last_play {
+            return false;
+        }
+        timeline.last_play = now;
+        true
+    }
+
+    /// Start the sequence, from the top. Playing it again while it runs
+    /// restarts it: the second refusal is not half a shake.
+    pub(crate) fn play(&mut self) {
+        if let Some(timeline) = &mut self.timeline
+            && !timeline.keyframes.is_empty()
+        {
+            timeline.playing = Some(Instant::now());
+        }
+    }
+
+    /// Advance the running timeline. `None` when there is none, or when the
+    /// one that was running has just handed the property back.
+    fn advance_timeline(&mut self) -> Option<AdvanceResult<T>> {
+        // Both halves together, so a `playing` without a sequence to play
+        // cannot survive the question. On its own it would keep
+        // `is_animating` true for good: a surface asking for a frame every
+        // vsync with nothing to draw.
+        let Some(timeline) = &mut self.timeline else {
+            return None;
+        };
+        let started = timeline.playing?;
+
+        let elapsed = started.elapsed().as_secs_f32() * 1000.0;
+        let Some(value) = timeline.keyframes.value_at(elapsed) else {
+            // Over. The property goes back to whatever declares it — by
+            // *animating* there from where the sequence left it, not by
+            // snapping to it. The declared transition was suspended for the
+            // duration, not cancelled, and ending it at the last frame is
+            // what made a card jump the moment a hover arrived mid-shake.
+            timeline.playing = None;
+            let landed = self.current;
+            self.begin_segment_from(landed);
+            // Returning `None` lets this frame run the ordinary path, so the
+            // hand-back is animated by the declared transition and reaches
+            // its completion edge — which is what fires `on_complete`.
+            return None;
+        };
+
+        let changed = self.prev_value.as_ref() != Some(&value);
+        self.current = value;
+        self.prev_value = Some(value);
+        Some(if changed {
+            AdvanceResult::Changed(value)
+        } else {
+            AdvanceResult::NoChange
+        })
     }
 
     /// Get current value
@@ -459,6 +626,161 @@ mod tests {
         assert_eq!(fired.get(), 2, "a new completed run fires again");
     }
     use crate::animation::TimingFunction;
+
+    /// Step a running sequence to `ms` into its run.
+    fn play_at<T: Animatable>(anim: &mut AnimationState<T>, ms: u64) {
+        if let Some(timeline) = anim.timeline.as_mut() {
+            timeline.playing = Some(Instant::now() - std::time::Duration::from_millis(ms));
+        }
+        anim.advance();
+    }
+
+    /// While a sequence runs it speaks for the property, and when it ends the
+    /// property goes back to whatever is declared — including a value that
+    /// changed while it was playing.
+    #[test]
+    fn a_timeline_plays_and_then_hands_the_property_back() {
+        use crate::animation::Keyframes;
+
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(0.0, TimingFunction::Linear));
+        anim.set_immediate(0.0);
+        anim.set_timeline(Keyframes::new(60.0).at(0.0, 0.0).at(0.5, 10.0).at(1.0, 0.0));
+
+        anim.play();
+        assert!(anim.is_animating(), "a playing timeline is an animation");
+
+        play_at(&mut anim, 30);
+        assert!(
+            *anim.current() > 4.0,
+            "halfway through it should be near the peak, got {}",
+            anim.current()
+        );
+
+        // The declared value moves while the sequence is running.
+        anim.animate_to(3.0);
+        play_at(&mut anim, 70);
+        at(&mut anim, 10);
+        assert_eq!(*anim.current(), 3.0, "over, and back to what is declared");
+        assert!(!anim.is_animating());
+    }
+
+    /// Played again mid-run it restarts: the second refusal is not half a
+    /// shake.
+    #[test]
+    fn playing_again_starts_the_sequence_over() {
+        use crate::animation::Keyframes;
+
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(0.0, TimingFunction::Linear));
+        anim.set_immediate(0.0);
+        anim.set_timeline(Keyframes::new(80.0).at(0.0, 0.0).at(1.0, 8.0));
+
+        anim.play();
+        play_at(&mut anim, 60);
+        let far = *anim.current();
+
+        anim.play();
+        anim.advance();
+        assert!(
+            *anim.current() < far,
+            "back near the top of the run, got {} after {far}",
+            anim.current()
+        );
+    }
+
+    /// The end of a sequence hands the property back to its declared
+    /// transition — it does not cancel it.
+    ///
+    /// Forcing the value to the target on the last frame made the case the
+    /// whole feature is sold on jump: a card shaking, a pointer arriving
+    /// mid-shake, and the hover landing instantly instead of on its spring.
+    #[test]
+    fn the_end_of_a_sequence_animates_back_rather_than_snapping() {
+        use crate::animation::Keyframes;
+
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(200.0, TimingFunction::Linear));
+        anim.set_immediate(0.0);
+        anim.set_timeline(Keyframes::new(60.0).at(0.0, 0.0).at(1.0, 10.0));
+
+        anim.play();
+        play_at(&mut anim, 30);
+
+        // Something declares a new value while the sequence is running.
+        anim.animate_to(100.0);
+
+        // The sequence runs out.
+        play_at(&mut anim, 70);
+        let handed_back = *anim.current();
+        assert!(
+            handed_back < 100.0,
+            "the declared transition has to run, not be skipped: got \
+             {handed_back}"
+        );
+        assert!(anim.is_animating(), "and it is still going");
+
+        at(&mut anim, 400);
+        assert_eq!(*anim.current(), 100.0, "arriving under its own transition");
+    }
+
+    /// And the transition it hands back to reaches its completion edge, so a
+    /// callback gated on the property arriving still fires.
+    #[test]
+    fn a_sequence_does_not_swallow_the_completion_callback() {
+        use crate::animation::Keyframes;
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let fired = Rc::new(Cell::new(0));
+        let seen = fired.clone();
+        let transition = Transition::new(50.0, TimingFunction::Linear)
+            .on_complete(move || seen.set(seen.get() + 1));
+
+        let mut anim = AnimationState::new(0.0_f32, transition);
+        anim.set_immediate(0.0);
+        anim.set_timeline(Keyframes::new(60.0).at(0.0, 0.0).at(1.0, 5.0));
+
+        anim.animate_to(1.0);
+        anim.play();
+        play_at(&mut anim, 30);
+        assert_eq!(fired.get(), 0, "nothing has arrived yet");
+
+        play_at(&mut anim, 70);
+        at(&mut anim, 100);
+        assert_eq!(fired.get(), 1, "the hand-back completes, and says so");
+    }
+
+    /// A `playing` with nothing to play cannot outlive the sequence: on its
+    /// own it would keep `is_animating` true for good, and the surface asking
+    /// for a frame every vsync with nothing to draw.
+    #[test]
+    fn a_play_without_a_sequence_does_not_pin_the_frame_loop() {
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(10.0, TimingFunction::Linear));
+        anim.set_immediate(0.0);
+        anim.play();
+        anim.advance();
+        assert!(!anim.is_animating(), "nothing to play, nothing to animate");
+    }
+
+    /// The trigger is asked and committed in one place, so the pass that
+    /// subscribes and the pass that plays cannot disagree about what they
+    /// have seen.
+    #[test]
+    fn a_trigger_is_taken_once_per_change() {
+        use crate::animation::Keyframes;
+        use crate::reactive::create_signal;
+
+        let plays = create_signal(0_u32);
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(0.0, TimingFunction::Linear));
+        anim.set_timeline(Keyframes::new(40.0).at(0.0, 0.0).at(1.0, 1.0));
+        anim.set_play_trigger(plays.into());
+
+        assert!(!anim.wants_play(), "nothing has happened yet");
+
+        plays.set(1);
+        assert!(anim.wants_play());
+        assert!(anim.take_play(), "the first ask takes it");
+        assert!(!anim.take_play(), "the second finds nothing left");
+        assert!(!anim.wants_play());
+    }
 
     /// Step an animation to `ms` after its segment began.
     ///
@@ -670,6 +992,14 @@ mod tests {
             "and it has to arrive, got {}",
             anim.current()
         );
+    }
+
+    #[test]
+    fn a_property_with_no_timeline_cannot_be_played() {
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(10.0, TimingFunction::Linear));
+        anim.set_immediate(0.0);
+        anim.play();
+        assert!(!anim.is_animating(), "nothing to play");
     }
 
     /// A transition that has not started moving yet has nothing to carry: its

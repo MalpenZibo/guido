@@ -1024,6 +1024,113 @@ fn the_published_text_derived_is_freed_with_its_container() {
 }
 
 // ---------------------------------------------------------------------------
+// Keyframes
+// ---------------------------------------------------------------------------
+
+/// A timeline plays because a signal the caller owns changed, so the container
+/// has to be subscribed to it — reading the trigger where the targets are read
+/// is what does that, and without it a shake would wait for the next frame
+/// somebody else asked for.
+#[test]
+fn a_container_wakes_when_its_timeline_is_asked_to_play() {
+    use crate::animation::Keyframes;
+
+    let plays = create_signal(0u32);
+    let mut h = H::new(
+        box_of(50.0, 50.0).keyframes_transform(
+            Keyframes::new(200.0)
+                .at(0.0, Transform::IDENTITY)
+                .at(0.5, Transform::rotate_degrees(2.0))
+                .at(1.0, Transform::IDENTITY),
+            plays,
+        ),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    let queued = h.jobs_from(|| plays.set(1));
+    assert!(
+        queued.contains(&JobType::Animation),
+        "a play has to wake the container that would show it, got {queued:?}"
+    );
+}
+
+/// The transform this container is painted with, once the queued jobs have
+/// run. A rotation shows up as a matrix that is no longer the identity.
+fn played_transform(h: &mut H) -> Transform {
+    pump(h);
+    h.fit(200.0, 200.0);
+    h.paint().children[0].local_transform
+}
+
+/// Waking is not playing. The test above passes whether or not the sequence
+/// survived, because the job comes from the trigger — so this one asks the
+/// only question that matters: did the property move?
+#[test]
+fn a_played_sequence_actually_moves_the_transform() {
+    use crate::animation::Keyframes;
+
+    let plays = create_signal(0u32);
+    let mut h = H::new(
+        container().layout(Flex::row()).child(
+            box_of(50.0, 50.0).keyframes_transform(
+                Keyframes::new(200.0)
+                    .at(0.0, Transform::IDENTITY)
+                    .at(0.5, Transform::rotate_degrees(20.0))
+                    .at(1.0, Transform::IDENTITY),
+                plays,
+            ),
+        ),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+
+    plays.set(1);
+    let played = played_transform(&mut h);
+    assert_ne!(
+        played,
+        Transform::IDENTITY,
+        "the sequence has to reach the paint, not only the job queue"
+    );
+}
+
+/// And it survives the transition being declared after it.
+///
+/// `animate_transform` builds a fresh `AnimationState`, so the sequence used
+/// to be thrown away by whichever builder came second — with the trigger
+/// still firing, the job still queued and nothing at all to show for it.
+#[test]
+fn declaring_a_transition_after_a_sequence_does_not_lose_it() {
+    use crate::animation::Keyframes;
+
+    let plays = create_signal(0u32);
+    let mut h = H::new(
+        container().layout(Flex::row()).child(
+            box_of(50.0, 50.0)
+                .keyframes_transform(
+                    Keyframes::new(200.0)
+                        .at(0.0, Transform::IDENTITY)
+                        .at(0.5, Transform::rotate_degrees(20.0))
+                        .at(1.0, Transform::IDENTITY),
+                    plays,
+                )
+                // Written after, which used to decide the whole thing.
+                .animate_transform(Transition::new(100.0, TimingFunction::EaseOut)),
+        ),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+
+    plays.set(1);
+    assert_ne!(
+        played_transform(&mut h),
+        Transform::IDENTITY,
+        "the order the two builders were written in must not decide whether \
+         the sequence exists"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Focus, now that it is stored state
 // ---------------------------------------------------------------------------
 
