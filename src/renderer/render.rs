@@ -568,6 +568,21 @@ fn begin_pass<'a>(
     })
 }
 
+/// The clip a command was flattened under, in physical pixels.
+///
+/// The axis-aligned rect of it: a rounded or rotated clip is approximated by
+/// its box, which is one pixel of slack at the corners against a blurred
+/// rectangle where the content has been scrolled away.
+fn clip_rect(cmd: &FlattenedCommand, scale: f32) -> Option<Rect> {
+    let clip = cmd.clip.as_ref()?.rect;
+    Some(Rect::new(
+        clip.x * scale,
+        clip.y * scale,
+        clip.width * scale,
+        clip.height * scale,
+    ))
+}
+
 /// Resolve a backdrop command to the physical-pixel region it filters.
 fn command_to_backdrop_region(cmd: &FlattenedCommand, scale: f32) -> Option<BackdropRegion> {
     let DrawCommand::BackdropBlur {
@@ -613,6 +628,7 @@ fn command_to_backdrop_region(cmd: &FlattenedCommand, scale: f32) -> Option<Back
         radius: radius * scale,
         radii: corner_radii.scaled(scale),
         curvature: *curvature,
+        clip: clip_rect(cmd, scale),
     })
 }
 
@@ -669,6 +685,7 @@ fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBa
             // composite would have used.
             radii: CornerRadii::uniform(0.0),
             curvature: 1.0,
+            clip: clip_rect(cmd, scale),
         },
         spec: MaskSpec {
             text,
@@ -865,6 +882,24 @@ mod tests {
         let frost = command_to_text_backdrop(&cmd, 1.0).expect("a frost");
         assert!((frost.region.rect.x + frost.spec.offset.0 - 50.0).abs() < 1e-3);
         assert!((frost.region.rect.y + frost.spec.offset.1 - 25.0).abs() < 1e-3);
+    }
+
+    /// A frost inside a scroll view must not paint where the text has been
+    /// scrolled away to: the clip is what the effect is allowed to write.
+    #[test]
+    fn the_clip_reaches_the_region() {
+        let mut cmd = frosted(Rect::new(10.0, 20.0, 100.0, 30.0), Transform::IDENTITY);
+        cmd.clip = Some(crate::renderer::flatten::WorldClip {
+            rect: Rect::new(0.0, 0.0, 200.0, 200.0),
+            corner_radius: 0.0,
+            curvature: 1.0,
+        });
+        let frost = command_to_text_backdrop(&cmd, 2.0).expect("a frost");
+        assert_eq!(
+            frost.region.clip,
+            Some(Rect::new(0.0, 0.0, 400.0, 400.0)),
+            "in physical pixels, like the region it bounds"
+        );
     }
 
     /// A rotated or scaled one is not: the mask is rasterized square, and a

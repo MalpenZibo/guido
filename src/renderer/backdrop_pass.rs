@@ -63,16 +63,34 @@ pub struct BackdropRegion {
     pub radius: f32,
     pub radii: CornerRadii,
     pub curvature: f32,
+    /// What the effect is allowed to write, in physical pixels: the clip it
+    /// was flattened under, if any. The mask says which pixels of the region
+    /// are filtered; this says which of them are on show at all.
+    pub clip: Option<Rect>,
 }
 
 impl BackdropRegion {
     /// Clamp to the target so a card running off-screen cannot ask for a
     /// viewport wgpu will reject.
     fn clamped(&self, width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
-        let x = self.rect.x.floor().max(0.0) as u32;
-        let y = self.rect.y.floor().max(0.0) as u32;
-        let right = (self.rect.x + self.rect.width).ceil().max(0.0) as u32;
-        let bottom = (self.rect.y + self.rect.height).ceil().max(0.0) as u32;
+        // The clip comes first: a region scrolled out of its container has
+        // nothing on show, and filtering it would leave a blurred rectangle
+        // where the content is not.
+        let mut left = self.rect.x;
+        let mut top = self.rect.y;
+        let mut right_f = self.rect.x + self.rect.width;
+        let mut bottom_f = self.rect.y + self.rect.height;
+        if let Some(clip) = self.clip {
+            left = left.max(clip.x);
+            top = top.max(clip.y);
+            right_f = right_f.min(clip.x + clip.width);
+            bottom_f = bottom_f.min(clip.y + clip.height);
+        }
+
+        let x = left.floor().max(0.0) as u32;
+        let y = top.floor().max(0.0) as u32;
+        let right = right_f.ceil().max(0.0) as u32;
+        let bottom = bottom_f.ceil().max(0.0) as u32;
         let right = right.min(width);
         let bottom = bottom.min(height);
         if x >= right || y >= bottom {
