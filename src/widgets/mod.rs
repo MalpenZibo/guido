@@ -18,7 +18,9 @@ pub mod widget;
 
 pub use crate::renderer::CornerRadii;
 pub use children::ChildrenSource;
-pub use container::{Border, Container, GradientDirection, LinearGradient, Overflow, container};
+pub use container::{
+    Border, Container, GradientDirection, IntoClickHandler, LinearGradient, Overflow, container,
+};
 pub use control::Control;
 pub use font::{FontFamily, FontWeight};
 pub use image::{ContentFit, Image, ImageSource, image};

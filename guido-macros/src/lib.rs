@@ -30,7 +30,7 @@ use syn::{DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro
 ///     container()
 ///         .padding(padding) // Signal<f32> is Copy, no clone needed
 ///         .background(background) // Signal<Color> is Copy
-///         .on_click_option(on_click.clone())
+///         .on_click(on_click)
 ///         .child(text(label).color(Color::WHITE))
 /// }
 /// ```

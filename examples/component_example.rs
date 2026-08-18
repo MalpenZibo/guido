@@ -14,7 +14,7 @@ pub fn button(
         .corner_radius(6.0)
         .when_hovered(|s| s.lighter(0.1))
         .when_pressed(|s| s.ripple())
-        .on_click_option(on_click)
+        .on_click(on_click)
         .text_color(Color::WHITE)
         .child(text(label))
 }

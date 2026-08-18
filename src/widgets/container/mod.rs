@@ -54,6 +54,44 @@ use super::widget::{
 /// Callback for click events
 pub type ClickCallback = Rc<dyn Fn()>;
 
+#[doc(hidden)]
+pub struct FnHandler;
+#[doc(hidden)]
+pub struct CallbackHandler;
+#[doc(hidden)]
+pub struct OptionHandler;
+
+/// What a click handler can be written as.
+///
+/// A closure is the ordinary case. A [`Callback`](crate::reactive::Callback)
+/// and an `Option<Callback>` are the shapes a `#[component]` callback prop
+/// arrives in, so a component can forward its own prop straight through
+/// without a second method name for it.
+///
+/// The marker parameter is the same trick [`IntoSignal`] uses: it keeps the
+/// three impls from overlapping.
+pub trait IntoClickHandler<Marker = FnHandler> {
+    fn into_click_handler(self) -> Option<ClickCallback>;
+}
+
+impl<F: Fn() + 'static> IntoClickHandler<FnHandler> for F {
+    fn into_click_handler(self) -> Option<ClickCallback> {
+        Some(Rc::new(self))
+    }
+}
+
+impl IntoClickHandler<CallbackHandler> for crate::reactive::Callback {
+    fn into_click_handler(self) -> Option<ClickCallback> {
+        Some(Rc::new(move || self.run()))
+    }
+}
+
+impl IntoClickHandler<OptionHandler> for Option<crate::reactive::Callback> {
+    fn into_click_handler(self) -> Option<ClickCallback> {
+        self.map(|cb| Rc::new(move || cb.run()) as ClickCallback)
+    }
+}
+
 /// Callback for a key press: the key and the modifiers held with it.
 pub type KeyCallback = Rc<dyn Fn(Key, Modifiers)>;
 /// Callback for hover events (bool = is_hovered)
@@ -824,8 +862,26 @@ impl Container {
         self
     }
 
-    pub fn on_click<F: Fn() + 'static>(mut self, callback: F) -> Self {
-        self.interact_mut().on_click = Some(Rc::new(callback));
+    /// Called on a left-button press inside the bounds.
+    ///
+    /// Takes a closure, a [`Callback`](crate::reactive::Callback), or an
+    /// `Option<Callback>` — the last being what a `#[component]` callback prop
+    /// holds, so a component forwards its own prop with no ceremony:
+    ///
+    /// ```ignore
+    /// #[component]
+    /// fn button(#[prop(callback)] on_click: ()) -> impl Widget {
+    ///     container().on_click(on_click)
+    /// }
+    /// ```
+    ///
+    /// A `None` prop leaves the container without a click handler, but still a
+    /// pointer target if anything else made it one.
+    pub fn on_click<M>(mut self, callback: impl IntoClickHandler<M>) -> Self {
+        let handler = callback.into_click_handler();
+        if handler.is_some() || self.interaction.is_some() {
+            self.interact_mut().on_click = handler;
+        }
         self
     }
 
@@ -848,16 +904,6 @@ impl Container {
     /// or a popup holding a grab.
     pub fn on_key_down<F: Fn(Key, Modifiers) + 'static>(mut self, callback: F) -> Self {
         self.interact_mut().on_key_down = Some(Rc::new(callback));
-        self
-    }
-
-    /// Accept an optional click callback — the shape a `#[component]`
-    /// callback prop has, so it can be forwarded straight through.
-    pub fn on_click_option(mut self, callback: Option<crate::reactive::Callback>) -> Self {
-        if callback.is_some() || self.interaction.is_some() {
-            self.interact_mut().on_click =
-                callback.map(|cb| std::rc::Rc::new(move || cb.run()) as ClickCallback);
-        }
         self
     }
 
