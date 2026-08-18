@@ -223,7 +223,8 @@ is what lets one signal switch the effect on and off rather than forcing the
 caller to rebuild the widget in a Rust branch.
 
 **What is not reactive** is structural: `.layout(..)`, `.scrollable(..)`,
-`.scrollbar(..)`, `.control()`, and the `.animate_*()` declarations. These say
+`.scrollbar(..)`, `.scrollbar_visibility(..)`, `.control()`, and the
+`.animate_*()` declarations. These say
 what kind of thing the container *is*; change one and you are describing a
 different widget, so declare it in the closure that builds the widget instead.
 
