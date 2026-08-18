@@ -156,6 +156,19 @@ pub(super) struct ContainerAnims {
     pub(super) border_color: Option<AnimationState<Color>>,
     pub(super) transform: Option<AnimationState<Transform>>,
     pub(super) text_color: Option<AnimationState<Color>>,
+    /// What plays the transform's timeline, and the last count seen from it.
+    pub(super) transform_plays: Option<PlayTrigger>,
+}
+
+/// A signal whose every change plays a timeline once, and the value this
+/// container last saw from it.
+///
+/// A count rather than a flag, because two refusals in a row are two events
+/// and a signal that stays equal notifies nobody. It is the shape SwiftUI's
+/// keyframe animator takes too: play when a value the caller owns changes.
+pub(super) struct PlayTrigger {
+    pub(super) signal: Signal<u32>,
+    pub(super) last: u32,
 }
 
 bitflags::bitflags! {
@@ -1015,6 +1028,58 @@ impl Container {
         self
     }
 
+    /// Play a sequence of transforms whenever `plays` changes.
+    ///
+    /// The other animations here move *towards* a value; this one has none. It
+    /// plays, and while it plays it replaces whatever `transform` declares,
+    /// handing the property back when it ends — the rule CSS gives an
+    /// animation over a normal declaration.
+    ///
+    /// ```ignore
+    /// container()
+    ///     .keyframes_transform(
+    ///         Keyframes::new(320.0)
+    ///             .at(0.0, Transform::IDENTITY)
+    ///             .at(0.2, Transform::rotate_degrees(1.5))
+    ///             .at(0.5, Transform::rotate_degrees(-1.0))
+    ///             .at(1.0, Transform::IDENTITY),
+    ///         rejections,
+    ///     )
+    /// ```
+    ///
+    /// The trigger is a count and not a flag on purpose: a second refusal has
+    /// to shake as loudly as the first, and a signal that stays equal notifies
+    /// nobody. The count it starts at is whatever it holds when the container
+    /// is built, so nothing plays on the first frame.
+    pub fn keyframes_transform<M>(
+        mut self,
+        keyframes: crate::animation::Keyframes<Transform>,
+        plays: impl IntoSignal<u32, M>,
+    ) -> Self {
+        let initial = self.transform.get_or_untracked(Transform::IDENTITY);
+        let anim = self
+            .anims_mut()
+            .transform
+            // A transition of no duration: the timeline speaks for this
+            // property while it plays, and outside it the declared value
+            // applies at once, exactly as it would with no animation at all.
+            .get_or_insert_with(|| {
+                AnimationState::new(
+                    initial,
+                    crate::animation::Transition::new(
+                        0.0,
+                        crate::animation::TimingFunction::Linear,
+                    ),
+                )
+            });
+        anim.set_timeline(keyframes);
+
+        let signal = plays.into_signal();
+        let last = signal.get_untracked();
+        self.anims_mut().transform_plays = Some(PlayTrigger { signal, last });
+        self
+    }
+
     /// Enable transform animation with an ENTER transition: on first
     /// layout the transform animates from `enter_from` to its effective
     /// value, so the widget appears mid-animation — no signal flip, no
@@ -1224,6 +1289,18 @@ impl Widget for Container {
                 any_animating,
                 paint
             );
+            // A trigger that has moved starts the sequence, before the frame
+            // that will show its first value.
+            if let Some(trigger) = anims.transform_plays.as_mut() {
+                let plays =
+                    crate::reactive::diagnostics::snapshot_zone(|| trigger.signal.get_untracked());
+                if plays != trigger.last {
+                    trigger.last = plays;
+                    if let Some(anim) = anims.transform.as_mut() {
+                        anim.play();
+                    }
+                }
+            }
             advance_anim!(anims, transform, transform_target, id, any_animating, paint);
         }
 

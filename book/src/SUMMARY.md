@@ -42,6 +42,7 @@
     - [Transitions](animations/transitions.md)
     - [Timing Functions](animations/timing.md)
     - [Spring Physics](animations/springs.md)
+    - [Keyframes](animations/keyframes.md)
     - [Animatable Properties](animations/properties.md)
 
 # Transforms

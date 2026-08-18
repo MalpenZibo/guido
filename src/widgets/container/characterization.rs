@@ -1024,6 +1024,38 @@ fn the_published_text_derived_is_freed_with_its_container() {
 }
 
 // ---------------------------------------------------------------------------
+// Keyframes
+// ---------------------------------------------------------------------------
+
+/// A timeline plays because a signal the caller owns changed, so the container
+/// has to be subscribed to it — reading the trigger where the targets are read
+/// is what does that, and without it a shake would wait for the next frame
+/// somebody else asked for.
+#[test]
+fn a_container_wakes_when_its_timeline_is_asked_to_play() {
+    use crate::animation::Keyframes;
+
+    let plays = create_signal(0u32);
+    let mut h = H::new(
+        box_of(50.0, 50.0).keyframes_transform(
+            Keyframes::new(200.0)
+                .at(0.0, Transform::IDENTITY)
+                .at(0.5, Transform::rotate_degrees(2.0))
+                .at(1.0, Transform::IDENTITY),
+            plays,
+        ),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    let queued = h.jobs_from(|| plays.set(1));
+    assert!(
+        queued.contains(&JobType::Animation),
+        "a play has to wake the container that would show it, got {queued:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Focus, now that it is stored state
 // ---------------------------------------------------------------------------
 

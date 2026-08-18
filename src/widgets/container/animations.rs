@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use crate::animation::{Animatable, SpringState, Transition, TransitionConfig};
+use crate::animation::{Animatable, Keyframes, SpringState, Transition, TransitionConfig};
 
 /// Result of advancing an animation, indicating whether the value changed
 #[derive(Debug, Clone, PartialEq)]
@@ -45,6 +45,12 @@ pub struct AnimationState<T: Animatable> {
     /// Pending enter value: consumed at first layout to start an enter
     /// animation instead of snapping to the target
     enter_from: Option<T>,
+    /// A sequence to play on demand. Unlike everything else here it has no
+    /// target: while it runs it *replaces* the declared value, and when it
+    /// ends the property goes back to whatever that value is now.
+    timeline: Option<Keyframes<T>>,
+    /// When the timeline started, if it is running.
+    playing: Option<Instant>,
 }
 
 impl<T: Animatable> AnimationState<T> {
@@ -71,6 +77,8 @@ impl<T: Animatable> AnimationState<T> {
             initialized: false, // Not yet initialized with real content-based value
             prev_value: None,
             enter_from: None,
+            timeline: None,
+            playing: None,
         }
     }
 
@@ -113,6 +121,12 @@ impl<T: Animatable> AnimationState<T> {
 
     /// Advance the animation and return whether the value changed
     pub fn advance(&mut self) -> AdvanceResult<T> {
+        // A sequence speaks for the property while it runs, and nothing else
+        // does — the same rule the cascade gives a CSS animation over a normal
+        // declaration.
+        if let Some(result) = self.advance_timeline() {
+            return result;
+        }
         if self.progress >= 1.0 && self.spring_state.is_none() {
             return AdvanceResult::NoChange;
         }
@@ -205,7 +219,47 @@ impl<T: Animatable> AnimationState<T> {
 
     /// Check if animation is still running
     pub fn is_animating(&self) -> bool {
-        self.progress < 1.0 || (self.spring_state.is_some() && self.progress < 0.99)
+        self.playing.is_some()
+            || self.progress < 1.0
+            || (self.spring_state.is_some() && self.progress < 0.99)
+    }
+
+    /// Give this property a sequence to play.
+    pub(crate) fn set_timeline(&mut self, keyframes: Keyframes<T>) {
+        self.timeline = Some(keyframes);
+    }
+
+    /// Start the sequence, from the top. Playing it again while it runs
+    /// restarts it: the second refusal is not half a shake.
+    pub(crate) fn play(&mut self) {
+        if self.timeline.as_ref().is_some_and(|t| !t.is_empty()) {
+            self.playing = Some(Instant::now());
+        }
+    }
+
+    /// Advance the running timeline. `None` when there is none.
+    fn advance_timeline(&mut self) -> Option<AdvanceResult<T>> {
+        let started = self.playing?;
+        let elapsed = started.elapsed().as_secs_f32() * 1000.0;
+        let value = match self.timeline.as_ref()?.value_at(elapsed) {
+            Some(value) => value,
+            None => {
+                // Over: the property goes back to whatever declared it, which
+                // `animate_to` has been keeping current all along.
+                self.playing = None;
+                self.progress = 1.0;
+                self.target
+            }
+        };
+
+        let changed = self.prev_value.as_ref() != Some(&value);
+        self.current = value;
+        self.prev_value = Some(value);
+        Some(if changed {
+            AdvanceResult::Changed(value)
+        } else {
+            AdvanceResult::NoChange
+        })
     }
 
     /// Get current value
@@ -412,6 +466,68 @@ mod tests {
         assert_eq!(fired.get(), 2, "a new completed run fires again");
     }
     use crate::animation::TimingFunction;
+
+    /// While a sequence runs it speaks for the property, and when it ends the
+    /// property goes back to whatever is declared — including a value that
+    /// changed while it was playing.
+    #[test]
+    fn a_timeline_plays_and_then_hands_the_property_back() {
+        use crate::animation::Keyframes;
+
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(0.0, TimingFunction::Linear));
+        anim.set_immediate(0.0);
+        anim.set_timeline(Keyframes::new(60.0).at(0.0, 0.0).at(0.5, 10.0).at(1.0, 0.0));
+
+        anim.play();
+        assert!(anim.is_animating(), "a playing timeline is an animation");
+
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        anim.advance();
+        assert!(
+            *anim.current() > 4.0,
+            "halfway through it should be near the peak, got {}",
+            anim.current()
+        );
+
+        // The declared value moves while the sequence is running.
+        anim.animate_to(3.0);
+        std::thread::sleep(std::time::Duration::from_millis(45));
+        anim.advance();
+        assert_eq!(*anim.current(), 3.0, "over, and back to what is declared");
+        assert!(!anim.is_animating());
+    }
+
+    /// Played again mid-run it restarts: the second refusal is not half a
+    /// shake.
+    #[test]
+    fn playing_again_starts_the_sequence_over() {
+        use crate::animation::Keyframes;
+
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(0.0, TimingFunction::Linear));
+        anim.set_immediate(0.0);
+        anim.set_timeline(Keyframes::new(80.0).at(0.0, 0.0).at(1.0, 8.0));
+
+        anim.play();
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        anim.advance();
+        let far = *anim.current();
+
+        anim.play();
+        anim.advance();
+        assert!(
+            *anim.current() < far,
+            "back near the top of the run, got {} after {far}",
+            anim.current()
+        );
+    }
+
+    #[test]
+    fn a_property_with_no_timeline_cannot_be_played() {
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(10.0, TimingFunction::Linear));
+        anim.set_immediate(0.0);
+        anim.play();
+        assert!(!anim.is_animating(), "nothing to play");
+    }
 
     #[test]
     fn test_animation_state_new() {

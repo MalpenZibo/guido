@@ -1,8 +1,10 @@
 mod animatable;
+mod keyframes;
 mod spring;
 mod timing;
 
 pub use animatable::Animatable;
+pub use keyframes::Keyframes;
 pub use spring::{SpringConfig, SpringState};
 pub use timing::TimingFunction;
 
