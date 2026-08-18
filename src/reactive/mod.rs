@@ -38,7 +38,13 @@ pub use into_signal::{
     ClosureMarker, LossyMarker, MemoMarker, RwSignalMarker, SignalMarker, ValueMarker,
 };
 pub use into_signal::{IntoSignal, IntoVal};
-pub(crate) use invalidation::with_signal_tracking;
+// The scope a widget opens around its own signal reads. Public because a
+// widget written outside the crate needs it: without one, its reads attribute
+// to the nearest ancestor that opened a scope — its parent container — so a
+// change to its content re-lays-out every one of its siblings. Reactive, but
+// imprecise, and silently so.
+pub use crate::jobs::JobType;
+pub use invalidation::with_signal_tracking;
 pub use memo::{Memo, create_memo};
 // with_owner and OwnerId are internal and automatically used by the
 // dynamic children system; the public dispose_owner is deferred (safe to
