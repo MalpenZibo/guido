@@ -102,6 +102,8 @@ impl Container {
     /// ancestors from tracking their own hover.
     pub(super) fn track_pointer(&mut self, id: WidgetId, hit: &HitContext, event: &Event) {
         let has_animated = self.has_animated_state_properties();
+        // Read before the mutable borrow: cancelling a ripple below needs it.
+        let ripple_config = self.interaction.as_ref().and_then(|ix| ix.ripple_config());
         let Some(ref mut ix) = self.interaction else {
             return;
         };
@@ -135,6 +137,19 @@ impl Container {
 
                 let was_hovered = ix.is_hovered();
                 ix.set_flag(InteractionFlags::HOVERED, hit.contains(*x, *y));
+
+                // Dragging off the container abandons the press. Only leaving
+                // the whole surface used to say so, which left a ripple
+                // growing at full brightness on a button the pointer had left
+                // several hundred pixels ago.
+                if was_hovered
+                    && !ix.is_hovered()
+                    && ix.ripple.is_active()
+                    && let Some(ref config) = ripple_config
+                {
+                    ix.ripple.cancel(config, Instant::now());
+                    request_job(id, JobRequest::Animation(RequiredJob::Paint));
+                }
 
                 if was_hovered != ix.is_hovered() {
                     if ix.declares(|w| matches!(w, StateWhen::Hovered)) {
@@ -231,11 +246,19 @@ impl Container {
                     let was_pressed = ix.is_pressed();
                     ix.set_flag(InteractionFlags::PRESSED, false);
 
-                    // Released inside: the press happened, so the ripple
-                    // finishes its expansion on the way out. Where the pointer
-                    // ended up does not enter into it.
-                    if ix.ripple.is_active() {
-                        ix.ripple.release(Instant::now());
+                    // The ripple has to say the same thing `on_click` below
+                    // says: a release inside activated something and finishes
+                    // its expansion, a release that wandered off did not and
+                    // simply goes.
+                    if ix.ripple.is_active()
+                        && let Some(config) = ix.ripple_config()
+                    {
+                        let now = Instant::now();
+                        if hit.contains(*x, *y) {
+                            ix.ripple.release(&config, now);
+                        } else {
+                            ix.ripple.cancel(&config, now);
+                        }
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
@@ -281,8 +304,10 @@ impl Container {
                     // The pointer left without releasing, so nothing was
                     // activated and there is nothing to complete: the ripple
                     // just goes.
-                    if ix.ripple.is_active() {
-                        ix.ripple.cancel(Instant::now());
+                    if ix.ripple.is_active()
+                        && let Some(config) = ix.ripple_config()
+                    {
+                        ix.ripple.cancel(&config, Instant::now());
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 

@@ -52,10 +52,10 @@ Combine ripples with other pressed state changes:
 
 1. **Press** - a disc appears at the click point, already at about a third of
    its final size, and starts spreading
-2. **Release** - the press happened, so the remaining expansion is *completed*
-   rather than interrupted, while the disc fades out
-3. **Or leave without releasing** - nothing was activated, so there is nothing
-   to complete: the disc just fades, quickly
+2. **Release inside** - the press happened, so the remaining expansion is
+   *completed* rather than interrupted, while the disc fades out
+3. **Release elsewhere, or drag off the button** - nothing was activated, and
+   the ripple says the same thing `on_click` does: the disc just fades, quickly
 
 Two properties are worth stating outright, because they are what makes the
 effect read as an acknowledgement rather than a hesitation:
@@ -64,9 +64,13 @@ effect read as an acknowledgement rather than a hesitation:
 - **A short press does not truncate the expansion.** A click lasts 60-150ms
   against a growth measured in hundreds, so the release finishes the growth
   instead of abandoning it half-way.
+- **No press is dimmer for being quicker.** The disc always finishes appearing
+  before it starts to leave, so a 20ms tap is as bright as a held one.
 
 The disc's centre also drifts toward the container's own centre as it grows, so
-a press near a corner settles onto the button instead of staying lopsided.
+a press near a corner settles onto the button instead of staying lopsided. Its
+final size comes from the container, not from where you pressed — every ripple
+on a given button is the same size, and a full one covers it exactly.
 
 The ripple:
 - Respects corner radius and container shape
@@ -90,16 +94,21 @@ own fade.
 
 ## Timing
 
-| Phase | Duration |
-|---|---|
-| Opacity rise on contact | 75ms |
-| Growth while held | 1s |
-| Growth remaining after release | 225ms |
-| Fade after a release | 375ms |
-| Fade after leaving without releasing | 75ms |
+| Phase | Duration | Scaled by |
+|---|---|---|
+| Opacity rise on contact | 75ms | `fade_speed` |
+| Growth while held | 1s | `expand_speed` |
+| Growth remaining after release | 225ms | `expand_speed` |
+| Fade after a release | 375ms | `fade_speed` |
+| Fade after an abandoned press | 75ms | `fade_speed` |
 
-`expand_speed` and `fade_speed` on `RippleConfig` scale the growth and the fade
-respectively:
+The fade never starts before the rise has finished, and the growth after a
+release is never given longer than the fade it overlaps — so no combination of
+the two speeds can put the disc back where it started, half-grown and already
+invisible.
+
+Both speeds are clamped to a sane range, so a zero or a negative one degrades
+instead of stalling the frame loop:
 
 ```rust
 .when_pressed(|s| s.ripple_config(RippleConfig {

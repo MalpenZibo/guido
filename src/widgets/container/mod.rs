@@ -14,7 +14,7 @@ mod characterization;
 pub(crate) use animations::with_measure_final;
 pub use animations::{AdvanceResult, AnimationState, get_animated_value};
 use interaction::{HitContext, untransform_point};
-pub use ripple::{RIPPLE_START_RADIUS, RippleState};
+pub use ripple::{MAX_LIVE_RIPPLES, Ripple, RippleState};
 use style::Decoration;
 
 use std::borrow::Cow;
@@ -1686,37 +1686,22 @@ impl Widget for Container {
             self.paint_scrollbar_containers(tree, id, ctx);
         }
 
-        // Ripples, oldest first, in local coordinates. The state holds the
-        // press point and how far along each one is; the geometry is the
-        // container's, so it is resolved here.
+        // Ripples, oldest first. The state holds how far along each one is;
+        // the geometry it resolves against is the container's.
         if let Some(ref ix) = self.interaction
-            && ix.ripple.is_active()
             && let Some(ripple_config) = ix.ripple_config()
+            && ix.ripple.iter().any(|r| r.opacity() > 0.0)
         {
             // Clips the ripples without affecting children.
             ctx.set_overlay_clip(local_bounds, corner_radius, corner_curvature);
-            let (mid_x, mid_y) = (bounds.width / 2.0, bounds.height / 2.0);
 
             for ripple in ix.ripple.iter() {
                 let opacity = ripple.opacity();
                 if opacity <= 0.0 {
                     continue;
                 }
-                let (origin_x, origin_y) = ripple.origin();
-                let growth = ripple.growth();
-
-                // Far enough to reach the corner furthest from where the
-                // pointer went down, so a full ripple covers the box.
-                let max_dist_x = origin_x.max(bounds.width - origin_x);
-                let max_dist_y = origin_y.max(bounds.height - origin_y);
-                let max_radius = (max_dist_x * max_dist_x + max_dist_y * max_dist_y).sqrt();
-                let radius =
-                    max_radius * (RIPPLE_START_RADIUS + (1.0 - RIPPLE_START_RADIUS) * growth);
-
-                // The centre settles onto the container as the disc grows,
-                // which is what stops a corner press from looking lopsided.
-                let center_x = origin_x + (mid_x - origin_x) * growth;
-                let center_y = origin_y + (mid_y - origin_y) * growth;
+                let (center_x, center_y) = ripple.center(bounds.width, bounds.height);
+                let radius = ripple.radius(bounds.width, bounds.height);
 
                 let ripple_color = Color::rgba(
                     ripple_config.color.r,
