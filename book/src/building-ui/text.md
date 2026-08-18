@@ -135,17 +135,26 @@ Three things to know before reaching for it:
   container for the subtree below it; this one cannot, because each frosted
   text ends the render pass to filter the target. It is asked for one text at
   a time on purpose.
-- **It is not legibility, and it does not combine with what is.** Frost softens
-  the background where a shadow darkens it, so over a busy photograph a shadow
-  still does more — but you cannot have both. A stroke and a shadow are drawn
-  as copies of the glyphs *under* the fill, so they cover the letter's own area
-  and not only its edge: invisible under an opaque fill, and an opaque letter
-  over frost, which is the one thing the frost was cut out of. What holds a
-  frosted text together is its tint.
+- **It is not legibility on its own.** Frost softens the background where a
+  stroke and a shadow darken it. A stroke composes with it — over frost it is
+  drawn as a true contour, dilated from the same coverage mask and laid outside
+  the letter, which is what the glass needs and what a thick stroke wanted
+  anyway. A shadow does not: it is still copies of the glyphs *under* the fill,
+  so it covers the letter's own area as well as its edge, which is invisible
+  under an opaque fill and an opaque letter over frost.
 - **Rotation and scale skip it**, since the mask is rasterized square. A frost
   sitting beside its own letters would be worse than none.
 
-`cargo run --example frosted_text` puts it beside a shadow and a control.
+```rust
+text("09:41")
+    .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
+    .backdrop_blur(16.0)
+    // A contour, because this text is glass. Elsewhere the same declaration is
+    // the cheap approximation, and under an opaque fill the two look alike.
+    .text_stroke(TextStroke::new(2.0, Color::BLACK))
+```
+
+`cargo run --example frosted_text` puts all of it beside a control.
 
 ## Styling
 

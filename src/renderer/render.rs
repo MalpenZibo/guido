@@ -374,6 +374,18 @@ impl Renderer {
                                     &frost.region,
                                     &mask,
                                 );
+                                // After the blur and before the glyphs: a
+                                // contour on the glass, not under it.
+                                if let Some((color, width)) = frost.outline {
+                                    self.backdrop.apply_outline(
+                                        &self.device,
+                                        &mut encoder,
+                                        &frost.region,
+                                        &mask,
+                                        color,
+                                        width,
+                                    );
+                                }
                             }
                         }
                     }
@@ -636,6 +648,8 @@ fn command_to_backdrop_region(cmd: &FlattenedCommand, scale: f32) -> Option<Back
 struct TextBackdrop<'a> {
     region: BackdropRegion,
     spec: MaskSpec<'a>,
+    /// The contour to draw around the coverage, in physical pixels.
+    outline: Option<(Color, f32)>,
 }
 
 /// Resolve a text backdrop command to its region and the mask to shape it with.
@@ -646,6 +660,7 @@ struct TextBackdrop<'a> {
 fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBackdrop<'_>> {
     let DrawCommand::TextBackdropBlur {
         text,
+        stroke,
         rect,
         radius,
         font_size,
@@ -665,8 +680,10 @@ fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBa
 
     let (world_x, world_y) = cmd.world_transform.transform_point(rect.x, rect.y);
     // Glyphs overshoot their layout box — descenders, italics, marks — and the
-    // slack here is the one the flattener already uses for a text's bounds.
-    let slack = font_size * 0.5;
+    // slack here is the one the flattener already uses for a text's bounds. A
+    // contour reaches further still, and what falls outside the region is not
+    // drawn at all.
+    let slack = font_size * 0.5 + stroke.map(|s| s.width).unwrap_or(0.0);
     let left = (world_x - slack) * scale;
     let top = (world_y - slack) * scale;
     let right = (world_x + rect.width + slack) * scale;
@@ -697,6 +714,7 @@ fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBa
             offset: (world_x * scale - x, world_y * scale - y),
             scale_factor: scale,
         },
+        outline: stroke.map(|s| (s.color, s.width * scale)),
     })
 }
 
@@ -817,6 +835,7 @@ mod tests {
         FlattenedCommand {
             command: Rc::new(DrawCommand::TextBackdropBlur {
                 text: "09:41".to_owned(),
+                stroke: None,
                 rect,
                 radius: 10.0,
                 font_size: 20.0,
