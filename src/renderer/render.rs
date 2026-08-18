@@ -144,7 +144,7 @@ impl Renderer {
 
         // Initialize transformed text renderer
         let text_quad_renderer = TextQuadRenderer::new(&device, &queue, format);
-        let text_mask = TextMaskRenderer::new(&device, &queue, format);
+        let text_mask = TextMaskRenderer::new(format);
 
         // Initialize image renderer
         let image_quad_renderer = ImageQuadRenderer::new(&device, format);

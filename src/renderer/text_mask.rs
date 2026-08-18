@@ -80,8 +80,11 @@ struct CachedMask {
     last_used: Cell<u64>,
 }
 
-/// Rasterizes glyph coverage, and remembers it.
-pub struct TextMaskRenderer {
+/// The glyphon side, built on the first frosted text and not before.
+///
+/// A `FontSystem` scans the machine's fonts to construct, which is not a cost
+/// to put on every app for an effect most of them never ask for.
+struct Shaper {
     font_system: FontSystem,
     swash_cache: SwashCache,
     #[allow(dead_code)] // Held for the atlas and viewport.
@@ -89,13 +92,10 @@ pub struct TextMaskRenderer {
     atlas: TextAtlas,
     text_renderer: TextRenderer,
     viewport: Viewport,
-    format: TextureFormat,
-    masks: HashMap<MaskKey, Rc<CachedMask>>,
-    frame_gen: u64,
 }
 
-impl TextMaskRenderer {
-    pub fn new(device: &Device, queue: &Queue, format: TextureFormat) -> Self {
+impl Shaper {
+    fn new(device: &Device, queue: &Queue, format: TextureFormat) -> Self {
         let mut font_system = FontSystem::new();
         for data in crate::get_registered_fonts() {
             font_system
@@ -115,6 +115,22 @@ impl TextMaskRenderer {
             atlas,
             text_renderer,
             viewport,
+        }
+    }
+}
+
+/// Rasterizes glyph coverage, and remembers it.
+pub struct TextMaskRenderer {
+    shaper: Option<Shaper>,
+    format: TextureFormat,
+    masks: HashMap<MaskKey, Rc<CachedMask>>,
+    frame_gen: u64,
+}
+
+impl TextMaskRenderer {
+    pub fn new(format: TextureFormat) -> Self {
+        Self {
+            shaper: None,
             format,
             masks: HashMap::new(),
             frame_gen: 0,
@@ -176,19 +192,24 @@ impl TextMaskRenderer {
             return Some(Rc::clone(&cached.view));
         }
 
+        let format = self.format;
+        let shaper = self
+            .shaper
+            .get_or_insert_with(|| Shaper::new(device, queue, format));
+
         // Shaped the way the on-screen text is shaped, or the hole would not be
         // the shape of the letters that land in it.
         let mut buffer = Buffer::new(
-            &mut self.font_system,
+            &mut shaper.font_system,
             Metrics::new(font_size, font_size * 1.2),
         );
         buffer.set_size(
-            &mut self.font_system,
+            &mut shaper.font_system,
             Some(spec.logical.0.max(200.0) * spec.scale_factor),
             Some(spec.logical.1.max(50.0) * spec.scale_factor),
         );
         buffer.set_text(
-            &mut self.font_system,
+            &mut shaper.font_system,
             spec.text,
             &Attrs::new()
                 .family(spec.font_family.to_cosmic())
@@ -196,7 +217,7 @@ impl TextMaskRenderer {
             Shaping::Advanced,
             None,
         );
-        buffer.shape_until_scroll(&mut self.font_system, true);
+        buffer.shape_until_scroll(&mut shaper.font_system, true);
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Text Mask"),
@@ -208,13 +229,13 @@ impl TextMaskRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: self.format,
+            format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
 
-        self.viewport.update(queue, Resolution { width, height });
+        shaper.viewport.update(queue, Resolution { width, height });
 
         let area = TextArea {
             buffer: &buffer,
@@ -233,14 +254,14 @@ impl TextMaskRenderer {
             custom_glyphs: &[],
         };
 
-        if let Err(e) = self.text_renderer.prepare(
+        if let Err(e) = shaper.text_renderer.prepare(
             device,
             queue,
-            &mut self.font_system,
-            &mut self.atlas,
-            &self.viewport,
+            &mut shaper.font_system,
+            &mut shaper.atlas,
+            &shaper.viewport,
             vec![area],
-            &mut self.swash_cache,
+            &mut shaper.swash_cache,
         ) {
             log::error!("text mask prepare failed: {e:?}");
             return None;
@@ -266,9 +287,9 @@ impl TextMaskRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if let Err(e) = self
+            if let Err(e) = shaper
                 .text_renderer
-                .render(&self.atlas, &self.viewport, &mut pass)
+                .render(&shaper.atlas, &shaper.viewport, &mut pass)
             {
                 log::error!("text mask render failed: {e:?}");
             }
