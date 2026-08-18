@@ -2,7 +2,8 @@ mod animatable;
 mod spring;
 mod timing;
 
-pub use animatable::Animatable;
+pub(crate) use animatable::carry_velocity;
+pub use animatable::{Animatable, Channels};
 pub use spring::{SpringConfig, SpringState};
 pub use timing::TimingFunction;
 
