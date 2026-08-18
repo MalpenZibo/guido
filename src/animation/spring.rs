@@ -85,11 +85,20 @@ pub struct SpringState {
 }
 
 impl SpringState {
-    /// Create a new spring state starting at position 0.0
+    /// Create a new spring state starting at position 0.0, at rest.
     pub fn new() -> Self {
+        Self::moving_at(0.0)
+    }
+
+    /// The same, already moving.
+    ///
+    /// For a spring that inherits the momentum of the one it interrupted:
+    /// velocity is in units of the segment per second, so a value of 1.0 is
+    /// "crossing the whole distance every second".
+    pub fn moving_at(velocity: f32) -> Self {
         Self {
             position: 0.0,
-            velocity: 0.0,
+            velocity,
             last_t: 0.0,
         }
     }

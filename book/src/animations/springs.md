@@ -157,6 +157,31 @@ fn spring_button() -> Container {
 }
 ```
 
+## Interruption
+
+A spring that is retargeted mid-flight keeps its momentum: the new segment
+starts with the speed the old one had, so a value sent back where it came from
+*turns around* rather than stopping first. That is what makes a spring feel
+physical when a hover reverses halfway, and it is also the cheapest wobble
+there is — send a value out and then back, and the overshoot on the way home
+is a shake nobody had to choreograph:
+
+```rust
+let angle = create_signal(0.0);
+
+container()
+    .transform(move || Transform::rotate_degrees(angle.get()))
+    .animate_transform(Transition::spring(SpringConfig::BOUNCY))
+
+// out, and back a moment later: the return leg crosses zero and comes back
+angle.set(2.0);
+// ...one short delay...
+angle.set(0.0);
+```
+
+Timed transitions have no momentum to keep: a retarget there starts from the
+current value at whatever the curve says, as it always has.
+
 ## API Reference
 
 ```rust

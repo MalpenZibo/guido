@@ -100,15 +100,60 @@ impl<T: Animatable> AnimationState<T> {
             crate::animation::TimingFunction::Spring(_)
         );
 
+        let carried = if is_spring {
+            self.carried_velocity(&new_target)
+        } else {
+            0.0
+        };
+
         self.start = self.current;
         self.target = new_target;
         self.progress = 0.0;
         self.start_time = Instant::now();
         self.spring_state = if is_spring {
-            Some(SpringState::new())
+            Some(SpringState::moving_at(carried))
         } else {
             None
         };
+    }
+
+    /// The velocity the running spring should carry into the new segment.
+    ///
+    /// A spring integrates in a space normalised over its own segment, so a
+    /// new target means a new space: the speed is converted back into the
+    /// property's own units, then into the new segment's. The sign says
+    /// whether the motion is already heading towards the new target — a
+    /// negative one is a spring that has to be turned around, which is the
+    /// whole point of keeping it.
+    ///
+    /// Zero unless a spring is actually in flight. Starting from rest is right
+    /// for a value that was standing still, and is what this did for every
+    /// target change before: a hover reversed mid-flight restarted from a stop
+    /// instead of turning around, and a spring that never keeps its momentum
+    /// is an easing curve wearing a spring's name.
+    fn carried_velocity(&self, new_target: &T) -> f32 {
+        let Some(spring) = &self.spring_state else {
+            return 0.0;
+        };
+        let old_span = T::distance(&self.start, &self.target);
+        let new_span = T::distance(&self.current, new_target);
+        if old_span <= f32::EPSILON || new_span <= f32::EPSILON {
+            return 0.0;
+        }
+
+        // Normalised velocity is per unit of the old segment; the property
+        // moves `speed` of its own units per second.
+        let speed = spring.velocity * old_span;
+
+        // Which way that is going, against the new target: a step further
+        // along the direction of travel either closes the distance or opens
+        // it. `lerp` and `distance` are all this needs, so it holds for every
+        // animatable type rather than just the scalar ones.
+        let ahead = T::lerp(&self.start, &self.target, spring.position + 0.01);
+        let closing = T::distance(&ahead, new_target) < T::distance(&self.current, new_target);
+
+        let magnitude = speed.abs() / new_span;
+        if closing { magnitude } else { -magnitude }
     }
 
     /// Advance the animation and return whether the value changed
@@ -412,6 +457,108 @@ mod tests {
         assert_eq!(fired.get(), 2, "a new completed run fires again");
     }
     use crate::animation::TimingFunction;
+
+    /// Step a spring for `ms`, in frames, returning the extreme value reached.
+    fn run(anim: &mut AnimationState<f32>, ms: u64) -> (f32, f32) {
+        let (mut low, mut high) = (*anim.current(), *anim.current());
+        for _ in 0..(ms / 8) {
+            std::thread::sleep(std::time::Duration::from_millis(8));
+            anim.advance();
+            low = low.min(*anim.current());
+            high = high.max(*anim.current());
+        }
+        (low, high)
+    }
+
+    fn spring(config: crate::animation::SpringConfig) -> Transition {
+        Transition::new(0.0, TimingFunction::Spring(config))
+    }
+
+    /// A spring interrupted mid-flight turns around; it does not stop and
+    /// start again. Every target change used to hand the integrator a fresh
+    /// `SpringState`, velocity zero, so an animation reversed halfway through
+    /// snapped to a halt first — a spring in name and an easing curve in
+    /// behaviour.
+    #[test]
+    fn a_spring_reversed_in_flight_carries_its_momentum() {
+        use crate::animation::SpringConfig;
+
+        let mut anim = AnimationState::new(0.0_f32, spring(SpringConfig::BOUNCY));
+        anim.set_immediate(0.0);
+        anim.animate_to(1.0);
+        run(&mut anim, 40);
+        assert!(
+            *anim.current() > 0.0,
+            "the spring has to be moving before it can be interrupted"
+        );
+
+        anim.animate_to(0.0);
+        let velocity = anim.spring_state.as_ref().expect("a spring").velocity;
+        assert!(
+            velocity < 0.0,
+            "still travelling away from the new target, so the new segment \
+             starts with the spring having to turn around, got {velocity}"
+        );
+    }
+
+    /// And that momentum is what a wobble is made of: sent back to where it
+    /// came from, the spring overshoots past it rather than easing into it.
+    #[test]
+    fn the_carried_momentum_overshoots_the_way_back() {
+        use crate::animation::SpringConfig;
+
+        let mut anim = AnimationState::new(0.0_f32, spring(SpringConfig::BOUNCY));
+        anim.set_immediate(0.0);
+        anim.animate_to(1.0);
+        run(&mut anim, 40);
+        anim.animate_to(0.0);
+        let (low, _) = run(&mut anim, 400);
+
+        assert!(
+            low < -0.02,
+            "the return leg should cross zero and come back, got {low} at its \
+             furthest"
+        );
+    }
+
+    /// Retargeted the way it was already going, the spring keeps closing.
+    #[test]
+    fn a_spring_sent_further_the_same_way_keeps_closing() {
+        use crate::animation::SpringConfig;
+
+        let mut anim = AnimationState::new(0.0_f32, spring(SpringConfig::DEFAULT));
+        anim.set_immediate(0.0);
+        anim.animate_to(1.0);
+        run(&mut anim, 40);
+
+        anim.animate_to(2.0);
+        let velocity = anim.spring_state.as_ref().expect("a spring").velocity;
+        assert!(velocity > 0.0, "still heading there, got {velocity}");
+    }
+
+    /// A value that was standing still starts from rest, as it always did.
+    #[test]
+    fn a_settled_spring_starts_from_rest() {
+        use crate::animation::SpringConfig;
+
+        let mut anim = AnimationState::new(0.0_f32, spring(SpringConfig::DEFAULT));
+        anim.set_immediate(0.0);
+
+        anim.animate_to(1.0);
+        assert_eq!(anim.spring_state.as_ref().expect("a spring").velocity, 0.0);
+    }
+
+    /// Nothing of this touches the timed transitions, which have no momentum
+    /// to keep.
+    #[test]
+    fn a_timed_transition_has_no_spring_to_carry() {
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
+        anim.set_immediate(0.0);
+        anim.animate_to(1.0);
+        run(&mut anim, 24);
+        anim.animate_to(0.0);
+        assert!(anim.spring_state.is_none());
+    }
 
     #[test]
     fn test_animation_state_new() {

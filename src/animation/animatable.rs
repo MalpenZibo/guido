@@ -17,6 +17,15 @@ pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
     fn is_reverse(_from: &Self, _to: &Self) -> bool {
         false
     }
+
+    /// How far apart two values are, in whatever unit the type animates in.
+    ///
+    /// Only the ratio between two distances is ever used, so the unit does not
+    /// matter — what matters is that it is proportional to how much of the
+    /// animation is left. A spring integrates in a space normalised over its
+    /// own segment, and carrying its momentum into a new segment means
+    /// rescaling by the two lengths.
+    fn distance(from: &Self, to: &Self) -> f32;
 }
 
 impl Animatable for f32 {
@@ -26,6 +35,10 @@ impl Animatable for f32 {
 
     fn is_reverse(from: &Self, to: &Self) -> bool {
         to < from
+    }
+
+    fn distance(from: &Self, to: &Self) -> f32 {
+        (to - from).abs()
     }
 }
 
@@ -44,6 +57,16 @@ impl Animatable for Color {
         // or when darkening (luminance decreasing) at same alpha
         (to.a, to.luminance()) < (from.a, from.luminance())
     }
+
+    fn distance(from: &Self, to: &Self) -> f32 {
+        // The largest channel move: a colour that has travelled most of the
+        // way in red and none in blue is most of the way there.
+        (to.r - from.r)
+            .abs()
+            .max((to.g - from.g).abs())
+            .max((to.b - from.b).abs())
+            .max((to.a - from.a).abs())
+    }
 }
 
 impl Animatable for Padding {
@@ -61,6 +84,14 @@ impl Animatable for Padding {
         let from_total = from.left + from.right + from.top + from.bottom;
         to_total < from_total
     }
+
+    fn distance(from: &Self, to: &Self) -> f32 {
+        (to.left - from.left)
+            .abs()
+            .max((to.right - from.right).abs())
+            .max((to.top - from.top).abs())
+            .max((to.bottom - from.bottom).abs())
+    }
 }
 
 impl Animatable for Transform {
@@ -74,6 +105,18 @@ impl Animatable for Transform {
 
     fn is_reverse(from: &Self, to: &Self) -> bool {
         to.extract_scale() < from.extract_scale()
+    }
+
+    fn distance(from: &Self, to: &Self) -> f32 {
+        // Over the matrix the animation actually interpolates, since that is
+        // the space the spring is normalised in. The translation terms are in
+        // pixels and the rest is unitless, so this is not a length in any
+        // geometric sense — only a ratio between two of them is ever used.
+        from.data
+            .iter()
+            .zip(to.data.iter())
+            .map(|(a, b)| (b - a).abs())
+            .fold(0.0f32, f32::max)
     }
 }
 
