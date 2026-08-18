@@ -25,6 +25,8 @@ use crate::tree::{Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
 
 use super::font::{FontFamily, FontWeight};
+use super::input_style::{InputStyle, InputStyled};
+use super::text_style::{TextStyle, TextStyled};
 use super::widget::{Color, Event, EventResponse, Key, MouseButton, Rect, Widget};
 
 /// Cursor blink interval in milliseconds
@@ -254,6 +256,10 @@ pub struct TextInput {
     // Callbacks
     on_change: Option<TextCallback>,
     on_submit: Option<TextCallback>,
+    /// What this input declares about its own text, and about the furniture
+    /// only it draws. Boxed and absent by default.
+    text_style: Option<Box<TextStyle>>,
+    input_style: Option<Box<InputStyle>>,
 }
 
 impl TextInput {
@@ -292,7 +298,27 @@ impl TextInput {
             scroll_offset: 0.0,
             on_change: None,
             on_submit: None,
+            text_style: None,
+            input_style: None,
         }
+    }
+
+    /// This input's own declarations, completed by the ancestors' for whatever
+    /// they leave out. Each walk is skipped when nothing is left to find.
+    fn resolved_text_style(&self, tree: &Tree, id: WidgetId) -> TextStyle {
+        let mut style = self.text_style.as_deref().copied().unwrap_or_default();
+        if !style.is_complete() {
+            style.inherit_from(&tree.inherited_text_style(id));
+        }
+        style
+    }
+
+    fn resolved_input_style(&self, tree: &Tree, id: WidgetId) -> InputStyle {
+        let mut style = self.input_style.as_deref().copied().unwrap_or_default();
+        if !style.is_complete() {
+            style.inherit_from(&tree.inherited_input_style(id));
+        }
+        style
     }
 
     /// Enable password mode (masks text with bullet characters)
@@ -470,7 +496,7 @@ impl TextInput {
     fn refresh(&mut self, tree: &Tree, id: WidgetId) -> f32 {
         let (new_value, new_font_size, new_font_family, new_font_weight, overflow) =
             with_signal_tracking(id, JobType::Layout, || {
-                let style = tree.inherited_text_style(id);
+                let style = self.resolved_text_style(tree, id);
                 (
                     self.value.get(),
                     style.font_size.get_or(14.0),
@@ -1012,6 +1038,18 @@ impl TextInput {
     }
 }
 
+impl TextStyled for TextInput {
+    fn text_style_mut(&mut self) -> &mut TextStyle {
+        self.text_style.get_or_insert_with(Box::default)
+    }
+}
+
+impl InputStyled for TextInput {
+    fn input_style_mut(&mut self) -> &mut InputStyle {
+        self.input_style.get_or_insert_with(Box::default)
+    }
+}
+
 impl Widget for TextInput {
     fn advance_animations(&mut self, _tree: &mut Tree, id: WidgetId) -> bool {
         self.update_cursor_blink(id)
@@ -1083,8 +1121,8 @@ impl Widget for TextInput {
         // ancestor supplied them repaints this input and nothing else.
         let (text_color, selection_color, cursor_color, stroke, shadow, placeholder) =
             with_signal_tracking(id, JobType::Paint, || {
-                let style = tree.inherited_text_style(id);
-                let input = tree.inherited_input_style(id);
+                let style = self.resolved_text_style(tree, id);
+                let input = self.resolved_input_style(tree, id);
                 let text_color = style.color.get_or(Color::WHITE);
                 // Only when there is nothing to show instead. Read inside the
                 // tracking scope like every other paint input, so a prompt that

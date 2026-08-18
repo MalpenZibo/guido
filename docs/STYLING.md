@@ -206,14 +206,28 @@ container()
 
 ## Text Styling
 
-Text carries content; how it looks is declared on the container, alongside
-every other visual property:
+How a text looks can be declared on the text itself:
+
+```rust
+text("Hello").font_size(16.0).color(Color::WHITE).bold()
+```
+
+`color`, `font_size`, `font_family`, `font_weight`, `bold`, `mono`,
+`text_stroke` and `text_shadow` come from the `TextStyled` trait, implemented
+by `Text` and `TextInput` — the two widgets that draw glyphs. A `TextInput`
+also implements `InputStyled` for `cursor_color`, `selection_color` and
+`placeholder_color`, which only it can draw.
+
+### One declaration for a group
+
+The same properties can be declared on a container, where they are inherited
+by everything below it:
 
 ```rust
 container()
     .font_size(16.0)
     .text_color(Color::WHITE)
-    .bold()                          // font weight
+    .bold()
     .child(text("Hello").nowrap())   // nowrap is about wrapping, not looks
 ```
 
@@ -245,8 +259,37 @@ container()
     .child(text_input(value))
 ```
 
+A declaration on the text itself is the nearest one there is, so it wins over
+every container above it — per property, like everything else:
+
+```rust
+container().text_color(theme.weak).font_size(14.0)
+    .child(text("quiet"))
+    .child(text("loud").color(theme.strong))   // own colour, inherited size
+```
+
 Properties nothing declares fall back to white, 14 logical pixels, the
 registered default family and normal weight.
+
+### Repeating a style: write a function
+
+Inheritance is for dressing a subtree you do not otherwise touch. For "the same
+kind of label, many times", the cheaper tool is the one the language already
+gives you:
+
+```rust
+let label = |s: &str| text(s).color(theme.weak).font_size(12.0);
+
+container()
+    .layout(Flex::row().spacing(8.0))
+    .children([label("one"), label("two"), label("three")])
+```
+
+That keeps the declaration next to the widget that draws it, costs no wrapper
+node, and gives the style a name. Reach for a container's inherited
+declaration when the texts are not yours to write — inside a component you are
+calling, say — or when there are enough of them that naming each one is the
+noise.
 
 ### Stroke and shadow
 

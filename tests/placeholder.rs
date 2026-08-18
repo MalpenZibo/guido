@@ -131,6 +131,25 @@ fn a_container_can_declare_the_placeholder_colour() {
     assert_eq!(texts[0].1, declared);
 }
 
+/// The field draws the placeholder, so the field can say what colour it is —
+/// and being the nearest declaration, it wins over the container's.
+#[test]
+fn a_field_can_declare_its_own_placeholder_colour() {
+    let own = Color::rgba(0.0, 1.0, 0.0, 1.0);
+    let texts = drawn(
+        container()
+            .text_color(Color::rgba(1.0, 1.0, 1.0, 1.0))
+            .placeholder_color(Color::rgba(1.0, 0.0, 0.0, 1.0))
+            .child(
+                text_input(create_signal(String::new()))
+                    .placeholder("Password")
+                    .placeholder_color(own),
+            ),
+    );
+
+    assert_eq!(texts[0].1, own);
+}
+
 #[test]
 fn an_empty_field_without_a_placeholder_draws_no_text_at_all() {
     let texts = drawn(text_input(create_signal(String::new())));

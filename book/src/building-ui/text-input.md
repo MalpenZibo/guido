@@ -27,13 +27,15 @@ container().text_color(Color::WHITE).child(text_input(value))
 ### Cursor Color
 
 ```rust
+text_input(value).cursor_color(Color::rgb(0.4, 0.8, 1.0))
+// or, for every input below one container:
 container().cursor_color(Color::rgb(0.4, 0.8, 1.0)).child(text_input(value))
 ```
 
 ### Selection Color
 
 ```rust
-container().selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4)).child(text_input(value))
+text_input(value).selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
 ```
 
 ### Font Size
@@ -124,7 +126,8 @@ text_input(answer).placeholder(move || prompt.get())
 ```
 
 The colour is the inherited text colour at reduced alpha — a placeholder is the
-same text, quieter. Declare `placeholder_color` on a container to override it:
+same text, quieter. Declare `placeholder_color` on the field, or on a
+container to cover every field below it:
 
 ```rust
 container()

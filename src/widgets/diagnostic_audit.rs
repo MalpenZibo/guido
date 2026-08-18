@@ -27,7 +27,7 @@ use crate::renderer::{PaintContext, RenderNode};
 use crate::tree::Tree;
 use crate::widgets::widget::{Event, Key, Modifiers, MouseButton, ScrollSource};
 use crate::widgets::{Color, ImageSource, ScrollAxis};
-use crate::widgets::{Widget, container, image, text, text_input};
+use crate::widgets::{InputStyled, TextStyled, Widget, container, image, text, text_input};
 
 /// Put a widget through the whole `Widget` trait and return how many reads the
 /// library performed with no reactive scope.
@@ -211,6 +211,62 @@ fn a_fully_reactive_text_is_quiet() {
 
     assert_quiet(
         "a fully reactive text",
+        diagnostics_from_full_lifecycle(widget),
+    );
+}
+
+/// The same properties declared on the text itself rather than above it: the
+/// closures have to be read inside the text's own scope too, or a leaf that
+/// styles itself would be quietly unreactive.
+#[test]
+fn a_text_that_styles_itself_is_quiet() {
+    let n = create_signal(0.0f32);
+
+    let widget = container().child(
+        text("ciao")
+            .color(move || {
+                if n.get() > 0.0 {
+                    Color::RED
+                } else {
+                    Color::WHITE
+                }
+            })
+            .font_size(move || n.get() + 12.0),
+    );
+
+    assert_quiet(
+        "a text that declares its own style",
+        diagnostics_from_full_lifecycle(widget),
+    );
+}
+
+/// And the furniture only an input draws, declared on the input.
+#[test]
+fn an_input_that_styles_itself_is_quiet() {
+    let n = create_signal(0.0f32);
+    let value = create_signal(String::new());
+
+    let widget = container().child(
+        text_input(value)
+            .placeholder("prompt")
+            .placeholder_color(move || {
+                if n.get() > 0.0 {
+                    Color::RED
+                } else {
+                    Color::WHITE
+                }
+            })
+            .cursor_color(move || {
+                if n.get() > 0.0 {
+                    Color::RED
+                } else {
+                    Color::WHITE
+                }
+            }),
+    );
+
+    assert_quiet(
+        "an input that declares its own caret and placeholder",
         diagnostics_from_full_lifecycle(widget),
     );
 }

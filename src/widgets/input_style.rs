@@ -17,7 +17,7 @@
 //!
 //! [`TextStyle`]: crate::widgets::TextStyle
 
-use crate::reactive::Signal;
+use crate::reactive::{IntoSignal, Signal};
 
 use super::widget::Color;
 
@@ -61,5 +61,35 @@ impl InputStyle {
         self.cursor_color.is_some()
             && self.selection_color.is_some()
             && self.placeholder_color.is_some()
+    }
+}
+
+/// The vocabulary for declaring an input's own furniture, written once.
+///
+/// Implemented by [`TextInput`](crate::widgets::TextInput) alone, because it
+/// is the only widget that draws any of it. That is the whole point of the
+/// trait existing separately from
+/// [`TextStyled`](crate::widgets::TextStyled): a placeholder colour has
+/// nowhere to land except on the widget that draws the placeholder.
+pub trait InputStyled: Sized {
+    #[doc(hidden)]
+    fn input_style_mut(&mut self) -> &mut InputStyle;
+
+    /// Colour of the caret.
+    fn cursor_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.input_style_mut().cursor_color = Some(color.into_signal());
+        self
+    }
+
+    /// Colour of the selection band behind the selected glyphs.
+    fn selection_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.input_style_mut().selection_color = Some(color.into_signal());
+        self
+    }
+
+    /// Colour of the placeholder.
+    fn placeholder_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.input_style_mut().placeholder_color = Some(color.into_signal());
+        self
     }
 }
