@@ -24,8 +24,10 @@ use crate::renderer::{PaintContext, char_index_from_x_styled};
 use crate::tree::{Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
 
+use super::control::Control;
 use super::font::{FontFamily, FontWeight};
 use super::input_style::{InputStyle, InputStyled};
+use super::state_layer::{StateWhen, Stateful};
 use super::text_style::{TextStyle, TextStyled};
 use super::widget::{Color, Event, EventResponse, Key, MouseButton, Rect, Widget};
 
@@ -246,6 +248,11 @@ pub struct TextInput {
 
     // Mouse hover state (for cursor icon)
     is_hovered: bool,
+    /// The same fact behind a signal, so a state override resolving it
+    /// subscribes. Written next to `is_hovered`, never instead of it: the
+    /// cursor logic reads a bool on the event path, where a subscription
+    /// would be noise.
+    hover: RwSignal<bool>,
 
     // Undo/redo history
     history: History,
@@ -260,6 +267,9 @@ pub struct TextInput {
     /// only it draws. Boxed and absent by default.
     text_style: Option<Box<TextStyle>>,
     input_style: Option<Box<InputStyle>>,
+    /// Overrides that apply while this field's control is in a state, in
+    /// declaration order.
+    states: Vec<(StateWhen, TextStyle)>,
 }
 
 impl TextInput {
@@ -294,23 +304,56 @@ impl TextInput {
             last_cursor_toggle: Instant::now(),
             is_dragging: false,
             is_hovered: false,
+            hover: crate::reactive::signal::create_signal(false),
             history: History::new(),
             scroll_offset: 0.0,
             on_change: None,
             on_submit: None,
             text_style: None,
             input_style: None,
+            states: Vec::new(),
         }
     }
 
     /// This input's own declarations, completed by the ancestors' for whatever
     /// they leave out. Each walk is skipped when nothing is left to find.
     fn resolved_text_style(&self, tree: &Tree, id: WidgetId) -> TextStyle {
-        let mut style = self.text_style.as_deref().copied().unwrap_or_default();
+        let mut style = TextStyle::default();
+        // Active overrides first and last declared first, so they outrank this
+        // field's own declaration; `inherit_from` takes only what is missing,
+        // which resolves the chain per property.
+        if !self.states.is_empty() {
+            let control = tree.nearest_control(id);
+            for (when, override_) in self.states.iter().rev() {
+                if self.is_state_active(id, control.as_ref(), when) {
+                    style.inherit_from(override_);
+                }
+            }
+        }
+        if let Some(own) = self.text_style.as_deref() {
+            style.inherit_from(own);
+        }
         if !style.is_complete() {
             style.inherit_from(&tree.inherited_text_style(id));
         }
         style
+    }
+
+    /// Whether an override applies. Reading the answer subscribes the field to
+    /// its control, so it is asked only for a state it declares.
+    fn is_state_active(&self, id: WidgetId, control: Option<&Control>, when: &StateWhen) -> bool {
+        match (when, control) {
+            (StateWhen::When(condition), _) => condition.get(),
+            (StateWhen::Hovered, Some(control)) => control.is_hovered(),
+            (StateWhen::Pressed, Some(control)) => control.is_pressed(),
+            (StateWhen::Focused, Some(control)) => control.has_focus(),
+            // No control above: the field is its own unit. It already tracks
+            // the pointer for its cursor, and it is the thing that holds the
+            // focus, so both answers are its own.
+            (StateWhen::Hovered, None) => self.hover.get(),
+            (StateWhen::Focused, None) => crate::reactive::focus::focus_path().contains(id),
+            (StateWhen::Pressed, None) => false,
+        }
     }
 
     fn resolved_input_style(&self, tree: &Tree, id: WidgetId) -> InputStyle {
@@ -1038,6 +1081,14 @@ impl TextInput {
     }
 }
 
+impl Stateful for TextInput {
+    type Style = TextStyle;
+
+    fn push_state_style(&mut self, when: StateWhen, style: TextStyle) {
+        self.states.push((when, style));
+    }
+}
+
 impl TextStyled for TextInput {
     fn text_style_mut(&mut self) -> &mut TextStyle {
         self.text_style.get_or_insert_with(Box::default)
@@ -1262,9 +1313,11 @@ impl Widget for TextInput {
                 // Update hover state and cursor
                 if in_bounds && !self.is_hovered {
                     self.is_hovered = true;
+                    self.hover.set(true);
                     set_cursor(CursorIcon::Text);
                 } else if !in_bounds && self.is_hovered {
                     self.is_hovered = false;
+                    self.hover.set(false);
                     set_cursor(CursorIcon::Default);
                 }
 
@@ -1315,6 +1368,7 @@ impl Widget for TextInput {
             }
             Event::MouseLeave if self.is_hovered => {
                 self.is_hovered = false;
+                self.hover.set(false);
                 set_cursor(CursorIcon::Default);
             }
             _ => {}

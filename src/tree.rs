@@ -130,6 +130,9 @@ struct Slot {
     /// the same reason as `text_style`, and separate from it because only an
     /// input can draw what it holds.
     input_style: Option<Box<crate::widgets::InputStyle>>,
+    /// The interaction unit this node declares, if it is one. Descendants walk
+    /// up to the nearest, and resolve hover, press and focus from it.
+    control: Option<crate::widgets::Control>,
     /// Distance from this widget's top edge to the baseline of its first line
     /// of text, if it has one. Reported by leaves during layout and read by a
     /// parent aligning on `CrossAlignment::Baseline`.
@@ -213,6 +216,7 @@ impl Tree {
             cached_paint: None,
             text_style: None,
             input_style: None,
+            control: None,
             baseline: None,
             paint_overflow: 0.0,
         });
@@ -430,6 +434,34 @@ impl Tree {
         }
 
         resolved
+    }
+
+    /// Record that this node is an interaction unit.
+    ///
+    /// Containers call this as they enter the tree, exactly like the style
+    /// declarations beside it.
+    pub(crate) fn set_control(&mut self, id: WidgetId, control: Option<crate::widgets::Control>) {
+        if let Some(idx) = self.get_dense_index(id) {
+            self.dense[idx].control = control;
+        }
+    }
+
+    /// The interaction unit a widget belongs to: itself if it is one,
+    /// otherwise the nearest ancestor that is.
+    ///
+    /// Returns a handle holding signals, not values, on the same contract as
+    /// the style walks: reading them is what subscribes, so the caller must do
+    /// it inside its own tracking scope.
+    pub fn nearest_control(&self, id: WidgetId) -> Option<crate::widgets::Control> {
+        let mut cursor = Some(id);
+        while let Some(node) = cursor {
+            let idx = self.get_dense_index(node)?;
+            if let Some(control) = self.dense[idx].control {
+                return Some(control);
+            }
+            cursor = self.dense[idx].parent;
+        }
+        None
     }
 
     /// Declare how far this widget paints outside its own bounds.

@@ -326,3 +326,12 @@ pub trait TextStyled: Sized {
         self
     }
 }
+
+/// A partial text style is itself something to declare style on, which is what
+/// lets a state override use the same builder as the widget:
+/// `when_hovered(|s| s.color(..))`.
+impl TextStyled for TextStyle {
+    fn text_style_mut(&mut self) -> &mut TextStyle {
+        self
+    }
+}

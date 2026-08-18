@@ -54,6 +54,55 @@ container()
 
 The same signal can be read anywhere else that needs it, independently. That is why there is one generic `state` rather than a named method per case.
 
+## Interaction Units
+
+When a text declares a hover style, hover *of what*? Not its own glyphs — a
+button's label has to light up while the pointer is on the button's padding.
+Not any ancestor either — a label inside one button must stay dark while the
+pointer is over a sibling button in the same row.
+
+The unit that holds the state is the nearest enclosing **control**:
+
+```rust
+container().control()
+    .child(text("Password").when_focused(|s| s.color(theme.accent)))
+    .child(text_input(password))
+```
+
+Everything inside asks the same question — *is my control in this state?* —
+whatever the state is. Direction stops being part of the mechanism and becomes
+only how the control notices: the pointer is inside its bounds, the focus is
+inside its subtree. Which is what makes the case above work at all — the focus
+is in a *sibling*, and both belong to the same unit.
+
+`control()` is rarely written by hand. Anything the pointer can act on is a
+unit by necessity, so `on_click`, `on_hover`, `on_scroll`, `scrollable` and a
+declared state layer all imply it. Write it where the boundary is real but
+nothing else announces it — a field's label and input, a row whose highlight
+belongs to the row.
+
+Leaves declare states with `when_hovered`, `when_pressed`, `when_focused` and
+`state`, from the `Stateful` trait. The closure receives the same partial style
+the widget itself is built with, because an override *is* another partial
+style:
+
+```rust
+text("Save").color(theme.weak).when_hovered(|s| s.color(theme.strong))
+```
+
+### Nesting scopes resolution, not state
+
+Every control notices its own state independently: a list row is hovered
+because the pointer is inside the row, even when the pointer is over a button
+nested in it. What the nested control changes is only *who a descendant asks* —
+the label inside the button asks the button, not the row.
+
+### With no control above
+
+The widget is its own unit and notices the pointer over its own bounds. It is
+never *pressed*, though: being pressed means being activated, and a widget that
+is its own unit has nothing to activate.
+
 ## Precedence: last declared wins
 
 Layers are resolved in reverse declaration order, per property. Writing the error after the focus is what makes an error outrank a focus ring on a field that holds the focus essentially always:

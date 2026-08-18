@@ -93,3 +93,11 @@ pub trait InputStyled: Sized {
         self
     }
 }
+
+/// As for [`TextStyle`](crate::widgets::TextStyle): a partial style is
+/// something to declare on.
+impl InputStyled for InputStyle {
+    fn input_style_mut(&mut self) -> &mut InputStyle {
+        self
+    }
+}
