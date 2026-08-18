@@ -42,7 +42,7 @@ use super::paint_children::{ChildPaintOptions, paint_children};
 use super::scroll::{
     ScrollAxis, ScrollState, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibility,
 };
-use super::state_layer::{StateStyle, resolve_background};
+use super::state_layer::{RippleConfig, StateStyle, StateWhen, resolve_background};
 use super::text_style::{TextShadow, TextStroke, TextStyle};
 use super::widget::{
     Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding, Rect,
@@ -190,9 +190,11 @@ pub(super) struct InteractionState {
     /// *behaviour* (drag capture, ripple) and a subscription would be noise;
     /// with `get` from style resolution, where the subscription is the point.
     pub(super) flags: RwSignal<InteractionFlags>,
-    pub(super) hover_state: Option<StateStyle>,
-    pub(super) pressed_state: Option<StateStyle>,
-    pub(super) focused_state: Option<StateStyle>,
+    /// State layers in declaration order. Resolution walks it backwards, so
+    /// the last one declared wins wherever two of them speak about the same
+    /// property — CSS's rule at equal specificity, and the only one that lets
+    /// a caller decide that an error outranks the focus.
+    pub(super) states: Vec<(StateWhen, StateStyle)>,
     pub(super) ripple: RippleState,
 }
 
@@ -209,9 +211,7 @@ impl Default for InteractionState {
             on_mouse_down: None,
             on_mouse_up: None,
             flags: create_signal(InteractionFlags::empty()),
-            hover_state: None,
-            pressed_state: None,
-            focused_state: None,
+            states: Vec::new(),
             ripple: RippleState::new(),
         }
     }
@@ -246,7 +246,38 @@ impl InteractionState {
     /// `on_click` has nothing to resolve, and must not start repainting on
     /// every hover just because the flags became reactive.
     pub(super) fn has_any_state(&self) -> bool {
-        self.hover_state.is_some() || self.pressed_state.is_some() || self.focused_state.is_some()
+        !self.states.is_empty()
+    }
+
+    /// Whether a layer with this trigger is declared, without reading any
+    /// signal — the gate event handling uses before asking for a repaint.
+    pub(super) fn declares(&self, when: impl Fn(&StateWhen) -> bool) -> bool {
+        self.states.iter().any(|(w, _)| when(w))
+    }
+
+    /// The ripple a pressed layer declares, if one does.
+    ///
+    /// By value: the caller advances `self.ripple` while holding it, and a
+    /// borrow of the whole `InteractionState` would stand in the way of a
+    /// borrow of one of its fields.
+    pub(super) fn ripple_config(&self) -> Option<RippleConfig> {
+        self.states
+            .iter()
+            .rev()
+            .find(|(when, s)| matches!(when, StateWhen::Pressed) && s.ripple.is_some())
+            .and_then(|(_, s)| s.ripple.clone())
+    }
+
+    /// Whether the layer is active right now. Reading this is what subscribes
+    /// the caller to the state, which is why it is not asked for layers that
+    /// declare nothing about the property being resolved.
+    pub(super) fn is_active(&self, id: WidgetId, when: &StateWhen) -> bool {
+        match when {
+            StateWhen::Hovered => self.flags.get().contains(InteractionFlags::HOVERED),
+            StateWhen::Pressed => self.flags.get().contains(InteractionFlags::PRESSED),
+            StateWhen::Focused => Container::has_child_focus(id),
+            StateWhen::When(condition) => condition.get(),
+        }
     }
 }
 
@@ -994,7 +1025,7 @@ impl Container {
     where
         F: FnOnce(StateStyle) -> StateStyle,
     {
-        self.interact_mut().hover_state = Some(f(StateStyle::new()));
+        self.push_state(StateWhen::Hovered, f);
         self
     }
 
@@ -1003,7 +1034,7 @@ impl Container {
     where
         F: FnOnce(StateStyle) -> StateStyle,
     {
-        self.interact_mut().pressed_state = Some(f(StateStyle::new()));
+        self.push_state(StateWhen::Pressed, f);
         self
     }
 
@@ -1022,8 +1053,43 @@ impl Container {
     where
         F: FnOnce(StateStyle) -> StateStyle,
     {
-        self.interact_mut().focused_state = Some(f(StateStyle::new()));
+        self.push_state(StateWhen::Focused, f);
         self
+    }
+
+    /// Set style overrides for while `condition` holds.
+    ///
+    /// For the states the app owns rather than the pointer: the last submit
+    /// failed, this row is selected, this value is out of range. The condition
+    /// is an ordinary signal, so nothing propagates and nothing is inferred —
+    /// whoever draws the style reads the same signal the app already has.
+    ///
+    /// Declaration order decides ties, so writing this after `focused_state`
+    /// is how an error keeps its colour on a field that holds the focus.
+    ///
+    /// # Example
+    /// ```ignore
+    /// container()
+    ///     .border(1.0, theme.line)
+    ///     .focused_state(|s| s.border(2.0, theme.accent))
+    ///     .state(wrong_password, |s| s.border(2.0, theme.error))
+    ///     .child(text_input(password))
+    /// ```
+    pub fn state<M, F>(mut self, condition: impl IntoSignal<bool, M>, f: F) -> Self
+    where
+        F: FnOnce(StateStyle) -> StateStyle,
+    {
+        self.push_state(StateWhen::When(condition.into_signal()), f);
+        self
+    }
+
+    fn push_state<F>(&mut self, when: StateWhen, f: F)
+    where
+        F: FnOnce(StateStyle) -> StateStyle,
+    {
+        self.interact_mut()
+            .states
+            .push((when, f(StateStyle::new())));
     }
 }
 
@@ -1156,10 +1222,9 @@ impl Widget for Container {
         // Advance ripple animation
         if let Some(ref mut ix) = self.interaction
             && ix.ripple.is_active()
-            && let Some(ref state) = ix.pressed_state
-            && let Some(ref config) = state.ripple
+            && let Some(config) = ix.ripple_config()
         {
-            let ripple_animating = ix.ripple.advance(config);
+            let ripple_animating = ix.ripple.advance(&config);
             if ripple_animating {
                 // Ripple is paint-only, request animation continuation with paint
                 request_job(id, JobRequest::Animation(RequiredJob::Paint));
@@ -1605,8 +1670,7 @@ impl Widget for Container {
         // Draw ripple effect as overlay (ripple.center is already in local coordinates)
         if let Some(ref ix) = self.interaction
             && let Some((local_cx, local_cy)) = ix.ripple.center
-            && let Some(ref pressed_state) = ix.pressed_state
-            && let Some(ref ripple_config) = pressed_state.ripple
+            && let Some(ripple_config) = ix.ripple_config()
             && ix.ripple.opacity > 0.0
         {
             // Set overlay clip to container bounds with rounded corners

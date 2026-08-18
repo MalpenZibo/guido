@@ -23,7 +23,7 @@ pub use into_child::{
     DynamicChildren, IntoChild, IntoChildren, IntoDynChild, KeyedChildren, StaticChildren, keyed,
 };
 pub use scroll::{ScrollAxis, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibility};
-pub use state_layer::{BackgroundOverride, RippleConfig, StateStyle};
+pub use state_layer::{BackgroundOverride, RippleConfig, StateStyle, StateWhen};
 pub use text::{Text, text};
 pub use text_input::{Selection, TextInput, text_input};
 pub use text_style::{TextShadow, TextStroke, TextStyle};

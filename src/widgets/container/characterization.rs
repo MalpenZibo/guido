@@ -1197,6 +1197,87 @@ fn a_state_override_follows_the_signal_it_was_given() {
     assert_eq!(rects(&h.paint())[0].1, Color::BLUE);
 }
 
+/// A state the app owns needs no mechanism: it is a signal, read where the
+/// style is resolved.
+#[test]
+fn a_state_layer_may_hang_on_a_condition_the_app_owns() {
+    let wrong = create_signal(false);
+    let mut h = H::new(
+        box_of(50.0, 50.0)
+            .background(Color::BLACK)
+            .state(wrong, |s| s.background(Color::RED)),
+    );
+    h.fit(100.0, 100.0);
+
+    assert_eq!(rects(&h.paint())[0].1, Color::BLACK);
+
+    let queued = h.jobs_from(|| wrong.set(true));
+    assert!(
+        queued.contains(&JobType::Paint),
+        "the condition has to subscribe, got {queued:?}"
+    );
+    assert_eq!(rects(&h.paint())[0].1, Color::RED);
+}
+
+/// The answer to the field whose focus ring hid its error: declaration order
+/// decides, so the error written last outranks the focus.
+#[test]
+fn the_last_layer_declared_wins_over_the_ones_before_it() {
+    use crate::reactive::focus::clear_focus;
+    use crate::reactive::request_focus;
+    use crate::widgets::text_input;
+
+    clear_focus();
+    let wrong = create_signal(false);
+    let mut h = H::new(
+        container()
+            .width(50.0)
+            .height(50.0)
+            .border(1.5, Color::WHITE)
+            .focused_state(|s| s.border(1.5, Color::BLUE))
+            .state(wrong, |s| s.border(1.5, Color::RED))
+            .child(text_input(create_signal(String::new()))),
+    );
+    h.fit(100.0, 100.0);
+    let input = h.children()[0];
+
+    request_focus(&h.tree, input);
+    assert_eq!(borders(&h.paint())[0].1, Color::BLUE);
+
+    wrong.set(true);
+    assert_eq!(
+        borders(&h.paint())[0].1,
+        Color::RED,
+        "declared after the focused layer, so it outranks it"
+    );
+
+    // And it is the order, not the kind: the focus is still held.
+    wrong.set(false);
+    assert_eq!(borders(&h.paint())[0].1, Color::BLUE);
+}
+
+/// A layer is passed over for a property it says nothing about, rather than
+/// ending the search — otherwise a pressed layer that only scales would drop
+/// the hover's background on the way down.
+#[test]
+fn a_layer_silent_on_a_property_does_not_shadow_the_one_below_it() {
+    let mut h = H::new(
+        box_of(50.0, 50.0)
+            .background(Color::BLACK)
+            .hover_state(|s| s.background(Color::RED))
+            .pressed_state(|s| s.transform(Transform::scale(0.5))),
+    );
+    h.fit(100.0, 100.0);
+
+    set_hover(&mut h, true);
+    h.send(Event::MouseDown {
+        x: 5.0,
+        y: 5.0,
+        button: MouseButton::Left,
+    });
+    assert_eq!(rects(&h.paint())[0].1, Color::RED);
+}
+
 // ---------------------------------------------------------------------------
 // An animated text colour
 // ---------------------------------------------------------------------------

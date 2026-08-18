@@ -54,6 +54,25 @@ impl RippleConfig {
     }
 }
 
+/// When a state layer applies.
+///
+/// The first three are noticed by the container itself — the pointer is inside
+/// it, the pointer is down on it, the focus is somewhere below it. The fourth
+/// is a condition the app already holds: "the last submit failed", "this row
+/// is selected". Nothing has to propagate for that one, so it needs no
+/// mechanism beyond reading the signal where the style is resolved.
+#[derive(Clone, Copy)]
+pub enum StateWhen {
+    /// The pointer is inside the container's shape.
+    Hovered,
+    /// The pointer is down on the container.
+    Pressed,
+    /// The container, or anything below it, holds the keyboard focus.
+    Focused,
+    /// A condition the app owns.
+    When(Signal<bool>),
+}
+
 /// How to override the background color in a state.
 #[derive(Clone, Copy)]
 pub enum BackgroundOverride {
