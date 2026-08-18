@@ -8,11 +8,13 @@
 //! together with `background-clip: text`.
 //!
 //! The colour is the tint laid over the glass, which is why every panel here
-//! but the first is translucent. The last panel is the trap: a stroke and a
-//! shadow are drawn as copies of the glyphs *under* the fill, so they cover the
-//! letter's own area and not only its edge. Under an opaque fill that is
-//! invisible and free; over frost it is an opaque letter where the picture
-//! should be.
+//! but the first is translucent. The fourth adds a stroke, which over frost is
+//! drawn as a true contour — outside the letter, leaving the glass alone.
+//!
+//! The last panel is the trap, and it is a shadow: shadows are still copies of
+//! the glyphs drawn *under* the fill, so they cover the letter's own area and
+//! not only its edge. Under an opaque fill that is invisible and free; over
+//! frost it is an opaque letter where the picture should be.
 
 use guido::prelude::*;
 
@@ -76,6 +78,13 @@ fn main() {
                 text(LABEL).color(Color::TRANSPARENT).backdrop_blur(16.0),
             ))
             .child(panel(
+                "frost + stroke 2",
+                text(LABEL)
+                    .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
+                    .backdrop_blur(16.0)
+                    .text_stroke(TextStroke::new(2.0, Color::BLACK)),
+            ))
+            .child(panel(
                 "frost under a shadow — buried",
                 text(LABEL)
                     .color(Color::rgba(1.0, 1.0, 1.0, 0.35))
@@ -90,7 +99,7 @@ fn main() {
 
         app.add_surface(
             SurfaceConfig::new()
-                .width(1080)
+                .width(1360)
                 .height(210)
                 .anchor(Anchor::TOP | Anchor::LEFT)
                 .layer(Layer::Top)

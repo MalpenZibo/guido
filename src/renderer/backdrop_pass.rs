@@ -20,7 +20,7 @@
 
 use wgpu::util::DeviceExt;
 
-use crate::widgets::Rect;
+use crate::widgets::{Color, Rect};
 
 use super::commands::CornerRadii;
 
@@ -52,7 +52,18 @@ struct Params {
     /// UV. The whole mask unless the region runs off the target, where the
     /// viewport is clipped and the mask must be read clipped with it.
     mask_rect: [f32; 4],
+    /// Colour of the contour `fs_outline` draws, and how far out it reaches
+    /// from the glyph edge in physical pixels.
+    stroke_color: [f32; 4],
+    stroke_width: f32,
+    _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
 }
+
+/// Where a region lands on the target — viewport in physical pixels — and the
+/// sub-rectangle of a coverage mask that covers it, in normalised uv.
+type Placement = ((u32, u32, u32, u32), [f32; 4]);
 
 /// A blur to apply, resolved to physical pixels.
 #[derive(Debug, Clone, Copy)]
@@ -129,6 +140,7 @@ pub struct BackdropRenderer {
     blur: wgpu::RenderPipeline,
     composite: wgpu::RenderPipeline,
     composite_mask: wgpu::RenderPipeline,
+    outline: wgpu::RenderPipeline,
     blit: wgpu::RenderPipeline,
     targets: Option<Targets>,
     idle_frames: u32,
@@ -300,6 +312,12 @@ impl BackdropRenderer {
             composite_mask: build(
                 "Backdrop Composite Mask",
                 "fs_composite_mask",
+                Some(composite_blend),
+                &mask_layout,
+            ),
+            outline: build(
+                "Text Outline",
+                "fs_outline",
                 Some(composite_blend),
                 &mask_layout,
             ),
@@ -475,6 +493,80 @@ impl BackdropRenderer {
         self.filter(device, encoder, region, Some(mask));
     }
 
+    /// Where a region lands on the target, and which part of a mask covers it.
+    ///
+    /// The two go together: the viewport is the region clipped to what is on
+    /// show, and the mask covers the region whole, so anything the clip took
+    /// off has to come off the mask's uv as well.
+    fn placement(&self, region: &BackdropRegion) -> Option<Placement> {
+        let targets = self.targets.as_ref()?;
+        let (x, y, width, height) = region.clamped(targets.width, targets.height)?;
+        let mask_rect = [
+            (x as f32 - region.rect.x) / region.rect.width.max(1.0),
+            (y as f32 - region.rect.y) / region.rect.height.max(1.0),
+            width as f32 / region.rect.width.max(1.0),
+            height as f32 / region.rect.height.max(1.0),
+        ];
+        Some(((x, y, width, height), mask_rect))
+    }
+
+    /// Draw a contour just outside `mask`'s coverage.
+    ///
+    /// A stroke, for the one case the cheap approximation cannot serve: copies
+    /// of the glyphs drawn under the fill ring the letter *and* fill it, which
+    /// is invisible under an opaque fill and opaque over frost. This dilates
+    /// the coverage instead and draws only the band the dilate added.
+    ///
+    /// Ordered after the frost and before the glyphs, so the letter keeps what
+    /// the frost put in it.
+    pub fn apply_outline(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        region: &BackdropRegion,
+        mask: &wgpu::TextureView,
+        color: Color,
+        width: f32,
+    ) {
+        let Some(targets) = &self.targets else {
+            return;
+        };
+        let Some((viewport, mask_rect)) = self.placement(region) else {
+            return;
+        };
+        let (_, _, dst_width, dst_height) = viewport;
+
+        let params = Params {
+            src_rect: [0.0, 0.0, 1.0, 1.0],
+            direction: [0.0, 0.0],
+            sigma: 0.0,
+            taps: 0.0,
+            dst_size: [dst_width as f32, dst_height as f32],
+            curvature: 1.0,
+            _pad: 0.0,
+            radii: [0.0; 4],
+            mask_rect,
+            stroke_color: [color.r, color.g, color.b, color.a],
+            stroke_width: width,
+            _pad1: 0.0,
+            _pad2: 0.0,
+            _pad3: 0.0,
+        };
+        // Binding 0 goes unread by this pipeline; the working texture fills it
+        // because the scene is the target and may not be bound as a resource
+        // at the same time.
+        let bind = self.bind_masked(device, &targets.working_views[0], mask, params);
+        self.pass(
+            encoder,
+            &self.outline,
+            &targets.scene_view,
+            wgpu::LoadOp::Load,
+            &bind,
+            viewport,
+            "Text Outline",
+        );
+    }
+
     fn filter(
         &self,
         device: &wgpu::Device,
@@ -485,7 +577,7 @@ impl BackdropRenderer {
         let Some(targets) = &self.targets else {
             return;
         };
-        let Some((x, y, width, height)) = region.clamped(targets.width, targets.height) else {
+        let Some(((x, y, width, height), mask_rect)) = self.placement(region) else {
             return;
         };
 
@@ -513,16 +605,6 @@ impl BackdropRenderer {
             work_height as f32 / targets.work_height as f32,
         ];
 
-        // The mask covers the region; the viewport covers whatever of it is on
-        // the target. When a text runs off the edge they differ, and reading
-        // the whole mask across a clipped viewport would squash the letters.
-        let mask_rect = [
-            (x as f32 - region.rect.x) / region.rect.width.max(1.0),
-            (y as f32 - region.rect.y) / region.rect.height.max(1.0),
-            width as f32 / region.rect.width.max(1.0),
-            height as f32 / region.rect.height.max(1.0),
-        ];
-
         let base = Params {
             src_rect: scene_rect,
             direction: [0.0, 0.0],
@@ -533,6 +615,11 @@ impl BackdropRenderer {
             _pad: 0.0,
             radii: region.radii.to_array(),
             mask_rect,
+            stroke_color: [0.0; 4],
+            stroke_width: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+            _pad3: 0.0,
         };
 
         // 1. Scene region → working[0], shrunk.
@@ -624,6 +711,11 @@ impl BackdropRenderer {
                 _pad: 0.0,
                 radii: [0.0; 4],
                 mask_rect: [0.0, 0.0, 1.0, 1.0],
+                stroke_color: [0.0; 4],
+                stroke_width: 0.0,
+                _pad1: 0.0,
+                _pad2: 0.0,
+                _pad3: 0.0,
             },
         );
         self.pass(
