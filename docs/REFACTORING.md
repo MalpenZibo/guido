@@ -16,7 +16,7 @@ and where this document turned out to be wrong.
 | II.5 (d) untested wakeup invariant | **Done** (#171) |
 | II.6 Three tracking scopes in one paint | Open |
 | II.7 Style ownership (leaf style, provider nodes, animation) | Open — designed, ready |
-| II.8 States on leaves | Open — one question unanswered on purpose |
+| II.8 States: interaction groups | Open — designed; the name is the last question |
 
 **Caveat on every performance claim below.** None of it was measured — the
 environment this review ran in cannot build the crate — so numbers are counted
@@ -635,104 +635,198 @@ Two details to keep in mind while doing it:
 kinds × their properties) before toggle, checkbox and slider arrive.
 **Risk:** low. Independent of Part I.
 
-## II.8 States on leaves — open, and the one genuinely novel bit
+## II.8 States: interaction groups
 
-Everything above concerns *style*. Putting **states** on leaves —
-`text("x").hover_state(…)` — is a separate step, and it is where guido would be
-doing something no comparable library does. Worth taking deliberately.
+Everything in §II.7 concerns *style*. Putting **states** on leaves —
+`text("x").when_hovered(…)` — raises a question that style does not, and the
+answer below came out of a long back-and-forth in which three other candidates
+were tried and dropped. They are kept at the end, because the reasons they fail
+are the argument for the one that stands.
 
-### The question that has no default answer
+### The question style does not raise
 
-When a `text` declares `hover_state`, hover **of what**? The text is not the
-thing the pointer is aimed at. Three possible answers, tested against two
-scenarios:
+When a `text` declares a hover style, hover **of what**? The text is not the
+thing the pointer is aimed at. A button's label must light up while the pointer
+is on the button's *padding*, nowhere near the glyphs — so "my own bounds" is
+wrong. And a label inside one button must **not** light up when the pointer is
+over a *sibling* button inside the same highlighted row — so "any ancestor" is
+wrong too.
 
-*A — a button label.* Pointer over the button's padding, not over the glyphs.
-The label should light up.
+Focus makes it worse, because it runs the other way. Hover comes from **above**
+(the button is hovered, its descendants should react); focus comes from
+**below** (the input holds focus, its ancestors should react). Two mechanisms
+pointing in opposite directions is a bad smell, and it left one case with no
+answer at all: a label that must react to the focus of a *sibling* input — the
+floating label of every form ever written.
 
-*B — a sibling button.* A row that highlights on hover contains a button that
-also highlights. Pointer over the row, away from the button. The button's label
-should **not** light up.
+### The proposal: a subtree that behaves as one unit
 
-| | A (must light) | B (must not) |
+Mark a subtree as a single **interaction group**. The group is the unit that
+holds state; every widget inside it asks the same question — *is my group in
+this state?* — regardless of which state.
+
+```rust
+container().group()
+    .child(text("Password").when_focused(|s| s.color(blue)))
+    .child(text_input(password))
+```
+
+The label and the input are in the same group, so focus on the input is focus
+on the group, and the label can react. **The sibling case, which had no clean
+answer, simply disappears.**
+
+The direction stops being a property of the mechanism and becomes only how a
+group notices:
+
+- **hover** — the pointer is inside my bounds
+- **focus** — the focus is inside my subtree
+
+After that the resolution is identical for both. One rule, two ways of noticing.
+
+| scenario | resolves from | result |
 |---|---|---|
-| hover **of myself** | ✗ pointer is on the padding | ✓ |
-| hover of **any ancestor** | ✓ | ✗ the row is hovered, so the label lights |
-| hover of the **nearest source** | ✓ finds the button, hovered | ✓ finds the button, not hovered |
+| label while the pointer is on the button's padding | the button group, pointer inside | lights ✓ |
+| a button's label while the pointer is over a sibling | its own (nested) button group, pointer outside | stays ✓ |
+| lockscreen container wrapping the focused input | itself, focus inside | shows the border ✓ |
+| label beside a focused input | the same group as the input | reacts ✓ |
 
-Only the third is right in both. "Source" already has a definition in the code:
-a container with `InteractionState` allocated — exactly what `track_pointer`
-checks before tracking anything. Pure layout wrappers are not sources and are
-skipped, like the style walk skips containers that declare nothing.
+### What a nested group isolates — and what it must not
 
-### Why no one else needs this rule
+Two readings are possible here and only one works.
 
-Because **everyone else inherits resolved values, not states.** In Floem the
-style pass propagates inherited properties (colour, font size) down the tree;
-the button resolves *its own* style including hover, and the resolved colour
-descends. CSS is the same: `color` inherits the computed value, and the computed
-value of `.button:hover` already includes the hover rule. **Guido does this
-today.** The label knows nothing about hover — it reads a colour that changed.
+**It scopes resolution, not state.** Every group notices its own state
+independently: a list row is hovered because the pointer is inside the row, full
+stop, even when the pointer is over a button nested within it. What the nested
+group changes is only **who a descendant asks**: the label inside the button
+asks the button, not the row.
 
-So "hover of what?" never arises: nobody inherits a state.
+The other reading — a nested group *blocks* the outer one — breaks the list row:
+moving onto the button would switch the row's highlight off, when the pointer is
+plainly still on the row.
 
-CSS *can* express the other model — `.button:hover .label {}` — but the ancestor
-is named in the selector. Without selectors, the library has to guess it, and
-the nearest-source rule is the stand-in for the selector guido does not have.
+### It absorbs `interactive()`
 
-| | inherit **values**<br>(CSS, Floem, guido today) | inherit **states**<br>(proposed) |
+These are not two concepts. A pointer target *is* an interaction unit, and an
+interaction unit has to know whether it is being pointed at. So there is one
+thing to declare, and `on_click` (and every other behaviour: `on_hover`,
+`on_scroll`, `scrollable`) implies it — out of necessity, not convenience: you
+cannot click what is not a target.
+
+Against the discarded alternative A, this is what the group buys: the source is
+no longer **inferred** from "does it have a behaviour", it is **visible** — the
+boundary is written where it is.
+
+### Prior art
+
+This is Material-UI's `FormControl`: a component that wraps a label, a field and
+its helper text, and shares `focused`, `error`, `disabled` and `required` with
+its descendants. Same design, arrived at from the same place — forms — and in
+use by a very large number of people. SwiftUI's `.disabled()` propagating
+through the environment is the same shape.
+
+### The four families of state
+
+One mechanism does not explain all of them, and it would be suspicious if it
+did.
+
+| state | where it comes from | resolved by |
 |---|---|---|
-| "hover of what?" | never arises | needs a rule |
-| who declares the hover text colour | the interactive ancestor | the text itself |
-| must the ancestor know it contains text | **yes** | no |
-| trodden path | yes | no |
+| hover, pressed | geometry — the pointer | is my group under the pointer |
+| focus | structure — the focus path | is the focus inside my group |
+| error, selected, valid… | a signal the app owns | read the signal directly — no mechanism needed |
+| disabled | a signal the app owns, but blocks input | style like the above; behaviour propagates down the group |
 
-The bottom-left cell is the real argument for the new model: today a button must
-declare "my text is white on hover", so it has to know its subtree contains
-text. With state propagation the button says only "I am hovered" and each
-descendant decides. That is genuinely more composable.
+The third row is worth noticing: **app-declared states need no propagation at
+all**, because the condition is a signal the caller already holds and can read
+anywhere.
 
-### The costs, honestly
+```rust
+container().state(wrong_password, |s| s.border(2.0, red))
+    .child(text("Wrong password").state(wrong_password, |s| s.color(red)))
+```
 
-- **A rule nobody else has to document.** The walk itself is one function of the
-  same shape as the style walk; the cost is that two behaviours become yours to
-  define and explain, and no user will have met them elsewhere.
-- **You cannot reach past a nearer source.** A text inside a button that wants
-  to react to the enclosing *card* cannot say so. CSS would use a selector.
-- **A silent no-op.** Declaring a state on a leaf with no source above it does
-  nothing and says nothing. Needs a decision: leave it silent, or let a widget
-  with a state style become a source for itself (hit-testing itself).
+Both read the same signal, independently. This is also why one generic
+`.state(condition, |s| …)` is better than a named method per case: naming
+`error_state`, then `selected_state`, then `checked_state` is the same dynamic
+that put `placeholder_color` on the container.
 
-### Not to be settled on paper
+### Naming: the one genuinely open point
 
-The style work above stands on its own and does not depend on any of this. The
-state question should be answered with the first half in place and tried against
-a real case — the Wayland lockscreen, where an input is focused essentially
-always and a wrong password must show an error — because half an hour of use
-will say whether "nearest source" reads as obvious or as maddening, and no
-amount of reasoning will.
+`group()` is the working name and it is not settled. It is generic — guido
+already groups things for layout — and the concept is narrower than the word.
+Candidates:
 
-### Also in scope when this is taken up
+- **`group()`** — short, but says nothing about *what kind* of group.
+- **`interaction_scope()`** — precise, long, and reads like plumbing.
+- **`control()`** — says what the thing *is* (a control), and is the word
+  accessibility uses for exactly this. It also predicts the a11y role boundary,
+  which is likely the same boundary.
 
-- **Two families of state, by who knows.** `hover`/`pressed`/`focus` are
-  detected by the framework — it knows, you only declare the look.
-  Error, selected, checked are known only by the app. They need different API
-  shapes: `error_state(|s| …)` alone cannot work, because nothing would turn it
-  on.
-- **One generic primitive rather than a list of names.** `.state(condition, |s| …)`
-  covers error, warning, selected, checked and whatever comes next, without the
-  framework enumerating any of them. Naming a state per case is the same
-  dynamic that put `placeholder_color` on the container.
-- **`disabled` is not just appearance** — it must block clicks, hover and focus.
-  That is the framework's job, so it gets `.disabled(cond)` plus
-  `.disabled_state(|s| …)` rather than falling out of the generic primitive.
-- **`focus_visible`.** The lockscreen case makes it obvious: a field focused
-  essentially always shows a permanent focus ring. The web separates focus
-  arrived at by keyboard from focus arrived at by pointer; it only needs
-  remembering *how* focus arrived.
-- **Precedence: last declared wins.** CSS's rule at equal specificity, so
-  nothing new to learn — write the error state after the focus state and a
-  focused field in error shows the error.
+Worth settling against real call sites before it spreads.
+
+### Also settled along the way
+
+- **`hover_state` should be renamed `when_hovered`.** The old name reads as "*my*
+  hover state", which is false on a label. `when_hovered` promises nothing about
+  whose — it says "when there is hover", and the unit that can be hovered is the
+  group you belong to. True on the button and on its label alike, with no second
+  method.
+- **`focus_visible`** stays needed: in the lockscreen an input is focused
+  essentially always, so a permanent focus ring is noise. The web separates
+  focus arrived at by keyboard from focus arrived at by pointer; it only takes
+  remembering how it arrived.
+- **Precedence: last declared wins.** CSS's rule at equal specificity — write
+  the error state after the focus state and a focused field in error shows the
+  error.
+
+### Still open
+
+- **No enclosing group.** A `when_hovered` with no group above it: silent no-op,
+  or does the widget become its own group? The latter, probably — silent
+  declarations are the failure mode this whole design is trying to avoid, and
+  the existing reactive diagnostics are the natural place to warn.
+- **Attribute or node?** An attribute on the container is enough almost always,
+  since grouping usually implies a container to arrange things in. A standalone
+  node only if a case appears for grouping without a box.
+- **Keyboard.** Which widgets may receive keys is a separate unanswered
+  question: today keys are broadcast to the whole tree and each widget filters
+  itself by `has_focus`. The group is a plausible boundary for that too, but it
+  has not been worked through.
+- **`disabled` propagation** is event dispatch, not style resolution — a
+  different mechanism that happens to share the group's boundary.
+
+### Alternatives that were tried and dropped
+
+**A — the source is whoever has a behaviour.** No new methods: `on_click` makes
+you a source, a state style does not. It works for every case above, and its
+rule is a decent sentence ("hover follows the nearest thing you can actually
+activate"). Dropped in favour of the group because the source is *inferred*
+rather than visible, and because it has no answer for focus at all — the
+lockscreen's wrapper has no behaviour, so under A it would find no source, while
+today it works by focus containment.
+
+**B — two method names** (`hover_state` vs `ancestor_hover_state`), or the same
+idea as a scope argument, or as a state passed into the style closure. Explored
+in some depth and dropped: **none of these removes the ambiguity, they only
+restate it** — "the ancestor's hover" still has to decide *which* ancestor, and
+every variant needs the same walk. What B does buy is legibility, since a
+declaration that depends on an ancestor stops looking self-contained; that gain
+is bought far more cheaply by the `when_hovered` rename. Its one uniquely
+covered case — an interactive widget that wants an ancestor's state instead of
+its own — is a clickable thing inside a clickable thing whose feedback points at
+the wrong target, i.e. a UX bug rather than a case to support.
+
+**C — inherit resolved values, not states.** What CSS, Floem and guido today all
+do: the interactive ancestor resolves its own style including hover, and the
+*resolved* colour descends to a label that knows nothing about hover. Requires
+no new concept whatsoever and is the trodden path. Dropped because it forces the
+ancestor to know its subtree contains text — the button has to declare "my text
+is white on hover" — which is exactly the coupling §II.7 exists to remove.
+
+**Naming the source explicitly** (`hover_state_of(button_ref, …)` via
+`WidgetRef`) removes all ambiguity and stays available as an escape hatch for
+the rare "react to a further ancestor" case. Not the default: it costs a
+variable and a binding at every ordinary call site.
 
 ## II.9 Explicitly not recommended
 
