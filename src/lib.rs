@@ -147,7 +147,9 @@ pub fn quit_app() {
 }
 
 pub mod prelude {
-    pub use crate::animation::{SpringConfig, TimingFunction, Transition, TransitionConfig};
+    pub use crate::animation::{
+        Keyframes, SpringConfig, TimingFunction, Transition, TransitionConfig,
+    };
     pub use crate::backdrop::{BackdropBlur, BackdropSources};
     pub use crate::compositor::{CompositorEffects, compositor_effects};
     pub use crate::keyboard::keyboard_modifiers;

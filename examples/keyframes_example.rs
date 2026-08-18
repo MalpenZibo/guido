@@ -11,7 +11,6 @@
 //! there, it just does not argue with the sequence while it runs, and it has
 //! the property back the moment the sequence ends.
 
-use guido::animation::Keyframes;
 use guido::prelude::*;
 
 /// Left, decaying: out, back past, out again, still.
@@ -54,13 +53,8 @@ fn card(label: &'static str, keyframes: Keyframes<Transform>, plays: RwSignal<u3
         .when_hovered(|s| s.transform(Transform::scale(1.03)))
         .animate_transform(Transition::spring(SpringConfig::SNAPPY))
         .keyframes_transform(keyframes, plays)
-        .on_click(move || plays.set(plays.get_untracked() + 1))
-        .child(
-            container()
-                .text_color(Color::WHITE)
-                .font_size(16.0)
-                .child(text(label)),
-        )
+        .on_click(move || plays.update(|p| *p += 1))
+        .child(text(label).color(Color::WHITE).font_size(16.0))
 }
 
 fn main() {

@@ -68,8 +68,28 @@ container()
     .keyframes_transform(shake(), rejections)
 ```
 
-The hover is still declared while the shake runs; it simply is not being drawn,
-and it has the property back the moment the sequence ends.
+The hover is still declared while the shake runs; it simply is not being drawn.
+When the sequence ends the property is handed back **through its declared
+transition**, from wherever the sequence left it — so a pointer that arrived
+mid-shake gets its spring, rather than the card jumping to the hovered size on
+the sequence's last frame. A callback on that transition fires as it normally
+would, for the same reason.
+
+The builders do not care which order you write them in: declaring a transition
+after a sequence keeps the sequence, and the other way round too.
+
+## What a segment cannot be eased with
+
+A spring. A keyframe segment is a fixed slice of a fixed duration, which is
+exactly what a spring has not got — it settles when it settles. Passing one to
+`at_with` substitutes `EaseInOut` and says so in debug builds, rather than
+quietly playing the segment as a straight line.
+
+```rust
+Keyframes::new(320.0)
+    .at_with(0.0, Transform::IDENTITY, TimingFunction::EaseOut)
+    .at(1.0, Transform::rotate_degrees(2.0))
+```
 
 ## When not to use them
 
