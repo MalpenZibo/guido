@@ -68,7 +68,32 @@ impl<T: Animatable> Keyframes<T> {
 
     /// A stop whose outgoing segment is eased.
     pub fn at_with(mut self, offset: f32, value: T, easing: TimingFunction) -> Self {
-        let offset = offset.clamp(0.0, 1.0);
+        // `f32::clamp` passes NaN straight through, and an offset that
+        // compares false against everything makes the search below find no
+        // stop at all. An offset is usually computed — `i as f32 / count` with
+        // an empty count is all it takes — so this is absorbed at the door
+        // rather than left to surface as an index one place before the first.
+        let offset = if offset.is_nan() {
+            0.0
+        } else {
+            offset.clamp(0.0, 1.0)
+        };
+
+        // A spring has no duration, and a keyframe segment is nothing but one.
+        // `TimingFunction::evaluate` returns `t` unchanged for a spring, so
+        // taking it at face value would play the segment dead linear and say
+        // nothing about it.
+        let easing = match easing {
+            TimingFunction::Spring(_) => {
+                #[cfg(debug_assertions)]
+                log::warn!(
+                    "keyframes: a spring cannot ease a segment of fixed \
+                     duration; using EaseInOut for the stop at {offset}"
+                );
+                TimingFunction::EaseInOut
+            }
+            other => other,
+        };
         let stop = Stop {
             offset,
             value,
@@ -123,11 +148,18 @@ impl<T: Animatable> Keyframes<T> {
 
         // The pair this sits between. Timelines are short by nature — a
         // handful of stops — so a scan is the whole search.
+        //
+        // Never zero: `stops[next - 1]` is the stop before this one, and the
+        // two early returns above have already covered every `t` that could
+        // land before the first. The floor makes that structural rather than
+        // an argument, since the only way past them was a comparison that
+        // answered false to everything.
         let next = self
             .stops
             .iter()
             .position(|stop| stop.offset > t)
-            .unwrap_or(self.stops.len() - 1);
+            .unwrap_or(self.stops.len() - 1)
+            .max(1);
         let from = &self.stops[next - 1];
         let to = &self.stops[next];
 
@@ -210,5 +242,45 @@ mod tests {
         let kf: Keyframes<f32> = Keyframes::new(100.0);
         assert!(kf.is_empty());
         assert_eq!(kf.value_at(0.0), None);
+    }
+
+    /// An offset that compares false against everything used to send the
+    /// search one place before the first stop.
+    #[test]
+    fn a_nan_offset_does_not_walk_off_the_front() {
+        let kf = Keyframes::new(100.0).at(f32::NAN, 7.0_f32);
+        assert_eq!(kf.value_at(0.0), Some(7.0));
+        assert_eq!(kf.value_at(50.0), Some(7.0));
+    }
+
+    #[test]
+    fn a_nan_offset_lands_at_the_start() {
+        let kf = Keyframes::new(100.0).at(f32::NAN, 0.0_f32).at(1.0, 10.0);
+        assert_eq!(kf.value_at(0.0), Some(0.0));
+        assert_eq!(kf.value_at(99.0).map(|v| v > 9.0), Some(true));
+    }
+
+    /// A spring has no duration and a segment is nothing but one, so it cannot
+    /// be the easing — and it must not quietly become a straight line either.
+    #[test]
+    fn a_spring_easing_is_replaced_rather_than_played_flat() {
+        use crate::animation::SpringConfig;
+
+        let sprung = Keyframes::new(100.0)
+            .at_with(0.0, 0.0_f32, TimingFunction::Spring(SpringConfig::BOUNCY))
+            .at(1.0, 10.0);
+        let eased = Keyframes::new(100.0)
+            .at_with(0.0, 0.0_f32, TimingFunction::EaseInOut)
+            .at(1.0, 10.0);
+
+        assert_eq!(sprung.value_at(25.0), eased.value_at(25.0));
+        assert_ne!(
+            sprung.value_at(25.0),
+            Keyframes::new(100.0)
+                .at(0.0, 0.0_f32)
+                .at(1.0, 10.0)
+                .value_at(25.0),
+            "and it is not the linear one either"
+        );
     }
 }
