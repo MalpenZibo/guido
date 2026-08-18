@@ -233,7 +233,9 @@ container()
 ```
 
 The same declarations style a `text_input`, which additionally reads
-`cursor_color` and `selection_color`:
+`cursor_color`, `selection_color` and `placeholder_color`. Those three are
+`InputStyle`, not `TextStyle`, and resolve on their own walk — a `text` never
+looks for properties it cannot draw:
 
 ```rust
 container()

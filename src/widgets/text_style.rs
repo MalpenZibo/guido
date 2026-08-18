@@ -225,15 +225,6 @@ pub struct TextStyle {
     pub stroke: Option<Signal<TextStroke>>,
     /// Soft shadow cast by the glyphs.
     pub shadow: Option<Signal<TextShadow>>,
-    /// Caret colour. Only [`TextInput`](crate::widgets::TextInput) reads it.
-    pub cursor_color: Option<Signal<Color>>,
-    /// Selection highlight colour. Only
-    /// [`TextInput`](crate::widgets::TextInput) reads it.
-    pub selection_color: Option<Signal<Color>>,
-    /// Colour of an input's placeholder. Only
-    /// [`TextInput`](crate::widgets::TextInput) reads it, and it falls back to the
-    /// text colour at reduced alpha — a placeholder is the same text, quieter.
-    pub placeholder_color: Option<Signal<Color>>,
 }
 
 impl TextStyle {
@@ -256,9 +247,6 @@ impl TextStyle {
         self.font_weight = self.font_weight.or(outer.font_weight);
         self.stroke = self.stroke.or(outer.stroke);
         self.shadow = self.shadow.or(outer.shadow);
-        self.cursor_color = self.cursor_color.or(outer.cursor_color);
-        self.selection_color = self.selection_color.or(outer.selection_color);
-        self.placeholder_color = self.placeholder_color.or(outer.placeholder_color);
     }
 
     /// Whether every property has been resolved, so the walk can stop early.
@@ -269,8 +257,5 @@ impl TextStyle {
             && self.font_weight.is_some()
             && self.stroke.is_some()
             && self.shadow.is_some()
-            && self.cursor_color.is_some()
-            && self.selection_color.is_some()
-            && self.placeholder_color.is_some()
     }
 }
