@@ -67,6 +67,27 @@ impl TimingFunction {
     }
 
     /// Create a custom timing function from a closure
+    /// How far past 1.0 this curve can go, as a fraction of the distance
+    /// travelled. Zero for every curve that only eases.
+    ///
+    /// A bezier is bounded by its control polygon, so its control points give
+    /// the bound directly. A [`Custom`](TimingFunction::Custom) curve is
+    /// arbitrary and cannot be asked, so it gets an allowance — generous enough
+    /// for anything written to look like a spring, and documented as the one
+    /// case that is a bound rather than a fact.
+    pub fn peak_overshoot(&self) -> f32 {
+        const CUSTOM_ALLOWANCE: f32 = 0.25;
+        match self {
+            TimingFunction::Linear
+            | TimingFunction::EaseIn
+            | TimingFunction::EaseOut
+            | TimingFunction::EaseInOut => 0.0,
+            TimingFunction::CubicBezier(_, y1, _, y2) => (y1.max(*y2) - 1.0).max(0.0),
+            TimingFunction::Spring(config) => config.peak_overshoot(),
+            TimingFunction::Custom(_) => CUSTOM_ALLOWANCE,
+        }
+    }
+
     pub fn custom<F>(f: F) -> Self
     where
         F: Fn(f32) -> f32 + Send + Sync + 'static,

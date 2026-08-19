@@ -144,17 +144,27 @@ impl Container {
     ///
     /// Read tracked: a *declared* elevation changing is rare and does need a new
     /// reach, so it should invalidate the layout that recorded the old one.
+    ///
+    /// An animated elevation is allowed past its target — a spring overshoots by
+    /// design, `BOUNCY` by about 17% — so the largest *declared* value is not the
+    /// largest *drawn* one, and the peak is where the shadow ring would fall
+    /// outside the damage rect. The curve says how far it goes.
     pub(super) fn max_elevation(&self) -> f32 {
         let base = self.elevation.get_or(0.0);
-        let Some(ref ix) = self.interaction else {
-            return base;
+        let declared = match self.interaction {
+            Some(ref ix) => ix.states.iter().fold(base, |most, (_, state)| {
+                match state.elevation.map(|s| s.get()) {
+                    Some(level) => most.max(level),
+                    None => most,
+                }
+            }),
+            None => base,
         };
-        ix.states.iter().fold(base, |most, (_, state)| {
-            match state.elevation.map(|s| s.get()) {
-                Some(level) => most.max(level),
-                None => most,
-            }
-        })
+
+        match self.anims.as_ref().and_then(|a| a.elevation.as_ref()) {
+            Some(anim) => declared * (1.0 + anim.peak_overshoot()),
+            None => declared,
+        }
     }
 
     pub(super) fn effective_elevation_target(&self, id: WidgetId) -> f32 {
@@ -410,10 +420,11 @@ impl Container {
             }
         }
 
-        // A width with no colour behind it is an invisible frame, and one
-        // reaches the instance buffer every frame if it is not stopped here.
-        // `border_width(2.0)` on its own is newly spellable, and the default
-        // colour is transparent.
+        // A border that resolves to nothing visible must not reach the instance
+        // buffer every frame. Both halves are always declared together, so this
+        // is only reached deliberately — `border(2.0, TRANSPARENT)`,
+        // `border(0.0, RED)` — or in passing, while an animated colour crosses
+        // transparent.
         if d.border_width > 0.0 && d.border_color.a > 0.0 {
             ctx.draw_border_frame_with_curvature(
                 bounds,

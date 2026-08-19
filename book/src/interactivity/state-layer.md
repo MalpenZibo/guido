@@ -39,7 +39,6 @@ State layers can override these properties:
 ### Border
 
 ```rust
-.when_hovered(|s| s.border(2.0, Color::WHITE))
 .when_hovered(|s| s.border(2.0, Color::WHITE))   // both halves, always
 ```
 

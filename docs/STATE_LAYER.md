@@ -138,8 +138,6 @@ Note that a layer *replaces* the base value rather than ranking against it. A pr
 .border(1.0, Color::rgb(0.3, 0.3, 0.4))
 .when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
 .when_pressed(|s| s.border(3.0, Color::rgb(0.7, 0.7, 0.8)))
-
-// Or just width or color
 .when_hovered(|s| s.border(2.0, Color::WHITE))   // both halves, always
 ```
 

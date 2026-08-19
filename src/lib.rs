@@ -384,36 +384,36 @@ fn process_surface_commands(
                 wayland_state.set_surface_keyboard_interactivity(id, mode);
             }
             SurfaceCommand::SetAnchor { id, anchor } => {
-                // Recorded, like the size and the margin: the anchor is what
-                // `ExclusiveZone::Auto` reads to decide which axis it follows
-                // and which edge's margin counts, so a stale one keeps a dock
-                // reserving a bar's height at the top of the screen.
-                if let Some(surface) = surface_manager.get_mut(id) {
+                reconfigure(id, surface_manager, wayland_state, |surface, wayland| {
                     surface.config.anchor = anchor;
-                }
-                wayland_state.set_surface_anchor(id, anchor);
-                if let Some(surface) = surface_manager.get(id) {
-                    resync_exclusive_zone(id, &surface.config, wayland_state, None);
-                }
+                    wayland.set_surface_anchor(id, anchor);
+                    // A content axis the new anchor stretches can never take
+                    // effect, exactly as at creation.
+                    surface::warn_content_on_stretched_axis(id, &surface.config);
+                });
             }
             SurfaceCommand::SetSize { id, width, height } => {
-                // Recorded on the config as well as sent: the content-sizing
-                // pass reads it every frame to decide which axes it owns, so
-                // an axis handed back to `content()` has to be visible there.
-                let root = surface_manager.get_mut(id).map(|surface| {
+                let asked = reconfigure(id, surface_manager, wayland_state, |surface, wayland| {
                     surface.config.width = width;
                     surface.config.height = height;
-                    surface.widget_id
-                });
+                    // The creation path refuses a content axis the compositor
+                    // owns with a warning; a runtime resize has to say the same,
+                    // or a full-width bar shrinks to its content in silence.
+                    surface::warn_content_on_stretched_axis(id, &surface.config);
 
-                let live = wayland_state.get_surface(id).map(|s| (s.width, s.height));
-                let (ask_w, ask_h, needs_measure) = resize_request(width, height, live);
-                wayland_state.set_surface_size(id, ask_w, ask_h);
-                if needs_measure && let Some(root) = root {
+                    let live = wayland.get_surface(id).map(|s| (s.width, s.height));
+                    let (ask_w, ask_h, needs_measure) = resize_request(width, height, live);
+                    let (stretch_w, stretch_h) =
+                        surface::compositor_owned_axes(surface.config.anchor);
+                    wayland.set_surface_size(
+                        id,
+                        if stretch_w { 0 } else { ask_w },
+                        if stretch_h { 0 } else { ask_h },
+                    );
+                    (needs_measure, surface.widget_id)
+                });
+                if let Some((true, root)) = asked {
                     jobs::request_job(root, jobs::JobRequest::Layout);
-                }
-                if let Some(surface) = surface_manager.get(id) {
-                    resync_exclusive_zone(id, &surface.config, wayland_state, None);
                 }
             }
             SurfaceCommand::SetExclusiveZone { id, zone } => {
@@ -427,14 +427,10 @@ fn process_surface_commands(
                 }
             }
             SurfaceCommand::SetMargin { id, margin } => {
-                if let Some(surface) = surface_manager.get_mut(id) {
+                reconfigure(id, surface_manager, wayland_state, |surface, wayland| {
                     surface.config.margin = margin;
-                }
-                wayland_state.set_surface_margin(id, margin);
-                // An `Auto` reservation counts the anchored edge's margin.
-                if let Some(surface) = surface_manager.get(id) {
-                    resync_exclusive_zone(id, &surface.config, wayland_state, None);
-                }
+                    wayland.set_surface_margin(id, margin);
+                });
             }
             SurfaceCommand::SetInputRegion { id, rects } => {
                 wayland_state.set_surface_input_region(id, rects.as_deref());
@@ -915,6 +911,28 @@ fn layout_pass(
     // A `WidgetRef::focus()` from application code lands here: after layout, so a
     // handle attached this very frame has resolved to a widget.
     reactive::focus::apply_pending_focus(tree);
+}
+
+/// Apply a change to a surface, then re-publish what follows from it.
+///
+/// Every property an [`ExclusiveZone::Auto`] reservation follows — the anchor,
+/// the size, the margin — goes through here, so the resync happens in one place
+/// and a fifth trigger cannot be added to three of the four. Forgetting exactly
+/// that is how a re-anchored dock went on reserving a bar's height at the top of
+/// the screen.
+///
+/// The change records on the config *and* sends the protocol request, because
+/// the two must not drift: the content-sizing pass reads the config every frame.
+fn reconfigure<R>(
+    id: SurfaceId,
+    surface_manager: &mut SurfaceManager,
+    wayland_state: &mut platform::WaylandState,
+    change: impl FnOnce(&mut ManagedSurface, &mut platform::WaylandState) -> R,
+) -> Option<R> {
+    let surface = surface_manager.get_mut(id)?;
+    let result = change(surface, wayland_state);
+    resync_exclusive_zone(id, &surface.config, wayland_state, None);
+    Some(result)
 }
 
 /// Paint the tree, and collect the compositor blur region the paint left behind.

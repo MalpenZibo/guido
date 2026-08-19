@@ -828,6 +828,15 @@ impl Container {
     ///
     /// Two constant endpoints — much the commonest case — build one constant
     /// gradient rather than a derived recomputing a value that cannot change.
+    ///
+    /// The endpoints are converted before being asked, so the constant path
+    /// leaves two stored signals behind that nothing reads. Reading them first
+    /// would need an `as_constant` on `IntoSignal` itself, and its blanket
+    /// `Into<T>` impl consumes `self`, so that hook costs a `Clone` bound on
+    /// every value ever passed to any reactive property. Two arena slots per
+    /// gradient shorthand, freed with the scope, is the cheaper side of that
+    /// trade — the closure and the per-read recomputation were the parts worth
+    /// removing.
     fn gradient_between<M1, M2>(
         self,
         start: impl IntoSignal<Color, M1>,

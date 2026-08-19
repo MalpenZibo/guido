@@ -206,6 +206,31 @@ pub enum SurfaceExtent {
     Content,
 }
 
+/// Which axes the compositor owns, from the anchor: an axis pinned to both of
+/// its screen edges is stretched to fit and the surface's request for it is
+/// ignored.
+///
+/// Returns `(width, height)`.
+pub(crate) fn compositor_owned_axes(anchor: Anchor) -> (bool, bool) {
+    (
+        anchor.contains(Anchor::LEFT) && anchor.contains(Anchor::RIGHT),
+        anchor.contains(Anchor::TOP) && anchor.contains(Anchor::BOTTOM),
+    )
+}
+
+/// Warn about a `content()` axis the compositor owns, which can never take
+/// effect. Shared so the creation path and `SurfaceHandle::set_size` cannot
+/// disagree about what is worth saying.
+pub(crate) fn warn_content_on_stretched_axis(id: SurfaceId, config: &SurfaceConfig) {
+    let (stretch_w, stretch_h) = compositor_owned_axes(config.anchor);
+    if (stretch_w && config.width.is_content()) || (stretch_h && config.height.is_content()) {
+        log::warn!(
+            "Surface {id:?}: content() sizing on an axis anchored to both screen \
+             edges is compositor-owned and will be ignored"
+        );
+    }
+}
+
 impl SurfaceExtent {
     /// The initial protocol size (`Content` starts at 1px until the first
     /// measure lands).

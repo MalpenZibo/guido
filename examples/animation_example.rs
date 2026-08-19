@@ -175,7 +175,17 @@ fn border_card() -> Container {
             )
             .animate_border_width(Transition::spring(SpringConfig::BOUNCY))
             .animate_border_color(Transition::new(300.0, TimingFunction::EaseOut))
-            .when_hovered(|s| s.border(2.0, Color::rgb(0.40, 0.80, 0.60)))
+            // A border is declared as a pair, so the hover restates the width —
+            // and restates it as the same signal, or hovering would pin it and
+            // the click would have nothing left to spring. Each half of a state
+            // layer's border takes a signal of its own, which is what makes that
+            // possible.
+            .when_hovered(|s| {
+                s.border(
+                    move || if thick.get() { 14.0 } else { 2.0 },
+                    Color::rgb(0.40, 0.80, 0.60),
+                )
+            })
             .on_click(move || thick.update(|t| *t = !*t)),
     )
 }

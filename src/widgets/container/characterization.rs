@@ -14,7 +14,7 @@
 use rustc_hash::FxHashSet;
 
 use super::*;
-use crate::animation::{TimingFunction, Transition};
+use crate::animation::{SpringConfig, TimingFunction, Transition};
 use crate::jobs::{self, JobType};
 use crate::layout::{Constraints, Flex, at_least, at_most, fill, fraction};
 use crate::reactive::create_signal;
@@ -1954,6 +1954,40 @@ fn the_damage_reach_covers_the_elevation_a_hover_can_reach() {
     let mut flat = H::new(container().width(40.0).height(40.0).background(Color::RED));
     flat.fit(100.0, 100.0);
     assert_eq!(flat.tree.paint_overflow(flat.root), 0.0);
+}
+
+/// A spring goes past its target on purpose, so a reach measured from the target
+/// leaves the shadow ring outside the damage rect exactly at the peak — the same
+/// artefact the reach exists to prevent, moved to the moment it is most visible.
+#[test]
+fn the_damage_reach_allows_for_a_spring_overshooting() {
+    let bouncy = |c: Container| {
+        c.width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .elevation(0.0)
+            .when_hovered(|s| s.elevation(8.0))
+    };
+
+    let mut eased = H::new(
+        bouncy(container()).animate_elevation(Transition::new(80.0, TimingFunction::Linear)),
+    );
+    eased.fit(100.0, 100.0);
+    let without_bounce = eased.tree.paint_overflow(eased.root);
+
+    let mut sprung =
+        H::new(bouncy(container()).animate_elevation(Transition::spring(SpringConfig::BOUNCY)));
+    sprung.fit(100.0, 100.0);
+    let with_bounce = sprung.tree.paint_overflow(sprung.root);
+
+    assert!(
+        with_bounce > without_bounce,
+        "a bouncy spring has to reach further than an ease: {with_bounce} vs {without_bounce}"
+    );
+    assert!(
+        with_bounce >= style::elevation_to_shadow(8.0 * 1.17).extent() - 0.01,
+        "and far enough for BOUNCY's ~17%, got {with_bounce}"
+    );
 }
 
 /// A declared elevation changing does need a new reach, so it must invalidate

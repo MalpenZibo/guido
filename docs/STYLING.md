@@ -197,7 +197,7 @@ container().padding([8.0, 16.0])                   // [vertical, horizontal]
 container().padding([8, 16])                       // integer arrays work too
 container().padding([1.0, 2.0, 3.0, 4.0])         // [top, right, bottom, left]
 container().padding([1, 2, 3, 4])                  // integer 4-value shorthand
-container().padding(Padding::all(8.0).top(20.0))   // builder pattern
+container().padding(Padding::all(8.0).with_top(20.0))   // builder pattern
 ```
 
 ## Sizing
