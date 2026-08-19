@@ -626,4 +626,24 @@ mod tests {
         color.set(Color::BLUE);
         assert_eq!(frame(&mut tree, root).0, Color::BLUE);
     }
+
+    /// A shadow that resolves to nothing visible must not expand into a ring of
+    /// text copies. Same gate the stroke has, and the same one the container's
+    /// shadow got — a transparent shadow is spellable deliberately, and in
+    /// passing while an animated colour leaves transparent.
+    #[test]
+    fn a_fully_transparent_text_shadow_draws_nothing() {
+        let invisible = TextShadow::new(2.0, 2.0, 4.0, Color::TRANSPARENT);
+        assert_eq!(
+            commands(text("hi").text_shadow(invisible)),
+            vec!["text"],
+            "the glyphs, and no copies behind them"
+        );
+
+        let visible = TextShadow::new(2.0, 2.0, 4.0, Color::rgba(0.0, 0.0, 0.0, 0.5));
+        assert!(
+            commands(text("hi").text_shadow(visible)).len() > 1,
+            "and a shadow that can be seen still draws"
+        );
+    }
 }

@@ -65,7 +65,10 @@ impl TimingFunction {
             // Clamped, so `peak_overshoot` is a bound rather than a hope:
             // anything sized from it — a damage rect, most of all — would
             // otherwise be measured for less than what gets drawn.
-            TimingFunction::Custom(f) => f(t).min(1.0 + Self::CUSTOM_MAX_OVERSHOOT),
+            TimingFunction::Custom(f) => f(t).clamp(
+                -Self::CUSTOM_MAX_OVERSHOOT,
+                1.0 + Self::CUSTOM_MAX_OVERSHOOT,
+            ),
         }
     }
 
@@ -88,15 +91,26 @@ impl TimingFunction {
             | TimingFunction::EaseIn
             | TimingFunction::EaseOut
             | TimingFunction::EaseInOut => 0.0,
-            TimingFunction::CubicBezier(_, y1, _, y2) => (y1.max(*y2) - 1.0).max(0.0),
+            // Both ends. An anticipation curve dips *below* its start before it
+            // goes anywhere — `cubic_bezier(0.5, -0.6, 0.5, 1.2)` is the shape
+            // every "wind up first" easing has — and a caller sizing a bound from
+            // this would otherwise be told the value never leaves [0, 1] from
+            // below. The bezier is contained by its control polygon, so the
+            // control points bound both directions.
+            TimingFunction::CubicBezier(_, y1, _, y2) => {
+                let above = (y1.max(*y2) - 1.0).max(0.0);
+                let below = (-y1.min(*y2)).max(0.0);
+                above.max(below)
+            }
             TimingFunction::Spring(config) => config.peak_overshoot(),
             TimingFunction::Custom(_) => Self::CUSTOM_MAX_OVERSHOOT,
         }
     }
 
-    /// How far past its target a [`Custom`](TimingFunction::Custom) curve is
-    /// allowed to go. Generous enough for anything written to look like a
-    /// spring, and enforced rather than trusted.
+    /// How far past either end a [`Custom`](TimingFunction::Custom) curve is
+    /// allowed to go — past 1 at the finish, and below 0 at the start, since an
+    /// anticipation curve winds up before it moves. Generous enough for anything
+    /// written to look like a spring, and enforced rather than trusted.
     pub const CUSTOM_MAX_OVERSHOOT: f32 = 0.25;
 
     /// Create a custom timing function from a closure.
@@ -213,17 +227,22 @@ mod overshoot_bound_tests {
     /// would otherwise be measured for less than what is drawn.
     #[test]
     fn a_custom_curve_cannot_exceed_the_allowance_it_is_credited_with() {
-        let overzealous = TimingFunction::custom(|t| t * 1.5);
-        let bound = 1.0 + TimingFunction::CUSTOM_MAX_OVERSHOOT;
+        let allowance = TimingFunction::CUSTOM_MAX_OVERSHOOT;
+        // Overshooting at the end, and anticipating at the start: a bound that
+        // holds only above 1 is not a bound, and every "wind up first" easing
+        // dips below 0.
+        let overzealous = TimingFunction::custom(|t| t * 2.0 - 0.5);
 
         for step in 0..=100 {
             let t = step as f32 / 100.0;
+            let v = overzealous.evaluate(t);
             assert!(
-                overzealous.evaluate(t) <= bound + 1e-6,
-                "t = {t} evaluated past the bound"
+                v <= 1.0 + allowance + 1e-6 && v >= -allowance - 1e-6,
+                "t = {t} evaluated to {v}, outside the bound"
             );
         }
-        assert_eq!(overzealous.evaluate(1.0), bound, "and reaches it");
+        assert_eq!(overzealous.evaluate(1.0), 1.0 + allowance, "and reaches it");
+        assert_eq!(overzealous.evaluate(0.0), -allowance, "at both ends");
     }
 
     /// The curves that only ease report nothing, and a bezier reports its own
@@ -239,6 +258,11 @@ mod overshoot_bound_tests {
         assert_eq!(
             TimingFunction::CubicBezier(0.4, 0.0, 0.6, 1.0).peak_overshoot(),
             0.0
+        );
+        // Anticipation: it dips to -0.6 before it rises to 1.2, and the larger
+        // excursion is the one that bounds it.
+        assert!(
+            (TimingFunction::CubicBezier(0.5, -0.6, 0.5, 1.2).peak_overshoot() - 0.6).abs() < 1e-5
         );
     }
 }

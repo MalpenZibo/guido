@@ -386,7 +386,12 @@ impl Container {
         // takes can change between frames; a gradient that dropped the shadow
         // meant an elevation animation stopped drawing halfway through while
         // still asking for a frame at every step.
-        let shadow = (d.elevation > 0.0).then(|| elevation_to_shadow(d.elevation));
+        // Not `elevation > 0.0`: the first frames of a lift are at ~0.001, where
+        // the shadow's alpha rounds to nothing and every frame would still push a
+        // rect carrying it. The same gate the border gets, on the thing that is
+        // actually drawn rather than on the level that asked for it.
+        let shadow = elevation_to_shadow(d.elevation);
+        let shadow = (shadow.color.a > SHADOW_ALPHA_FLOOR).then_some(shadow);
 
         if let Some(ref gradient) = d.gradient {
             ctx.draw_rounded_rect_full(
@@ -436,6 +441,11 @@ impl Container {
         }
     }
 }
+
+/// Below this the shadow is not a faint shadow, it is nothing — and a rect
+/// carrying it is a rect drawn for no reason, once per frame for as long as an
+/// elevation animation is leaving zero.
+const SHADOW_ALPHA_FLOOR: f32 = 0.004;
 
 /// The tabulated Material steps, `level => (offset_y, blur, alpha)`.
 ///

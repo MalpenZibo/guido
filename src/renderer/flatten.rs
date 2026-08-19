@@ -8,7 +8,7 @@ use smallvec::SmallVec;
 use crate::transform::Transform;
 use crate::widgets::Rect;
 
-use super::commands::DrawCommand;
+use super::commands::{CornerRadii, DrawCommand};
 use super::tree::{CachedFlatten, ClipRegion, RenderNode};
 
 /// Render layer for draw command ordering.
@@ -65,6 +65,49 @@ pub struct FlattenedCommand {
     /// Whether the clip is in local coordinates (use frag_pos in shader instead of world_pos).
     /// This is true for overlay clips on transformed containers.
     pub clip_is_local: bool,
+}
+
+impl FlattenedCommand {
+    /// Where a local rounded rect of this command lands in world space: the
+    /// axis-aligned box that contains it, and the corner radii grown with it.
+    ///
+    /// **One implementation, because there are two consumers.** A backdrop blur
+    /// is filtered by the renderer and, for the same command, published to the
+    /// compositor as a `wl_region` — and the two must describe the same shape.
+    /// They did not: one folded four corners and the other subtracted two, so a
+    /// container rotated 45° produced a correct region for the renderer and a
+    /// zero-width one for the compositor.
+    ///
+    /// Four corners, because two only bound the box for a transform that keeps
+    /// the axes: a rotation moves the extremes onto the other diagonal. And the
+    /// radii scale with the box, or a `.scale(2.0)` container reports a shape
+    /// whose corners are cut half as deep as the one it draws.
+    pub fn world_rounded_rect(&self, rect: Rect, radii: CornerRadii) -> (Rect, CornerRadii) {
+        let corners = [
+            self.world_transform.transform_point(rect.x, rect.y),
+            self.world_transform
+                .transform_point(rect.x + rect.width, rect.y),
+            self.world_transform
+                .transform_point(rect.x, rect.y + rect.height),
+            self.world_transform
+                .transform_point(rect.x + rect.width, rect.y + rect.height),
+        ];
+        let min_x = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
+        let max_x = corners
+            .iter()
+            .map(|c| c.0)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let min_y = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
+        let max_y = corners
+            .iter()
+            .map(|c| c.1)
+            .fold(f32::NEG_INFINITY, f32::max);
+
+        (
+            Rect::new(min_x, min_y, max_x - min_x, max_y - min_y),
+            radii.scaled(self.world_transform.extract_scale()),
+        )
+    }
 }
 
 /// Draw commands grouped so that batching never reorders drawing.
@@ -930,5 +973,72 @@ mod tests {
         let mut layers = Vec::new();
         layered.drain_into(&mut commands, &mut layers);
         assert!(layers.iter().all(|layer| !layer.is_empty()));
+    }
+}
+
+#[cfg(test)]
+mod world_geometry_tests {
+    use super::*;
+    use crate::widgets::Color;
+
+    fn command(transform: Transform) -> FlattenedCommand {
+        FlattenedCommand {
+            command: Rc::new(DrawCommand::RoundedRect {
+                rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+                color: Color::RED,
+                radius: CornerRadii::uniform(16.0),
+                curvature: 1.0,
+                border: None,
+                shadow: None,
+                gradient: None,
+            }),
+            world_transform: transform,
+            world_transform_origin: None,
+            layer: RenderLayer::Shapes,
+            clip: None,
+            clip_is_local: false,
+        }
+    }
+
+    /// Two opposite corners do not bound a rotated box: a 45° rotation puts the
+    /// extremes on the *other* diagonal, and subtracting the two you happen to
+    /// have gives a zero-width rect — which downstream reads as "nothing to do".
+    #[test]
+    fn a_rotated_box_reports_the_diagonal_it_actually_covers() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let (world, _) = command(Transform::rotate_degrees(45.0))
+            .world_rounded_rect(rect, CornerRadii::from(0.0));
+
+        let diagonal = 100.0 * 2.0f32.sqrt();
+        assert!(
+            (world.width - diagonal).abs() < 0.1 && (world.height - diagonal).abs() < 0.1,
+            "a 100x100 turned 45° covers {diagonal:.1} square, got {:.1}x{:.1}",
+            world.width,
+            world.height
+        );
+    }
+
+    /// The radii travel with the box, or a scaled container reports a shape
+    /// whose corners are cut a different amount from the one it draws.
+    #[test]
+    fn the_corner_radii_scale_with_the_box() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let (world, radii) =
+            command(Transform::scale(2.0)).world_rounded_rect(rect, CornerRadii::uniform(16.0));
+
+        assert_eq!(world.width, 200.0);
+        assert_eq!(radii.max(), 32.0, "twice the box, twice the corner");
+    }
+
+    /// A translation moves it and changes nothing else.
+    #[test]
+    fn a_translation_only_moves_it() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 60.0);
+        let (world, radii) = command(Transform::translate(20.0, 30.0))
+            .world_rounded_rect(rect, CornerRadii::uniform(8.0));
+
+        assert_eq!((world.x, world.y), (20.0, 30.0));
+        assert_eq!((world.width, world.height), (100.0, 60.0));
+        assert_eq!(radii.max(), 8.0);
     }
 }

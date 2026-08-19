@@ -232,7 +232,12 @@ pub(crate) fn warn_content_on_stretched_axis(id: SurfaceId, config: &SurfaceConf
 }
 
 /// The size an axis is currently asking for: its own, if it has one, and the
-/// live surface size while a content axis waits to be measured.
+/// size the compositor has confirmed while a content axis waits to be measured.
+///
+/// Before the first configure there is no confirmed size, and the placeholder is
+/// what creation asks for too — the content-measure pass runs on the first
+/// frames of a surface either way, so 1px is a value it is leaving, not one it
+/// can be stuck at.
 pub(crate) fn requested_extent(extent: SurfaceExtent, live: Option<u32>) -> u32 {
     match extent {
         SurfaceExtent::Fixed(v) => v,

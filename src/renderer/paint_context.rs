@@ -407,7 +407,12 @@ impl<'a> PaintContext<'a> {
             return;
         }
 
-        if let Some(shadow) = shadow {
+        // Filtered like the stroke below it, and for the same reason the
+        // container's shadow is: a fully transparent one still expands into a
+        // ring of text copies, every frame, drawing nothing. Spellable
+        // deliberately (`TextShadow::new(.., Color::TRANSPARENT)`) and in
+        // passing, while an animated shadow colour leaves transparent.
+        if let Some(shadow) = shadow.filter(|s| s.color.a > 0.0) {
             for (dx, dy, sample_color) in shadow.samples() {
                 self.draw_text_styled(
                     text,

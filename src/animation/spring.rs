@@ -89,7 +89,19 @@ impl SpringConfig {
             return 0.0;
         }
         let zeta = self.damping / denominator;
-        if zeta >= 1.0 || zeta <= 0.0 {
+        if zeta < 0.0 {
+            // Negative damping is not a spring, it is an explosion. Nothing
+            // bounds it, so it reports nothing rather than a number a caller
+            // would size a rect from.
+            return 0.0;
+        }
+        if zeta == 0.0 {
+            // Undamped: it swings the whole way past its target, forever. The
+            // formula below is the limit of exactly this, and reporting zero for
+            // the spring that overshoots *most* was the wrong way round.
+            return 1.0;
+        }
+        if zeta >= 1.0 {
             return 0.0;
         }
         (-std::f32::consts::PI * zeta / (1.0 - zeta * zeta).sqrt()).exp()
@@ -249,6 +261,26 @@ mod overshoot_tests {
                 "{config:?} documents {documented} and computes {computed}"
             );
         }
+    }
+
+    /// The spring that oscillates most reported the least. Undamped, it swings
+    /// the whole way past its target and keeps doing it, so anything sizing a
+    /// bound from the target has to be told that.
+    #[test]
+    fn an_undamped_spring_reports_a_full_overshoot() {
+        let undamped = SpringConfig {
+            mass: 1.0,
+            stiffness: 100.0,
+            damping: 0.0,
+        };
+        assert_eq!(undamped.peak_overshoot(), 1.0);
+
+        // And it is the limit the formula approaches, so nothing jumps at zero.
+        let nearly = SpringConfig {
+            damping: 0.02,
+            ..undamped
+        };
+        assert!(nearly.peak_overshoot() > 0.99);
     }
 
     /// A critically damped or overdamped spring never passes its target.

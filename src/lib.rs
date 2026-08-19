@@ -297,7 +297,7 @@ fn publish_exclusive_zone(
     wayland_state: &mut platform::WaylandState,
     measured: Option<(u32, u32)>,
 ) {
-    let known = measured.or_else(|| wayland_state.get_surface(id).map(|s| (s.width, s.height)));
+    let known = measured.or_else(|| configured_size(wayland_state, id));
     let width = surface::requested_extent(config.width, known.map(|(w, _)| w));
     let height = surface::requested_extent(config.height, known.map(|(_, h)| h));
     let zone = config
@@ -378,13 +378,18 @@ fn process_surface_commands(
                 }
             }
             SurfaceCommand::SetExclusiveZone { id, zone } => {
-                // Through `reconfigure` like the rest, but this one publishes
-                // unconditionally: the policy *itself* changed, where the other
-                // triggers only matter to `Auto`. The resync `reconfigure` then
-                // does is a no-op for anything else.
+                // Recorded through `reconfigure` like the rest; the publishing is
+                // left to the resync it already does, which for `Auto` is exactly
+                // this. Doing it inside the closure too sent the request twice —
+                // and logged it twice — for the one policy the resync is for.
+                //
+                // The other policies are numbers the resync skips, so they
+                // publish here.
                 reconfigure(id, surface_manager, wayland_state, |surface, wayland| {
                     surface.config.exclusive_zone = zone;
-                    publish_exclusive_zone(id, &surface.config, wayland, None);
+                    if zone != surface::ExclusiveZone::Auto {
+                        publish_exclusive_zone(id, &surface.config, wayland, None);
+                    }
                 });
             }
             SurfaceCommand::SetMargin { id, margin } => {
@@ -877,6 +882,20 @@ fn layout_pass(
     reactive::focus::apply_pending_focus(tree);
 }
 
+/// The size the compositor has confirmed, if it has confirmed one.
+///
+/// `WaylandSurfaceState` is created holding the size that was *requested*, which
+/// for a content axis is the 1px placeholder — so reading it unconditionally
+/// would report a number nobody agreed on as though it were live, and make
+/// `requested_extent`'s "no size yet" branch unreachable while the case it
+/// describes was still happening.
+fn configured_size(wayland_state: &platform::WaylandState, id: SurfaceId) -> Option<(u32, u32)> {
+    wayland_state
+        .get_surface(id)
+        .filter(|s| s.configured)
+        .map(|s| (s.width, s.height))
+}
+
 /// Send the size the surface is currently asking for, and report whether the
 /// content-measure pass has to run before that answer is right.
 ///
@@ -893,7 +912,7 @@ fn send_size(
     // its content in silence.
     surface::warn_content_on_stretched_axis(id, &surface.config);
 
-    let live = wayland_state.get_surface(id).map(|s| (s.width, s.height));
+    let live = configured_size(wayland_state, id);
     let (ask_w, ask_h, needs_measure) = surface::resize_request(&surface.config, live);
     wayland_state.set_surface_size(id, ask_w, ask_h);
     (needs_measure, surface.widget_id)
@@ -946,8 +965,10 @@ fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry)
         // is on screen — so it is also the right region. Still synced: a
         // blur-region change without a repaint (the compositor's blur capability
         // arriving) needs its own commit.
-        let blur_rects = blur::regions_from_commands(&surface.flattened_commands);
-        wayland_state.sync_blur_region(id, blur_rects, qh, true);
+        if wayland_state.supports_blur_region() {
+            let blur_rects = blur::regions_from_commands(&surface.flattened_commands);
+            wayland_state.sync_blur_region(id, blur_rects, qh, true);
+        }
         render_stats::record_frame_skipped();
         render_stats::end_frame(&DamageRegion::None);
         return;
@@ -978,8 +999,13 @@ fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry)
     // it cannot disagree with what is on screen — see `blur`. Set before
     // present() so it rides the buffer commit: region and content change
     // together.
-    let blur_rects = blur::regions_from_commands(&surface.flattened_commands);
-    wayland_state.sync_blur_region(id, blur_rects, qh, false);
+    // Asked before the scan, not after: without the protocol there is nothing
+    // to publish, and walking the frame's commands to find out would be a
+    // per-frame cost on the compositors that can do the least with it.
+    if wayland_state.supports_blur_region() {
+        let blur_rects = blur::regions_from_commands(&surface.flattened_commands);
+        wayland_state.sync_blur_region(id, blur_rects, qh, false);
+    }
 
     // Re-arm the frame callback BEFORE presenting so the request rides
     // the same commit as the buffer (present() commits internally). The
@@ -1609,10 +1635,20 @@ mod exclusive_zone_resync_tests {
             surface::requested_extent(SurfaceExtent::Content, Some(240)),
             240
         );
-        // Only before the first configure is there nothing better to say.
+        // Before the first configure there is nothing better to say, and the
+        // placeholder is what creation asks for too — the content-measure pass
+        // runs on a surface's first frames regardless, so this is a size it is
+        // on its way out of rather than one it can be stuck at. What must not
+        // happen is reporting the placeholder as though the compositor had
+        // agreed to it, which is why `live` is the *configured* size.
         assert_eq!(
             surface::requested_extent(SurfaceExtent::Content, None),
             SurfaceExtent::Content.initial()
+        );
+        assert_eq!(
+            surface::requested_extent(SurfaceExtent::Content, Some(1)),
+            1,
+            "and once configured at 1px, 1px is the honest answer"
         );
     }
 

@@ -24,8 +24,8 @@
 //! For lists, [`keyed()`] preserves per-row state through stable identity
 //! and rebuilds only rows whose item content changed.
 
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::rc::Rc;
 
@@ -194,12 +194,12 @@ where
             next_generation: u64,
             /// Rows built by the latest run, adopted by the reconciler's
             /// factory calls in the same pass.
-            pending: HashMap<u64, Box<dyn Widget>>,
+            pending: FxHashMap<u64, Box<dyn Widget>>,
         }
 
         let state = Rc::new(RefCell::new(State {
             next_generation: 0,
-            pending: HashMap::new(),
+            pending: FxHashMap::default(),
         }));
         let list_fn = Rc::new(self);
 
@@ -347,17 +347,21 @@ fn add_keyed_children<T, I, K, W>(
     /// non-cryptographic hash can rule that out for keys like strings and
     /// tuples, which is exactly what this signature invites.
     struct KeyedState<T, K> {
-        rows: HashMap<K, Row<T>>,
+        rows: FxHashMap<K, Row<T>>,
         next_generation: u64,
         /// Widgets built eagerly this pass, awaiting adoption by the
         /// reconciler's factory calls (keyed by generation).
-        pending: HashMap<u64, (Box<dyn Widget>, OwnerId)>,
+        pending: FxHashMap<u64, (Box<dyn Widget>, OwnerId)>,
     }
 
+    // Fx rather than the std hasher: this runs once per row per pass, on every
+    // frame a list changes, and widening the key from u64 to any Hash made a
+    // string key ordinary. These are the app's own identities, not adversarial
+    // input, which is the condition SipHash is there for.
     let state = Rc::new(RefCell::new(KeyedState::<T, K> {
-        rows: HashMap::new(),
+        rows: FxHashMap::default(),
         next_generation: 0,
-        pending: HashMap::new(),
+        pending: FxHashMap::default(),
     }));
 
     let items_fn = move || {
@@ -370,7 +374,7 @@ fn add_keyed_children<T, I, K, W>(
             dispose_owner_now(owner_id);
         }
 
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = FxHashSet::default();
         let mut out = Vec::new();
         for (index, item) in items.into_iter().enumerate() {
             let key = key_fn(&item);

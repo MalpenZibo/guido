@@ -1,10 +1,14 @@
 //! Compositor-side background blur (`ext-background-effect-v1`).
 //!
-//! Containers opt in via `.background_blur()`. During paint they register
-//! their id and corner radius here; each frame the surface sync reads the
-//! current bounds from the tree, tessellates rounded corners into
-//! axis-aligned rects (`wl_region` has no notion of curves), and hands them
-//! to the platform layer. No-ops when the compositor doesn't support the
+//! Containers opt in via [`backdrop_blur`](crate::widgets::Container::backdrop_blur),
+//! which emits one `DrawCommand::BackdropBlur` carrying the sources it asked
+//! for. The renderer filters the surface's own backdrop from that command; this
+//! module reads the compositor's region off the same one, after the frame has
+//! been flattened, and tessellates its rounded corners into axis-aligned rects
+//! — `wl_region` has no notion of curves.
+//!
+//! Nothing is remembered between frames: see [`regions_from_commands`] for why
+//! that is the whole point. No-ops when the compositor does not support the
 //! protocol or its blur capability.
 
 use crate::backdrop::BackdropSources;
@@ -49,16 +53,12 @@ pub(crate) fn regions_from_commands(commands: &[FlattenedCommand]) -> Vec<BlurRe
             continue;
         }
 
-        // World coordinates, so a scrolled or transformed container reports
-        // where it actually is. The protocol takes rectangles, so a rotated one
-        // contributes its bounding box.
-        let (x, y) = cmd.world_transform.transform_point(rect.x, rect.y);
-        let (x2, y2) = cmd
-            .world_transform
-            .transform_point(rect.x + rect.width, rect.y + rect.height);
-        let world = Rect::new(x.min(x2), y.min(y2), (x2 - x).abs(), (y2 - y).abs());
-
-        out.extend(rounded_rect_to_blur_rects(world, corner_radii.max()));
+        // World coordinates, so a scrolled or transformed container reports where
+        // it actually is — and by the same computation the renderer uses for the
+        // surface half of this very command, so the two cannot describe
+        // different shapes.
+        let (world, world_radii) = cmd.world_rounded_rect(*rect, *corner_radii);
+        out.extend(rounded_rect_to_blur_rects(world, world_radii.max()));
     }
     out.sort_unstable_by_key(|r| (r.y, r.x, r.width, r.height));
     out

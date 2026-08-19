@@ -29,6 +29,12 @@ use crate::widgets::widget::{Event, EventResponse, MouseButton};
 struct H {
     tree: Tree,
     root: WidgetId,
+    /// The last frame's render tree and flattened commands, retained as the
+    /// loop retains them — a frame that repaints nothing publishes from these.
+    last: Option<(
+        std::rc::Rc<RenderNode>,
+        Vec<crate::renderer::FlattenedCommand>,
+    )>,
 }
 
 impl H {
@@ -36,7 +42,11 @@ impl H {
         let mut tree = Tree::new();
         let root = tree.register(Box::new(widget));
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-        Self { tree, root }
+        Self {
+            tree,
+            root,
+            last: None,
+        }
     }
 
     fn layout(&mut self, constraints: Constraints) -> Size {
@@ -61,15 +71,17 @@ impl H {
         node
     }
 
-    /// One frame, in the phases and the order the loop runs them: queued jobs,
-    /// layout, paint, flatten, the compositor blur region read off the result,
-    /// and `crate::cache_paint_results` to finish.
+    /// One frame, in the phases and the order `render_surface` runs them: queued
+    /// jobs, layout, the skip-frame gate, paint, flatten, the compositor blur
+    /// region read off the result, and `crate::cache_paint_results` to finish.
     ///
-    /// That last one is the real function, not a stand-in for the half of it a
-    /// test happened to need. Writing `clear_needs_paint` by hand instead left
-    /// `cache_paint` undone, so `reuse_cached` never found a cache and every
-    /// test repainted everything — which made a whole class of bug, the one
-    /// about a widget that is *not* repainted, structurally invisible here.
+    /// Two of those are the loop's own code rather than a stand-in for it, and
+    /// both were learned the hard way. `cache_paint_results` written out by hand
+    /// left `cache_paint` undone, so `reuse_cached` never found a cache and every
+    /// test repainted everything — making the whole class of bug about a widget
+    /// that is *not* repainted structurally invisible here. And a `frame` that
+    /// always painted could not reach the gate at all, where the loop publishes
+    /// the region from the buffer it retained.
     ///
     /// Use this, not `paint()`, for anything whose correctness is about when in
     /// the frame it happens, or about which widgets painted at all.
@@ -78,6 +90,15 @@ impl H {
         self.fit(w, h);
 
         let root = self.root;
+        if !self.tree.needs_paint(root)
+            && let Some((node, commands)) = self.last.clone()
+        {
+            // The gate: nothing is dirty, so nothing repaints and the region
+            // comes from the frame still on screen.
+            let blur = crate::blur::regions_from_commands(&commands);
+            return Frame { node, blur };
+        }
+
         let mut node = RenderNode::new(root.as_u64());
         self.tree.with_widget_mut(root, |w, id, t| {
             let mut ctx = PaintContext::new(&mut node);
@@ -91,6 +112,7 @@ impl H {
         let blur = crate::blur::regions_from_commands(&commands);
 
         crate::cache_paint_results(&mut self.tree, &node);
+        self.last = Some((std::rc::Rc::clone(&node), commands));
 
         Frame { node, blur }
     }
@@ -1730,9 +1752,16 @@ fn elevation_animates_towards_its_state_layer() {
     assert_eq!(shadow_count(&h.paint()), 0, "flat on the surface at rest");
 
     set_hover(&mut h, true);
-    std::thread::sleep(std::time::Duration::from_millis(20));
-    pump(&mut h);
-    h.fit(100.0, 100.0);
+    // Two frames: the first starts the animation, the second is far enough up
+    // the ramp for the shadow to be worth drawing — the very first values are
+    // below the alpha floor by design, since a shadow nobody can see is a rect
+    // drawn for nothing.
+    for _ in 0..2 {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        pump(&mut h);
+        h.fit(100.0, 100.0);
+        h.paint();
+    }
     assert_eq!(
         shadow_count(&h.paint()),
         1,
@@ -2026,21 +2055,24 @@ fn a_declared_elevation_change_invalidates_the_reach() {
 }
 
 // ---------------------------------------------------------------------------
-// Compositor blur regions — every one of these is about *when* in the frame
+// Compositor blur regions — every one of these is about which widgets painted
 // ---------------------------------------------------------------------------
 //
-// The surface half of a backdrop blur is a draw command and shows up in the
-// render tree. The compositor half is a region handed to `wl_region`, published
-// once per frame, and it is where the interesting failure lives: a region is
-// registered and withdrawn *during* paint, so anything that reads it must read
-// it after. These drive `H::frame`, which calls the same `crate::paint_surface`
-// the loop does, precisely so they cannot attest an order the loop lacks.
+// The surface half of a backdrop blur is a draw command in the render tree. The
+// compositor half is a `wl_region` derived from the same command after
+// flattening, which is what makes these tests about *painting*: a container that
+// did not paint has no command, one served from the cache carries its along, and
+// a frame that repaints nothing publishes from the buffer it retained.
+//
+// They all go through `H::frame`, which runs those phases in the loop's order
+// and with the loop's own `cache_paint_results` — the two things a test of this
+// cannot model loosely and still be a test.
 
 /// Turning a blur off has to reach the compositor on the frame that turns it
-/// off. Collecting before the paint published the region the *previous* frame
-/// asked for, and then nothing was dirty any more — so the withdrawal waited for
-/// a frame that never came and the desktop stayed blurred for the life of the
-/// surface.
+/// off. While the region was collected before the paint, the frame that switched
+/// it off published the *previous* frame's answer, and nothing was dirty
+/// afterwards — so the withdrawal waited for a frame a settled surface never
+/// renders.
 #[test]
 fn switching_a_compositor_blur_off_withdraws_it_on_that_frame() {
     let frosted = create_signal(true);
@@ -2220,4 +2252,26 @@ fn a_gradient_can_be_switched_off_and_the_background_returns() {
         Some(Color::GRAY),
         "and the background it was covering is drawn again"
     );
+}
+
+/// The border is gated on resolving to something visible; the shadow has to be
+/// too. The opening frames of a lift are at ~0.001, where the shadow's alpha
+/// rounds to nothing — and without a floor each one still pushed a rect
+/// carrying it, every frame, for as long as the animation was leaving zero.
+#[test]
+fn a_shadow_too_faint_to_see_is_not_drawn() {
+    let level = create_signal(0.001f32);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .elevation(move || level.get()),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(shadow_count(&h.paint()), 0, "invisible, so not drawn");
+
+    level.set(1.0);
+    h.fit(100.0, 100.0);
+    assert_eq!(shadow_count(&h.paint()), 1, "and drawn once it can be seen");
 }
