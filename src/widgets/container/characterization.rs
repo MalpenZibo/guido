@@ -60,6 +60,33 @@ impl H {
         node
     }
 
+    /// One frame in the order the loop runs it: queued jobs, layout, then
+    /// `crate::paint_surface` — the same function `paint_and_present` calls, so
+    /// a test cannot attest an order the loop does not have. Finishes by
+    /// clearing the paint flags, which is what `cache_paint_results` does and
+    /// what makes a clean child cullable on the frame after.
+    ///
+    /// Use this, not `paint()`, for anything whose correctness is about *when*
+    /// in the frame it happens.
+    fn frame(&mut self, w: f32, h: f32) -> Frame {
+        pump(self);
+        self.fit(w, h);
+
+        let root = self.root;
+        let mut node = RenderNode::new(root.as_u64());
+        let blur = crate::paint_surface(&mut self.tree, root, &mut node);
+
+        fn settle(tree: &mut Tree, node: &RenderNode) {
+            tree.clear_needs_paint(WidgetId::from_u64(node.id));
+            for child in &node.children {
+                settle(tree, child);
+            }
+        }
+        settle(&mut self.tree, &node);
+
+        Frame { node, blur }
+    }
+
     fn send(&mut self, event: Event) -> EventResponse {
         let root = self.root;
         // Event dispatch runs inside a snapshot zone in the real loop
@@ -107,6 +134,13 @@ impl H {
         jobs::recycle_job_buffer(drained);
         types
     }
+}
+
+/// What one frame produced: the render tree, and the compositor blur region the
+/// paint left registered.
+struct Frame {
+    node: RenderNode,
+    blur: Vec<crate::blur::BlurRect>,
 }
 
 /// A leaf of an exactly known size.
@@ -1741,74 +1775,6 @@ fn shadow_count(node: &RenderNode) -> usize {
         .count()
 }
 
-/// The compositor half of a backdrop blur is a region published to a registry,
-/// not a draw command — and the registry only prunes widgets that left the
-/// tree. So a container whose blur reached zero has to withdraw its own entry,
-/// or a blur switched on once blurs the desktop for the life of the surface.
-///
-/// This is the half the draw-command test cannot see: `DrawCommand::BackdropBlur`
-/// is the *surface* path, which was correctly gated all along.
-#[test]
-fn a_zero_radius_withdraws_the_compositor_blur_region() {
-    crate::blur::reset_blur();
-
-    let radius = create_signal(24.0f32);
-    let mut h = H::new(
-        container()
-            .width(40.0)
-            .height(20.0)
-            .backdrop_blur(move || BackdropBlur::new(radius.get())),
-    );
-    h.fit(100.0, 100.0);
-    h.paint();
-    assert!(
-        !crate::blur::collect_for_surface(&h.tree, h.root).is_empty(),
-        "a positive radius publishes a region"
-    );
-
-    radius.set(0.0);
-    pump(&mut h);
-    h.fit(100.0, 100.0);
-    h.paint();
-    assert_eq!(
-        crate::blur::collect_for_surface(&h.tree, h.root),
-        Vec::new(),
-        "and zero takes it back"
-    );
-
-    // Both ways, so the withdrawal is not a one-shot.
-    radius.set(12.0);
-    pump(&mut h);
-    h.fit(100.0, 100.0);
-    h.paint();
-    assert!(!crate::blur::collect_for_surface(&h.tree, h.root).is_empty());
-
-    crate::blur::reset_blur();
-}
-
-/// Restricting the sources to the surface must publish no compositor region at
-/// all, whatever the radius.
-#[test]
-fn a_surface_only_blur_publishes_no_compositor_region() {
-    crate::blur::reset_blur();
-
-    let mut h = H::new(
-        container()
-            .width(40.0)
-            .height(20.0)
-            .backdrop_blur(BackdropBlur::new(24.0).sources(BackdropSources::SURFACE)),
-    );
-    h.fit(100.0, 100.0);
-    h.paint();
-    assert_eq!(
-        crate::blur::collect_for_surface(&h.tree, h.root),
-        Vec::new()
-    );
-    assert_eq!(blur_radii(&h.paint()), vec![24.0], "but it still draws one");
-
-    crate::blur::reset_blur();
-}
-
 /// A shadow belongs to the box, not to the fill, so a gradient must not lose
 /// it. Both are reactive, so a signal can move a container from one branch of
 /// the decoration to the other between frames — an elevation animation that
@@ -2017,71 +1983,131 @@ fn a_declared_elevation_change_invalidates_the_reach() {
     assert!(h.tree.paint_overflow(h.root) > 0.0);
 }
 
-/// An invisible container blurs nothing.
-///
-/// It holds two mechanisms together: `paint` returns at the visibility gate,
-/// *before* the register/withdraw decision, so the withdrawal happens at the
-/// gate — and an invisible container also measures zero, so its region would
-/// tessellate to nothing even if the entry lingered. Belt and braces on purpose:
-/// the second is what makes this not a bug today, the first is what keeps the
-/// registry from growing one stale entry per hidden panel.
+// ---------------------------------------------------------------------------
+// Compositor blur regions — every one of these is about *when* in the frame
+// ---------------------------------------------------------------------------
+//
+// The surface half of a backdrop blur is a draw command and shows up in the
+// render tree. The compositor half is a region handed to `wl_region`, published
+// once per frame, and it is where the interesting failure lives: a region is
+// registered and withdrawn *during* paint, so anything that reads it must read
+// it after. These drive `H::frame`, which calls the same `crate::paint_surface`
+// the loop does, precisely so they cannot attest an order the loop lacks.
+
+/// Turning a blur off has to reach the compositor on the frame that turns it
+/// off. Collecting before the paint published the region the *previous* frame
+/// asked for, and then nothing was dirty any more — so the withdrawal waited for
+/// a frame that never came and the desktop stayed blurred for the life of the
+/// surface.
 #[test]
-fn an_invisible_container_withdraws_its_compositor_blur() {
+fn switching_a_compositor_blur_off_withdraws_it_on_that_frame() {
+    crate::blur::reset_blur();
+
+    let frosted = create_signal(true);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(20.0)
+            .backdrop_blur(move || if frosted.get() { 24.0 } else { 0.0 }),
+    );
+    assert!(!h.frame(100.0, 100.0).blur.is_empty(), "frosted");
+
+    frosted.set(false);
+    assert_eq!(
+        h.frame(100.0, 100.0).blur,
+        Vec::new(),
+        "the frame that turns it off is the frame that stops publishing it"
+    );
+
+    // And a settled surface keeps it off: nothing is dirty, so this frame does
+    // not repaint, and the region must not come back.
+    assert_eq!(h.frame(100.0, 100.0).blur, Vec::new());
+
+    frosted.set(true);
+    assert!(!h.frame(100.0, 100.0).blur.is_empty(), "and back on");
+
+    crate::blur::reset_blur();
+}
+
+/// Restricting the sources to the surface publishes no compositor region at all,
+/// whatever the radius — while still drawing one.
+#[test]
+fn a_surface_only_blur_publishes_no_compositor_region() {
+    crate::blur::reset_blur();
+
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(20.0)
+            .backdrop_blur(BackdropBlur::new(24.0).sources(BackdropSources::SURFACE)),
+    );
+    let frame = h.frame(100.0, 100.0);
+    assert_eq!(frame.blur, Vec::new());
+    assert_eq!(blur_radii(&frame.node), vec![24.0], "but it draws one");
+
+    crate::blur::reset_blur();
+}
+
+/// A hidden panel blurs nothing, and neither does anything inside it. The
+/// parent's paint returns at the visibility gate before its children are
+/// painted, so a blurred *descendant* never gets to withdraw its own region —
+/// and layout returning zero for the parent leaves the child's own bounds
+/// exactly where they were.
+#[test]
+fn hiding_a_panel_withdraws_the_blur_of_everything_inside_it() {
     crate::blur::reset_blur();
 
     let open = create_signal(true);
     let mut h = H::new(
         container()
-            .width(40.0)
-            .height(20.0)
+            .width(60.0)
+            .height(40.0)
             .visible(move || open.get())
-            .backdrop_blur(24.0),
+            .child(container().width(40.0).height(20.0).backdrop_blur(24.0)),
     );
-    h.fit(100.0, 100.0);
-    h.paint();
-    assert!(!crate::blur::collect_for_surface(&h.tree, h.root).is_empty());
+    assert!(!h.frame(100.0, 100.0).blur.is_empty(), "open");
 
     open.set(false);
-    pump(&mut h);
-    h.fit(100.0, 100.0);
-    h.paint();
     assert_eq!(
-        crate::blur::collect_for_surface(&h.tree, h.root),
+        h.frame(100.0, 100.0).blur,
         Vec::new(),
-        "an invisible panel blurs nothing"
+        "a hidden panel blurs nothing, descendants included"
     );
+    assert_eq!(h.frame(100.0, 100.0).blur, Vec::new(), "and stays that way");
 
     open.set(true);
-    pump(&mut h);
-    h.fit(100.0, 100.0);
-    h.paint();
-    assert!(!crate::blur::collect_for_surface(&h.tree, h.root).is_empty());
+    assert!(!h.frame(100.0, 100.0).blur.is_empty(), "and back");
 
     crate::blur::reset_blur();
 }
 
-/// A child culled out of a scrolling viewport never paints, so it cannot withdraw
-/// its own region — the parent that culled it says so on its behalf.
-///
-/// Culling only skips a *clean* child, so the card's paint flag is cleared before
-/// the last frame, which is what the loop's `cache_paint_results` does once its
-/// content stops changing.
+/// A child scrolled out of a viewport blurs nothing. It never paints — culled,
+/// or outside the window the scroller even offers to `paint_children` — so it
+/// cannot withdraw its own region, and its bounds stay where they were.
 #[test]
-fn a_culled_child_withdraws_its_compositor_blur() {
+fn scrolling_a_frosted_card_away_withdraws_its_blur() {
     crate::blur::reset_blur();
+
+    // Enough rows that the scroller takes its windowing fast path, which is the
+    // case the sweep exists for and the one a two-child list never reaches.
+    let mut rows: Vec<crate::widgets::AnyWidget> = vec![
+        container()
+            .width(40.0)
+            .height(20.0)
+            .backdrop_blur(24.0)
+            .into_any(),
+    ];
+    rows.extend((0..60).map(|_| box_of(40.0, 20.0).into_any()));
 
     let mut h = H::new(
         container()
             .width(40.0)
             .height(30.0)
             .scrollable(ScrollAxis::Vertical)
-            .child(container().width(40.0).height(20.0).backdrop_blur(24.0))
-            .child(box_of(40.0, 400.0)),
+            .children(rows),
     );
-    h.fit(40.0, 30.0);
-    h.paint();
     assert!(
-        !crate::blur::collect_for_surface(&h.tree, h.root).is_empty(),
+        !h.frame(40.0, 30.0).blur.is_empty(),
         "visible at the top of the scroll"
     );
 
@@ -2089,18 +2115,14 @@ fn a_culled_child_withdraws_its_compositor_blur() {
         x: 20.0,
         y: 15.0,
         delta_x: 0.0,
-        delta_y: 300.0,
+        delta_y: 600.0,
         source: ScrollSource::Wheel,
     });
-    pump(&mut h);
-    h.fit(40.0, 30.0);
-
-    let card = h.children()[0];
-    h.tree.clear_needs_paint(card);
-    h.paint();
-
+    // Two frames: the first repaints the scroller and settles the flags, the
+    // second is where a clean card is culled — or never offered at all.
+    h.frame(40.0, 30.0);
     assert_eq!(
-        crate::blur::collect_for_surface(&h.tree, h.root),
+        h.frame(40.0, 30.0).blur,
         Vec::new(),
         "scrolled away, so it blurs nothing"
     );

@@ -917,6 +917,30 @@ fn layout_pass(
     reactive::focus::apply_pending_focus(tree);
 }
 
+/// Paint the tree, and collect the compositor blur region the paint left behind.
+///
+/// **The order is the contract, which is why these two are one function.** A
+/// paint is what registers a blur region and what withdraws one, so collecting
+/// first publishes what the *previous* frame asked for — and a withdrawal made
+/// during this paint would then wait for a next frame that a settled surface
+/// never renders, leaving the desktop blurred behind a panel that has stopped
+/// asking. Splitting them is how that shipped once already, so the tests drive
+/// this function rather than calling the two halves in an order of their own.
+///
+/// The one caller that legitimately collects without painting is the skip-frame
+/// path, where no registration can have changed.
+pub(crate) fn paint_surface(
+    tree: &mut Tree,
+    root: WidgetId,
+    node: &mut renderer::RenderNode,
+) -> Vec<blur::BlurRect> {
+    tree.with_widget_mut(root, |widget, id, tree| {
+        let mut ctx = PaintContext::new(node);
+        widget.paint(tree, id, &mut ctx);
+    });
+    blur::collect_for_surface(tree, root)
+}
+
 /// Paint, flatten, hand the frame to the GPU, and re-arm the pacing gate.
 ///
 /// The order at the end is not free-form: the frame callback and the damage
@@ -936,35 +960,31 @@ fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry)
         tree.mark_subtree_needs_paint(surface.widget_id);
     }
 
-    // Collect this surface's blur region from registered widgets (post
-    // layout, so bounds are current).
-    let blur_rects = blur::collect_for_surface(tree, surface.widget_id);
-
     // Skip frame if nothing needs paint
     if !tree.needs_paint(surface.widget_id) {
-        // A blur-region change without a repaint (e.g. the compositor's
-        // blur capability arriving) still needs its own commit.
+        // No paint means no registration can have changed, so the region is
+        // whatever the last paint left. Still synced: a blur-region change
+        // without a repaint (the compositor's blur capability arriving) needs
+        // its own commit.
+        let blur_rects = blur::collect_for_surface(tree, surface.widget_id);
         wayland_state.sync_blur_region(id, blur_rects, qh, true);
         render_stats::record_frame_skipped();
         render_stats::end_frame(&DamageRegion::None);
         return;
     }
 
-    // Set the blur region now so it rides the buffer commit performed
-    // inside present() — region and content change in the same frame.
-    wayland_state.sync_blur_region(id, blur_rects, qh, false);
-
     // Clear and reuse the root node (preserves capacity)
     surface.root_node.clear();
     surface.root_node.bounds =
         widgets::Rect::new(0.0, 0.0, frame.width as f32, frame.height as f32);
 
-    time_phase!(render_stats::Phase::Paint, {
-        tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
-            let mut ctx = PaintContext::new(&mut surface.root_node);
-            widget.paint(tree, id, &mut ctx);
-        });
+    let blur_rects = time_phase!(render_stats::Phase::Paint, {
+        paint_surface(tree, surface.widget_id, &mut surface.root_node)
     });
+
+    // Set the blur region now so it rides the buffer commit performed inside
+    // present() — region and content change in the same frame.
+    wayland_state.sync_blur_region(id, blur_rects, qh, false);
 
     // Flatten tree into reused buffers
     time_phase!(render_stats::Phase::Flatten, {

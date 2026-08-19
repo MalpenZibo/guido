@@ -1704,13 +1704,12 @@ impl Widget for Container {
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
         let is_visible = with_signal_tracking(id, JobType::Paint, || self.visible.get_or(true));
         if !is_visible {
-            // An invisible container draws nothing, and must not go on asking
-            // the compositor to blur the desktop behind where it would be. The
-            // withdrawal has to happen here rather than at the decision below,
-            // which this return never reaches.
-            if self.backdrop_blur.is_some() {
-                crate::blur::unregister_blur(id);
-            }
+            // Nothing here draws, so nothing here may go on asking the compositor
+            // to blur the desktop behind it — and that includes the descendants,
+            // whose paint this return skips and whose own bounds layout left
+            // exactly where they were. Withdrawing only `self` would spare the
+            // container its own region and keep every one below it.
+            crate::blur::unregister_unpainted(tree, &[id]);
             return;
         }
 
@@ -1852,6 +1851,14 @@ impl Widget for Container {
         // For scrollable containers with a single-axis layout, use binary search
         // to find the visible range (O(log n)) instead of iterating all children (O(n)).
         let all_children = self.children_source.get();
+
+        // Rows outside the scroller's window are not painted, so they are
+        // "unpainted" in exactly the sense the blur registry means — and this is
+        // the path a long list actually takes, the cull check inside
+        // `paint_children` never seeing them at all.
+        let mut unpainted_rows: Vec<WidgetId> = Vec::new();
+        let sweeping_blur = !crate::blur::is_empty();
+
         let visible_children: &[WidgetId] = if is_scrollable {
             let sd = self.scroll();
             match self.scroll_axis {
@@ -1871,6 +1878,10 @@ impl Widget for Container {
                         all_children.len() as u64,
                         (end - start) as u64,
                     );
+                    if sweeping_blur {
+                        unpainted_rows.extend_from_slice(&all_children[..start]);
+                        unpainted_rows.extend_from_slice(&all_children[end..]);
+                    }
                     &all_children[start..end]
                 }
                 ScrollAxis::Horizontal => {
@@ -1889,6 +1900,10 @@ impl Widget for Container {
                         all_children.len() as u64,
                         (end - start) as u64,
                     );
+                    if sweeping_blur {
+                        unpainted_rows.extend_from_slice(&all_children[..start]);
+                        unpainted_rows.extend_from_slice(&all_children[end..]);
+                    }
                     &all_children[start..end]
                 }
                 _ => all_children, // Both/None: fall back to full iteration
@@ -1916,6 +1931,7 @@ impl Widget for Container {
                 cache_requires_full_visibility: is_scrollable,
             },
         );
+        crate::blur::unregister_unpainted(tree, &unpainted_rows);
 
         // Draw scrollbar containers
         if is_scrollable {

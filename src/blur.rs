@@ -56,22 +56,30 @@ pub(crate) fn is_empty() -> bool {
     BLUR_WIDGETS.with(|reg| reg.borrow().is_empty())
 }
 
-/// Withdraw every request from widgets inside one of `culled`.
+/// Withdraw every request from inside one of these subtrees, because none of
+/// them was painted this frame.
 ///
-/// A culled child's `paint` is never called, so it cannot withdraw its own
-/// request — and the registry has to be sticky across skipped paints, because a
-/// *clean* container whose paint was satisfied from cache still wants its region.
-/// So the parent that culled says so on its behalf.
+/// The rule this enforces: **a subtree that did not paint keeps no region.** A
+/// widget withdraws its own request during its own paint, so a subtree whose
+/// paint never ran cannot — and there are three ways that happens, all of them a
+/// parent's decision rather than the widget's: the parent returned at its
+/// visibility gate, a scroller's window did not offer the child, or
+/// `paint_children` culled it.
 ///
-/// Walks the registry rather than the culled subtrees: the registry holds a
-/// handful of entries however long the list being culled is.
-pub(crate) fn unregister_culled(tree: &Tree, culled: &[WidgetId]) {
-    if culled.is_empty() || is_empty() {
+/// It cannot be a blanket sweep before painting, tempting as that is: the
+/// registry has to stay sticky across *skipped* paints, because a clean container
+/// satisfied from the paint cache still wants its region and will not re-register
+/// it. So the parent names what it did not paint.
+///
+/// Walks the registry rather than the subtrees: the registry holds a handful of
+/// entries however many thousand rows were skipped.
+pub(crate) fn unregister_unpainted(tree: &Tree, subtrees: &[WidgetId]) {
+    if subtrees.is_empty() || is_empty() {
         return;
     }
     BLUR_WIDGETS.with(|reg| {
         reg.borrow_mut()
-            .retain(|&id, _| !culled.iter().any(|&c| is_under(tree, id, c)));
+            .retain(|&id, _| !subtrees.iter().any(|&root| is_under(tree, id, root)));
     });
 }
 
