@@ -760,25 +760,33 @@ impl Container {
         self
     }
 
-    /// Set a border with the given width and colour.
+    /// Set a border: a width and a colour, together.
+    ///
+    /// Both halves, always — a width with no colour and a colour with no width
+    /// are the same thing, which is no border, so there is nothing for a
+    /// half-declaration to mean. Each half takes a signal of its own, so
+    /// anything that has to change over time already can:
+    ///
+    /// ```ignore
+    /// container().border(1.5, move || if failed.get() { theme.danger } else { theme.line })
+    /// ```
+    ///
+    /// A *state layer* is the other story: it overrides a base that already has
+    /// both, so naming one half there is meaningful and
+    /// [`StateStyle`](crate::widgets::StateStyle) has `border_width` and
+    /// `border_color` for exactly that.
+    ///
+    /// ```ignore
+    /// container()
+    ///     .border(1.5, theme.line)
+    ///     .when_focused(|s| s.border_color(theme.accent))
+    /// ```
     pub fn border<M1, M2>(
         mut self,
         width: impl IntoSignal<f32, M1>,
         color: impl IntoSignal<Color, M2>,
     ) -> Self {
         self.border_width = Some(width.into_signal());
-        self.border_color = Some(color.into_signal());
-        self
-    }
-
-    /// Set only the border width, leaving the colour as declared.
-    pub fn border_width<M>(mut self, width: impl IntoSignal<f32, M>) -> Self {
-        self.border_width = Some(width.into_signal());
-        self
-    }
-
-    /// Set only the border colour, leaving the width as declared.
-    pub fn border_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
         self.border_color = Some(color.into_signal());
         self
     }

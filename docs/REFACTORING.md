@@ -39,9 +39,8 @@ is stated: **anything that survives to paint takes a signal; anything
 structural — the layout, whether a container scrolls — does not.**
 
 **Two spellings for one idea.** `Padding::symmetric(horizontal, vertical)`
-against the `[vertical, horizontal]` shorthand every call site uses; a border
-that could only be set as a pair while its state-layer counterpart had
-`border_width` and `border_color` apart; `on_click_option` beside `on_click`
+against the `[vertical, horizontal]` shorthand every call site uses;
+`on_click_option` beside `on_click`
 because a `#[component]` prop is an `Option<Callback>`; `Transform::identity()`
 beside `Transform::IDENTITY`. In each case one spelling survives, and it is the
 one already used everywhere else.
@@ -78,8 +77,8 @@ While `gradient`, `backdrop_blur`, `overflow` and `elevation` were constants,
 their interactions were settled in the builder chain and visible statically. A
 gradient that dropped the shadow was an authoring mistake you made once and saw.
 An elevation table read with `level as i32` was exact, because the only levels
-that ever arrived were the six integers. A `border_width` with no colour was a
-line you would not write. Once a signal can move any of these between frames,
+that ever arrived were the six integers. Once a signal can move any of these
+between frames,
 each becomes a case the paint gate has to handle *at every frame*, and the ones
 that only misbehave in the fractions or in one branch are invisible until
 something animates through them.
@@ -97,7 +96,7 @@ The specific shapes, all fixed with tests:
   returned without consulting the elevation; reachable by signal, mid-animation.
 - **A default that is invisible rather than absent.** `border_color` defaults to
   transparent, so gating the frame on the width alone emitted an invisible
-  command every frame once `border_width` became separately spellable.
+  command every frame whenever a border resolved to only one of its halves.
 - **A read on the pointer path.** A closure-backed signal recomputes on every
   read, and `overflow` was read during event dispatch — for every container
   under the pointer, on every coalesced `MouseMove`. The tracked reads in layout
@@ -112,6 +111,23 @@ The specific shapes, all fixed with tests:
 The seventh was independent: widening `keyed()` from `u64` to any `Hash` while
 the reconciler still indexed by a 64-bit hash of the key, so two colliding keys
 became one row.
+
+### Tried and withdrawn: half a border
+
+The audit added `border_width` and `border_color` to `Container`, on the
+strength of `docs/STYLING.md` documenting them — the same "the docs were right
+early" reasoning that kept `gradient_diagonal` and `animate_elevation`. That
+reasoning does not transfer, and applying it without judging the design was the
+mistake: a *base* declaration with only one half of a border is not an
+under-specified border, it is **no border**, so the split introduced two states
+that mean nothing and then needed defending in the paint gate — one of the bugs
+above.
+
+The state layer is the opposite case and keeps both setters: it overrides a base
+that already has both halves, so naming one is meaningful, and not restating the
+width you are not changing was the whole point. `Container::border(w, c)` takes
+both, always; each half accepts its own signal, which covers everything the base
+needs to express.
 
 The documentation was audited against the code in the same pass. It described
 `.children_dyn()`, `.padding_horizontal()`, `.min_width()`, `.gradient_diagonal()`

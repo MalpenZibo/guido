@@ -1626,29 +1626,46 @@ fn a_backdrop_blur_is_reactive_and_zero_means_off() {
     assert_eq!(blur_radii(&h.paint()), Vec::<f32>::new());
 }
 
-/// The border's two halves can be declared apart, so a state layer that only
-/// recolours it does not have to restate the width.
+/// A state layer overrides a base that already has both halves, so naming one
+/// half there is meaningful: a layer that only recolours the frame must not have
+/// to restate the width it is not changing.
 #[test]
-fn border_width_and_colour_are_separately_declarable() {
+fn a_state_layer_can_recolour_a_border_without_restating_its_width() {
     let danger = create_signal(false);
     let mut h = H::new(
         container()
             .width(20.0)
             .height(20.0)
-            .border_width(2.0)
-            .border_color(move || {
-                if danger.get() {
-                    Color::RED
-                } else {
-                    Color::GRAY
-                }
-            }),
+            .border(2.0, Color::GRAY)
+            .state(danger, |s| s.border_color(Color::RED)),
     );
     h.fit(100.0, 100.0);
     assert_eq!(borders(&h.paint()), vec![(2.0, Color::GRAY)]);
 
     danger.set(true);
-    assert_eq!(borders(&h.paint()), vec![(2.0, Color::RED)]);
+    assert_eq!(
+        borders(&h.paint()),
+        vec![(2.0, Color::RED)],
+        "the width the layer said nothing about is kept"
+    );
+}
+
+/// And the same for the width, over a colour the layer leaves alone.
+#[test]
+fn a_state_layer_can_thicken_a_border_without_restating_its_colour() {
+    let focused = create_signal(false);
+    let mut h = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .border(1.0, Color::GRAY)
+            .state(focused, |s| s.border_width(3.0)),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(borders(&h.paint()), vec![(1.0, Color::GRAY)]);
+
+    focused.set(true);
+    assert_eq!(borders(&h.paint()), vec![(3.0, Color::GRAY)]);
 }
 
 /// Elevation transitions like every other paint property now, instead of
@@ -1812,59 +1829,53 @@ fn a_gradient_keeps_its_shadow() {
     assert_eq!(shadow_count(&node), 1, "the gradient is still elevated");
 }
 
-/// The two halves of a border can be declared apart, so either can be missing.
-/// A width with a transparent colour is an invisible frame, and it used to reach
-/// the instance buffer every frame.
+/// A border resolving to nothing visible must draw nothing, rather than send an
+/// invisible frame to the instance buffer every frame.
+///
+/// The base declaration always names both halves, so it can only get here by
+/// asking for it — a deliberately transparent colour, or a zero width. A *state
+/// layer* can get here by naming one half over a base that has no border at all,
+/// which is the silent case the gate has to absorb.
 #[test]
 fn a_border_with_nothing_to_show_draws_nothing() {
-    let mut h = H::new(container().width(20.0).height(20.0).border_width(2.0));
-    h.fit(100.0, 100.0);
-    assert_eq!(
-        borders(&h.paint()),
-        Vec::new(),
-        "a width with no colour behind it"
-    );
-
-    // A colour with no width is not a border either — CSS says the same.
     let mut h = H::new(
         container()
             .width(20.0)
             .height(20.0)
-            .border_color(Color::RED),
+            .border(2.0, Color::TRANSPARENT),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(borders(&h.paint()), Vec::new(), "an invisible colour");
+
+    let mut h = H::new(container().width(20.0).height(20.0).border(0.0, Color::RED));
+    h.fit(100.0, 100.0);
+    assert_eq!(borders(&h.paint()), Vec::new(), "a zero width");
+
+    // A layer naming one half over a base with no border resolves to half a
+    // border, which is no border.
+    let on = create_signal(true);
+    let mut h = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .state(on, |s| s.border_width(2.0)),
     );
     h.fit(100.0, 100.0);
     assert_eq!(borders(&h.paint()), Vec::new());
-
-    // Both, and it draws.
-    let mut h = H::new(
-        container()
-            .width(20.0)
-            .height(20.0)
-            .border_width(2.0)
-            .border_color(Color::RED),
-    );
-    h.fit(100.0, 100.0);
-    assert_eq!(borders(&h.paint()), vec![(2.0, Color::RED)]);
 }
 
-/// A colour fading in behind an already-declared width has to start drawing the
-/// moment it is visible, so the gate cannot be a build-time decision.
+/// A colour fading in behind a declared width has to start drawing the moment it
+/// is visible, so the gate cannot be a build-time decision.
 #[test]
 fn a_border_appears_when_its_colour_does() {
     let visible = create_signal(false);
-    let mut h = H::new(
-        container()
-            .width(20.0)
-            .height(20.0)
-            .border_width(2.0)
-            .border_color(move || {
-                if visible.get() {
-                    Color::RED
-                } else {
-                    Color::TRANSPARENT
-                }
-            }),
-    );
+    let mut h = H::new(container().width(20.0).height(20.0).border(2.0, move || {
+        if visible.get() {
+            Color::RED
+        } else {
+            Color::TRANSPARENT
+        }
+    }));
     h.fit(100.0, 100.0);
     assert_eq!(borders(&h.paint()), Vec::new());
 
