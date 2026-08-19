@@ -34,7 +34,7 @@ use platform::create_wayland_app;
 use reactive::owner::with_owner;
 use reactive::{OwnerId, take_clipboard_change, take_cursor_change};
 use renderer::{GpuContext, PaintContext, Renderer, flatten_root_into};
-use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, drain_surface_commands};
+use surface::{SurfaceCommand, SurfaceConfig, SurfaceExtent, SurfaceId, drain_surface_commands};
 use surface_manager::{ManagedSurface, SurfaceManager};
 use widgets::Widget;
 use widgets::font::FontFamily;
@@ -263,6 +263,35 @@ fn close_surface_now(
 /// [`ExclusiveZone::Auto`] is a policy, not a number, so it has to be
 /// re-resolved after anything it follows — the size, the margin, the policy
 /// itself — has moved.
+/// The size an axis is currently asking for: its own, if it has one, and the
+/// live surface size while a content axis waits to be measured.
+fn requested_extent(extent: SurfaceExtent, live: Option<u32>) -> u32 {
+    match extent {
+        SurfaceExtent::Fixed(v) => v,
+        SurfaceExtent::Content => live.unwrap_or_else(|| extent.initial()),
+    }
+}
+
+/// What a runtime resize asks the compositor for, and whether the surface has
+/// to be re-measured before that answer is right.
+///
+/// A content axis has no size of its own yet — `SurfaceExtent::initial()` is
+/// 1px — so asking for it directly collapses the surface, and nothing brings it
+/// back: the content-measure pass runs only for a surface that had layout
+/// activity, and a bare `set_size` produces none. So a content axis holds the
+/// live size and asks for a layout, which is what brings the measure round.
+fn resize_request(
+    width: SurfaceExtent,
+    height: SurfaceExtent,
+    live: Option<(u32, u32)>,
+) -> (u32, u32, bool) {
+    (
+        requested_extent(width, live.map(|(w, _)| w)),
+        requested_extent(height, live.map(|(_, h)| h)),
+        width.is_content() || height.is_content(),
+    )
+}
+
 fn resync_exclusive_zone(
     id: SurfaceId,
     surface_manager: &SurfaceManager,
@@ -271,13 +300,21 @@ fn resync_exclusive_zone(
     let Some(surface) = surface_manager.get(id) else {
         return;
     };
-    let (width, height) = match wayland_state.get_surface(id) {
-        Some(s) => (s.width, s.height),
-        None => (
-            surface.config.width.initial(),
-            surface.config.height.initial(),
-        ),
-    };
+    // The size we just *asked* for, not the one the compositor last told us
+    // about: `set_surface_size` only sends the protocol request, and
+    // `WaylandSurfaceState` learns the new size a round trip later, in
+    // `configure`. Resolving against that reserves for the size the surface is
+    // leaving — a bar going from 32 to 48 keeps reserving 32.
+    //
+    // A `Fixed` axis is therefore authoritative here. A `Content` one has no
+    // number yet, so it falls back to the live size and the content-measure
+    // pass re-resolves once it has measured. And the axis an `Auto` reservation
+    // follows is always one we own — `follow_axis` gives up on an axis anchored
+    // to both edges, the only kind the compositor sizes — so the value we
+    // asked for is the value that will take effect.
+    let live = wayland_state.get_surface(id).map(|s| (s.width, s.height));
+    let width = requested_extent(surface.config.width, live.map(|(w, _)| w));
+    let height = requested_extent(surface.config.height, live.map(|(_, h)| h));
     let zone = surface.config.exclusive_zone.resolve(
         surface.config.anchor,
         surface.config.margin,
@@ -342,11 +379,18 @@ fn process_surface_commands(
                 // Recorded on the config as well as sent: the content-sizing
                 // pass reads it every frame to decide which axes it owns, so
                 // an axis handed back to `content()` has to be visible there.
-                if let Some(surface) = surface_manager.get_mut(id) {
+                let root = surface_manager.get_mut(id).map(|surface| {
                     surface.config.width = width;
                     surface.config.height = height;
+                    surface.widget_id
+                });
+
+                let live = wayland_state.get_surface(id).map(|s| (s.width, s.height));
+                let (ask_w, ask_h, needs_measure) = resize_request(width, height, live);
+                wayland_state.set_surface_size(id, ask_w, ask_h);
+                if needs_measure && let Some(root) = root {
+                    jobs::request_job(root, jobs::JobRequest::Layout);
                 }
-                wayland_state.set_surface_size(id, width.initial(), height.initial());
                 resync_exclusive_zone(id, surface_manager, wayland_state);
             }
             SurfaceCommand::SetExclusiveZone { id, zone } => {
@@ -1506,6 +1550,56 @@ impl Drop for App {
 impl Default for App {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod exclusive_zone_resync_tests {
+    use super::*;
+    use crate::platform::Anchor;
+    use crate::surface::{ExclusiveZone, Margin};
+
+    /// The reservation has to follow the size that was just *requested*. The
+    /// compositor only tells us the new size a round trip later, so resolving
+    /// against what it last said reserves for the size the surface is leaving.
+    #[test]
+    fn a_fixed_axis_resolves_against_the_requested_size() {
+        // A bar that was 32 tall and has just asked for 48.
+        let live_height = Some(32);
+        let height = requested_extent(SurfaceExtent::Fixed(48), live_height);
+        assert_eq!(height, 48, "the request wins over the stale configure");
+
+        let zone =
+            ExclusiveZone::Auto.resolve(Anchor::TOP, Margin::from([6, 0, 0, 0]), 800, height);
+        assert_eq!(zone, 48 + 6);
+    }
+
+    /// A content axis has no number of its own yet — `initial()` is 1px, which
+    /// must never be what a running surface asks for.
+    #[test]
+    fn a_content_axis_holds_the_live_size_until_it_is_measured() {
+        assert_eq!(requested_extent(SurfaceExtent::Content, Some(240)), 240);
+        // Only before the first configure is there nothing better to say.
+        assert_eq!(
+            requested_extent(SurfaceExtent::Content, None),
+            SurfaceExtent::Content.initial()
+        );
+    }
+
+    /// Handing an axis back to `content()` at runtime must not ask for 1px, and
+    /// must ask for a layout — nothing else brings the content-measure pass
+    /// round for a surface whose widgets did not change.
+    #[test]
+    fn handing_an_axis_to_content_keeps_the_size_and_asks_for_a_measure() {
+        let live = Some((300u32, 40u32));
+
+        let (w, h, measure) = resize_request(SurfaceExtent::Content, 40.into(), live);
+        assert_eq!((w, h), (300, 40), "no 1px collapse");
+        assert!(measure, "the measure pass has to be woken");
+
+        let (w, h, measure) = resize_request(200.into(), 60.into(), live);
+        assert_eq!((w, h), (200, 60));
+        assert!(!measure, "two fixed axes need no measure");
     }
 }
 

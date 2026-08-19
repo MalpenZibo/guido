@@ -36,6 +36,18 @@ pub(crate) fn register_blur(id: WidgetId, corner_radius: f32) {
     });
 }
 
+/// Withdraw a widget's blur request.
+///
+/// The registry cannot discover this on its own: `collect_for_surface` prunes
+/// widgets that left the *tree*, and a container that merely stopped asking for
+/// blur is still in it. So the paint that stops asking has to say so — which is
+/// exactly the frame on which a radius driven by a signal reaches zero.
+pub(crate) fn unregister_blur(id: WidgetId) {
+    BLUR_WIDGETS.with(|reg| {
+        reg.borrow_mut().remove(&id);
+    });
+}
+
 /// Collect tessellated blur rects for every blur widget under `root`,
 /// sorted for deterministic change detection. Prunes stale entries.
 pub(crate) fn collect_for_surface(tree: &Tree, root: WidgetId) -> Vec<BlurRect> {

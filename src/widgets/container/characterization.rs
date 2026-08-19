@@ -1703,3 +1703,71 @@ fn shadow_count(node: &RenderNode) -> usize {
         })
         .count()
 }
+
+/// The compositor half of a backdrop blur is a region published to a registry,
+/// not a draw command — and the registry only prunes widgets that left the
+/// tree. So a container whose blur reached zero has to withdraw its own entry,
+/// or a blur switched on once blurs the desktop for the life of the surface.
+///
+/// This is the half the draw-command test cannot see: `DrawCommand::BackdropBlur`
+/// is the *surface* path, which was correctly gated all along.
+#[test]
+fn a_zero_radius_withdraws_the_compositor_blur_region() {
+    crate::blur::reset_blur();
+
+    let radius = create_signal(24.0f32);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(20.0)
+            .backdrop_blur(move || BackdropBlur::new(radius.get())),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+    assert!(
+        !crate::blur::collect_for_surface(&h.tree, h.root).is_empty(),
+        "a positive radius publishes a region"
+    );
+
+    radius.set(0.0);
+    pump(&mut h);
+    h.fit(100.0, 100.0);
+    h.paint();
+    assert_eq!(
+        crate::blur::collect_for_surface(&h.tree, h.root),
+        Vec::new(),
+        "and zero takes it back"
+    );
+
+    // Both ways, so the withdrawal is not a one-shot.
+    radius.set(12.0);
+    pump(&mut h);
+    h.fit(100.0, 100.0);
+    h.paint();
+    assert!(!crate::blur::collect_for_surface(&h.tree, h.root).is_empty());
+
+    crate::blur::reset_blur();
+}
+
+/// Restricting the sources to the surface must publish no compositor region at
+/// all, whatever the radius.
+#[test]
+fn a_surface_only_blur_publishes_no_compositor_region() {
+    crate::blur::reset_blur();
+
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(20.0)
+            .backdrop_blur(BackdropBlur::new(24.0).sources(BackdropSources::SURFACE)),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+    assert_eq!(
+        crate::blur::collect_for_surface(&h.tree, h.root),
+        Vec::new()
+    );
+    assert_eq!(blur_radii(&h.paint()), vec![24.0], "but it still draws one");
+
+    crate::blur::reset_blur();
+}

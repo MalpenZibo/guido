@@ -1703,13 +1703,23 @@ impl Widget for Container {
             .unwrap_or_else(|| crate::renderer::CornerRadii::uniform(corner_radius));
         let corner_radius = corner_radius.max(corner_radii.max());
 
-        // Publish the compositor blur region: bounds are read fresh from the
-        // tree at frame sync, so only the (possibly animated) radius is
-        // recorded here.
-        if let Some(blur) = backdrop_blur
-            && blur.sources.contains(BackdropSources::COMPOSITOR)
-        {
+        // Publish (or withdraw) the compositor blur region: bounds are read
+        // fresh from the tree at frame sync, so only the (possibly animated)
+        // radius is recorded here.
+        //
+        // The zero-radius case has to withdraw rather than simply not register.
+        // `ext-background-effect-v1` carries no radius of its own, so nothing
+        // downstream can tell that this container asked for zero — and the
+        // registry only prunes widgets that left the tree, which a container
+        // whose blur signal reached zero has not. Without the withdrawal a
+        // blur switched on once stayed on for the life of the surface.
+        let wants_compositor_blur = backdrop_blur.is_some_and(|blur| {
+            blur.sources.contains(BackdropSources::COMPOSITOR) && blur.radius > 0.0
+        });
+        if wants_compositor_blur {
             crate::blur::register_blur(id, corner_radius);
+        } else {
+            crate::blur::unregister_blur(id);
         }
 
         // LOCAL bounds: the origin is this container, the parent already
