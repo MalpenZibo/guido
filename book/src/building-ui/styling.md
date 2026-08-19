@@ -51,8 +51,7 @@ container()
 
 // Or separately
 container()
-    .border_width(2.0)
-    .border_color(Color::WHITE)
+    .border(2.0, Color::WHITE)
 ```
 
 ## Shadows (Elevation)

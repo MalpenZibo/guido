@@ -11,23 +11,21 @@ container()
     .border(2.0, Color::WHITE)  // 2px white border
 ```
 
-A border is always both halves at once: a width with no colour and a colour
-with no width are the same thing, which is no border. Each half takes a signal
-of its own, so anything that has to change already can:
+A border is always both halves at once — everywhere. A width with no colour and
+a colour with no width are the same thing, which is no border, so there is
+nothing for a half-declaration to mean, and no way to write one. Each half takes
+a signal of its own, which covers anything that has to change:
 
 ```rust
 container().border(1.5, move || if failed.get() { theme.danger } else { theme.line })
 ```
 
-### One Half, in a State Layer
-
-A state layer overrides a base that already has both halves, so naming one there
-*is* meaningful — and saves restating the one you are not changing:
+A state layer says it the same way, and replaces the whole border:
 
 ```rust
 container()
     .border(1.5, theme.line)
-    .when_focused(|s| s.border_color(theme.accent))
+    .when_focused(|s| s.border(1.5, theme.accent))
 ```
 
 ## Corner Radius

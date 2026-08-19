@@ -221,7 +221,7 @@ container()
     .background(Color::rgb(0.15, 0.15, 0.2))
     .border(1.0, Color::rgb(0.3, 0.3, 0.4))
     .corner_radius(4.0)
-    .when_focused(|s| s.border_color(Color::rgb(0.4, 0.6, 1.0)))
+    .when_focused(|s| s.border(1.0, Color::rgb(0.4, 0.6, 1.0)))
     .child(
         container().text_color(Color::WHITE).child(text_input(value))
     )
@@ -252,7 +252,7 @@ fn login_form() -> Container {
                         .background(Color::rgb(0.15, 0.15, 0.2))
                         .border(1.0, Color::rgb(0.3, 0.3, 0.4))
                         .corner_radius(4.0)
-                        .when_focused(|s| s.border_color(Color::rgb(0.4, 0.6, 1.0)))
+                        .when_focused(|s| s.border(1.0, Color::rgb(0.4, 0.6, 1.0)))
                         .child(
                             container().text_color(Color::WHITE).font_size(14.0).child(text_input(username))
                         ),
@@ -267,7 +267,7 @@ fn login_form() -> Container {
                         .background(Color::rgb(0.15, 0.15, 0.2))
                         .border(1.0, Color::rgb(0.3, 0.3, 0.4))
                         .corner_radius(4.0)
-                        .when_focused(|s| s.border_color(Color::rgb(0.4, 0.6, 1.0)))
+                        .when_focused(|s| s.border(1.0, Color::rgb(0.4, 0.6, 1.0)))
                         .child(
                             container().text_color(Color::WHITE).font_size(14.0).child(text_input(password).password(true))
                         ),

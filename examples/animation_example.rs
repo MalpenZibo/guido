@@ -175,7 +175,7 @@ fn border_card() -> Container {
             )
             .animate_border_width(Transition::spring(SpringConfig::BOUNCY))
             .animate_border_color(Transition::new(300.0, TimingFunction::EaseOut))
-            .when_hovered(|s| s.border_color(Color::rgb(0.40, 0.80, 0.60)))
+            .when_hovered(|s| s.border(2.0, Color::rgb(0.40, 0.80, 0.60)))
             .on_click(move || thick.update(|t| *t = !*t)),
     )
 }

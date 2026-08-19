@@ -1091,7 +1091,13 @@ impl Container {
         self
     }
 
-    /// Enable animation for border width changes
+    /// Enable animation for border width changes.
+    ///
+    /// Width and colour keep separate `animate_*` declarations even though the
+    /// border is *declared* as a pair: these name an animatable channel, not a
+    /// way to state a value, and the two channels are different types with
+    /// their own curves. `examples/animation_example.rs` springs the width while
+    /// easing the colour, which one call could not express.
     pub fn animate_border_width(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.border_width.get_or_untracked(0.0);
         self.anims_mut().border_width = Some(AnimationState::new(initial, transition));
@@ -1114,6 +1120,12 @@ impl Container {
     /// with its own curve. CSS starts the inner one once, towards the outer's
     /// *final* value; that is the rule to adopt if it ever comes up. The chase
     /// converges either way.
+    pub fn animate_border_color(mut self, transition: impl Into<TransitionConfig>) -> Self {
+        let initial = self.border_color.get_or_untracked(Color::TRANSPARENT);
+        self.anims_mut().border_color = Some(AnimationState::new(initial, transition));
+        self
+    }
+
     pub fn animate_text_color(mut self, transition: impl Into<TransitionConfig>) -> Self {
         self.anims_mut().text_color = Some(AnimationState::new(Color::WHITE, transition.into()));
         self.animated_text = Some(create_signal(None));
@@ -1125,12 +1137,6 @@ impl Container {
     pub fn animate_elevation(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.elevation.get_or_untracked(0.0);
         self.anims_mut().elevation = Some(AnimationState::new(initial, transition));
-        self
-    }
-
-    pub fn animate_border_color(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.border_color.get_or_untracked(Color::TRANSPARENT);
-        self.anims_mut().border_color = Some(AnimationState::new(initial, transition));
         self
     }
 

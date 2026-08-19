@@ -40,8 +40,7 @@ State layers can override these properties:
 
 ```rust
 .when_hovered(|s| s.border(2.0, Color::WHITE))
-.when_hovered(|s| s.border_width(2.0))
-.when_hovered(|s| s.border_color(Color::WHITE))
+.when_hovered(|s| s.border(2.0, Color::WHITE))   // both halves, always
 ```
 
 ### Transform
@@ -137,11 +136,13 @@ Internally, `StateStyle` holds all possible overrides:
 ```rust
 pub struct StateStyle {
     pub background: Option<BackgroundOverride>,
-    pub border_width: Option<f32>,
-    pub border_color: Option<Color>,
-    pub corner_radius: Option<f32>,
-    pub transform: Option<Transform>,
-    pub elevation: Option<f32>,
+    // Both halves or neither: half a border is no border.
+    pub border: Option<BorderOverride>,
+    pub corner_radius: Option<Signal<f32>>,
+    pub transform: Option<Signal<Transform>>,
+    pub elevation: Option<Signal<f32>>,
+    pub text_color: Option<Signal<Color>>,
+    pub alpha: Option<Signal<f32>>,
     pub ripple: Option<RippleConfig>,
 }
 ```

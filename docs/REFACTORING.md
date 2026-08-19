@@ -112,22 +112,40 @@ The seventh was independent: widening `keyed()` from `u64` to any `Hash` while
 the reconciler still indexed by a 64-bit hash of the key, so two colliding keys
 became one row.
 
-### Tried and withdrawn: half a border
+### Settled: a border is one thing, everywhere
 
-The audit added `border_width` and `border_color` to `Container`, on the
-strength of `docs/STYLING.md` documenting them — the same "the docs were right
-early" reasoning that kept `gradient_diagonal` and `animate_elevation`. That
-reasoning does not transfer, and applying it without judging the design was the
-mistake: a *base* declaration with only one half of a border is not an
-under-specified border, it is **no border**, so the split introduced two states
-that mean nothing and then needed defending in the paint gate — one of the bugs
-above.
+The audit added `border_width` and `border_color` to `Container`, on the strength
+of `docs/STYLING.md` documenting them — the same "the docs were right early"
+reasoning that kept `gradient_diagonal` and `animate_elevation`. That reasoning
+does not transfer: those two are whole features the docs promised, this is a
+*decomposition*, and a decomposition has to be judged on whether its parts mean
+anything alone. They do not. A declaration naming one half of a border is not an
+under-specified border, it is **no border** — so the split introduced two states
+that mean nothing, and then needed defending in the paint gate, which is where it
+turned up as one of the bugs above.
 
-The state layer is the opposite case and keeps both setters: it overrides a base
-that already has both halves, so naming one is meaningful, and not restating the
-width you are not changing was the whole point. `Container::border(w, c)` takes
-both, always; each half accepts its own signal, which covers everything the base
-needs to express.
+Withdrawn from `Container`, and then from `StateStyle` too, which had carried
+them since #183. Half a border does not become meaningful for being an override:
+it is the same nothing, and border was the only property in `StateStyle` with
+more than one setter — every other one has exactly one. Uniformity is the point.
+`border(w, c)` takes both, always, wherever it appears, and each half accepts its
+own signal, which is what covers anything that has to change over time.
+
+The pair is one field rather than two, `border: Option<BorderOverride>`, so half
+a border cannot be built even by hand. `BorderOverride` follows
+`BackgroundOverride`: a named override type, not exported in the prelude.
+
+For a width repeated across several layers — the complaint that started this —
+the answer is a constant in the application, which is the same answer this
+document already gives for "the same kind of label, many times".
+
+**`animate_border_width` and `animate_border_color` stay separate**, and that is
+not the same question. Those name an animatable *channel*, not a way to state a
+value: the two are different `Animatable` types with their own states and their
+own curves, and `examples/animation_example.rs` springs the width while easing
+the colour — which one call could not express. `animate_padding` is one call
+because `Padding` is one `Animatable` whose four edges lerp together; a border is
+not.
 
 The documentation was audited against the code in the same pass. It described
 `.children_dyn()`, `.padding_horizontal()`, `.min_width()`, `.gradient_diagonal()`

@@ -62,26 +62,33 @@ container()
     .border(2.0, Color::WHITE)  // 2px white border
 ```
 
-A border is always both halves at once. A width with no colour and a colour
-with no width are the same thing — no border — so there is nothing for a
-half-declaration to mean. Each half takes a signal of its own, which covers
-anything that has to change:
+A border is always both halves at once — on the container and in a state layer
+alike. A width with no colour and a colour with no width are the same thing, no
+border, so there is nothing for a half-declaration to mean and no way to write
+one. Each half takes a signal of its own, which covers anything that has to
+change:
 
 ```rust
 container().border(1.5, move || if failed.get() { theme.danger } else { theme.line })
 ```
 
-### One Half, in a State Layer
+### In a State Layer
 
-A state layer overrides a base that already has both, so naming one half there
-*is* meaningful — and it is the reason not to restate the width you are not
-changing:
+Same call, and it replaces the whole border. Layers resolve last-declared-wins,
+so the border a caller wants to outrank the others goes last:
 
 ```rust
 container()
     .border(1.5, theme.line)
-    .when_focused(|s| s.border_color(theme.accent))
-    .state(failed, |s| s.border_color(theme.danger))
+    .when_focused(|s| s.border(1.5, theme.accent))
+    .state(failed, |s| s.border(1.5, theme.danger))
+```
+
+A width repeated across layers is a constant in your own code, not something the
+API should let you leave half-said:
+
+```rust
+const FIELD_BORDER: f32 = 1.5;
 ```
 
 ### Animated Borders

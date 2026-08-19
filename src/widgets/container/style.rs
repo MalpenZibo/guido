@@ -99,12 +99,12 @@ impl Container {
 
     pub(super) fn effective_border_width_target(&self, id: WidgetId) -> f32 {
         let base = self.border_width.get_or(0.0);
-        self.resolve_state_value(id, base, |state| state.border_width.map(|s| s.get()))
+        self.resolve_state_value(id, base, |state| state.border.map(|b| b.width.get()))
     }
 
     pub(super) fn effective_border_color_target(&self, id: WidgetId) -> Color {
         let base = self.border_color.get_or(Color::TRANSPARENT);
-        self.resolve_state_value(id, base, |state| state.border_color.map(|s| s.get()))
+        self.resolve_state_value(id, base, |state| state.border.map(|b| b.color.get()))
     }
 
     pub(super) fn effective_corner_radius_target(&self, id: WidgetId) -> f32 {

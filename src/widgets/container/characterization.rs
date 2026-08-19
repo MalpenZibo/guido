@@ -1626,46 +1626,47 @@ fn a_backdrop_blur_is_reactive_and_zero_means_off() {
     assert_eq!(blur_radii(&h.paint()), Vec::<f32>::new());
 }
 
-/// A state layer overrides a base that already has both halves, so naming one
-/// half there is meaningful: a layer that only recolours the frame must not have
-/// to restate the width it is not changing.
+/// A state layer replaces the whole border, both halves at once, because that is
+/// the only way to say "border" anywhere in this API.
 #[test]
-fn a_state_layer_can_recolour_a_border_without_restating_its_width() {
+fn a_state_layer_replaces_the_whole_border() {
     let danger = create_signal(false);
     let mut h = H::new(
         container()
             .width(20.0)
             .height(20.0)
-            .border(2.0, Color::GRAY)
-            .state(danger, |s| s.border_color(Color::RED)),
+            .border(1.0, Color::GRAY)
+            .state(danger, |s| s.border(2.0, Color::RED)),
     );
     h.fit(100.0, 100.0);
-    assert_eq!(borders(&h.paint()), vec![(2.0, Color::GRAY)]);
+    assert_eq!(borders(&h.paint()), vec![(1.0, Color::GRAY)]);
 
     danger.set(true);
-    assert_eq!(
-        borders(&h.paint()),
-        vec![(2.0, Color::RED)],
-        "the width the layer said nothing about is kept"
-    );
+    assert_eq!(borders(&h.paint()), vec![(2.0, Color::RED)]);
+
+    danger.set(false);
+    assert_eq!(borders(&h.paint()), vec![(1.0, Color::GRAY)], "and back");
 }
 
-/// And the same for the width, over a colour the layer leaves alone.
+/// Two layers speaking about the border resolve last-declared-wins, as every
+/// other property does — and as a unit, since half of one cannot be declared.
 #[test]
-fn a_state_layer_can_thicken_a_border_without_restating_its_colour() {
-    let focused = create_signal(false);
+fn the_last_declared_border_layer_wins() {
+    let hovered = create_signal(true);
+    let failed = create_signal(true);
     let mut h = H::new(
         container()
             .width(20.0)
             .height(20.0)
             .border(1.0, Color::GRAY)
-            .state(focused, |s| s.border_width(3.0)),
+            .state(hovered, |s| s.border(2.0, Color::WHITE))
+            .state(failed, |s| s.border(3.0, Color::RED)),
     );
     h.fit(100.0, 100.0);
-    assert_eq!(borders(&h.paint()), vec![(1.0, Color::GRAY)]);
+    assert_eq!(borders(&h.paint()), vec![(3.0, Color::RED)]);
 
-    focused.set(true);
-    assert_eq!(borders(&h.paint()), vec![(3.0, Color::GRAY)]);
+    failed.set(false);
+    assert_eq!(borders(&h.paint()), vec![(2.0, Color::WHITE)]);
 }
 
 /// Elevation transitions like every other paint property now, instead of
@@ -1832,10 +1833,9 @@ fn a_gradient_keeps_its_shadow() {
 /// A border resolving to nothing visible must draw nothing, rather than send an
 /// invisible frame to the instance buffer every frame.
 ///
-/// The base declaration always names both halves, so it can only get here by
-/// asking for it — a deliberately transparent colour, or a zero width. A *state
-/// layer* can get here by naming one half over a base that has no border at all,
-/// which is the silent case the gate has to absorb.
+/// Every border names both halves, so this is only reachable deliberately — a
+/// transparent colour, a zero width — or in passing, while an animated colour
+/// crosses transparent.
 #[test]
 fn a_border_with_nothing_to_show_draws_nothing() {
     let mut h = H::new(
@@ -1850,18 +1850,6 @@ fn a_border_with_nothing_to_show_draws_nothing() {
     let mut h = H::new(container().width(20.0).height(20.0).border(0.0, Color::RED));
     h.fit(100.0, 100.0);
     assert_eq!(borders(&h.paint()), Vec::new(), "a zero width");
-
-    // A layer naming one half over a base with no border resolves to half a
-    // border, which is no border.
-    let on = create_signal(true);
-    let mut h = H::new(
-        container()
-            .width(20.0)
-            .height(20.0)
-            .state(on, |s| s.border_width(2.0)),
-    );
-    h.fit(100.0, 100.0);
-    assert_eq!(borders(&h.paint()), Vec::new());
 }
 
 /// A colour fading in behind a declared width has to start drawing the moment it
