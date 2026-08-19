@@ -771,16 +771,16 @@ impl Container {
     /// container().border(1.5, move || if failed.get() { theme.danger } else { theme.line })
     /// ```
     ///
-    /// A *state layer* is the other story: it overrides a base that already has
-    /// both, so naming one half there is meaningful and
-    /// [`StateStyle`](crate::widgets::StateStyle) has `border_width` and
-    /// `border_color` for exactly that.
+    /// A state layer says it the same way, and replaces the whole border:
     ///
     /// ```ignore
     /// container()
     ///     .border(1.5, theme.line)
-    ///     .when_focused(|s| s.border_color(theme.accent))
+    ///     .when_focused(|s| s.border(1.5, theme.accent))
     /// ```
+    ///
+    /// A width repeated across layers is a constant in your own code — there is
+    /// deliberately no way to leave half a border unsaid.
     pub fn border<M1, M2>(
         mut self,
         width: impl IntoSignal<f32, M1>,
@@ -1104,7 +1104,15 @@ impl Container {
         self
     }
 
-    /// Enable animation for border color changes
+    /// Enable animation for border colour changes. See
+    /// [`animate_border_width`](Self::animate_border_width) for why the two
+    /// halves have their own declarations.
+    pub fn animate_border_color(mut self, transition: impl Into<TransitionConfig>) -> Self {
+        let initial = self.border_color.get_or_untracked(Color::TRANSPARENT);
+        self.anims_mut().border_color = Some(AnimationState::new(initial, transition));
+        self
+    }
+
     /// Animate the text colour of this container and its descendants.
     ///
     /// ```ignore
@@ -1120,12 +1128,6 @@ impl Container {
     /// with its own curve. CSS starts the inner one once, towards the outer's
     /// *final* value; that is the rule to adopt if it ever comes up. The chase
     /// converges either way.
-    pub fn animate_border_color(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.border_color.get_or_untracked(Color::TRANSPARENT);
-        self.anims_mut().border_color = Some(AnimationState::new(initial, transition));
-        self
-    }
-
     pub fn animate_text_color(mut self, transition: impl Into<TransitionConfig>) -> Self {
         self.anims_mut().text_color = Some(AnimationState::new(Color::WHITE, transition.into()));
         self.animated_text = Some(create_signal(None));

@@ -220,44 +220,6 @@ impl<'a> PaintContext<'a> {
         }));
     }
 
-    /// Draw a rounded rectangle with gradient.
-    pub fn draw_gradient_rect(
-        &mut self,
-        rect: Rect,
-        gradient: Gradient,
-        radius: impl Into<CornerRadii>,
-        curvature: f32,
-    ) {
-        self.node.commands.push(Rc::new(DrawCommand::RoundedRect {
-            rect,
-            color: gradient.start_color, // Fallback color
-            radius: radius.into(),
-            curvature,
-            border: None,
-            shadow: None,
-            gradient: Some(gradient),
-        }));
-    }
-
-    /// Draw a border frame (no fill).
-    pub fn draw_border_frame(
-        &mut self,
-        rect: Rect,
-        border_color: Color,
-        radius: impl Into<CornerRadii>,
-        border_width: f32,
-    ) {
-        self.node.commands.push(Rc::new(DrawCommand::RoundedRect {
-            rect,
-            color: Color::TRANSPARENT,
-            radius: radius.into(),
-            curvature: 1.0,
-            border: Some(Border::new(border_width, border_color)),
-            shadow: None,
-            gradient: None,
-        }));
-    }
-
     /// Draw a border frame with curvature.
     pub fn draw_border_frame_with_curvature(
         &mut self,

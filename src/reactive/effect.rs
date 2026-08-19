@@ -1,7 +1,5 @@
 use super::owner::register_effect;
-#[cfg(test)]
-use super::runtime::EffectId;
-use super::runtime::{run_effect_by_id, with_runtime};
+use super::runtime::{EffectId, run_effect_by_id, with_runtime};
 
 /// Run `f` now, and again whenever a signal it read changes.
 ///
@@ -19,6 +17,21 @@ pub fn create_effect<F>(f: F)
 where
     F: FnMut() + 'static,
 {
+    create_effect_id(f);
+}
+
+/// [`create_effect`], returning the id.
+///
+/// Only the ownership tests reach for this: nothing in the running library needs
+/// an effect's id, because nothing disposes an effect other than the scope that
+/// owns it. It exists so those tests can ask whether registration happened —
+/// which is only worth asking if it is the *same* three steps the real path
+/// takes, in the same order. So `create_effect` delegates here rather than the
+/// two keeping their own copies.
+pub(crate) fn create_effect_id<F>(f: F) -> EffectId
+where
+    F: FnMut() + 'static,
+{
     let id = with_runtime(|rt| rt.allocate_effect(Box::new(f)));
 
     // Initial run establishes dependencies. Runs outside the runtime borrow, so
@@ -26,26 +39,6 @@ where
     run_effect_by_id(id);
 
     // Register with the current owner for automatic cleanup
-    register_effect(id);
-}
-
-/// [`create_effect`], returning the id.
-///
-/// Only the ownership tests reach for this: nothing in the running library needs
-/// an effect's id, because nothing disposes an effect other than the scope that
-/// owns it. It exists so those tests can ask whether registration happened.
-#[cfg(test)]
-pub(crate) fn create_effect_id<F>(f: F) -> EffectId
-where
-    F: FnMut() + 'static,
-{
-    let id = with_runtime(|rt| rt.allocate_effect(Box::new(f)));
-
-    // Initial run establishes dependencies. Runs outside the runtime
-    // borrow, so the callback can freely write signals or create new ones.
-    run_effect_by_id(id);
-
-    // Register with current owner for automatic cleanup
     register_effect(id);
 
     id

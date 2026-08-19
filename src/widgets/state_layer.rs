@@ -179,7 +179,6 @@ impl StateStyle {
         self
     }
 
-    /// Set the border width and color for this state.
     /// Override the border while this state is active.
     ///
     /// Both halves, as on the container — see

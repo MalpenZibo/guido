@@ -345,16 +345,19 @@ fn downcast_cell<T: 'static>(rc: &Rc<dyn Any>, id: SignalId) -> &RefCell<T> {
     })
 }
 
-/// Reset all signal storage.
+/// How many signal slots storage currently holds — every slot ever allocated,
+/// occupied or vacated, which is what makes it the right measure for "did this
+/// primitive claim one". [`live_signal_count`] counts only the occupied ones.
 ///
-/// Called during `App::drop()` to wipe all stored signal values.
-/// How many signal slots storage currently holds. Test-only: the cost of a
-/// primitive is only assertable against a number.
+/// Test-only: the cost of a primitive is only assertable against a number.
 #[cfg(test)]
 pub(crate) fn slot_count() -> usize {
     STORAGE.with(|storage| storage.borrow().slots.len())
 }
 
+/// Reset all signal storage.
+///
+/// Called during `App::drop()` to wipe all stored signal values.
 pub(crate) fn reset_storage() {
     STORAGE.with(|s| *s.borrow_mut() = SignalStorage::new());
 }
