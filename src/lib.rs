@@ -257,12 +257,6 @@ fn close_surface_now(
     wayland_state.destroy_surface(id);
 }
 
-/// Push the surface's reservation policy to the compositor, resolved against
-/// what it is anchored to and how big it currently is.
-///
-/// [`ExclusiveZone::Auto`] is a policy, not a number, so it has to be
-/// re-resolved after anything it follows — the size, the margin, the policy
-/// itself — has moved.
 /// The size an axis is currently asking for: its own, if it has one, and the
 /// live surface size while a content axis waits to be measured.
 fn requested_extent(extent: SurfaceExtent, live: Option<u32>) -> u32 {
@@ -292,35 +286,52 @@ fn resize_request(
     )
 }
 
+/// Re-publish the reservation after something it *follows* has moved — the
+/// size, the margin, the anchor.
+///
+/// Only [`ExclusiveZone::Auto`] follows anything: every other policy is a
+/// number, and republishing it would send the compositor a value it already has
+/// and log a line saying so, on every resize and every margin change.
+/// `measured` is for the one caller that knows a size the compositor has not
+/// been told about yet: the content-measure pass, which has just computed it.
 fn resync_exclusive_zone(
     id: SurfaceId,
-    surface_manager: &SurfaceManager,
+    config: &SurfaceConfig,
     wayland_state: &mut platform::WaylandState,
+    measured: Option<(u32, u32)>,
 ) {
-    let Some(surface) = surface_manager.get(id) else {
-        return;
-    };
-    // The size we just *asked* for, not the one the compositor last told us
-    // about: `set_surface_size` only sends the protocol request, and
-    // `WaylandSurfaceState` learns the new size a round trip later, in
-    // `configure`. Resolving against that reserves for the size the surface is
-    // leaving — a bar going from 32 to 48 keeps reserving 32.
-    //
-    // A `Fixed` axis is therefore authoritative here. A `Content` one has no
-    // number yet, so it falls back to the live size and the content-measure
-    // pass re-resolves once it has measured. And the axis an `Auto` reservation
-    // follows is always one we own — `follow_axis` gives up on an axis anchored
-    // to both edges, the only kind the compositor sizes — so the value we
-    // asked for is the value that will take effect.
-    let live = wayland_state.get_surface(id).map(|s| (s.width, s.height));
-    let width = requested_extent(surface.config.width, live.map(|(w, _)| w));
-    let height = requested_extent(surface.config.height, live.map(|(_, h)| h));
-    let zone = surface.config.exclusive_zone.resolve(
-        surface.config.anchor,
-        surface.config.margin,
-        width,
-        height,
-    );
+    if config.exclusive_zone == surface::ExclusiveZone::Auto {
+        publish_exclusive_zone(id, config, wayland_state, measured);
+    }
+}
+
+/// Resolve the reservation policy against what the surface is anchored to and
+/// how big it is, and send the protocol value.
+///
+/// The size is the one just *asked* for, not the one the compositor last told us
+/// about: `set_surface_size` only sends a request, and `WaylandSurfaceState`
+/// learns the new size a round trip later, in `configure`. Resolving against
+/// that reserves for the size the surface is leaving — a bar going from 32 to 48
+/// keeps reserving 32.
+///
+/// A `Fixed` axis is therefore authoritative here. A `Content` one has no number
+/// yet, so it falls back to `measured` if the caller has one and to the live
+/// size otherwise, the measure pass re-resolving once it does. And the axis an
+/// `Auto` reservation follows is always one we own — `follow_axis` gives up on
+/// an axis anchored to both edges, the only kind the compositor sizes — so the
+/// value we asked for is the value that will take effect.
+fn publish_exclusive_zone(
+    id: SurfaceId,
+    config: &SurfaceConfig,
+    wayland_state: &mut platform::WaylandState,
+    measured: Option<(u32, u32)>,
+) {
+    let known = measured.or_else(|| wayland_state.get_surface(id).map(|s| (s.width, s.height)));
+    let width = requested_extent(config.width, known.map(|(w, _)| w));
+    let height = requested_extent(config.height, known.map(|(_, h)| h));
+    let zone = config
+        .exclusive_zone
+        .resolve(config.anchor, config.margin, width, height);
     wayland_state.set_surface_exclusive_zone(id, zone);
 }
 
@@ -373,7 +384,17 @@ fn process_surface_commands(
                 wayland_state.set_surface_keyboard_interactivity(id, mode);
             }
             SurfaceCommand::SetAnchor { id, anchor } => {
+                // Recorded, like the size and the margin: the anchor is what
+                // `ExclusiveZone::Auto` reads to decide which axis it follows
+                // and which edge's margin counts, so a stale one keeps a dock
+                // reserving a bar's height at the top of the screen.
+                if let Some(surface) = surface_manager.get_mut(id) {
+                    surface.config.anchor = anchor;
+                }
                 wayland_state.set_surface_anchor(id, anchor);
+                if let Some(surface) = surface_manager.get(id) {
+                    resync_exclusive_zone(id, &surface.config, wayland_state, None);
+                }
             }
             SurfaceCommand::SetSize { id, width, height } => {
                 // Recorded on the config as well as sent: the content-sizing
@@ -391,13 +412,19 @@ fn process_surface_commands(
                 if needs_measure && let Some(root) = root {
                     jobs::request_job(root, jobs::JobRequest::Layout);
                 }
-                resync_exclusive_zone(id, surface_manager, wayland_state);
+                if let Some(surface) = surface_manager.get(id) {
+                    resync_exclusive_zone(id, &surface.config, wayland_state, None);
+                }
             }
             SurfaceCommand::SetExclusiveZone { id, zone } => {
                 if let Some(surface) = surface_manager.get_mut(id) {
                     surface.config.exclusive_zone = zone;
                 }
-                resync_exclusive_zone(id, surface_manager, wayland_state);
+                // The policy itself changed, so this publishes whatever it now
+                // is — unlike the follow triggers, which only matter to `Auto`.
+                if let Some(surface) = surface_manager.get(id) {
+                    publish_exclusive_zone(id, &surface.config, wayland_state, None);
+                }
             }
             SurfaceCommand::SetMargin { id, margin } => {
                 if let Some(surface) = surface_manager.get_mut(id) {
@@ -405,7 +432,9 @@ fn process_surface_commands(
                 }
                 wayland_state.set_surface_margin(id, margin);
                 // An `Auto` reservation counts the anchored edge's margin.
-                resync_exclusive_zone(id, surface_manager, wayland_state);
+                if let Some(surface) = surface_manager.get(id) {
+                    resync_exclusive_zone(id, &surface.config, wayland_state, None);
+                }
             }
             SurfaceCommand::SetInputRegion { id, rects } => {
                 wayland_state.set_surface_input_region(id, rects.as_deref());
@@ -873,17 +902,10 @@ fn layout_pass(
         });
         if (nw, nh) != (frame.width, frame.height) {
             wayland_state.set_surface_size(id, nw, nh);
-            // Auto reservations follow automatic resizes too; every
-            // other policy never moves
-            if surface.config.exclusive_zone == surface::ExclusiveZone::Auto {
-                let zone = surface.config.exclusive_zone.resolve(
-                    surface.config.anchor,
-                    surface.config.margin,
-                    nw,
-                    nh,
-                );
-                wayland_state.set_surface_exclusive_zone(id, zone);
-            }
+            // An `Auto` reservation follows an automatic resize too, and this is
+            // the one caller that knows the measured size before the compositor
+            // does — so it passes it rather than letting the helper look it up.
+            resync_exclusive_zone(id, &surface.config, wayland_state, Some((nw, nh)));
         }
     }
 
@@ -1584,6 +1606,25 @@ mod exclusive_zone_resync_tests {
             requested_extent(SurfaceExtent::Content, None),
             SurfaceExtent::Content.initial()
         );
+    }
+
+    /// The anchor is what an `Auto` reservation reads to decide which axis it
+    /// follows and which edge's margin counts, so a bar becoming a side dock has
+    /// to reserve on the other axis. It used to keep reserving its old one:
+    /// `SetAnchor` was the one command that recorded nothing on the config.
+    #[test]
+    fn a_reservation_follows_the_anchor_it_was_given() {
+        let margin = Margin::from([6, 20, 9, 20]);
+
+        // A 800x32 bar at the top reserves its height plus the top margin.
+        let bar = ExclusiveZone::Auto.resolve(Anchor::TOP, margin, 800, 32);
+        assert_eq!(bar, 32 + 6);
+
+        // The same surface, re-anchored as a 48-wide dock on the left, has to
+        // reserve its width plus the left margin instead.
+        let dock = ExclusiveZone::Auto.resolve(Anchor::LEFT, margin, 48, 600);
+        assert_eq!(dock, 48 + 20);
+        assert_ne!(dock, bar, "the axis genuinely changes with the anchor");
     }
 
     /// Handing an axis back to `content()` at runtime must not ask for 1px, and

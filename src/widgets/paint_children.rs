@@ -57,6 +57,9 @@ pub(crate) fn paint_children(
     opts: &ChildPaintOptions,
 ) {
     let (offset_x, offset_y) = opts.scroll_offset;
+    // A culled child never paints, so it cannot withdraw a compositor blur
+    // region of its own. Collected here and swept once at the end.
+    let mut culled: Vec<WidgetId> = Vec::new();
 
     for &child_id in children {
         // Child bounds come from the tree in the parent's local coordinates
@@ -73,6 +76,9 @@ pub(crate) fn paint_children(
             if !cull.intersects(&child_rect) {
                 crate::render_stats::record_paint_child_culled();
                 ctx.mark_partial();
+                if !crate::blur::is_empty() {
+                    culled.push(child_id);
+                }
                 continue;
             }
         }
@@ -109,6 +115,8 @@ pub(crate) fn paint_children(
         });
         crate::render_stats::record_paint_child_painted();
     }
+
+    crate::blur::unregister_culled(tree, &culled);
 }
 
 /// Try to satisfy a child from its paint cache. Returns whether it worked.

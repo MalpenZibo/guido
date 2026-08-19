@@ -491,6 +491,14 @@ impl Tree {
         }
     }
 
+    /// How far this widget's paint reaches beyond its bounds.
+    #[cfg(test)]
+    pub(crate) fn paint_overflow(&self, id: WidgetId) -> f32 {
+        self.get_dense_index(id)
+            .map(|idx| self.dense[idx].paint_overflow)
+            .unwrap_or(0.0)
+    }
+
     /// Get the children of a widget (returns a slice to avoid heap allocation).
     pub fn get_children(&self, id: WidgetId) -> &[WidgetId] {
         self.get_dense_index(id)

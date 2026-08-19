@@ -48,6 +48,33 @@ pub(crate) fn unregister_blur(id: WidgetId) {
     });
 }
 
+/// Whether anything is registered at all, in O(1).
+///
+/// The cull path asks before doing any work: a surface with no compositor blur —
+/// which is most of them — must not pay for a sweep it cannot need.
+pub(crate) fn is_empty() -> bool {
+    BLUR_WIDGETS.with(|reg| reg.borrow().is_empty())
+}
+
+/// Withdraw every request from widgets inside one of `culled`.
+///
+/// A culled child's `paint` is never called, so it cannot withdraw its own
+/// request — and the registry has to be sticky across skipped paints, because a
+/// *clean* container whose paint was satisfied from cache still wants its region.
+/// So the parent that culled says so on its behalf.
+///
+/// Walks the registry rather than the culled subtrees: the registry holds a
+/// handful of entries however long the list being culled is.
+pub(crate) fn unregister_culled(tree: &Tree, culled: &[WidgetId]) {
+    if culled.is_empty() || is_empty() {
+        return;
+    }
+    BLUR_WIDGETS.with(|reg| {
+        reg.borrow_mut()
+            .retain(|&id, _| !culled.iter().any(|&c| is_under(tree, id, c)));
+    });
+}
+
 /// Collect tessellated blur rects for every blur widget under `root`,
 /// sorted for deterministic change detection. Prunes stale entries.
 pub(crate) fn collect_for_surface(tree: &Tree, root: WidgetId) -> Vec<BlurRect> {

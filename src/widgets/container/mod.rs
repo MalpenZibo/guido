@@ -1612,12 +1612,17 @@ impl Widget for Container {
         // Cache constraints and size for partial layout
         tree.cache_layout(id, constraints, size);
 
-        // An elevation shadow falls outside the box that casts it, so the
-        // damage this container reports has to reach past its own bounds.
-        // Snapshotted: a hover that only changes the elevation goes through
-        // paint, and this is here to size the damage, not to subscribe to it.
-        let elevation = self.elevation.get_or_untracked(0.0);
-        tree.set_paint_overflow(id, style::elevation_to_shadow(elevation).extent());
+        // An elevation shadow falls outside the box that casts it, so the damage
+        // this container reports has to reach past its own bounds.
+        //
+        // The *largest* elevation it can reach, not the one showing: elevation
+        // animates paint-only, so a hover that lifts a card never re-runs this
+        // layout, and a reach sized to the resting value would leave the shadow
+        // ring outside every damage rect — invisible on the way up, and left
+        // behind on the way down. Read under layout tracking, so a declared
+        // elevation changing does re-run it.
+        let reach = with_signal_tracking(id, JobType::Layout, || self.max_elevation());
+        tree.set_paint_overflow(id, style::elevation_to_shadow(reach).extent());
 
         // Register widget ref so update_widget_refs() can refresh bounds
         if let Some(ref wr) = self.widget_ref {
@@ -1697,6 +1702,13 @@ impl Widget for Container {
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
         let is_visible = with_signal_tracking(id, JobType::Paint, || self.visible.get_or(true));
         if !is_visible {
+            // An invisible container draws nothing, and must not go on asking
+            // the compositor to blur the desktop behind where it would be. The
+            // withdrawal has to happen here rather than at the decision below,
+            // which this return never reaches.
+            if self.backdrop_blur.is_some() {
+                crate::blur::unregister_blur(id);
+            }
             return;
         }
 
@@ -1761,7 +1773,10 @@ impl Widget for Container {
         });
         if wants_compositor_blur {
             crate::blur::register_blur(id, corner_radius);
-        } else {
+        } else if self.backdrop_blur.is_some() {
+            // Only a container that could have registered needs to withdraw.
+            // Every other one would be a borrow and a miss on a mostly empty
+            // map, per container, per frame, on the paint path.
             crate::blur::unregister_blur(id);
         }
 

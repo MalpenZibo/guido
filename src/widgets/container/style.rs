@@ -133,6 +133,30 @@ impl Container {
         self.resolve_state_value(id, base, |state| state.text_color.map(|s| s.get()))
     }
 
+    /// The largest elevation this container can reach: its own, or any a state
+    /// layer declares.
+    ///
+    /// Damage bounds want the worst case, not the current value. Elevation is a
+    /// paint-only animation, so a hover that lifts a card never re-runs layout —
+    /// and layout is where the shadow's reach is recorded. Sizing the reach to
+    /// what is possible rather than to what is showing keeps the damage rect
+    /// correct without asking a colour change to re-run a layout.
+    ///
+    /// Read tracked: a *declared* elevation changing is rare and does need a new
+    /// reach, so it should invalidate the layout that recorded the old one.
+    pub(super) fn max_elevation(&self) -> f32 {
+        let base = self.elevation.get_or(0.0);
+        let Some(ref ix) = self.interaction else {
+            return base;
+        };
+        ix.states.iter().fold(base, |most, (_, state)| {
+            match state.elevation.map(|s| s.get()) {
+                Some(level) => most.max(level),
+                None => most,
+            }
+        })
+    }
+
     pub(super) fn effective_elevation_target(&self, id: WidgetId) -> f32 {
         let base = self.elevation.get_or(0.0);
         self.resolve_state_value(id, base, |state| state.elevation.map(|s| s.get()))

@@ -1955,3 +1955,155 @@ fn events_use_the_clip_of_the_frame_on_screen() {
     }
     assert_eq!(clicked.get_untracked(), 1);
 }
+
+/// A shadow falls outside the box that casts it, so the damage a container
+/// reports has to reach past its own bounds — and it has to reach far enough for
+/// the *largest* shadow it can cast, not the one showing.
+///
+/// Elevation animates paint-only, so a hover that lifts a card never re-runs the
+/// layout that records the reach. Sized to the resting value, the shadow ring
+/// falls outside every damage rect: absent on the way up, left on screen on the
+/// way down.
+#[test]
+fn the_damage_reach_covers_the_elevation_a_hover_can_reach() {
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .elevation(0.0)
+            .when_hovered(|s| s.elevation(8.0))
+            .animate_elevation(Transition::new(80.0, TimingFunction::Linear)),
+    );
+    h.fit(100.0, 100.0);
+
+    let reach = h.tree.paint_overflow(h.root);
+    let lifted = style::elevation_to_shadow(8.0).extent();
+    assert!(
+        reach >= lifted && lifted > 0.0,
+        "reach {reach} must cover the hovered shadow {lifted}"
+    );
+
+    // And a container that can never lift pays nothing for it.
+    let mut flat = H::new(container().width(40.0).height(40.0).background(Color::RED));
+    flat.fit(100.0, 100.0);
+    assert_eq!(flat.tree.paint_overflow(flat.root), 0.0);
+}
+
+/// A declared elevation changing does need a new reach, so it must invalidate
+/// the layout that recorded the old one.
+#[test]
+fn a_declared_elevation_change_invalidates_the_reach() {
+    let level = create_signal(0.0f32);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .elevation(move || level.get()),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+    assert_eq!(h.tree.paint_overflow(h.root), 0.0);
+
+    let queued = h.jobs_from(|| level.set(6.0));
+    assert!(queued.contains(&JobType::Layout), "got {queued:?}");
+
+    // `jobs_from` consumes the jobs without running them, so the reach is
+    // recomputed by a write that gets pumped.
+    level.set(9.0);
+    pump(&mut h);
+    h.fit(100.0, 100.0);
+    assert!(h.tree.paint_overflow(h.root) > 0.0);
+}
+
+/// An invisible container blurs nothing.
+///
+/// It holds two mechanisms together: `paint` returns at the visibility gate,
+/// *before* the register/withdraw decision, so the withdrawal happens at the
+/// gate — and an invisible container also measures zero, so its region would
+/// tessellate to nothing even if the entry lingered. Belt and braces on purpose:
+/// the second is what makes this not a bug today, the first is what keeps the
+/// registry from growing one stale entry per hidden panel.
+#[test]
+fn an_invisible_container_withdraws_its_compositor_blur() {
+    crate::blur::reset_blur();
+
+    let open = create_signal(true);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(20.0)
+            .visible(move || open.get())
+            .backdrop_blur(24.0),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+    assert!(!crate::blur::collect_for_surface(&h.tree, h.root).is_empty());
+
+    open.set(false);
+    pump(&mut h);
+    h.fit(100.0, 100.0);
+    h.paint();
+    assert_eq!(
+        crate::blur::collect_for_surface(&h.tree, h.root),
+        Vec::new(),
+        "an invisible panel blurs nothing"
+    );
+
+    open.set(true);
+    pump(&mut h);
+    h.fit(100.0, 100.0);
+    h.paint();
+    assert!(!crate::blur::collect_for_surface(&h.tree, h.root).is_empty());
+
+    crate::blur::reset_blur();
+}
+
+/// A child culled out of a scrolling viewport never paints, so it cannot withdraw
+/// its own region — the parent that culled it says so on its behalf.
+///
+/// Culling only skips a *clean* child, so the card's paint flag is cleared before
+/// the last frame, which is what the loop's `cache_paint_results` does once its
+/// content stops changing.
+#[test]
+fn a_culled_child_withdraws_its_compositor_blur() {
+    crate::blur::reset_blur();
+
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(30.0)
+            .scrollable(ScrollAxis::Vertical)
+            .child(container().width(40.0).height(20.0).backdrop_blur(24.0))
+            .child(box_of(40.0, 400.0)),
+    );
+    h.fit(40.0, 30.0);
+    h.paint();
+    assert!(
+        !crate::blur::collect_for_surface(&h.tree, h.root).is_empty(),
+        "visible at the top of the scroll"
+    );
+
+    h.send(Event::Scroll {
+        x: 20.0,
+        y: 15.0,
+        delta_x: 0.0,
+        delta_y: 300.0,
+        source: ScrollSource::Wheel,
+    });
+    pump(&mut h);
+    h.fit(40.0, 30.0);
+
+    let card = h.children()[0];
+    h.tree.clear_needs_paint(card);
+    h.paint();
+
+    assert_eq!(
+        crate::blur::collect_for_surface(&h.tree, h.root),
+        Vec::new(),
+        "scrolled away, so it blurs nothing"
+    );
+
+    crate::blur::reset_blur();
+}
