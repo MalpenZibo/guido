@@ -76,7 +76,8 @@ impl H {
     /// region read off the result, and `crate::cache_paint_results` to finish.
     ///
     /// Two of those are the loop's own code rather than a stand-in for it, and
-    /// both were learned the hard way. `cache_paint_results` written out by hand
+    /// both were learned the hard way — and it is called the way the loop calls
+    /// it, per child of the root, not on the root. `cache_paint_results` written out by hand
     /// left `cache_paint` undone, so `reuse_cached` never found a cache and every
     /// test repainted everything — making the whole class of bug about a widget
     /// that is *not* repainted structurally invisible here. And a `frame` that
@@ -111,7 +112,14 @@ impl H {
         crate::renderer::flatten_root_into(&node, &mut commands, &mut layers);
         let blur = crate::blur::regions_from_commands(&commands);
 
-        crate::cache_paint_results(&mut self.tree, &node);
+        // Per child of the root and then `clear_needs_paint(root)`, which is
+        // what the loop does: the surface root always repaints, so it is never
+        // cache-reused, and handing it to `cache_paint_results` would leave the
+        // harness with a cache entry the loop never has.
+        for child in &node.children {
+            crate::cache_paint_results(&mut self.tree, child);
+        }
+        self.tree.clear_needs_paint(root);
         self.last = Some((std::rc::Rc::clone(&node), commands));
 
         Frame { node, blur }
@@ -2416,6 +2424,43 @@ fn a_clipped_blur_publishes_only_what_is_on_show() {
     assert!(
         widest <= 40,
         "the row is 80 wide inside a 40-wide clip, so no region may reach {widest}"
+    );
+}
+
+/// The region is the shape *as drawn*, so a transform has to reach it: a scaled
+/// card covers more of the desktop and a rotated one covers a diagonal.
+///
+/// End to end through the real paint and flatten, because the geometry is
+/// derived there. The unit tests in `renderer::flatten` measure the arithmetic;
+/// this is the wiring — a region built from a command's local rect instead of
+/// its world one passes every one of those and still publishes a 40x40 upright
+/// box for a card the compositor is showing at 80x80 turned on its corner.
+#[test]
+fn a_transformed_blur_publishes_the_shape_it_is_drawn_as() {
+    let card = |c: Container| c.width(40.0).height(40.0).backdrop_blur(24.0);
+
+    let plain = H::new(card(container())).frame(200.0, 200.0).blur;
+    let scaled = H::new(card(container()).scale(2.0))
+        .frame(200.0, 200.0)
+        .blur;
+    let turned = H::new(card(container()).rotate(45.0))
+        .frame(200.0, 200.0)
+        .blur;
+
+    let span = |rects: &[crate::blur::BlurRect]| {
+        let left = rects.iter().map(|r| r.x).min().expect("a region");
+        let right = rects.iter().map(|r| r.x + r.width).max().expect("a region");
+        right - left
+    };
+
+    let (plain, scaled, turned) = (span(&plain), span(&scaled), span(&turned));
+    assert!(
+        scaled >= plain * 2 - 2,
+        "twice the card is twice the region: {scaled} against {plain}"
+    );
+    assert!(
+        turned > plain && turned < scaled,
+        "turned on its corner it covers its diagonal, {turned} against {plain}"
     );
 }
 

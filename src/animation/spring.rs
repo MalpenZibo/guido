@@ -89,6 +89,14 @@ impl SpringConfig {
             return 0.0;
         }
         let zeta = self.damping / denominator;
+        if !zeta.is_finite() {
+            // A negative mass or stiffness makes the ratio NaN, and NaN fails
+            // every comparison below on its way to `exp`. A NaN here is not a
+            // number that stays here: it multiplies a damage reach, which sizes
+            // a rect, and `f32::min` hands back the *other* operand — so the
+            // clamp that reads the reach would quietly stop clamping too.
+            return 0.0;
+        }
         if zeta < 0.0 {
             // Negative damping is not a spring, it is an explosion. Nothing
             // bounds it, so it reports nothing rather than a number a caller
@@ -197,6 +205,35 @@ impl Default for SpringState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A spring built from a nonsense config must not seed NaN into anything
+    /// that sizes a rect from it.
+    #[test]
+    fn an_impossible_spring_reports_no_overshoot_rather_than_nan() {
+        for config in [
+            SpringConfig {
+                mass: -1.0,
+                stiffness: 400.0,
+                damping: 20.0,
+            },
+            SpringConfig {
+                mass: 1.0,
+                stiffness: -400.0,
+                damping: 20.0,
+            },
+            SpringConfig {
+                mass: f32::NAN,
+                stiffness: 400.0,
+                damping: 20.0,
+            },
+        ] {
+            let overshoot = config.peak_overshoot();
+            assert!(
+                overshoot.is_finite(),
+                "{config:?} reported {overshoot}, which would poison a damage rect"
+            );
+        }
+    }
 
     #[test]
     fn test_spring_reaches_target() {

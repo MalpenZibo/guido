@@ -79,13 +79,19 @@ impl TimingFunction {
     /// A bezier is bounded by its control polygon, so its control points give
     /// the bound directly, and a spring's physics give it exactly.
     ///
-    /// A [`Custom`](TimingFunction::Custom) curve is an arbitrary closure and
-    /// cannot be asked, so it is **clamped** to
-    /// [`custom`](TimingFunction::custom), which samples it once, rather than by
-    /// [`evaluate`](Self::evaluate) rather than merely assumed to respect it. A
-    /// bound nothing enforces is not a bound: a hand-rolled bounce peaking at
-    /// 1.5 would have had its damage rect measured for 1.25, leaving the ring
-    /// between the two outside every one of them.
+    /// A [`Custom`](TimingFunction::Custom) curve is an arbitrary closure, so it
+    /// cannot be asked — it is **measured**:
+    /// [`custom`](TimingFunction::custom) samples it once when it is built and
+    /// carries the excursion it found, which is what this reports. The curve
+    /// itself is untouched, and [`evaluate`](Self::evaluate) hands back exactly
+    /// what it returns.
+    ///
+    /// Clamping the curve to an assumed allowance would make the bound true by
+    /// shortening every hand-rolled bounce, silently, which is the wrong way
+    /// round: the bound describes the curve, not the reverse. Assuming one
+    /// without measuring is no better — a bounce peaking at 1.5 would have had
+    /// its damage rect measured for 1.25, leaving the ring between the two
+    /// outside every one of them.
     pub fn peak_overshoot(&self) -> f32 {
         match self {
             TimingFunction::Linear
@@ -232,13 +238,11 @@ mod tests {
 mod overshoot_bound_tests {
     use super::*;
 
-    /// A custom curve that goes further than the allowance is clamped to it, so
-    /// what `peak_overshoot` reports is a bound and not a hope. Anything sized
-    /// from that number — the damage rect an elevation shadow needs, above all —
-    /// would otherwise be measured for less than what is drawn.
     /// A custom curve keeps the shape it was written with, and reports what that
-    /// shape actually does. Clamping it to a constant instead would have made the
-    /// bound true by shortening every hand-rolled bounce, silently.
+    /// shape actually does. Anything sized from that number — the damage rect an
+    /// elevation shadow needs, above all — would otherwise be measured for less
+    /// than what is drawn; clamping the curve instead would have made the bound
+    /// true by shortening every hand-rolled bounce, silently.
     #[test]
     fn a_custom_curve_is_measured_rather_than_clamped() {
         // Overshoots at the end and anticipates at the start: a bound that holds

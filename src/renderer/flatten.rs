@@ -83,6 +83,14 @@ impl FlattenedCommand {
     /// radii scale with the box, or a `.scale(2.0)` container reports a shape
     /// whose corners are cut half as deep as the one it draws.
     pub fn world_rounded_rect(&self, rect: Rect, radii: CornerRadii) -> (Rect, CornerRadii) {
+        (
+            self.world_aabb(rect),
+            radii.scaled(self.world_transform.extract_scale()),
+        )
+    }
+
+    /// The axis-aligned world box containing a rect of this command's own space.
+    fn world_aabb(&self, rect: Rect) -> Rect {
         let corners = [
             self.world_transform.transform_point(rect.x, rect.y),
             self.world_transform
@@ -102,9 +110,7 @@ impl FlattenedCommand {
             .iter()
             .map(|c| c.1)
             .fold(f32::NEG_INFINITY, f32::max);
-
-        let world = Rect::new(min_x, min_y, max_x - min_x, max_y - min_y);
-        (world, radii.scaled(self.world_transform.extract_scale()))
+        Rect::new(min_x, min_y, max_x - min_x, max_y - min_y)
     }
 
     /// [`world_rounded_rect`](Self::world_rounded_rect), narrowed to what the
@@ -114,13 +120,25 @@ impl FlattenedCommand {
     /// out of a viewport is filtered only where it is on show, and a compositor
     /// region published for the whole card blurs the desktop beside a panel that
     /// is not there. Returns `None` when the clip leaves nothing.
+    ///
+    /// An overlay's clip is stored in the command's *local* space so a ripple
+    /// follows the shape it belongs to instead of an axis-aligned box around it
+    /// — so it is carried into world space here before the two are compared.
+    /// Intersecting the two spaces directly reported a region offset by every
+    /// translation between the shape and the surface.
     pub fn clipped_world_rounded_rect(
         &self,
         rect: Rect,
         radii: CornerRadii,
     ) -> Option<(Rect, CornerRadii)> {
         let (world, world_radii) = self.world_rounded_rect(rect, radii);
-        let Some(clip) = self.clip.as_ref().map(|c| c.rect) else {
+        let Some(clip) = self.clip.as_ref().map(|c| {
+            if self.clip_is_local {
+                self.world_aabb(c.rect)
+            } else {
+                c.rect
+            }
+        }) else {
             return Some((world, world_radii));
         };
 
@@ -1089,6 +1107,30 @@ mod world_geometry_tests {
         assert!(
             cmd.clipped_world_rounded_rect(rect, CornerRadii::from(0.0))
                 .is_none()
+        );
+    }
+
+    /// An overlay keeps its clip in local space so a ripple follows the shape
+    /// through a rotation. Compared against a world rect without being carried
+    /// over first, a ripple inside a translated subtree reports a region
+    /// somewhere else entirely — or none at all, for a shape wholly on show.
+    #[test]
+    fn a_local_clip_is_carried_into_world_space_before_it_cuts() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let mut cmd = command(Transform::translate(500.0, 300.0));
+        cmd.clip = Some(WorldClip {
+            rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+            corner_radius: 0.0,
+            curvature: 1.0,
+        });
+        cmd.clip_is_local = true;
+
+        let (world, _) = cmd
+            .clipped_world_rounded_rect(rect, CornerRadii::from(0.0))
+            .expect("the clip covers the whole shape, so nothing is cut");
+        assert_eq!(
+            (world.x, world.y, world.width, world.height),
+            (500.0, 300.0, 100.0, 100.0)
         );
     }
 

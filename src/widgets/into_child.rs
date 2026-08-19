@@ -24,7 +24,7 @@
 //! For lists, [`keyed()`] preserves per-row state through stable identity
 //! and rebuilds only rows whose item content changed.
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::hash::Hash;
 use std::rc::Rc;
@@ -374,20 +374,24 @@ fn add_keyed_children<T, I, K, W>(
             dispose_owner_now(owner_id);
         }
 
-        let mut seen = FxHashSet::default();
+        // Keyed by first sighting rather than a plain set: a duplicate is worth
+        // reporting *with the row it collided with*, and that is the one thing a
+        // set cannot say.
+        let mut seen = FxHashMap::default();
         let mut out = Vec::new();
         for (index, item) in items.into_iter().enumerate() {
             let key = key_fn(&item);
             // One lookup rather than a `contains` and then an `insert`: this runs
             // per row per pass, and the clone a fresh row would have paid anyway
             // is paid once here instead.
-            if !seen.insert(key.clone()) {
+            if let Some(first) = seen.insert(key.clone(), index) {
                 // Without the key's value: `Debug` would be a bound the mechanism
                 // does not need, and it would keep an opaque newtype out of
-                // `keyed` in order to format a log line. The type and the
-                // position are what can be said for nothing.
+                // `keyed` in order to format a log line. Both indices instead —
+                // the type alone names nothing, but the pair of rows that
+                // collided is enough to go and look at them.
                 log::warn!(
-                    "keyed children: duplicate {} key at index {index}, skipping item",
+                    "keyed children: item {index} repeats the {} key of item {first}, skipping it",
                     std::any::type_name::<K>()
                 );
                 continue;
@@ -419,7 +423,7 @@ fn add_keyed_children<T, I, K, W>(
                 OwnedWidget::new(widget, owner_id)
             }));
         }
-        st.rows.retain(|key, _| seen.contains(key));
+        st.rows.retain(|key, _| seen.contains_key(key));
         out
     };
 

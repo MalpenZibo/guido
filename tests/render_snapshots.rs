@@ -435,9 +435,12 @@ fn corners_borders_and_elevation() {
 /// which half of the effect runs, and until this scene existed no golden held a
 /// blur command at all.
 ///
-/// The transformed cases are here on purpose: the region's geometry is derived
-/// from the world transform, and a rotation moves its extremes onto the other
-/// diagonal while a scale grows the corner radii with the box.
+/// The transformed cases are here for what reaches the *renderer*: the command
+/// keeps its own rect and radii and carries the matrix, so the golden is where a
+/// transform silently baked into the geometry would show up. What the compositor
+/// is told is derived from that matrix later and is not in this file — the
+/// arithmetic is measured in `renderer::flatten`, and the wiring end to end in
+/// `a_transformed_blur_publishes_the_shape_it_is_drawn_as`.
 #[test]
 fn backdrop_blur_sources_and_geometry() {
     let frosted = |radius: f32| {
