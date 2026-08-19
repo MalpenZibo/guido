@@ -48,6 +48,24 @@ impl WaylandState {
         self.backdrop.bg_effect_supports_blur && self.backdrop.bg_effect_manager.is_some()
     }
 
+    /// Whether a surface that is *not* repainting still owes the compositor a
+    /// region, taking the debt as it answers.
+    ///
+    /// A frame that paints publishes its region from the commands it just
+    /// flattened, so the only reason an idle one has to say anything is that the
+    /// compositor forgot: the blur capability going away drops its regions, and
+    /// they have to be pushed again when it returns. Asking the retained command
+    /// list every idle frame instead walked a whole frame's commands, on every
+    /// still frame, to rebuild the region that was already published.
+    pub(crate) fn take_blur_resync(&mut self, id: SurfaceId) -> bool {
+        if !self.supports_blur_region() {
+            return false;
+        }
+        self.surfaces
+            .get_mut(&id)
+            .is_some_and(|s| std::mem::take(&mut s.blur_resync_owed))
+    }
+
     /// Push a surface's blur region to the compositor if it changed.
     ///
     /// The `set_blur_region` request is double-buffered: with `commit: false`
@@ -77,6 +95,7 @@ impl WaylandState {
         let Some(surface_state) = self.surfaces.get_mut(&id) else {
             return;
         };
+        surface_state.blur_resync_owed = false;
 
         // Never used blur and still doesn't — don't claim the surface.
         if rects.is_empty()
@@ -145,6 +164,7 @@ impl Dispatch<ExtBackgroundEffectManagerV1, ()> for WaylandState {
             // forget ours and wake the loop to push them again if it's back.
             for surface_state in state.surfaces.values_mut() {
                 surface_state.blur_region = None;
+                surface_state.blur_resync_owed = true;
             }
             crate::jobs::wake_loop();
         }

@@ -371,6 +371,9 @@ fn process_surface_commands(
                 let asked = reconfigure(id, surface_manager, wayland_state, |surface, wayland| {
                     surface.config.width = width;
                     surface.config.height = height;
+                    // Here every value is one the caller just named, so anything
+                    // the anchor discards is worth saying.
+                    surface::warn_size_request_on_stretched_axis(id, &surface.config);
                     send_size(id, surface, wayland)
                 });
                 if let Some((true, root)) = asked {
@@ -866,16 +869,24 @@ fn layout_pass(
             widget.layout(tree, wid, constraints);
         });
         if (nw, nh) != (frame.width, frame.height) {
-            // Through the same rule as every other resize: a measured number on
-            // an axis the compositor owns hands back an axis that is not ours,
-            // and a full-width bar would then stay at whatever the screen was
-            // when it was measured.
-            let (ask_w, ask_h) = surface::honour_owned_axes(surface.config.anchor, nw, nh);
-            wayland_state.set_surface_size(id, ask_w, ask_h);
-            // An `Auto` reservation follows an automatic resize too, and this is
-            // the one caller that knows the measured size before the compositor
-            // does — so it passes it rather than letting the helper look it up.
-            resync_exclusive_zone(id, &surface.config, wayland_state, Some((nw, nh)));
+            // One commit, like every other pair of these. A content surface whose
+            // content animates resizes on frame after frame, and two commits a
+            // frame show the compositor the new size against the old reservation
+            // in between.
+            let config = &surface.config;
+            wayland_state.batch_layer_requests(id, |wayland| {
+                // Through the same rule as every other resize: a measured number
+                // on an axis the compositor owns hands back an axis that is not
+                // ours, and a full-width bar would then stay at whatever the
+                // screen was when it was measured.
+                let (ask_w, ask_h) = surface::honour_owned_axes(config.anchor, nw, nh);
+                wayland.set_surface_size(id, ask_w, ask_h);
+                // An `Auto` reservation follows an automatic resize too, and this
+                // is the one caller that knows the measured size before the
+                // compositor does — so it passes it rather than letting the
+                // helper look it up.
+                resync_exclusive_zone(id, config, wayland, Some((nw, nh)));
+            });
         }
     }
 
@@ -907,16 +918,28 @@ fn configured_size(wayland_state: &platform::WaylandState, id: SurfaceId) -> Opt
 /// Shared by the two commands that can change it — a resize, and a re-anchoring
 /// that changes which axes are ours — so the anchor and the size cannot end up
 /// describing different surfaces.
+///
+/// An axis crossing from the compositor's side to ours has to be given a number:
+/// layer-shell makes zero on an axis not anchored to opposite edges a protocol
+/// error, so a re-anchored bar that says nothing is disconnected at its next
+/// commit. The number is the config's, **default included** — a bar written
+/// `height(32).anchor(TOP | LEFT | RIGHT)` never names a width, so re-anchoring
+/// it to `TOP | LEFT` asks for [`SurfaceConfig::default`]'s 400 rather than the
+/// screen width it was stretched to. Handing back the size it happens to have
+/// instead would read better there and worse where it counts: it would also
+/// override a width the app *did* name and had ignored while stretched. An app
+/// re-anchoring to an axis it cares about sets the size for it.
+///
+/// It does not warn. A re-anchoring names no sizes, so warning from here fired
+/// on every anchor change for an axis that was stretched before and still is —
+/// the noise
+/// [`warn_content_on_stretched_axis`](surface::warn_content_on_stretched_axis)
+/// was split off to avoid. The caller that was handed a size says so.
 fn send_size(
     id: SurfaceId,
     surface: &ManagedSurface,
     wayland_state: &mut platform::WaylandState,
 ) -> (bool, WidgetId) {
-    // Every size that reaches here was asked for by name, so anything the
-    // anchor discards is worth saying — a `content()` axis that will never be
-    // measured, and a `Fixed` one whose number is simply dropped.
-    surface::warn_size_request_on_stretched_axis(id, &surface.config);
-
     let live = configured_size(wayland_state, id);
     let (ask_w, ask_h, needs_measure) = surface::resize_request(&surface.config, live);
     wayland_state.set_surface_size(id, ask_w, ask_h);
@@ -972,11 +995,14 @@ fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry)
 
     // Skip frame if nothing needs paint
     if !tree.needs_paint(surface.widget_id) {
-        // The retained command buffer still holds the last frame, which is what
-        // is on screen — so it is also the right region. Still synced: a
-        // blur-region change without a repaint (the compositor's blur capability
-        // arriving) needs its own commit.
-        if wayland_state.supports_blur_region() {
+        // Only when one is owed. The retained command buffer still holds the
+        // last frame, which is what is on screen — so it is also the right
+        // region, and rebuilding it from those commands is right but not free:
+        // an idle surface would walk a whole frame's worth of them, every frame,
+        // to arrive at the region it published already. The one thing that can
+        // change while nothing paints is the compositor's blur capability, which
+        // drops its regions, and that says so.
+        if wayland_state.take_blur_resync(id) {
             let blur_rects = blur::regions_from_commands(&surface.flattened_commands);
             wayland_state.sync_blur_region(id, blur_rects, qh, true);
         }
@@ -1703,6 +1729,30 @@ mod exclusive_zone_resync_tests {
         let (w, h, measure) = surface::resize_request(&anchored(200.into(), 60.into()), live);
         assert_eq!((w, h), (200, 60));
         assert!(!measure, "two fixed axes need no measure");
+    }
+
+    /// A `content()` axis the compositor owns is measured and then thrown away.
+    /// Asking for the measure anyway re-lays out the whole subtree on every
+    /// resize and every re-anchoring, to produce a number nothing can use.
+    #[test]
+    fn a_stretched_content_axis_asks_for_no_measure() {
+        let live = Some((1920u32, 32u32));
+        let bar = |anchor: Anchor| SurfaceConfig {
+            anchor,
+            width: SurfaceExtent::Content,
+            height: 32.into(),
+            ..SurfaceConfig::new()
+        };
+
+        let (_, _, measure) =
+            surface::resize_request(&bar(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT), live);
+        assert!(!measure, "the width is the compositor's either way");
+
+        let (_, _, measure) = surface::resize_request(&bar(Anchor::TOP | Anchor::LEFT), live);
+        assert!(
+            measure,
+            "anchored to one edge it is ours, and has to be measured"
+        );
     }
 
     /// Which axes are the compositor's follows from the anchor, and layer-shell

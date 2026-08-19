@@ -280,16 +280,19 @@ pub(crate) fn requested_extent(extent: SurfaceExtent, live: Option<u32>) -> u32 
 /// activity, and a bare `set_size` produces none. So a content axis holds the
 /// confirmed size and asks for a layout, which is what brings the measure round.
 pub(crate) fn resize_request(config: &SurfaceConfig, live: Option<(u32, u32)>) -> (u32, u32, bool) {
+    let (owns_w, owns_h) = compositor_owned_axes(config.anchor);
     let (width, height) = honour_owned_axes(
         config.anchor,
         requested_extent(config.width, live.map(|(w, _)| w)),
         requested_extent(config.height, live.map(|(_, h)| h)),
     );
-    (
-        width,
-        height,
-        config.width.is_content() || config.height.is_content(),
-    )
+    // Only for a content axis that is *ours*. Stretched, the measure runs and
+    // `honour_owned_axes` throws the answer away — a full re-layout of the
+    // subtree for an axis that was never going to be ours. A bar declared
+    // `width(content()).anchor(LEFT | RIGHT)` did exactly that on every resize
+    // and every re-anchoring.
+    let measure = (config.width.is_content() && !owns_w) || (config.height.is_content() && !owns_h);
+    (width, height, measure)
 }
 
 /// Zero the axes the compositor owns, whatever size was going to be asked for.

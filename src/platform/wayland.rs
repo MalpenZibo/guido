@@ -33,6 +33,7 @@ use wayland_protocols::ext::background_effect::v1::client::{
     ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1,
 };
 
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use super::backdrop::Backdrop;
@@ -105,6 +106,11 @@ pub struct WaylandSurfaceState {
     /// been pushed yet (also reset when the blur capability changes, so the
     /// region is re-sent if it comes back).
     pub(super) blur_region: Option<Vec<BlurRect>>,
+    /// Set when the compositor's blur capability changes, so a surface that is
+    /// not repainting knows it owes a region — and, the rest of the time, knows
+    /// it does not. See
+    /// [`take_blur_resync`](WaylandState::take_blur_resync).
+    pub(super) blur_resync_owed: bool,
     /// Height sent in an in-flight popup reposition (cleared by the popup
     /// configure), so repeated content measurements don't re-send it.
     pub(super) pending_popup_height: Option<u32>,
@@ -131,6 +137,7 @@ impl WaylandSurfaceState {
             pending_events: Vec::new(),
             bg_effect_surface: None,
             blur_region: None,
+            blur_resync_owed: false,
             pending_popup_height: None,
         }
     }
@@ -139,6 +146,36 @@ impl WaylandSurfaceState {
     pub fn take_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.pending_events)
     }
+}
+
+thread_local! {
+    /// Whether a [`batch_layer_requests`](WaylandState::batch_layer_requests)
+    /// group is open: individual requests hold their commit so the group makes
+    /// one.
+    ///
+    /// A dynamic scope rather than a field, because the scope has to survive a
+    /// panic. The closure gets `&mut WaylandState`, so a guard restoring a field
+    /// could not hold on to it while the closure runs — and a flag left set by
+    /// an unwind would be permanent: every later `set_margin` or `set_layer`
+    /// would hold its commit for a group that had already ended, and the surface
+    /// would stop answering its handle in silence.
+    static BATCHING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Run `f` inside the batching scope, and report whether it opened it.
+///
+/// Restored on the way out however that happens, which is the whole point.
+fn batching<R>(f: impl FnOnce() -> R) -> (bool, R) {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            BATCHING.with(|b| b.set(self.0));
+        }
+    }
+
+    let outer = BATCHING.with(|b| b.replace(true));
+    let _restore = Restore(outer);
+    (!outer, f())
 }
 
 pub struct WaylandState {
@@ -150,10 +187,6 @@ pub struct WaylandState {
 
     /// Whether the application should exit
     pub exit: bool,
-    /// Inside [`batch_layer_requests`](Self::batch_layer_requests): individual
-    /// requests hold their commit so the group makes one.
-    batching_requests: bool,
-
     // Multi-surface tracking
     /// All surfaces indexed by SurfaceId
     pub surfaces: HashMap<SurfaceId, WaylandSurfaceState>,
@@ -293,7 +326,6 @@ pub fn create_wayland_app(
         seat_state,
         layer_shell,
         exit: false,
-        batching_requests: false,
         surfaces: HashMap::new(),
         surface_lookup: HashMap::new(),
         current_pointer_surface: None,
@@ -476,8 +508,6 @@ impl WaylandState {
         }
     }
 
-    /// Helper to modify a surface's layer shell properties and commit.
-    /// No-ops (with a warning) on session-lock surfaces, which have none.
     /// Apply several layer-shell requests as one change.
     ///
     /// `with_layer_surface` commits after each
@@ -486,20 +516,29 @@ impl WaylandState {
     /// commits is two of them showing the compositor a surface halfway between
     /// two configurations — before this, an app animating a dock's margin sent a
     /// redundant pair every frame.
+    ///
+    /// The commit is the group's, so it is subject to the same rule each request
+    /// is: only a layer surface has these properties, and a batch aimed at a
+    /// session-lock or popup surface applies nothing. Committing anyway would
+    /// send a bare commit to exactly the roles the per-request path refuses to
+    /// touch.
     pub fn batch_layer_requests(&mut self, id: SurfaceId, f: impl FnOnce(&mut Self)) {
-        let outer = std::mem::replace(&mut self.batching_requests, true);
-        f(self);
-        self.batching_requests = outer;
-        if !outer && let Some(state) = self.surfaces.get(&id) {
+        let (outermost, ()) = batching(|| f(self));
+        if outermost
+            && let Some(state) = self.surfaces.get(&id)
+            && matches!(state.role, SurfaceRole::Layer(_))
+        {
             state.wl_surface.commit();
         }
     }
 
+    /// Helper to modify a surface's layer shell properties and commit.
+    /// No-ops (with a warning) on session-lock surfaces, which have none.
     fn with_layer_surface<F>(&mut self, id: SurfaceId, f: F)
     where
         F: FnOnce(&LayerSurface),
     {
-        let batching = self.batching_requests;
+        let batching = BATCHING.with(|b| b.get());
         if let Some(surface_state) = self.surfaces.get_mut(&id) {
             match &surface_state.role {
                 SurfaceRole::Layer(layer_surface) => {
@@ -790,3 +829,33 @@ impl ProvidesRegistryState for WaylandState {
 delegate_compositor!(WaylandState);
 delegate_layer!(WaylandState);
 delegate_registry!(WaylandState);
+
+#[cfg(test)]
+mod batching_tests {
+    use super::{BATCHING, batching};
+
+    /// A batch is a scope, and a scope that a panic can leave open is not one.
+    /// Left open, every later layer-shell request holds its commit for a group
+    /// that ended, and the surface stops answering its handle in silence.
+    #[test]
+    fn a_panic_inside_a_batch_still_closes_it() {
+        let escaped = std::panic::catch_unwind(|| {
+            batching(|| panic!("a request went wrong"));
+        });
+        assert!(escaped.is_err(), "the panic still propagates");
+        assert!(
+            !BATCHING.with(|b| b.get()),
+            "and the scope closed on its way out"
+        );
+    }
+
+    /// Only the outermost group commits, or a nested batch would commit halfway
+    /// through the one containing it.
+    #[test]
+    fn only_the_outermost_batch_reports_itself() {
+        let (outermost, inner) = batching(|| batching(|| ()).0);
+        assert!(outermost, "the outer one opened the scope");
+        assert!(!inner, "the inner one found it already open");
+        assert!(!BATCHING.with(|b| b.get()));
+    }
+}
