@@ -1771,3 +1771,84 @@ fn a_surface_only_blur_publishes_no_compositor_region() {
 
     crate::blur::reset_blur();
 }
+
+/// A shadow belongs to the box, not to the fill, so a gradient must not lose
+/// it. Both are reactive, so a signal can move a container from one branch of
+/// the decoration to the other between frames — an elevation animation that
+/// crossed into the gradient branch stopped drawing while still asking for a
+/// frame at every step.
+#[test]
+fn a_gradient_keeps_its_shadow() {
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(20.0)
+            .elevation(3.0)
+            .gradient_horizontal(Color::RED, Color::BLUE),
+    );
+    h.fit(100.0, 100.0);
+    let node = h.paint();
+
+    assert_eq!(gradient_ends(&node), Some((Color::RED, Color::BLUE)));
+    assert_eq!(shadow_count(&node), 1, "the gradient is still elevated");
+}
+
+/// The two halves of a border can be declared apart, so either can be missing.
+/// A width with a transparent colour is an invisible frame, and it used to reach
+/// the instance buffer every frame.
+#[test]
+fn a_border_with_nothing_to_show_draws_nothing() {
+    let mut h = H::new(container().width(20.0).height(20.0).border_width(2.0));
+    h.fit(100.0, 100.0);
+    assert_eq!(
+        borders(&h.paint()),
+        Vec::new(),
+        "a width with no colour behind it"
+    );
+
+    // A colour with no width is not a border either — CSS says the same.
+    let mut h = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .border_color(Color::RED),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(borders(&h.paint()), Vec::new());
+
+    // Both, and it draws.
+    let mut h = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .border_width(2.0)
+            .border_color(Color::RED),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(borders(&h.paint()), vec![(2.0, Color::RED)]);
+}
+
+/// A colour fading in behind an already-declared width has to start drawing the
+/// moment it is visible, so the gate cannot be a build-time decision.
+#[test]
+fn a_border_appears_when_its_colour_does() {
+    let visible = create_signal(false);
+    let mut h = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .border_width(2.0)
+            .border_color(move || {
+                if visible.get() {
+                    Color::RED
+                } else {
+                    Color::TRANSPARENT
+                }
+            }),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(borders(&h.paint()), Vec::new());
+
+    visible.set(true);
+    assert_eq!(borders(&h.paint()), vec![(2.0, Color::RED)]);
+}

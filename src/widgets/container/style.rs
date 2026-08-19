@@ -346,38 +346,51 @@ impl Container {
     /// `bounds` is local — the origin is the container itself, and the parent
     /// has already positioned the node.
     pub(super) fn paint_decoration(&self, ctx: &mut PaintContext, bounds: Rect, d: &Decoration) {
-        // A gradient replaces the solid fill rather than layering over it.
+        // A gradient replaces the solid fill rather than layering over it —
+        // but not the shadow, which belongs to the box rather than to the
+        // fill. Both are reactive, so which of the two branches a container
+        // takes can change between frames; a gradient that dropped the shadow
+        // meant an elevation animation stopped drawing halfway through while
+        // still asking for a frame at every step.
+        let shadow = (d.elevation > 0.0).then(|| elevation_to_shadow(d.elevation));
+
         if let Some(ref gradient) = d.gradient {
-            ctx.draw_gradient_rect(
+            ctx.draw_rounded_rect_full(
                 bounds,
-                crate::renderer::Gradient {
+                gradient.start_color,
+                d.corner_radii,
+                d.corner_curvature,
+                None,
+                shadow,
+                Some(crate::renderer::Gradient {
                     start_color: gradient.start_color,
                     end_color: gradient.end_color,
                     direction: gradient.direction.into(),
-                },
-                d.corner_radii,
-                d.corner_curvature,
+                }),
             );
         } else if d.background.a > 0.0 {
-            if d.elevation > 0.0 {
-                ctx.draw_rounded_rect_with_shadow(
+            match shadow {
+                Some(shadow) => ctx.draw_rounded_rect_with_shadow(
                     bounds,
                     d.background,
                     d.corner_radii,
                     d.corner_curvature,
-                    elevation_to_shadow(d.elevation),
-                );
-            } else {
-                ctx.draw_rounded_rect_with_curvature(
+                    shadow,
+                ),
+                None => ctx.draw_rounded_rect_with_curvature(
                     bounds,
                     d.background,
                     d.corner_radii,
                     d.corner_curvature,
-                );
+                ),
             }
         }
 
-        if d.border_width > 0.0 {
+        // A width with no colour behind it is an invisible frame, and one
+        // reaches the instance buffer every frame if it is not stopped here.
+        // `border_width(2.0)` on its own is newly spellable, and the default
+        // colour is transparent.
+        if d.border_width > 0.0 && d.border_color.a > 0.0 {
             ctx.draw_border_frame_with_curvature(
                 bounds,
                 d.border_color,
@@ -389,28 +402,52 @@ impl Container {
     }
 }
 
+/// The tabulated Material steps, `level => (offset_y, blur, alpha)`.
+///
+/// Level 0 is in the table so the interpolation below has somewhere to come
+/// from, and the last entry meets the formula that continues past it exactly:
+/// at 5, `level * 1.2`, `level * 2.0` and `0.12 + level * 0.02` are 6.0, 10.0
+/// and 0.22.
+const ELEVATION_STEPS: [(f32, f32, f32); 6] = [
+    (0.0, 0.0, 0.0),
+    (1.0, 3.0, 0.12),
+    (2.0, 4.0, 0.16),
+    (3.0, 6.0, 0.19),
+    (4.0, 8.0, 0.20),
+    (6.0, 10.0, 0.22),
+];
+
 /// Convert an elevation level to the shadow that expresses it.
 ///
 /// Material-style: the higher the surface sits, the further the shadow falls
-/// and the softer it gets. Levels 1–5 are tabulated; above that the numbers
+/// and the softer it gets. Levels 0–5 are tabulated; above that the numbers
 /// keep growing on the same curve, up to a ceiling.
+///
+/// A fractional level interpolates between the two steps around it. Reading the
+/// table with `level as i32` was fine while elevation could not be animated —
+/// it always arrived as one of the six integers. Now that it can, truncation
+/// made the shadow a staircase between 1 and 5, and worse, discontinuous where
+/// the table met the formula: 0.999 fell through to the formula for
+/// (1.199, 1.998, 0.140) while 1.0 read the table for (1.0, 3.0, 0.12), so
+/// crossing 1 dropped the offset and the alpha while jumping the blur.
 pub(super) fn elevation_to_shadow(level: f32) -> Shadow {
     if level <= 0.0 {
         return Shadow::none();
     }
 
-    let (offset_y, blur, alpha) = match level as i32 {
-        1 => (1.0, 3.0, 0.12),
-        2 => (2.0, 4.0, 0.16),
-        3 => (3.0, 6.0, 0.19),
-        4 => (4.0, 8.0, 0.20),
-        5 => (6.0, 10.0, 0.22),
-        _ => {
-            let offset = (level * 1.2).min(12.0);
-            let blur = (level * 2.0).min(24.0);
-            let alpha = (0.12 + level * 0.02).min(0.25);
-            (offset, blur, alpha)
-        }
+    let last = (ELEVATION_STEPS.len() - 1) as f32;
+    let (offset_y, blur, alpha) = if level >= last {
+        (
+            (level * 1.2).min(12.0),
+            (level * 2.0).min(24.0),
+            (0.12 + level * 0.02).min(0.25),
+        )
+    } else {
+        let lower = level.floor();
+        let t = level - lower;
+        let (o0, b0, a0) = ELEVATION_STEPS[lower as usize];
+        let (o1, b1, a1) = ELEVATION_STEPS[lower as usize + 1];
+        (o0 + (o1 - o0) * t, b0 + (b1 - b0) * t, a0 + (a1 - a0) * t)
     };
 
     Shadow::new(
@@ -419,4 +456,72 @@ pub(super) fn elevation_to_shadow(level: f32) -> Shadow {
         0.0,
         Color::rgba(0.0, 0.0, 0.0, alpha),
     )
+}
+
+#[cfg(test)]
+mod elevation_tests {
+    use super::*;
+
+    fn parts(level: f32) -> (f32, f32, f32) {
+        let s = elevation_to_shadow(level);
+        (s.offset.1, s.blur, s.color.a)
+    }
+
+    /// Whole levels keep the Material numbers they always had, so a static
+    /// elevation looks exactly as it did.
+    #[test]
+    fn the_tabulated_levels_are_unchanged() {
+        assert_eq!(parts(1.0), (1.0, 3.0, 0.12));
+        assert_eq!(parts(2.0), (2.0, 4.0, 0.16));
+        assert_eq!(parts(3.0), (3.0, 6.0, 0.19));
+        assert_eq!(parts(4.0), (4.0, 8.0, 0.20));
+        assert_eq!(parts(5.0), (6.0, 10.0, 0.22));
+    }
+
+    /// An animated elevation sweeps through the fractions, so every component
+    /// has to grow without ever going backwards. Reading the table with
+    /// `level as i32` failed this twice over: flat between whole levels, and
+    /// non-monotonic across 1, where the formula's (1.199, 1.998, 0.140) met
+    /// the table's (1.0, 3.0, 0.12).
+    #[test]
+    fn a_fractional_level_never_goes_backwards() {
+        let mut previous = parts(0.001);
+        let mut moved = 0;
+        for step in 2..=8000 {
+            let level = step as f32 * 0.001;
+            let current = parts(level);
+            assert!(
+                current.0 >= previous.0 - 1e-4
+                    && current.1 >= previous.1 - 1e-4
+                    && current.2 >= previous.2 - 1e-4,
+                "level {level} went backwards: {previous:?} -> {current:?}"
+            );
+            if current != previous {
+                moved += 1;
+            }
+            previous = current;
+        }
+        assert!(
+            moved > 7000,
+            "the shadow has to actually move with the level, moved on {moved} of 7999 steps"
+        );
+    }
+
+    /// The table hands over to the formula without a step.
+    #[test]
+    fn the_table_meets_the_formula_at_five() {
+        let below = parts(5.0 - 1e-4);
+        let above = parts(5.0 + 1e-4);
+        assert!((below.0 - above.0).abs() < 1e-2);
+        assert!((below.1 - above.1).abs() < 1e-2);
+        assert!((below.2 - above.2).abs() < 1e-3);
+    }
+
+    /// Zero is no shadow at all, not a shadow of size zero with a colour.
+    #[test]
+    fn zero_is_no_shadow() {
+        let s = elevation_to_shadow(0.0);
+        assert_eq!(s.color, Color::TRANSPARENT);
+        assert_eq!(s.blur, 0.0);
+    }
 }
