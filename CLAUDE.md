@@ -98,7 +98,7 @@ cargo test
 
 **`widgets/`** - Composable UI primitives implementing the `Widget` trait
 - `Container`: Handles padding, background colors, gradients, borders, corner radius, and event handlers (click, hover, scroll)
-- **Reactivity rule**: everything that survives to paint takes `impl IntoSignal<T, M>` (background, gradient, backdrop_blur, overflow, corners, border, transform, …); structural declarations do not (`layout`, `scrollable`, `scrollbar`, `control`, `animate_*`)
+- **Reactivity rule**: everything that survives to paint takes `impl IntoSignal<T, M>` (background, gradient, backdrop_blur, overflow, corners, border, transform, …); structural declarations do not (`layout`, `scrollable`, `scrollbar`, `scrollbar_visibility`, `control`, `animate_*`)
 - `Flex` / `ZStack`: layouts plugged into a container via `.layout(Flex::row())`; the `Layout` trait is public, so an app can write its own
 - `Text`: Text rendering with reactive content and styling
 - `AnyWidget`: Type alias for `Box<dyn Widget>` with `Widget::into_any()` for type erasure

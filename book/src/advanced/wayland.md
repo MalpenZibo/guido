@@ -764,12 +764,12 @@ fn main() {
 ```rust
 impl SurfaceConfig {
     pub fn new() -> Self;
-    pub fn width(self, width: u32) -> Self;
-    pub fn height(self, height: u32) -> Self;
+    pub fn width(self, width: impl Into<SurfaceExtent>) -> Self;
+    pub fn height(self, height: impl Into<SurfaceExtent>) -> Self;
     pub fn anchor(self, anchor: Anchor) -> Self;
     pub fn layer(self, layer: Layer) -> Self;
     pub fn keyboard_interactivity(self, mode: KeyboardInteractivity) -> Self;
-    pub fn exclusive_zone(self, zone: Option<i32>) -> Self;
+    pub fn exclusive_zone(self, zone: impl Into<ExclusiveZone>) -> Self;
     pub fn namespace(self, namespace: impl Into<String>) -> Self;
     pub fn background_color(self, color: Color) -> Self;
     pub fn margin(self, margin: impl Into<Margin>) -> Self;

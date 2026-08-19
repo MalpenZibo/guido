@@ -129,7 +129,6 @@ fn test_writers_set_batches_effects() {
     let run_count_ptr = &run_count as *const Cell<u32>;
 
     // Effect reads both fields — should run once on creation.
-    // Hold the effect so it doesn't get disposed on drop.
     create_effect(move || {
         let _ = signals.count.get();
         let _ = signals.name.get();
