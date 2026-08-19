@@ -848,7 +848,7 @@ fn layout_pass(
         });
         wayland_state.reposition_popup_if_changed(id, natural, qh);
     } else if (has_pending_layouts || frame.force_render_surface)
-        && (surface.config.width.is_content() || surface.config.height.is_content())
+        && surface::needs_content_measure(&surface.config)
     {
         // Initialization included: a freshly spawned surface reaches
         // its first frames through the full-layout path, not
@@ -868,7 +868,13 @@ fn layout_pass(
         tree.with_widget_mut(surface.widget_id, |widget, wid, tree| {
             widget.layout(tree, wid, constraints);
         });
-        if (nw, nh) != (frame.width, frame.height) {
+        // Compared as they will be *asked for*, not as they were measured. On an
+        // axis the compositor owns both sides are zero, so a `content()` width
+        // under `LEFT | RIGHT` cannot make this true for ever by measuring 300
+        // against a screen's 1920 — which it did, resizing, resyncing,
+        // committing and logging once a frame for the whole life of the surface.
+        let asking = surface::honour_owned_axes(surface.config.anchor, nw, nh);
+        if asking != surface::honour_owned_axes(surface.config.anchor, frame.width, frame.height) {
             // One commit, like every other pair of these. A content surface whose
             // content animates resizes on frame after frame, and two commits a
             // frame show the compositor the new size against the old reservation
@@ -879,7 +885,7 @@ fn layout_pass(
                 // on an axis the compositor owns hands back an axis that is not
                 // ours, and a full-width bar would then stay at whatever the
                 // screen was when it was measured.
-                let (ask_w, ask_h) = surface::honour_owned_axes(config.anchor, nw, nh);
+                let (ask_w, ask_h) = asking;
                 wayland.set_surface_size(id, ask_w, ask_h);
                 // An `Auto` reservation follows an automatic resize too, and this
                 // is the one caller that knows the measured size before the
@@ -1024,8 +1030,9 @@ fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry)
     });
 
     // Flatten tree into reused buffers
+    let compositor_blur;
     time_phase!(render_stats::Phase::Flatten, {
-        flatten_root_into(
+        compositor_blur = flatten_root_into(
             &surface.root_node,
             &mut surface.flattened_commands,
             &mut surface.command_layers,
@@ -1039,7 +1046,15 @@ fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry)
     // Asked before the scan, not after: without the protocol there is nothing
     // to publish, and walking the frame's commands to find out would be a
     // per-frame cost on the compositors that can do the least with it.
-    if wayland_state.supports_blur_region() {
+    //
+    // And on the compositors that *can*, only for a frame that asks. The flatten
+    // counted them on its way past, so the scan is skipped for the surfaces —
+    // almost all of them — with no compositor blur in the frame at all. The one
+    // frame that has to be walked without carrying one is the frame that stops:
+    // it owes the compositor the empty region that withdraws the last one.
+    if wayland_state.supports_blur_region()
+        && (compositor_blur || wayland_state.has_published_blur(id))
+    {
         let blur_rects = blur::regions_from_commands(&surface.flattened_commands);
         wayland_state.sync_blur_region(id, blur_rects, qh, false);
     }
@@ -1744,15 +1759,22 @@ mod exclusive_zone_resync_tests {
             ..SurfaceConfig::new()
         };
 
-        let (_, _, measure) =
-            surface::resize_request(&bar(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT), live);
+        let stretched = bar(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT);
+        let (_, _, measure) = surface::resize_request(&stretched, live);
         assert!(!measure, "the width is the compositor's either way");
+        assert!(
+            !surface::needs_content_measure(&stretched),
+            "and the frame loop's measure pass asks the same question, or it \
+             re-measures a discarded axis on every frame that lays anything out"
+        );
 
-        let (_, _, measure) = surface::resize_request(&bar(Anchor::TOP | Anchor::LEFT), live);
+        let ours = bar(Anchor::TOP | Anchor::LEFT);
+        let (_, _, measure) = surface::resize_request(&ours, live);
         assert!(
             measure,
             "anchored to one edge it is ours, and has to be measured"
         );
+        assert!(surface::needs_content_measure(&ours));
     }
 
     /// Which axes are the compositor's follows from the anchor, and layer-shell

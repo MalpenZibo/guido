@@ -103,9 +103,12 @@ pub struct SurfaceConfig {
 
 /// Margins from the anchored screen edges, in logical pixels.
 ///
-/// The same shorthands a [`Padding`](crate::widgets::Padding) takes, in the
-/// same order — one value for every edge, `[vertical, horizontal]`, or the
-/// full `[top, right, bottom, left]`:
+/// The shorthands a [`Padding`](crate::widgets::Padding) takes, in the same
+/// order — one value for every edge, `[vertical, horizontal]`, or the full
+/// `[top, right, bottom, left]` — but **whole pixels only**: `i32`, `u32` and
+/// arrays of them. `margin(8.0)` does not compile where `padding(8.0)` does,
+/// because `zwlr_layer_surface_v1::set_margin` is defined in integers and a
+/// fractional margin has nothing to round to that the compositor would honour.
 ///
 /// ```ignore
 /// SurfaceConfig::new().margin(8)                   // all four edges
@@ -280,19 +283,26 @@ pub(crate) fn requested_extent(extent: SurfaceExtent, live: Option<u32>) -> u32 
 /// activity, and a bare `set_size` produces none. So a content axis holds the
 /// confirmed size and asks for a layout, which is what brings the measure round.
 pub(crate) fn resize_request(config: &SurfaceConfig, live: Option<(u32, u32)>) -> (u32, u32, bool) {
-    let (owns_w, owns_h) = compositor_owned_axes(config.anchor);
     let (width, height) = honour_owned_axes(
         config.anchor,
         requested_extent(config.width, live.map(|(w, _)| w)),
         requested_extent(config.height, live.map(|(_, h)| h)),
     );
-    // Only for a content axis that is *ours*. Stretched, the measure runs and
-    // `honour_owned_axes` throws the answer away — a full re-layout of the
-    // subtree for an axis that was never going to be ours. A bar declared
-    // `width(content()).anchor(LEFT | RIGHT)` did exactly that on every resize
-    // and every re-anchoring.
-    let measure = (config.width.is_content() && !owns_w) || (config.height.is_content() && !owns_h);
-    (width, height, measure)
+    (width, height, needs_content_measure(config))
+}
+
+/// Whether this surface has a `content()` axis worth measuring.
+///
+/// A content axis the compositor owns is not one: the measure runs, and
+/// [`honour_owned_axes`] throws the answer away. A bar declared
+/// `width(content()).anchor(TOP | LEFT | RIGHT)` measured its content and
+/// discarded it on every resize, every re-anchoring, and — until this was the
+/// gate on the frame loop's measure pass too — on **every frame with any layout
+/// activity at all**, since the width it measured could never equal the screen
+/// width it had been given.
+pub(crate) fn needs_content_measure(config: &SurfaceConfig) -> bool {
+    let (owns_w, owns_h) = compositor_owned_axes(config.anchor);
+    (config.width.is_content() && !owns_w) || (config.height.is_content() && !owns_h)
 }
 
 /// Zero the axes the compositor owns, whatever size was going to be asked for.

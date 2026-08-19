@@ -171,6 +171,12 @@ impl FlattenedCommand {
 /// column of buttons stays one group; a tint over a photo gets two.
 struct LayeredCommands {
     groups: Vec<LayerBuckets>,
+    /// Whether any command asks the compositor to blur behind it.
+    ///
+    /// Counted while the commands go past, because the alternative is walking
+    /// them all again afterwards to find out — on every painted frame, for the
+    /// large majority of surfaces that never ask for it at all.
+    compositor_blur: bool,
 }
 
 #[derive(Default)]
@@ -274,10 +280,16 @@ impl LayeredCommands {
     fn new() -> Self {
         Self {
             groups: vec![LayerBuckets::default()],
+            compositor_blur: false,
         }
     }
 
     fn push(&mut self, cmd: FlattenedCommand) {
+        if let DrawCommand::BackdropBlur { sources, .. } = &*cmd.command
+            && sources.contains(crate::backdrop::BackdropSources::COMPOSITOR)
+        {
+            self.compositor_blur = true;
+        }
         let layer = cmd.layer;
         let rect = world_bounds(&cmd);
         // `expect`: `new` seeds one group and nothing ever removes one.
@@ -413,18 +425,24 @@ impl CommandLayer {
 /// incremental reuse in subsequent frames.
 ///
 /// `layers` receives the groups to draw, in order; see [`CommandLayer`].
+///
+/// Returns whether the frame carries a backdrop blur the *compositor* is asked
+/// to apply, which is the only reason to walk the result again and build a
+/// `wl_region` from it.
 pub fn flatten_root_into(
     root: &RenderNode,
     commands: &mut Vec<FlattenedCommand>,
     layers: &mut Vec<CommandLayer>,
-) {
+) -> bool {
     commands.clear();
     layers.clear();
 
     let mut layered = LayeredCommands::new();
     flatten_node(root, Transform::IDENTITY, None, None, &mut layered);
 
+    let compositor_blur = layered.compositor_blur;
     layered.drain_into(commands, layers);
+    compositor_blur
 }
 
 /// Recursively flatten a node and its children.
@@ -520,6 +538,20 @@ fn flatten_node(
         let layer = match &**cmd {
             DrawCommand::Text { .. } => RenderLayer::Text,
             DrawCommand::Image { .. } => RenderLayer::Images,
+            // Only the half the renderer draws opens a backdrop group. A blur
+            // restricted to `COMPOSITOR` is published as a `wl_region` and drawn
+            // by nobody here, and `Backdrop` is not a free label: it is the
+            // lowest layer, so it splits the draw group, and a non-empty
+            // backdrop bucket ends the render pass to store the target the
+            // effect would sample. That is a pass break and a group per
+            // container per frame, to filter nothing. It still travels with the
+            // frame — the region is read off this list — it just travels with
+            // the shapes, where it produces no instance.
+            DrawCommand::BackdropBlur { sources, .. }
+                if !sources.contains(crate::backdrop::BackdropSources::SURFACE) =>
+            {
+                RenderLayer::Shapes
+            }
             DrawCommand::BackdropBlur { .. } | DrawCommand::TextBackdropBlur { .. } => {
                 RenderLayer::Backdrop
             }
@@ -793,6 +825,46 @@ mod tests {
     }
 
     use RenderLayer::{Images, Overlay, Shapes, Text};
+
+    /// A blur restricted to the compositor is published as a `wl_region` and
+    /// drawn by nobody here, so it must not be filed as a backdrop effect: that
+    /// bucket ends the render pass to store the target the effect would sample,
+    /// and it is the lowest layer, so it splits the draw group as well. Both,
+    /// per container, per frame, to filter nothing.
+    #[test]
+    fn a_compositor_only_blur_neither_breaks_the_pass_nor_splits_the_group() {
+        let frame = |sources| {
+            let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+            let mut node = RenderNode::new(1);
+            node.bounds = rect;
+            // The background first, so a backdrop landing after it is one the
+            // group rules have to split for.
+            node.commands
+                .push(Rc::new(DrawCommand::rounded_rect(rect, Color::WHITE, 0.0)));
+            node.commands.push(Rc::new(DrawCommand::BackdropBlur {
+                rect,
+                sources,
+                radius: 24.0,
+                corner_radii: CornerRadii::from(0.0),
+                curvature: 1.0,
+            }));
+
+            let (mut commands, mut layers) = (Vec::new(), Vec::new());
+            let told = flatten_root_into(&node, &mut commands, &mut layers);
+            let drawn = layers.iter().any(|l| !l.backdrop.is_empty());
+            (told, drawn, layers.len())
+        };
+
+        let (told, drawn, groups) = frame(crate::backdrop::BackdropSources::COMPOSITOR);
+        assert!(told, "the compositor still has to be handed a region");
+        assert!(!drawn, "and this renderer has nothing to do for it");
+        assert_eq!(groups, 1, "so the frame is not split for it either");
+
+        let (told, drawn, groups) = frame(crate::backdrop::BackdropSources::SURFACE);
+        assert!(!told, "nothing for the compositor");
+        assert!(drawn, "and a pass of our own to run");
+        assert_eq!(groups, 2, "which is what the split is for");
+    }
 
     #[test]
     fn ascending_layers_stay_in_one_group() {

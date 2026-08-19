@@ -48,6 +48,18 @@ impl WaylandState {
         self.backdrop.bg_effect_supports_blur && self.backdrop.bg_effect_manager.is_some()
     }
 
+    /// Whether this surface has a non-empty region standing with the compositor.
+    ///
+    /// A frame carrying no compositor blur skips the scan — except this one,
+    /// where the scan produces the empty region that withdraws what is still
+    /// published. Once withdrawn the answer is `false`, so it happens once.
+    pub(crate) fn has_published_blur(&self, id: SurfaceId) -> bool {
+        self.surfaces
+            .get(&id)
+            .and_then(|s| s.blur_region.as_ref())
+            .is_some_and(|rects| !rects.is_empty())
+    }
+
     /// Whether a surface that is *not* repainting still owes the compositor a
     /// region, taking the debt as it answers.
     ///
