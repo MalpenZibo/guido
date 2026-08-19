@@ -137,6 +137,7 @@ fn dump_command(cmd: &DrawCommand, depth: usize, kind: &str, out: &mut String) {
             radius,
             corner_radii,
             curvature,
+            ..
         } => {
             out.push_str(&format!(
                 "{pad}{kind} backdrop-blur {} radius={} corners={}/{}/{}/{} k={}\n",

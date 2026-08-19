@@ -391,12 +391,12 @@ impl WaylandState {
         // When anchored to both edges on an axis, the compositor owns
         // that dimension: set it to 0 so it stretches. Content sizing on
         // such an axis can never take effect — warn loudly.
-        let (stretch_w, stretch_h) = crate::surface::compositor_owned_axes(config.anchor);
         crate::surface::warn_content_on_stretched_axis(id, config);
+        // The same rule the runtime resize uses, so creation and re-anchoring
+        // cannot disagree about which axes are the compositor's.
+        let (use_width, use_height, _) = crate::surface::resize_request(config, None);
         let initial_width = config.width.initial();
         let initial_height = config.height.initial();
-        let use_width = if stretch_w { 0 } else { initial_width };
-        let use_height = if stretch_h { 0 } else { initial_height };
 
         layer_surface.set_size(use_width, use_height);
         layer_surface.set_keyboard_interactivity(config.keyboard_interactivity);

@@ -62,21 +62,27 @@ impl TimingFunction {
             TimingFunction::EaseInOut => ease_in_out(t),
             TimingFunction::CubicBezier(x1, y1, x2, y2) => cubic_bezier(t, *x1, *y1, *x2, *y2),
             TimingFunction::Spring(_) => t, // Springs handled separately with real time
-            TimingFunction::Custom(f) => f(t),
+            // Clamped, so `peak_overshoot` is a bound rather than a hope:
+            // anything sized from it — a damage rect, most of all — would
+            // otherwise be measured for less than what gets drawn.
+            TimingFunction::Custom(f) => f(t).min(1.0 + Self::CUSTOM_MAX_OVERSHOOT),
         }
     }
 
-    /// Create a custom timing function from a closure
     /// How far past 1.0 this curve can go, as a fraction of the distance
     /// travelled. Zero for every curve that only eases.
     ///
     /// A bezier is bounded by its control polygon, so its control points give
-    /// the bound directly. A [`Custom`](TimingFunction::Custom) curve is
-    /// arbitrary and cannot be asked, so it gets an allowance — generous enough
-    /// for anything written to look like a spring, and documented as the one
-    /// case that is a bound rather than a fact.
+    /// the bound directly, and a spring's physics give it exactly.
+    ///
+    /// A [`Custom`](TimingFunction::Custom) curve is an arbitrary closure and
+    /// cannot be asked, so it is **clamped** to
+    /// [`CUSTOM_MAX_OVERSHOOT`](Self::CUSTOM_MAX_OVERSHOOT) by
+    /// [`evaluate`](Self::evaluate) rather than merely assumed to respect it. A
+    /// bound nothing enforces is not a bound: a hand-rolled bounce peaking at
+    /// 1.5 would have had its damage rect measured for 1.25, leaving the ring
+    /// between the two outside every one of them.
     pub fn peak_overshoot(&self) -> f32 {
-        const CUSTOM_ALLOWANCE: f32 = 0.25;
         match self {
             TimingFunction::Linear
             | TimingFunction::EaseIn
@@ -84,10 +90,16 @@ impl TimingFunction {
             | TimingFunction::EaseInOut => 0.0,
             TimingFunction::CubicBezier(_, y1, _, y2) => (y1.max(*y2) - 1.0).max(0.0),
             TimingFunction::Spring(config) => config.peak_overshoot(),
-            TimingFunction::Custom(_) => CUSTOM_ALLOWANCE,
+            TimingFunction::Custom(_) => Self::CUSTOM_MAX_OVERSHOOT,
         }
     }
 
+    /// How far past its target a [`Custom`](TimingFunction::Custom) curve is
+    /// allowed to go. Generous enough for anything written to look like a
+    /// spring, and enforced rather than trusted.
+    pub const CUSTOM_MAX_OVERSHOOT: f32 = 0.25;
+
+    /// Create a custom timing function from a closure.
     pub fn custom<F>(f: F) -> Self
     where
         F: Fn(f32) -> f32 + Send + Sync + 'static,
@@ -188,5 +200,45 @@ mod tests {
     fn test_ease_out() {
         let result = TimingFunction::EaseOut.evaluate(0.5);
         assert!(result > 0.5); // Should be faster at start
+    }
+}
+
+#[cfg(test)]
+mod overshoot_bound_tests {
+    use super::*;
+
+    /// A custom curve that goes further than the allowance is clamped to it, so
+    /// what `peak_overshoot` reports is a bound and not a hope. Anything sized
+    /// from that number — the damage rect an elevation shadow needs, above all —
+    /// would otherwise be measured for less than what is drawn.
+    #[test]
+    fn a_custom_curve_cannot_exceed_the_allowance_it_is_credited_with() {
+        let overzealous = TimingFunction::custom(|t| t * 1.5);
+        let bound = 1.0 + TimingFunction::CUSTOM_MAX_OVERSHOOT;
+
+        for step in 0..=100 {
+            let t = step as f32 / 100.0;
+            assert!(
+                overzealous.evaluate(t) <= bound + 1e-6,
+                "t = {t} evaluated past the bound"
+            );
+        }
+        assert_eq!(overzealous.evaluate(1.0), bound, "and reaches it");
+    }
+
+    /// The curves that only ease report nothing, and a bezier reports its own
+    /// control points.
+    #[test]
+    fn the_ordinary_curves_report_what_they_do() {
+        assert_eq!(TimingFunction::Linear.peak_overshoot(), 0.0);
+        assert_eq!(TimingFunction::EaseInOut.peak_overshoot(), 0.0);
+        assert!(
+            (TimingFunction::CubicBezier(0.34, 1.56, 0.64, 1.0).peak_overshoot() - 0.56).abs()
+                < 1e-5
+        );
+        assert_eq!(
+            TimingFunction::CubicBezier(0.4, 0.0, 0.6, 1.0).peak_overshoot(),
+            0.0
+        );
     }
 }

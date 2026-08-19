@@ -290,12 +290,14 @@ impl<'a> PaintContext<'a> {
     pub fn draw_backdrop_blur(
         &mut self,
         rect: Rect,
+        sources: crate::backdrop::BackdropSources,
         radius: f32,
         corner_radii: impl Into<CornerRadii>,
         curvature: f32,
     ) {
         self.node.commands.push(Rc::new(DrawCommand::BackdropBlur {
             rect,
+            sources,
             radius,
             corner_radii: corner_radii.into(),
             curvature,

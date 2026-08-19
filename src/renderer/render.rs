@@ -599,6 +599,7 @@ fn clip_rect(cmd: &FlattenedCommand, scale: f32) -> Option<Rect> {
 fn command_to_backdrop_region(cmd: &FlattenedCommand, scale: f32) -> Option<BackdropRegion> {
     let DrawCommand::BackdropBlur {
         rect,
+        sources,
         radius,
         corner_radii,
         curvature,
@@ -606,6 +607,11 @@ fn command_to_backdrop_region(cmd: &FlattenedCommand, scale: f32) -> Option<Back
     else {
         return None;
     };
+    // The compositor half of the same command is published as a `wl_region`
+    // instead; this pass filters only what the surface has drawn itself.
+    if !sources.contains(crate::backdrop::BackdropSources::SURFACE) {
+        return None;
+    }
 
     // The effect works on axis-aligned pixels, so a rotated container gets the
     // bounding box of its rotated rect — the mask still cuts the right shape

@@ -138,10 +138,10 @@ fn a_fully_reactive_container_is_quiet() {
         .visible(move || !flag.get())
         .rotate(move || n.get())
         .gradient(move || {
-            LinearGradient::horizontal(
+            Some(LinearGradient::horizontal(
                 if flag.get() { Color::RED } else { Color::BLUE },
                 Color::WHITE,
-            )
+            ))
         })
         .backdrop_blur(move || n.get() + 8.0)
         .overflow(move || {

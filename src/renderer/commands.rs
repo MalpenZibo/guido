@@ -183,6 +183,11 @@ pub enum DrawCommand {
     BackdropBlur {
         /// Region to filter, in local coordinates.
         rect: Rect,
+        /// Which backdrops this asks for. The surface's own is filtered by the
+        /// renderer; the compositor's is published as a `wl_region` collected
+        /// off this very command after flattening — which is what keeps the two
+        /// halves from disagreeing about whether a container still wants it.
+        sources: crate::backdrop::BackdropSources,
         /// Blur radius in logical pixels.
         radius: f32,
         /// Corner radii of the region, so the result is masked to the

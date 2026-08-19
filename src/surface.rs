@@ -231,6 +231,47 @@ pub(crate) fn warn_content_on_stretched_axis(id: SurfaceId, config: &SurfaceConf
     }
 }
 
+/// The size an axis is currently asking for: its own, if it has one, and the
+/// live surface size while a content axis waits to be measured.
+pub(crate) fn requested_extent(extent: SurfaceExtent, live: Option<u32>) -> u32 {
+    match extent {
+        SurfaceExtent::Fixed(v) => v,
+        SurfaceExtent::Content => live.unwrap_or_else(|| extent.initial()),
+    }
+}
+
+/// What a runtime resize asks the compositor for, and whether the surface has
+/// to be re-measured before that answer is right.
+///
+/// A content axis has no size of its own yet — `SurfaceExtent::initial()` is
+/// 1px — so asking for it directly collapses the surface, and nothing brings it
+/// back: the content-measure pass runs only for a surface that had layout
+/// activity, and a bare `set_size` produces none. So a content axis holds the
+/// live size and asks for a layout, which is what brings the measure round.
+pub(crate) fn resize_request(config: &SurfaceConfig, live: Option<(u32, u32)>) -> (u32, u32, bool) {
+    // Zero on an axis the compositor owns is how layer-shell says "you decide",
+    // and it is not optional: `zwlr_layer_surface_v1::set_size` makes omitting a
+    // dimension *without* opposite-edge anchoring a protocol error, and sending
+    // a number *with* it hands back an axis that is not ours. Either way the
+    // anchor decides, so anything that moves the anchor has to come back through
+    // here — the connection is closed at the next commit otherwise, and every
+    // frame commits.
+    let (stretch_w, stretch_h) = compositor_owned_axes(config.anchor);
+    (
+        if stretch_w {
+            0
+        } else {
+            requested_extent(config.width, live.map(|(w, _)| w))
+        },
+        if stretch_h {
+            0
+        } else {
+            requested_extent(config.height, live.map(|(_, h)| h))
+        },
+        config.width.is_content() || config.height.is_content(),
+    )
+}
+
 impl SurfaceExtent {
     /// The initial protocol size (`Content` starts at 1px until the first
     /// measure lands).

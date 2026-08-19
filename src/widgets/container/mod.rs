@@ -23,7 +23,7 @@ use std::rc::Rc;
 
 use crate::advance_anim;
 use crate::animation::TransitionConfig;
-use crate::backdrop::{BackdropBlur, BackdropSources};
+use crate::backdrop::BackdropBlur;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
@@ -361,7 +361,7 @@ pub struct Container {
     // Styling properties
     pub(super) padding: Option<Signal<Padding>>,
     pub(super) background: Option<Signal<Color>>,
-    pub(super) gradient: Option<Signal<LinearGradient>>,
+    pub(super) gradient: Option<Signal<Option<LinearGradient>>>,
     pub(super) corner_radius: Option<Signal<f32>>,
     pub(super) corner_radii: Option<Signal<crate::renderer::CornerRadii>>,
     pub(super) corner_curvature: Option<Signal<f32>>,
@@ -791,8 +791,21 @@ impl Container {
         self
     }
 
-    /// Set a linear gradient background. Replaces the solid fill.
-    pub fn gradient<M>(mut self, gradient: impl IntoSignal<LinearGradient, M>) -> Self {
+    /// Set a linear gradient background. Replaces the solid fill while it is
+    /// there.
+    ///
+    /// `None` is "no gradient", so the background shows through again — the same
+    /// contract a radius of `0.0` gives
+    /// [`backdrop_blur`](Self::backdrop_blur), and for the same reason: without
+    /// a value meaning *off*, a gradient that only applies sometimes forces the
+    /// caller back to branching in Rust and rebuilding the widget.
+    ///
+    /// ```ignore
+    /// container()
+    ///     .background(theme.surface)
+    ///     .gradient(move || expanded.get().then(|| palette.get().header()))
+    /// ```
+    pub fn gradient<M>(mut self, gradient: impl IntoSignal<Option<LinearGradient>, M>) -> Self {
         self.gradient = Some(gradient.into_signal());
         self
     }
@@ -843,10 +856,16 @@ impl Container {
         end: impl IntoSignal<Color, M2>,
         direction: GradientDirection,
     ) -> Self {
+        // The shorthands always mean "a gradient", so they wrap in Some for the
+        // caller; the general setter is where `None` is spellable.
         let (start, end) = (start.into_signal(), end.into_signal());
         match (start.constant(), end.constant()) {
-            (Some(start), Some(end)) => self.gradient(LinearGradient::new(start, end, direction)),
-            _ => self.gradient(move || LinearGradient::new(start.get(), end.get(), direction)),
+            (Some(start), Some(end)) => {
+                self.gradient(Some(LinearGradient::new(start, end, direction)))
+            }
+            _ => {
+                self.gradient(move || Some(LinearGradient::new(start.get(), end.get(), direction)))
+            }
         }
     }
 
@@ -1713,12 +1732,6 @@ impl Widget for Container {
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
         let is_visible = with_signal_tracking(id, JobType::Paint, || self.visible.get_or(true));
         if !is_visible {
-            // Nothing here draws, so nothing here may go on asking the compositor
-            // to blur the desktop behind it — and that includes the descendants,
-            // whose paint this return skips and whose own bounds layout left
-            // exactly where they were. Withdrawing only `self` would spare the
-            // container its own region and keep every one below it.
-            crate::blur::unregister_unpainted(tree, &[id]);
             return;
         }
 
@@ -1752,7 +1765,7 @@ impl Widget for Container {
                 self.animated_border_width(id),
                 self.animated_border_color(id),
                 self.corner_radii.as_ref().map(|s| s.get()),
-                self.gradient.as_ref().map(|g| g.get()),
+                self.gradient.as_ref().and_then(|g| g.get()),
                 self.backdrop_blur.as_ref().map(|b| b.get()),
                 self.overflow.get_or(Overflow::Visible),
             )
@@ -1768,28 +1781,6 @@ impl Widget for Container {
             .unwrap_or_else(|| crate::renderer::CornerRadii::uniform(corner_radius));
         let corner_radius = corner_radius.max(corner_radii.max());
 
-        // Publish (or withdraw) the compositor blur region: bounds are read
-        // fresh from the tree at frame sync, so only the (possibly animated)
-        // radius is recorded here.
-        //
-        // The zero-radius case has to withdraw rather than simply not register.
-        // `ext-background-effect-v1` carries no radius of its own, so nothing
-        // downstream can tell that this container asked for zero — and the
-        // registry only prunes widgets that left the tree, which a container
-        // whose blur signal reached zero has not. Without the withdrawal a
-        // blur switched on once stayed on for the life of the surface.
-        let wants_compositor_blur = backdrop_blur.is_some_and(|blur| {
-            blur.sources.contains(BackdropSources::COMPOSITOR) && blur.radius > 0.0
-        });
-        if wants_compositor_blur {
-            crate::blur::register_blur(id, corner_radius);
-        } else if self.backdrop_blur.is_some() {
-            // Only a container that could have registered needs to withdraw.
-            // Every other one would be a borrow and a miss on a mostly empty
-            // map, per container, per frame, on the paint path.
-            crate::blur::unregister_blur(id);
-        }
-
         // LOCAL bounds: the origin is this container, the parent already
         // positioned the node.
         let local_bounds = Rect::new(0.0, 0.0, bounds.width, bounds.height);
@@ -1801,13 +1792,25 @@ impl Widget for Container {
         }
 
         // Before the decoration: the container paints over its own blurred
-        // backdrop, and the effect must read a target that does not yet
-        // include this container.
+        // backdrop, and the effect must read a target that does not yet include
+        // this container.
+        //
+        // One command carries both halves. The renderer filters the surface's
+        // own; the compositor's region is read off this same command after
+        // flattening, so the two can never disagree about whether the container
+        // still wants it — and a blur cached, culled or hidden is carried or
+        // dropped by the render tree itself rather than by a registry that has
+        // to be told.
         if let Some(blur) = backdrop_blur
-            && blur.sources.contains(BackdropSources::SURFACE)
             && blur.radius > 0.0
         {
-            ctx.draw_backdrop_blur(local_bounds, blur.radius, corner_radii, corner_curvature);
+            ctx.draw_backdrop_blur(
+                local_bounds,
+                blur.sources,
+                blur.radius,
+                corner_radii,
+                corner_curvature,
+            );
         }
 
         self.paint_decoration(
@@ -1861,13 +1864,6 @@ impl Widget for Container {
         // to find the visible range (O(log n)) instead of iterating all children (O(n)).
         let all_children = self.children_source.get();
 
-        // Rows outside the scroller's window are not painted, so they are
-        // "unpainted" in exactly the sense the blur registry means — and this is
-        // the path a long list actually takes, the cull check inside
-        // `paint_children` never seeing them at all.
-        let mut unpainted_rows: Vec<WidgetId> = Vec::new();
-        let sweeping_blur = !crate::blur::is_empty();
-
         let visible_children: &[WidgetId] = if is_scrollable {
             let sd = self.scroll();
             match self.scroll_axis {
@@ -1887,10 +1883,6 @@ impl Widget for Container {
                         all_children.len() as u64,
                         (end - start) as u64,
                     );
-                    if sweeping_blur {
-                        unpainted_rows.extend_from_slice(&all_children[..start]);
-                        unpainted_rows.extend_from_slice(&all_children[end..]);
-                    }
                     &all_children[start..end]
                 }
                 ScrollAxis::Horizontal => {
@@ -1909,10 +1901,6 @@ impl Widget for Container {
                         all_children.len() as u64,
                         (end - start) as u64,
                     );
-                    if sweeping_blur {
-                        unpainted_rows.extend_from_slice(&all_children[..start]);
-                        unpainted_rows.extend_from_slice(&all_children[end..]);
-                    }
                     &all_children[start..end]
                 }
                 _ => all_children, // Both/None: fall back to full iteration
@@ -1940,7 +1928,6 @@ impl Widget for Container {
                 cache_requires_full_visibility: is_scrollable,
             },
         );
-        crate::blur::unregister_unpainted(tree, &unpainted_rows);
 
         // Draw scrollbar containers
         if is_scrollable {

@@ -502,8 +502,15 @@ mod elevation_tests {
         (s.offset.1, s.blur, s.color.a)
     }
 
-    /// Whole levels keep the Material numbers they always had, so a static
-    /// elevation looks exactly as it did.
+    /// Whole levels keep the Material numbers they always had, which is every
+    /// elevation the examples and snapshots use.
+    ///
+    /// A *fractional* static elevation does move: `0.5` now interpolates from
+    /// nothing towards level 1 rather than falling through to the formula, so
+    /// its shadow is lighter and tighter than before. That is the point of
+    /// interpolating, and it is what makes an animation pass through the
+    /// fractions smoothly, but it is a change and this says so rather than
+    /// claiming nothing moved.
     #[test]
     fn the_tabulated_levels_are_unchanged() {
         assert_eq!(parts(1.0), (1.0, 3.0, 0.12));

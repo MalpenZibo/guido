@@ -112,6 +112,17 @@ The seventh was independent: widening `keyed()` from `u64` to any `Hash` while
 the reconciler still indexed by a 64-bit hash of the key, so two colliding keys
 became one row.
 
+A later round found the same shape once more, in the mechanism rather than in a
+consumer, and it is the one worth remembering: the compositor blur region was a
+**registry written during paint**, and every way a container can stop painting —
+hidden, culled, outside a scroller's window, served from the paint cache — was a
+way for that registry to disagree with the screen. Four rounds of review found
+four of them, one at a time. The region is now *derived* from the flattened
+command list instead: a container that did not paint has no command in it, one
+served from the cache carries its command along, and ordering stops mattering
+because the list only exists after the paint that built it. State that has to be
+told about every way it can go stale is the smell; deriving it is the fix.
+
 ### Settled: a border is one thing, everywhere
 
 The audit added `border_width` and `border_color` to `Container`, on the strength

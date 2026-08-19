@@ -7,10 +7,8 @@
 //! to the platform layer. No-ops when the compositor doesn't support the
 //! protocol or its blur capability.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-
-use crate::tree::{Tree, WidgetId};
+use crate::backdrop::BackdropSources;
+use crate::renderer::{DrawCommand, FlattenedCommand};
 use crate::widgets::Rect;
 
 /// An axis-aligned rectangle of a blur region, in logical surface pixels.
@@ -22,107 +20,48 @@ pub(crate) struct BlurRect {
     pub height: i32,
 }
 
-thread_local! {
-    /// Widgets currently requesting background blur: id → corner radius.
-    /// Bounds are read fresh from the tree at collect time; entries whose
-    /// widget left the tree are pruned then too.
-    static BLUR_WIDGETS: RefCell<HashMap<WidgetId, f32>> = RefCell::new(HashMap::new());
-}
-
-/// Record a widget's blur request (called from `Container::paint`).
-pub(crate) fn register_blur(id: WidgetId, corner_radius: f32) {
-    BLUR_WIDGETS.with(|reg| {
-        reg.borrow_mut().insert(id, corner_radius);
-    });
-}
-
-/// Withdraw a widget's blur request.
+/// The region to hand `ext-background-effect-v1`, read off the frame that was
+/// just drawn.
 ///
-/// The registry cannot discover this on its own: `collect_for_surface` prunes
-/// widgets that left the *tree*, and a container that merely stopped asking for
-/// blur is still in it. So the paint that stops asking has to say so — which is
-/// exactly the frame on which a radius driven by a signal reaches zero.
-pub(crate) fn unregister_blur(id: WidgetId) {
-    BLUR_WIDGETS.with(|reg| {
-        reg.borrow_mut().remove(&id);
-    });
-}
-
-/// Whether anything is registered at all, in O(1).
+/// **Derived, never remembered.** An earlier version kept a registry that
+/// containers wrote to during paint, and every way a container can *stop*
+/// painting — hidden, culled, outside a scroller's window, satisfied from the
+/// paint cache — was a way for that registry to disagree with the screen. Each
+/// one had to be found and told, and one of them was always missing.
 ///
-/// The cull path asks before doing any work: a surface with no compositor blur —
-/// which is most of them — must not pay for a sweep it cannot need.
-pub(crate) fn is_empty() -> bool {
-    BLUR_WIDGETS.with(|reg| reg.borrow().is_empty())
-}
-
-/// Withdraw every request from inside one of these subtrees, because none of
-/// them was painted this frame.
-///
-/// The rule this enforces: **a subtree that did not paint keeps no region.** A
-/// widget withdraws its own request during its own paint, so a subtree whose
-/// paint never ran cannot — and there are three ways that happens, all of them a
-/// parent's decision rather than the widget's: the parent returned at its
-/// visibility gate, a scroller's window did not offer the child, or
-/// `paint_children` culled it.
-///
-/// It cannot be a blanket sweep before painting, tempting as that is: the
-/// registry has to stay sticky across *skipped* paints, because a clean container
-/// satisfied from the paint cache still wants its region and will not re-register
-/// it. So the parent names what it did not paint.
-///
-/// Walks the registry rather than the subtrees: the registry holds a handful of
-/// entries however many thousand rows were skipped.
-pub(crate) fn unregister_unpainted(tree: &Tree, subtrees: &[WidgetId]) {
-    if subtrees.is_empty() || is_empty() {
-        return;
-    }
-    BLUR_WIDGETS.with(|reg| {
-        reg.borrow_mut()
-            .retain(|&id, _| !subtrees.iter().any(|&root| is_under(tree, id, root)));
-    });
-}
-
-/// Collect tessellated blur rects for every blur widget under `root`,
-/// sorted for deterministic change detection. Prunes stale entries.
-pub(crate) fn collect_for_surface(tree: &Tree, root: WidgetId) -> Vec<BlurRect> {
-    BLUR_WIDGETS.with(|reg| {
-        let mut reg = reg.borrow_mut();
-        let mut out = Vec::new();
-        reg.retain(|&id, &mut radius| {
-            if !tree.contains(id) {
-                return false;
-            }
-            // Only widgets belonging to this surface's subtree
-            if is_under(tree, id, root)
-                && let Some(bounds) = tree.get_surface_relative_bounds(id)
-            {
-                out.extend(rounded_rect_to_blur_rects(bounds, radius));
-            }
-            true
-        });
-        out.sort_unstable_by_key(|r| (r.y, r.x, r.width, r.height));
-        out
-    })
-}
-
-fn is_under(tree: &Tree, mut id: WidgetId, root: WidgetId) -> bool {
-    loop {
-        if id == root {
-            return true;
+/// The flattened command list is the frame. A container that did not paint has
+/// no command in it; one served from the paint cache carries its command along
+/// unchanged; a culled one is absent. Ordering stops mattering too, since the
+/// list only exists after the paint that built it.
+pub(crate) fn regions_from_commands(commands: &[FlattenedCommand]) -> Vec<BlurRect> {
+    let mut out = Vec::new();
+    for cmd in commands {
+        let DrawCommand::BackdropBlur {
+            rect,
+            sources,
+            corner_radii,
+            ..
+        } = &*cmd.command
+        else {
+            continue;
+        };
+        if !sources.contains(BackdropSources::COMPOSITOR) {
+            continue;
         }
-        match tree.get_parent(id) {
-            Some(parent) => id = parent,
-            None => return false,
-        }
-    }
-}
 
-/// Reset blur state.
-///
-/// Called during `App::drop()`.
-pub(crate) fn reset_blur() {
-    BLUR_WIDGETS.with(|reg| reg.borrow_mut().clear());
+        // World coordinates, so a scrolled or transformed container reports
+        // where it actually is. The protocol takes rectangles, so a rotated one
+        // contributes its bounding box.
+        let (x, y) = cmd.world_transform.transform_point(rect.x, rect.y);
+        let (x2, y2) = cmd
+            .world_transform
+            .transform_point(rect.x + rect.width, rect.y + rect.height);
+        let world = Rect::new(x.min(x2), y.min(y2), (x2 - x).abs(), (y2 - y).abs());
+
+        out.extend(rounded_rect_to_blur_rects(world, corner_radii.max()));
+    }
+    out.sort_unstable_by_key(|r| (r.y, r.x, r.width, r.height));
+    out
 }
 
 /// Approximate a uniformly rounded rectangle as a union of axis-aligned

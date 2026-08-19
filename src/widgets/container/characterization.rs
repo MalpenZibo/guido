@@ -15,6 +15,7 @@ use rustc_hash::FxHashSet;
 
 use super::*;
 use crate::animation::{SpringConfig, TimingFunction, Transition};
+use crate::backdrop::BackdropSources;
 use crate::jobs::{self, JobType};
 use crate::layout::{Constraints, Flex, at_least, at_most, fill, fraction};
 use crate::reactive::create_signal;
@@ -60,29 +61,36 @@ impl H {
         node
     }
 
-    /// One frame in the order the loop runs it: queued jobs, layout, then
-    /// `crate::paint_surface` — the same function `paint_and_present` calls, so
-    /// a test cannot attest an order the loop does not have. Finishes by
-    /// clearing the paint flags, which is what `cache_paint_results` does and
-    /// what makes a clean child cullable on the frame after.
+    /// One frame, in the phases and the order the loop runs them: queued jobs,
+    /// layout, paint, flatten, the compositor blur region read off the result,
+    /// and `crate::cache_paint_results` to finish.
     ///
-    /// Use this, not `paint()`, for anything whose correctness is about *when*
-    /// in the frame it happens.
+    /// That last one is the real function, not a stand-in for the half of it a
+    /// test happened to need. Writing `clear_needs_paint` by hand instead left
+    /// `cache_paint` undone, so `reuse_cached` never found a cache and every
+    /// test repainted everything — which made a whole class of bug, the one
+    /// about a widget that is *not* repainted, structurally invisible here.
+    ///
+    /// Use this, not `paint()`, for anything whose correctness is about when in
+    /// the frame it happens, or about which widgets painted at all.
     fn frame(&mut self, w: f32, h: f32) -> Frame {
         pump(self);
         self.fit(w, h);
 
         let root = self.root;
         let mut node = RenderNode::new(root.as_u64());
-        let blur = crate::paint_surface(&mut self.tree, root, &mut node);
+        self.tree.with_widget_mut(root, |w, id, t| {
+            let mut ctx = PaintContext::new(&mut node);
+            w.paint(t, id, &mut ctx);
+        });
 
-        fn settle(tree: &mut Tree, node: &RenderNode) {
-            tree.clear_needs_paint(WidgetId::from_u64(node.id));
-            for child in &node.children {
-                settle(tree, child);
-            }
-        }
-        settle(&mut self.tree, &node);
+        let node = std::rc::Rc::new(node);
+        let mut commands = Vec::new();
+        let mut layers = Vec::new();
+        crate::renderer::flatten_root_into(&node, &mut commands, &mut layers);
+        let blur = crate::blur::regions_from_commands(&commands);
+
+        crate::cache_paint_results(&mut self.tree, &node);
 
         Frame { node, blur }
     }
@@ -139,7 +147,7 @@ impl H {
 /// What one frame produced: the render tree, and the compositor blur region the
 /// paint left registered.
 struct Frame {
-    node: RenderNode,
+    node: std::rc::Rc<RenderNode>,
     blur: Vec<crate::blur::BlurRect>,
 }
 
@@ -1556,11 +1564,11 @@ fn an_animated_colour_starts_from_the_inherited_base() {
 fn a_gradient_is_reactive_and_paint_only() {
     let warm = create_signal(true);
     let mut h = H::new(container().width(20.0).height(20.0).gradient(move || {
-        if warm.get() {
+        Some(if warm.get() {
             LinearGradient::horizontal(Color::RED, Color::YELLOW)
         } else {
             LinearGradient::horizontal(Color::BLUE, Color::CYAN)
-        }
+        })
     }));
     h.fit(100.0, 100.0);
     assert_eq!(gradient_ends(&h.paint()), Some((Color::RED, Color::YELLOW)));
@@ -1576,7 +1584,7 @@ fn a_gradient_is_reactive_and_paint_only() {
 fn a_constant_gradient_shorthand_stays_constant() {
     let constant = container().gradient_vertical(Color::RED, Color::BLUE);
     assert_eq!(
-        constant.gradient.and_then(|g| g.constant()),
+        constant.gradient.and_then(|g| g.constant()).flatten(),
         Some(LinearGradient::vertical(Color::RED, Color::BLUE)),
         "two constants make one constant"
     );
@@ -2035,8 +2043,6 @@ fn a_declared_elevation_change_invalidates_the_reach() {
 /// surface.
 #[test]
 fn switching_a_compositor_blur_off_withdraws_it_on_that_frame() {
-    crate::blur::reset_blur();
-
     let frosted = create_signal(true);
     let mut h = H::new(
         container()
@@ -2059,16 +2065,12 @@ fn switching_a_compositor_blur_off_withdraws_it_on_that_frame() {
 
     frosted.set(true);
     assert!(!h.frame(100.0, 100.0).blur.is_empty(), "and back on");
-
-    crate::blur::reset_blur();
 }
 
 /// Restricting the sources to the surface publishes no compositor region at all,
 /// whatever the radius — while still drawing one.
 #[test]
 fn a_surface_only_blur_publishes_no_compositor_region() {
-    crate::blur::reset_blur();
-
     let mut h = H::new(
         container()
             .width(40.0)
@@ -2078,8 +2080,6 @@ fn a_surface_only_blur_publishes_no_compositor_region() {
     let frame = h.frame(100.0, 100.0);
     assert_eq!(frame.blur, Vec::new());
     assert_eq!(blur_radii(&frame.node), vec![24.0], "but it draws one");
-
-    crate::blur::reset_blur();
 }
 
 /// A hidden panel blurs nothing, and neither does anything inside it. The
@@ -2089,8 +2089,6 @@ fn a_surface_only_blur_publishes_no_compositor_region() {
 /// exactly where they were.
 #[test]
 fn hiding_a_panel_withdraws_the_blur_of_everything_inside_it() {
-    crate::blur::reset_blur();
-
     let open = create_signal(true);
     let mut h = H::new(
         container()
@@ -2111,8 +2109,42 @@ fn hiding_a_panel_withdraws_the_blur_of_everything_inside_it() {
 
     open.set(true);
     assert!(!h.frame(100.0, 100.0).blur.is_empty(), "and back");
+}
 
-    crate::blur::reset_blur();
+/// Hiding and showing a panel has to work in *both* directions, and the return
+/// trip is the one that breaks: the panel repaints, but its child is clean and
+/// is served from the paint cache, so the child's own paint never runs.
+///
+/// While the region was a registry written during paint, that meant the blur
+/// went off and never came back — the withdrawal had a path and the
+/// re-registration did not. Reading the region off the frame instead makes the
+/// two directions one operation: a cached node carries its commands with it, so
+/// it carries its blur.
+#[test]
+fn a_blur_served_from_the_paint_cache_is_still_published() {
+    let open = create_signal(true);
+    let mut h = H::new(
+        container()
+            .width(60.0)
+            .height(40.0)
+            .visible(move || open.get())
+            .child(container().width(40.0).height(20.0).backdrop_blur(24.0)),
+    );
+    assert!(!h.frame(100.0, 100.0).blur.is_empty(), "open");
+
+    open.set(false);
+    assert_eq!(h.frame(100.0, 100.0).blur, Vec::new(), "hidden");
+
+    // The panel is dirty and repaints; the child is not, and comes from the
+    // cache without its paint running.
+    open.set(true);
+    assert!(
+        !h.frame(100.0, 100.0).blur.is_empty(),
+        "a blur that came back from the cache still has to be published"
+    );
+
+    // And it survives a frame in which nothing at all repaints.
+    assert!(!h.frame(100.0, 100.0).blur.is_empty(), "and stays");
 }
 
 /// A child scrolled out of a viewport blurs nothing. It never paints — culled,
@@ -2120,8 +2152,6 @@ fn hiding_a_panel_withdraws_the_blur_of_everything_inside_it() {
 /// cannot withdraw its own region, and its bounds stay where they were.
 #[test]
 fn scrolling_a_frosted_card_away_withdraws_its_blur() {
-    crate::blur::reset_blur();
-
     // Enough rows that the scroller takes its windowing fast path, which is the
     // case the sweep exists for and the one a two-child list never reaches.
     let mut rows: Vec<crate::widgets::AnyWidget> = vec![
@@ -2160,6 +2190,34 @@ fn scrolling_a_frosted_card_away_withdraws_its_blur() {
         Vec::new(),
         "scrolled away, so it blurs nothing"
     );
+}
 
-    crate::blur::reset_blur();
+/// A gradient needs a value that means "no gradient", or the rule the whole
+/// branch is about — a property you can turn off with the signal that turned it
+/// on — has a hole exactly where a header expands and collapses.
+#[test]
+fn a_gradient_can_be_switched_off_and_the_background_returns() {
+    let expanded = create_signal(true);
+    let mut h = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .background(Color::GRAY)
+            .gradient(move || {
+                expanded
+                    .get()
+                    .then(|| LinearGradient::horizontal(Color::RED, Color::BLUE))
+            }),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(gradient_ends(&h.paint()), Some((Color::RED, Color::BLUE)));
+
+    expanded.set(false);
+    let node = h.paint();
+    assert_eq!(gradient_ends(&node), None, "no gradient");
+    assert_eq!(
+        rects(&node).first().map(|(_, color)| *color),
+        Some(Color::GRAY),
+        "and the background it was covering is drawn again"
+    );
 }
