@@ -384,6 +384,16 @@ pub struct Container {
     /// one such read of several on that path, so that is a bonus rather than
     /// the reason.
     pub(super) overflow_resolved: Cell<Overflow>,
+    /// The elevation the last layout sized this container's damage rect for.
+    ///
+    /// Written by `layout` and read by `animated_elevation`, so the shadow that
+    /// is drawn and the rect that is repainted are the *same number* rather than
+    /// two computations of it. They were two, and they disagreed: paint asked
+    /// [`max_elevation`](style) again, which reads the elevation signal at its
+    /// current value, so a card animating from 8 down to 0 was clamped to the 0
+    /// it had not reached yet and the shadow vanished in one frame while the
+    /// animation went on running.
+    pub(super) elevation_reach: Cell<f32>,
     pub(super) visible: Option<Signal<bool>>,
     pub(super) transform: Option<Signal<Transform>>,
     pub(super) transform_origin: Option<Signal<TransformOrigin>>,
@@ -457,6 +467,7 @@ impl Container {
             height: None,
             overflow: None,
             overflow_resolved: Cell::new(Overflow::Visible),
+            elevation_reach: Cell::new(0.0),
             visible: None,
             transform: None,
             transform_origin: None,
@@ -1656,7 +1667,12 @@ impl Widget for Container {
         // ring outside every damage rect — invisible on the way up, and left
         // behind on the way down. Read under layout tracking, so a declared
         // elevation changing does re-run it.
+        //
+        // Kept as well as published, because paint clamps to it: the shadow that
+        // is drawn and the rect that is repainted have to be one number, not two
+        // computations of it made a frame apart.
         let reach = with_signal_tracking(id, JobType::Layout, || self.max_elevation());
+        self.elevation_reach.set(reach);
         tree.set_paint_overflow(id, style::elevation_to_shadow(reach).extent());
 
         // Register widget ref so update_widget_refs() can refresh bounds

@@ -133,8 +133,8 @@ impl Container {
         self.resolve_state_value(id, base, |state| state.text_color.map(|s| s.get()))
     }
 
-    /// The largest elevation this container can reach: its own, or any a state
-    /// layer declares.
+    /// The largest elevation this container can reach, and the number its damage
+    /// rect is sized from.
     ///
     /// Damage bounds want the worst case, not the current value. Elevation is a
     /// paint-only animation, so a hover that lifts a card never re-runs layout —
@@ -142,22 +142,26 @@ impl Container {
     /// what is possible rather than to what is showing keeps the damage rect
     /// correct without asking a colour change to re-run a layout.
     ///
-    /// Read tracked, because a *declared* elevation changing genuinely needs a
-    /// new reach — which is also the cost to know about: `.elevation(move || if
-    /// hovered.get() { 8.0 } else { 0.0 })` re-lays-out the subtree on every
-    /// enter and leave, since the maximum really does change.
+    /// Three things can be showing, so all three are folded:
     ///
-    /// `.elevation(0.0).when_hovered(|s| s.elevation(8.0))` says the same thing
-    /// and costs no layout at all: the maximum is 8 either way, so hovering
-    /// moves only the animation and the paint. That is the idiom to reach for,
-    /// and the reason this reads the maximum rather than the current value.
+    /// - the declared elevation, and every state layer's,
+    /// - the overshoot, because a spring does not stop at its target,
+    /// - **and whatever is in flight**, because a *falling* elevation is drawn
+    ///   from a value the declarations no longer mention. `.elevation(move ||
+    ///   if lifted.get() { 8.0 } else { 0.0 })` re-runs this layout on the write
+    ///   that starts the descent, and at that instant the declared maximum is
+    ///   already 0 while the shadow on screen is still 8 deep.
     ///
-    /// An animated elevation is allowed past its target — a spring overshoots by
-    /// design, `BOUNCY` by about 17% — so the largest *declared* value is not the
-    /// largest *drawn* one, and the peak is where the shadow ring would fall
-    /// outside the damage rect. The curve says how far it goes.
+    /// The whole fold is read under layout tracking, which is the cost to know
+    /// about: every elevation *any* state layer declares is a layout dependency,
+    /// active or not, because the maximum genuinely moves when one of them
+    /// changes. `.elevation(0.0).when_hovered(|s| s.elevation(8.0))` — both
+    /// constants — subscribes to nothing and hovering moves only the paint;
+    /// `when_hovered(|s| s.elevation(lift))` with `lift` a signal re-lays out the
+    /// subtree whenever `lift` is written, pressed or not.
     pub(super) fn max_elevation(&self) -> f32 {
         let base = self.elevation.get_or(0.0);
+        let anim = self.anims.as_ref().and_then(|a| a.elevation.as_ref());
         let declared = match self.interaction {
             Some(ref ix) => ix.states.iter().fold(base, |most, (_, state)| {
                 match state.elevation.map(|s| s.get()) {
@@ -168,8 +172,10 @@ impl Container {
             None => base,
         };
 
-        match self.anims.as_ref().and_then(|a| a.elevation.as_ref()) {
-            Some(anim) => declared * (1.0 + anim.peak_overshoot()),
+        match anim {
+            // The value in flight is already past its overshoot, so it is folded
+            // in flat; the declarations have theirs still to come.
+            Some(anim) => (declared * (1.0 + anim.peak_overshoot())).max(*anim.current()),
             None => declared,
         }
     }
@@ -323,24 +329,28 @@ impl Container {
         )
     }
 
+    /// The elevation to draw, never deeper than the rect the layout reserved.
+    ///
+    /// Clamped, and clamped to [`elevation_reach`](super::Container::elevation_reach)
+    /// — the number `layout` recorded — rather than to a fresh
+    /// [`max_elevation`](Self::max_elevation). Recomputing it here reads the
+    /// signals at *paint* time, which is a different frame's answer: on a falling
+    /// elevation the declared maximum has already reached 0 and the shadow was
+    /// cut to nothing while the animation was still playing.
+    ///
+    /// A clamp at all, rather than a wider reach, because the reach that would
+    /// make one unnecessary is not a small one. A spring keeps its momentum
+    /// across a retarget, so hover flicker *pumps* it: driven at its damped
+    /// natural frequency the steady-state excursion is the resonant gain,
+    /// `1 / (2ζ√(1-ζ²))` — 1.03x the step response for `BOUNCY`, but 3.7x at
+    /// ζ = 0.05, and sizing every damage rect for that is not a trade worth
+    /// making for the tip of a bounce nobody asked for. See
+    /// `hover_flicker_cannot_push_a_shadow_outside_its_damage_rect`.
     pub(super) fn animated_elevation(&self, id: WidgetId) -> f32 {
-        let level = get_animated_value(
-            self.anims.as_ref().and_then(|a| a.elevation.as_ref()),
-            || self.effective_elevation_target(id),
-        );
-
-        // Clamped to the reach the layout recorded, because a spring's step
-        // response is not its bound: `retarget` restarts it carrying the velocity
-        // it had, so a hover reversed mid-flight peaks past `peak_overshoot`,
-        // which is measured from rest — and the shadow ring at that peak would
-        // fall outside the damage rect, which is the artefact the reach exists to
-        // prevent. The cut is at the tip of an overshoot the reach already allows
-        // in full, and a bound nothing enforces is not a bound — see
-        // `a_spring_given_velocity_overshoots_more_than_one_at_rest`, which is
-        // where the premise is measured: at a carried velocity of 16 a BOUNCY
-        // spring peaks half again as far as its step response reports.
-        match self.anims.as_ref().and_then(|a| a.elevation.as_ref()) {
-            Some(_) => level.min(self.max_elevation()),
+        let anim = self.anims.as_ref().and_then(|a| a.elevation.as_ref());
+        let level = get_animated_value(anim, || self.effective_elevation_target(id));
+        match anim {
+            Some(_) => level.min(self.elevation_reach.get()),
             None => level,
         }
     }

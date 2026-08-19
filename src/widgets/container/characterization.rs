@@ -2027,6 +2027,118 @@ fn the_damage_reach_allows_for_a_spring_overshooting() {
     );
 }
 
+/// The shadow's reach, as drawn — `None` where the box casts none.
+fn shadow_extent(node: &RenderNode) -> Option<f32> {
+    node.commands.iter().find_map(|c| match &**c {
+        DrawCommand::RoundedRect {
+            shadow: Some(shadow),
+            ..
+        } => Some(shadow.extent()),
+        _ => None,
+    })
+}
+
+/// A `.elevation(signal)` that falls has to *animate* down. It used to rise
+/// animated and drop in one frame.
+///
+/// The reach the layout records is also the ceiling paint clamps to, and the
+/// ceiling was recomputed at paint time from the declarations — which by then
+/// say 0, while the shadow on screen is still 8 deep. Every frame of the descent
+/// drew `min(interpolated, 0.0)`: no shadow at all, for an animation that went
+/// on running and asking for frames.
+#[test]
+fn a_falling_elevation_animates_down_instead_of_snapping() {
+    let level = create_signal(8.0f32);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .elevation(move || level.get())
+            .animate_elevation(Transition::new(600.0, TimingFunction::Linear)),
+    );
+    h.fit(100.0, 100.0);
+    let lifted = shadow_extent(&h.paint()).expect("a lifted card casts a shadow");
+
+    level.set(0.0);
+    pump(&mut h);
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    // A third of the way down a 600ms ramp: unmistakably moving, and nowhere
+    // near gone.
+    for _ in 0..5 {
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        pump(&mut h);
+        h.fit(100.0, 100.0);
+        h.paint();
+    }
+    let falling = shadow_extent(&h.paint()).expect("it is still falling, not gone");
+    assert!(
+        falling < lifted,
+        "the descent has to move: {falling} vs {lifted}"
+    );
+}
+
+/// The clamp the descent above must not trip is still doing its job.
+///
+/// A spring keeps its momentum across a retarget, so hover flicker pumps it:
+/// driven near its damped natural frequency it settles at the resonant gain,
+/// which for a lightly damped spring is several times the step response the
+/// reach is measured from. Whatever it reaches, it is not allowed to draw
+/// outside the rect the layout reserved — that ring would be composited nowhere
+/// and left on screen.
+#[test]
+fn hover_flicker_cannot_push_a_shadow_outside_its_damage_rect() {
+    // Lightly damped (zeta = 0.1, resonant gain ~3.7x) and fast, so the pumping
+    // shows up within a test's worth of frames.
+    let pumpable = SpringConfig {
+        mass: 1.0,
+        stiffness: 3600.0,
+        damping: 12.0,
+    };
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            // Small enough that the shadow is still growing with the number:
+            // past ~12 the blur and the offset are both capped, so a clamp
+            // there would have nothing to show for itself.
+            .elevation(0.0)
+            .when_hovered(|s| s.elevation(2.0))
+            .animate_elevation(Transition::spring(pumpable)),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    let reach = h.tree.paint_overflow(h.root);
+    let mut inside = false;
+    let mut worst: f32 = 0.0;
+    // Flipped by the clock, not by a frame count: pumping means reversing every
+    // half period (~53ms here), and a frame is only worth ~8ms of it.
+    let mut last_flip = std::time::Instant::now();
+    for step in 0..120 {
+        if last_flip.elapsed() >= std::time::Duration::from_millis(52) {
+            inside = !inside;
+            set_hover(&mut h, inside);
+            last_flip = std::time::Instant::now();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(6));
+        pump(&mut h);
+        h.fit(100.0, 100.0);
+        let node = h.paint();
+        if let Some(extent) = shadow_extent(&node) {
+            worst = worst.max(extent);
+            assert!(
+                extent <= reach + 0.01,
+                "step {step} drew a shadow reaching {extent} outside a damage rect of {reach}"
+            );
+        }
+    }
+    assert!(worst > 0.0, "the flicker has to actually raise a shadow");
+}
+
 /// A declared elevation changing does need a new reach, so it must invalidate
 /// the layout that recorded the old one.
 #[test]

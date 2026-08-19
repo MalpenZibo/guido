@@ -87,6 +87,26 @@ container()
     .when_hovered(|s| s.elevation(6.0))
 ```
 
+A shadow falls outside the box that casts it, so the container has to tell the
+layout how far its painting reaches — and the reach has to cover the deepest
+shadow it can ever cast, since a hover never re-runs layout.
+
+That makes the two ways of lifting a card cost different amounts:
+
+```rust
+// Constants: the deepest is 6 whatever happens, so hovering moves only the
+// paint and nothing is re-laid-out.
+.elevation(2.0).when_hovered(|s| s.elevation(6.0))
+
+// A signal: the deepest genuinely changes when it is written, so every write
+// re-runs the layout of this subtree.
+.elevation(move || if lifted.get() { 6.0 } else { 2.0 })
+```
+
+Both are correct, and the second is the one to reach for when the depth is
+driven by something other than pointer state. Prefer the state layer when it can
+say the same thing.
+
 ## Multiple Animations
 
 Combine animations on a single container:
