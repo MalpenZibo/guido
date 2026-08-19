@@ -25,7 +25,9 @@ Animate border thickness:
 container()
     .border(1.0, Color::rgb(0.3, 0.3, 0.4))
     .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
-    .when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.7, 1.0)))
+    // A border is declared as a pair, so the layer restates the colour it is
+    // not changing — otherwise the width eases while the colour jumps.
+    .when_hovered(|s| s.border(2.0, Color::rgb(0.3, 0.3, 0.4)))
 ```
 
 ## Border Color
@@ -36,7 +38,8 @@ Animate border color:
 container()
     .border(2.0, Color::rgb(0.3, 0.3, 0.4))
     .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))
-    .when_hovered(|s| s.border(1.0, Color::rgb(0.5, 0.7, 1.0)))
+    // The mirror image: the width is restated so only the colour moves.
+    .when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.7, 1.0)))
 ```
 
 ## Transform

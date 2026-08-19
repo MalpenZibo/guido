@@ -47,7 +47,7 @@ impl ServiceContext {
 
 /// Handle to a background service for sending commands.
 ///
-/// `Copy`, like [`Signal`](super::Signal): the channel lives in the reactive
+/// `Copy`, like [`Signal`]: the channel lives in the reactive
 /// arena and the handle is just its id, so it can be dropped into as many
 /// closures as needed without a clone. Handles of services, signals and
 /// callbacks being `Copy` is what keeps a struct that groups them `Copy` too.

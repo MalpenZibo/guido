@@ -26,7 +26,7 @@ pub(crate) fn decoration_overflow(stroke: Option<TextStroke>, shadow: Option<Tex
 
 /// A run of text.
 ///
-/// Style may be declared here — [`TextStyled`](super::TextStyled) — or on an
+/// Style may be declared here — [`TextStyled`] — or on an
 /// enclosing container, in which case it is inherited from the nearest one
 /// that sets each property. A declaration on the text itself is the nearest
 /// there is, so it wins.

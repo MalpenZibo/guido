@@ -150,6 +150,9 @@ pub struct WaylandState {
 
     /// Whether the application should exit
     pub exit: bool,
+    /// Inside [`batch_layer_requests`](Self::batch_layer_requests): individual
+    /// requests hold their commit so the group makes one.
+    batching_requests: bool,
 
     // Multi-surface tracking
     /// All surfaces indexed by SurfaceId
@@ -290,6 +293,7 @@ pub fn create_wayland_app(
         seat_state,
         layer_shell,
         exit: false,
+        batching_requests: false,
         surfaces: HashMap::new(),
         surface_lookup: HashMap::new(),
         current_pointer_surface: None,
@@ -474,15 +478,35 @@ impl WaylandState {
 
     /// Helper to modify a surface's layer shell properties and commit.
     /// No-ops (with a warning) on session-lock surfaces, which have none.
+    /// Apply several layer-shell requests as one change.
+    ///
+    /// `with_layer_surface` commits after each
+    /// request, which is right for one on its own and wrong for a group:
+    /// re-anchoring sends the anchor, the size and the reservation, and three
+    /// commits is two of them showing the compositor a surface halfway between
+    /// two configurations — before this, an app animating a dock's margin sent a
+    /// redundant pair every frame.
+    pub fn batch_layer_requests(&mut self, id: SurfaceId, f: impl FnOnce(&mut Self)) {
+        let outer = std::mem::replace(&mut self.batching_requests, true);
+        f(self);
+        self.batching_requests = outer;
+        if !outer && let Some(state) = self.surfaces.get(&id) {
+            state.wl_surface.commit();
+        }
+    }
+
     fn with_layer_surface<F>(&mut self, id: SurfaceId, f: F)
     where
         F: FnOnce(&LayerSurface),
     {
+        let batching = self.batching_requests;
         if let Some(surface_state) = self.surfaces.get_mut(&id) {
             match &surface_state.role {
                 SurfaceRole::Layer(layer_surface) => {
                     f(layer_surface);
-                    surface_state.wl_surface.commit();
+                    if !batching {
+                        surface_state.wl_surface.commit();
+                    }
                 }
                 SurfaceRole::Lock(_) | SurfaceRole::Popup { .. } => {
                     log::warn!(

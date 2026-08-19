@@ -53,11 +53,15 @@ pub(crate) fn regions_from_commands(commands: &[FlattenedCommand]) -> Vec<BlurRe
             continue;
         }
 
-        // World coordinates, so a scrolled or transformed container reports where
-        // it actually is — and by the same computation the renderer uses for the
-        // surface half of this very command, so the two cannot describe
-        // different shapes.
-        let (world, world_radii) = cmd.world_rounded_rect(*rect, *corner_radii);
+        // World coordinates *and* the clip, by the same computation the renderer
+        // uses for the surface half of this very command — so the two cannot
+        // describe different shapes. A card half out of a viewport is filtered
+        // only where it is on show, and a region published for the whole card
+        // blurs the desktop beside a panel that is not there.
+        let Some((world, world_radii)) = cmd.clipped_world_rounded_rect(*rect, *corner_radii)
+        else {
+            continue;
+        };
         out.extend(rounded_rect_to_blur_rects(world, world_radii.max()));
     }
     out.sort_unstable_by_key(|r| (r.y, r.x, r.width, r.height));

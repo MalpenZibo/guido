@@ -2275,3 +2275,80 @@ fn a_shadow_too_faint_to_see_is_not_drawn() {
     h.fit(100.0, 100.0);
     assert_eq!(shadow_count(&h.paint()), 1, "and drawn once it can be seen");
 }
+
+/// The clip is part of the shape, for the region as much as for the renderer. A
+/// blurred card cut off by its parent must publish only the part on show, or the
+/// desktop is blurred beside a panel that is not there.
+#[test]
+fn a_clipped_blur_publishes_only_what_is_on_show() {
+    // Content overflows by summing: each child answers to the parent's maximum,
+    // their row does not. So the second card sits entirely past the clip.
+    let card = || container().width(40.0).height(40.0).backdrop_blur(24.0);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .overflow(Overflow::Hidden)
+            .layout(Flex::row())
+            .child(card())
+            .child(card()),
+    );
+    let frame = h.frame(200.0, 200.0);
+
+    let widest = frame
+        .blur
+        .iter()
+        .map(|r| r.x + r.width)
+        .max()
+        .expect("the visible card still blurs");
+    assert!(
+        widest <= 40,
+        "the row is 80 wide inside a 40-wide clip, so no region may reach {widest}"
+    );
+}
+
+/// A gradient between two fully transparent colours draws nothing, and must not
+/// push a rect per frame to do it — the same gate the fill, the border and the
+/// shadow have. With both endpoints reactive, one animating out through
+/// transparent reaches this every frame.
+#[test]
+fn a_fully_transparent_gradient_draws_nothing() {
+    let clear = Color::rgba(1.0, 0.0, 0.0, 0.0);
+
+    let mut h = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .gradient(LinearGradient::horizontal(clear, clear)),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(rects(&h.paint()), Vec::new(), "nothing to draw");
+
+    // One end still visible is still a gradient.
+    let mut half = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .gradient(LinearGradient::horizontal(clear, Color::BLUE)),
+    );
+    half.fit(100.0, 100.0);
+    assert_eq!(
+        gradient_ends(&half.paint()),
+        Some((clear, Color::BLUE)),
+        "fading to transparent is a gradient"
+    );
+
+    // And an invisible gradient does not hide the background under it.
+    let mut over = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .background(Color::GRAY)
+            .gradient(LinearGradient::horizontal(clear, clear)),
+    );
+    over.fit(100.0, 100.0);
+    assert_eq!(
+        rects(&over.paint()).first().map(|(_, c)| *c),
+        Some(Color::GRAY)
+    );
+}

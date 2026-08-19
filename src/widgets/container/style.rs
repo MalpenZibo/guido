@@ -142,8 +142,15 @@ impl Container {
     /// what is possible rather than to what is showing keeps the damage rect
     /// correct without asking a colour change to re-run a layout.
     ///
-    /// Read tracked: a *declared* elevation changing is rare and does need a new
-    /// reach, so it should invalidate the layout that recorded the old one.
+    /// Read tracked, because a *declared* elevation changing genuinely needs a
+    /// new reach — which is also the cost to know about: `.elevation(move || if
+    /// hovered.get() { 8.0 } else { 0.0 })` re-lays-out the subtree on every
+    /// enter and leave, since the maximum really does change.
+    ///
+    /// `.elevation(0.0).when_hovered(|s| s.elevation(8.0))` says the same thing
+    /// and costs no layout at all: the maximum is 8 either way, so hovering
+    /// moves only the animation and the paint. That is the idiom to reach for,
+    /// and the reason this reads the maximum rather than the current value.
     ///
     /// An animated elevation is allowed past its target — a spring overshoots by
     /// design, `BOUNCY` by about 17% — so the largest *declared* value is not the
@@ -317,10 +324,25 @@ impl Container {
     }
 
     pub(super) fn animated_elevation(&self, id: WidgetId) -> f32 {
-        get_animated_value(
+        let level = get_animated_value(
             self.anims.as_ref().and_then(|a| a.elevation.as_ref()),
             || self.effective_elevation_target(id),
-        )
+        );
+
+        // Clamped to the reach the layout recorded, because a spring's step
+        // response is not its bound: `retarget` restarts it carrying the velocity
+        // it had, so a hover reversed mid-flight peaks past `peak_overshoot`,
+        // which is measured from rest — and the shadow ring at that peak would
+        // fall outside the damage rect, which is the artefact the reach exists to
+        // prevent. The cut is at the tip of an overshoot the reach already allows
+        // in full, and a bound nothing enforces is not a bound — see
+        // `a_spring_given_velocity_overshoots_more_than_one_at_rest`, which is
+        // where the premise is measured: at a carried velocity of 16 a BOUNCY
+        // spring peaks half again as far as its step response reports.
+        match self.anims.as_ref().and_then(|a| a.elevation.as_ref()) {
+            Some(_) => level.min(self.max_elevation()),
+            None => level,
+        }
     }
 
     pub(super) fn animated_transform(&self, id: WidgetId) -> Transform {
@@ -393,7 +415,14 @@ impl Container {
         let shadow = elevation_to_shadow(d.elevation);
         let shadow = (shadow.color.a > SHADOW_ALPHA_FLOOR).then_some(shadow);
 
-        if let Some(ref gradient) = d.gradient {
+        // Gated like the fill, the border and the shadow: a gradient between two
+        // fully transparent colours draws nothing, and with both endpoints
+        // reactive one animating out through transparent would push a rect per
+        // frame to do it. One end still visible is still a gradient.
+        let gradient = d
+            .gradient
+            .filter(|g| g.start_color.a > 0.0 || g.end_color.a > 0.0);
+        if let Some(ref gradient) = gradient {
             ctx.draw_rounded_rect_full(
                 bounds,
                 gradient.start_color,

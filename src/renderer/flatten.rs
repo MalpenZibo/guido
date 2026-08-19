@@ -103,10 +103,32 @@ impl FlattenedCommand {
             .map(|c| c.1)
             .fold(f32::NEG_INFINITY, f32::max);
 
-        (
-            Rect::new(min_x, min_y, max_x - min_x, max_y - min_y),
-            radii.scaled(self.world_transform.extract_scale()),
-        )
+        let world = Rect::new(min_x, min_y, max_x - min_x, max_y - min_y);
+        (world, radii.scaled(self.world_transform.extract_scale()))
+    }
+
+    /// [`world_rounded_rect`](Self::world_rounded_rect), narrowed to what the
+    /// command is allowed to show.
+    ///
+    /// The clip is part of the shape, not a detail of one consumer: a card half
+    /// out of a viewport is filtered only where it is on show, and a compositor
+    /// region published for the whole card blurs the desktop beside a panel that
+    /// is not there. Returns `None` when the clip leaves nothing.
+    pub fn clipped_world_rounded_rect(
+        &self,
+        rect: Rect,
+        radii: CornerRadii,
+    ) -> Option<(Rect, CornerRadii)> {
+        let (world, world_radii) = self.world_rounded_rect(rect, radii);
+        let Some(clip) = self.clip.as_ref().map(|c| c.rect) else {
+            return Some((world, world_radii));
+        };
+
+        let x = world.x.max(clip.x);
+        let y = world.y.max(clip.y);
+        let right = (world.x + world.width).min(clip.x + clip.width);
+        let bottom = (world.y + world.height).min(clip.y + clip.height);
+        (right > x && bottom > y).then(|| (Rect::new(x, y, right - x, bottom - y), world_radii))
     }
 }
 
@@ -372,7 +394,7 @@ impl CommandLayer {
 /// Flatten results are cached on nodes (via interior mutability) for
 /// incremental reuse in subsequent frames.
 ///
-/// `layers` receives the groups to draw, in order; see [`LayeredCommands`].
+/// `layers` receives the groups to draw, in order; see [`CommandLayer`].
 pub fn flatten_root_into(
     root: &RenderNode,
     commands: &mut Vec<FlattenedCommand>,
@@ -1028,6 +1050,46 @@ mod world_geometry_tests {
 
         assert_eq!(world.width, 200.0);
         assert_eq!(radii.max(), 32.0, "twice the box, twice the corner");
+    }
+
+    /// The clip is part of the shape. A card half out of a viewport is filtered
+    /// only where it is on show, and the region published to the compositor has
+    /// to agree — otherwise it blurs the desktop beside a panel that is not
+    /// there, which is the last way the two halves of one command could
+    /// describe different things.
+    #[test]
+    fn a_clip_narrows_the_shape_for_both_halves() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let mut cmd = command(Transform::translate(0.0, 0.0));
+        cmd.clip = Some(WorldClip {
+            rect: Rect::new(0.0, 0.0, 40.0, 100.0),
+            corner_radius: 0.0,
+            curvature: 1.0,
+        });
+
+        let (world, _) = cmd
+            .clipped_world_rounded_rect(rect, CornerRadii::from(0.0))
+            .expect("still on show");
+        assert_eq!((world.x, world.width), (0.0, 40.0), "cut to the clip");
+        assert_eq!(world.height, 100.0, "and untouched on the other axis");
+    }
+
+    /// Clipped away entirely is nothing to publish, not an empty rectangle
+    /// somewhere.
+    #[test]
+    fn a_shape_outside_its_clip_has_no_region() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let mut cmd = command(Transform::translate(500.0, 0.0));
+        cmd.clip = Some(WorldClip {
+            rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+            corner_radius: 0.0,
+            curvature: 1.0,
+        });
+
+        assert!(
+            cmd.clipped_world_rounded_rect(rect, CornerRadii::from(0.0))
+                .is_none()
+        );
     }
 
     /// A translation moves it and changes nothing else.

@@ -311,7 +311,7 @@ pub fn compare_and_update_signal_value<T: Clone + PartialEq + 'static>(
 /// Set unconditionally: no comparison, no `PartialEq` bound. Returns
 /// `true` if the write landed (`false` only when the slot is disposed).
 ///
-/// Backs [`RwSignal::set_always`]: trigger-style writes where every
+/// Backs [`RwSignal::set_always`](super::RwSignal::set_always): trigger-style writes where every
 /// emission must notify (or where the type has no meaningful equality).
 pub fn set_signal_value_always<T: 'static>(id: SignalId, value: T) -> bool {
     let Some(rc) = try_clone_slot_rc(id) else {

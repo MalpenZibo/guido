@@ -131,7 +131,8 @@ fn update_and_notify_always<T: Clone + 'static>(id: SignalId, f: impl FnOnce(&mu
 ///
 /// `Signal<T>` provides read access to reactive values. It is returned by
 /// [`create_stored`] (static values) and [`create_derived`] (closure-backed).
-/// Widget properties accept `Signal<T>` via the [`IntoSignal`] trait.
+/// Widget properties accept `Signal<T>` via the
+/// [`IntoSignal`](super::IntoSignal) trait.
 ///
 /// To create a read-write signal, use [`create_signal`] which returns [`RwSignal<T>`].
 ///
@@ -210,7 +211,8 @@ impl<T: Clone + Send + Sync + 'static> Signal<T> {
 ///
 /// Created by [`create_signal`]. Provides both read and write access.
 /// Can be converted to a read-only [`Signal<T>`] via [`read_only()`](RwSignal::read_only)
-/// or the [`From`] impl. Widget properties accept `RwSignal<T>` via [`IntoSignal`].
+/// or the [`From`] impl. Widget properties accept `RwSignal<T>` via
+/// [`IntoSignal`](super::IntoSignal).
 ///
 /// `RwSignal<T>` is `Copy` (8 bytes — just a signal ID).
 ///

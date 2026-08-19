@@ -273,7 +273,7 @@ pub struct KeyedChildren<T, I, K, W> {
 /// read via signals inside the row for in-place updates, fields included
 /// trigger a row rebuild when they change.
 ///
-/// The key is any `Hash + Eq + Clone + Debug`, so an identity that is already a string
+/// The key is any `Hash + Eq + Clone`, so an identity that is already a string
 /// or a tuple can be used as it is rather than hashed by hand at the call site.
 /// Rows are indexed by the key itself, not by a hash of it, so two distinct keys
 /// are never reconciled as one:
@@ -299,7 +299,7 @@ pub fn keyed<T, I, K, W>(
 where
     T: Clone + PartialEq + 'static,
     I: IntoIterator<Item = T>,
-    K: Hash + Eq + Clone + std::fmt::Debug + 'static,
+    K: Hash + Eq + Clone + 'static,
     W: Widget + 'static,
 {
     KeyedChildren {
@@ -313,7 +313,7 @@ impl<T, I, K, W> IntoChildren<DynamicChildren> for KeyedChildren<T, I, K, W>
 where
     T: Clone + PartialEq + 'static,
     I: IntoIterator<Item = T> + 'static,
-    K: Hash + Eq + Clone + std::fmt::Debug + 'static,
+    K: Hash + Eq + Clone + 'static,
     W: Widget + 'static,
 {
     fn add_to_container(self, children_source: &mut ChildrenSource) {
@@ -332,7 +332,7 @@ fn add_keyed_children<T, I, K, W>(
 ) where
     T: Clone + PartialEq + 'static,
     I: IntoIterator<Item = T>,
-    K: Hash + Eq + Clone + std::fmt::Debug + 'static,
+    K: Hash + Eq + Clone + 'static,
     W: Widget + 'static,
 {
     struct Row<T> {
@@ -378,19 +378,21 @@ fn add_keyed_children<T, I, K, W>(
         let mut out = Vec::new();
         for (index, item) in items.into_iter().enumerate() {
             let key = key_fn(&item);
-            if seen.contains(&key) {
-                // The key, not just the position: for a list built from a
-                // filtered or sorted source the index is the index of nothing
-                // the caller can see, while the identity that collided — a
-                // workspace name, a tab title — is the whole content of the
-                // warning. `Debug` on the key costs nothing for the types this
-                // signature invites.
-                log::warn!("keyed children: duplicate key {key:?} at index {index}, skipping item");
+            // One lookup rather than a `contains` and then an `insert`: this runs
+            // per row per pass, and the clone a fresh row would have paid anyway
+            // is paid once here instead.
+            if !seen.insert(key.clone()) {
+                // Without the key's value: `Debug` would be a bound the mechanism
+                // does not need, and it would keep an opaque newtype out of
+                // `keyed` in order to format a log line. The type and the
+                // position are what can be said for nothing.
+                log::warn!(
+                    "keyed children: duplicate {} key at index {index}, skipping item",
+                    std::any::type_name::<K>()
+                );
                 continue;
             }
 
-            // The key is cloned only where a row is created — a reordered or
-            // unchanged list clones nothing.
             let generation = match st.rows.get(&key) {
                 Some(row) if row.item == item => row.generation,
                 _ => {
@@ -406,7 +408,6 @@ fn add_keyed_children<T, I, K, W>(
                     generation
                 }
             };
-            seen.insert(key);
 
             let adopt_state = Rc::clone(&state);
             out.push(DynItem::new(generation, move || {
@@ -459,7 +460,8 @@ mod tests {
     fn colliding_keys_are_still_distinct_rows() {
         /// A key whose hash is deliberately useless, standing in for the
         /// collision a real hash makes merely unlikely.
-        #[derive(Clone, Debug, PartialEq, Eq)]
+        // Deliberately not Debug: the key bound must not require it.
+        #[derive(Clone, PartialEq, Eq)]
         struct Collides(&'static str);
 
         impl std::hash::Hash for Collides {

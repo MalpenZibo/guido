@@ -150,7 +150,7 @@ pub fn quit_app() {
 ///
 /// Writing a *widget* or a *layout* rather than an application is a different
 /// job with a different vocabulary — the tree, the paint context, the tracking
-/// scope. That lives in [`widget_prelude`](crate::widget_prelude), and is not
+/// scope. That lives in [`widget_prelude`], and is not
 /// re-exported here.
 pub mod prelude {
     pub use crate::animation::{
@@ -207,7 +207,7 @@ pub mod prelude {
 /// use guido::widget_prelude::*;
 /// ```
 ///
-/// [`Widget`](crate::widgets::Widget) has two required methods, `layout` and
+/// [`Widget`] has two required methods — `layout` and
 /// `paint`; [`Layout`](crate::layout::Layout) has one. Everything else here is
 /// what those signatures name, plus
 /// [`with_signal_tracking`](crate::reactive::with_signal_tracking) — the scope
@@ -866,7 +866,12 @@ fn layout_pass(
             widget.layout(tree, wid, constraints);
         });
         if (nw, nh) != (frame.width, frame.height) {
-            wayland_state.set_surface_size(id, nw, nh);
+            // Through the same rule as every other resize: a measured number on
+            // an axis the compositor owns hands back an axis that is not ours,
+            // and a full-width bar would then stay at whatever the screen was
+            // when it was measured.
+            let (ask_w, ask_h) = surface::honour_owned_axes(surface.config.anchor, nw, nh);
+            wayland_state.set_surface_size(id, ask_w, ask_h);
             // An `Auto` reservation follows an automatic resize too, and this is
             // the one caller that knows the measured size before the compositor
             // does — so it passes it rather than letting the helper look it up.
@@ -907,10 +912,10 @@ fn send_size(
     surface: &ManagedSurface,
     wayland_state: &mut platform::WaylandState,
 ) -> (bool, WidgetId) {
-    // The creation path refuses a content axis the compositor owns with a
-    // warning; the runtime paths say the same, or a full-width bar shrinks to
-    // its content in silence.
-    surface::warn_content_on_stretched_axis(id, &surface.config);
+    // Every size that reaches here was asked for by name, so anything the
+    // anchor discards is worth saying — a `content()` axis that will never be
+    // measured, and a `Fixed` one whose number is simply dropped.
+    surface::warn_size_request_on_stretched_axis(id, &surface.config);
 
     let live = configured_size(wayland_state, id);
     let (ask_w, ask_h, needs_measure) = surface::resize_request(&surface.config, live);
@@ -935,9 +940,15 @@ fn reconfigure<R>(
     change: impl FnOnce(&mut ManagedSurface, &mut platform::WaylandState) -> R,
 ) -> Option<R> {
     let surface = surface_manager.get_mut(id)?;
-    let result = change(surface, wayland_state);
-    resync_exclusive_zone(id, &surface.config, wayland_state, None);
-    Some(result)
+    let mut result = None;
+    // One commit for the group. A re-anchoring sends the anchor, the size and
+    // the reservation, and each request committing on its own would show the
+    // compositor two intermediate surfaces on the way.
+    wayland_state.batch_layer_requests(id, |wayland| {
+        result = Some(change(surface, wayland));
+        resync_exclusive_zone(id, &surface.config, wayland, None);
+    });
+    result
 }
 
 /// Paint, flatten, hand the frame to the GPU, and re-arm the pacing gate.

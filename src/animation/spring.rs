@@ -283,6 +283,40 @@ mod overshoot_tests {
         assert!(nearly.peak_overshoot() > 0.99);
     }
 
+    /// A spring that starts already moving goes further than one released from
+    /// rest, so the step-response figure `peak_overshoot` reports is *not* a
+    /// bound for a retargeted animation — `retarget` restarts the spring with
+    /// the velocity it was carrying.
+    ///
+    /// This is why anything sizing a rect from that figure has to clamp what it
+    /// draws to it rather than assume the value stays inside: see
+    /// `Container::animated_elevation`.
+    #[test]
+    fn a_spring_given_velocity_overshoots_more_than_one_at_rest() {
+        let config = SpringConfig::BOUNCY;
+        let reported = 1.0 + config.peak_overshoot();
+
+        let peak_of = |initial_velocity: f32| {
+            let mut state = SpringState::moving_at(initial_velocity);
+            let mut elapsed = 0.0f32;
+            let mut peak = 0.0f32;
+            // Finely enough to catch the peak rather than a point beside it.
+            for _ in 0..4000 {
+                elapsed += 1.0 / 480.0;
+                peak = peak.max(state.step(elapsed, &config));
+            }
+            peak
+        };
+
+        assert!(peak_of(0.0) <= reported + 0.01, "from rest it holds");
+
+        let carried = peak_of(16.0);
+        assert!(
+            carried > reported + 0.05,
+            "and carrying velocity it does not: {carried} against {reported}"
+        );
+    }
+
     /// A critically damped or overdamped spring never passes its target.
     #[test]
     fn a_spring_that_cannot_bounce_reports_nothing() {

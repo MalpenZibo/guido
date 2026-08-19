@@ -94,11 +94,11 @@ Keys must be unique and stable — never use the index:
 
 ```rust
 keyed(data, |item| item.id, build)          // Good: stable identity
-keyed(data, |item| item.name.clone(), build) // Good: any Hash + Eq + Debug key
+keyed(data, |item| item.name.clone(), build) // Good: any Hash + Eq key
 keyed(data, |(index, _)| *index, build)      // Bad: reorder loses state
 ```
 
-The key is anything `Hash + Eq + Clone + Debug`, and rows are indexed by the key itself
+The key is anything `Hash + Eq + Clone`, and rows are indexed by the key itself
 rather than by a hash of it, so two distinct keys are never reconciled as one.
 
 The item type chooses the update granularity: fields included in the item
@@ -237,7 +237,7 @@ pub fn keyed<T, I, K, W>(
 where
     T: Clone + PartialEq + 'static,
     I: IntoIterator<Item = T>,
-    K: Hash + Eq + Clone + Debug + 'static,
+    K: Hash + Eq + Clone + 'static,
     W: Widget + 'static;
 
 // Cleanup registration (use inside reactive closures and builders)

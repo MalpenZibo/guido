@@ -45,7 +45,14 @@ pub enum TimingFunction {
     /// Spring physics simulation (can overshoot)
     Spring(SpringConfig),
     /// Custom timing function
-    Custom(Arc<dyn Fn(f32) -> f32 + Send + Sync>),
+    /// Custom timing function, with how far it was measured to leave `[0, 1]`.
+    ///
+    /// The excursion is sampled once by [`custom`](TimingFunction::custom) and
+    /// carried, rather than the curve being clamped to a constant: anything
+    /// sizing a bound from a curve — a damage rect is why this exists — needs a
+    /// number that is true of *that* curve, and a hand-rolled bounce should
+    /// bounce as far as it was written to.
+    Custom(Arc<dyn Fn(f32) -> f32 + Send + Sync>, f32),
 }
 
 impl TimingFunction {
@@ -62,13 +69,7 @@ impl TimingFunction {
             TimingFunction::EaseInOut => ease_in_out(t),
             TimingFunction::CubicBezier(x1, y1, x2, y2) => cubic_bezier(t, *x1, *y1, *x2, *y2),
             TimingFunction::Spring(_) => t, // Springs handled separately with real time
-            // Clamped, so `peak_overshoot` is a bound rather than a hope:
-            // anything sized from it — a damage rect, most of all — would
-            // otherwise be measured for less than what gets drawn.
-            TimingFunction::Custom(f) => f(t).clamp(
-                -Self::CUSTOM_MAX_OVERSHOOT,
-                1.0 + Self::CUSTOM_MAX_OVERSHOOT,
-            ),
+            TimingFunction::Custom(f, _) => f(t),
         }
     }
 
@@ -80,7 +81,7 @@ impl TimingFunction {
     ///
     /// A [`Custom`](TimingFunction::Custom) curve is an arbitrary closure and
     /// cannot be asked, so it is **clamped** to
-    /// [`CUSTOM_MAX_OVERSHOOT`](Self::CUSTOM_MAX_OVERSHOOT) by
+    /// [`custom`](TimingFunction::custom), which samples it once, rather than by
     /// [`evaluate`](Self::evaluate) rather than merely assumed to respect it. A
     /// bound nothing enforces is not a bound: a hand-rolled bounce peaking at
     /// 1.5 would have had its damage rect measured for 1.25, leaving the ring
@@ -103,22 +104,32 @@ impl TimingFunction {
                 above.max(below)
             }
             TimingFunction::Spring(config) => config.peak_overshoot(),
-            TimingFunction::Custom(_) => Self::CUSTOM_MAX_OVERSHOOT,
+            TimingFunction::Custom(_, excursion) => *excursion,
         }
     }
 
-    /// How far past either end a [`Custom`](TimingFunction::Custom) curve is
-    /// allowed to go — past 1 at the finish, and below 0 at the start, since an
-    /// anticipation curve winds up before it moves. Generous enough for anything
-    /// written to look like a spring, and enforced rather than trusted.
-    pub const CUSTOM_MAX_OVERSHOOT: f32 = 0.25;
+    /// How many points [`custom`](TimingFunction::custom) samples a curve at to
+    /// find how far it leaves `[0, 1]`.
+    ///
+    /// Enough that a bounce or an anticipation is caught at its extreme; a curve
+    /// with a spike narrower than a 64th of its duration is not a timing curve.
+    const CUSTOM_SAMPLES: usize = 65;
 
     /// Create a custom timing function from a closure.
     pub fn custom<F>(f: F) -> Self
     where
         F: Fn(f32) -> f32 + Send + Sync + 'static,
     {
-        TimingFunction::Custom(Arc::new(f))
+        // Measured once, here, rather than clamped at every evaluation: the
+        // curve keeps whatever shape it was written with, and `peak_overshoot`
+        // reports what that shape actually does instead of a constant everyone
+        // has to be held to.
+        let mut excursion = 0.0f32;
+        for i in 0..Self::CUSTOM_SAMPLES {
+            let v = f(i as f32 / (Self::CUSTOM_SAMPLES - 1) as f32);
+            excursion = excursion.max(v - 1.0).max(-v);
+        }
+        TimingFunction::Custom(Arc::new(f), excursion.max(0.0))
     }
 }
 
@@ -133,7 +144,7 @@ impl std::fmt::Debug for TimingFunction {
                 write!(f, "CubicBezier({}, {}, {}, {})", x1, y1, x2, y2)
             }
             TimingFunction::Spring(config) => write!(f, "Spring({:?})", config),
-            TimingFunction::Custom(_) => write!(f, "Custom"),
+            TimingFunction::Custom(_, excursion) => write!(f, "Custom(±{excursion})"),
         }
     }
 }
@@ -225,24 +236,38 @@ mod overshoot_bound_tests {
     /// what `peak_overshoot` reports is a bound and not a hope. Anything sized
     /// from that number — the damage rect an elevation shadow needs, above all —
     /// would otherwise be measured for less than what is drawn.
+    /// A custom curve keeps the shape it was written with, and reports what that
+    /// shape actually does. Clamping it to a constant instead would have made the
+    /// bound true by shortening every hand-rolled bounce, silently.
     #[test]
-    fn a_custom_curve_cannot_exceed_the_allowance_it_is_credited_with() {
-        let allowance = TimingFunction::CUSTOM_MAX_OVERSHOOT;
-        // Overshooting at the end, and anticipating at the start: a bound that
-        // holds only above 1 is not a bound, and every "wind up first" easing
-        // dips below 0.
-        let overzealous = TimingFunction::custom(|t| t * 2.0 - 0.5);
+    fn a_custom_curve_is_measured_rather_than_clamped() {
+        // Overshoots at the end and anticipates at the start: a bound that holds
+        // only above 1 is not a bound, and every "wind up first" easing dips
+        // below 0.
+        let curve = TimingFunction::custom(|t| t * 2.0 - 0.5);
+
+        assert_eq!(curve.evaluate(1.0), 1.5, "the curve is left alone");
+        assert_eq!(curve.evaluate(0.0), -0.5);
+
+        // …and its bound is the larger of the two excursions, measured.
+        assert!((curve.peak_overshoot() - 0.5).abs() < 1e-5);
 
         for step in 0..=100 {
             let t = step as f32 / 100.0;
-            let v = overzealous.evaluate(t);
+            let v = curve.evaluate(t);
+            let bound = curve.peak_overshoot();
             assert!(
-                v <= 1.0 + allowance + 1e-6 && v >= -allowance - 1e-6,
-                "t = {t} evaluated to {v}, outside the bound"
+                v <= 1.0 + bound + 1e-4 && v >= -bound - 1e-4,
+                "t = {t} evaluated to {v}, outside the bound it reports"
             );
         }
-        assert_eq!(overzealous.evaluate(1.0), 1.0 + allowance, "and reaches it");
-        assert_eq!(overzealous.evaluate(0.0), -allowance, "at both ends");
+    }
+
+    /// An ordinary custom ease reports nothing, so it costs nothing downstream.
+    #[test]
+    fn a_custom_curve_that_only_eases_reports_no_excursion() {
+        let eased = TimingFunction::custom(|t| t * t);
+        assert_eq!(eased.peak_overshoot(), 0.0);
     }
 
     /// The curves that only ease report nothing, and a bezier reports its own

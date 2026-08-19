@@ -38,6 +38,16 @@ impl Backdrop {
 }
 
 impl WaylandState {
+    /// Whether publishing a blur region can do anything at all.
+    ///
+    /// Asked *before* building one: on a compositor without
+    /// `ext-background-effect-v1` — most of them — `sync_blur_region` would
+    /// return at its first line, after the caller had already walked the frame's
+    /// whole command list to hand it something to ignore.
+    pub(crate) fn supports_blur_region(&self) -> bool {
+        self.backdrop.bg_effect_supports_blur && self.backdrop.bg_effect_manager.is_some()
+    }
+
     /// Push a surface's blur region to the compositor if it changed.
     ///
     /// The `set_blur_region` request is double-buffered: with `commit: false`
@@ -51,16 +61,6 @@ impl WaylandState {
     /// an *empty* region, never NULL: NULL only withdraws our opinion and
     /// lets such a rule blur the whole surface, where an empty region says
     /// "blur exactly nothing".
-    /// Whether publishing a blur region can do anything at all.
-    ///
-    /// Asked *before* building one: on a compositor without
-    /// `ext-background-effect-v1` — most of them — `sync_blur_region` would
-    /// return at its first line, after the caller had already walked the frame's
-    /// whole command list to hand it something to ignore.
-    pub(crate) fn supports_blur_region(&self) -> bool {
-        self.backdrop.bg_effect_supports_blur && self.backdrop.bg_effect_manager.is_some()
-    }
-
     pub(crate) fn sync_blur_region(
         &mut self,
         id: SurfaceId,

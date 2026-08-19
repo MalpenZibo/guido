@@ -196,7 +196,7 @@ impl From<[i32; 4]> for Margin {
 ///   final-size surface.
 /// - On an axis anchored to both screen edges the compositor owns the
 ///   size; `Content` there is ignored with a warning at creation.
-/// - An exclusive zone of [`ExclusiveZone::FollowHeight`] follows content
+/// - An exclusive zone of [`ExclusiveZone::Auto`] follows content
 ///   resizes; every other policy never moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceExtent {
@@ -219,8 +219,9 @@ pub(crate) fn compositor_owned_axes(anchor: Anchor) -> (bool, bool) {
 }
 
 /// Warn about a `content()` axis the compositor owns, which can never take
-/// effect. Shared so the creation path and `SurfaceHandle::set_size` cannot
-/// disagree about what is worth saying.
+/// effect. For the creation path, where the *other* axis is usually just the
+/// default nobody chose — a bar declares its height and leaves the width alone —
+/// so a warning about a `Fixed` one there would be noise.
 pub(crate) fn warn_content_on_stretched_axis(id: SurfaceId, config: &SurfaceConfig) {
     let (stretch_w, stretch_h) = compositor_owned_axes(config.anchor);
     if (stretch_w && config.width.is_content()) || (stretch_h && config.height.is_content()) {
@@ -228,6 +229,31 @@ pub(crate) fn warn_content_on_stretched_axis(id: SurfaceId, config: &SurfaceConf
             "Surface {id:?}: content() sizing on an axis anchored to both screen \
              edges is compositor-owned and will be ignored"
         );
+    }
+}
+
+/// The same for a size asked for at runtime, where every value is one the caller
+/// chose — so a `Fixed` one being discarded is worth saying too. Silently
+/// dropping a number somebody passed is the failure mode this exists for.
+pub(crate) fn warn_size_request_on_stretched_axis(id: SurfaceId, config: &SurfaceConfig) {
+    let (stretch_w, stretch_h) = compositor_owned_axes(config.anchor);
+    for (stretched, extent, axis) in [
+        (stretch_w, config.width, "width"),
+        (stretch_h, config.height, "height"),
+    ] {
+        if !stretched {
+            continue;
+        }
+        match extent {
+            SurfaceExtent::Content => log::warn!(
+                "Surface {id:?}: content() {axis} on an axis anchored to both \
+                 screen edges is compositor-owned and will be ignored"
+            ),
+            SurfaceExtent::Fixed(v) => log::warn!(
+                "Surface {id:?}: {axis} of {v} on an axis anchored to both screen \
+                 edges is compositor-owned and will be ignored"
+            ),
+        }
     }
 }
 
@@ -245,35 +271,40 @@ pub(crate) fn requested_extent(extent: SurfaceExtent, live: Option<u32>) -> u32 
     }
 }
 
-/// What a runtime resize asks the compositor for, and whether the surface has
-/// to be re-measured before that answer is right.
+/// What a resize asks the compositor for, and whether the surface has to be
+/// re-measured before that answer is right.
 ///
 /// A content axis has no size of its own yet — `SurfaceExtent::initial()` is
 /// 1px — so asking for it directly collapses the surface, and nothing brings it
 /// back: the content-measure pass runs only for a surface that had layout
 /// activity, and a bare `set_size` produces none. So a content axis holds the
-/// live size and asks for a layout, which is what brings the measure round.
+/// confirmed size and asks for a layout, which is what brings the measure round.
 pub(crate) fn resize_request(config: &SurfaceConfig, live: Option<(u32, u32)>) -> (u32, u32, bool) {
-    // Zero on an axis the compositor owns is how layer-shell says "you decide",
-    // and it is not optional: `zwlr_layer_surface_v1::set_size` makes omitting a
-    // dimension *without* opposite-edge anchoring a protocol error, and sending
-    // a number *with* it hands back an axis that is not ours. Either way the
-    // anchor decides, so anything that moves the anchor has to come back through
-    // here — the connection is closed at the next commit otherwise, and every
-    // frame commits.
-    let (stretch_w, stretch_h) = compositor_owned_axes(config.anchor);
+    let (width, height) = honour_owned_axes(
+        config.anchor,
+        requested_extent(config.width, live.map(|(w, _)| w)),
+        requested_extent(config.height, live.map(|(_, h)| h)),
+    );
     (
-        if stretch_w {
-            0
-        } else {
-            requested_extent(config.width, live.map(|(w, _)| w))
-        },
-        if stretch_h {
-            0
-        } else {
-            requested_extent(config.height, live.map(|(_, h)| h))
-        },
+        width,
+        height,
         config.width.is_content() || config.height.is_content(),
+    )
+}
+
+/// Zero the axes the compositor owns, whatever size was going to be asked for.
+///
+/// Zero on such an axis is how layer-shell says "you decide", and it is not
+/// optional: `zwlr_layer_surface_v1::set_size` makes omitting a dimension
+/// *without* opposite-edge anchoring a protocol error, and sending a number
+/// *with* it hands back an axis that is not ours. The anchor decides, so every
+/// path that sends a size comes through here — creation, a runtime resize, a
+/// re-anchoring, and the content-measure pass.
+pub(crate) fn honour_owned_axes(anchor: Anchor, width: u32, height: u32) -> (u32, u32) {
+    let (stretch_w, stretch_h) = compositor_owned_axes(anchor);
+    (
+        if stretch_w { 0 } else { width },
+        if stretch_h { 0 } else { height },
     )
 }
 

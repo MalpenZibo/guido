@@ -373,12 +373,16 @@ pub struct Container {
     pub(super) overflow: Option<Signal<Overflow>>,
     /// What `overflow` resolved to in the last layout or paint.
     ///
-    /// Event dispatch needs it — a clipped child must not answer for a click
-    /// outside the bounds — but it needs the value the *drawn* frame used, and
-    /// it needs it without running application code: a closure-backed signal
-    /// recomputes on every read, and this one would be read for every container
-    /// on the pointer's path, on every coalesced MouseMove. The tracked reads
-    /// that do subscribe write here on their way past.
+    /// Event dispatch needs the value the *drawn* frame used, not the current
+    /// one: it tests against `hit.bounds`, which come from the last layout, and
+    /// a clip that disagreed with the box it is clipping would answer for a
+    /// point the geometry says nothing about. The tracked reads that do
+    /// subscribe write here on their way past.
+    ///
+    /// It is also cheaper than re-reading a closure-backed signal for every
+    /// container under the pointer on every coalesced `MouseMove` — but only
+    /// one such read of several on that path, so that is a bonus rather than
+    /// the reason.
     pub(super) overflow_resolved: Cell<Overflow>,
     pub(super) visible: Option<Signal<bool>>,
     pub(super) transform: Option<Signal<Transform>>,
@@ -504,8 +508,8 @@ impl Container {
         self
     }
 
-    /// Add a single child: a widget value, or [`dynamic(data, build)`](crate::widgets::dynamic)
-    /// for reactive content.
+    /// Add a single child: a widget value, or a closure returning one for
+    /// reactive content.
     pub fn child<M>(mut self, child: impl IntoChild<M>) -> Self {
         child.add_to_container(&mut self.children_source);
         self
@@ -727,7 +731,8 @@ impl Container {
     ///     .background(Color::rgba(0.1, 0.1, 0.15, 0.6))
     /// ```
     ///
-    /// Restrict it with [`BackdropSources`] when only one side should soften.
+    /// Restrict it with [`BackdropSources`](crate::backdrop::BackdropSources) when
+    /// only one side should soften.
     /// The compositor side needs `ext-background-effect-v1` — check
     /// [`compositor_effects()`](crate::compositor::compositor_effects) — and
     /// carries no radius of its own; the compositor picks one.
