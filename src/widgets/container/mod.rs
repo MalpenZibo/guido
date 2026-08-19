@@ -18,6 +18,7 @@ pub use ripple::{MAX_LIVE_RIPPLES, Ripple, RippleState};
 use style::Decoration;
 
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::advance_anim;
@@ -370,6 +371,15 @@ pub struct Container {
     pub(super) width: Option<Signal<Length>>,
     pub(super) height: Option<Signal<Length>>,
     pub(super) overflow: Option<Signal<Overflow>>,
+    /// What `overflow` resolved to in the last layout or paint.
+    ///
+    /// Event dispatch needs it — a clipped child must not answer for a click
+    /// outside the bounds — but it needs the value the *drawn* frame used, and
+    /// it needs it without running application code: a closure-backed signal
+    /// recomputes on every read, and this one would be read for every container
+    /// on the pointer's path, on every coalesced MouseMove. The tracked reads
+    /// that do subscribe write here on their way past.
+    pub(super) overflow_resolved: Cell<Overflow>,
     pub(super) visible: Option<Signal<bool>>,
     pub(super) transform: Option<Signal<Transform>>,
     pub(super) transform_origin: Option<Signal<TransformOrigin>>,
@@ -442,6 +452,7 @@ impl Container {
             width: None,
             height: None,
             overflow: None,
+            overflow_resolved: Cell::new(Overflow::Visible),
             visible: None,
             transform: None,
             transform_origin: None,
@@ -784,8 +795,7 @@ impl Container {
         start: impl IntoSignal<Color, M1>,
         end: impl IntoSignal<Color, M2>,
     ) -> Self {
-        let (start, end) = (start.into_signal(), end.into_signal());
-        self.gradient(move || LinearGradient::horizontal(start.get(), end.get()))
+        self.gradient_between(start, end, GradientDirection::Horizontal)
     }
 
     /// Convenience: vertical gradient.
@@ -794,8 +804,7 @@ impl Container {
         start: impl IntoSignal<Color, M1>,
         end: impl IntoSignal<Color, M2>,
     ) -> Self {
-        let (start, end) = (start.into_signal(), end.into_signal());
-        self.gradient(move || LinearGradient::vertical(start.get(), end.get()))
+        self.gradient_between(start, end, GradientDirection::Vertical)
     }
 
     /// Convenience: diagonal gradient, top-left to bottom-right.
@@ -804,10 +813,24 @@ impl Container {
         start: impl IntoSignal<Color, M1>,
         end: impl IntoSignal<Color, M2>,
     ) -> Self {
+        self.gradient_between(start, end, GradientDirection::Diagonal)
+    }
+
+    /// The three shorthands above, which differ only in the direction.
+    ///
+    /// Two constant endpoints — much the commonest case — build one constant
+    /// gradient rather than a derived recomputing a value that cannot change.
+    fn gradient_between<M1, M2>(
+        self,
+        start: impl IntoSignal<Color, M1>,
+        end: impl IntoSignal<Color, M2>,
+        direction: GradientDirection,
+    ) -> Self {
         let (start, end) = (start.into_signal(), end.into_signal());
-        self.gradient(move || {
-            LinearGradient::new(start.get(), end.get(), GradientDirection::Diagonal)
-        })
+        match (start.constant(), end.constant()) {
+            (Some(start), Some(end)) => self.gradient(LinearGradient::new(start, end, direction)),
+            _ => self.gradient(move || LinearGradient::new(start.get(), end.get(), direction)),
+        }
     }
 
     /// Set the width of the container.
@@ -824,7 +847,12 @@ impl Container {
 
     /// Set the overflow behaviour for content that exceeds the container bounds.
     pub fn overflow<M>(mut self, overflow: impl IntoSignal<Overflow, M>) -> Self {
-        self.overflow = Some(overflow.into_signal());
+        let signal = overflow.into_signal();
+        // Seed the cache the event path reads, so a container declared clipped
+        // is clipped for the first event too, without depending on a layout
+        // having run first.
+        self.overflow_resolved.set(signal.get_untracked());
+        self.overflow = Some(signal);
         self
     }
 
@@ -1631,7 +1659,7 @@ impl Widget for Container {
         // Children clipped away by hidden overflow or scrolling are invisible,
         // and an invisible child must not steal a click from a sibling drawn
         // below it (a collapsed submenu used to do exactly that).
-        let clips_children = self.overflow.get_or(Overflow::Visible) == Overflow::Hidden
+        let clips_children = self.overflow_resolved.get() == Overflow::Hidden
             || self.scroll_axis != ScrollAxis::None;
         let skip_child_dispatch = clips_children
             && local_event
@@ -1693,6 +1721,7 @@ impl Widget for Container {
                 self.overflow.get_or(Overflow::Visible),
             )
         });
+        self.overflow_resolved.set(overflow);
 
         self.resync_animation_targets(id);
 

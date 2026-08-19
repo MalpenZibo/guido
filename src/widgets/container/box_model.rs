@@ -109,6 +109,10 @@ impl Container {
             height.exact = Some((constraints.max_height * f).max(0.0));
         }
 
+        // Event dispatch reads the resolved value from here rather than from
+        // the signal, so it costs nothing on the pointer path.
+        self.overflow_resolved.set(overflow);
+
         BoxLengths {
             padding,
             width,

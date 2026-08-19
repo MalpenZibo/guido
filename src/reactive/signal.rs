@@ -174,6 +174,15 @@ impl<T: Clone + 'static> Signal<T> {
         tracked_with(self.id, self.kind, f)
     }
 
+    /// The value, if this signal is one that can never change.
+    ///
+    /// A `create_stored` signal is a constant behind a signal-shaped handle, so
+    /// a builder handed one can take the cheap path — build one constant rather
+    /// than a derived that recomputes a value that will always be the same.
+    pub(crate) fn constant(&self) -> Option<T> {
+        matches!(self.kind, SignalKind::Stored).then(|| get_stored_value(self.id))
+    }
+
     /// Borrow the value without tracking
     pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         match self.kind {

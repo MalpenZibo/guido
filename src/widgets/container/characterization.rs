@@ -1536,6 +1536,25 @@ fn a_gradient_is_reactive_and_paint_only() {
     assert_eq!(gradient_ends(&h.paint()), Some((Color::BLUE, Color::CYAN)));
 }
 
+/// Two constant endpoints must not cost a derived that boxes a closure and
+/// recomputes, every read, a value that cannot change.
+#[test]
+fn a_constant_gradient_shorthand_stays_constant() {
+    let constant = container().gradient_vertical(Color::RED, Color::BLUE);
+    assert_eq!(
+        constant.gradient.and_then(|g| g.constant()),
+        Some(LinearGradient::vertical(Color::RED, Color::BLUE)),
+        "two constants make one constant"
+    );
+
+    let end = create_signal(Color::GREEN);
+    let reactive = container().gradient_vertical(Color::RED, end);
+    assert!(
+        reactive.gradient.expect("declared").constant().is_none(),
+        "a reactive endpoint has to stay reactive"
+    );
+}
+
 /// The endpoints are reactive on their own, so the common case needs no
 /// closure building a whole gradient.
 #[test]
@@ -1851,4 +1870,89 @@ fn a_border_appears_when_its_colour_does() {
 
     visible.set(true);
     assert_eq!(borders(&h.paint()), vec![(2.0, Color::RED)]);
+}
+
+/// A clipped child is invisible, and an invisible child must not answer for a
+/// click landing outside its parent's bounds.
+///
+/// Content overflows by *summing*: each child answers to the parent's maximum,
+/// their row does not. So the second pill sits beyond the parent's right edge.
+fn clip_host(clipped: Signal<bool>, clicked: RwSignal<i32>) -> Container {
+    container()
+        .width(40.0)
+        .height(20.0)
+        .layout(Flex::row())
+        .overflow(move || {
+            if clipped.get() {
+                Overflow::Hidden
+            } else {
+                Overflow::Visible
+            }
+        })
+        .child(box_of(40.0, 20.0))
+        .child(
+            container()
+                .width(40.0)
+                .height(20.0)
+                .on_click(move || clicked.update(|c| *c += 1)),
+        )
+}
+
+#[test]
+fn hidden_overflow_stops_events_reaching_a_clipped_child() {
+    let clicked = create_signal(0);
+    let clipped = create_signal(true);
+    let mut h = H::new(clip_host(clipped.into(), clicked));
+    h.fit(500.0, 500.0);
+    h.paint();
+
+    // x = 60 is inside the second pill and outside the clipping parent.
+    for event in click_at(60.0, 10.0) {
+        h.send(event);
+    }
+    assert_eq!(clicked.get_untracked(), 0, "clipped away, so not clickable");
+
+    clipped.set(false);
+    pump(&mut h);
+    h.fit(500.0, 500.0);
+    h.paint();
+
+    for event in click_at(60.0, 10.0) {
+        h.send(event);
+    }
+    assert_eq!(clicked.get_untracked(), 1, "unclipped, so clickable");
+}
+
+/// Events resolve against the frame on screen, not against the frame about to
+/// be drawn: the pointer is aimed at what the user can see. `hit.bounds` already
+/// come from the last layout, and the clip has to agree with them — which is
+/// also why the event path reads a cached value rather than running the
+/// container's own closure once per container per coalesced MouseMove.
+#[test]
+fn events_use_the_clip_of_the_frame_on_screen() {
+    let clicked = create_signal(0);
+    let clipped = create_signal(false);
+    let mut h = H::new(clip_host(clipped.into(), clicked));
+    h.fit(500.0, 500.0);
+    h.paint();
+
+    // The signal flips, but nothing has been laid out or drawn since.
+    clipped.set(true);
+    for event in click_at(60.0, 10.0) {
+        h.send(event);
+    }
+    assert_eq!(
+        clicked.get_untracked(),
+        1,
+        "the pill the user can see is still clickable"
+    );
+
+    // Once the clip is on screen, it applies.
+    pump(&mut h);
+    h.fit(500.0, 500.0);
+    h.paint();
+    for event in click_at(60.0, 10.0) {
+        h.send(event);
+    }
+    assert_eq!(clicked.get_untracked(), 1);
 }

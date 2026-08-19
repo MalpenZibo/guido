@@ -134,31 +134,40 @@ where
     Fut: Future<Output = ()> + Send + 'static,
 {
     let (tx, rx) = mpsc::unbounded_channel();
-    let running = Arc::new(AtomicBool::new(true));
-    let running_for_cleanup = running.clone();
-
-    let ctx = ServiceContext { running };
-    let handle = service_runtime().spawn(f(rx, ctx));
     // The channel lives in the arena so the handle can be Copy
     let sender = create_stored(tx);
+    spawn_owned(|ctx| f(rx, ctx));
+    Service { sender }
+}
 
-    // Register cleanup to stop the task when component unmounts.
-    // Setting is_running to false allows graceful shutdown, while abort()
-    // cancels the task at its next .await point for fast cleanup — this
-    // prevents stale WriteSignal writes after an App restart.
+/// Spawn a future on the service runtime, owned by the current scope.
+///
+/// The half both [`create_service`] and [`create_task`] need: the context, the
+/// spawn, and the cleanup that stops it. Setting `is_running` to false allows a
+/// graceful shutdown, while `abort()` cancels the task at its next `.await` for
+/// fast cleanup — which is what keeps a `WriteSignal` from writing after an App
+/// restart.
+fn spawn_owned<F, Fut>(f: F)
+where
+    F: FnOnce(ServiceContext) -> Fut,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    let running = Arc::new(AtomicBool::new(true));
+    let running_for_cleanup = running.clone();
+    let handle = service_runtime().spawn(f(ServiceContext { running }));
+
     on_cleanup(move || {
         running_for_cleanup.store(false, Ordering::SeqCst);
         handle.abort();
     });
-
-    Service { sender }
 }
 
 /// Create a background task tied to the current Owner.
 ///
 /// The half of [`create_service`] that only pushes: no commands, so no
-/// receiver, no command type to name, and no handle to keep. It is aborted
-/// when the scope that created it is disposed, exactly as a service is.
+/// receiver, no command type to name, no channel allocated and no handle to
+/// keep. It is aborted when the scope that created it is disposed, exactly as a
+/// service is.
 ///
 /// ```ignore
 /// let time = create_signal(String::new());
@@ -176,7 +185,11 @@ where
     F: FnOnce(ServiceContext) -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
-    create_service::<(), _, _>(move |_rx, ctx| f(ctx));
+    // Not `create_service::<(), _, _>`: that would allocate a channel whose
+    // receiver is dropped at the first poll, and park its sender in an arena
+    // slot held until the scope is disposed. A status bar's dozen push-only
+    // tasks are a dozen dead channels.
+    spawn_owned(f);
 }
 
 /// Get a runtime handle for spawning service tasks.
@@ -244,6 +257,37 @@ mod tests {
         }
         assert_eq!(received.load(Ordering::SeqCst), 5);
 
+        dispose_owner_now(owner_id);
+    }
+
+    /// A task has nothing to receive, so it must not build the machinery for
+    /// receiving. Going through `create_service::<(), _, _>` allocated a channel
+    /// whose receiver died at the first poll and parked its sender in an arena
+    /// slot held until disposal — a dozen push-only tasks, a dozen dead
+    /// channels.
+    #[test]
+    fn a_task_allocates_no_channel() {
+        let before = crate::reactive::storage::slot_count();
+        let (_, owner_id) = with_owner(|| {
+            create_task(|ctx| async move {
+                let _ = ctx.is_running();
+            });
+        });
+        assert_eq!(
+            crate::reactive::storage::slot_count(),
+            before,
+            "a task must claim no arena slot"
+        );
+        dispose_owner_now(owner_id);
+
+        // The service, which does have something to receive, still claims one.
+        let before = crate::reactive::storage::slot_count();
+        let (_, owner_id) = with_owner(|| {
+            create_service::<i32, _, _>(|mut rx, _ctx| async move {
+                let _ = rx.recv().await;
+            })
+        });
+        assert!(crate::reactive::storage::slot_count() > before);
         dispose_owner_now(owner_id);
     }
 

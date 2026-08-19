@@ -348,6 +348,13 @@ fn downcast_cell<T: 'static>(rc: &Rc<dyn Any>, id: SignalId) -> &RefCell<T> {
 /// Reset all signal storage.
 ///
 /// Called during `App::drop()` to wipe all stored signal values.
+/// How many signal slots storage currently holds. Test-only: the cost of a
+/// primitive is only assertable against a number.
+#[cfg(test)]
+pub(crate) fn slot_count() -> usize {
+    STORAGE.with(|storage| storage.borrow().slots.len())
+}
+
 pub(crate) fn reset_storage() {
     STORAGE.with(|s| *s.borrow_mut() = SignalStorage::new());
 }

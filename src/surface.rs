@@ -929,19 +929,44 @@ pub(crate) fn surface_commands_pending() -> bool {
 mod tests {
     use super::*;
 
-    /// The shorthands are the ones `Padding` takes, in the same order.
+    /// The doc promises "the same shorthands a `Padding` takes, in the same
+    /// order". The two types are written out separately — one holds i32 for the
+    /// protocol, the other f32 for layout — so the promise is only worth
+    /// anything if something checks it. This does, edge by edge, over every
+    /// shorthand and a set of inputs where confusing two edges shows up:
+    /// asymmetric, and non-zero everywhere.
     #[test]
-    fn margin_shorthands_follow_css_order() {
-        assert_eq!(Margin::from(8), Margin::all(8));
-        assert_eq!(
-            Margin::from([4, 12]),
-            Margin {
-                top: 4,
-                right: 12,
-                bottom: 4,
-                left: 12
-            }
+    fn a_margin_converts_exactly_as_a_padding_does() {
+        let same = |m: Margin, p: crate::widgets::Padding, what: &str| {
+            assert_eq!(m.top as f32, p.top, "{what}: top");
+            assert_eq!(m.right as f32, p.right, "{what}: right");
+            assert_eq!(m.bottom as f32, p.bottom, "{what}: bottom");
+            assert_eq!(m.left as f32, p.left, "{what}: left");
+        };
+
+        same(
+            Margin::from(8),
+            crate::widgets::Padding::from(8),
+            "one value",
         );
+        same(
+            Margin::all(8),
+            crate::widgets::Padding::all(8.0),
+            "all(), the named form",
+        );
+        same(
+            Margin::from([4, 12]),
+            crate::widgets::Padding::from([4, 12]),
+            "[vertical, horizontal]",
+        );
+        same(
+            Margin::from([1, 2, 3, 4]),
+            crate::widgets::Padding::from([1, 2, 3, 4]),
+            "[top, right, bottom, left]",
+        );
+
+        // And spelled out once, so a shared mistake in both types would still
+        // be caught: CSS order, clockwise from the top.
         assert_eq!(
             Margin::from([1, 2, 3, 4]),
             Margin {
@@ -949,6 +974,15 @@ mod tests {
                 right: 2,
                 bottom: 3,
                 left: 4
+            }
+        );
+        assert_eq!(
+            Margin::from([4, 12]),
+            Margin {
+                top: 4,
+                right: 12,
+                bottom: 4,
+                left: 12
             }
         );
     }
