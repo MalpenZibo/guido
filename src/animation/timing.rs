@@ -122,6 +122,13 @@ impl TimingFunction {
     const CUSTOM_SAMPLES: usize = 65;
 
     /// Create a custom timing function from a closure.
+    ///
+    /// The curve is sampled here, once, to find how far it leaves `[0, 1]` — so
+    /// building one costs a construction plus 65 evaluations of
+    /// the closure, around half a microsecond for a curve with a trig call in
+    /// it. Free where a curve is built once and shared, which is the usual
+    /// shape; inside a per-row builder rebuilt on every pass it is worth
+    /// hoisting, since `TimingFunction` is `Clone`.
     pub fn custom<F>(f: F) -> Self
     where
         F: Fn(f32) -> f32 + Send + Sync + 'static,

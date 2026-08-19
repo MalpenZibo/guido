@@ -365,11 +365,18 @@ impl Container {
     /// Whether a state-layer change can move an animated property — i.e.
     /// whether hovering or pressing needs an Animation job rather than a plain
     /// repaint.
+    ///
+    /// `border_width` belongs here now that a state layer's border is declared
+    /// as a pair: `when_hovered(|s| s.border(14.0, GREEN))` moves the width as
+    /// well as the colour, and without it the enter queued no Animation job at
+    /// all. The spring then started a frame late, and only if something else had
+    /// forced that paint.
     pub(super) fn has_animated_state_properties(&self) -> bool {
         self.anims.as_ref().is_some_and(|a| {
             a.background.is_some()
                 || a.corner_radius.is_some()
                 || a.elevation.is_some()
+                || a.border_width.is_some()
                 || a.border_color.is_some()
                 || a.transform.is_some()
                 || a.text_color.is_some()

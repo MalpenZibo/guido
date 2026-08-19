@@ -431,8 +431,12 @@ impl WaylandState {
         // The same rule the runtime resize uses, so creation and re-anchoring
         // cannot disagree about which axes are the compositor's.
         let (use_width, use_height, _) = crate::surface::resize_request(config, None);
-        let initial_width = config.width.initial();
-        let initial_height = config.height.initial();
+        // Before the honouring: the size the surface believes it has, and the
+        // one a reservation resolves against. Through the same helper as the
+        // request, not `SurfaceExtent::initial()`, which happens to agree today
+        // only because `requested_extent` with no configure falls back to it.
+        let initial_width = crate::surface::requested_extent(config.width, None);
+        let initial_height = crate::surface::requested_extent(config.height, None);
 
         layer_surface.set_size(use_width, use_height);
         layer_surface.set_keyboard_interactivity(config.keyboard_interactivity);

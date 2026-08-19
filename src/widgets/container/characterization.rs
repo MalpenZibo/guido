@@ -109,7 +109,7 @@ impl H {
         let node = std::rc::Rc::new(node);
         let mut commands = Vec::new();
         let mut layers = Vec::new();
-        crate::renderer::flatten_root_into(&node, &mut commands, &mut layers);
+        let _ = crate::renderer::flatten_root_into(&node, &mut commands, &mut layers);
         let blur = crate::blur::regions_from_commands(&commands);
 
         // Per child of the root and then `clear_needs_paint(root)`, which is
@@ -796,6 +796,41 @@ fn advancing_animations_does_not_report_a_missing_scope() {
     assert!(
         queued.contains(&JobType::Animation),
         "and the properties must genuinely be subscribed, got {queued:?}"
+    );
+}
+
+/// A state layer's border moves the *width* as well as the colour, because a
+/// border is declared as a pair — so "can a state change move an animated
+/// property" has to answer yes for a container that animates only the width.
+///
+/// It answered no: the list named `border_color` and not `border_width`, from
+/// when the two were declared separately and a layer really could change one
+/// alone. This PR added `elevation` to that list and left the hole next to it
+/// that it had just made reachable.
+///
+/// Asked of the predicate rather than through a hover, because a hover reaches
+/// the animation by a second route as well: the interaction flags are a signal,
+/// and paint reads the animated width under `JobType::Animation` tracking, so
+/// setting the flag queues the job anyway. That route is why nothing was visibly
+/// broken — and it is not a reason to leave the direct answer wrong, since it
+/// holds only while some paint has already subscribed.
+#[test]
+fn a_border_width_animation_counts_as_movable_by_a_state_layer() {
+    let animated = container()
+        .border(2.0, Color::BLUE)
+        .animate_border_width(Transition::spring(SpringConfig::BOUNCY))
+        .when_hovered(|s| s.border(14.0, Color::BLUE));
+    assert!(
+        animated.has_animated_state_properties(),
+        "hovering moves the width, so it needs an Animation job"
+    );
+
+    let plain = container()
+        .border(2.0, Color::BLUE)
+        .when_hovered(|s| s.border(14.0, Color::BLUE));
+    assert!(
+        !plain.has_animated_state_properties(),
+        "with nothing animated, a plain repaint is the whole job"
     );
 }
 
@@ -2054,38 +2089,53 @@ fn shadow_extent(node: &RenderNode) -> Option<f32> {
 /// say 0, while the shadow on screen is still 8 deep. Every frame of the descent
 /// drew `min(interpolated, 0.0)`: no shadow at all, for an animation that went
 /// on running and asking for frames.
+///
+/// The descent runs on a ramp no loaded runner can reach the end of, because the
+/// claim is about what is drawn *while* it falls: with a short ramp, a slow
+/// machine would finish the fall between two sleeps and the test would read the
+/// correct absence of a shadow as the bug. Arrival is checked separately, by
+/// settling rather than by a clock.
 #[test]
 fn a_falling_elevation_animates_down_instead_of_snapping() {
-    let level = create_signal(8.0f32);
-    let mut h = H::new(
-        container()
-            .width(40.0)
-            .height(40.0)
-            .background(Color::RED)
-            .elevation(move || level.get())
-            .animate_elevation(Transition::new(600.0, TimingFunction::Linear)),
-    );
+    let falling = |ramp_ms: f32| {
+        let level = create_signal(8.0f32);
+        let h = H::new(
+            container()
+                .width(40.0)
+                .height(40.0)
+                .background(Color::RED)
+                .elevation(move || level.get())
+                .animate_elevation(Transition::new(ramp_ms, TimingFunction::Linear)),
+        );
+        (h, level)
+    };
+
+    let (mut h, level) = falling(60_000.0);
     h.fit(100.0, 100.0);
-    let lifted = shadow_extent(&h.paint()).expect("a lifted card casts a shadow");
+    assert!(
+        shadow_extent(&h.paint()).is_some(),
+        "a lifted card casts a shadow"
+    );
 
     level.set(0.0);
-    pump(&mut h);
-    h.fit(100.0, 100.0);
-    h.paint();
-
-    // A third of the way down a 600ms ramp: unmistakably moving, and nowhere
-    // near gone.
-    for _ in 0..5 {
-        std::thread::sleep(std::time::Duration::from_millis(40));
+    for step in 0..5 {
+        std::thread::sleep(std::time::Duration::from_millis(4));
         pump(&mut h);
         h.fit(100.0, 100.0);
-        h.paint();
+        assert!(
+            shadow_extent(&h.paint()).is_some(),
+            "frame {step} of the descent drew no shadow at all"
+        );
     }
-    let falling = shadow_extent(&h.paint()).expect("it is still falling, not gone");
-    assert!(
-        falling < lifted,
-        "the descent has to move: {falling} vs {lifted}"
-    );
+
+    // And it does arrive, on a ramp it can finish.
+    let (mut h, level) = falling(60.0);
+    h.fit(100.0, 100.0);
+    h.paint();
+    level.set(0.0);
+    pump(&mut h);
+    settle(&mut h, 200);
+    assert_eq!(shadow_count(&h.paint()), 0, "and settles flat");
 }
 
 /// The clamp the descent above must not trip is still doing its job.
@@ -2132,7 +2182,7 @@ fn hover_flicker_cannot_push_a_shadow_outside_its_damage_rect() {
             set_hover(&mut h, inside);
             last_flip = std::time::Instant::now();
         }
-        std::thread::sleep(std::time::Duration::from_millis(6));
+        std::thread::sleep(std::time::Duration::from_millis(4));
         pump(&mut h);
         h.fit(100.0, 100.0);
         let node = h.paint();

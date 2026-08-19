@@ -130,7 +130,7 @@ impl<Cmd: 'static> Service<Cmd> {
 pub fn create_service<Cmd, F, Fut>(f: F) -> Service<Cmd>
 where
     Cmd: Send + 'static,
-    F: FnOnce(mpsc::UnboundedReceiver<Cmd>, ServiceContext) -> Fut + Send + 'static,
+    F: FnOnce(mpsc::UnboundedReceiver<Cmd>, ServiceContext) -> Fut,
     Fut: Future<Output = ()> + Send + 'static,
 {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -147,6 +147,13 @@ where
 /// graceful shutdown, while `abort()` cancels the task at its next `.await` for
 /// fast cleanup — which is what keeps a `WriteSignal` from writing after an App
 /// restart.
+/// Build the future on *this* thread and hand only the future to the runtime.
+///
+/// Which is why neither [`create_service`] nor [`create_task`] asks its factory
+/// to be `Send`: the factory runs here, so it may read whatever the caller has —
+/// a `Signal`, an `Rc` — as long as only owned data crosses into the `async`
+/// block. Both of them used to demand it anyway, which rejected exactly the
+/// idiom their own documentation shows.
 fn spawn_owned<F, Fut>(f: F)
 where
     F: FnOnce(ServiceContext) -> Fut,
@@ -182,7 +189,7 @@ where
 /// ```
 pub fn create_task<F, Fut>(f: F)
 where
-    F: FnOnce(ServiceContext) -> Fut + Send + 'static,
+    F: FnOnce(ServiceContext) -> Fut,
     Fut: Future<Output = ()> + Send + 'static,
 {
     // Not `create_service::<(), _, _>`: that would allocate a channel whose
@@ -391,5 +398,33 @@ mod tests {
         assert_eq!(received.load(Ordering::SeqCst), 12);
 
         dispose_owner_now(owner_id);
+    }
+}
+
+#[cfg(test)]
+mod factory_bounds {
+    use super::*;
+
+    /// Compile-time only: the factory runs on the calling thread, so it may
+    /// capture something that could never cross to the runtime. Nothing calls
+    /// this — spawning would want a scope and a runtime, and the claim is about
+    /// what type-checks.
+    #[allow(dead_code)]
+    fn a_factory_may_read_a_non_send_value() {
+        let local = std::rc::Rc::new(7u8);
+        create_task(move |_ctx| {
+            let owned = *local;
+            async move {
+                let _ = owned;
+            }
+        });
+
+        let local = std::rc::Rc::new(9u8);
+        let _service = create_service::<(), _, _>(move |_rx, _ctx| {
+            let owned = *local;
+            async move {
+                let _ = owned;
+            }
+        });
     }
 }

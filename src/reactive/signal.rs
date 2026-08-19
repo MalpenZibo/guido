@@ -1,10 +1,11 @@
 use std::marker::PhantomData;
 
 use super::diagnostics::{check_reactive_scope, snapshot_zone};
-use super::invalidation::{notify_signal_change, record_signal_read};
+use super::invalidation::{notify_signal_change, record_signal_read, suspend_widget_tracking};
 use super::owner::register_signal;
 use super::runtime::{
-    SignalId, current_write_epoch, notify_write, queue_bg_write, record_effect_read, with_runtime,
+    SignalId, current_write_epoch, notify_write, queue_bg_write, record_effect_read,
+    suspend_effect_tracking, with_runtime,
 };
 use super::storage::{
     allocate_signal_slot, compare_and_set_signal_value, compare_and_update_signal_value,
@@ -158,13 +159,26 @@ impl<T: Clone + 'static> Signal<T> {
         tracked_get(self.id, self.kind)
     }
 
-    /// Get the current value without tracking
+    /// Get the current value without tracking.
+    ///
+    /// Untracked all the way down for a derived one: its closure runs with the
+    /// widget and effect scopes suspended, the same three-part suspension
+    /// [`create_memo`](crate::reactive::create_memo) seeds itself with. The
+    /// diagnostic zone alone was not it — in release it compiles to nothing, so
+    /// every signal the closure read was still recorded against whatever
+    /// happened to be tracking. A `get_untracked` inside a dynamic-children
+    /// closure therefore subscribed the *parent's children list* to it, and
+    /// writing it rebuilt the whole list where a repaint was the work.
     pub fn get_untracked(&self) -> T {
         match self.kind {
             SignalKind::Stored => get_stored_value(self.id),
             // The caller asked for a snapshot; the closure's own reads are
             // part of that snapshot and must not be reported either
-            SignalKind::Derived => snapshot_zone(|| try_call_derived::<T>(self.id).unwrap()),
+            SignalKind::Derived => snapshot_zone(|| {
+                suspend_widget_tracking(|| {
+                    suspend_effect_tracking(|| try_call_derived::<T>(self.id).unwrap())
+                })
+            }),
             SignalKind::Mutable => get_signal_value(self.id),
         }
     }

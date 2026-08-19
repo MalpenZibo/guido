@@ -452,6 +452,50 @@ mod tests {
         });
     }
 
+    /// `get_untracked` has to be untracked for a *derived* signal too. Its
+    /// closure runs somewhere, and where it ran was inside whatever scope the
+    /// caller happened to be in: the diagnostic snapshot zone around it is
+    /// compiled away in release and never suppressed the recording.
+    ///
+    /// The cost is not a stale value but the wrong granularity — a read inside a
+    /// dynamic-children closure subscribed the parent's *children list*, so
+    /// writing it rebuilt every row where a repaint was the whole job.
+    #[test]
+    fn an_untracked_read_of_a_derived_subscribes_nobody() {
+        use crate::reactive::{create_derived, create_signal};
+
+        let subscribed = |wid: WidgetId| {
+            REGISTRY.with(|reg| {
+                reg.borrow()
+                    .widget_to_signals
+                    .get(&wid)
+                    .is_some_and(|signals| !signals.is_empty())
+            })
+        };
+
+        let inner = create_signal(1i32);
+        let derived = create_derived(move || inner.get() + 1);
+
+        let untracked = widget_id(500);
+        with_signal_tracking(untracked, JobType::Paint, || {
+            assert_eq!(derived.get_untracked(), 2);
+        });
+        assert!(
+            !subscribed(untracked),
+            "an untracked read must leave the scope holding nothing"
+        );
+
+        // The control: the same read, asked for by its tracking name.
+        let tracked = widget_id(501);
+        with_signal_tracking(tracked, JobType::Paint, || {
+            assert_eq!(derived.get(), 2);
+        });
+        assert!(
+            subscribed(tracked),
+            "and a tracked one still has to subscribe, or the test proves nothing"
+        );
+    }
+
     #[test]
     fn test_with_signal_tracking_registers_subscriber() {
         let wid = widget_id(300);
