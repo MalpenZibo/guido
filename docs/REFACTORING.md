@@ -68,6 +68,51 @@ Also: `create_task` for the very common push-only service, `keyed()` accepting
 any `Hash` key rather than insisting on a `u64`, and `#[prop(default = expr)]`
 unquoted, which is what makes a string literal spellable as a default.
 
+### What making a property reactive costs
+
+Review of the branch found seven real bugs, and six of them are the same bug:
+**a consumer written for a value that could not move.** Worth recording,
+because the next property to become reactive will meet it again.
+
+While `gradient`, `backdrop_blur`, `overflow` and `elevation` were constants,
+their interactions were settled in the builder chain and visible statically. A
+gradient that dropped the shadow was an authoring mistake you made once and saw.
+An elevation table read with `level as i32` was exact, because the only levels
+that ever arrived were the six integers. A `border_width` with no colour was a
+line you would not write. Once a signal can move any of these between frames,
+each becomes a case the paint gate has to handle *at every frame*, and the ones
+that only misbehave in the fractions or in one branch are invisible until
+something animates through them.
+
+The specific shapes, all fixed with tests:
+
+- **A gate on one half of a pair.** `backdrop_blur`'s surface path checked
+  `radius > 0.0`; its compositor path never did, and the region registry had no
+  withdrawal — so "0.0 means off" held for the half with a draw command and not
+  for the half with a side effect.
+- **A quantized consumer.** `elevation_to_shadow` truncated to an integer, which
+  is a staircase under animation and, where the table met the formula that
+  continues it, not even monotonic.
+- **A branch that forgets a sibling property.** The gradient path drew and
+  returned without consulting the elevation; reachable by signal, mid-animation.
+- **A default that is invisible rather than absent.** `border_color` defaults to
+  transparent, so gating the frame on the width alone emitted an invisible
+  command every frame once `border_width` became separately spellable.
+- **A read on the pointer path.** A closure-backed signal recomputes on every
+  read, and `overflow` was read during event dispatch — for every container
+  under the pointer, on every coalesced `MouseMove`. The tracked reads in layout
+  and paint publish what they resolved, and dispatch reads that; which is also
+  the more correct value, since events resolve against the frame on screen, as
+  `hit.bounds` already do.
+- **A request that outruns the round trip.** `set_surface_size` only sends a
+  protocol request; the size arrives back in `configure`. An `Auto` exclusive
+  zone resolved against the stale value reserved for the size the surface was
+  leaving.
+
+The seventh was independent: widening `keyed()` from `u64` to any `Hash` while
+the reconciler still indexed by a 64-bit hash of the key, so two colliding keys
+became one row.
+
 The documentation was audited against the code in the same pass. It described
 `.children_dyn()`, `.padding_horizontal()`, `.min_width()`, `.gradient_diagonal()`
 and `.animate_elevation()`, none of which existed; `Row` and `Column` widgets,
