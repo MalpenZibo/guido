@@ -92,11 +92,19 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         if let Some(prop_attr) = prop_attr
             && let Meta::List(meta_list) = &prop_attr.meta
         {
-            let nested = meta_list
-                .parse_args_with(
-                    syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
-                )
-                .unwrap_or_default();
+            // Reported, not swallowed. An unparseable list used to yield an
+            // empty one, so a `#[prop(...)]` with a typo in it compiled as a
+            // plain `Signal<T>` with `Default::default()` — taking `callback`,
+            // `children` and `slot` on the same attribute down with it, and
+            // leaving a component silently unwired instead of failing to build.
+            // `default` now takes a raw expression, which is a great deal easier
+            // to write wrong than the string it used to be.
+            let nested = match meta_list.parse_args_with(
+                syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
+            ) {
+                Ok(nested) => nested,
+                Err(err) => return err.to_compile_error().into(),
+            };
 
             for meta in &nested {
                 if meta.path().is_ident("callback") {

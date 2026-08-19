@@ -150,6 +150,19 @@ pub struct Signal<T> {
     _not_send: PhantomData<*const ()>,
 }
 
+/// Run a derived signal's closure with nothing listening.
+///
+/// One place, because there are two callers and they were not the same: the
+/// diagnostic zone alone is compiled away in release, so a `with_untracked` that
+/// had only that still recorded every signal the closure read against whatever
+/// happened to be tracking. Two sister functions with different contracts is
+/// worse than either contract.
+fn untracked_derived<T: Clone + 'static>(id: SignalId) -> T {
+    snapshot_zone(|| {
+        suspend_widget_tracking(|| suspend_effect_tracking(|| try_call_derived::<T>(id).unwrap()))
+    })
+}
+
 impl_signal_id_traits!(Signal);
 
 impl<T: Clone + 'static> Signal<T> {
@@ -174,11 +187,7 @@ impl<T: Clone + 'static> Signal<T> {
             SignalKind::Stored => get_stored_value(self.id),
             // The caller asked for a snapshot; the closure's own reads are
             // part of that snapshot and must not be reported either
-            SignalKind::Derived => snapshot_zone(|| {
-                suspend_widget_tracking(|| {
-                    suspend_effect_tracking(|| try_call_derived::<T>(self.id).unwrap())
-                })
-            }),
+            SignalKind::Derived => untracked_derived::<T>(self.id),
             SignalKind::Mutable => get_signal_value(self.id),
         }
     }
@@ -198,12 +207,17 @@ impl<T: Clone + 'static> Signal<T> {
         matches!(self.kind, SignalKind::Stored).then(|| get_stored_value(self.id))
     }
 
-    /// Borrow the value without tracking
+    /// Borrow the value without tracking.
+    ///
+    /// The borrowing half of [`get_untracked`](Self::get_untracked), suspended
+    /// the same three ways for the same reason: a derived signal's closure runs
+    /// somewhere, and unsuspended it runs inside whatever scope the caller was
+    /// in.
     pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         match self.kind {
             SignalKind::Stored => with_stored_value(self.id, f),
             SignalKind::Derived => {
-                let val = snapshot_zone(|| try_call_derived::<T>(self.id).unwrap());
+                let val = untracked_derived::<T>(self.id);
                 f(&val)
             }
             SignalKind::Mutable => with_signal_value(self.id, f),

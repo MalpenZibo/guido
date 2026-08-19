@@ -44,7 +44,6 @@ pub enum TimingFunction {
     CubicBezier(f32, f32, f32, f32),
     /// Spring physics simulation (can overshoot)
     Spring(SpringConfig),
-    /// Custom timing function
     /// Custom timing function, with how far it was measured to leave `[0, 1]`.
     ///
     /// The excursion is sampled once by [`custom`](TimingFunction::custom) and

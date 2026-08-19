@@ -149,33 +149,40 @@ impl WaylandSurfaceState {
 }
 
 thread_local! {
-    /// Whether a [`batch_layer_requests`](WaylandState::batch_layer_requests)
-    /// group is open: individual requests hold their commit so the group makes
-    /// one.
+    /// Which surface a [`batch_layer_requests`](WaylandState::batch_layer_requests)
+    /// group is open on: its requests hold their commit so the group makes one.
+    ///
+    /// The *id*, not a flag. The closure is handed a whole `&mut WaylandState`,
+    /// so it can address any surface it likes, and a flag suppressed the commit
+    /// of every one of them while promising it for exactly one: a request aimed
+    /// at another surface stayed double-buffered until something unrelated
+    /// committed that surface, which for an idle one is never.
     ///
     /// A dynamic scope rather than a field, because the scope has to survive a
     /// panic. The closure gets `&mut WaylandState`, so a guard restoring a field
-    /// could not hold on to it while the closure runs — and a flag left set by
+    /// could not hold on to it while the closure runs — and a scope left open by
     /// an unwind would be permanent: every later `set_margin` or `set_layer`
     /// would hold its commit for a group that had already ended, and the surface
     /// would stop answering its handle in silence.
-    static BATCHING: Cell<bool> = const { Cell::new(false) };
+    static BATCHING: Cell<Option<SurfaceId>> = const { Cell::new(None) };
 }
 
-/// Run `f` inside the batching scope, and report whether it opened it.
+/// Run `f` inside a batching scope for `id`, and report whether it opened it.
 ///
-/// Restored on the way out however that happens, which is the whole point.
-fn batching<R>(f: impl FnOnce() -> R) -> (bool, R) {
-    struct Restore(bool);
+/// Restored on the way out however that happens, which is the whole point. A
+/// group nested inside one on *another* surface opens its own, because the
+/// commit it owes is not the one the outer group will make.
+fn batching<R>(id: SurfaceId, f: impl FnOnce() -> R) -> (bool, R) {
+    struct Restore(Option<SurfaceId>);
     impl Drop for Restore {
         fn drop(&mut self) {
             BATCHING.with(|b| b.set(self.0));
         }
     }
 
-    let outer = BATCHING.with(|b| b.replace(true));
+    let outer = BATCHING.with(|b| b.replace(Some(id)));
     let _restore = Restore(outer);
-    (!outer, f())
+    (outer != Some(id), f())
 }
 
 pub struct WaylandState {
@@ -527,7 +534,7 @@ impl WaylandState {
     /// send a bare commit to exactly the roles the per-request path refuses to
     /// touch.
     pub fn batch_layer_requests(&mut self, id: SurfaceId, f: impl FnOnce(&mut Self)) {
-        let (outermost, ()) = batching(|| f(self));
+        let (outermost, ()) = batching(id, || f(self));
         if outermost
             && let Some(state) = self.surfaces.get(&id)
             && matches!(state.role, SurfaceRole::Layer(_))
@@ -542,7 +549,9 @@ impl WaylandState {
     where
         F: FnOnce(&LayerSurface),
     {
-        let batching = BATCHING.with(|b| b.get());
+        // Only for the surface the open group will commit for. Another one's
+        // request has nobody to ride with, so it commits for itself.
+        let batching = BATCHING.with(|b| b.get()) == Some(id);
         if let Some(surface_state) = self.surfaces.get_mut(&id) {
             match &surface_state.role {
                 SurfaceRole::Layer(layer_surface) => {
@@ -836,7 +845,12 @@ delegate_registry!(WaylandState);
 
 #[cfg(test)]
 mod batching_tests {
-    use super::{BATCHING, batching};
+    use super::{BATCHING, SurfaceId, batching};
+
+    /// Distinct ids; the counter is global and the numbers do not matter.
+    fn surface() -> SurfaceId {
+        SurfaceId::next()
+    }
 
     /// A batch is a scope, and a scope that a panic can leave open is not one.
     /// Left open, every later layer-shell request holds its commit for a group
@@ -844,11 +858,11 @@ mod batching_tests {
     #[test]
     fn a_panic_inside_a_batch_still_closes_it() {
         let escaped = std::panic::catch_unwind(|| {
-            batching(|| panic!("a request went wrong"));
+            batching(surface(), || panic!("a request went wrong"));
         });
         assert!(escaped.is_err(), "the panic still propagates");
         assert!(
-            !BATCHING.with(|b| b.get()),
+            BATCHING.with(|b| b.get()).is_none(),
             "and the scope closed on its way out"
         );
     }
@@ -857,9 +871,28 @@ mod batching_tests {
     /// through the one containing it.
     #[test]
     fn only_the_outermost_batch_reports_itself() {
-        let (outermost, inner) = batching(|| batching(|| ()).0);
+        let a = surface();
+        let (outermost, inner) = batching(a, || batching(a, || ()).0);
         assert!(outermost, "the outer one opened the scope");
         assert!(!inner, "the inner one found it already open");
-        assert!(!BATCHING.with(|b| b.get()));
+        assert!(BATCHING.with(|b| b.get()).is_none());
+    }
+
+    /// The scope belongs to a surface, not to the thread. A request aimed at
+    /// another surface inside an open group has nobody to ride with: suppressing
+    /// its commit leaves it double-buffered until something unrelated commits
+    /// that surface, which for an idle one is never.
+    #[test]
+    fn a_batch_on_one_surface_does_not_hold_another_one_s_commit() {
+        let (a, b) = (surface(), surface());
+        let mut seen = None;
+        let (outer, inner) = batching(a, || {
+            seen = Some(BATCHING.with(|s| s.get()));
+            batching(b, || ()).0
+        });
+        assert!(outer, "the group on a commits for a");
+        assert!(inner, "and the one on b commits for b, rather than nothing");
+        assert_eq!(seen, Some(Some(a)), "inside, the open group is a's");
+        assert!(BATCHING.with(|s| s.get()).is_none());
     }
 }

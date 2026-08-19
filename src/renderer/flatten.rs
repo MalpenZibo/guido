@@ -119,7 +119,8 @@ impl FlattenedCommand {
     /// The clip is part of the shape, not a detail of one consumer: a card half
     /// out of a viewport is filtered only where it is on show, and a compositor
     /// region published for the whole card blurs the desktop beside a panel that
-    /// is not there. Returns `None` when the clip leaves nothing.
+    /// is not there. Returns `None` when the clip leaves nothing, and drops the
+    /// radius of every corner the clip cut off — a cut edge is straight.
     ///
     /// An overlay's clip is stored in the command's *local* space so a ripple
     /// follows the shape it belongs to instead of an axis-aligned box around it
@@ -146,7 +147,26 @@ impl FlattenedCommand {
         let y = world.y.max(clip.y);
         let right = (world.x + world.width).min(clip.x + clip.width);
         let bottom = (world.y + world.height).min(clip.y + clip.height);
-        (right > x && bottom > y).then(|| (Rect::new(x, y, right - x, bottom - y), world_radii))
+        if right <= x || bottom <= y {
+            return None;
+        }
+
+        // A cut edge is a straight one. A corner survives only where neither of
+        // the edges meeting there was moved: keeping the radius on a corner the
+        // clip removed describes a curve that is not on screen, and the region
+        // built from it loses a wedge the size of the radius along the cut.
+        let (cut_left, cut_top) = (x > world.x, y > world.y);
+        let cut_right = right < world.x + world.width;
+        let cut_bottom = bottom < world.y + world.height;
+        let keep = |radius: f32, a: bool, b: bool| if a || b { 0.0 } else { radius };
+        let radii = CornerRadii {
+            top_left: keep(world_radii.top_left, cut_left, cut_top),
+            top_right: keep(world_radii.top_right, cut_right, cut_top),
+            bottom_right: keep(world_radii.bottom_right, cut_right, cut_bottom),
+            bottom_left: keep(world_radii.bottom_left, cut_left, cut_bottom),
+        };
+
+        Some((Rect::new(x, y, right - x, bottom - y), radii))
     }
 }
 
@@ -1162,6 +1182,35 @@ mod world_geometry_tests {
             .expect("still on show");
         assert_eq!((world.x, world.width), (0.0, 40.0), "cut to the clip");
         assert_eq!(world.height, 100.0, "and untouched on the other axis");
+    }
+
+    /// And the corners go with it. A card cut in half by a viewport has a
+    /// straight edge where the cut is, so the two corners along it are square —
+    /// published as round, the region loses a wedge the size of the radius at
+    /// each of them, and the desktop shows through beside the panel.
+    #[test]
+    fn a_clip_squares_off_the_corners_it_cuts() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let mut cmd = command(Transform::translate(0.0, 0.0));
+        cmd.clip = Some(WorldClip {
+            rect: Rect::new(0.0, 0.0, 40.0, 100.0),
+            corner_radius: 0.0,
+            curvature: 1.0,
+        });
+
+        let (_, radii) = cmd
+            .clipped_world_rounded_rect(rect, CornerRadii::uniform(16.0))
+            .expect("still on show");
+        assert_eq!(
+            (radii.top_left, radii.bottom_left),
+            (16.0, 16.0),
+            "the left edge was not moved, so its corners are as they were drawn"
+        );
+        assert_eq!(
+            (radii.top_right, radii.bottom_right),
+            (0.0, 0.0),
+            "and the ones along the cut are square"
+        );
     }
 
     /// Clipped away entirely is nothing to publish, not an empty rectangle

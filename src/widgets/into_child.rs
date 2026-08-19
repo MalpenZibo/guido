@@ -381,20 +381,28 @@ fn add_keyed_children<T, I, K, W>(
         let mut out = Vec::new();
         for (index, item) in items.into_iter().enumerate() {
             let key = key_fn(&item);
-            // One lookup rather than a `contains` and then an `insert`: this runs
-            // per row per pass, and the clone a fresh row would have paid anyway
-            // is paid once here instead.
-            if let Some(first) = seen.insert(key.clone(), index) {
-                // Without the key's value: `Debug` would be a bound the mechanism
-                // does not need, and it would keep an opaque newtype out of
-                // `keyed` in order to format a log line. Both indices instead —
-                // the type alone names nothing, but the pair of rows that
-                // collided is enough to go and look at them.
-                log::warn!(
-                    "keyed children: item {index} repeats the {} key of item {first}, skipping it",
-                    std::any::type_name::<K>()
-                );
-                continue;
+            // Vacant-only, not `insert`: `insert` replaces, so with duplicates at
+            // 0, 2 and 5 the third would be reported against item 2 — which was
+            // itself skipped and is not in the list the reader is being sent to.
+            // The first sighting is the one still on screen.
+            match seen.entry(key.clone()) {
+                std::collections::hash_map::Entry::Occupied(first) => {
+                    // Without the key's value: `Debug` would be a bound the
+                    // mechanism does not need, and it would keep an opaque
+                    // newtype out of `keyed` in order to format a log line. Both
+                    // indices instead — the type alone names nothing, but the
+                    // pair of rows that collided is enough to go and look at
+                    // them.
+                    log::warn!(
+                        "keyed children: item {index} repeats the {} key of item {}, skipping it",
+                        std::any::type_name::<K>(),
+                        first.get()
+                    );
+                    continue;
+                }
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    slot.insert(index);
+                }
             }
 
             let generation = match st.rows.get(&key) {
@@ -700,14 +708,17 @@ mod tests {
     fn keyed_children_skip_duplicate_keys() {
         let (mut tree, mut source) = children_host();
 
+        // Three of them, so the report has a choice to get wrong: the second and
+        // the third are both told about the *first*, which is the row still on
+        // screen — not about each other, one of which was itself skipped.
         keyed(
-            move || vec![(7u64, "x"), (7, "y")],
+            move || vec![(7u64, "x"), (1, "a"), (7, "y"), (7, "z")],
             |(id, _)| *id,
             |_| TestWidget,
         )
         .add_to_container(&mut source);
 
         // Only the first item with a given key is rendered
-        assert_eq!(source.reconcile_and_get(&mut tree).len(), 1);
+        assert_eq!(source.reconcile_and_get(&mut tree).len(), 2);
     }
 }

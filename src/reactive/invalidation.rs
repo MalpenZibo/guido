@@ -452,7 +452,8 @@ mod tests {
         });
     }
 
-    /// `get_untracked` has to be untracked for a *derived* signal too. Its
+    /// `get_untracked` and `with_untracked` have to be untracked for a
+    /// *derived* signal too. Its
     /// closure runs somewhere, and where it ran was inside whatever scope the
     /// caller happened to be in: the diagnostic snapshot zone around it is
     /// compiled away in release and never suppressed the recording.
@@ -483,6 +484,16 @@ mod tests {
         assert!(
             !subscribed(untracked),
             "an untracked read must leave the scope holding nothing"
+        );
+
+        // The borrowing half is the same promise, and was the same bug.
+        let borrowed = widget_id(502);
+        with_signal_tracking(borrowed, JobType::Paint, || {
+            assert_eq!(derived.with_untracked(|v| *v), 2);
+        });
+        assert!(
+            !subscribed(borrowed),
+            "`with_untracked` says untracked too, and has to mean it"
         );
 
         // The control: the same read, asked for by its tracking name.
