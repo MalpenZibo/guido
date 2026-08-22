@@ -18,11 +18,12 @@ pub use ripple::{MAX_LIVE_RIPPLES, Ripple, RippleState};
 use style::Decoration;
 
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::advance_anim;
 use crate::animation::TransitionConfig;
-use crate::backdrop::{BackdropBlur, BackdropSources};
+use crate::backdrop::BackdropBlur;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
@@ -53,6 +54,44 @@ use super::widget::{
 
 /// Callback for click events
 pub type ClickCallback = Rc<dyn Fn()>;
+
+#[doc(hidden)]
+pub struct FnHandler;
+#[doc(hidden)]
+pub struct CallbackHandler;
+#[doc(hidden)]
+pub struct OptionHandler;
+
+/// What a click handler can be written as.
+///
+/// A closure is the ordinary case. A [`Callback`](crate::reactive::Callback)
+/// and an `Option<Callback>` are the shapes a `#[component]` callback prop
+/// arrives in, so a component can forward its own prop straight through
+/// without a second method name for it.
+///
+/// The marker parameter is the same trick [`IntoSignal`] uses: it keeps the
+/// three impls from overlapping.
+pub trait IntoClickHandler<Marker = FnHandler> {
+    fn into_click_handler(self) -> Option<ClickCallback>;
+}
+
+impl<F: Fn() + 'static> IntoClickHandler<FnHandler> for F {
+    fn into_click_handler(self) -> Option<ClickCallback> {
+        Some(Rc::new(self))
+    }
+}
+
+impl IntoClickHandler<CallbackHandler> for crate::reactive::Callback {
+    fn into_click_handler(self) -> Option<ClickCallback> {
+        Some(Rc::new(move || self.run()))
+    }
+}
+
+impl IntoClickHandler<OptionHandler> for Option<crate::reactive::Callback> {
+    fn into_click_handler(self) -> Option<ClickCallback> {
+        self.map(|cb| Rc::new(move || cb.run()) as ClickCallback)
+    }
+}
 
 /// Callback for a key press: the key and the modifiers held with it.
 pub type KeyCallback = Rc<dyn Fn(Key, Modifiers)>;
@@ -92,7 +131,7 @@ impl From<GradientDirection> for GradientDir {
 }
 
 /// Linear gradient definition
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LinearGradient {
     pub start_color: Color,
     pub end_color: Color,
@@ -151,6 +190,7 @@ pub(super) struct ContainerAnims {
     pub(super) height: Option<AnimationState<f32>>,
     pub(super) background: Option<AnimationState<Color>>,
     pub(super) corner_radius: Option<AnimationState<f32>>,
+    pub(super) elevation: Option<AnimationState<f32>>,
     pub(super) padding: Option<AnimationState<Padding>>,
     pub(super) border_width: Option<AnimationState<f32>>,
     pub(super) border_color: Option<AnimationState<Color>>,
@@ -321,7 +361,7 @@ pub struct Container {
     // Styling properties
     pub(super) padding: Option<Signal<Padding>>,
     pub(super) background: Option<Signal<Color>>,
-    pub(super) gradient: Option<LinearGradient>,
+    pub(super) gradient: Option<Signal<Option<LinearGradient>>>,
     pub(super) corner_radius: Option<Signal<f32>>,
     pub(super) corner_radii: Option<Signal<crate::renderer::CornerRadii>>,
     pub(super) corner_curvature: Option<Signal<f32>>,
@@ -330,7 +370,30 @@ pub struct Container {
     pub(super) elevation: Option<Signal<f32>>,
     pub(super) width: Option<Signal<Length>>,
     pub(super) height: Option<Signal<Length>>,
-    pub(super) overflow: Overflow,
+    pub(super) overflow: Option<Signal<Overflow>>,
+    /// What `overflow` resolved to in the last layout or paint.
+    ///
+    /// Event dispatch needs the value the *drawn* frame used, not the current
+    /// one: it tests against `hit.bounds`, which come from the last layout, and
+    /// a clip that disagreed with the box it is clipping would answer for a
+    /// point the geometry says nothing about. The tracked reads that do
+    /// subscribe write here on their way past.
+    ///
+    /// It is also cheaper than re-reading a closure-backed signal for every
+    /// container under the pointer on every coalesced `MouseMove` — but only
+    /// one such read of several on that path, so that is a bonus rather than
+    /// the reason.
+    pub(super) overflow_resolved: Cell<Overflow>,
+    /// The elevation the last layout sized this container's damage rect for.
+    ///
+    /// Written by `layout` and read by `animated_elevation`, so the shadow that
+    /// is drawn and the rect that is repainted are the *same number* rather than
+    /// two computations of it. They were two, and they disagreed: paint asked
+    /// [`max_elevation`](style) again, which reads the elevation signal at its
+    /// current value, so a card animating from 8 down to 0 was clamped to the 0
+    /// it had not reached yet and the shadow vanished in one frame while the
+    /// animation went on running.
+    pub(super) elevation_reach: Cell<f32>,
     pub(super) visible: Option<Signal<bool>>,
     pub(super) transform: Option<Signal<Transform>>,
     pub(super) transform_origin: Option<Signal<TransformOrigin>>,
@@ -343,7 +406,7 @@ pub struct Container {
     pub(super) widget_ref: Option<WidgetRef>,
 
     // Backdrop blur: this surface's own content, the compositor's, or both.
-    pub(super) backdrop_blur: Option<BackdropBlur>,
+    pub(super) backdrop_blur: Option<Signal<BackdropBlur>>,
 
     // How text inside this container looks. Boxed: most containers hold no
     // text and pay one pointer for the whole feature.
@@ -402,7 +465,9 @@ impl Container {
             elevation: None,
             width: None,
             height: None,
-            overflow: Overflow::Visible,
+            overflow: None,
+            overflow_resolved: Cell::new(Overflow::Visible),
+            elevation_reach: Cell::new(0.0),
             visible: None,
             transform: None,
             transform_origin: None,
@@ -454,8 +519,8 @@ impl Container {
         self
     }
 
-    /// Add a single child: a widget value, or [`dynamic(data, build)`](crate::widgets::dynamic)
-    /// for reactive content.
+    /// Add a single child: a widget value, or a closure returning one for
+    /// reactive content.
     pub fn child<M>(mut self, child: impl IntoChild<M>) -> Self {
         child.add_to_container(&mut self.children_source);
         self
@@ -487,7 +552,7 @@ impl Container {
     /// - `padding(8.0)` or `padding(8)` — uniform on all sides
     /// - `padding([8.0, 16.0])` — `[vertical, horizontal]` (CSS 2-value shorthand)
     /// - `padding([1.0, 2.0, 3.0, 4.0])` — `[top, right, bottom, left]` (CSS 4-value)
-    /// - `padding(Padding::all(8.0).top(20.0))` — builder pattern
+    /// - `padding(Padding::all(8.0).with_top(20.0))` — builder pattern
     /// - `padding(signal)` or `padding(move || ...)` — reactive
     pub fn padding<M>(mut self, value: impl IntoSignal<Padding, M>) -> Self {
         self.padding = Some(value.into_signal());
@@ -677,15 +742,19 @@ impl Container {
     ///     .background(Color::rgba(0.1, 0.1, 0.15, 0.6))
     /// ```
     ///
-    /// Restrict it with [`BackdropSources`] when only one side should soften.
+    /// Restrict it with [`BackdropSources`](crate::backdrop::BackdropSources) when
+    /// only one side should soften.
     /// The compositor side needs `ext-background-effect-v1` — check
     /// [`compositor_effects()`](crate::compositor::compositor_effects) — and
     /// carries no radius of its own; the compositor picks one.
     ///
     /// See [`crate::backdrop`] for why both are filtered rather than one
     /// being chosen.
-    pub fn backdrop_blur(mut self, blur: impl Into<BackdropBlur>) -> Self {
-        self.backdrop_blur = Some(blur.into());
+    /// A radius of `0.0` is "no blur", so a blur can be switched off by the
+    /// same signal that switches it on — the shape
+    /// [`Text::backdrop_blur`](crate::widgets::Text::backdrop_blur) already has.
+    pub fn backdrop_blur<M>(mut self, blur: impl IntoSignal<BackdropBlur, M>) -> Self {
+        self.backdrop_blur = Some(blur.into_signal());
         self
     }
 
@@ -707,7 +776,27 @@ impl Container {
         self
     }
 
-    /// Set a border with the given width and color
+    /// Set a border: a width and a colour, together.
+    ///
+    /// Both halves, always — a width with no colour and a colour with no width
+    /// are the same thing, which is no border, so there is nothing for a
+    /// half-declaration to mean. Each half takes a signal of its own, so
+    /// anything that has to change over time already can:
+    ///
+    /// ```ignore
+    /// container().border(1.5, move || if failed.get() { theme.danger } else { theme.line })
+    /// ```
+    ///
+    /// A state layer says it the same way, and replaces the whole border:
+    ///
+    /// ```ignore
+    /// container()
+    ///     .border(1.5, theme.line)
+    ///     .when_focused(|s| s.border(1.5, theme.accent))
+    /// ```
+    ///
+    /// A width repeated across layers is a constant in your own code — there is
+    /// deliberately no way to leave half a border unsaid.
     pub fn border<M1, M2>(
         mut self,
         width: impl IntoSignal<f32, M1>,
@@ -718,22 +807,82 @@ impl Container {
         self
     }
 
-    /// Set a linear gradient background
-    pub fn gradient(mut self, gradient: LinearGradient) -> Self {
-        self.gradient = Some(gradient);
+    /// Set a linear gradient background. Replaces the solid fill while it is
+    /// there.
+    ///
+    /// `None` is "no gradient", so the background shows through again — the same
+    /// contract a radius of `0.0` gives
+    /// [`backdrop_blur`](Self::backdrop_blur), and for the same reason: without
+    /// a value meaning *off*, a gradient that only applies sometimes forces the
+    /// caller back to branching in Rust and rebuilding the widget.
+    ///
+    /// ```ignore
+    /// container()
+    ///     .background(theme.surface)
+    ///     .gradient(move || expanded.get().then(|| palette.get().header()))
+    /// ```
+    pub fn gradient<M>(mut self, gradient: impl IntoSignal<Option<LinearGradient>, M>) -> Self {
+        self.gradient = Some(gradient.into_signal());
         self
     }
 
-    /// Convenience: horizontal gradient
-    pub fn gradient_horizontal(mut self, start: Color, end: Color) -> Self {
-        self.gradient = Some(LinearGradient::horizontal(start, end));
-        self
+    /// Convenience: horizontal gradient.
+    pub fn gradient_horizontal<M1, M2>(
+        self,
+        start: impl IntoSignal<Color, M1>,
+        end: impl IntoSignal<Color, M2>,
+    ) -> Self {
+        self.gradient_between(start, end, GradientDirection::Horizontal)
     }
 
-    /// Convenience: vertical gradient
-    pub fn gradient_vertical(mut self, start: Color, end: Color) -> Self {
-        self.gradient = Some(LinearGradient::vertical(start, end));
-        self
+    /// Convenience: vertical gradient.
+    pub fn gradient_vertical<M1, M2>(
+        self,
+        start: impl IntoSignal<Color, M1>,
+        end: impl IntoSignal<Color, M2>,
+    ) -> Self {
+        self.gradient_between(start, end, GradientDirection::Vertical)
+    }
+
+    /// Convenience: diagonal gradient, top-left to bottom-right.
+    pub fn gradient_diagonal<M1, M2>(
+        self,
+        start: impl IntoSignal<Color, M1>,
+        end: impl IntoSignal<Color, M2>,
+    ) -> Self {
+        self.gradient_between(start, end, GradientDirection::Diagonal)
+    }
+
+    /// The three shorthands above, which differ only in the direction.
+    ///
+    /// Two constant endpoints — much the commonest case — build one constant
+    /// gradient rather than a derived recomputing a value that cannot change.
+    ///
+    /// The endpoints are converted before being asked, so the constant path
+    /// leaves two stored signals behind that nothing reads. Reading them first
+    /// would need an `as_constant` on `IntoSignal` itself, and its blanket
+    /// `Into<T>` impl consumes `self`, so that hook costs a `Clone` bound on
+    /// every value ever passed to any reactive property. Two arena slots per
+    /// gradient shorthand, freed with the scope, is the cheaper side of that
+    /// trade — the closure and the per-read recomputation were the parts worth
+    /// removing.
+    fn gradient_between<M1, M2>(
+        self,
+        start: impl IntoSignal<Color, M1>,
+        end: impl IntoSignal<Color, M2>,
+        direction: GradientDirection,
+    ) -> Self {
+        // The shorthands always mean "a gradient", so they wrap in Some for the
+        // caller; the general setter is where `None` is spellable.
+        let (start, end) = (start.into_signal(), end.into_signal());
+        match (start.constant(), end.constant()) {
+            (Some(start), Some(end)) => {
+                self.gradient(Some(LinearGradient::new(start, end, direction)))
+            }
+            _ => {
+                self.gradient(move || Some(LinearGradient::new(start.get(), end.get(), direction)))
+            }
+        }
     }
 
     /// Set the width of the container.
@@ -748,9 +897,14 @@ impl Container {
         self
     }
 
-    /// Set the overflow behavior for content that exceeds container bounds
-    pub fn overflow(mut self, overflow: Overflow) -> Self {
-        self.overflow = overflow;
+    /// Set the overflow behaviour for content that exceeds the container bounds.
+    pub fn overflow<M>(mut self, overflow: impl IntoSignal<Overflow, M>) -> Self {
+        let signal = overflow.into_signal();
+        // Seed the cache the event path reads, so a container declared clipped
+        // is clipped for the first event too, without depending on a layout
+        // having run first.
+        self.overflow_resolved.set(signal.get_untracked());
+        self.overflow = Some(signal);
         self
     }
 
@@ -788,8 +942,26 @@ impl Container {
         self
     }
 
-    pub fn on_click<F: Fn() + 'static>(mut self, callback: F) -> Self {
-        self.interact_mut().on_click = Some(Rc::new(callback));
+    /// Called on a left-button press inside the bounds.
+    ///
+    /// Takes a closure, a [`Callback`](crate::reactive::Callback), or an
+    /// `Option<Callback>` — the last being what a `#[component]` callback prop
+    /// holds, so a component forwards its own prop with no ceremony:
+    ///
+    /// ```ignore
+    /// #[component]
+    /// fn button(#[prop(callback)] on_click: ()) -> impl Widget {
+    ///     container().on_click(on_click)
+    /// }
+    /// ```
+    ///
+    /// A `None` prop leaves the container without a click handler, but still a
+    /// pointer target if anything else made it one.
+    pub fn on_click<M>(mut self, callback: impl IntoClickHandler<M>) -> Self {
+        let handler = callback.into_click_handler();
+        if handler.is_some() || self.interaction.is_some() {
+            self.interact_mut().on_click = handler;
+        }
         self
     }
 
@@ -812,16 +984,6 @@ impl Container {
     /// or a popup holding a grab.
     pub fn on_key_down<F: Fn(Key, Modifiers) + 'static>(mut self, callback: F) -> Self {
         self.interact_mut().on_key_down = Some(Rc::new(callback));
-        self
-    }
-
-    /// Accept an optional click callback — the shape a `#[component]`
-    /// callback prop has, so it can be forwarded straight through.
-    pub fn on_click_option(mut self, callback: Option<crate::reactive::Callback>) -> Self {
-        if callback.is_some() || self.interaction.is_some() {
-            self.interact_mut().on_click =
-                callback.map(|cb| std::rc::Rc::new(move || cb.run()) as ClickCallback);
-        }
         self
     }
 
@@ -973,14 +1135,28 @@ impl Container {
         self
     }
 
-    /// Enable animation for border width changes
+    /// Enable animation for border width changes.
+    ///
+    /// Width and colour keep separate `animate_*` declarations even though the
+    /// border is *declared* as a pair: these name an animatable channel, not a
+    /// way to state a value, and the two channels are different types with
+    /// their own curves. `examples/animation_example.rs` springs the width while
+    /// easing the colour, which one call could not express.
     pub fn animate_border_width(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.border_width.get_or_untracked(0.0);
         self.anims_mut().border_width = Some(AnimationState::new(initial, transition));
         self
     }
 
-    /// Enable animation for border color changes
+    /// Enable animation for border colour changes. See
+    /// [`animate_border_width`](Self::animate_border_width) for why the two
+    /// halves have their own declarations.
+    pub fn animate_border_color(mut self, transition: impl Into<TransitionConfig>) -> Self {
+        let initial = self.border_color.get_or_untracked(Color::TRANSPARENT);
+        self.anims_mut().border_color = Some(AnimationState::new(initial, transition));
+        self
+    }
+
     /// Animate the text colour of this container and its descendants.
     ///
     /// ```ignore
@@ -1002,9 +1178,11 @@ impl Container {
         self
     }
 
-    pub fn animate_border_color(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.border_color.get_or_untracked(Color::TRANSPARENT);
-        self.anims_mut().border_color = Some(AnimationState::new(initial, transition));
+    /// Animate elevation changes — the Material lift on hover, in motion
+    /// rather than as a jump.
+    pub fn animate_elevation(mut self, transition: impl Into<TransitionConfig>) -> Self {
+        let initial = self.elevation.get_or_untracked(0.0);
+        self.anims_mut().elevation = Some(AnimationState::new(initial, transition));
         self
     }
 
@@ -1204,6 +1382,7 @@ impl Widget for Container {
                 border_width_target,
                 bg_target,
                 corner_radius_target,
+                elevation_target,
                 border_color_target,
                 transform_target,
             ) = crate::reactive::diagnostics::snapshot_zone(|| {
@@ -1212,6 +1391,7 @@ impl Widget for Container {
                     self.effective_border_width_target(id),
                     self.effective_background_target(id),
                     self.effective_corner_radius_target(id),
+                    self.effective_elevation_target(id),
                     self.effective_border_color_target(id),
                     self.effective_transform_target(id),
                 )
@@ -1273,6 +1453,7 @@ impl Widget for Container {
                 any_animating,
                 paint
             );
+            advance_anim!(anims, elevation, elevation_target, id, any_animating, paint);
             advance_anim!(
                 anims,
                 border_color,
@@ -1458,8 +1639,8 @@ impl Widget for Container {
 
         if self.scroll_axis != ScrollAxis::None {
             let sd = self.scroll_mut();
-            sd.scroll_state.content_width = content_size.width + padding.horizontal();
-            sd.scroll_state.content_height = content_size.height + padding.vertical();
+            sd.scroll_state.content_width = content_size.width + padding.horizontal_total();
+            sd.scroll_state.content_height = content_size.height + padding.vertical_total();
             sd.scroll_state.viewport_width = child.viewport.width;
             sd.scroll_state.viewport_height = child.viewport.height;
             sd.scroll_state.clamp_offsets();
@@ -1477,12 +1658,22 @@ impl Widget for Container {
         // Cache constraints and size for partial layout
         tree.cache_layout(id, constraints, size);
 
-        // An elevation shadow falls outside the box that casts it, so the
-        // damage this container reports has to reach past its own bounds.
-        // Snapshotted: a hover that only changes the elevation goes through
-        // paint, and this is here to size the damage, not to subscribe to it.
-        let elevation = self.elevation.get_or_untracked(0.0);
-        tree.set_paint_overflow(id, style::elevation_to_shadow(elevation).extent());
+        // An elevation shadow falls outside the box that casts it, so the damage
+        // this container reports has to reach past its own bounds.
+        //
+        // The *largest* elevation it can reach, not the one showing: elevation
+        // animates paint-only, so a hover that lifts a card never re-runs this
+        // layout, and a reach sized to the resting value would leave the shadow
+        // ring outside every damage rect — invisible on the way up, and left
+        // behind on the way down. Read under layout tracking, so a declared
+        // elevation changing does re-run it.
+        //
+        // Kept as well as published, because paint clamps to it: the shadow that
+        // is drawn and the rect that is repainted have to be one number, not two
+        // computations of it made a frame apart.
+        let reach = with_signal_tracking(id, JobType::Layout, || self.max_elevation());
+        self.elevation_reach.set(reach);
+        tree.set_paint_overflow(id, style::elevation_to_shadow(reach).extent());
 
         // Register widget ref so update_widget_refs() can refresh bounds
         if let Some(ref wr) = self.widget_ref {
@@ -1538,8 +1729,8 @@ impl Widget for Container {
         // Children clipped away by hidden overflow or scrolling are invisible,
         // and an invisible child must not steal a click from a sibling drawn
         // below it (a collapsed submenu used to do exactly that).
-        let clips_children =
-            self.overflow == Overflow::Hidden || self.scroll_axis != ScrollAxis::None;
+        let clips_children = self.overflow_resolved.get() == Overflow::Hidden
+            || self.scroll_axis != ScrollAxis::None;
         let skip_child_dispatch = clips_children
             && local_event
                 .coords()
@@ -1581,19 +1772,26 @@ impl Widget for Container {
             border_width,
             border_color,
             per_corner_radii,
+            gradient,
+            backdrop_blur,
+            overflow,
         ) = with_signal_tracking(id, JobType::Paint, || {
             (
                 self.animated_background(id),
                 self.animated_corner_radius(id),
                 self.corner_curvature.get_or(1.0),
-                self.effective_elevation(id),
+                self.animated_elevation(id),
                 self.animated_transform(id),
                 self.transform_origin.get_or(TransformOrigin::CENTER),
                 self.animated_border_width(id),
                 self.animated_border_color(id),
                 self.corner_radii.as_ref().map(|s| s.get()),
+                self.gradient.as_ref().and_then(|g| g.get()),
+                self.backdrop_blur.as_ref().map(|b| b.get()),
+                self.overflow.get_or(Overflow::Visible),
             )
         });
+        self.overflow_resolved.set(overflow);
 
         self.resync_animation_targets(id);
 
@@ -1603,15 +1801,6 @@ impl Widget for Container {
         let corner_radii = per_corner_radii
             .unwrap_or_else(|| crate::renderer::CornerRadii::uniform(corner_radius));
         let corner_radius = corner_radius.max(corner_radii.max());
-
-        // Publish the compositor blur region: bounds are read fresh from the
-        // tree at frame sync, so only the (possibly animated) radius is
-        // recorded here.
-        if let Some(blur) = self.backdrop_blur
-            && blur.sources.contains(BackdropSources::COMPOSITOR)
-        {
-            crate::blur::register_blur(id, corner_radius);
-        }
 
         // LOCAL bounds: the origin is this container, the parent already
         // positioned the node.
@@ -1624,13 +1813,25 @@ impl Widget for Container {
         }
 
         // Before the decoration: the container paints over its own blurred
-        // backdrop, and the effect must read a target that does not yet
-        // include this container.
-        if let Some(blur) = self.backdrop_blur
-            && blur.sources.contains(BackdropSources::SURFACE)
+        // backdrop, and the effect must read a target that does not yet include
+        // this container.
+        //
+        // One command carries both halves. The renderer filters the surface's
+        // own; the compositor's region is read off this same command after
+        // flattening, so the two can never disagree about whether the container
+        // still wants it — and a blur cached, culled or hidden is carried or
+        // dropped by the render tree itself rather than by a registry that has
+        // to be told.
+        if let Some(blur) = backdrop_blur
             && blur.radius > 0.0
         {
-            ctx.draw_backdrop_blur(local_bounds, blur.radius, corner_radii, corner_curvature);
+            ctx.draw_backdrop_blur(
+                local_bounds,
+                blur.sources,
+                blur.radius,
+                corner_radii,
+                corner_curvature,
+            );
         }
 
         self.paint_decoration(
@@ -1638,6 +1839,7 @@ impl Widget for Container {
             local_bounds,
             &Decoration {
                 background,
+                gradient,
                 corner_radii,
                 corner_curvature,
                 elevation: elevation_level,
@@ -1651,7 +1853,7 @@ impl Widget for Container {
 
         // Set clip region for scrollable or overflow:hidden containers
         // This clips all children to the container bounds
-        if is_scrollable || self.overflow == Overflow::Hidden {
+        if is_scrollable || overflow == Overflow::Hidden {
             ctx.set_clip(local_bounds, corner_radius, corner_curvature);
         }
 
@@ -1682,6 +1884,7 @@ impl Widget for Container {
         // For scrollable containers with a single-axis layout, use binary search
         // to find the visible range (O(log n)) instead of iterating all children (O(n)).
         let all_children = self.children_source.get();
+
         let visible_children: &[WidgetId] = if is_scrollable {
             let sd = self.scroll();
             match self.scroll_axis {

@@ -10,7 +10,7 @@ use syn::{DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro
 ///
 /// # Attributes on parameters
 /// - No attribute — standard prop, `Signal<T>`, default = `create_stored(Default::default())`
-/// - `#[prop(default = "expr")]` — standard prop with custom default
+/// - `#[prop(default = <expr>)]` — standard prop with custom default
 /// - `#[prop(callback)]` — callback prop. Use `()` for `Fn()`, or `fn(T1, T2)` for typed params
 /// - `#[prop(children)]` — children support via `ChildrenSource`
 /// - `#[prop(slot)]` — named widget slot
@@ -20,9 +20,9 @@ use syn::{DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro
 /// #[component]
 /// pub fn button(
 ///     label: String,
-///     #[prop(default = "Color::rgb(0.3, 0.3, 0.4)")]
+///     #[prop(default = Color::rgb(0.3, 0.3, 0.4))]
 ///     background: Color,
-///     #[prop(default = "8.0")]
+///     #[prop(default = 8.0)]
 ///     padding: f32,
 ///     #[prop(callback)]
 ///     on_click: (),
@@ -30,7 +30,7 @@ use syn::{DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro
 ///     container()
 ///         .padding(padding) // Signal<f32> is Copy, no clone needed
 ///         .background(background) // Signal<Color> is Copy
-///         .on_click_option(on_click.clone())
+///         .on_click(on_click)
 ///         .child(text(label).color(Color::WHITE))
 /// }
 /// ```
@@ -92,11 +92,19 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         if let Some(prop_attr) = prop_attr
             && let Meta::List(meta_list) = &prop_attr.meta
         {
-            let nested = meta_list
-                .parse_args_with(
-                    syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
-                )
-                .unwrap_or_default();
+            // Reported, not swallowed. An unparseable list used to yield an
+            // empty one, so a `#[prop(...)]` with a typo in it compiled as a
+            // plain `Signal<T>` with `Default::default()` — taking `callback`,
+            // `children` and `slot` on the same attribute down with it, and
+            // leaving a component silently unwired instead of failing to build.
+            // `default` now takes a raw expression, which is a great deal easier
+            // to write wrong than the string it used to be.
+            let nested = match meta_list.parse_args_with(
+                syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
+            ) {
+                Ok(nested) => nested,
+                Err(err) => return err.to_compile_error().into(),
+            };
 
             for meta in &nested {
                 if meta.path().is_ident("callback") {
@@ -107,29 +115,12 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 } else if meta.path().is_ident("slot") {
                     is_slot = true;
                 } else if meta.path().is_ident("default") {
+                    // The value is an ordinary Rust expression. It used to be
+                    // accepted quoted as well, which made a string literal
+                    // unspellable: `default = "Guest"` parsed its own contents
+                    // and asked for a variable called Guest.
                     if let Meta::NameValue(nv) = meta {
-                        // If the value is a string literal, parse its contents as an expression.
-                        // This supports `#[prop(default = "Color::RED")]` syntax where the string
-                        // contains arbitrary Rust expressions.
-                        if let Expr::Lit(syn::ExprLit {
-                            lit: syn::Lit::Str(lit_str),
-                            ..
-                        }) = &nv.value
-                        {
-                            match lit_str.parse::<Expr>() {
-                                Ok(expr) => default_value = Some(expr),
-                                Err(e) => {
-                                    return syn::Error::new_spanned(
-                                        lit_str,
-                                        format!("failed to parse default value: {e}"),
-                                    )
-                                    .to_compile_error()
-                                    .into();
-                                }
-                            }
-                        } else {
-                            default_value = Some(nv.value.clone());
-                        }
+                        default_value = Some(nv.value.clone());
                     } else {
                         return syn::Error::new_spanned(meta, "expected `default = <expr>`")
                             .to_compile_error()

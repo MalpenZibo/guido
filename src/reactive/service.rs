@@ -47,7 +47,7 @@ impl ServiceContext {
 
 /// Handle to a background service for sending commands.
 ///
-/// `Copy`, like [`Signal`](super::Signal): the channel lives in the reactive
+/// `Copy`, like [`Signal`]: the channel lives in the reactive
 /// arena and the handle is just its id, so it can be dropped into as many
 /// closures as needed without a clone. Handles of services, signals and
 /// callbacks being `Copy` is what keeps a struct that groups them `Copy` too.
@@ -125,47 +125,78 @@ impl<Cmd: 'static> Service<Cmd> {
 /// service.send(Cmd::SwitchWorkspace(2));
 /// ```
 ///
-/// # Example: Read-Only Service
+/// A task with nothing to command is [`create_task`], which has no receiver
+/// and no turbofish.
+pub fn create_service<Cmd, F, Fut>(f: F) -> Service<Cmd>
+where
+    Cmd: Send + 'static,
+    F: FnOnce(mpsc::UnboundedReceiver<Cmd>, ServiceContext) -> Fut,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    let (tx, rx) = mpsc::unbounded_channel();
+    // The channel lives in the arena so the handle can be Copy
+    let sender = create_stored(tx);
+    spawn_owned(|ctx| f(rx, ctx));
+    Service { sender }
+}
+
+/// Spawn a future on the service runtime, owned by the current scope.
 ///
-/// For services that only push data to signals (no commands), use `()` as
-/// the command type and ignore the receiver:
+/// The half both [`create_service`] and [`create_task`] need: the context, the
+/// spawn, and the cleanup that stops it. Setting `is_running` to false allows a
+/// graceful shutdown, while `abort()` cancels the task at its next `.await` for
+/// fast cleanup — which is what keeps a `WriteSignal` from writing after an App
+/// restart.
+/// Build the future on *this* thread and hand only the future to the runtime.
+///
+/// Which is why neither [`create_service`] nor [`create_task`] asks its factory
+/// to be `Send`: the factory runs here, so it may read whatever the caller has —
+/// a `Signal`, an `Rc` — as long as only owned data crosses into the `async`
+/// block. Both of them used to demand it anyway, which rejected exactly the
+/// idiom their own documentation shows.
+fn spawn_owned<F, Fut>(f: F)
+where
+    F: FnOnce(ServiceContext) -> Fut,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    let running = Arc::new(AtomicBool::new(true));
+    let running_for_cleanup = running.clone();
+    let handle = service_runtime().spawn(f(ServiceContext { running }));
+
+    on_cleanup(move || {
+        running_for_cleanup.store(false, Ordering::SeqCst);
+        handle.abort();
+    });
+}
+
+/// Create a background task tied to the current Owner.
+///
+/// The half of [`create_service`] that only pushes: no commands, so no
+/// receiver, no command type to name, no channel allocated and no handle to
+/// keep. It is aborted when the scope that created it is disposed, exactly as a
+/// service is.
 ///
 /// ```ignore
 /// let time = create_signal(String::new());
 /// let time_w = time.writer();
 ///
-/// let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+/// create_task(move |ctx| async move {
 ///     while ctx.is_running() {
 ///         time_w.set(chrono::Local::now().format("%H:%M").to_string());
 ///         tokio::time::sleep(Duration::from_secs(1)).await;
 ///     }
 /// });
 /// ```
-pub fn create_service<Cmd, F, Fut>(f: F) -> Service<Cmd>
+pub fn create_task<F, Fut>(f: F)
 where
-    Cmd: Send + 'static,
-    F: FnOnce(mpsc::UnboundedReceiver<Cmd>, ServiceContext) -> Fut + Send + 'static,
+    F: FnOnce(ServiceContext) -> Fut,
     Fut: Future<Output = ()> + Send + 'static,
 {
-    let (tx, rx) = mpsc::unbounded_channel();
-    let running = Arc::new(AtomicBool::new(true));
-    let running_for_cleanup = running.clone();
-
-    let ctx = ServiceContext { running };
-    let handle = service_runtime().spawn(f(rx, ctx));
-    // The channel lives in the arena so the handle can be Copy
-    let sender = create_stored(tx);
-
-    // Register cleanup to stop the task when component unmounts.
-    // Setting is_running to false allows graceful shutdown, while abort()
-    // cancels the task at its next .await point for fast cleanup — this
-    // prevents stale WriteSignal writes after an App restart.
-    on_cleanup(move || {
-        running_for_cleanup.store(false, Ordering::SeqCst);
-        handle.abort();
-    });
-
-    Service { sender }
+    // Not `create_service::<(), _, _>`: that would allocate a channel whose
+    // receiver is dropped at the first poll, and park its sender in an arena
+    // slot held until the scope is disposed. A status bar's dozen push-only
+    // tasks are a dozen dead channels.
+    spawn_owned(f);
 }
 
 /// Get a runtime handle for spawning service tasks.
@@ -236,13 +267,44 @@ mod tests {
         dispose_owner_now(owner_id);
     }
 
+    /// A task has nothing to receive, so it must not build the machinery for
+    /// receiving. Going through `create_service::<(), _, _>` allocated a channel
+    /// whose receiver died at the first poll and parked its sender in an arena
+    /// slot held until disposal — a dozen push-only tasks, a dozen dead
+    /// channels.
+    #[test]
+    fn a_task_allocates_no_channel() {
+        let before = crate::reactive::storage::slot_count();
+        let (_, owner_id) = with_owner(|| {
+            create_task(|ctx| async move {
+                let _ = ctx.is_running();
+            });
+        });
+        assert_eq!(
+            crate::reactive::storage::slot_count(),
+            before,
+            "a task must claim no arena slot"
+        );
+        dispose_owner_now(owner_id);
+
+        // The service, which does have something to receive, still claims one.
+        let before = crate::reactive::storage::slot_count();
+        let (_, owner_id) = with_owner(|| {
+            create_service::<i32, _, _>(|mut rx, _ctx| async move {
+                let _ = rx.recv().await;
+            })
+        });
+        assert!(crate::reactive::storage::slot_count() > before);
+        dispose_owner_now(owner_id);
+    }
+
     #[tokio::test]
     async fn test_service_stops_on_cleanup() {
         let counter = Arc::new(AtomicI32::new(0));
         let counter_clone = counter.clone();
 
         let (_, owner_id) = with_owner(|| {
-            let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+            create_task(move |ctx| async move {
                 while ctx.is_running() {
                     counter_clone.fetch_add(1, Ordering::SeqCst);
                     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -336,5 +398,33 @@ mod tests {
         assert_eq!(received.load(Ordering::SeqCst), 12);
 
         dispose_owner_now(owner_id);
+    }
+}
+
+#[cfg(test)]
+mod factory_bounds {
+    use super::*;
+
+    /// Compile-time only: the factory runs on the calling thread, so it may
+    /// capture something that could never cross to the runtime. Nothing calls
+    /// this — spawning would want a scope and a runtime, and the claim is about
+    /// what type-checks.
+    #[allow(dead_code)]
+    fn a_factory_may_read_a_non_send_value() {
+        let local = std::rc::Rc::new(7u8);
+        create_task(move |_ctx| {
+            let owned = *local;
+            async move {
+                let _ = owned;
+            }
+        });
+
+        let local = std::rc::Rc::new(9u8);
+        let _service = create_service::<(), _, _>(move |_rx, _ctx| {
+            let owned = *local;
+            async move {
+                let _ = owned;
+            }
+        });
     }
 }

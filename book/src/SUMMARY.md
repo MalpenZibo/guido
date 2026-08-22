@@ -57,6 +57,7 @@
 
 - [Advanced Topics](advanced/README.md)
     - [Creating Components](advanced/components.md)
+    - [Custom Widgets and Layouts](advanced/custom-widgets.md)
     - [Dynamic Children](advanced/dynamic-children.md)
     - [Background Tasks](advanced/background-threads.md)
     - [Widget Ref](advanced/widget-ref.md)

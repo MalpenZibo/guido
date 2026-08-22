@@ -599,6 +599,7 @@ fn clip_rect(cmd: &FlattenedCommand, scale: f32) -> Option<Rect> {
 fn command_to_backdrop_region(cmd: &FlattenedCommand, scale: f32) -> Option<BackdropRegion> {
     let DrawCommand::BackdropBlur {
         rect,
+        sources,
         radius,
         corner_radii,
         curvature,
@@ -606,39 +607,31 @@ fn command_to_backdrop_region(cmd: &FlattenedCommand, scale: f32) -> Option<Back
     else {
         return None;
     };
+    // The compositor half of the same command is published as a `wl_region`
+    // instead; this pass filters only what the surface has drawn itself.
+    if !sources.contains(crate::backdrop::BackdropSources::SURFACE) {
+        return None;
+    }
 
     // The effect works on axis-aligned pixels, so a rotated container gets the
     // bounding box of its rotated rect — the mask still cuts the right shape
-    // out of it for the common translation-only case.
-    let corners = [
-        cmd.world_transform.transform_point(rect.x, rect.y),
-        cmd.world_transform
-            .transform_point(rect.x + rect.width, rect.y),
-        cmd.world_transform
-            .transform_point(rect.x, rect.y + rect.height),
-        cmd.world_transform
-            .transform_point(rect.x + rect.width, rect.y + rect.height),
-    ];
-    let min_x = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
-    let max_x = corners
-        .iter()
-        .map(|c| c.0)
-        .fold(f32::NEG_INFINITY, f32::max);
-    let min_y = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
-    let max_y = corners
-        .iter()
-        .map(|c| c.1)
-        .fold(f32::NEG_INFINITY, f32::max);
+    // out of it for the common translation-only case. Shared with the region
+    // published to the compositor, which is the same shape by definition.
+    let (world, world_radii) = cmd.world_rounded_rect(*rect, *corner_radii);
+    // The mask shader takes one radius per corner, so an unevenly scaled corner
+    // is approximated here rather than on the way in — the region published to
+    // the compositor keeps both axes, because a `wl_region` can hold the shape.
+    let world_radii = world_radii.to_circular();
 
     Some(BackdropRegion {
         rect: Rect::new(
-            min_x * scale,
-            min_y * scale,
-            (max_x - min_x) * scale,
-            (max_y - min_y) * scale,
+            world.x * scale,
+            world.y * scale,
+            world.width * scale,
+            world.height * scale,
         ),
         radius: radius * scale,
-        radii: corner_radii.scaled(scale),
+        radii: world_radii.scaled(scale),
         curvature: *curvature,
         clip: clip_rect(cmd, scale),
     })

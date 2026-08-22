@@ -15,7 +15,7 @@ async fn main() {
 
         // Create a service that adds an item after 2 seconds
         let items_w = items.writer();
-        let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+        create_task(move |ctx| async move {
             tokio::time::sleep(Duration::from_secs(2)).await;
             if ctx.is_running() && !ADD_TRIGGERED.swap(true, Ordering::SeqCst) {
                 items_w.update(|list| {

@@ -202,7 +202,7 @@ TextInput handles text editing but not visual styling like backgrounds and borde
 
 ```rust
 container()
-    .padding(Padding::horizontal(12.0).vertical(8.0))
+    .padding([8.0, 12.0])
     .background(Color::rgb(0.15, 0.15, 0.2))
     .border(1.0, Color::rgb(0.3, 0.3, 0.4))
     .corner_radius(4.0)
@@ -217,11 +217,11 @@ Add visual feedback when the input is focused:
 
 ```rust
 container()
-    .padding(Padding::horizontal(12.0).vertical(8.0))
+    .padding([8.0, 12.0])
     .background(Color::rgb(0.15, 0.15, 0.2))
     .border(1.0, Color::rgb(0.3, 0.3, 0.4))
     .corner_radius(4.0)
-    .when_focused(|s| s.border_color(Color::rgb(0.4, 0.6, 1.0)))
+    .when_focused(|s| s.border(1.0, Color::rgb(0.4, 0.6, 1.0)))
     .child(
         container().text_color(Color::WHITE).child(text_input(value))
     )
@@ -248,11 +248,11 @@ fn login_form() -> Container {
                 .children([
                     container().font_size(12.0).text_color(Color::rgb(0.6, 0.6, 0.7)).child(text("Username")),
                     container()
-                        .padding(Padding::horizontal(12.0).vertical(8.0))
+                        .padding([8.0, 12.0])
                         .background(Color::rgb(0.15, 0.15, 0.2))
                         .border(1.0, Color::rgb(0.3, 0.3, 0.4))
                         .corner_radius(4.0)
-                        .when_focused(|s| s.border_color(Color::rgb(0.4, 0.6, 1.0)))
+                        .when_focused(|s| s.border(1.0, Color::rgb(0.4, 0.6, 1.0)))
                         .child(
                             container().text_color(Color::WHITE).font_size(14.0).child(text_input(username))
                         ),
@@ -263,18 +263,18 @@ fn login_form() -> Container {
                 .children([
                     container().font_size(12.0).text_color(Color::rgb(0.6, 0.6, 0.7)).child(text("Password")),
                     container()
-                        .padding(Padding::horizontal(12.0).vertical(8.0))
+                        .padding([8.0, 12.0])
                         .background(Color::rgb(0.15, 0.15, 0.2))
                         .border(1.0, Color::rgb(0.3, 0.3, 0.4))
                         .corner_radius(4.0)
-                        .when_focused(|s| s.border_color(Color::rgb(0.4, 0.6, 1.0)))
+                        .when_focused(|s| s.border(1.0, Color::rgb(0.4, 0.6, 1.0)))
                         .child(
                             container().text_color(Color::WHITE).font_size(14.0).child(text_input(password).password(true))
                         ),
                 ]),
             // Submit button
             container()
-                .padding(Padding::horizontal(16.0).vertical(10.0))
+                .padding([10.0, 16.0])
                 .background(Color::rgb(0.3, 0.5, 0.9))
                 .corner_radius(6.0)
                 .when_hovered(|s| s.lighter(0.1))

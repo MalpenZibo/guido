@@ -22,7 +22,7 @@ async fn main() {
         // A label that changes text — and therefore size — 10 times a second
         let ticks = create_signal(0u32);
         let ticks_w = ticks.writer();
-        let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+        create_task(move |ctx| async move {
             while ctx.is_running() {
                 ticks_w.update(|t| *t += 1);
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;

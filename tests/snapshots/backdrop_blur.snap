@@ -1,0 +1,18 @@
+node 0,0 620x100
+  node 0,0 80x60 at 20,20
+    draw backdrop-blur 0,0 80x60 sources=BackdropSources(SURFACE | COMPOSITOR) radius=24 corners=16/16/16/16 k=1
+    draw rect 0,0 80x60 fill=#ffffff26 radius=16/16/16/16
+  node 0,0 80x60 at 120,20
+    draw backdrop-blur 0,0 80x60 sources=BackdropSources(SURFACE) radius=24 corners=16/16/16/16 k=1
+    draw rect 0,0 80x60 fill=#ffffff26 radius=16/16/16/16
+  node 0,0 80x60 at 220,20
+    draw backdrop-blur 0,0 80x60 sources=BackdropSources(COMPOSITOR) radius=24 corners=16/16/16/16 k=1
+    draw rect 0,0 80x60 fill=#ffffff26 radius=16/16/16/16
+  node 0,0 80x60 at 320,20
+    draw rect 0,0 80x60 fill=#ffffff26 radius=16/16/16/16
+  node 0,0 80x60 matrix[0.71 -0.71 0.71 0.71 420 20] origin=Center/Center
+    draw backdrop-blur 0,0 80x60 sources=BackdropSources(SURFACE | COMPOSITOR) radius=24 corners=16/16/16/16 k=1
+    draw rect 0,0 80x60 fill=#ffffff26 radius=16/16/16/16
+  node 0,0 80x60 matrix[2 0 0 2 520 20] origin=Center/Center
+    draw backdrop-blur 0,0 80x60 sources=BackdropSources(SURFACE | COMPOSITOR) radius=24 corners=16/16/16/16 k=1
+    draw rect 0,0 80x60 fill=#ffffff26 radius=16/16/16/16

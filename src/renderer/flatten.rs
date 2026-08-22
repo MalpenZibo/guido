@@ -8,7 +8,7 @@ use smallvec::SmallVec;
 use crate::transform::Transform;
 use crate::widgets::Rect;
 
-use super::commands::DrawCommand;
+use super::commands::{CornerRadii, DrawCommand, EllipticalRadii};
 use super::tree::{CachedFlatten, ClipRegion, RenderNode};
 
 /// Render layer for draw command ordering.
@@ -67,6 +67,135 @@ pub struct FlattenedCommand {
     pub clip_is_local: bool,
 }
 
+impl FlattenedCommand {
+    /// Where a local rounded rect of this command lands in world space: the
+    /// axis-aligned box that contains it, and the corner radii grown with it.
+    ///
+    /// **One implementation, because there are two consumers.** A backdrop blur
+    /// is filtered by the renderer and, for the same command, published to the
+    /// compositor as a `wl_region` — and the two must describe the same shape.
+    /// They did not: one folded four corners and the other subtracted two, so a
+    /// container rotated 45° produced a correct region for the renderer and a
+    /// zero-width one for the compositor.
+    ///
+    /// Four corners, because two only bound the box for a transform that keeps
+    /// the axes: a rotation moves the extremes onto the other diagonal. And the
+    /// radii scale with the box, or a `.scale(2.0)` container reports a shape
+    /// whose corners are cut half as deep as the one it draws — each axis by its
+    /// own factor, since a corner scaled unevenly is an ellipse and the
+    /// geometric mean of the two is neither of them.
+    pub fn world_rounded_rect(&self, rect: Rect, radii: CornerRadii) -> (Rect, EllipticalRadii) {
+        let (sx, sy) = self.world_transform.extract_scale_components();
+        (
+            self.world_aabb(rect),
+            EllipticalRadii::scaled_xy(radii, sx, sy),
+        )
+    }
+
+    /// The axis-aligned world box containing a rect of this command's own space.
+    fn world_aabb(&self, rect: Rect) -> Rect {
+        let corners = [
+            self.world_transform.transform_point(rect.x, rect.y),
+            self.world_transform
+                .transform_point(rect.x + rect.width, rect.y),
+            self.world_transform
+                .transform_point(rect.x, rect.y + rect.height),
+            self.world_transform
+                .transform_point(rect.x + rect.width, rect.y + rect.height),
+        ];
+        let min_x = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
+        let max_x = corners
+            .iter()
+            .map(|c| c.0)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let min_y = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
+        let max_y = corners
+            .iter()
+            .map(|c| c.1)
+            .fold(f32::NEG_INFINITY, f32::max);
+        Rect::new(min_x, min_y, max_x - min_x, max_y - min_y)
+    }
+
+    /// [`world_rounded_rect`](Self::world_rounded_rect), narrowed to what the
+    /// command is allowed to show.
+    ///
+    /// The clip is part of the shape, not a detail of one consumer: a card half
+    /// out of a viewport is filtered only where it is on show, and a compositor
+    /// region published for the whole card blurs the desktop beside a panel that
+    /// is not there. Returns `None` when the clip leaves nothing.
+    ///
+    /// A corner of the intersection belongs to whichever rectangle supplied both
+    /// edges meeting there: the shape's own radius where the clip reached
+    /// neither, the *clip's* where it supplied both — a card inside a rounded
+    /// scroller is cornered by the scroller, and publishing the scroller's
+    /// square bounding box blurs the desktop in the four corners where the panel
+    /// is not drawn — and nothing where it supplied one, because a cut edge is
+    /// straight.
+    ///
+    /// An overlay's clip is stored in the command's *local* space so a ripple
+    /// follows the shape it belongs to instead of an axis-aligned box around it
+    /// — so it is carried into world space here before the two are compared.
+    /// Intersecting the two spaces directly reported a region offset by every
+    /// translation between the shape and the surface.
+    pub fn clipped_world_rounded_rect(
+        &self,
+        rect: Rect,
+        radii: CornerRadii,
+    ) -> Option<(Rect, EllipticalRadii)> {
+        let (world, world_radii) = self.world_rounded_rect(rect, radii);
+        let Some(clip) = self.clip.as_ref() else {
+            return Some((world, world_radii));
+        };
+
+        // A local clip and the radius that shapes it are in the same space, so
+        // both come out through the same transform.
+        let (sx, sy) = self.world_transform.extract_scale_components();
+        let (clip_rect, clip_radii) = if self.clip_is_local {
+            (
+                self.world_aabb(clip.rect),
+                EllipticalRadii::scaled_xy(CornerRadii::uniform(clip.corner_radius), sx, sy),
+            )
+        } else {
+            (
+                clip.rect,
+                EllipticalRadii::circular(CornerRadii::uniform(clip.corner_radius)),
+            )
+        };
+
+        let x = world.x.max(clip_rect.x);
+        let y = world.y.max(clip_rect.y);
+        let right = (world.x + world.width).min(clip_rect.x + clip_rect.width);
+        let bottom = (world.y + world.height).min(clip_rect.y + clip_rect.height);
+        if right <= x || bottom <= y {
+            return None;
+        }
+
+        let (cut_left, cut_top) = (x > world.x, y > world.y);
+        let cut_right = right < world.x + world.width;
+        let cut_bottom = bottom < world.y + world.height;
+        // Both edges from the clip, both from the shape, or one from each.
+        let pick = |shape: f32, clip: f32, a: bool, b: bool| match (a, b) {
+            (false, false) => shape,
+            (true, true) => clip,
+            _ => 0.0,
+        };
+        let corners = |shape: CornerRadii, clip: CornerRadii| CornerRadii {
+            top_left: pick(shape.top_left, clip.top_left, cut_left, cut_top),
+            top_right: pick(shape.top_right, clip.top_right, cut_right, cut_top),
+            bottom_right: pick(shape.bottom_right, clip.bottom_right, cut_right, cut_bottom),
+            bottom_left: pick(shape.bottom_left, clip.bottom_left, cut_left, cut_bottom),
+        };
+
+        Some((
+            Rect::new(x, y, right - x, bottom - y),
+            EllipticalRadii {
+                x: corners(world_radii.x, clip_radii.x),
+                y: corners(world_radii.y, clip_radii.y),
+            },
+        ))
+    }
+}
+
 /// Draw commands grouped so that batching never reorders drawing.
 ///
 /// Each group buckets its commands by [`RenderLayer`], and the GPU draws a
@@ -88,6 +217,12 @@ pub struct FlattenedCommand {
 /// column of buttons stays one group; a tint over a photo gets two.
 struct LayeredCommands {
     groups: Vec<LayerBuckets>,
+    /// Whether any command asks the compositor to blur behind it.
+    ///
+    /// Counted while the commands go past, because the alternative is walking
+    /// them all again afterwards to find out — on every painted frame, for the
+    /// large majority of surfaces that never ask for it at all.
+    compositor_blur: bool,
 }
 
 #[derive(Default)]
@@ -191,10 +326,16 @@ impl LayeredCommands {
     fn new() -> Self {
         Self {
             groups: vec![LayerBuckets::default()],
+            compositor_blur: false,
         }
     }
 
     fn push(&mut self, cmd: FlattenedCommand) {
+        if let DrawCommand::BackdropBlur { sources, .. } = &*cmd.command
+            && sources.contains(crate::backdrop::BackdropSources::COMPOSITOR)
+        {
+            self.compositor_blur = true;
+        }
         let layer = cmd.layer;
         let rect = world_bounds(&cmd);
         // `expect`: `new` seeds one group and nothing ever removes one.
@@ -329,19 +470,25 @@ impl CommandLayer {
 /// Flatten results are cached on nodes (via interior mutability) for
 /// incremental reuse in subsequent frames.
 ///
-/// `layers` receives the groups to draw, in order; see [`LayeredCommands`].
+/// `layers` receives the groups to draw, in order; see [`CommandLayer`].
+///
+/// Returns whether the frame carries a backdrop blur the *compositor* is asked
+/// to apply, which is the only reason to walk the result again and build a
+/// `wl_region` from it.
 pub fn flatten_root_into(
     root: &RenderNode,
     commands: &mut Vec<FlattenedCommand>,
     layers: &mut Vec<CommandLayer>,
-) {
+) -> bool {
     commands.clear();
     layers.clear();
 
     let mut layered = LayeredCommands::new();
     flatten_node(root, Transform::IDENTITY, None, None, &mut layered);
 
+    let compositor_blur = layered.compositor_blur;
     layered.drain_into(commands, layers);
+    compositor_blur
 }
 
 /// Recursively flatten a node and its children.
@@ -437,6 +584,20 @@ fn flatten_node(
         let layer = match &**cmd {
             DrawCommand::Text { .. } => RenderLayer::Text,
             DrawCommand::Image { .. } => RenderLayer::Images,
+            // Only the half the renderer draws opens a backdrop group. A blur
+            // restricted to `COMPOSITOR` is published as a `wl_region` and drawn
+            // by nobody here, and `Backdrop` is not a free label: it is the
+            // lowest layer, so it splits the draw group, and a non-empty
+            // backdrop bucket ends the render pass to store the target the
+            // effect would sample. That is a pass break and a group per
+            // container per frame, to filter nothing. It still travels with the
+            // frame — the region is read off this list — it just travels with
+            // the shapes, where it produces no instance.
+            DrawCommand::BackdropBlur { sources, .. }
+                if !sources.contains(crate::backdrop::BackdropSources::SURFACE) =>
+            {
+                RenderLayer::Shapes
+            }
             DrawCommand::BackdropBlur { .. } | DrawCommand::TextBackdropBlur { .. } => {
                 RenderLayer::Backdrop
             }
@@ -711,6 +872,46 @@ mod tests {
 
     use RenderLayer::{Images, Overlay, Shapes, Text};
 
+    /// A blur restricted to the compositor is published as a `wl_region` and
+    /// drawn by nobody here, so it must not be filed as a backdrop effect: that
+    /// bucket ends the render pass to store the target the effect would sample,
+    /// and it is the lowest layer, so it splits the draw group as well. Both,
+    /// per container, per frame, to filter nothing.
+    #[test]
+    fn a_compositor_only_blur_neither_breaks_the_pass_nor_splits_the_group() {
+        let frame = |sources| {
+            let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+            let mut node = RenderNode::new(1);
+            node.bounds = rect;
+            // The background first, so a backdrop landing after it is one the
+            // group rules have to split for.
+            node.commands
+                .push(Rc::new(DrawCommand::rounded_rect(rect, Color::WHITE, 0.0)));
+            node.commands.push(Rc::new(DrawCommand::BackdropBlur {
+                rect,
+                sources,
+                radius: 24.0,
+                corner_radii: CornerRadii::from(0.0),
+                curvature: 1.0,
+            }));
+
+            let (mut commands, mut layers) = (Vec::new(), Vec::new());
+            let told = flatten_root_into(&node, &mut commands, &mut layers);
+            let drawn = layers.iter().any(|l| !l.backdrop.is_empty());
+            (told, drawn, layers.len())
+        };
+
+        let (told, drawn, groups) = frame(crate::backdrop::BackdropSources::COMPOSITOR);
+        assert!(told, "the compositor still has to be handed a region");
+        assert!(!drawn, "and this renderer has nothing to do for it");
+        assert_eq!(groups, 1, "so the frame is not split for it either");
+
+        let (told, drawn, groups) = frame(crate::backdrop::BackdropSources::SURFACE);
+        assert!(!told, "nothing for the compositor");
+        assert!(drawn, "and a pass of our own to run");
+        assert_eq!(groups, 2, "which is what the split is for");
+    }
+
     #[test]
     fn ascending_layers_stay_in_one_group() {
         // The common case: nothing is painted over a higher layer, so the
@@ -930,5 +1131,218 @@ mod tests {
         let mut layers = Vec::new();
         layered.drain_into(&mut commands, &mut layers);
         assert!(layers.iter().all(|layer| !layer.is_empty()));
+    }
+}
+
+#[cfg(test)]
+mod world_geometry_tests {
+    use super::*;
+    use crate::widgets::Color;
+
+    fn command(transform: Transform) -> FlattenedCommand {
+        FlattenedCommand {
+            command: Rc::new(DrawCommand::RoundedRect {
+                rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+                color: Color::RED,
+                radius: CornerRadii::uniform(16.0),
+                curvature: 1.0,
+                border: None,
+                shadow: None,
+                gradient: None,
+            }),
+            world_transform: transform,
+            world_transform_origin: None,
+            layer: RenderLayer::Shapes,
+            clip: None,
+            clip_is_local: false,
+        }
+    }
+
+    /// Two opposite corners do not bound a rotated box: a 45° rotation puts the
+    /// extremes on the *other* diagonal, and subtracting the two you happen to
+    /// have gives a zero-width rect — which downstream reads as "nothing to do".
+    #[test]
+    fn a_rotated_box_reports_the_diagonal_it_actually_covers() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let (world, _) = command(Transform::rotate_degrees(45.0))
+            .world_rounded_rect(rect, CornerRadii::from(0.0));
+
+        let diagonal = 100.0 * 2.0f32.sqrt();
+        assert!(
+            (world.width - diagonal).abs() < 0.1 && (world.height - diagonal).abs() < 0.1,
+            "a 100x100 turned 45° covers {diagonal:.1} square, got {:.1}x{:.1}",
+            world.width,
+            world.height
+        );
+    }
+
+    /// The radii travel with the box, or a scaled container reports a shape
+    /// whose corners are cut a different amount from the one it draws.
+    #[test]
+    fn the_corner_radii_scale_with_the_box() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let (world, radii) =
+            command(Transform::scale(2.0)).world_rounded_rect(rect, CornerRadii::uniform(16.0));
+
+        assert_eq!(world.width, 200.0);
+        assert_eq!(
+            (radii.x.max(), radii.y.max()),
+            (32.0, 32.0),
+            "twice the box, twice the corner"
+        );
+    }
+
+    /// Each axis by its own factor. A corner scaled unevenly is an ellipse, and
+    /// the geometric mean the shared scale used to return — 22.6 for 2x/1x — is
+    /// neither of its axes, so the region cut a curve the shape does not have.
+    #[test]
+    fn an_uneven_scale_gives_the_corner_two_axes() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let (_, radii) = command(Transform::scale_xy(2.0, 1.0))
+            .world_rounded_rect(rect, CornerRadii::uniform(16.0));
+
+        assert_eq!(radii.x.top_left, 32.0, "twice as wide");
+        assert_eq!(radii.y.top_left, 16.0, "and as tall as it was");
+        assert_eq!(
+            radii.to_circular().top_left,
+            32.0,
+            "a consumer taking one radius gets the larger, so it cuts at least \
+             as much as the ellipse and stays inside the shape"
+        );
+    }
+
+    /// The clip is part of the shape. A card half out of a viewport is filtered
+    /// only where it is on show, and the region published to the compositor has
+    /// to agree — otherwise it blurs the desktop beside a panel that is not
+    /// there, which is the last way the two halves of one command could
+    /// describe different things.
+    #[test]
+    fn a_clip_narrows_the_shape_for_both_halves() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let mut cmd = command(Transform::translate(0.0, 0.0));
+        cmd.clip = Some(WorldClip {
+            rect: Rect::new(0.0, 0.0, 40.0, 100.0),
+            corner_radius: 0.0,
+            curvature: 1.0,
+        });
+
+        let (world, _) = cmd
+            .clipped_world_rounded_rect(rect, CornerRadii::from(0.0))
+            .expect("still on show");
+        assert_eq!((world.x, world.width), (0.0, 40.0), "cut to the clip");
+        assert_eq!(world.height, 100.0, "and untouched on the other axis");
+    }
+
+    /// And the corners go with it. A card cut in half by a viewport has a
+    /// straight edge where the cut is, so the two corners along it are square —
+    /// published as round, the region loses a wedge the size of the radius at
+    /// each of them, and the desktop shows through beside the panel.
+    #[test]
+    fn a_clip_squares_off_the_corners_it_cuts() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let mut cmd = command(Transform::translate(0.0, 0.0));
+        cmd.clip = Some(WorldClip {
+            rect: Rect::new(0.0, 0.0, 40.0, 100.0),
+            corner_radius: 0.0,
+            curvature: 1.0,
+        });
+
+        let (_, radii) = cmd
+            .clipped_world_rounded_rect(rect, CornerRadii::uniform(16.0))
+            .expect("still on show");
+        assert_eq!(
+            (radii.x.top_left, radii.x.bottom_left),
+            (16.0, 16.0),
+            "the left edge was not moved, so its corners are as they were drawn"
+        );
+        assert_eq!(
+            (radii.x.top_right, radii.x.bottom_right),
+            (0.0, 0.0),
+            "and the ones along the cut are square"
+        );
+    }
+
+    /// A corner where the clip supplied *both* edges is the clip's corner. A
+    /// frosted card filling a rounded scroller published the scroller's square
+    /// bounding box, so the compositor blurred the desktop in the four corners
+    /// where the panel is not drawn — the function's own doc, applied to itself.
+    #[test]
+    fn a_corner_the_clip_supplies_belongs_to_the_clip() {
+        // The card overhangs the scroller on every side, so all four corners of
+        // the intersection come from the clip.
+        let rect = Rect::new(-10.0, -10.0, 120.0, 120.0);
+        let mut cmd = command(Transform::translate(0.0, 0.0));
+        cmd.clip = Some(WorldClip {
+            rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+            corner_radius: 16.0,
+            curvature: 1.0,
+        });
+
+        let (world, radii) = cmd
+            .clipped_world_rounded_rect(rect, CornerRadii::uniform(4.0))
+            .expect("still on show");
+        assert_eq!(
+            (world.x, world.y, world.width, world.height),
+            (0.0, 0.0, 100.0, 100.0)
+        );
+        assert_eq!(
+            radii.x.to_array(),
+            [16.0; 4],
+            "every corner is the scroller's, not the card's and not square"
+        );
+    }
+
+    /// Clipped away entirely is nothing to publish, not an empty rectangle
+    /// somewhere.
+    #[test]
+    fn a_shape_outside_its_clip_has_no_region() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let mut cmd = command(Transform::translate(500.0, 0.0));
+        cmd.clip = Some(WorldClip {
+            rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+            corner_radius: 0.0,
+            curvature: 1.0,
+        });
+
+        assert!(
+            cmd.clipped_world_rounded_rect(rect, CornerRadii::from(0.0))
+                .is_none()
+        );
+    }
+
+    /// An overlay keeps its clip in local space so a ripple follows the shape
+    /// through a rotation. Compared against a world rect without being carried
+    /// over first, a ripple inside a translated subtree reports a region
+    /// somewhere else entirely — or none at all, for a shape wholly on show.
+    #[test]
+    fn a_local_clip_is_carried_into_world_space_before_it_cuts() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let mut cmd = command(Transform::translate(500.0, 300.0));
+        cmd.clip = Some(WorldClip {
+            rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+            corner_radius: 0.0,
+            curvature: 1.0,
+        });
+        cmd.clip_is_local = true;
+
+        let (world, _) = cmd
+            .clipped_world_rounded_rect(rect, CornerRadii::from(0.0))
+            .expect("the clip covers the whole shape, so nothing is cut");
+        assert_eq!(
+            (world.x, world.y, world.width, world.height),
+            (500.0, 300.0, 100.0, 100.0)
+        );
+    }
+
+    /// A translation moves it and changes nothing else.
+    #[test]
+    fn a_translation_only_moves_it() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 60.0);
+        let (world, radii) = command(Transform::translate(20.0, 30.0))
+            .world_rounded_rect(rect, CornerRadii::uniform(8.0));
+
+        assert_eq!((world.x, world.y), (20.0, 30.0));
+        assert_eq!((world.width, world.height), (100.0, 60.0));
+        assert_eq!((radii.x.max(), radii.y.max()), (8.0, 8.0));
     }
 }

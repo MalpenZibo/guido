@@ -24,8 +24,9 @@
 //! For lists, [`keyed()`] preserves per-row state through stable identity
 //! and rebuilds only rows whose item content changed.
 
+use rustc_hash::FxHashMap;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::hash::Hash;
 use std::rc::Rc;
 
 use crate::reactive::invalidation::suspend_widget_tracking;
@@ -193,12 +194,12 @@ where
             next_generation: u64,
             /// Rows built by the latest run, adopted by the reconciler's
             /// factory calls in the same pass.
-            pending: HashMap<u64, Box<dyn Widget>>,
+            pending: FxHashMap<u64, Box<dyn Widget>>,
         }
 
         let state = Rc::new(RefCell::new(State {
             next_generation: 0,
-            pending: HashMap::new(),
+            pending: FxHashMap::default(),
         }));
         let list_fn = Rc::new(self);
 
@@ -248,9 +249,9 @@ where
 /// A reactive keyed children list: tracked data, key-based identity,
 /// untracked per-item builder. Built with [`keyed()`], consumed by
 /// `.children()`.
-pub struct KeyedChildren<T, I, W> {
+pub struct KeyedChildren<T, I, K, W> {
     data: Box<dyn Fn() -> I>,
-    key: Box<dyn Fn(&T) -> u64>,
+    key: Box<dyn Fn(&T) -> K>,
     build: Box<dyn Fn(T) -> W>,
 }
 
@@ -272,21 +273,33 @@ pub struct KeyedChildren<T, I, W> {
 /// read via signals inside the row for in-place updates, fields included
 /// trigger a row rebuild when they change.
 ///
+/// The key is any `Hash + Eq + Clone`, so an identity that is already a string
+/// or a tuple can be used as it is rather than hashed by hand at the call site.
+/// Rows are indexed by the key itself, not by a hash of it, so two distinct keys
+/// are never reconciled as one:
+///
 /// ```ignore
 /// container().children(keyed(
 ///     move || workspaces.get(),
 ///     |ws| ws.id,
 ///     workspace_pill,
 /// ))
+///
+/// container().children(keyed(
+///     move || tabs.get(),
+///     |tab| tab.title.clone(),
+///     tab_button,
+/// ))
 /// ```
-pub fn keyed<T, I, W>(
+pub fn keyed<T, I, K, W>(
     data: impl Fn() -> I + 'static,
-    key: impl Fn(&T) -> u64 + 'static,
+    key: impl Fn(&T) -> K + 'static,
     build: impl Fn(T) -> W + 'static,
-) -> KeyedChildren<T, I, W>
+) -> KeyedChildren<T, I, K, W>
 where
     T: Clone + PartialEq + 'static,
     I: IntoIterator<Item = T>,
+    K: Hash + Eq + Clone + 'static,
     W: Widget + 'static,
 {
     KeyedChildren {
@@ -296,10 +309,11 @@ where
     }
 }
 
-impl<T, I, W> IntoChildren<DynamicChildren> for KeyedChildren<T, I, W>
+impl<T, I, K, W> IntoChildren<DynamicChildren> for KeyedChildren<T, I, K, W>
 where
     T: Clone + PartialEq + 'static,
     I: IntoIterator<Item = T> + 'static,
+    K: Hash + Eq + Clone + 'static,
     W: Widget + 'static,
 {
     fn add_to_container(self, children_source: &mut ChildrenSource) {
@@ -310,14 +324,15 @@ where
 /// Wire a (tracked data, key, untracked builder) triple into a
 /// ChildrenSource as a keyed dynamic list. See [`keyed()`] for the
 /// semantics.
-fn add_keyed_children<T, I, W>(
+fn add_keyed_children<T, I, K, W>(
     source: &mut ChildrenSource,
     data_fn: impl Fn() -> I + 'static,
-    key_fn: impl Fn(&T) -> u64 + 'static,
+    key_fn: impl Fn(&T) -> K + 'static,
     build_fn: impl Fn(T) -> W + 'static,
 ) where
     T: Clone + PartialEq + 'static,
     I: IntoIterator<Item = T>,
+    K: Hash + Eq + Clone + 'static,
     W: Widget + 'static,
 {
     struct Row<T> {
@@ -326,18 +341,27 @@ fn add_keyed_children<T, I, W>(
         /// content version), stable while the item compares equal.
         generation: u64,
     }
-    struct KeyedState<T> {
-        rows: HashMap<u64, Row<T>>,
+    /// Rows are indexed by the key itself, not by a hash of it. Reducing the
+    /// key to a u64 first would make two colliding keys the same row — one
+    /// widget serving two items and the other silently dropped — and no
+    /// non-cryptographic hash can rule that out for keys like strings and
+    /// tuples, which is exactly what this signature invites.
+    struct KeyedState<T, K> {
+        rows: FxHashMap<K, Row<T>>,
         next_generation: u64,
         /// Widgets built eagerly this pass, awaiting adoption by the
         /// reconciler's factory calls (keyed by generation).
-        pending: HashMap<u64, (Box<dyn Widget>, OwnerId)>,
+        pending: FxHashMap<u64, (Box<dyn Widget>, OwnerId)>,
     }
 
-    let state = Rc::new(RefCell::new(KeyedState::<T> {
-        rows: HashMap::new(),
+    // Fx rather than the std hasher: this runs once per row per pass, on every
+    // frame a list changes, and widening the key from u64 to any Hash made a
+    // string key ordinary. These are the app's own identities, not adversarial
+    // input, which is the condition SipHash is there for.
+    let state = Rc::new(RefCell::new(KeyedState::<T, K> {
+        rows: FxHashMap::default(),
         next_generation: 0,
-        pending: HashMap::new(),
+        pending: FxHashMap::default(),
     }));
 
     let items_fn = move || {
@@ -350,12 +374,34 @@ fn add_keyed_children<T, I, W>(
             dispose_owner_now(owner_id);
         }
 
-        let mut seen = std::collections::HashSet::new();
+        // Keyed by first sighting rather than a plain set: a duplicate is worth
+        // reporting *with the row it collided with*, and that is the one thing a
+        // set cannot say.
+        let mut seen = FxHashMap::default();
         let mut out = Vec::new();
-        for item in items {
+        for (index, item) in items.into_iter().enumerate() {
             let key = key_fn(&item);
-            if !seen.insert(key) {
-                log::warn!("keyed children: duplicate key {key}, skipping item");
+            // Looked up now and recorded at the end of the row, rather than
+            // through `entry`: `entry` takes the key by value, so it would clone
+            // every key on every pass — a heap allocation per row for the string
+            // keys this signature invites, on a list that has settled and is
+            // building nothing. This way only a row that is actually created
+            // clones, and a second hash of a key already in cache is the cheaper
+            // half of that trade.
+            //
+            // The first sighting, not the previous one: reporting against the
+            // previous would, with duplicates at 0, 2 and 5, send the reader to
+            // item 2 — which was itself skipped and is not in the list.
+            if let Some(first) = seen.get(&key) {
+                // Without the key's value: `Debug` would be a bound the mechanism
+                // does not need, and it would keep an opaque newtype out of
+                // `keyed` in order to format a log line. Both indices instead —
+                // the type alone names nothing, but the pair of rows that
+                // collided is enough to go and look at them.
+                log::warn!(
+                    "keyed children: item {index} repeats the {} key of item {first}, skipping it",
+                    std::any::type_name::<K>(),
+                );
                 continue;
             }
 
@@ -370,10 +416,14 @@ fn add_keyed_children<T, I, W>(
                         })
                     });
                     st.pending.insert(generation, (widget, owner_id));
-                    st.rows.insert(key, Row { item, generation });
+                    st.rows.insert(key.clone(), Row { item, generation });
                     generation
                 }
             };
+
+            // Recorded once the row is dealt with, moving the key rather than
+            // cloning it — nothing below needs it again.
+            seen.insert(key, index);
 
             let adopt_state = Rc::clone(&state);
             out.push(DynItem::new(generation, move || {
@@ -385,7 +435,7 @@ fn add_keyed_children<T, I, W>(
                 OwnedWidget::new(widget, owner_id)
             }));
         }
-        st.rows.retain(|key, _| seen.contains(key));
+        st.rows.retain(|key, _| seen.contains_key(key));
         out
     };
 
@@ -417,6 +467,45 @@ mod tests {
         let mut source = ChildrenSource::default();
         source.set_container_id(parent);
         (tree, source)
+    }
+
+    /// Two keys that a 64-bit hash cannot tell apart must still be two rows.
+    /// While the reconciler indexed by `FxHash` of the key this collapsed them:
+    /// one widget served both items and the other was silently dropped.
+    #[test]
+    fn colliding_keys_are_still_distinct_rows() {
+        /// A key whose hash is deliberately useless, standing in for the
+        /// collision a real hash makes merely unlikely.
+        // Deliberately not Debug: the key bound must not require it.
+        #[derive(Clone, PartialEq, Eq)]
+        struct Collides(&'static str);
+
+        impl std::hash::Hash for Collides {
+            fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+                0u8.hash(state);
+            }
+        }
+
+        let (mut tree, mut source) = children_host();
+        let items = create_signal(vec![Collides("a"), Collides("b")]);
+
+        IntoChildren::<DynamicChildren>::add_to_container(
+            keyed(
+                move || items.get(),
+                |c: &Collides| c.clone(),
+                |_| TestWidget,
+            ),
+            &mut source,
+        );
+
+        let ids = source.reconcile_and_get(&mut tree).clone();
+        assert_eq!(ids.len(), 2, "two keys, two widgets");
+
+        // And the identity survives a reorder: same widgets, swapped.
+        items.set(vec![Collides("b"), Collides("a")]);
+        source.reconcile_with_tracking(&mut tree);
+        let reordered = source.reconcile_and_get(&mut tree).clone();
+        assert_eq!(reordered, vec![ids[1], ids[0]]);
     }
 
     #[test]
@@ -623,14 +712,17 @@ mod tests {
     fn keyed_children_skip_duplicate_keys() {
         let (mut tree, mut source) = children_host();
 
+        // Three of them, so the report has a choice to get wrong: the second and
+        // the third are both told about the *first*, which is the row still on
+        // screen — not about each other, one of which was itself skipped.
         keyed(
-            move || vec![(7u64, "x"), (7, "y")],
+            move || vec![(7u64, "x"), (1, "a"), (7, "y"), (7, "z")],
             |(id, _)| *id,
             |_| TestWidget,
         )
         .add_to_container(&mut source);
 
         // Only the first item with a given key is rendered
-        assert_eq!(source.reconcile_and_get(&mut tree).len(), 1);
+        assert_eq!(source.reconcile_and_get(&mut tree).len(), 2);
     }
 }

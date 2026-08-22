@@ -150,10 +150,9 @@ Control widget sizing with builder methods:
 
 ```rust
 container()
-    .width(100.0)        // Fixed width
-    .height(50.0)        // Fixed height
-    .min_width(50.0)     // Minimum width
-    .max_width(200.0)    // Maximum width
+    .width(100.0)                          // Fixed width
+    .height(50.0)                          // Fixed height
+    .width(at_least(50.0).at_most(200.0))  // Bounded instead
 ```
 
 ## Event Flow

@@ -24,7 +24,7 @@ async fn main() {
         let time_w = time.writer(); // WriteSignal is Send — can be captured by service
 
         // Clock service - read-only (ignore the receiver)
-        let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+        create_task(move |ctx| async move {
             log::info!("Clock service started");
 
             while ctx.is_running() {

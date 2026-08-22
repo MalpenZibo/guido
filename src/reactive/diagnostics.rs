@@ -205,8 +205,7 @@ mod tests {
         assert_eq!(
             reports_of(|| crate::reactive::create_effect(move || {
                 let _ = count.get();
-            })
-            .detach()),
+            })),
             0
         );
     }

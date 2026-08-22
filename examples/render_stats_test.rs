@@ -19,7 +19,7 @@ async fn main() {
 
         // Continuously update rotation to force frame rendering
         let rotation_w = rotation.writer();
-        let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+        create_task(move |ctx| async move {
             while ctx.is_running() {
                 rotation_w.update(|r| *r += 1.0);
                 tokio::time::sleep(std::time::Duration::from_millis(16)).await; // ~60fps

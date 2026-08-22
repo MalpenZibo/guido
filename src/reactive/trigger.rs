@@ -68,8 +68,7 @@ mod tests {
         create_effect(move || {
             trigger.track();
             counter.set(counter.get() + 1);
-        })
-        .detach();
+        });
         assert_eq!(runs.get(), 1, "initial run");
 
         trigger.notify();

@@ -138,10 +138,7 @@ Note that a layer *replaces* the base value rather than ranking against it. A pr
 .border(1.0, Color::rgb(0.3, 0.3, 0.4))
 .when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
 .when_pressed(|s| s.border(3.0, Color::rgb(0.7, 0.7, 0.8)))
-
-// Or just width or color
-.when_hovered(|s| s.border_width(2.0))
-.when_hovered(|s| s.border_color(Color::WHITE))
+.when_hovered(|s| s.border(2.0, Color::WHITE))   // both halves, always
 ```
 
 ### Transform
@@ -261,8 +258,8 @@ The `StateStyle` struct holds all possible overrides:
 ```rust
 pub struct StateStyle {
     pub background: Option<BackgroundOverride>,
-    pub border_width: Option<Signal<f32>>,
-    pub border_color: Option<Signal<Color>>,
+    /// Both halves or neither — half a border is no border.
+    pub border: Option<BorderOverride>,
     pub corner_radius: Option<Signal<f32>>,
     pub transform: Option<Signal<Transform>>,
     pub elevation: Option<Signal<f32>>,

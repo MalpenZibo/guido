@@ -91,14 +91,107 @@ pub struct SurfaceConfig {
     pub background_color: Color,
     /// Screen-space reservation policy (see [`ExclusiveZone`]).
     pub exclusive_zone: ExclusiveZone,
-    /// Margins from the anchored screen edges (top, right, bottom, left).
-    pub margin: (i32, i32, i32, i32),
+    /// Margins from the anchored screen edges.
+    pub margin: Margin,
     /// Output (monitor) to show the surface on. None lets the compositor choose.
     pub output: Option<OutputId>,
     /// Input region in logical surface coordinates. `None` means the whole
     /// surface accepts input; `Some(rects)` limits input to those rectangles
     /// (an empty list makes the surface fully click-through).
     pub input_region: Option<Vec<Rect>>,
+}
+
+/// Margins from the anchored screen edges, in logical pixels.
+///
+/// The shorthands a [`Padding`](crate::widgets::Padding) takes, in the same
+/// order — one value for every edge, `[vertical, horizontal]`, or the full
+/// `[top, right, bottom, left]` — but **whole pixels only**: `i32`, `u32` and
+/// arrays of them. `margin(8.0)` does not compile where `padding(8.0)` does,
+/// because `zwlr_layer_surface_v1::set_margin` is defined in integers and a
+/// fractional margin has nothing to round to that the compositor would honour.
+///
+/// ```ignore
+/// SurfaceConfig::new().margin(8)                   // all four edges
+/// SurfaceConfig::new().margin([0, 12])             // none top/bottom, 12 aside
+/// SurfaceConfig::new().margin([8, 12, 0, 12])      // top, right, bottom, left
+/// ```
+///
+/// Negative values are allowed: layer-shell reads them as pushing the surface
+/// past its anchored edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Margin {
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+    pub left: i32,
+}
+
+impl Margin {
+    /// The same margin on every edge.
+    pub fn all(value: i32) -> Self {
+        Self {
+            top: value,
+            right: value,
+            bottom: value,
+            left: value,
+        }
+    }
+
+    pub(crate) fn is_zero(self) -> bool {
+        self == Self::default()
+    }
+}
+
+impl From<i32> for Margin {
+    fn from(v: i32) -> Self {
+        Margin::all(v)
+    }
+}
+
+impl From<u32> for Margin {
+    fn from(v: u32) -> Self {
+        Margin::all(v as i32)
+    }
+}
+
+/// `[vertical, horizontal]` — CSS-style 2-value shorthand.
+impl From<[i32; 2]> for Margin {
+    fn from(v: [i32; 2]) -> Self {
+        Margin {
+            top: v[0],
+            right: v[1],
+            bottom: v[0],
+            left: v[1],
+        }
+    }
+}
+
+/// `[top, right, bottom, left]` — CSS-style 4-value shorthand.
+impl From<[i32; 4]> for Margin {
+    fn from(v: [i32; 4]) -> Self {
+        Margin {
+            top: v[0],
+            right: v[1],
+            bottom: v[2],
+            left: v[3],
+        }
+    }
+}
+
+/// `[vertical, horizontal]`, unsigned. A bare `[0, 12]` infers as `[i32; 2]`
+/// and needs neither of these, which is why the pair was missing while the doc
+/// said "arrays of them" — it takes a `[u32; 2]` named somewhere else to notice.
+impl From<[u32; 2]> for Margin {
+    fn from(v: [u32; 2]) -> Self {
+        Margin::from([v[0] as i32, v[1] as i32])
+    }
+}
+
+/// `[top, right, bottom, left]`, unsigned.
+impl From<[u32; 4]> for Margin {
+    fn from(v: [u32; 4]) -> Self {
+        Margin::from([v[0] as i32, v[1] as i32, v[2] as i32, v[3] as i32])
+    }
 }
 
 /// Per-axis sizing for layer surfaces.
@@ -122,7 +215,7 @@ pub struct SurfaceConfig {
 ///   final-size surface.
 /// - On an axis anchored to both screen edges the compositor owns the
 ///   size; `Content` there is ignored with a warning at creation.
-/// - An exclusive zone of [`ExclusiveZone::FollowHeight`] follows content
+/// - An exclusive zone of [`ExclusiveZone::Auto`] follows content
 ///   resizes; every other policy never moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceExtent {
@@ -130,6 +223,118 @@ pub enum SurfaceExtent {
     Fixed(u32),
     /// Follow the content's natural size on this axis.
     Content,
+}
+
+/// Which axes the compositor owns, from the anchor: an axis pinned to both of
+/// its screen edges is stretched to fit and the surface's request for it is
+/// ignored.
+///
+/// Returns `(width, height)`.
+pub(crate) fn compositor_owned_axes(anchor: Anchor) -> (bool, bool) {
+    (
+        anchor.contains(Anchor::LEFT) && anchor.contains(Anchor::RIGHT),
+        anchor.contains(Anchor::TOP) && anchor.contains(Anchor::BOTTOM),
+    )
+}
+
+/// Warn about a `content()` axis the compositor owns, which can never take
+/// effect. For the creation path, where the *other* axis is usually just the
+/// default nobody chose — a bar declares its height and leaves the width alone —
+/// so a warning about a `Fixed` one there would be noise.
+pub(crate) fn warn_content_on_stretched_axis(id: SurfaceId, config: &SurfaceConfig) {
+    let (stretch_w, stretch_h) = compositor_owned_axes(config.anchor);
+    if (stretch_w && config.width.is_content()) || (stretch_h && config.height.is_content()) {
+        log::warn!(
+            "Surface {id:?}: content() sizing on an axis anchored to both screen \
+             edges is compositor-owned and will be ignored"
+        );
+    }
+}
+
+/// The same for a size asked for at runtime, where every value is one the caller
+/// chose — so a `Fixed` one being discarded is worth saying too. Silently
+/// dropping a number somebody passed is the failure mode this exists for.
+pub(crate) fn warn_size_request_on_stretched_axis(id: SurfaceId, config: &SurfaceConfig) {
+    let (stretch_w, stretch_h) = compositor_owned_axes(config.anchor);
+    for (stretched, extent, axis) in [
+        (stretch_w, config.width, "width"),
+        (stretch_h, config.height, "height"),
+    ] {
+        if !stretched {
+            continue;
+        }
+        match extent {
+            SurfaceExtent::Content => log::warn!(
+                "Surface {id:?}: content() {axis} on an axis anchored to both \
+                 screen edges is compositor-owned and will be ignored"
+            ),
+            SurfaceExtent::Fixed(v) => log::warn!(
+                "Surface {id:?}: {axis} of {v} on an axis anchored to both screen \
+                 edges is compositor-owned and will be ignored"
+            ),
+        }
+    }
+}
+
+/// The size an axis is currently asking for: its own, if it has one, and the
+/// size the compositor has confirmed while a content axis waits to be measured.
+///
+/// Before the first configure there is no confirmed size, and the placeholder is
+/// what creation asks for too — the content-measure pass runs on the first
+/// frames of a surface either way, so 1px is a value it is leaving, not one it
+/// can be stuck at.
+pub(crate) fn requested_extent(extent: SurfaceExtent, live: Option<u32>) -> u32 {
+    match extent {
+        SurfaceExtent::Fixed(v) => v,
+        SurfaceExtent::Content => live.unwrap_or_else(|| extent.initial()),
+    }
+}
+
+/// What a resize asks the compositor for, and whether the surface has to be
+/// re-measured before that answer is right.
+///
+/// A content axis has no size of its own yet — `SurfaceExtent::initial()` is
+/// 1px — so asking for it directly collapses the surface, and nothing brings it
+/// back: the content-measure pass runs only for a surface that had layout
+/// activity, and a bare `set_size` produces none. So a content axis holds the
+/// confirmed size and asks for a layout, which is what brings the measure round.
+pub(crate) fn resize_request(config: &SurfaceConfig, live: Option<(u32, u32)>) -> (u32, u32, bool) {
+    let (width, height) = honour_owned_axes(
+        config.anchor,
+        requested_extent(config.width, live.map(|(w, _)| w)),
+        requested_extent(config.height, live.map(|(_, h)| h)),
+    );
+    (width, height, needs_content_measure(config))
+}
+
+/// Whether this surface has a `content()` axis worth measuring.
+///
+/// A content axis the compositor owns is not one: the measure runs, and
+/// [`honour_owned_axes`] throws the answer away. A bar declared
+/// `width(content()).anchor(TOP | LEFT | RIGHT)` measured its content and
+/// discarded it on every resize, every re-anchoring, and — until this was the
+/// gate on the frame loop's measure pass too — on **every frame with any layout
+/// activity at all**, since the width it measured could never equal the screen
+/// width it had been given.
+pub(crate) fn needs_content_measure(config: &SurfaceConfig) -> bool {
+    let (owns_w, owns_h) = compositor_owned_axes(config.anchor);
+    (config.width.is_content() && !owns_w) || (config.height.is_content() && !owns_h)
+}
+
+/// Zero the axes the compositor owns, whatever size was going to be asked for.
+///
+/// Zero on such an axis is how layer-shell says "you decide", and it is not
+/// optional: `zwlr_layer_surface_v1::set_size` makes omitting a dimension
+/// *without* opposite-edge anchoring a protocol error, and sending a number
+/// *with* it hands back an axis that is not ours. The anchor decides, so every
+/// path that sends a size comes through here — creation, a runtime resize, a
+/// re-anchoring, and the content-measure pass.
+pub(crate) fn honour_owned_axes(anchor: Anchor, width: u32, height: u32) -> (u32, u32) {
+    let (stretch_w, stretch_h) = compositor_owned_axes(anchor);
+    (
+        if stretch_w { 0 } else { width },
+        if stretch_h { 0 } else { height },
+    )
 }
 
 impl SurfaceExtent {
@@ -198,28 +403,22 @@ pub enum ExclusiveZone {
 impl ExclusiveZone {
     /// Protocol value. [`Auto`](ExclusiveZone::Auto) resolves against the
     /// surface extent on the anchored axis plus that edge's margin.
-    pub(crate) fn resolve(
-        self,
-        anchor: Anchor,
-        margin: (i32, i32, i32, i32),
-        width: u32,
-        height: u32,
-    ) -> i32 {
+    pub(crate) fn resolve(self, anchor: Anchor, margin: Margin, width: u32, height: u32) -> i32 {
         match self {
             ExclusiveZone::Auto => match Self::follow_axis(anchor) {
                 Some(FollowAxis::Height) => {
                     let edge_margin = if anchor.contains(Anchor::TOP) {
-                        margin.0
+                        margin.top
                     } else {
-                        margin.2
+                        margin.bottom
                     };
                     height as i32 + edge_margin
                 }
                 Some(FollowAxis::Width) => {
                     let edge_margin = if anchor.contains(Anchor::LEFT) {
-                        margin.3
+                        margin.left
                     } else {
-                        margin.1
+                        margin.right
                     };
                     width as i32 + edge_margin
                 }
@@ -276,7 +475,7 @@ impl Default for SurfaceConfig {
             namespace: "guido-surface".to_string(),
             background_color: Color::rgb(0.1, 0.1, 0.15),
             exclusive_zone: ExclusiveZone::None,
-            margin: (0, 0, 0, 0),
+            margin: Margin::default(),
             output: None,
             input_region: None,
         }
@@ -344,9 +543,9 @@ impl SurfaceConfig {
 
     /// Set the margins from the anchored screen edges, applied at creation.
     ///
-    /// Use `SurfaceHandle::set_margin` to change them at runtime.
-    pub fn margin(mut self, top: i32, right: i32, bottom: i32, left: i32) -> Self {
-        self.margin = (top, right, bottom, left);
+    /// Use [`SurfaceHandle::set_margin`] to change them at runtime.
+    pub fn margin(mut self, margin: impl Into<Margin>) -> Self {
+        self.margin = margin.into();
         self
     }
 
@@ -553,38 +752,38 @@ impl SurfaceHandle {
         });
     }
 
-    /// Set the size of this surface in logical pixels.
+    /// Set the size of this surface, in the same vocabulary
+    /// [`SurfaceConfig::width`] takes — so an axis can be handed back to
+    /// [`content()`] at runtime, not only pinned to a number.
     ///
-    /// Note: When anchored to both edges on an axis (e.g., LEFT and RIGHT),
+    /// Note: when anchored to both edges on an axis (e.g. LEFT and RIGHT),
     /// the compositor may override that dimension.
-    pub fn set_size(&self, width: u32, height: u32) {
+    pub fn set_size(&self, width: impl Into<SurfaceExtent>, height: impl Into<SurfaceExtent>) {
         push_surface_command(SurfaceCommand::SetSize {
             id: self.id,
-            width,
-            height,
+            width: width.into(),
+            height: height.into(),
         });
     }
 
-    /// Set the exclusive zone for this surface.
+    /// Set the screen-space reservation for this surface, in the same
+    /// vocabulary [`SurfaceConfig::exclusive_zone`] takes.
     ///
-    /// The exclusive zone reserves screen space so other windows don't
-    /// overlap. Pass 0 for no exclusive zone, or a positive value for
-    /// the number of pixels to reserve.
-    pub fn set_exclusive_zone(&self, zone: i32) {
-        push_surface_command(SurfaceCommand::SetExclusiveZone { id: self.id, zone });
+    /// [`ExclusiveZone::Auto`] keeps following the surface's extent from here
+    /// on, exactly as it would had it been declared at creation.
+    pub fn set_exclusive_zone(&self, zone: impl Into<ExclusiveZone>) {
+        push_surface_command(SurfaceCommand::SetExclusiveZone {
+            id: self.id,
+            zone: zone.into(),
+        });
     }
 
-    /// Set the margin for this surface.
-    ///
-    /// Margins add space between the surface and the screen edge it's
-    /// anchored to.
-    pub fn set_margin(&self, top: i32, right: i32, bottom: i32, left: i32) {
+    /// Set the margins from the anchored screen edges, in the same vocabulary
+    /// [`SurfaceConfig::margin`] takes.
+    pub fn set_margin(&self, margin: impl Into<Margin>) {
         push_surface_command(SurfaceCommand::SetMargin {
             id: self.id,
-            top,
-            right,
-            bottom,
-            left,
+            margin: margin.into(),
         });
     }
 
@@ -623,19 +822,14 @@ pub(crate) enum SurfaceCommand {
     /// Set the size of a surface.
     SetSize {
         id: SurfaceId,
-        width: u32,
-        height: u32,
+        width: SurfaceExtent,
+        height: SurfaceExtent,
     },
-    /// Set the exclusive zone for a surface.
-    SetExclusiveZone { id: SurfaceId, zone: i32 },
+    /// Set the screen-space reservation for a surface. Resolved to a protocol
+    /// value by the loop, which is where the anchor and the current extent are.
+    SetExclusiveZone { id: SurfaceId, zone: ExclusiveZone },
     /// Set the margin for a surface.
-    SetMargin {
-        id: SurfaceId,
-        top: i32,
-        right: i32,
-        bottom: i32,
-        left: i32,
-    },
+    SetMargin { id: SurfaceId, margin: Margin },
     /// Set the input region for a surface.
     SetInputRegion {
         id: SurfaceId,
@@ -860,4 +1054,94 @@ pub fn surface_handle(id: SurfaceId) -> SurfaceHandle {
 /// Part of the loop's wakeup check — see `queued_but_unwoken` in `lib.rs`.
 pub(crate) fn surface_commands_pending() -> bool {
     SURFACE_COMMANDS.with(|cmds| !cmds.borrow().is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The doc promises "the same shorthands a `Padding` takes, in the same
+    /// order". The two types are written out separately — one holds i32 for the
+    /// protocol, the other f32 for layout — so the promise is only worth
+    /// anything if something checks it. This does, edge by edge, over every
+    /// shorthand and a set of inputs where confusing two edges shows up:
+    /// asymmetric, and non-zero everywhere.
+    #[test]
+    fn a_margin_converts_exactly_as_a_padding_does() {
+        let same = |m: Margin, p: crate::widgets::Padding, what: &str| {
+            assert_eq!(m.top as f32, p.top, "{what}: top");
+            assert_eq!(m.right as f32, p.right, "{what}: right");
+            assert_eq!(m.bottom as f32, p.bottom, "{what}: bottom");
+            assert_eq!(m.left as f32, p.left, "{what}: left");
+        };
+
+        same(
+            Margin::from(8),
+            crate::widgets::Padding::from(8),
+            "one value",
+        );
+        same(
+            Margin::all(8),
+            crate::widgets::Padding::all(8.0),
+            "all(), the named form",
+        );
+        same(
+            Margin::from([4, 12]),
+            crate::widgets::Padding::from([4, 12]),
+            "[vertical, horizontal]",
+        );
+        same(
+            Margin::from([1, 2, 3, 4]),
+            crate::widgets::Padding::from([1, 2, 3, 4]),
+            "[top, right, bottom, left]",
+        );
+
+        // And spelled out once, so a shared mistake in both types would still
+        // be caught: CSS order, clockwise from the top.
+        assert_eq!(
+            Margin::from([1, 2, 3, 4]),
+            Margin {
+                top: 1,
+                right: 2,
+                bottom: 3,
+                left: 4
+            }
+        );
+        assert_eq!(
+            Margin::from([4, 12]),
+            Margin {
+                top: 4,
+                right: 12,
+                bottom: 4,
+                left: 12
+            }
+        );
+    }
+
+    /// An `Auto` reservation counts the margin on the edge it is anchored to,
+    /// and only that one.
+    #[test]
+    fn an_auto_zone_adds_the_anchored_edges_margin() {
+        let margin = Margin::from([6, 20, 9, 20]);
+        let top = ExclusiveZone::Auto.resolve(Anchor::TOP, margin, 800, 32);
+        assert_eq!(top, 32 + 6);
+
+        let bottom = ExclusiveZone::Auto.resolve(Anchor::BOTTOM, margin, 800, 32);
+        assert_eq!(bottom, 32 + 9);
+
+        let left = ExclusiveZone::Auto.resolve(Anchor::LEFT, margin, 48, 600);
+        assert_eq!(left, 48 + 20);
+    }
+
+    /// The other policies are numbers, and never consult anything.
+    #[test]
+    fn the_other_zone_policies_ignore_the_surface() {
+        let m = Margin::all(10);
+        assert_eq!(ExclusiveZone::None.resolve(Anchor::TOP, m, 800, 32), 0);
+        assert_eq!(ExclusiveZone::Ignore.resolve(Anchor::TOP, m, 800, 32), -1);
+        assert_eq!(
+            ExclusiveZone::from(34u32).resolve(Anchor::TOP, m, 800, 32),
+            34
+        );
+    }
 }

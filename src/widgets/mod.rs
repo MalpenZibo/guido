@@ -18,7 +18,9 @@ pub mod widget;
 
 pub use crate::renderer::CornerRadii;
 pub use children::ChildrenSource;
-pub use container::{Border, Container, GradientDirection, LinearGradient, Overflow, container};
+pub use container::{
+    Border, Container, GradientDirection, IntoClickHandler, LinearGradient, Overflow, container,
+};
 pub use control::Control;
 pub use font::{FontFamily, FontWeight};
 pub use image::{ContentFit, Image, ImageSource, image};
@@ -27,7 +29,9 @@ pub use into_child::{
     DynamicChildren, IntoChild, IntoChildren, IntoDynChild, KeyedChildren, StaticChildren, keyed,
 };
 pub use scroll::{ScrollAxis, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibility};
-pub use state_layer::{BackgroundOverride, RippleConfig, StateStyle, StateWhen, Stateful};
+pub use state_layer::{
+    BackgroundOverride, BorderOverride, RippleConfig, StateStyle, StateWhen, Stateful,
+};
 pub use text::{Text, text};
 pub use text_input::{Selection, TextInput, text_input};
 pub use text_style::{TextShadow, TextStroke, TextStyle, TextStyled};

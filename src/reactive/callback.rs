@@ -7,7 +7,7 @@
 //! back its id, so the handle is `Copy` and goes wherever it is needed.
 //!
 //! It is also what keeps a struct that groups handles `Copy` — the same
-//! reason [`Signal`](super::Signal) and [`Service`](super::Service) are.
+//! reason [`Signal`] and [`Service`](super::Service) are.
 //!
 //! The argument list is a tuple, and each arity gets its own `new`/`run` so
 //! both ends stay flat:

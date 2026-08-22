@@ -65,7 +65,7 @@ This is useful for reloading configuration, switching themes, or resetting appli
 Both `quit_app()` and `restart_app()` are `Send` — they work from any thread, including background services:
 
 ```rust
-let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+create_task(move |ctx| async move {
     loop {
         tokio::select! {
             _ = watch_config_file() => {

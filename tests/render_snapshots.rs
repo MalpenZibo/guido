@@ -134,13 +134,15 @@ fn dump_command(cmd: &DrawCommand, depth: usize, kind: &str, out: &mut String) {
     match cmd {
         DrawCommand::BackdropBlur {
             rect: r,
+            sources,
             radius,
             corner_radii,
             curvature,
         } => {
             out.push_str(&format!(
-                "{pad}{kind} backdrop-blur {} radius={} corners={}/{}/{}/{} k={}\n",
+                "{pad}{kind} backdrop-blur {} sources={:?} radius={} corners={}/{}/{}/{} k={}\n",
                 rect(r),
+                sources,
                 n(*radius),
                 n(corner_radii.top_left),
                 n(corner_radii.top_right),
@@ -426,6 +428,45 @@ fn corners_borders_and_elevation() {
         );
 
     assert_snapshot("corners_borders_and_elevation", render(view, 500.0, 400.0));
+}
+
+/// After `examples/blur_example.rs`: the backdrop blur, which is the one command
+/// carrying a property the golden is the only reader of — `sources` decides
+/// which half of the effect runs, and until this scene existed no golden held a
+/// blur command at all.
+///
+/// The transformed cases are here for what reaches the *renderer*: the command
+/// keeps its own rect and radii and carries the matrix, so the golden is where a
+/// transform silently baked into the geometry would show up. What the compositor
+/// is told is derived from that matrix later and is not in this file — the
+/// arithmetic is measured in `renderer::flatten`, and the wiring end to end in
+/// `a_transformed_blur_publishes_the_shape_it_is_drawn_as`.
+#[test]
+fn backdrop_blur_sources_and_geometry() {
+    let frosted = |radius: f32| {
+        box_of(80.0, 60.0)
+            .background(Color::rgba(1.0, 1.0, 1.0, 0.15))
+            .corner_radius(16.0)
+            .backdrop_blur(radius)
+    };
+
+    let view = container()
+        .layout(Flex::row().spacing(20.0))
+        .padding(20.0)
+        .child(frosted(24.0))
+        .child(
+            frosted(24.0).backdrop_blur(BackdropBlur::new(24.0).sources(BackdropSources::SURFACE)),
+        )
+        .child(
+            frosted(24.0)
+                .backdrop_blur(BackdropBlur::new(24.0).sources(BackdropSources::COMPOSITOR)),
+        )
+        // A radius of zero is "no blur", so this one emits no command at all.
+        .child(frosted(0.0))
+        .child(frosted(24.0).rotate(45.0))
+        .child(frosted(24.0).scale(2.0));
+
+    assert_snapshot("backdrop_blur", render(view, 700.0, 200.0));
 }
 
 /// After `examples/clip_test.rs`: hidden overflow clips its children, and a

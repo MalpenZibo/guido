@@ -26,7 +26,7 @@ use crate::reactive::diagnostics::report_count;
 use crate::renderer::{PaintContext, RenderNode};
 use crate::tree::Tree;
 use crate::widgets::widget::{Event, Key, Modifiers, MouseButton, ScrollSource};
-use crate::widgets::{Color, ImageSource, ScrollAxis};
+use crate::widgets::{Color, ImageSource, LinearGradient, Overflow, ScrollAxis};
 use crate::widgets::{
     InputStyled, Stateful, TextStyled, Widget, container, image, text, text_input,
 };
@@ -137,10 +137,25 @@ fn a_fully_reactive_container_is_quiet() {
         .height(move || n.get() + 100.0)
         .visible(move || !flag.get())
         .rotate(move || n.get())
+        .gradient(move || {
+            Some(LinearGradient::horizontal(
+                if flag.get() { Color::RED } else { Color::BLUE },
+                Color::WHITE,
+            ))
+        })
+        .backdrop_blur(move || n.get() + 8.0)
+        .overflow(move || {
+            if flag.get() {
+                Overflow::Hidden
+            } else {
+                Overflow::Visible
+            }
+        })
         .animate_background(t())
         .animate_border_width(t())
         .animate_border_color(t())
         .animate_corner_radius(t())
+        .animate_elevation(t())
         .animate_padding(t())
         .animate_width(t())
         .animate_height(t())

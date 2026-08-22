@@ -311,7 +311,7 @@ pub fn compare_and_update_signal_value<T: Clone + PartialEq + 'static>(
 /// Set unconditionally: no comparison, no `PartialEq` bound. Returns
 /// `true` if the write landed (`false` only when the slot is disposed).
 ///
-/// Backs [`RwSignal::set_always`]: trigger-style writes where every
+/// Backs [`RwSignal::set_always`](super::RwSignal::set_always): trigger-style writes where every
 /// emission must notify (or where the type has no meaningful equality).
 pub fn set_signal_value_always<T: 'static>(id: SignalId, value: T) -> bool {
     let Some(rc) = try_clone_slot_rc(id) else {
@@ -343,6 +343,16 @@ fn downcast_cell<T: 'static>(rc: &Rc<dyn Any>, id: SignalId) -> &RefCell<T> {
             std::any::type_name::<T>()
         )
     })
+}
+
+/// How many signal slots storage currently holds — every slot ever allocated,
+/// occupied or vacated, which is what makes it the right measure for "did this
+/// primitive claim one". [`live_signal_count`] counts only the occupied ones.
+///
+/// Test-only: the cost of a primitive is only assertable against a number.
+#[cfg(test)]
+pub(crate) fn slot_count() -> usize {
+    STORAGE.with(|storage| storage.borrow().slots.len())
 }
 
 /// Reset all signal storage.

@@ -244,13 +244,14 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 ### Children
 - `.child(widget)` - Add single child
 - `.children([...])` - Add multiple children
-- `.maybe_child(condition, factory)` - Conditional child
-- `.children_dyn(items, key_fn, view_fn)` - Dynamic list
+- `.maybe_child(Option<widget>)` - Conditional child
+- `.child(move || ..)` - Reactive child, rebuilt when a signal it read changes
+- `.children(keyed(items, key_fn, view_fn))` - Keyed reactive list
 
 ### Styling
 - `.background(color)` - Solid background
 - `.gradient_horizontal(start, end)` - Horizontal gradient
-- `.gradient_vertical(start, end)` - Vertical gradient
+- `.gradient_vertical(start, end)` / `.gradient_diagonal(start, end)`
 - `.corner_radius(radius)` - Rounded corners
 - `.squircle()` / `.bevel()` / `.scoop()` - Corner curvature
 - `.border(width, color)` - Border
@@ -258,13 +259,13 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 
 ### Spacing
 - `.padding(all)` - Uniform padding
-- `.padding_horizontal(h)` - Left/right padding
-- `.padding_vertical(v)` - Top/bottom padding
+- `.padding([v, h])` - CSS two-value shorthand
+- `.padding([t, r, b, l])` - CSS four-value shorthand
 
 ### Sizing
 - `.width(w)` / `.height(h)` - Fixed size
-- `.min_width(w)` / `.max_width(w)` - Width constraints
-- `.min_height(h)` / `.max_height(h)` - Height constraints
+- `.width(at_least(w))` / `.width(at_most(w))` - Bounded width
+- `.height(at_least(h).at_most(h2))` - Bounded height
 
 ### Layout
 - `.layout(Flex::row())` - Horizontal layout

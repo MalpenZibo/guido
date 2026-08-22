@@ -2,9 +2,9 @@
 
 Guido signals (`RwSignal<T>` and `Signal<T>`) live on the main thread and are `!Send` — they cannot be captured directly in background tasks. To update signals from a background task, call `.writer()` on an `RwSignal<T>` to obtain a `WriteSignal<T>`, which **is** `Send`. Writes through a `WriteSignal` are queued and applied on the main thread during the next frame.
 
-The `create_service` API provides a convenient way to spawn async background tasks that are automatically cleaned up when the component unmounts. Services run as tokio tasks: if your `main` already runs inside a tokio runtime (e.g. `#[tokio::main]`), that runtime is used; otherwise guido lazily starts a small background runtime of its own, so a plain `fn main()` works too.
+`create_task` and `create_service` spawn async background work that is automatically cleaned up when the component unmounts — `create_task` for work that only pushes into signals, `create_service` when the UI also sends it commands. Both run as tokio tasks: if your `main` already runs inside a tokio runtime (e.g. `#[tokio::main]`), that runtime is used; otherwise guido lazily starts a small background runtime of its own, so a plain `fn main()` works too.
 
-## Basic Pattern: Read-Only Service
+## Basic Pattern: A Task That Only Pushes
 
 For services that only push data to signals (no commands from UI):
 
@@ -14,15 +14,15 @@ use std::time::Duration;
 let time = create_signal(String::new());
 let time_w = time.writer(); // Get a Send-able write handle
 
-// Spawn a read-only service - use () as command type
-let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+// A task has no command channel, so no command type and no receiver
+create_task(move |ctx| async move {
     while ctx.is_running() {
         time_w.set(chrono::Local::now().format("%H:%M:%S").to_string());
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 });
 
-// The service automatically stops when the component unmounts
+// The task automatically stops when the component unmounts
 ```
 
 ## Bidirectional Service
@@ -86,7 +86,7 @@ fn main() {
         let time_w = time.writer();
 
         // Background monitoring service
-        let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+        create_task(move |ctx| async move {
             while ctx.is_running() {
                 // Simulate system monitoring
                 cpu_w.set(rand::random::<f32>() * 100.0);
@@ -130,7 +130,7 @@ let weather_w = weather.writer();
 let news_w = news.writer();
 
 // Weather service
-let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+create_task(move |ctx| async move {
     while ctx.is_running() {
         weather_w.set(fetch_weather());
         tokio::time::sleep(Duration::from_secs(300)).await; // Every 5 minutes
@@ -138,7 +138,7 @@ let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
 });
 
 // News service
-let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+create_task(move |ctx| async move {
     while ctx.is_running() {
         news_w.set(fetch_news());
         tokio::time::sleep(Duration::from_secs(60)).await; // Every minute
@@ -160,7 +160,7 @@ enum DataState {
 let status = create_signal(DataState::Loading);
 let status_w = status.writer();
 
-let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+create_task(move |ctx| async move {
     while ctx.is_running() {
         match fetch_data() {
             Ok(data) => status_w.set(DataState::Success(data)),
@@ -186,7 +186,7 @@ Simple clock using a service:
 let time = create_signal(String::new());
 let time_w = time.writer();
 
-let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+create_task(move |ctx| async move {
     while ctx.is_running() {
         let now = chrono::Local::now();
         time_w.set(now.format("%H:%M:%S").to_string());
@@ -210,7 +210,7 @@ value, and awaitable.
 let menu_open = create_memo(move || active_menu.get() == Some(Menu::SystemInfo));
 let mut open_rx = menu_open.watch();
 
-let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+create_task(move |ctx| async move {
     while ctx.is_running() {
         // Current value, no polling
         let scope = if *open_rx.borrow_and_update() { Scope::All } else { Scope::Bar };
@@ -271,7 +271,7 @@ let cpu_w = cpu.writer();
 let memory_w = memory.writer();
 let disk_w = disk.writer();
 
-let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+create_task(move |ctx| async move {
     while ctx.is_running() {
         let data = fetch_all_data();
 

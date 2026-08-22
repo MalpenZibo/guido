@@ -82,7 +82,9 @@ pub fn lock_state() -> Signal<LockState> {
     state_signal().read_only()
 }
 
-/// Lock the session (tracked read convenience: `lock_state` == `Locked`).
+/// Whether the session is locked right now — a tracked read, the convenience
+/// form of `lock_state() == LockState::Locked`. It reports the state; to
+/// *take* the lock, see [`lock_session`].
 pub fn session_locked() -> bool {
     lock_state().get() == LockState::Locked
 }

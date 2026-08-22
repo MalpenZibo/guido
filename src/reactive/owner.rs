@@ -17,7 +17,7 @@
 //! // Create a scope with automatic cleanup
 //! let (result, owner_id) = with_owner(|| {
 //!     let signal = create_signal(42);
-//!     let effect = create_effect(move || {
+//!     create_effect(move || {
 //!         println!("Signal: {}", signal.get());
 //!     });
 //!
@@ -394,12 +394,11 @@ pub(crate) fn register_effect(id: EffectId) {
     }
 }
 
-/// Check if an effect is owned by any owner.
+/// Check if an effect is owned by any owner, in O(1) via the reverse mapping.
 ///
-/// This is used by Effect's Drop impl to determine if it should dispose
-/// the effect or let the owner handle it.
-///
-/// Uses O(1) lookup via the reverse mapping instead of linear search.
+/// Only the ownership tests below ask this: nothing in the running library
+/// needs to, since an effect's lifetime is entirely its scope's.
+#[cfg(test)]
 pub(crate) fn effect_has_owner(id: EffectId) -> bool {
     OWNERS.with(|owners| owners.borrow().effect_owners.contains_key(&id))
 }
@@ -649,7 +648,7 @@ mod tests {
 
     #[test]
     fn test_effect_registration_and_reverse_mapping() {
-        use super::super::effect::create_effect;
+        use super::super::effect::create_effect_id;
         use super::super::signal::create_signal;
 
         let effect_ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -657,11 +656,10 @@ mod tests {
 
         let (effect_id, owner_id) = with_owner(|| {
             let signal = create_signal(0);
-            let effect = create_effect(move || {
+            create_effect_id(move || {
                 let _ = signal.get();
                 effect_ran_clone.store(true, std::sync::atomic::Ordering::SeqCst);
-            });
-            effect.id()
+            })
         });
 
         // Effect should be owned via reverse mapping
@@ -699,21 +697,21 @@ mod tests {
 
     #[test]
     fn test_multiple_effects_registration() {
-        use super::super::effect::create_effect;
+        use super::super::effect::create_effect_id;
         use super::super::signal::create_signal;
 
         let (effect_ids, owner_id) = with_owner(|| {
             let signal = create_signal(0);
-            let e1 = create_effect(move || {
+            let e1 = create_effect_id(move || {
                 let _ = signal.get();
             });
-            let e2 = create_effect(move || {
+            let e2 = create_effect_id(move || {
                 let _ = signal.get();
             });
-            let e3 = create_effect(move || {
+            let e3 = create_effect_id(move || {
                 let _ = signal.get();
             });
-            (e1.id(), e2.id(), e3.id())
+            (e1, e2, e3)
         });
 
         // All effects should be owned
@@ -732,22 +730,22 @@ mod tests {
 
     #[test]
     fn test_nested_owners_effect_cleanup() {
-        use super::super::effect::create_effect;
+        use super::super::effect::create_effect_id;
         use super::super::signal::create_signal;
 
         let ((inner_effect, outer_effect), outer_id) = with_owner(|| {
             let signal = create_signal(0);
-            let outer = create_effect(move || {
+            let outer = create_effect_id(move || {
                 let _ = signal.get();
             });
 
             let (inner, _inner_id) = with_owner(|| {
-                create_effect(move || {
+                create_effect_id(move || {
                     let _ = signal.get();
                 })
             });
 
-            (inner.id(), outer.id())
+            (inner, outer)
         });
 
         // Both should be owned

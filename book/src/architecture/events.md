@@ -142,19 +142,24 @@ The state layer system uses events internally:
 4. **MouseUp** → Set pressed state false, trigger ripple contraction
 
 ```rust
-fn event(&mut self, event: &Event) -> EventResponse {
+fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
     match event {
         Event::MouseEnter => {
-            self.hover_state = true;
+            self.flags.update(|f| f.insert(InteractionFlags::HOVERED));
         }
         Event::MouseDown { x, y, .. } => {
-            self.pressed_state = true;
-            self.press_point = Some((*x, *y));
+            self.flags.update(|f| f.insert(InteractionFlags::PRESSED));
+            self.ripple.start(*x, *y, Instant::now());
         }
         // ...
     }
+    EventResponse::Ignored
 }
 ```
+
+The flags live in a signal rather than a plain field, so that a *descendant*
+resolving a state layer subscribes to them — see
+[Interactivity](../interactivity/README.md).
 
 ## EventResponse
 

@@ -67,19 +67,12 @@ where
     // whenever any dependency changes. Signal::set() uses PartialEq to
     // skip notification when the value hasn't changed.
     //
-    // Lifetime: when a current owner exists, the effect is registered with
-    // it and Effect::drop skips disposal (the owner cleans up). Without an
-    // owner (memo created outside App::run or any with_owner scope), the
-    // effect must be detached — otherwise dropping the binding would
-    // dispose it immediately and the memo would silently stop updating.
-    let effect = create_effect(move || {
+    // Lifetime: the effect belongs to whatever scope created the memo, and
+    // outlives the binding either way — a memo created outside any scope
+    // keeps updating for as long as the application runs.
+    create_effect(move || {
         signal.set(f());
     });
-    if super::owner::current_owner().is_some() {
-        drop(effect); // owned: Drop skips disposal, owner controls cleanup
-    } else {
-        effect.detach();
-    }
     Memo { signal }
 }
 
@@ -169,8 +162,7 @@ mod tests {
         let observed_c = observed.clone();
         crate::reactive::create_effect(move || {
             observed_c.set(doubled.get());
-        })
-        .detach();
+        });
 
         assert_eq!(observed.get(), 2);
 
@@ -226,8 +218,7 @@ mod tests {
             trigger.get();
             runs_c.set(runs_c.get() + 1);
             let _memo = create_memo(move || hot.get() * 2);
-        })
-        .detach();
+        });
 
         assert_eq!(runs.get(), 1);
 

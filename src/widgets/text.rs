@@ -26,7 +26,7 @@ pub(crate) fn decoration_overflow(stroke: Option<TextStroke>, shadow: Option<Tex
 
 /// A run of text.
 ///
-/// Style may be declared here — [`TextStyled`](super::TextStyled) — or on an
+/// Style may be declared here — [`TextStyled`] — or on an
 /// enclosing container, in which case it is inherited from the nearest one
 /// that sets each property. A declaration on the text itself is the nearest
 /// there is, so it wins.
@@ -625,5 +625,25 @@ mod tests {
         assert_eq!(frame(&mut tree, root).0, Color::RED);
         color.set(Color::BLUE);
         assert_eq!(frame(&mut tree, root).0, Color::BLUE);
+    }
+
+    /// A shadow that resolves to nothing visible must not expand into a ring of
+    /// text copies. Same gate the stroke has, and the same one the container's
+    /// shadow got — a transparent shadow is spellable deliberately, and in
+    /// passing while an animated colour leaves transparent.
+    #[test]
+    fn a_fully_transparent_text_shadow_draws_nothing() {
+        let invisible = TextShadow::new(2.0, 2.0, 4.0, Color::TRANSPARENT);
+        assert_eq!(
+            commands(text("hi").text_shadow(invisible)),
+            vec!["text"],
+            "the glyphs, and no copies behind them"
+        );
+
+        let visible = TextShadow::new(2.0, 2.0, 4.0, Color::rgba(0.0, 0.0, 0.0, 0.5));
+        assert!(
+            commands(text("hi").text_shadow(visible)).len() > 1,
+            "and a shadow that can be seen still draws"
+        );
     }
 }
