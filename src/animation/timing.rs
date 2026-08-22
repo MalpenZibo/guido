@@ -44,14 +44,33 @@ pub enum TimingFunction {
     CubicBezier(f32, f32, f32, f32),
     /// Spring physics simulation (can overshoot)
     Spring(SpringConfig),
-    /// Custom timing function, with how far it was measured to leave `[0, 1]`.
+    /// A curve of the caller's own, built by [`custom`](TimingFunction::custom).
     ///
-    /// The excursion is sampled once by [`custom`](TimingFunction::custom) and
-    /// carried, rather than the curve being clamped to a constant: anything
-    /// sizing a bound from a curve — a damage rect is why this exists — needs a
-    /// number that is true of *that* curve, and a hand-rolled bounce should
-    /// bounce as far as it was written to.
-    Custom(Arc<dyn Fn(f32) -> f32 + Send + Sync>, f32),
+    /// The excursion it carries is sampled once at construction rather than the
+    /// curve being clamped to a constant: anything sizing a bound from a curve —
+    /// a damage rect is why this exists — needs a number that is true of *that*
+    /// curve, and a hand-rolled bounce should bounce as far as it was written
+    /// to. Which is why [`CustomCurve`] cannot be assembled by hand: a
+    /// `Custom(f, 0.0)` written out where the enum is in scope type-checks, and
+    /// its excursion is then a claim nobody measured.
+    Custom(CustomCurve),
+}
+
+/// A caller-supplied easing curve and the excursion measured from it.
+///
+/// Opaque on purpose. The pair is only meaningful when the second half was
+/// measured from the first, so [`TimingFunction::custom`] is the only way to
+/// make one — see [`TimingFunction::Custom`].
+#[derive(Clone)]
+pub struct CustomCurve {
+    f: Arc<dyn Fn(f32) -> f32 + Send + Sync>,
+    excursion: f32,
+}
+
+impl CustomCurve {
+    fn evaluate(&self, t: f32) -> f32 {
+        (self.f)(t)
+    }
 }
 
 impl TimingFunction {
@@ -68,7 +87,7 @@ impl TimingFunction {
             TimingFunction::EaseInOut => ease_in_out(t),
             TimingFunction::CubicBezier(x1, y1, x2, y2) => cubic_bezier(t, *x1, *y1, *x2, *y2),
             TimingFunction::Spring(_) => t, // Springs handled separately with real time
-            TimingFunction::Custom(f, _) => f(t),
+            TimingFunction::Custom(curve) => curve.evaluate(t),
         }
     }
 
@@ -109,7 +128,7 @@ impl TimingFunction {
                 above.max(below)
             }
             TimingFunction::Spring(config) => config.peak_overshoot(),
-            TimingFunction::Custom(_, excursion) => *excursion,
+            TimingFunction::Custom(curve) => curve.excursion,
         }
     }
 
@@ -141,7 +160,10 @@ impl TimingFunction {
             let v = f(i as f32 / (Self::CUSTOM_SAMPLES - 1) as f32);
             excursion = excursion.max(v - 1.0).max(-v);
         }
-        TimingFunction::Custom(Arc::new(f), excursion.max(0.0))
+        TimingFunction::Custom(CustomCurve {
+            f: Arc::new(f),
+            excursion: excursion.max(0.0),
+        })
     }
 }
 
@@ -156,7 +178,7 @@ impl std::fmt::Debug for TimingFunction {
                 write!(f, "CubicBezier({}, {}, {}, {})", x1, y1, x2, y2)
             }
             TimingFunction::Spring(config) => write!(f, "Spring({:?})", config),
-            TimingFunction::Custom(_, excursion) => write!(f, "Custom(±{excursion})"),
+            TimingFunction::Custom(curve) => write!(f, "Custom(±{})", curve.excursion),
         }
     }
 }

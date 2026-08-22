@@ -297,6 +297,18 @@ fn publish_exclusive_zone(
     wayland_state: &mut platform::WaylandState,
     measured: Option<(u32, u32)>,
 ) {
+    // A content axis waiting to be measured has no size to reserve for, and the
+    // confirmed one is the wrong answer rather than an old one: a surface
+    // declared `width(content()).anchor(TOP | LEFT | RIGHT)` is stretched, so
+    // 1920 is what the compositor imposed on an axis that was not ours. Re-anchor
+    // it to `LEFT` and that number becomes a reservation — a dock asking for the
+    // whole screen, pushing every other window off it, until the measure lands.
+    //
+    // So it waits for the measure, which resyncs whenever it runs.
+    if measured.is_none() && surface::needs_content_measure(config) {
+        return;
+    }
+
     let known = measured.or_else(|| configured_size(wayland_state, id));
     let width = surface::requested_extent(config.width, known.map(|(w, _)| w));
     let height = surface::requested_extent(config.height, known.map(|(_, h)| h));
@@ -874,19 +886,29 @@ fn layout_pass(
         // against a screen's 1920 — which it did, resizing, resyncing,
         // committing and logging once a frame for the whole life of the surface.
         let asking = surface::honour_owned_axes(surface.config.anchor, nw, nh);
-        if asking != surface::honour_owned_axes(surface.config.anchor, frame.width, frame.height) {
+        let resizing =
+            asking != surface::honour_owned_axes(surface.config.anchor, frame.width, frame.height);
+        // The resize is conditional; the resync is not. This is the only place
+        // the measurement is known, and the reservation may be waiting on it even
+        // when the size did not move — `publish_exclusive_zone` declines to
+        // resolve `Auto` against an unmeasured content axis, so a re-anchoring
+        // that measures back to the number it already had would otherwise leave
+        // the reservation deferred for ever.
+        {
             // One commit, like every other pair of these. A content surface whose
             // content animates resizes on frame after frame, and two commits a
             // frame show the compositor the new size against the old reservation
             // in between.
             let config = &surface.config;
             wayland_state.batch_layer_requests(id, |wayland| {
-                // Through the same rule as every other resize: a measured number
-                // on an axis the compositor owns hands back an axis that is not
-                // ours, and a full-width bar would then stay at whatever the
-                // screen was when it was measured.
-                let (ask_w, ask_h) = asking;
-                wayland.set_surface_size(id, ask_w, ask_h);
+                if resizing {
+                    // Through the same rule as every other resize: a measured
+                    // number on an axis the compositor owns hands back an axis
+                    // that is not ours, and a full-width bar would then stay at
+                    // whatever the screen was when it was measured.
+                    let (ask_w, ask_h) = asking;
+                    wayland.set_surface_size(id, ask_w, ask_h);
+                }
                 // An `Auto` reservation follows an automatic resize too, and this
                 // is the one caller that knows the measured size before the
                 // compositor does — so it passes it rather than letting the
@@ -1775,6 +1797,47 @@ mod exclusive_zone_resync_tests {
             "anchored to one edge it is ours, and has to be measured"
         );
         assert!(surface::needs_content_measure(&ours));
+    }
+
+    /// And until it *is* measured there is nothing to reserve for. The confirmed
+    /// size of a stretched axis is the compositor's, not a measurement: a bar
+    /// declared `width(content()).anchor(TOP | LEFT | RIGHT)` is confirmed at the
+    /// screen's 1920, and re-anchoring it into a side dock turns that into a
+    /// reservation for the whole screen — every other window pushed off it — for
+    /// the frame between the command and the measure.
+    #[test]
+    fn a_reservation_waits_for_the_measure_rather_than_guessing() {
+        // A left dock: anchored to one horizontal edge and both vertical ones, so
+        // the height is the compositor's and the reservation follows the width.
+        let dock = SurfaceConfig {
+            anchor: Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM,
+            width: SurfaceExtent::Content,
+            height: 32.into(),
+            exclusive_zone: surface::ExclusiveZone::Auto,
+            ..SurfaceConfig::new()
+        };
+
+        // What the stretched anchor left behind, and what the content is worth.
+        let stale = 1920;
+        let measured = 240;
+
+        assert!(
+            surface::needs_content_measure(&dock),
+            "the width is ours now, so it is waiting on a measure"
+        );
+        assert_eq!(
+            dock.exclusive_zone
+                .resolve(dock.anchor, dock.margin, measured, 32),
+            240,
+            "the measure is what it reserves for"
+        );
+        assert_eq!(
+            dock.exclusive_zone
+                .resolve(dock.anchor, dock.margin, stale, 32),
+            1920,
+            "and the confirmed size is the whole screen, which is why publishing \
+             from it has to wait"
+        );
     }
 
     /// Which axes are the compositor's follows from the anchor, and layer-shell

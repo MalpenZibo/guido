@@ -178,6 +178,22 @@ impl From<[i32; 4]> for Margin {
     }
 }
 
+/// `[vertical, horizontal]`, unsigned. A bare `[0, 12]` infers as `[i32; 2]`
+/// and needs neither of these, which is why the pair was missing while the doc
+/// said "arrays of them" — it takes a `[u32; 2]` named somewhere else to notice.
+impl From<[u32; 2]> for Margin {
+    fn from(v: [u32; 2]) -> Self {
+        Margin::from([v[0] as i32, v[1] as i32])
+    }
+}
+
+/// `[top, right, bottom, left]`, unsigned.
+impl From<[u32; 4]> for Margin {
+    fn from(v: [u32; 4]) -> Self {
+        Margin::from([v[0] as i32, v[1] as i32, v[2] as i32, v[3] as i32])
+    }
+}
+
 /// Per-axis sizing for layer surfaces.
 ///
 /// `Fixed` is a size in logical pixels (plain integers convert into it).

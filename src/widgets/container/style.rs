@@ -419,12 +419,19 @@ impl Container {
     /// `bounds` is local — the origin is the container itself, and the parent
     /// has already positioned the node.
     pub(super) fn paint_decoration(&self, ctx: &mut PaintContext, bounds: Rect, d: &Decoration) {
-        // A gradient replaces the solid fill rather than layering over it —
-        // but not the shadow, which belongs to the box rather than to the
-        // fill. Both are reactive, so which of the two branches a container
-        // takes can change between frames; a gradient that dropped the shadow
-        // meant an elevation animation stopped drawing halfway through while
-        // still asking for a frame at every step.
+        // A gradient replaces the solid fill rather than layering over it — but
+        // not the shadow, which belongs to the box rather than to either fill.
+        // Both are reactive, so which of the two branches a container takes can
+        // change between frames; a gradient that dropped the shadow meant an
+        // elevation animation stopped drawing halfway through while still asking
+        // for a frame at every step.
+        //
+        // To the box *it draws*, though: the shadow rides whichever fill runs,
+        // so a container with neither — no gradient, and a background that is
+        // transparent or has animated out — casts none, and `paint_overflow`
+        // goes on reserving the room. A shadow with nothing above it is a smear
+        // rather than a lift, so that is the behaviour; it is not a
+        // free-standing command waiting for a box to belong to.
         // Not `elevation > 0.0`: the first frames of a lift are at ~0.001, where
         // the shadow's alpha rounds to nothing and every frame would still push a
         // rect carrying it. The same gate the border gets, on the thing that is
@@ -521,8 +528,15 @@ const ELEVATION_STEPS: [(f32, f32, f32); 6] = [
 /// the table met the formula: 0.999 fell through to the formula for
 /// (1.199, 1.998, 0.140) while 1.0 read the table for (1.0, 3.0, 0.12), so
 /// crossing 1 dropped the offset and the alpha while jumping the blur.
+///
+/// A level that is not a number is no shadow. `.elevation(f32::NAN)` is
+/// writable, and NaN fails every comparison on the way in, so it reached the
+/// interpolating branch and came back out as a NaN extent — into
+/// `set_paint_overflow`, where it disables every `min` and `max` downstream
+/// without anything failing. The same guard `SpringConfig::peak_overshoot` has,
+/// for the same reason: a number that sizes a rect has to be one.
 pub(super) fn elevation_to_shadow(level: f32) -> Shadow {
-    if level <= 0.0 {
+    if level.is_nan() || level <= 0.0 {
         return Shadow::none();
     }
 
@@ -613,6 +627,17 @@ mod elevation_tests {
         assert!((below.0 - above.0).abs() < 1e-2);
         assert!((below.1 - above.1).abs() < 1e-2);
         assert!((below.2 - above.2).abs() < 1e-3);
+    }
+
+    /// A level that is not a number is no shadow either. NaN fails every
+    /// comparison on the way in, so it used to reach the interpolating branch and
+    /// come back out as a NaN extent — into `set_paint_overflow`, where it
+    /// disables every `min` and `max` downstream without anything failing.
+    #[test]
+    fn a_level_that_is_not_a_number_is_no_shadow() {
+        let s = elevation_to_shadow(f32::NAN);
+        assert_eq!(s.color, Color::TRANSPARENT);
+        assert!(!s.extent().is_nan(), "and nothing downstream is poisoned");
     }
 
     /// Zero is no shadow at all, not a shadow of size zero with a colour.

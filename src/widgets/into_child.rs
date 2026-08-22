@@ -381,28 +381,28 @@ fn add_keyed_children<T, I, K, W>(
         let mut out = Vec::new();
         for (index, item) in items.into_iter().enumerate() {
             let key = key_fn(&item);
-            // Vacant-only, not `insert`: `insert` replaces, so with duplicates at
-            // 0, 2 and 5 the third would be reported against item 2 — which was
-            // itself skipped and is not in the list the reader is being sent to.
-            // The first sighting is the one still on screen.
-            match seen.entry(key.clone()) {
-                std::collections::hash_map::Entry::Occupied(first) => {
-                    // Without the key's value: `Debug` would be a bound the
-                    // mechanism does not need, and it would keep an opaque
-                    // newtype out of `keyed` in order to format a log line. Both
-                    // indices instead — the type alone names nothing, but the
-                    // pair of rows that collided is enough to go and look at
-                    // them.
-                    log::warn!(
-                        "keyed children: item {index} repeats the {} key of item {}, skipping it",
-                        std::any::type_name::<K>(),
-                        first.get()
-                    );
-                    continue;
-                }
-                std::collections::hash_map::Entry::Vacant(slot) => {
-                    slot.insert(index);
-                }
+            // Looked up now and recorded at the end of the row, rather than
+            // through `entry`: `entry` takes the key by value, so it would clone
+            // every key on every pass — a heap allocation per row for the string
+            // keys this signature invites, on a list that has settled and is
+            // building nothing. This way only a row that is actually created
+            // clones, and a second hash of a key already in cache is the cheaper
+            // half of that trade.
+            //
+            // The first sighting, not the previous one: reporting against the
+            // previous would, with duplicates at 0, 2 and 5, send the reader to
+            // item 2 — which was itself skipped and is not in the list.
+            if let Some(first) = seen.get(&key) {
+                // Without the key's value: `Debug` would be a bound the mechanism
+                // does not need, and it would keep an opaque newtype out of
+                // `keyed` in order to format a log line. Both indices instead —
+                // the type alone names nothing, but the pair of rows that
+                // collided is enough to go and look at them.
+                log::warn!(
+                    "keyed children: item {index} repeats the {} key of item {first}, skipping it",
+                    std::any::type_name::<K>(),
+                );
+                continue;
             }
 
             let generation = match st.rows.get(&key) {
@@ -420,6 +420,10 @@ fn add_keyed_children<T, I, K, W>(
                     generation
                 }
             };
+
+            // Recorded once the row is dealt with, moving the key rather than
+            // cloning it — nothing below needs it again.
+            seen.insert(key, index);
 
             let adopt_state = Rc::clone(&state);
             out.push(DynItem::new(generation, move || {
