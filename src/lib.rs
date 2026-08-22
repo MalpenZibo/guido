@@ -301,11 +301,18 @@ fn publish_exclusive_zone(
     // confirmed one is the wrong answer rather than an old one: a surface
     // declared `width(content()).anchor(TOP | LEFT | RIGHT)` is stretched, so
     // 1920 is what the compositor imposed on an axis that was not ours. Re-anchor
-    // it to `LEFT` and that number becomes a reservation — a dock asking for the
-    // whole screen, pushing every other window off it, until the measure lands.
+    // it into a side dock and that number becomes a reservation for the whole
+    // screen, pushing every other window off it, until the measure lands.
     //
-    // So it waits for the measure, which resyncs whenever it runs.
-    if measured.is_none() && surface::needs_content_measure(config) {
+    // So it waits for the measure, which resyncs whenever it runs — but only
+    // `Auto` waits, because only `Auto` reads a size. `Fixed`, `None` and
+    // `Ignore` are constants, and deferring one defers it for ever: nothing
+    // republishes a policy that is not `Auto`, so a `set_exclusive_zone(Fixed(40))`
+    // on a `content()` surface would simply never reach the compositor.
+    if config.exclusive_zone == surface::ExclusiveZone::Auto
+        && measured.is_none()
+        && surface::needs_content_measure(config)
+    {
         return;
     }
 
@@ -408,10 +415,23 @@ fn process_surface_commands(
                 });
             }
             SurfaceCommand::SetMargin { id, margin } => {
-                reconfigure(id, surface_manager, wayland_state, |surface, wayland| {
+                let asked = reconfigure(id, surface_manager, wayland_state, |surface, wayland| {
                     surface.config.margin = margin;
                     wayland.set_surface_margin(id, margin);
+                    // Like its three sisters. An `Auto` reservation is the margin
+                    // *plus* the extent, so moving the margin moves it — and on a
+                    // content axis the resync declines to guess and waits for a
+                    // measure. Without asking for one, nothing lays anything out,
+                    // the measure pass never runs, and the reservation keeps the
+                    // old margin for as long as the surface lives.
+                    (
+                        surface::needs_content_measure(&surface.config),
+                        surface.widget_id,
+                    )
                 });
+                if let Some((true, root)) = asked {
+                    jobs::request_job(root, jobs::JobRequest::Layout);
+                }
             }
             SurfaceCommand::SetInputRegion { id, rects } => {
                 wayland_state.set_surface_input_region(id, rects.as_deref());
@@ -1838,6 +1858,42 @@ mod exclusive_zone_resync_tests {
             "and the confirmed size is the whole screen, which is why publishing \
              from it has to wait"
         );
+    }
+
+    /// Only `Auto` waits, because only `Auto` reads a size. The other three are
+    /// constants, and nothing republishes a policy that is not `Auto` — so a
+    /// deferred one is a lost one: `set_exclusive_zone(Fixed(40))` on a surface
+    /// with a `content()` axis would never reach the compositor at all.
+    #[test]
+    fn only_a_reservation_that_reads_a_size_waits_for_one() {
+        let toast = |zone| SurfaceConfig {
+            anchor: Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM,
+            width: SurfaceExtent::Content,
+            height: SurfaceExtent::Content,
+            exclusive_zone: zone,
+            ..SurfaceConfig::new()
+        };
+
+        assert!(
+            surface::needs_content_measure(&toast(surface::ExclusiveZone::Auto)),
+            "the premise: this is the surface whose measure is pending"
+        );
+
+        // Whatever size these are handed, they answer the same thing — so there
+        // is nothing for them to wait for.
+        for zone in [
+            surface::ExclusiveZone::Fixed(40),
+            surface::ExclusiveZone::None,
+            surface::ExclusiveZone::Ignore,
+        ] {
+            let config = toast(zone);
+            let unmeasured = zone.resolve(config.anchor, config.margin, 1, 1);
+            let measured = zone.resolve(config.anchor, config.margin, 240, 60);
+            assert_eq!(
+                unmeasured, measured,
+                "{zone:?} does not depend on the size, so deferring it only loses it"
+            );
+        }
     }
 
     /// Which axes are the compositor's follows from the anchor, and layer-shell
