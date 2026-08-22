@@ -8,7 +8,7 @@ use smallvec::SmallVec;
 use crate::transform::Transform;
 use crate::widgets::Rect;
 
-use super::commands::{CornerRadii, DrawCommand};
+use super::commands::{CornerRadii, DrawCommand, EllipticalRadii};
 use super::tree::{CachedFlatten, ClipRegion, RenderNode};
 
 /// Render layer for draw command ordering.
@@ -81,11 +81,14 @@ impl FlattenedCommand {
     /// Four corners, because two only bound the box for a transform that keeps
     /// the axes: a rotation moves the extremes onto the other diagonal. And the
     /// radii scale with the box, or a `.scale(2.0)` container reports a shape
-    /// whose corners are cut half as deep as the one it draws.
-    pub fn world_rounded_rect(&self, rect: Rect, radii: CornerRadii) -> (Rect, CornerRadii) {
+    /// whose corners are cut half as deep as the one it draws — each axis by its
+    /// own factor, since a corner scaled unevenly is an ellipse and the
+    /// geometric mean of the two is neither of them.
+    pub fn world_rounded_rect(&self, rect: Rect, radii: CornerRadii) -> (Rect, EllipticalRadii) {
+        let (sx, sy) = self.world_transform.extract_scale_components();
         (
             self.world_aabb(rect),
-            radii.scaled(self.world_transform.extract_scale()),
+            EllipticalRadii::scaled_xy(radii, sx, sy),
         )
     }
 
@@ -119,8 +122,15 @@ impl FlattenedCommand {
     /// The clip is part of the shape, not a detail of one consumer: a card half
     /// out of a viewport is filtered only where it is on show, and a compositor
     /// region published for the whole card blurs the desktop beside a panel that
-    /// is not there. Returns `None` when the clip leaves nothing, and drops the
-    /// radius of every corner the clip cut off — a cut edge is straight.
+    /// is not there. Returns `None` when the clip leaves nothing.
+    ///
+    /// A corner of the intersection belongs to whichever rectangle supplied both
+    /// edges meeting there: the shape's own radius where the clip reached
+    /// neither, the *clip's* where it supplied both — a card inside a rounded
+    /// scroller is cornered by the scroller, and publishing the scroller's
+    /// square bounding box blurs the desktop in the four corners where the panel
+    /// is not drawn — and nothing where it supplied one, because a cut edge is
+    /// straight.
     ///
     /// An overlay's clip is stored in the command's *local* space so a ripple
     /// follows the shape it belongs to instead of an axis-aligned box around it
@@ -131,42 +141,58 @@ impl FlattenedCommand {
         &self,
         rect: Rect,
         radii: CornerRadii,
-    ) -> Option<(Rect, CornerRadii)> {
+    ) -> Option<(Rect, EllipticalRadii)> {
         let (world, world_radii) = self.world_rounded_rect(rect, radii);
-        let Some(clip) = self.clip.as_ref().map(|c| {
-            if self.clip_is_local {
-                self.world_aabb(c.rect)
-            } else {
-                c.rect
-            }
-        }) else {
+        let Some(clip) = self.clip.as_ref() else {
             return Some((world, world_radii));
         };
 
-        let x = world.x.max(clip.x);
-        let y = world.y.max(clip.y);
-        let right = (world.x + world.width).min(clip.x + clip.width);
-        let bottom = (world.y + world.height).min(clip.y + clip.height);
+        // A local clip and the radius that shapes it are in the same space, so
+        // both come out through the same transform.
+        let (sx, sy) = self.world_transform.extract_scale_components();
+        let (clip_rect, clip_radii) = if self.clip_is_local {
+            (
+                self.world_aabb(clip.rect),
+                EllipticalRadii::scaled_xy(CornerRadii::uniform(clip.corner_radius), sx, sy),
+            )
+        } else {
+            (
+                clip.rect,
+                EllipticalRadii::circular(CornerRadii::uniform(clip.corner_radius)),
+            )
+        };
+
+        let x = world.x.max(clip_rect.x);
+        let y = world.y.max(clip_rect.y);
+        let right = (world.x + world.width).min(clip_rect.x + clip_rect.width);
+        let bottom = (world.y + world.height).min(clip_rect.y + clip_rect.height);
         if right <= x || bottom <= y {
             return None;
         }
 
-        // A cut edge is a straight one. A corner survives only where neither of
-        // the edges meeting there was moved: keeping the radius on a corner the
-        // clip removed describes a curve that is not on screen, and the region
-        // built from it loses a wedge the size of the radius along the cut.
         let (cut_left, cut_top) = (x > world.x, y > world.y);
         let cut_right = right < world.x + world.width;
         let cut_bottom = bottom < world.y + world.height;
-        let keep = |radius: f32, a: bool, b: bool| if a || b { 0.0 } else { radius };
-        let radii = CornerRadii {
-            top_left: keep(world_radii.top_left, cut_left, cut_top),
-            top_right: keep(world_radii.top_right, cut_right, cut_top),
-            bottom_right: keep(world_radii.bottom_right, cut_right, cut_bottom),
-            bottom_left: keep(world_radii.bottom_left, cut_left, cut_bottom),
+        // Both edges from the clip, both from the shape, or one from each.
+        let pick = |shape: f32, clip: f32, a: bool, b: bool| match (a, b) {
+            (false, false) => shape,
+            (true, true) => clip,
+            _ => 0.0,
+        };
+        let corners = |shape: CornerRadii, clip: CornerRadii| CornerRadii {
+            top_left: pick(shape.top_left, clip.top_left, cut_left, cut_top),
+            top_right: pick(shape.top_right, clip.top_right, cut_right, cut_top),
+            bottom_right: pick(shape.bottom_right, clip.bottom_right, cut_right, cut_bottom),
+            bottom_left: pick(shape.bottom_left, clip.bottom_left, cut_left, cut_bottom),
         };
 
-        Some((Rect::new(x, y, right - x, bottom - y), radii))
+        Some((
+            Rect::new(x, y, right - x, bottom - y),
+            EllipticalRadii {
+                x: corners(world_radii.x, clip_radii.x),
+                y: corners(world_radii.y, clip_radii.y),
+            },
+        ))
     }
 }
 
@@ -1159,7 +1185,30 @@ mod world_geometry_tests {
             command(Transform::scale(2.0)).world_rounded_rect(rect, CornerRadii::uniform(16.0));
 
         assert_eq!(world.width, 200.0);
-        assert_eq!(radii.max(), 32.0, "twice the box, twice the corner");
+        assert_eq!(
+            (radii.x.max(), radii.y.max()),
+            (32.0, 32.0),
+            "twice the box, twice the corner"
+        );
+    }
+
+    /// Each axis by its own factor. A corner scaled unevenly is an ellipse, and
+    /// the geometric mean the shared scale used to return — 22.6 for 2x/1x — is
+    /// neither of its axes, so the region cut a curve the shape does not have.
+    #[test]
+    fn an_uneven_scale_gives_the_corner_two_axes() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let (_, radii) = command(Transform::scale_xy(2.0, 1.0))
+            .world_rounded_rect(rect, CornerRadii::uniform(16.0));
+
+        assert_eq!(radii.x.top_left, 32.0, "twice as wide");
+        assert_eq!(radii.y.top_left, 16.0, "and as tall as it was");
+        assert_eq!(
+            radii.to_circular().top_left,
+            32.0,
+            "a consumer taking one radius gets the larger, so it cuts at least \
+             as much as the ellipse and stays inside the shape"
+        );
     }
 
     /// The clip is part of the shape. A card half out of a viewport is filtered
@@ -1202,14 +1251,44 @@ mod world_geometry_tests {
             .clipped_world_rounded_rect(rect, CornerRadii::uniform(16.0))
             .expect("still on show");
         assert_eq!(
-            (radii.top_left, radii.bottom_left),
+            (radii.x.top_left, radii.x.bottom_left),
             (16.0, 16.0),
             "the left edge was not moved, so its corners are as they were drawn"
         );
         assert_eq!(
-            (radii.top_right, radii.bottom_right),
+            (radii.x.top_right, radii.x.bottom_right),
             (0.0, 0.0),
             "and the ones along the cut are square"
+        );
+    }
+
+    /// A corner where the clip supplied *both* edges is the clip's corner. A
+    /// frosted card filling a rounded scroller published the scroller's square
+    /// bounding box, so the compositor blurred the desktop in the four corners
+    /// where the panel is not drawn — the function's own doc, applied to itself.
+    #[test]
+    fn a_corner_the_clip_supplies_belongs_to_the_clip() {
+        // The card overhangs the scroller on every side, so all four corners of
+        // the intersection come from the clip.
+        let rect = Rect::new(-10.0, -10.0, 120.0, 120.0);
+        let mut cmd = command(Transform::translate(0.0, 0.0));
+        cmd.clip = Some(WorldClip {
+            rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+            corner_radius: 16.0,
+            curvature: 1.0,
+        });
+
+        let (world, radii) = cmd
+            .clipped_world_rounded_rect(rect, CornerRadii::uniform(4.0))
+            .expect("still on show");
+        assert_eq!(
+            (world.x, world.y, world.width, world.height),
+            (0.0, 0.0, 100.0, 100.0)
+        );
+        assert_eq!(
+            radii.x.to_array(),
+            [16.0; 4],
+            "every corner is the scroller's, not the card's and not square"
         );
     }
 
@@ -1264,6 +1343,6 @@ mod world_geometry_tests {
 
         assert_eq!((world.x, world.y), (20.0, 30.0));
         assert_eq!((world.width, world.height), (100.0, 60.0));
-        assert_eq!(radii.max(), 8.0);
+        assert_eq!((radii.x.max(), radii.y.max()), (8.0, 8.0));
     }
 }

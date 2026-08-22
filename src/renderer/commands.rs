@@ -95,6 +95,56 @@ impl CornerRadii {
     }
 }
 
+/// Corner radii that need not be circular.
+///
+/// A non-uniform scale turns a round corner into an ellipse, and one radius per
+/// corner cannot say so: `.scale_xy(2.0, 1.0)` on a `corner_radius(16)` box
+/// draws corners 32 wide and 16 tall. Collapsing that to one number — the
+/// geometric mean, 22.6 — matches neither axis.
+///
+/// Only the consumer that can express an ellipse keeps both. The others say
+/// [`to_circular`](Self::to_circular) out loud rather than losing an axis
+/// silently on the way in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EllipticalRadii {
+    /// Horizontal semi-axis of each corner.
+    pub x: CornerRadii,
+    /// Vertical semi-axis of each corner.
+    pub y: CornerRadii,
+}
+
+impl EllipticalRadii {
+    /// The same radius on both axes — every corner a circle.
+    pub fn circular(radii: CornerRadii) -> Self {
+        Self { x: radii, y: radii }
+    }
+
+    /// Scale each axis by its own factor, which is what a transform does to a
+    /// corner.
+    pub fn scaled_xy(radii: CornerRadii, sx: f32, sy: f32) -> Self {
+        Self {
+            x: radii.scaled(sx),
+            y: radii.scaled(sy),
+        }
+    }
+
+    /// The circular approximation, for a consumer that takes one radius per
+    /// corner.
+    ///
+    /// The larger axis, so the corner cuts at least as much as the ellipse does:
+    /// a shape that stays inside the one it approximates blurs slightly less
+    /// than it should, where the other way round it blurs where nothing is
+    /// drawn.
+    pub fn to_circular(self) -> CornerRadii {
+        CornerRadii {
+            top_left: self.x.top_left.max(self.y.top_left),
+            top_right: self.x.top_right.max(self.y.top_right),
+            bottom_right: self.x.bottom_right.max(self.y.bottom_right),
+            bottom_left: self.x.bottom_left.max(self.y.bottom_left),
+        }
+    }
+}
+
 impl From<f32> for CornerRadii {
     fn from(radius: f32) -> Self {
         Self::uniform(radius)

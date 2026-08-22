@@ -618,6 +618,10 @@ fn command_to_backdrop_region(cmd: &FlattenedCommand, scale: f32) -> Option<Back
     // out of it for the common translation-only case. Shared with the region
     // published to the compositor, which is the same shape by definition.
     let (world, world_radii) = cmd.world_rounded_rect(*rect, *corner_radii);
+    // The mask shader takes one radius per corner, so an unevenly scaled corner
+    // is approximated here rather than on the way in — the region published to
+    // the compositor keeps both axes, because a `wl_region` can hold the shape.
+    let world_radii = world_radii.to_circular();
 
     Some(BackdropRegion {
         rect: Rect::new(
