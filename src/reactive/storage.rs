@@ -252,6 +252,16 @@ pub fn get_signal_value<T: Clone + 'static>(id: SignalId) -> T {
     with_signal_cell(id, "read", |cell: &RefCell<T>| cell.borrow().clone())
 }
 
+/// Read a mutable signal's value, or `None` if its slot is gone.
+///
+/// The read-side mirror of the `try_*` writes below, for the one reader that
+/// races disposal by design: the widget-ref registry outlives the scopes that
+/// created the handles it holds, and looking is how it finds out.
+pub fn try_get_signal_value<T: Clone + 'static>(id: SignalId) -> Option<T> {
+    let rc = try_clone_slot_rc(id)?;
+    Some(downcast_cell::<T>(&rc, id).borrow().clone())
+}
+
 /// Set a signal's value (in-place replace, no Box allocation)
 pub fn set_signal_value<T: 'static>(id: SignalId, value: T) {
     with_signal_cell(id, "write", |cell: &RefCell<T>| {

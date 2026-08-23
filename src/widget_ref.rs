@@ -128,17 +128,58 @@ pub(crate) fn reset_widget_refs() {
 pub(crate) fn update_widget_refs(tree: &Tree) {
     WIDGET_REF_REGISTRY.with(|reg| {
         reg.borrow_mut().retain(|&id, widget_ref| {
+            // A ref's signals belong to the scope that created it — a popup's
+            // widget tree, a dynamic child — and this registry outlives every
+            // one of them. Asking whether the handle is still alive is how an
+            // entry learns to go; reading it outright is how the frame after a
+            // popup closed used to panic.
+            let Some(attached) = widget_ref.widget.try_get_untracked() else {
+                return false;
+            };
             if let Some(rect) = tree.get_surface_relative_bounds(id) {
                 widget_ref.signal.set(rect);
                 true
             } else {
                 // Widget removed from tree — drop registry entry, and stop
                 // claiming the handle points at something.
-                if widget_ref.widget.get_untracked() == Some(id) {
+                if attached == Some(id) {
                     widget_ref.widget.set(None);
                 }
                 false
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reactive::owner::{create_root_owner, dispose_owner_now, with_owner};
+    use crate::widgets::container;
+
+    /// A widget ref is created wherever its widget is composed, and a popup's
+    /// content is composed inside the popup's own scope. The registry is
+    /// process-wide and holds a `Copy` of the handle, so it keeps looking at
+    /// refs whose owner is gone — and the frame right after a popup closes is
+    /// exactly when it looks.
+    #[test]
+    fn a_ref_whose_scope_died_leaves_the_registry_instead_of_panicking() {
+        create_root_owner();
+        let mut popup_tree = Tree::new();
+        let id = popup_tree.register(Box::new(container()));
+
+        let ((), popup_scope) = with_owner(|| {
+            register_widget_ref(id, create_widget_ref());
+        });
+        dispose_owner_now(popup_scope);
+
+        // The popup's tree is gone: what the loop lays out next knows nothing
+        // about that widget.
+        update_widget_refs(&Tree::new());
+
+        assert!(
+            WIDGET_REF_REGISTRY.with(|reg| reg.borrow().is_empty()),
+            "the dead ref is evicted, not carried into the next frame"
+        );
+    }
 }
