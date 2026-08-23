@@ -345,7 +345,7 @@ fn main() {
                                 })
                                 .child(container().text_color(Color::WHITE).child(text("Static 2")))
                                 .child(move || {
-                                    show_optional.get().then(|| container()
+                                    show_optional2.get().then(|| container()
                                         .padding(6.0)
                                         .background(Color::rgb(0.3, 0.2, 0.5))
                                         .corner_radius(4.0)
