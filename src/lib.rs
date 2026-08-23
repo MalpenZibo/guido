@@ -407,12 +407,24 @@ fn process_surface_commands(
                 //
                 // The other policies are numbers the resync skips, so they
                 // publish here.
-                reconfigure(id, surface_manager, wayland_state, |surface, wayland| {
+                let asked = reconfigure(id, surface_manager, wayland_state, |surface, wayland| {
                     surface.config.exclusive_zone = zone;
                     if zone != surface::ExclusiveZone::Auto {
                         publish_exclusive_zone(id, &surface.config, wayland, None);
                     }
+                    // Like its three sisters. Declaring `Auto` on a content
+                    // surface leaves the resync waiting for a measure — this arm
+                    // publishes nothing itself for `Auto`, on purpose — so
+                    // without asking for a layout the measure pass never runs on
+                    // a settled UI and the reservation is never sent at all.
+                    (
+                        surface::needs_content_measure(&surface.config),
+                        surface.widget_id,
+                    )
                 });
+                if let Some((true, root)) = asked {
+                    jobs::request_job(root, jobs::JobRequest::Layout);
+                }
             }
             SurfaceCommand::SetMargin { id, margin } => {
                 let asked = reconfigure(id, surface_manager, wayland_state, |surface, wayland| {

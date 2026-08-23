@@ -170,20 +170,62 @@ impl FlattenedCommand {
             return None;
         }
 
-        let (cut_left, cut_top) = (x > world.x, y > world.y);
-        let cut_right = right < world.x + world.width;
-        let cut_bottom = bottom < world.y + world.height;
-        // Both edges from the clip, both from the shape, or one from each.
-        let pick = |shape: f32, clip: f32, a: bool, b: bool| match (a, b) {
-            (false, false) => shape,
-            (true, true) => clip,
-            _ => 0.0,
+        // Which rectangle supplies each edge — and *both*, where they coincide.
+        // Asked as "is this edge at or inside the other's" rather than as "was
+        // this edge moved": a child filling its clipping parent exactly shares
+        // all four, and read as movement that is no movement at all, so the
+        // corners came back as the child's — square, for a child that declares
+        // no radius of its own, while the shape on screen is rounded by the
+        // parent. Four wedges of blurred desktop outside the panel, which is the
+        // artefact this whole computation exists to avoid, in the one case where
+        // the two rectangles are equal.
+        let (wr, wb) = (world.x + world.width, world.y + world.height);
+        let (cr, cb) = (
+            clip_rect.x + clip_rect.width,
+            clip_rect.y + clip_rect.height,
+        );
+        let (clip_l, shape_l) = (clip_rect.x >= world.x, world.x >= clip_rect.x);
+        let (clip_t, shape_t) = (clip_rect.y >= world.y, world.y >= clip_rect.y);
+        let (clip_r, shape_r) = (cr <= wr, wr <= cr);
+        let (clip_b, shape_b) = (cb <= wb, wb <= cb);
+
+        // A corner belongs to a rectangle when that rectangle supplies both of
+        // the edges meeting there. Both rectangles, where they coincide: the two
+        // curves are drawn one on top of the other and the tighter one is what
+        // shows. Neither, when one edge comes from each — a cut edge is straight.
+        let pick = |shape: f32, clip: f32, from_shape: bool, from_clip: bool| match (
+            from_shape, from_clip,
+        ) {
+            (true, true) => shape.max(clip),
+            (true, false) => shape,
+            (false, true) => clip,
+            (false, false) => 0.0,
         };
         let corners = |shape: CornerRadii, clip: CornerRadii| CornerRadii {
-            top_left: pick(shape.top_left, clip.top_left, cut_left, cut_top),
-            top_right: pick(shape.top_right, clip.top_right, cut_right, cut_top),
-            bottom_right: pick(shape.bottom_right, clip.bottom_right, cut_right, cut_bottom),
-            bottom_left: pick(shape.bottom_left, clip.bottom_left, cut_left, cut_bottom),
+            top_left: pick(
+                shape.top_left,
+                clip.top_left,
+                shape_l && shape_t,
+                clip_l && clip_t,
+            ),
+            top_right: pick(
+                shape.top_right,
+                clip.top_right,
+                shape_r && shape_t,
+                clip_r && clip_t,
+            ),
+            bottom_right: pick(
+                shape.bottom_right,
+                clip.bottom_right,
+                shape_r && shape_b,
+                clip_r && clip_b,
+            ),
+            bottom_left: pick(
+                shape.bottom_left,
+                clip.bottom_left,
+                shape_l && shape_b,
+                clip_l && clip_b,
+            ),
         };
 
         Some((
@@ -1289,6 +1331,48 @@ mod world_geometry_tests {
             radii.x.to_array(),
             [16.0; 4],
             "every corner is the scroller's, not the card's and not square"
+        );
+    }
+
+    /// And when the two rectangles are *equal*, both corners are there. A child
+    /// declared `width(fill()).height(fill())` inside a clipping parent with no
+    /// padding shares all four edges, so reading the corner as "was this edge
+    /// moved" found no movement and handed back the child's own radius — square,
+    /// where the shape on screen is rounded by the parent, and the compositor
+    /// blurs four wedges of desktop outside the panel.
+    #[test]
+    fn coincident_edges_keep_the_tighter_curve() {
+        // Exactly the clip: a fill/fill child of a zero-padding parent.
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let mut cmd = command(Transform::translate(0.0, 0.0));
+        cmd.clip = Some(WorldClip {
+            rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+            corner_radius: 16.0,
+            curvature: 1.0,
+        });
+
+        let (world, radii) = cmd
+            .clipped_world_rounded_rect(rect, CornerRadii::from(0.0))
+            .expect("nothing is cut away");
+        assert_eq!(
+            (world.x, world.y, world.width, world.height),
+            (0.0, 0.0, 100.0, 100.0),
+            "the intersection is either of them"
+        );
+        assert_eq!(
+            radii.x.to_array(),
+            [16.0; 4],
+            "the child declares none, so what shows is the parent's"
+        );
+
+        // The other way round: the tighter of the two is the one that shows.
+        let (_, radii) = cmd
+            .clipped_world_rounded_rect(rect, CornerRadii::uniform(24.0))
+            .expect("nothing is cut away");
+        assert_eq!(
+            radii.x.to_array(),
+            [24.0; 4],
+            "a child rounded harder than its clip keeps its own curve"
         );
     }
 
