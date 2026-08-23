@@ -316,10 +316,8 @@ impl StateStyleBuilder {
     pub fn lighter(self, amount: f32) -> Self;
     pub fn darker(self, amount: f32) -> Self;
 
-    // Border
+    // Border — both halves, always; half a border is no border
     pub fn border(self, width: f32, color: Color) -> Self;
-    pub fn border_width(self, width: f32) -> Self;
-    pub fn border_color(self, color: Color) -> Self;
 
     // Other
     pub fn corner_radius(self, radius: f32) -> Self;

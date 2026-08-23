@@ -25,7 +25,9 @@ Animate border thickness:
 container()
     .border(1.0, Color::rgb(0.3, 0.3, 0.4))
     .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
-    .when_hovered(|s| s.border_width(2.0))
+    // A border is declared as a pair, so the layer restates the colour it is
+    // not changing — otherwise the width eases while the colour jumps.
+    .when_hovered(|s| s.border(2.0, Color::rgb(0.3, 0.3, 0.4)))
 ```
 
 ## Border Color
@@ -36,7 +38,8 @@ Animate border color:
 container()
     .border(2.0, Color::rgb(0.3, 0.3, 0.4))
     .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))
-    .when_hovered(|s| s.border_color(Color::rgb(0.5, 0.7, 1.0)))
+    // The mirror image: the width is restated so only the colour moves.
+    .when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.7, 1.0)))
 ```
 
 ## Transform
@@ -83,6 +86,26 @@ container()
     .animate_elevation(Transition::new(200.0, TimingFunction::EaseOut))
     .when_hovered(|s| s.elevation(6.0))
 ```
+
+A shadow falls outside the box that casts it, so the container has to tell the
+layout how far its painting reaches — and the reach has to cover the deepest
+shadow it can ever cast, since a hover never re-runs layout.
+
+That makes the two ways of lifting a card cost different amounts:
+
+```rust
+// Constants: the deepest is 6 whatever happens, so hovering moves only the
+// paint and nothing is re-laid-out.
+.elevation(2.0).when_hovered(|s| s.elevation(6.0))
+
+// A signal: the deepest genuinely changes when it is written, so every write
+// re-runs the layout of this subtree.
+.elevation(move || if lifted.get() { 6.0 } else { 2.0 })
+```
+
+Both are correct, and the second is the one to reach for when the depth is
+driven by something other than pointer state. Prefer the state layer when it can
+say the same thing.
 
 ## Multiple Animations
 

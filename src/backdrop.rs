@@ -87,3 +87,31 @@ impl From<i32> for BackdropBlur {
         Self::new(radius as f32)
     }
 }
+
+/// Bare float literals default to f64.
+impl From<f64> for BackdropBlur {
+    fn from(radius: f64) -> Self {
+        Self::new(radius as f32)
+    }
+}
+
+// A closure may return a bare radius where a blur is expected, so the same
+// conversions have to exist for `IntoVal` — that is what makes
+// `.backdrop_blur(move || if glass { 16.0 } else { 0.0 })` compile.
+impl crate::reactive::IntoVal<BackdropBlur> for f32 {
+    fn into_val(self) -> BackdropBlur {
+        BackdropBlur::new(self)
+    }
+}
+
+impl crate::reactive::IntoVal<BackdropBlur> for f64 {
+    fn into_val(self) -> BackdropBlur {
+        BackdropBlur::new(self as f32)
+    }
+}
+
+impl crate::reactive::IntoVal<BackdropBlur> for i32 {
+    fn into_val(self) -> BackdropBlur {
+        BackdropBlur::new(self as f32)
+    }
+}

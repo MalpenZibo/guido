@@ -84,6 +84,16 @@ pub enum BackgroundOverride {
     Darker(Signal<f32>),
 }
 
+/// A border an active state draws instead of the declared one.
+///
+/// Named rather than a tuple, as [`BackgroundOverride`] is, and one value rather
+/// than two fields so that half a border cannot be built even by hand.
+#[derive(Clone, Copy)]
+pub struct BorderOverride {
+    pub width: Signal<f32>,
+    pub color: Signal<Color>,
+}
+
 /// Style overrides to apply during a specific interaction state.
 ///
 /// All fields are optional — `None` means use the base value from the
@@ -93,10 +103,10 @@ pub enum BackgroundOverride {
 pub struct StateStyle {
     /// Background color override
     pub background: Option<BackgroundOverride>,
-    /// Border width override
-    pub border_width: Option<Signal<f32>>,
-    /// Border color override
-    pub border_color: Option<Signal<Color>>,
+    /// Border override — both halves or neither. A width with no colour and a
+    /// colour with no width are the same thing, which is no border, so the pair
+    /// is one field rather than two that could disagree.
+    pub border: Option<BorderOverride>,
     /// Corner radius override
     pub corner_radius: Option<Signal<f32>>,
     /// Transform override (e.g., scale on press)
@@ -169,26 +179,20 @@ impl StateStyle {
         self
     }
 
-    /// Set the border width and color for this state.
+    /// Override the border while this state is active.
+    ///
+    /// Both halves, as on the container — see
+    /// [`Container::border`](crate::widgets::Container::border) for why there is
+    /// no way to say half of one.
     pub fn border<M1, M2>(
         mut self,
         width: impl IntoSignal<f32, M1>,
         color: impl IntoSignal<Color, M2>,
     ) -> Self {
-        self.border_width = Some(width.into_signal());
-        self.border_color = Some(color.into_signal());
-        self
-    }
-
-    /// Set just the border width for this state.
-    pub fn border_width<M>(mut self, width: impl IntoSignal<f32, M>) -> Self {
-        self.border_width = Some(width.into_signal());
-        self
-    }
-
-    /// Set just the border color for this state.
-    pub fn border_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.border_color = Some(color.into_signal());
+        self.border = Some(BorderOverride {
+            width: width.into_signal(),
+            color: color.into_signal(),
+        });
         self
     }
 

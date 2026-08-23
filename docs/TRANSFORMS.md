@@ -152,7 +152,7 @@ Transforms are properly accounted for in hit testing. A rotated button will corr
 ```rust
 impl Transform {
     // Creation
-    pub fn identity() -> Self;
+    pub const IDENTITY: Self;
     pub fn translate(x: f32, y: f32) -> Self;
     pub fn rotate(angle_radians: f32) -> Self;
     pub fn rotate_degrees(angle_degrees: f32) -> Self;
@@ -163,12 +163,14 @@ impl Transform {
     pub fn then(&self, other: &Transform) -> Transform;
     pub fn center_at(self, cx: f32, cy: f32) -> Self;
 
+    // The matrix itself, `[a, b, tx, c, d, ty]`
+    pub fn a(&self) -> f32;  // and b, c, d, tx, ty
+
     // Utilities
     pub fn inverse(&self) -> Transform;
     pub fn transform_point(&self, x: f32, y: f32) -> (f32, f32);
     pub fn is_identity(&self) -> bool;
-    pub fn has_rotation(&self) -> bool;
-    pub fn extract_scale(&self) -> f32;
+    pub fn is_translation_only(&self) -> bool;
 }
 ```
 
@@ -176,12 +178,12 @@ impl Transform {
 
 ```rust
 impl Container {
-    pub fn translate(self, x: f32, y: f32) -> Self;
+    pub fn translate<M1, M2>(self, x: impl IntoSignal<f32, M1>, y: impl IntoSignal<f32, M2>) -> Self;
     pub fn rotate<M>(self, degrees: impl IntoSignal<f32, M>) -> Self;
     pub fn scale<M>(self, factor: impl IntoSignal<f32, M>) -> Self;
-    pub fn scale_xy(self, sx: f32, sy: f32) -> Self;
-    pub fn transform(self, transform: Transform) -> Self;
+    pub fn scale_xy<M1, M2>(self, sx: impl IntoSignal<f32, M1>, sy: impl IntoSignal<f32, M2>) -> Self;
+    pub fn transform<M>(self, transform: impl IntoSignal<Transform, M>) -> Self;
     pub fn transform_origin<M>(self, origin: impl IntoSignal<TransformOrigin, M>) -> Self;
-    pub fn animate_transform(self, transition: Transition) -> Self;
+    pub fn animate_transform(self, transition: impl Into<TransitionConfig>) -> Self;
 }
 ```

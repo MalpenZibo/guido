@@ -1,10 +1,11 @@
 use std::marker::PhantomData;
 
 use super::diagnostics::{check_reactive_scope, snapshot_zone};
-use super::invalidation::{notify_signal_change, record_signal_read};
+use super::invalidation::{notify_signal_change, record_signal_read, suspend_widget_tracking};
 use super::owner::register_signal;
 use super::runtime::{
-    SignalId, current_write_epoch, notify_write, queue_bg_write, record_effect_read, with_runtime,
+    SignalId, current_write_epoch, notify_write, queue_bg_write, record_effect_read,
+    suspend_effect_tracking, with_runtime,
 };
 use super::storage::{
     allocate_signal_slot, compare_and_set_signal_value, compare_and_update_signal_value,
@@ -131,7 +132,8 @@ fn update_and_notify_always<T: Clone + 'static>(id: SignalId, f: impl FnOnce(&mu
 ///
 /// `Signal<T>` provides read access to reactive values. It is returned by
 /// [`create_stored`] (static values) and [`create_derived`] (closure-backed).
-/// Widget properties accept `Signal<T>` via the [`IntoSignal`] trait.
+/// Widget properties accept `Signal<T>` via the
+/// [`IntoSignal`](super::IntoSignal) trait.
 ///
 /// To create a read-write signal, use [`create_signal`] which returns [`RwSignal<T>`].
 ///
@@ -148,6 +150,19 @@ pub struct Signal<T> {
     _not_send: PhantomData<*const ()>,
 }
 
+/// Run a derived signal's closure with nothing listening.
+///
+/// One place, because there are two callers and they were not the same: the
+/// diagnostic zone alone is compiled away in release, so a `with_untracked` that
+/// had only that still recorded every signal the closure read against whatever
+/// happened to be tracking. Two sister functions with different contracts is
+/// worse than either contract.
+fn untracked_derived<T: Clone + 'static>(id: SignalId) -> T {
+    snapshot_zone(|| {
+        suspend_widget_tracking(|| suspend_effect_tracking(|| try_call_derived::<T>(id).unwrap()))
+    })
+}
+
 impl_signal_id_traits!(Signal);
 
 impl<T: Clone + 'static> Signal<T> {
@@ -157,13 +172,22 @@ impl<T: Clone + 'static> Signal<T> {
         tracked_get(self.id, self.kind)
     }
 
-    /// Get the current value without tracking
+    /// Get the current value without tracking.
+    ///
+    /// Untracked all the way down for a derived one: its closure runs with the
+    /// widget and effect scopes suspended, the same three-part suspension
+    /// [`create_memo`](crate::reactive::create_memo) seeds itself with. The
+    /// diagnostic zone alone was not it — in release it compiles to nothing, so
+    /// every signal the closure read was still recorded against whatever
+    /// happened to be tracking. A `get_untracked` inside a dynamic-children
+    /// closure therefore subscribed the *parent's children list* to it, and
+    /// writing it rebuilt the whole list where a repaint was the work.
     pub fn get_untracked(&self) -> T {
         match self.kind {
             SignalKind::Stored => get_stored_value(self.id),
             // The caller asked for a snapshot; the closure's own reads are
             // part of that snapshot and must not be reported either
-            SignalKind::Derived => snapshot_zone(|| try_call_derived::<T>(self.id).unwrap()),
+            SignalKind::Derived => untracked_derived::<T>(self.id),
             SignalKind::Mutable => get_signal_value(self.id),
         }
     }
@@ -174,12 +198,26 @@ impl<T: Clone + 'static> Signal<T> {
         tracked_with(self.id, self.kind, f)
     }
 
-    /// Borrow the value without tracking
+    /// The value, if this signal is one that can never change.
+    ///
+    /// A `create_stored` signal is a constant behind a signal-shaped handle, so
+    /// a builder handed one can take the cheap path — build one constant rather
+    /// than a derived that recomputes a value that will always be the same.
+    pub(crate) fn constant(&self) -> Option<T> {
+        matches!(self.kind, SignalKind::Stored).then(|| get_stored_value(self.id))
+    }
+
+    /// Borrow the value without tracking.
+    ///
+    /// The borrowing half of [`get_untracked`](Self::get_untracked), suspended
+    /// the same three ways for the same reason: a derived signal's closure runs
+    /// somewhere, and unsuspended it runs inside whatever scope the caller was
+    /// in.
     pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         match self.kind {
             SignalKind::Stored => with_stored_value(self.id, f),
             SignalKind::Derived => {
-                let val = snapshot_zone(|| try_call_derived::<T>(self.id).unwrap());
+                let val = untracked_derived::<T>(self.id);
                 f(&val)
             }
             SignalKind::Mutable => with_signal_value(self.id, f),
@@ -201,7 +239,8 @@ impl<T: Clone + Send + Sync + 'static> Signal<T> {
 ///
 /// Created by [`create_signal`]. Provides both read and write access.
 /// Can be converted to a read-only [`Signal<T>`] via [`read_only()`](RwSignal::read_only)
-/// or the [`From`] impl. Widget properties accept `RwSignal<T>` via [`IntoSignal`].
+/// or the [`From`] impl. Widget properties accept `RwSignal<T>` via
+/// [`IntoSignal`](super::IntoSignal).
 ///
 /// `RwSignal<T>` is `Copy` (8 bytes — just a signal ID).
 ///
@@ -317,7 +356,7 @@ impl<T: Clone + Send + Sync + 'static> RwSignal<T> {
     /// let wide = create_memo(move || menu.get() == Some(Menu::SystemInfo));
     /// let mut wide_rx = wide.watch();
     ///
-    /// create_service::<(), _, _>(move |_rx, ctx| async move {
+    /// create_task(move |ctx| async move {
     ///     while ctx.is_running() {
     ///         let scope = if *wide_rx.borrow() { Scope::All } else { Scope::Bar };
     ///         sample(scope);
@@ -367,7 +406,7 @@ impl<T: Clone + 'static> From<RwSignal<T>> for Signal<T> {
 /// let time = create_signal(get_current_time());
 /// let time_w = time.writer();
 ///
-/// let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+/// create_task(move |ctx| async move {
 ///     while ctx.is_running() {
 ///         time_w.set(get_current_time()); // queued for main thread
 ///         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -573,16 +612,12 @@ fn watch_value<T: Clone + Send + Sync + 'static>(
     read: impl Fn() -> T + 'static,
 ) -> tokio::sync::watch::Receiver<T> {
     let (tx, rx) = tokio::sync::watch::channel(initial);
-    let effect = super::effect::create_effect(move || {
+    // Owned by the scope that asked for the channel: disposing it drops the
+    // sender, which is how the task on the other end learns the UI is gone
+    // (`changed()` returns Err).
+    super::effect::create_effect(move || {
         let _ = tx.send(read());
     });
-    if super::owner::current_owner().is_some() {
-        // Owned: the scope disposes it, and dropping the sender is how the
-        // task learns the UI is gone (`changed()` returns Err)
-        drop(effect);
-    } else {
-        effect.detach();
-    }
     rx
 }
 
@@ -860,8 +895,7 @@ mod tests {
         create_effect(move || {
             let _ = sig.get();
             counter.set(counter.get() + 1);
-        })
-        .detach();
+        });
         assert_eq!(runs.get(), 1);
 
         sig.set(7); // equal: state write deduplicates

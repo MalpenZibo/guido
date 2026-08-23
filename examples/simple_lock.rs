@@ -21,7 +21,7 @@ fn lock_screen(output: OutputInfo) -> Container {
     // Safety net for an example: never leave the user locked out.
     let auto_unlock = create_signal(false);
     let auto_unlock_w = auto_unlock.writer();
-    let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+    create_task(move |ctx| async move {
         tokio::time::sleep(Duration::from_secs(30)).await;
         if ctx.is_running() {
             auto_unlock_w.set(true);

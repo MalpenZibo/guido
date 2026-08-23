@@ -91,7 +91,7 @@ fn main() {
                 .width(content())
                 .height(content())
                 .anchor(Anchor::TOP | Anchor::LEFT)
-                .margin(40, 0, 0, 40)
+                .margin([40, 0, 0, 40])
                 .layer(Layer::Overlay)
                 .keyboard_interactivity(KeyboardInteractivity::OnDemand)
                 .namespace("guido-at-most")

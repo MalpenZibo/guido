@@ -19,6 +19,152 @@ and why, and the one design still open.
 | Three tracking scopes in one paint | **Closed** — see below |
 | Container as a style source | Open — direction settled, not scheduled |
 | Interaction groups | **Done** (#188), as `control()`; names unified in #189 |
+| Public API audit: reactivity, symmetry, preludes | **Done** — see below |
+
+---
+
+## The API audit
+
+An audit of the whole public surface, read against a real application written
+on top of it. What it found was not missing features but *inconsistency*: the
+same idea spelled two ways, or reactive in one place and constant in the
+neighbouring one, so nothing about the API could be predicted from the rest of
+it.
+
+**Reactivity had no rule.** `background` took a signal and `gradient` did not;
+`corner_radius` did and `backdrop_blur` did not; `visible` did and `overflow`
+did not. Worse, `backdrop_blur` was reactive on `Text` and constant on
+`Container` — one name, two contracts. All four are reactive now, and the rule
+is stated: **anything that survives to paint takes a signal; anything
+structural — the layout, whether a container scrolls — does not.**
+
+**Two spellings for one idea.** `Padding::symmetric(horizontal, vertical)`
+against the `[vertical, horizontal]` shorthand every call site uses;
+`on_click_option` beside `on_click`
+because a `#[component]` prop is an `Option<Callback>`; `Transform::identity()`
+beside `Transform::IDENTITY`. In each case one spelling survives, and it is the
+one already used everywhere else.
+
+**A handle that did not speak its config's language.** `SurfaceConfig` takes an
+`ExclusiveZone` and a `SurfaceExtent`; `SurfaceHandle` took an `i32` and a
+`u32`, so a policy could never be changed to another policy and an axis pinned
+once could never go back to `content()`. Margins get a `Margin` type with the
+conversions `Padding` has.
+
+**A guard whose Drop depended on ambient state.** `create_effect` returned an
+`Effect` that disposed itself unless an owner had claimed it — invisible at the
+call site either way. It returns nothing now; an effect's lifetime is its
+scope's.
+
+**One prelude for two audiences.** 133 names, mixing what an application needs
+with what a widget author does — and failing the widget author anyway, since
+`Tree`, `WidgetId`, `RenderNode` and `Layout` were not in it. Split into
+`prelude` and `widget_prelude`. `IntoSignal` and `IntoVal` moved the other way:
+they look internal and are not, being what makes a custom type usable as a
+`#[component]` prop.
+
+Also: `create_task` for the very common push-only service, `keyed()` accepting
+any `Hash` key rather than insisting on a `u64`, and `#[prop(default = expr)]`
+unquoted, which is what makes a string literal spellable as a default.
+
+### What making a property reactive costs
+
+Review of the branch found seven real bugs, and six of them are the same bug:
+**a consumer written for a value that could not move.** Worth recording,
+because the next property to become reactive will meet it again.
+
+While `gradient`, `backdrop_blur`, `overflow` and `elevation` were constants,
+their interactions were settled in the builder chain and visible statically. A
+gradient that dropped the shadow was an authoring mistake you made once and saw.
+An elevation table read with `level as i32` was exact, because the only levels
+that ever arrived were the six integers. Once a signal can move any of these
+between frames,
+each becomes a case the paint gate has to handle *at every frame*, and the ones
+that only misbehave in the fractions or in one branch are invisible until
+something animates through them.
+
+The specific shapes, all fixed with tests:
+
+- **A gate on one half of a pair.** `backdrop_blur`'s surface path checked
+  `radius > 0.0`; its compositor path never did, and the region registry had no
+  withdrawal — so "0.0 means off" held for the half with a draw command and not
+  for the half with a side effect.
+- **A quantized consumer.** `elevation_to_shadow` truncated to an integer, which
+  is a staircase under animation and, where the table met the formula that
+  continues it, not even monotonic.
+- **A branch that forgets a sibling property.** The gradient path drew and
+  returned without consulting the elevation; reachable by signal, mid-animation.
+- **A default that is invisible rather than absent.** `border_color` defaults to
+  transparent, so gating the frame on the width alone emitted an invisible
+  command every frame whenever a border resolved to only one of its halves.
+- **A read on the pointer path.** A closure-backed signal recomputes on every
+  read, and `overflow` was read during event dispatch — for every container
+  under the pointer, on every coalesced `MouseMove`. The tracked reads in layout
+  and paint publish what they resolved, and dispatch reads that; which is also
+  the more correct value, since events resolve against the frame on screen, as
+  `hit.bounds` already do.
+- **A request that outruns the round trip.** `set_surface_size` only sends a
+  protocol request; the size arrives back in `configure`. An `Auto` exclusive
+  zone resolved against the stale value reserved for the size the surface was
+  leaving.
+
+The seventh was independent: widening `keyed()` from `u64` to any `Hash` while
+the reconciler still indexed by a 64-bit hash of the key, so two colliding keys
+became one row.
+
+A later round found the same shape once more, in the mechanism rather than in a
+consumer, and it is the one worth remembering: the compositor blur region was a
+**registry written during paint**, and every way a container can stop painting —
+hidden, culled, outside a scroller's window, served from the paint cache — was a
+way for that registry to disagree with the screen. Four rounds of review found
+four of them, one at a time. The region is now *derived* from the flattened
+command list instead: a container that did not paint has no command in it, one
+served from the cache carries its command along, and ordering stops mattering
+because the list only exists after the paint that built it. State that has to be
+told about every way it can go stale is the smell; deriving it is the fix.
+
+### Settled: a border is one thing, everywhere
+
+The audit added `border_width` and `border_color` to `Container`, on the strength
+of `docs/STYLING.md` documenting them — the same "the docs were right early"
+reasoning that kept `gradient_diagonal` and `animate_elevation`. That reasoning
+does not transfer: those two are whole features the docs promised, this is a
+*decomposition*, and a decomposition has to be judged on whether its parts mean
+anything alone. They do not. A declaration naming one half of a border is not an
+under-specified border, it is **no border** — so the split introduced two states
+that mean nothing, and then needed defending in the paint gate, which is where it
+turned up as one of the bugs above.
+
+Withdrawn from `Container`, and then from `StateStyle` too, which had carried
+them since #183. Half a border does not become meaningful for being an override:
+it is the same nothing, and border was the only property in `StateStyle` with
+more than one setter — every other one has exactly one. Uniformity is the point.
+`border(w, c)` takes both, always, wherever it appears, and each half accepts its
+own signal, which is what covers anything that has to change over time.
+
+The pair is one field rather than two, `border: Option<BorderOverride>`, so half
+a border cannot be built even by hand. `BorderOverride` follows
+`BackgroundOverride`: a named override type, not exported in the prelude.
+
+For a width repeated across several layers — the complaint that started this —
+the answer is a constant in the application, which is the same answer this
+document already gives for "the same kind of label, many times".
+
+**`animate_border_width` and `animate_border_color` stay separate**, and that is
+not the same question. Those name an animatable *channel*, not a way to state a
+value: the two are different `Animatable` types with their own states and their
+own curves, and `examples/animation_example.rs` springs the width while easing
+the colour — which one call could not express. `animate_padding` is one call
+because `Padding` is one `Animatable` whose four edges lerp together; a border is
+not.
+
+The documentation was audited against the code in the same pass. It described
+`.children_dyn()`, `.padding_horizontal()`, `.min_width()`, `.gradient_diagonal()`
+and `.animate_elevation()`, none of which existed; `Row` and `Column` widgets,
+which have never existed; the pre-`Tree` `Widget` signatures; and
+`hover_state`/`pressed_state`, renamed in #189. Of that list `gradient_diagonal`
+and `animate_elevation` turned out to be worth having and were implemented
+rather than deleted from the docs.
 
 ---
 
@@ -202,9 +348,9 @@ The third row needed no mechanism, which is why it shipped ahead of the rest.
 
 ### Also settled
 
-- **`when_hovered` becomes `when_hovered`.** The old name reads as "*my* hover
-  state", which is false on a label. `when_hovered` promises nothing about
-  whose.
+- **`hover_state` becomes `when_hovered`** (shipped in #189). The old name
+  reads as "*my* hover state", which is false on a label. `when_hovered`
+  promises nothing about whose.
 - **Precedence is already last-declared-wins** (#183), which is what this
   design needs.
 
@@ -219,10 +365,6 @@ The third row needed no mechanism, which is why it shipped ahead of the rest.
 
 ### Still open
 
-- **`when_hovered`/`when_pressed`/`when_focused` on `Container`** should
-  become `when_hovered`/`when_pressed`/`when_focused` to match the leaves. A
-  mechanical rename across ~290 call sites, deliberately kept out of #188 so
-  the mechanism could be reviewed on its own.
 - **`focus_visible`.** Needed: where an input holds focus essentially always, a
   permanent focus ring is noise. Separate question — it is about how the focus
   arrived, not about who resolves it.

@@ -62,12 +62,33 @@ container()
     .border(2.0, Color::WHITE)  // 2px white border
 ```
 
-### Separate Width and Color
+A border is always both halves at once — on the container and in a state layer
+alike. A width with no colour and a colour with no width are the same thing, no
+border, so there is nothing for a half-declaration to mean and no way to write
+one. Each half takes a signal of its own, which covers anything that has to
+change:
+
+```rust
+container().border(1.5, move || if failed.get() { theme.danger } else { theme.line })
+```
+
+### In a State Layer
+
+Same call, and it replaces the whole border. Layers resolve last-declared-wins,
+so the border a caller wants to outrank the others goes last:
 
 ```rust
 container()
-    .border_width(2.0)
-    .border_color(Color::rgb(0.5, 0.5, 0.6))
+    .border(1.5, theme.line)
+    .when_focused(|s| s.border(1.5, theme.accent))
+    .state(failed, |s| s.border(1.5, theme.danger))
+```
+
+A width repeated across layers is a constant in your own code, not something the
+API should let you leave half-said:
+
+```rust
+const FIELD_BORDER: f32 = 1.5;
 ```
 
 ### Animated Borders
@@ -176,7 +197,7 @@ container().padding([8.0, 16.0])                   // [vertical, horizontal]
 container().padding([8, 16])                       // integer arrays work too
 container().padding([1.0, 2.0, 3.0, 4.0])         // [top, right, bottom, left]
 container().padding([1, 2, 3, 4])                  // integer 4-value shorthand
-container().padding(Padding::all(8.0).top(20.0))   // builder pattern
+container().padding(Padding::all(8.0).with_top(20.0))   // builder pattern
 ```
 
 ## Sizing
@@ -198,11 +219,35 @@ container()
 
 ```rust
 container()
-    .min_width(50.0)
-    .max_width(200.0)
-    .min_height(30.0)
-    .max_height(100.0)
+    .width(at_least(50.0).at_most(200.0))
+    .height(at_least(30.0).at_most(100.0))
 ```
+
+## Static or Reactive
+
+Every property that survives to paint takes a signal, a closure, or a plain
+value — the same `IntoSignal` shape everywhere, so which spelling you use is
+never the API's decision:
+
+```rust
+container()
+    .background(theme.surface)                       // a constant
+    .background(surface_color)                       // a signal
+    .background(move || if hot.get() { HOT } else { COOL })   // a closure
+    .gradient(move || palette.get().header())
+    .backdrop_blur(move || if frosted.get() { 24.0 } else { 0.0 })
+    .overflow(move || if collapsed.get() { Overflow::Hidden } else { Overflow::Visible })
+```
+
+A blur radius of `0.0` is "no blur", on a container and on a text alike, which
+is what lets one signal switch the effect on and off rather than forcing the
+caller to rebuild the widget in a Rust branch.
+
+**What is not reactive** is structural: `.layout(..)`, `.scrollable(..)`,
+`.scrollbar(..)`, `.scrollbar_visibility(..)`, `.control()`, and the
+`.animate_*()` declarations. These say
+what kind of thing the container *is*; change one and you are describing a
+different widget, so declare it in the closure that builds the widget instead.
 
 ## Text Styling
 

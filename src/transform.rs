@@ -24,11 +24,6 @@ impl Transform {
         data: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
     };
 
-    /// Create an identity transform
-    pub fn identity() -> Self {
-        Self::IDENTITY
-    }
-
     /// Create a translation transform
     pub fn translate(x: f32, y: f32) -> Self {
         Self {
@@ -165,12 +160,6 @@ impl Transform {
         *self == Self::IDENTITY
     }
 
-    /// Check if this transform contains rotation.
-    /// Rotation is present when the off-diagonal elements (b, c) are non-zero.
-    pub fn has_rotation(&self) -> bool {
-        self.b().abs() > 1e-6 || self.c().abs() > 1e-6
-    }
-
     /// Get the X translation component
     #[inline]
     pub fn tx(&self) -> f32 {
@@ -185,61 +174,28 @@ impl Transform {
 
     /// Set the X translation component
     #[inline]
-    pub fn set_tx(&mut self, val: f32) {
+    pub(crate) fn set_tx(&mut self, val: f32) {
         self.data[2] = val;
     }
 
     /// Set the Y translation component
     #[inline]
-    pub fn set_ty(&mut self, val: f32) {
+    pub(crate) fn set_ty(&mut self, val: f32) {
         self.data[5] = val;
     }
 
-    /// Scale the translation components by a factor (useful for HiDPI scaling)
-    pub fn scale_translation(&mut self, factor: f32) {
-        self.data[2] *= factor;
-        self.data[5] *= factor;
-    }
-
-    /// Extract the X and Y scale components from the transform.
-    ///
-    /// For transforms that contain rotation and/or scale:
-    /// - sx = sqrt(a² + b²)
-    /// - sy = sqrt(c² + d²)
-    ///
-    /// Returns `(scale_x, scale_y)` as a tuple.
-    pub fn extract_scale_components(&self) -> (f32, f32) {
+    /// The X and Y scale components — `sqrt(a² + b²)` and `sqrt(c² + d²)`,
+    /// so a rotated transform still reports the scale it carries.
+    pub(crate) fn extract_scale_components(&self) -> (f32, f32) {
         let (a, b, c, d) = (self.a(), self.b(), self.c(), self.d());
         ((a * a + b * b).sqrt(), (c * c + d * d).sqrt())
     }
 
-    /// Extract the uniform scale factor from this transform.
-    ///
-    /// For transforms that contain rotation and/or scale, this returns the
-    /// average scale factor. For pure scale transforms, returns the exact scale.
-    /// For transforms with non-uniform scaling, returns the geometric mean.
-    pub fn extract_scale(&self) -> f32 {
+    /// One scale factor for a transform that may not have exactly one: the
+    /// geometric mean of the two axes.
+    pub(crate) fn extract_scale(&self) -> f32 {
         let (sx, sy) = self.extract_scale_components();
-        // Return geometric mean for uniform scale approximation
         (sx * sy).sqrt()
-    }
-
-    /// Create a transform with the scale component removed.
-    ///
-    /// This preserves rotation and translation but normalizes scale to 1.0.
-    /// Useful for render-to-texture workflows where text is pre-scaled.
-    pub fn without_scale(&self) -> Transform {
-        let (sx, sy) = self.extract_scale_components();
-        let [a, b, tx, c, d, ty] = self.data;
-
-        // Avoid division by zero
-        if sx < 1e-10 || sy < 1e-10 {
-            return Transform::translate(tx, ty);
-        }
-
-        Transform {
-            data: [a / sx, b / sx, tx, c / sy, d / sy, ty],
-        }
     }
 
     /// Check if this transform contains only translation (no rotation or scale).
@@ -247,30 +203,6 @@ impl Transform {
         let (a, b, c, d) = (self.a(), self.b(), self.c(), self.d());
         // For pure translation: a=1, b=0, c=0, d=1
         (a - 1.0).abs() < 1e-6 && b.abs() < 1e-6 && c.abs() < 1e-6 && (d - 1.0).abs() < 1e-6
-    }
-
-    /// Check if this transform contains non-trivial transformation (rotation or non-unit scale).
-    pub fn has_rotation_or_scale(&self) -> bool {
-        !self.is_translation_only()
-    }
-
-    /// Extract just the rotation component, removing both scale and translation.
-    ///
-    /// This is useful when you need to apply the same rotation to a different
-    /// object at a different position (like text inside a transformed container).
-    pub fn rotation_only(&self) -> Transform {
-        let (sx, sy) = self.extract_scale_components();
-
-        // Avoid division by zero
-        if sx < 1e-10 || sy < 1e-10 {
-            return Transform::IDENTITY;
-        }
-
-        let [a, b, _tx, c, d, _ty] = self.data;
-
-        Transform {
-            data: [a / sx, b / sx, 0.0, c / sy, d / sy, 0.0],
-        }
     }
 }
 
@@ -290,7 +222,7 @@ mod tests {
 
     #[test]
     fn test_identity() {
-        let t = Transform::identity();
+        let t = Transform::IDENTITY;
         assert_eq!(t, Transform::IDENTITY);
         assert!(t.is_identity());
     }

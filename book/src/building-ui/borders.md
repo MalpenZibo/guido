@@ -11,12 +11,21 @@ container()
     .border(2.0, Color::WHITE)  // 2px white border
 ```
 
-### Separate Width and Color
+A border is always both halves at once — everywhere. A width with no colour and
+a colour with no width are the same thing, which is no border, so there is
+nothing for a half-declaration to mean, and no way to write one. Each half takes
+a signal of its own, which covers anything that has to change:
+
+```rust
+container().border(1.5, move || if failed.get() { theme.danger } else { theme.line })
+```
+
+A state layer says it the same way, and replaces the whole border:
 
 ```rust
 container()
-    .border_width(2.0)
-    .border_color(Color::rgb(0.5, 0.5, 0.6))
+    .border(1.5, theme.line)
+    .when_focused(|s| s.border(1.5, theme.accent))
 ```
 
 ## Corner Radius

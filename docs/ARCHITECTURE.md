@@ -207,6 +207,7 @@ handle.set_layer(Layer::Overlay);
 handle.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
 handle.set_anchor(Anchor::TOP | Anchor::RIGHT);
 handle.set_size(400, 300);
+handle.set_margin([8, 12]);
 ```
 
 ### `transform.rs` - 2D Transforms

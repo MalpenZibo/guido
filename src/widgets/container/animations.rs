@@ -300,6 +300,16 @@ impl<T: Animatable> AnimationState<T> {
         }
     }
 
+    /// How far past its target this animation can travel, as a fraction of the
+    /// distance — the worse of the forward and reverse curves.
+    pub fn peak_overshoot(&self) -> f32 {
+        let forward = self.transition.timing.peak_overshoot();
+        match &self.reverse_transition {
+            Some(reverse) => forward.max(reverse.timing.peak_overshoot()),
+            None => forward,
+        }
+    }
+
     /// Check if animation is still running
     pub fn is_animating(&self) -> bool {
         self.timeline.as_ref().is_some_and(|t| t.playing.is_some())

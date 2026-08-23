@@ -71,6 +71,49 @@ impl SpringConfig {
         stiffness: 250.0,
         damping: 24.7,
     };
+
+    /// How far past its target this spring goes at the peak, as a fraction of
+    /// the distance travelled.
+    ///
+    /// The standard result for a second-order system:
+    /// `exp(-πζ / sqrt(1 - ζ²))` for a damping ratio `ζ = c / (2·sqrt(m·k))`
+    /// below 1, and nothing at all at or above it.
+    ///
+    /// Anything sizing a bound from an animation's *target* needs this, because
+    /// a spring does not stop there — a damage rect being the case that found
+    /// it, since the shadow at the peak falls outside a rect measured for the
+    /// resting value.
+    pub fn peak_overshoot(&self) -> f32 {
+        let denominator = 2.0 * (self.mass * self.stiffness).sqrt();
+        if denominator <= 0.0 {
+            return 0.0;
+        }
+        let zeta = self.damping / denominator;
+        if !zeta.is_finite() {
+            // A negative mass or stiffness makes the ratio NaN, and NaN fails
+            // every comparison below on its way to `exp`. A NaN here is not a
+            // number that stays here: it multiplies a damage reach, which sizes
+            // a rect, and `f32::min` hands back the *other* operand — so the
+            // clamp that reads the reach would quietly stop clamping too.
+            return 0.0;
+        }
+        if zeta < 0.0 {
+            // Negative damping is not a spring, it is an explosion. Nothing
+            // bounds it, so it reports nothing rather than a number a caller
+            // would size a rect from.
+            return 0.0;
+        }
+        if zeta == 0.0 {
+            // Undamped: it swings the whole way past its target, forever. The
+            // formula below is the limit of exactly this, and reporting zero for
+            // the spring that overshoots *most* was the wrong way round.
+            return 1.0;
+        }
+        if zeta >= 1.0 {
+            return 0.0;
+        }
+        (-std::f32::consts::PI * zeta / (1.0 - zeta * zeta).sqrt()).exp()
+    }
 }
 
 /// State for spring physics simulation
@@ -163,6 +206,35 @@ impl Default for SpringState {
 mod tests {
     use super::*;
 
+    /// A spring built from a nonsense config must not seed NaN into anything
+    /// that sizes a rect from it.
+    #[test]
+    fn an_impossible_spring_reports_no_overshoot_rather_than_nan() {
+        for config in [
+            SpringConfig {
+                mass: -1.0,
+                stiffness: 400.0,
+                damping: 20.0,
+            },
+            SpringConfig {
+                mass: 1.0,
+                stiffness: -400.0,
+                damping: 20.0,
+            },
+            SpringConfig {
+                mass: f32::NAN,
+                stiffness: 400.0,
+                damping: 20.0,
+            },
+        ] {
+            let overshoot = config.peak_overshoot();
+            assert!(
+                overshoot.is_finite(),
+                "{config:?} reported {overshoot}, which would poison a damage rect"
+            );
+        }
+    }
+
     #[test]
     fn test_spring_reaches_target() {
         let mut state = SpringState::new();
@@ -201,5 +273,123 @@ mod tests {
             "Bouncy spring should overshoot, max was {}",
             max_position
         );
+    }
+}
+
+#[cfg(test)]
+mod overshoot_tests {
+    use super::*;
+
+    /// Each preset overshoots by about what its doc comment claims, so the two
+    /// cannot drift apart. The tolerance is a point and a half because the
+    /// comments round, `GENTLE` being the one that rounds up.
+    #[test]
+    fn the_presets_overshoot_by_what_they_say() {
+        let pairs = [
+            (SpringConfig::DEFAULT, 0.06),
+            (SpringConfig::BOUNCY, 0.17),
+            (SpringConfig::SNAPPY, 0.04),
+            (SpringConfig::GENTLE, 0.03),
+        ];
+        for (config, documented) in pairs {
+            let computed = config.peak_overshoot();
+            assert!(
+                (computed - documented).abs() < 0.015,
+                "{config:?} documents {documented} and computes {computed}"
+            );
+        }
+    }
+
+    /// The spring that oscillates most reported the least. Undamped, it swings
+    /// the whole way past its target and keeps doing it, so anything sizing a
+    /// bound from the target has to be told that.
+    #[test]
+    fn an_undamped_spring_reports_a_full_overshoot() {
+        let undamped = SpringConfig {
+            mass: 1.0,
+            stiffness: 100.0,
+            damping: 0.0,
+        };
+        assert_eq!(undamped.peak_overshoot(), 1.0);
+
+        // And it is the limit the formula approaches, so nothing jumps at zero.
+        let nearly = SpringConfig {
+            damping: 0.02,
+            ..undamped
+        };
+        assert!(nearly.peak_overshoot() > 0.99);
+    }
+
+    /// A spring that starts already moving goes further than one released from
+    /// rest, so the step-response figure `peak_overshoot` reports is *not* a
+    /// bound for a retargeted animation — `retarget` restarts the spring with
+    /// the velocity it was carrying.
+    ///
+    /// This is why anything sizing a rect from that figure has to clamp what it
+    /// draws to it rather than assume the value stays inside: see
+    /// `Container::animated_elevation`.
+    #[test]
+    fn a_spring_given_velocity_overshoots_more_than_one_at_rest() {
+        let config = SpringConfig::BOUNCY;
+        let reported = 1.0 + config.peak_overshoot();
+
+        let peak_of = |initial_velocity: f32| {
+            let mut state = SpringState::moving_at(initial_velocity);
+            let mut elapsed = 0.0f32;
+            let mut peak = 0.0f32;
+            // Finely enough to catch the peak rather than a point beside it.
+            for _ in 0..4000 {
+                elapsed += 1.0 / 480.0;
+                peak = peak.max(state.step(elapsed, &config));
+            }
+            peak
+        };
+
+        assert!(peak_of(0.0) <= reported + 0.01, "from rest it holds");
+
+        let carried = peak_of(16.0);
+        assert!(
+            carried > reported + 0.05,
+            "and carrying velocity it does not: {carried} against {reported}"
+        );
+    }
+
+    /// A critically damped or overdamped spring never passes its target.
+    #[test]
+    fn a_spring_that_cannot_bounce_reports_nothing() {
+        let critical = SpringConfig {
+            mass: 1.0,
+            stiffness: 100.0,
+            damping: 20.0,
+        };
+        assert_eq!(critical.peak_overshoot(), 0.0);
+
+        let overdamped = SpringConfig {
+            mass: 1.0,
+            stiffness: 100.0,
+            damping: 40.0,
+        };
+        assert_eq!(overdamped.peak_overshoot(), 0.0);
+    }
+
+    /// A spring really does go past its target by about what it reports — the
+    /// step simulation is the thing being bounded, so it is what is checked.
+    #[test]
+    fn the_simulation_stays_within_the_reported_peak() {
+        for config in [SpringConfig::DEFAULT, SpringConfig::BOUNCY] {
+            let mut state = SpringState::new();
+            let mut peak = 0.0f32;
+            // `step` takes the total elapsed time, not a delta.
+            let mut elapsed = 0.0f32;
+            for _ in 0..2000 {
+                elapsed += 1.0 / 240.0;
+                peak = peak.max(state.step(elapsed, &config));
+            }
+            let bound = 1.0 + config.peak_overshoot();
+            assert!(
+                peak <= bound + 0.01 && peak > 1.0,
+                "{config:?} peaked at {peak}, bound {bound}"
+            );
+        }
     }
 }

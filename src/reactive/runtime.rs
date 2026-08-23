@@ -608,7 +608,7 @@ mod tests {
         let sig = create_signal(0);
         let observed = Rc::new(Cell::new(0));
         let o = observed.clone();
-        create_effect(move || o.set(sig.get())).detach();
+        create_effect(move || o.set(sig.get()));
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             batch(|| {
@@ -637,8 +637,7 @@ mod tests {
             if v == 1 {
                 panic!("effect panic");
             }
-        })
-        .detach();
+        });
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sig.set(1)));
         assert!(result.is_err(), "panic must propagate out of set()");

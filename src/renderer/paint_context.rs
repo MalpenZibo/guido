@@ -220,44 +220,6 @@ impl<'a> PaintContext<'a> {
         }));
     }
 
-    /// Draw a rounded rectangle with gradient.
-    pub fn draw_gradient_rect(
-        &mut self,
-        rect: Rect,
-        gradient: Gradient,
-        radius: impl Into<CornerRadii>,
-        curvature: f32,
-    ) {
-        self.node.commands.push(Rc::new(DrawCommand::RoundedRect {
-            rect,
-            color: gradient.start_color, // Fallback color
-            radius: radius.into(),
-            curvature,
-            border: None,
-            shadow: None,
-            gradient: Some(gradient),
-        }));
-    }
-
-    /// Draw a border frame (no fill).
-    pub fn draw_border_frame(
-        &mut self,
-        rect: Rect,
-        border_color: Color,
-        radius: impl Into<CornerRadii>,
-        border_width: f32,
-    ) {
-        self.node.commands.push(Rc::new(DrawCommand::RoundedRect {
-            rect,
-            color: Color::TRANSPARENT,
-            radius: radius.into(),
-            curvature: 1.0,
-            border: Some(Border::new(border_width, border_color)),
-            shadow: None,
-            gradient: None,
-        }));
-    }
-
     /// Draw a border frame with curvature.
     pub fn draw_border_frame_with_curvature(
         &mut self,
@@ -328,12 +290,14 @@ impl<'a> PaintContext<'a> {
     pub fn draw_backdrop_blur(
         &mut self,
         rect: Rect,
+        sources: crate::backdrop::BackdropSources,
         radius: f32,
         corner_radii: impl Into<CornerRadii>,
         curvature: f32,
     ) {
         self.node.commands.push(Rc::new(DrawCommand::BackdropBlur {
             rect,
+            sources,
             radius,
             corner_radii: corner_radii.into(),
             curvature,
@@ -443,7 +407,12 @@ impl<'a> PaintContext<'a> {
             return;
         }
 
-        if let Some(shadow) = shadow {
+        // Filtered like the stroke below it, and for the same reason the
+        // container's shadow is: a fully transparent one still expands into a
+        // ring of text copies, every frame, drawing nothing. Spellable
+        // deliberately (`TextShadow::new(.., Color::TRANSPARENT)`) and in
+        // passing, while an animated shadow colour leaves transparent.
+        if let Some(shadow) = shadow.filter(|s| s.color.a > 0.0) {
             for (dx, dy, sample_color) in shadow.samples() {
                 self.draw_text_styled(
                     text,

@@ -147,10 +147,15 @@ let svg_data = r##"
     </svg>
 "##;
 
-image(ImageSource::SvgBytes(svg_data.as_bytes().into()))
+container()
     .width(48.0)
     .height(48.0)
+    .child(image(ImageSource::SvgBytes(svg_data.as_bytes().into())))
 ```
+
+An `Image` carries no box of its own: the container it sits in is what gives it
+one, exactly as with a `text`. `content_fit` then decides how the picture uses
+that box.
 
 ## Reactive Images
 
@@ -211,9 +216,10 @@ fn main() {
             )
             .child(
                 // SVG from memory
-                image(ImageSource::SvgBytes(svg_icon.as_bytes().into()))
+                container()
                     .width(32.0)
                     .height(32.0)
+                    .child(image(ImageSource::SvgBytes(svg_icon.as_bytes().into())))
             )
             .child(
                 // Rotated image

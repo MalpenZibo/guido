@@ -57,16 +57,19 @@ Each widget:
 After layout, widgets paint to the `PaintContext`:
 
 ```rust
-fn paint(&self, ctx: &mut PaintContext) {
-    // Draw background
-    ctx.draw_rounded_rect(self.bounds, self.background, self.corner_radius);
+fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
+    // Bounds come from the Tree — the single source of truth — and paint
+    // happens in LOCAL coordinates, the parent having placed the node.
+    let bounds = tree.get_bounds(id).unwrap_or_default();
+    let local = Rect::new(0.0, 0.0, bounds.width, bounds.height);
 
-    // Draw border
-    ctx.draw_border(self.bounds, self.border_width, self.border_color);
+    // Background and border are one command: a rounded rect carries its own
+    // border, shadow and gradient.
+    ctx.draw_rounded_rect(local, self.background, self.corner_radius);
 
     // Paint children
-    for child in &self.children {
-        child.paint(ctx);
+    for &child_id in self.children.iter() {
+        tree.with_widget(child_id, |child| child.paint(tree, child_id, ctx));
     }
 }
 ```

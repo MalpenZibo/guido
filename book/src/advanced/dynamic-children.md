@@ -93,9 +93,13 @@ Per item, identity (`key`) and content (`PartialEq`) are diffed separately:
 Keys must be unique and stable — never use the index:
 
 ```rust
-keyed(data, |item| item.id, build)              // Good: stable identity
-keyed(data, |(index, _)| *index as u64, build)  // Bad: reorder loses state
+keyed(data, |item| item.id, build)          // Good: stable identity
+keyed(data, |item| item.name.clone(), build) // Good: any Hash + Eq key
+keyed(data, |(index, _)| *index, build)      // Bad: reorder loses state
 ```
+
+The key is anything `Hash + Eq + Clone`, and rows are indexed by the key itself
+rather than by a hash of it, so two distinct keys are never reconciled as one.
 
 The item type chooses the update granularity: fields included in the item
 trigger a row rebuild when they change; fields left out can be read via
@@ -225,14 +229,15 @@ impl Container {
 
 // Reactive keyed children list: tracked data, key-based identity,
 // untracked per-item builder with content diffing.
-pub fn keyed<T, I, W>(
+pub fn keyed<T, I, K, W>(
     data: impl Fn() -> I + 'static,
-    key: impl Fn(&T) -> u64 + 'static,
+    key: impl Fn(&T) -> K + 'static,
     build: impl Fn(T) -> W + 'static,
-) -> KeyedChildren<T, I, W>
+) -> KeyedChildren<T, I, K, W>
 where
     T: Clone + PartialEq + 'static,
     I: IntoIterator<Item = T>,
+    K: Hash + Eq + Clone + 'static,
     W: Widget + 'static;
 
 // Cleanup registration (use inside reactive closures and builders)

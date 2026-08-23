@@ -146,6 +146,12 @@ pub fn quit_app() {
     jobs::set_exit_request(jobs::ExitRequest::Quit);
 }
 
+/// Everything an application needs, and nothing it does not.
+///
+/// Writing a *widget* or a *layout* rather than an application is a different
+/// job with a different vocabulary — the tree, the paint context, the tracking
+/// scope. That lives in [`widget_prelude`], and is not
+/// re-exported here.
 pub mod prelude {
     pub use crate::animation::{
         Keyframes, SpringConfig, TimingFunction, Transition, TransitionConfig,
@@ -154,26 +160,23 @@ pub mod prelude {
     pub use crate::compositor::{CompositorEffects, compositor_effects};
     pub use crate::keyboard::keyboard_modifiers;
     pub use crate::layout::{
-        Axis, Constraints, CrossAlignment, Flex, IntoF32, Length, MainAlignment, Size, ZStack,
-        at_least, at_most, fill, fraction,
+        Axis, CrossAlignment, Flex, Length, MainAlignment, Size, ZStack, at_least, at_most, fill,
+        fraction,
     };
     pub use crate::outputs::{OutputId, OutputInfo, outputs, surface_output};
     pub use crate::platform::{Anchor, KeyboardInteractivity, Layer};
     pub use crate::reactive::{
-        Callback, CursorIcon, Memo, OptionSignalExt, RwSignal, Service, Signal, Trigger,
+        Callback, CursorIcon, IntoSignal, IntoVal, Memo, RwSignal, Service, Signal, Trigger,
         WriteSignal, create_derived, create_effect, create_memo, create_service, create_signal,
-        create_stored, create_trigger, expect_context, has_context, on_cleanup, provide_context,
-        provide_signal_context, set_cursor, use_context, with_context,
+        create_stored, create_task, create_trigger, expect_context, has_context, on_cleanup,
+        provide_context, provide_signal_context, set_cursor, use_context, with_context,
     };
-    // For widgets written outside the crate: the scope that makes a widget's
-    // own signal reads its own.
-    pub use crate::reactive::{JobType, with_signal_tracking};
-    pub use crate::renderer::{PaintContext, Shadow, measure_text};
+    pub use crate::renderer::{Shadow, measure_text};
     pub use crate::session_lock::{
         LockState, lock_session, lock_state, session_locked, unlock_session,
     };
     pub use crate::surface::{
-        ExclusiveZone, PopupAnchor, PopupConfig, PopupGravity, PopupHandle, SurfaceConfig,
+        ExclusiveZone, Margin, PopupAnchor, PopupConfig, PopupGravity, PopupHandle, SurfaceConfig,
         SurfaceExtent, SurfaceHandle, SurfaceId, content, spawn_popup, spawn_surface,
         surface_handle,
     };
@@ -183,15 +186,39 @@ pub mod prelude {
     pub use crate::widgets::{
         AnyWidget, Border, Color, Container, ContentFit, Control, CornerRadii, Event,
         EventResponse, FontFamily, FontWeight, GradientDirection, Image, ImageSource, InputStyle,
-        InputStyled, IntoChildren, Key, LinearGradient, Modifiers, MouseButton, Overflow, Padding,
-        Rect, ScrollAxis, ScrollSource, ScrollbarBuilder, ScrollbarVisibility, Selection,
-        StateStyle, Stateful, Text, TextInput, TextShadow, TextStroke, TextStyle, TextStyled,
-        Widget, container, image, keyed, text, text_input,
+        InputStyled, IntoChildren, IntoClickHandler, Key, LinearGradient, Modifiers, MouseButton,
+        Overflow, Padding, Rect, ScrollAxis, ScrollSource, ScrollbarBuilder, ScrollbarVisibility,
+        Selection, StateStyle, Stateful, Text, TextInput, TextShadow, TextStroke, TextStyle,
+        TextStyled, Widget, container, image, keyed, text, text_input,
     };
     pub use crate::{
         App, ExitReason, SignalFields, component, default_font_family, load_font, quit_app,
         restart_app, set_default_font_family,
     };
+}
+
+/// What a widget or a layout written outside the crate needs, on top of
+/// [`prelude`].
+///
+/// The two are meant to be imported together:
+///
+/// ```ignore
+/// use guido::prelude::*;
+/// use guido::widget_prelude::*;
+/// ```
+///
+/// [`Widget`] has two required methods — `layout` and
+/// `paint`; [`Layout`](crate::layout::Layout) has one. Everything else here is
+/// what those signatures name, plus
+/// [`with_signal_tracking`](crate::reactive::with_signal_tracking) — the scope
+/// that makes a widget's signal reads *its own*, so a change to its content
+/// re-runs it rather than the nearest ancestor that happened to open a scope.
+pub mod widget_prelude {
+    pub use crate::layout::{Constraints, IntoF32, Layout};
+    pub use crate::reactive::{JobType, OptionSignalExt, with_signal_tracking};
+    pub use crate::renderer::{PaintContext, RenderNode};
+    pub use crate::tree::{Tree, WidgetId};
+    pub use crate::widgets::{LayoutHints, Widget};
 }
 
 use smithay_client_toolkit::reexports::client::QueueHandle;
@@ -228,6 +255,74 @@ fn close_surface_now(
         surface_manager::teardown_widget_subtree(tree, managed.widget_id);
     }
     wayland_state.destroy_surface(id);
+}
+
+/// Re-publish the reservation after something it *follows* has moved — the
+/// size, the margin, the anchor.
+///
+/// Only [`ExclusiveZone::Auto`] follows anything: every other policy is a
+/// number, and republishing it would send the compositor a value it already has
+/// and log a line saying so, on every resize and every margin change.
+/// `measured` is for the one caller that knows a size the compositor has not
+/// been told about yet: the content-measure pass, which has just computed it.
+fn resync_exclusive_zone(
+    id: SurfaceId,
+    config: &SurfaceConfig,
+    wayland_state: &mut platform::WaylandState,
+    measured: Option<(u32, u32)>,
+) {
+    if config.exclusive_zone == surface::ExclusiveZone::Auto {
+        publish_exclusive_zone(id, config, wayland_state, measured);
+    }
+}
+
+/// Resolve the reservation policy against what the surface is anchored to and
+/// how big it is, and send the protocol value.
+///
+/// The size is the one just *asked* for, not the one the compositor last told us
+/// about: `set_surface_size` only sends a request, and `WaylandSurfaceState`
+/// learns the new size a round trip later, in `configure`. Resolving against
+/// that reserves for the size the surface is leaving — a bar going from 32 to 48
+/// keeps reserving 32.
+///
+/// A `Fixed` axis is therefore authoritative here. A `Content` one has no number
+/// yet, so it falls back to `measured` if the caller has one and to the live
+/// size otherwise, the measure pass re-resolving once it does. And the axis an
+/// `Auto` reservation follows is always one we own — `follow_axis` gives up on
+/// an axis anchored to both edges, the only kind the compositor sizes — so the
+/// value we asked for is the value that will take effect.
+fn publish_exclusive_zone(
+    id: SurfaceId,
+    config: &SurfaceConfig,
+    wayland_state: &mut platform::WaylandState,
+    measured: Option<(u32, u32)>,
+) {
+    // A content axis waiting to be measured has no size to reserve for, and the
+    // confirmed one is the wrong answer rather than an old one: a surface
+    // declared `width(content()).anchor(TOP | LEFT | RIGHT)` is stretched, so
+    // 1920 is what the compositor imposed on an axis that was not ours. Re-anchor
+    // it into a side dock and that number becomes a reservation for the whole
+    // screen, pushing every other window off it, until the measure lands.
+    //
+    // So it waits for the measure, which resyncs whenever it runs — but only
+    // `Auto` waits, because only `Auto` reads a size. `Fixed`, `None` and
+    // `Ignore` are constants, and deferring one defers it for ever: nothing
+    // republishes a policy that is not `Auto`, so a `set_exclusive_zone(Fixed(40))`
+    // on a `content()` surface would simply never reach the compositor.
+    if config.exclusive_zone == surface::ExclusiveZone::Auto
+        && measured.is_none()
+        && surface::needs_content_measure(config)
+    {
+        return;
+    }
+
+    let known = measured.or_else(|| configured_size(wayland_state, id));
+    let width = surface::requested_extent(config.width, known.map(|(w, _)| w));
+    let height = surface::requested_extent(config.height, known.map(|(_, h)| h));
+    let zone = config
+        .exclusive_zone
+        .resolve(config.anchor, config.margin, width, height);
+    wayland_state.set_surface_exclusive_zone(id, zone);
 }
 
 /// Process dynamic surface commands (create, close, property changes).
@@ -279,22 +374,76 @@ fn process_surface_commands(
                 wayland_state.set_surface_keyboard_interactivity(id, mode);
             }
             SurfaceCommand::SetAnchor { id, anchor } => {
-                wayland_state.set_surface_anchor(id, anchor);
+                let asked = reconfigure(id, surface_manager, wayland_state, |surface, wayland| {
+                    surface.config.anchor = anchor;
+                    wayland.set_surface_anchor(id, anchor);
+                    // The size goes with it: which axes are the compositor's
+                    // follows from the anchor, so a bar re-anchored to one edge
+                    // has to stop asking for zero on the axis it now owns.
+                    send_size(id, surface, wayland)
+                });
+                if let Some((true, root)) = asked {
+                    jobs::request_job(root, jobs::JobRequest::Layout);
+                }
             }
             SurfaceCommand::SetSize { id, width, height } => {
-                wayland_state.set_surface_size(id, width, height);
+                let asked = reconfigure(id, surface_manager, wayland_state, |surface, wayland| {
+                    surface.config.width = width;
+                    surface.config.height = height;
+                    // Here every value is one the caller just named, so anything
+                    // the anchor discards is worth saying.
+                    surface::warn_size_request_on_stretched_axis(id, &surface.config);
+                    send_size(id, surface, wayland)
+                });
+                if let Some((true, root)) = asked {
+                    jobs::request_job(root, jobs::JobRequest::Layout);
+                }
             }
             SurfaceCommand::SetExclusiveZone { id, zone } => {
-                wayland_state.set_surface_exclusive_zone(id, zone);
+                // Recorded through `reconfigure` like the rest; the publishing is
+                // left to the resync it already does, which for `Auto` is exactly
+                // this. Doing it inside the closure too sent the request twice —
+                // and logged it twice — for the one policy the resync is for.
+                //
+                // The other policies are numbers the resync skips, so they
+                // publish here.
+                let asked = reconfigure(id, surface_manager, wayland_state, |surface, wayland| {
+                    surface.config.exclusive_zone = zone;
+                    if zone != surface::ExclusiveZone::Auto {
+                        publish_exclusive_zone(id, &surface.config, wayland, None);
+                    }
+                    // Like its three sisters. Declaring `Auto` on a content
+                    // surface leaves the resync waiting for a measure — this arm
+                    // publishes nothing itself for `Auto`, on purpose — so
+                    // without asking for a layout the measure pass never runs on
+                    // a settled UI and the reservation is never sent at all.
+                    (
+                        surface::needs_content_measure(&surface.config),
+                        surface.widget_id,
+                    )
+                });
+                if let Some((true, root)) = asked {
+                    jobs::request_job(root, jobs::JobRequest::Layout);
+                }
             }
-            SurfaceCommand::SetMargin {
-                id,
-                top,
-                right,
-                bottom,
-                left,
-            } => {
-                wayland_state.set_surface_margin(id, top, right, bottom, left);
+            SurfaceCommand::SetMargin { id, margin } => {
+                let asked = reconfigure(id, surface_manager, wayland_state, |surface, wayland| {
+                    surface.config.margin = margin;
+                    wayland.set_surface_margin(id, margin);
+                    // Like its three sisters. An `Auto` reservation is the margin
+                    // *plus* the extent, so moving the margin moves it — and on a
+                    // content axis the resync declines to guess and waits for a
+                    // measure. Without asking for one, nothing lays anything out,
+                    // the measure pass never runs, and the reservation keeps the
+                    // old margin for as long as the surface lives.
+                    (
+                        surface::needs_content_measure(&surface.config),
+                        surface.widget_id,
+                    )
+                });
+                if let Some((true, root)) = asked {
+                    jobs::request_job(root, jobs::JobRequest::Layout);
+                }
             }
             SurfaceCommand::SetInputRegion { id, rects } => {
                 wayland_state.set_surface_input_region(id, rects.as_deref());
@@ -423,7 +572,10 @@ fn measure_natural_size(
 ///
 /// Also clears needs_paint flags and the per-frame `repainted` marker for
 /// freshly painted widgets (skipping already-clean subtrees entirely).
-fn cache_paint_results(tree: &mut Tree, node: &std::rc::Rc<renderer::RenderNode>) -> bool {
+pub(crate) fn cache_paint_results(
+    tree: &mut Tree,
+    node: &std::rc::Rc<renderer::RenderNode>,
+) -> bool {
     if !node.repainted.get() {
         // Reused from cache: its subtree is by construction complete and its
         // cache entries are already valid — nothing to do below it.
@@ -740,7 +892,7 @@ fn layout_pass(
         });
         wayland_state.reposition_popup_if_changed(id, natural, qh);
     } else if (has_pending_layouts || frame.force_render_surface)
-        && (surface.config.width.is_content() || surface.config.height.is_content())
+        && surface::needs_content_measure(&surface.config)
     {
         // Initialization included: a freshly spawned surface reaches
         // its first frames through the full-layout path, not
@@ -760,19 +912,41 @@ fn layout_pass(
         tree.with_widget_mut(surface.widget_id, |widget, wid, tree| {
             widget.layout(tree, wid, constraints);
         });
-        if (nw, nh) != (frame.width, frame.height) {
-            wayland_state.set_surface_size(id, nw, nh);
-            // Auto reservations follow automatic resizes too; every
-            // other policy never moves
-            if surface.config.exclusive_zone == surface::ExclusiveZone::Auto {
-                let zone = surface.config.exclusive_zone.resolve(
-                    surface.config.anchor,
-                    surface.config.margin,
-                    nw,
-                    nh,
-                );
-                wayland_state.set_surface_exclusive_zone(id, zone);
-            }
+        // Compared as they will be *asked for*, not as they were measured. On an
+        // axis the compositor owns both sides are zero, so a `content()` width
+        // under `LEFT | RIGHT` cannot make this true for ever by measuring 300
+        // against a screen's 1920 — which it did, resizing, resyncing,
+        // committing and logging once a frame for the whole life of the surface.
+        let asking = surface::honour_owned_axes(surface.config.anchor, nw, nh);
+        let resizing =
+            asking != surface::honour_owned_axes(surface.config.anchor, frame.width, frame.height);
+        // The resize is conditional; the resync is not. This is the only place
+        // the measurement is known, and the reservation may be waiting on it even
+        // when the size did not move — `publish_exclusive_zone` declines to
+        // resolve `Auto` against an unmeasured content axis, so a re-anchoring
+        // that measures back to the number it already had would otherwise leave
+        // the reservation deferred for ever.
+        {
+            // One commit, like every other pair of these. A content surface whose
+            // content animates resizes on frame after frame, and two commits a
+            // frame show the compositor the new size against the old reservation
+            // in between.
+            let config = &surface.config;
+            wayland_state.batch_layer_requests(id, |wayland| {
+                if resizing {
+                    // Through the same rule as every other resize: a measured
+                    // number on an axis the compositor owns hands back an axis
+                    // that is not ours, and a full-width bar would then stay at
+                    // whatever the screen was when it was measured.
+                    let (ask_w, ask_h) = asking;
+                    wayland.set_surface_size(id, ask_w, ask_h);
+                }
+                // An `Auto` reservation follows an automatic resize too, and this
+                // is the one caller that knows the measured size before the
+                // compositor does — so it passes it rather than letting the
+                // helper look it up.
+                resync_exclusive_zone(id, config, wayland, Some((nw, nh)));
+            });
         }
     }
 
@@ -782,6 +956,82 @@ fn layout_pass(
     // A `WidgetRef::focus()` from application code lands here: after layout, so a
     // handle attached this very frame has resolved to a widget.
     reactive::focus::apply_pending_focus(tree);
+}
+
+/// The size the compositor has confirmed, if it has confirmed one.
+///
+/// `WaylandSurfaceState` is created holding the size that was *requested*, which
+/// for a content axis is the 1px placeholder — so reading it unconditionally
+/// would report a number nobody agreed on as though it were live, and make
+/// `requested_extent`'s "no size yet" branch unreachable while the case it
+/// describes was still happening.
+fn configured_size(wayland_state: &platform::WaylandState, id: SurfaceId) -> Option<(u32, u32)> {
+    wayland_state
+        .get_surface(id)
+        .filter(|s| s.configured)
+        .map(|s| (s.width, s.height))
+}
+
+/// Send the size the surface is currently asking for, and report whether the
+/// content-measure pass has to run before that answer is right.
+///
+/// Shared by the two commands that can change it — a resize, and a re-anchoring
+/// that changes which axes are ours — so the anchor and the size cannot end up
+/// describing different surfaces.
+///
+/// An axis crossing from the compositor's side to ours has to be given a number:
+/// layer-shell makes zero on an axis not anchored to opposite edges a protocol
+/// error, so a re-anchored bar that says nothing is disconnected at its next
+/// commit. The number is the config's, **default included** — a bar written
+/// `height(32).anchor(TOP | LEFT | RIGHT)` never names a width, so re-anchoring
+/// it to `TOP | LEFT` asks for [`SurfaceConfig::default`]'s 400 rather than the
+/// screen width it was stretched to. Handing back the size it happens to have
+/// instead would read better there and worse where it counts: it would also
+/// override a width the app *did* name and had ignored while stretched. An app
+/// re-anchoring to an axis it cares about sets the size for it.
+///
+/// It does not warn. A re-anchoring names no sizes, so warning from here fired
+/// on every anchor change for an axis that was stretched before and still is —
+/// the noise
+/// [`warn_content_on_stretched_axis`](surface::warn_content_on_stretched_axis)
+/// was split off to avoid. The caller that was handed a size says so.
+fn send_size(
+    id: SurfaceId,
+    surface: &ManagedSurface,
+    wayland_state: &mut platform::WaylandState,
+) -> (bool, WidgetId) {
+    let live = configured_size(wayland_state, id);
+    let (ask_w, ask_h, needs_measure) = surface::resize_request(&surface.config, live);
+    wayland_state.set_surface_size(id, ask_w, ask_h);
+    (needs_measure, surface.widget_id)
+}
+
+/// Apply a change to a surface, then re-publish what follows from it.
+///
+/// Every property an [`ExclusiveZone::Auto`] reservation follows — the anchor,
+/// the size, the margin — goes through here, so the resync happens in one place
+/// and a fifth trigger cannot be added to three of the four. Forgetting exactly
+/// that is how a re-anchored dock went on reserving a bar's height at the top of
+/// the screen.
+///
+/// The change records on the config *and* sends the protocol request, because
+/// the two must not drift: the content-sizing pass reads the config every frame.
+fn reconfigure<R>(
+    id: SurfaceId,
+    surface_manager: &mut SurfaceManager,
+    wayland_state: &mut platform::WaylandState,
+    change: impl FnOnce(&mut ManagedSurface, &mut platform::WaylandState) -> R,
+) -> Option<R> {
+    let surface = surface_manager.get_mut(id)?;
+    let mut result = None;
+    // One commit for the group. A re-anchoring sends the anchor, the size and
+    // the reservation, and each request committing on its own would show the
+    // compositor two intermediate surfaces on the way.
+    wayland_state.batch_layer_requests(id, |wayland| {
+        result = Some(change(surface, wayland));
+        resync_exclusive_zone(id, &surface.config, wayland, None);
+    });
+    result
 }
 
 /// Paint, flatten, hand the frame to the GPU, and re-arm the pacing gate.
@@ -803,23 +1053,23 @@ fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry)
         tree.mark_subtree_needs_paint(surface.widget_id);
     }
 
-    // Collect this surface's blur region from registered widgets (post
-    // layout, so bounds are current).
-    let blur_rects = blur::collect_for_surface(tree, surface.widget_id);
-
     // Skip frame if nothing needs paint
     if !tree.needs_paint(surface.widget_id) {
-        // A blur-region change without a repaint (e.g. the compositor's
-        // blur capability arriving) still needs its own commit.
-        wayland_state.sync_blur_region(id, blur_rects, qh, true);
+        // Only when one is owed. The retained command buffer still holds the
+        // last frame, which is what is on screen — so it is also the right
+        // region, and rebuilding it from those commands is right but not free:
+        // an idle surface would walk a whole frame's worth of them, every frame,
+        // to arrive at the region it published already. The one thing that can
+        // change while nothing paints is the compositor's blur capability, which
+        // drops its regions, and that says so.
+        if wayland_state.take_blur_resync(id) {
+            let blur_rects = blur::regions_from_commands(&surface.flattened_commands);
+            wayland_state.sync_blur_region(id, blur_rects, qh, true);
+        }
         render_stats::record_frame_skipped();
         render_stats::end_frame(&DamageRegion::None);
         return;
     }
-
-    // Set the blur region now so it rides the buffer commit performed
-    // inside present() — region and content change in the same frame.
-    wayland_state.sync_blur_region(id, blur_rects, qh, false);
 
     // Clear and reuse the root node (preserves capacity)
     surface.root_node.clear();
@@ -834,13 +1084,34 @@ fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry)
     });
 
     // Flatten tree into reused buffers
+    let compositor_blur;
     time_phase!(render_stats::Phase::Flatten, {
-        flatten_root_into(
+        compositor_blur = flatten_root_into(
             &surface.root_node,
             &mut surface.flattened_commands,
             &mut surface.command_layers,
         );
     });
+
+    // The compositor blur region is read off the frame that was just built, so
+    // it cannot disagree with what is on screen — see `blur`. Set before
+    // present() so it rides the buffer commit: region and content change
+    // together.
+    // Asked before the scan, not after: without the protocol there is nothing
+    // to publish, and walking the frame's commands to find out would be a
+    // per-frame cost on the compositors that can do the least with it.
+    //
+    // And on the compositors that *can*, only for a frame that asks. The flatten
+    // counted them on its way past, so the scan is skipped for the surfaces —
+    // almost all of them — with no compositor blur in the frame at all. The one
+    // frame that has to be walked without carrying one is the frame that stops:
+    // it owes the compositor the empty region that withdraws the last one.
+    if wayland_state.supports_blur_region()
+        && (compositor_blur || wayland_state.has_published_blur(id))
+    {
+        let blur_rects = blur::regions_from_commands(&surface.flattened_commands);
+        wayland_state.sync_blur_region(id, blur_rects, qh, false);
+    }
 
     // Re-arm the frame callback BEFORE presenting so the request rides
     // the same commit as the buffer (present() commits internally). The
@@ -1430,7 +1701,6 @@ impl Drop for App {
         compositor::reset_compositor_effects();
         keyboard::reset_keyboard_modifiers();
         reactive::focus::reset_pending_focus();
-        blur::reset_blur();
         session_lock::reset_session_lock();
         FONTS_CONSUMED.with(|f| f.set(false));
     }
@@ -1439,6 +1709,241 @@ impl Drop for App {
 impl Default for App {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod exclusive_zone_resync_tests {
+    use super::*;
+    use crate::platform::Anchor;
+    use crate::surface::{ExclusiveZone, Margin, SurfaceExtent};
+
+    /// The reservation has to follow the size that was just *requested*. The
+    /// compositor only tells us the new size a round trip later, so resolving
+    /// against what it last said reserves for the size the surface is leaving.
+    #[test]
+    fn a_fixed_axis_resolves_against_the_requested_size() {
+        // A bar that was 32 tall and has just asked for 48.
+        let live_height = Some(32);
+        let height = surface::requested_extent(SurfaceExtent::Fixed(48), live_height);
+        assert_eq!(height, 48, "the request wins over the stale configure");
+
+        let zone =
+            ExclusiveZone::Auto.resolve(Anchor::TOP, Margin::from([6, 0, 0, 0]), 800, height);
+        assert_eq!(zone, 48 + 6);
+    }
+
+    /// A content axis has no number of its own yet — `initial()` is 1px, which
+    /// must never be what a running surface asks for.
+    #[test]
+    fn a_content_axis_holds_the_live_size_until_it_is_measured() {
+        assert_eq!(
+            surface::requested_extent(SurfaceExtent::Content, Some(240)),
+            240
+        );
+        // Before the first configure there is nothing better to say, and the
+        // placeholder is what creation asks for too — the content-measure pass
+        // runs on a surface's first frames regardless, so this is a size it is
+        // on its way out of rather than one it can be stuck at. What must not
+        // happen is reporting the placeholder as though the compositor had
+        // agreed to it, which is why `live` is the *configured* size.
+        assert_eq!(
+            surface::requested_extent(SurfaceExtent::Content, None),
+            SurfaceExtent::Content.initial()
+        );
+        assert_eq!(
+            surface::requested_extent(SurfaceExtent::Content, Some(1)),
+            1,
+            "and once configured at 1px, 1px is the honest answer"
+        );
+    }
+
+    /// The anchor is what an `Auto` reservation reads to decide which axis it
+    /// follows and which edge's margin counts, so a bar becoming a side dock has
+    /// to reserve on the other axis. It used to keep reserving its old one:
+    /// `SetAnchor` was the one command that recorded nothing on the config.
+    #[test]
+    fn a_reservation_follows_the_anchor_it_was_given() {
+        let margin = Margin::from([6, 20, 9, 20]);
+
+        // A 800x32 bar at the top reserves its height plus the top margin.
+        let bar = ExclusiveZone::Auto.resolve(Anchor::TOP, margin, 800, 32);
+        assert_eq!(bar, 32 + 6);
+
+        // The same surface, re-anchored as a 48-wide dock on the left, has to
+        // reserve its width plus the left margin instead.
+        let dock = ExclusiveZone::Auto.resolve(Anchor::LEFT, margin, 48, 600);
+        assert_eq!(dock, 48 + 20);
+        assert_ne!(dock, bar, "the axis genuinely changes with the anchor");
+    }
+
+    /// Handing an axis back to `content()` at runtime must not ask for 1px, and
+    /// must ask for a layout — nothing else brings the content-measure pass
+    /// round for a surface whose widgets did not change.
+    #[test]
+    fn handing_an_axis_to_content_keeps_the_size_and_asks_for_a_measure() {
+        let live = Some((300u32, 40u32));
+        let anchored = |w: SurfaceExtent, h: SurfaceExtent| SurfaceConfig {
+            anchor: Anchor::TOP,
+            width: w,
+            height: h,
+            ..SurfaceConfig::new()
+        };
+
+        let (w, h, measure) =
+            surface::resize_request(&anchored(SurfaceExtent::Content, 40.into()), live);
+        assert_eq!((w, h), (300, 40), "no 1px collapse");
+        assert!(measure, "the measure pass has to be woken");
+
+        let (w, h, measure) = surface::resize_request(&anchored(200.into(), 60.into()), live);
+        assert_eq!((w, h), (200, 60));
+        assert!(!measure, "two fixed axes need no measure");
+    }
+
+    /// A `content()` axis the compositor owns is measured and then thrown away.
+    /// Asking for the measure anyway re-lays out the whole subtree on every
+    /// resize and every re-anchoring, to produce a number nothing can use.
+    #[test]
+    fn a_stretched_content_axis_asks_for_no_measure() {
+        let live = Some((1920u32, 32u32));
+        let bar = |anchor: Anchor| SurfaceConfig {
+            anchor,
+            width: SurfaceExtent::Content,
+            height: 32.into(),
+            ..SurfaceConfig::new()
+        };
+
+        let stretched = bar(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT);
+        let (_, _, measure) = surface::resize_request(&stretched, live);
+        assert!(!measure, "the width is the compositor's either way");
+        assert!(
+            !surface::needs_content_measure(&stretched),
+            "and the frame loop's measure pass asks the same question, or it \
+             re-measures a discarded axis on every frame that lays anything out"
+        );
+
+        let ours = bar(Anchor::TOP | Anchor::LEFT);
+        let (_, _, measure) = surface::resize_request(&ours, live);
+        assert!(
+            measure,
+            "anchored to one edge it is ours, and has to be measured"
+        );
+        assert!(surface::needs_content_measure(&ours));
+    }
+
+    /// And until it *is* measured there is nothing to reserve for. The confirmed
+    /// size of a stretched axis is the compositor's, not a measurement: a bar
+    /// declared `width(content()).anchor(TOP | LEFT | RIGHT)` is confirmed at the
+    /// screen's 1920, and re-anchoring it into a side dock turns that into a
+    /// reservation for the whole screen — every other window pushed off it — for
+    /// the frame between the command and the measure.
+    #[test]
+    fn a_reservation_waits_for_the_measure_rather_than_guessing() {
+        // A left dock: anchored to one horizontal edge and both vertical ones, so
+        // the height is the compositor's and the reservation follows the width.
+        let dock = SurfaceConfig {
+            anchor: Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM,
+            width: SurfaceExtent::Content,
+            height: 32.into(),
+            exclusive_zone: surface::ExclusiveZone::Auto,
+            ..SurfaceConfig::new()
+        };
+
+        // What the stretched anchor left behind, and what the content is worth.
+        let stale = 1920;
+        let measured = 240;
+
+        assert!(
+            surface::needs_content_measure(&dock),
+            "the width is ours now, so it is waiting on a measure"
+        );
+        assert_eq!(
+            dock.exclusive_zone
+                .resolve(dock.anchor, dock.margin, measured, 32),
+            240,
+            "the measure is what it reserves for"
+        );
+        assert_eq!(
+            dock.exclusive_zone
+                .resolve(dock.anchor, dock.margin, stale, 32),
+            1920,
+            "and the confirmed size is the whole screen, which is why publishing \
+             from it has to wait"
+        );
+    }
+
+    /// Only `Auto` waits, because only `Auto` reads a size. The other three are
+    /// constants, and nothing republishes a policy that is not `Auto` — so a
+    /// deferred one is a lost one: `set_exclusive_zone(Fixed(40))` on a surface
+    /// with a `content()` axis would never reach the compositor at all.
+    #[test]
+    fn only_a_reservation_that_reads_a_size_waits_for_one() {
+        let toast = |zone| SurfaceConfig {
+            anchor: Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM,
+            width: SurfaceExtent::Content,
+            height: SurfaceExtent::Content,
+            exclusive_zone: zone,
+            ..SurfaceConfig::new()
+        };
+
+        assert!(
+            surface::needs_content_measure(&toast(surface::ExclusiveZone::Auto)),
+            "the premise: this is the surface whose measure is pending"
+        );
+
+        // Whatever size these are handed, they answer the same thing — so there
+        // is nothing for them to wait for.
+        for zone in [
+            surface::ExclusiveZone::Fixed(40),
+            surface::ExclusiveZone::None,
+            surface::ExclusiveZone::Ignore,
+        ] {
+            let config = toast(zone);
+            let unmeasured = zone.resolve(config.anchor, config.margin, 1, 1);
+            let measured = zone.resolve(config.anchor, config.margin, 240, 60);
+            assert_eq!(
+                unmeasured, measured,
+                "{zone:?} does not depend on the size, so deferring it only loses it"
+            );
+        }
+    }
+
+    /// Which axes are the compositor's follows from the anchor, and layer-shell
+    /// is strict about it: omitting a dimension *without* opposite-edge
+    /// anchoring is a protocol error, so a bar re-anchored to one edge has to
+    /// stop asking for zero on the axis it now owns — at the next commit, which
+    /// is every frame, the compositor would close the connection.
+    #[test]
+    fn the_size_asked_for_follows_the_anchor() {
+        let bar = |anchor: Anchor| SurfaceConfig {
+            anchor,
+            width: 800.into(),
+            height: 32.into(),
+            ..SurfaceConfig::new()
+        };
+        let live = Some((1920u32, 32u32));
+
+        let stretched =
+            surface::resize_request(&bar(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT), live);
+        assert_eq!(
+            (stretched.0, stretched.1),
+            (0, 32),
+            "anchored to both horizontal edges, the width is the compositor's"
+        );
+
+        let pinned = surface::resize_request(&bar(Anchor::TOP | Anchor::LEFT), live);
+        assert_eq!(
+            (pinned.0, pinned.1),
+            (800, 32),
+            "anchored to one, it is ours again and must be sent"
+        );
+
+        let dock = surface::resize_request(&bar(Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM), live);
+        assert_eq!(
+            (dock.0, dock.1),
+            (800, 0),
+            "and the other axis, the other way"
+        );
     }
 }
 

@@ -42,37 +42,39 @@ Guido is a GPU-accelerated GUI library for building Wayland layer shell applicat
 use guido::prelude::*;
 
 fn main() {
-    let count = create_signal(0);
+    App::new().run(|app| {
+        let count = create_signal(0);
 
-    let (app, _) = App::new().add_surface(
-        SurfaceConfig::new()
-            .height(48)
-            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
-            .layer(Layer::Top)
-            .background_color(Color::rgb(0.1, 0.1, 0.15)),
-        move || {
-            container()
-                .height(fill())
-                .layout(
-                    Flex::row()
-                        .spacing(16.0)
-                        .cross_alignment(CrossAlignment::Center),
-                )
-                .padding([0.0, 16.0])
-                .child(text(move || format!("Count: {}", count.get())).color(Color::WHITE))
-                .child(
-                    container()
-                        .background(Color::rgb(0.3, 0.3, 0.4))
-                        .corner_radius(8.0)
-                        .padding(8.0)
-                        .hover_state(|s| s.lighter(0.1))
-                        .pressed_state(|s| s.ripple())
-                        .on_click(move || count.update(|c| *c += 1))
-                        .child(text("Click me").color(Color::WHITE)),
-                )
-        },
-    );
-    app.run();
+        app.add_surface(
+            SurfaceConfig::new()
+                .height(48)
+                .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+                .layer(Layer::Top)
+                .background_color(Color::rgb(0.1, 0.1, 0.15)),
+            move || {
+                container()
+                    .height(fill())
+                    .layout(
+                        Flex::row()
+                            .spacing(16.0)
+                            .cross_alignment(CrossAlignment::Center),
+                    )
+                    .padding([0.0, 16.0])
+                    .text_color(Color::WHITE)
+                    .child(text(move || format!("Count: {}", count.get())))
+                    .child(
+                        container()
+                            .background(Color::rgb(0.3, 0.3, 0.4))
+                            .corner_radius(8.0)
+                            .padding(8.0)
+                            .when_hovered(|s| s.lighter(0.1))
+                            .when_pressed(|s| s.ripple())
+                            .on_click(move || count.update(|c| *c += 1))
+                            .child(text("Click me")),
+                    )
+            },
+        );
+    });
 }
 ```
 

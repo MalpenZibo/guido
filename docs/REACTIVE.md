@@ -141,7 +141,7 @@ text(move || state.name.get())                          // ignores count/items c
 // Get writer handles (Send + Copy) for background services
 let writers = state.writers();
 
-let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+create_task(move |ctx| async move {
     while ctx.is_running() {
         let new_state = fetch_state().await;
         writers.set(new_state);  // Decomposes struct, sets each field individually
@@ -267,7 +267,7 @@ let data = create_signal(String::new());
 let data_w = data.writer();  // WriteSignal<T> — Send, for background tasks
 
 // Spawn a background service - automatically cleaned up on unmount
-let _ = create_service::<(), _, _>(move |_rx, ctx| async move {
+create_task(move |ctx| async move {
     while ctx.is_running() {
         let new_data = fetch_data();
         data_w.set(new_data);  // Queued, applied next frame

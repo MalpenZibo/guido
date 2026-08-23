@@ -44,6 +44,18 @@ impl<T> IntoVal<T> for T {
     }
 }
 
+// A closure returning a bare value where an optional one is expected. The
+// constant path already accepts it, through std's `From<T> for Option<T>`, so
+// without this the *same expression* compiles as a value and not as a closure —
+// exactly the asymmetry `IntoSignal` exists to remove. `container().gradient`
+// is where that showed: `Some(g)` and `move || Some(g)` both worked, `g` worked
+// and `move || g` did not.
+impl<T> IntoVal<Option<T>> for T {
+    fn into_val(self) -> Option<T> {
+        Some(self)
+    }
+}
+
 // Lossy f64 → f32: bare float literals in closures default to f64, and
 // accepting them avoids the deprecated f32 inference fallback
 // (rust-lang/rust#154024)

@@ -14,7 +14,8 @@
 use rustc_hash::FxHashSet;
 
 use super::*;
-use crate::animation::{TimingFunction, Transition};
+use crate::animation::{SpringConfig, TimingFunction, Transition};
+use crate::backdrop::BackdropSources;
 use crate::jobs::{self, JobType};
 use crate::layout::{Constraints, Flex, at_least, at_most, fill, fraction};
 use crate::reactive::create_signal;
@@ -28,6 +29,12 @@ use crate::widgets::widget::{Event, EventResponse, MouseButton};
 struct H {
     tree: Tree,
     root: WidgetId,
+    /// The last frame's render tree and flattened commands, retained as the
+    /// loop retains them — a frame that repaints nothing publishes from these.
+    last: Option<(
+        std::rc::Rc<RenderNode>,
+        Vec<crate::renderer::FlattenedCommand>,
+    )>,
 }
 
 impl H {
@@ -35,7 +42,11 @@ impl H {
         let mut tree = Tree::new();
         let root = tree.register(Box::new(widget));
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-        Self { tree, root }
+        Self {
+            tree,
+            root,
+            last: None,
+        }
     }
 
     fn layout(&mut self, constraints: Constraints) -> Size {
@@ -58,6 +69,60 @@ impl H {
             w.paint(t, id, &mut ctx);
         });
         node
+    }
+
+    /// One frame, in the phases and the order `render_surface` runs them: queued
+    /// jobs, layout, the skip-frame gate, paint, flatten, the compositor blur
+    /// region read off the result, and `crate::cache_paint_results` to finish.
+    ///
+    /// Two of those are the loop's own code rather than a stand-in for it, and
+    /// both were learned the hard way — and it is called the way the loop calls
+    /// it, per child of the root, not on the root. `cache_paint_results` written out by hand
+    /// left `cache_paint` undone, so `reuse_cached` never found a cache and every
+    /// test repainted everything — making the whole class of bug about a widget
+    /// that is *not* repainted structurally invisible here. And a `frame` that
+    /// always painted could not reach the gate at all, where the loop publishes
+    /// the region from the buffer it retained.
+    ///
+    /// Use this, not `paint()`, for anything whose correctness is about when in
+    /// the frame it happens, or about which widgets painted at all.
+    fn frame(&mut self, w: f32, h: f32) -> Frame {
+        pump(self);
+        self.fit(w, h);
+
+        let root = self.root;
+        if !self.tree.needs_paint(root)
+            && let Some((node, commands)) = self.last.clone()
+        {
+            // The gate: nothing is dirty, so nothing repaints and the region
+            // comes from the frame still on screen.
+            let blur = crate::blur::regions_from_commands(&commands);
+            return Frame { node, blur };
+        }
+
+        let mut node = RenderNode::new(root.as_u64());
+        self.tree.with_widget_mut(root, |w, id, t| {
+            let mut ctx = PaintContext::new(&mut node);
+            w.paint(t, id, &mut ctx);
+        });
+
+        let node = std::rc::Rc::new(node);
+        let mut commands = Vec::new();
+        let mut layers = Vec::new();
+        let _ = crate::renderer::flatten_root_into(&node, &mut commands, &mut layers);
+        let blur = crate::blur::regions_from_commands(&commands);
+
+        // Per child of the root and then `clear_needs_paint(root)`, which is
+        // what the loop does: the surface root always repaints, so it is never
+        // cache-reused, and handing it to `cache_paint_results` would leave the
+        // harness with a cache entry the loop never has.
+        for child in &node.children {
+            crate::cache_paint_results(&mut self.tree, child);
+        }
+        self.tree.clear_needs_paint(root);
+        self.last = Some((std::rc::Rc::clone(&node), commands));
+
+        Frame { node, blur }
     }
 
     fn send(&mut self, event: Event) -> EventResponse {
@@ -107,6 +172,13 @@ impl H {
         jobs::recycle_job_buffer(drained);
         types
     }
+}
+
+/// What one frame produced: the render tree, and the compositor blur region the
+/// paint left registered.
+struct Frame {
+    node: std::rc::Rc<RenderNode>,
+    blur: Vec<crate::blur::BlurRect>,
 }
 
 /// A leaf of an exactly known size.
@@ -724,6 +796,41 @@ fn advancing_animations_does_not_report_a_missing_scope() {
     assert!(
         queued.contains(&JobType::Animation),
         "and the properties must genuinely be subscribed, got {queued:?}"
+    );
+}
+
+/// A state layer's border moves the *width* as well as the colour, because a
+/// border is declared as a pair — so "can a state change move an animated
+/// property" has to answer yes for a container that animates only the width.
+///
+/// It answered no: the list named `border_color` and not `border_width`, from
+/// when the two were declared separately and a layer really could change one
+/// alone. This PR added `elevation` to that list and left the hole next to it
+/// that it had just made reachable.
+///
+/// Asked of the predicate rather than through a hover, because a hover reaches
+/// the animation by a second route as well: the interaction flags are a signal,
+/// and paint reads the animated width under `JobType::Animation` tracking, so
+/// setting the flag queues the job anyway. That route is why nothing was visibly
+/// broken — and it is not a reason to leave the direct answer wrong, since it
+/// holds only while some paint has already subscribed.
+#[test]
+fn a_border_width_animation_counts_as_movable_by_a_state_layer() {
+    let animated = container()
+        .border(2.0, Color::BLUE)
+        .animate_border_width(Transition::spring(SpringConfig::BOUNCY))
+        .when_hovered(|s| s.border(14.0, Color::BLUE));
+    assert!(
+        animated.has_animated_state_properties(),
+        "hovering moves the width, so it needs an Animation job"
+    );
+
+    let plain = container()
+        .border(2.0, Color::BLUE)
+        .when_hovered(|s| s.border(14.0, Color::BLUE));
+    assert!(
+        !plain.has_animated_state_properties(),
+        "with nothing animated, a plain repaint is the whole job"
     );
 }
 
@@ -1509,5 +1616,946 @@ fn an_animated_colour_starts_from_the_inherited_base() {
         painted_text_color(&mut h),
         Color::RED,
         "and come back to it"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Reactivity — properties that used to accept only a constant
+// ---------------------------------------------------------------------------
+
+/// A gradient follows its signal, and does so as a repaint: nothing about the
+/// fill can move the box.
+#[test]
+fn a_gradient_is_reactive_and_paint_only() {
+    let warm = create_signal(true);
+    let mut h = H::new(container().width(20.0).height(20.0).gradient(move || {
+        Some(if warm.get() {
+            LinearGradient::horizontal(Color::RED, Color::YELLOW)
+        } else {
+            LinearGradient::horizontal(Color::BLUE, Color::CYAN)
+        })
+    }));
+    h.fit(100.0, 100.0);
+    assert_eq!(gradient_ends(&h.paint()), Some((Color::RED, Color::YELLOW)));
+
+    let queued = h.jobs_from(|| warm.set(false));
+    assert_eq!(queued, vec![JobType::Paint], "got {queued:?}");
+    assert_eq!(gradient_ends(&h.paint()), Some((Color::BLUE, Color::CYAN)));
+}
+
+/// Two constant endpoints must not cost a derived that boxes a closure and
+/// recomputes, every read, a value that cannot change.
+#[test]
+fn a_constant_gradient_shorthand_stays_constant() {
+    let constant = container().gradient_vertical(Color::RED, Color::BLUE);
+    assert_eq!(
+        constant.gradient.and_then(|g| g.constant()).flatten(),
+        Some(LinearGradient::vertical(Color::RED, Color::BLUE)),
+        "two constants make one constant"
+    );
+
+    let end = create_signal(Color::GREEN);
+    let reactive = container().gradient_vertical(Color::RED, end);
+    assert!(
+        reactive.gradient.expect("declared").constant().is_none(),
+        "a reactive endpoint has to stay reactive"
+    );
+}
+
+/// The endpoints are reactive on their own, so the common case needs no
+/// closure building a whole gradient.
+#[test]
+fn gradient_endpoints_are_reactive_one_by_one() {
+    let end = create_signal(Color::YELLOW);
+    let mut h = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .gradient_vertical(Color::RED, end),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(gradient_ends(&h.paint()), Some((Color::RED, Color::YELLOW)));
+
+    end.set(Color::GREEN);
+    assert_eq!(gradient_ends(&h.paint()), Some((Color::RED, Color::GREEN)));
+}
+
+/// `overflow` decides both whether children are clipped and whether the box may
+/// shrink below its content, so a write to it has to reach layout as well as
+/// paint.
+#[test]
+fn overflow_is_reactive_and_invalidates_layout() {
+    let clipped = create_signal(false);
+    let mut h = H::new(
+        container()
+            .width(50.0)
+            .height(20.0)
+            .overflow(move || {
+                if clipped.get() {
+                    Overflow::Hidden
+                } else {
+                    Overflow::Visible
+                }
+            })
+            .child(box_of(400.0, 10.0)),
+    );
+    h.fit(500.0, 500.0);
+    assert!(h.paint().clip.is_none());
+
+    let queued = h.jobs_from(|| clipped.set(true));
+    assert!(
+        queued.contains(&JobType::Layout) && queued.contains(&JobType::Paint),
+        "got {queued:?}"
+    );
+    h.fit(500.0, 500.0);
+    assert!(h.paint().clip.is_some());
+}
+
+/// A blur can be switched off by the same signal that switches it on: a radius
+/// of zero draws no blur command, which is the contract `Text` already had.
+#[test]
+fn a_backdrop_blur_is_reactive_and_zero_means_off() {
+    let radius = create_signal(0.0f32);
+    let mut h = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .backdrop_blur(move || radius.get()),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(blur_radii(&h.paint()), Vec::<f32>::new());
+
+    let queued = h.jobs_from(|| radius.set(12.0));
+    assert_eq!(queued, vec![JobType::Paint], "got {queued:?}");
+    assert_eq!(blur_radii(&h.paint()), vec![12.0]);
+
+    radius.set(0.0);
+    assert_eq!(blur_radii(&h.paint()), Vec::<f32>::new());
+}
+
+/// A state layer replaces the whole border, both halves at once, because that is
+/// the only way to say "border" anywhere in this API.
+#[test]
+fn a_state_layer_replaces_the_whole_border() {
+    let danger = create_signal(false);
+    let mut h = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .border(1.0, Color::GRAY)
+            .state(danger, |s| s.border(2.0, Color::RED)),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(borders(&h.paint()), vec![(1.0, Color::GRAY)]);
+
+    danger.set(true);
+    assert_eq!(borders(&h.paint()), vec![(2.0, Color::RED)]);
+
+    danger.set(false);
+    assert_eq!(borders(&h.paint()), vec![(1.0, Color::GRAY)], "and back");
+}
+
+/// Two layers speaking about the border resolve last-declared-wins, as every
+/// other property does — and as a unit, since half of one cannot be declared.
+#[test]
+fn the_last_declared_border_layer_wins() {
+    let hovered = create_signal(true);
+    let failed = create_signal(true);
+    let mut h = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .border(1.0, Color::GRAY)
+            .state(hovered, |s| s.border(2.0, Color::WHITE))
+            .state(failed, |s| s.border(3.0, Color::RED)),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(borders(&h.paint()), vec![(3.0, Color::RED)]);
+
+    failed.set(false);
+    assert_eq!(borders(&h.paint()), vec![(2.0, Color::WHITE)]);
+}
+
+/// Elevation transitions like every other paint property now, instead of
+/// jumping.
+#[test]
+fn elevation_animates_towards_its_state_layer() {
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .elevation(0.0)
+            .when_hovered(|s| s.elevation(8.0))
+            .animate_elevation(Transition::new(80.0, TimingFunction::Linear)),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    assert_eq!(shadow_count(&h.paint()), 0, "flat on the surface at rest");
+
+    set_hover(&mut h, true);
+    // Two frames: the first starts the animation, the second is far enough up
+    // the ramp for the shadow to be worth drawing — the very first values are
+    // below the alpha floor by design, since a shadow nobody can see is a rect
+    // drawn for nothing.
+    for _ in 0..2 {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        pump(&mut h);
+        h.fit(100.0, 100.0);
+        h.paint();
+    }
+    assert_eq!(
+        shadow_count(&h.paint()),
+        1,
+        "it casts a shadow while it rises"
+    );
+
+    settle(&mut h, 80);
+    set_hover(&mut h, false);
+    settle(&mut h, 80);
+    assert_eq!(shadow_count(&h.paint()), 0, "and settles back down");
+}
+
+/// Every `BackdropBlur` radius drawn by a node.
+fn blur_radii(node: &RenderNode) -> Vec<f32> {
+    node.commands
+        .iter()
+        .filter_map(|c| match &**c {
+            DrawCommand::BackdropBlur { radius, .. } => Some(*radius),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The endpoints of the first gradient drawn by a node.
+fn gradient_ends(node: &RenderNode) -> Option<(Color, Color)> {
+    node.commands.iter().find_map(|c| match &**c {
+        DrawCommand::RoundedRect {
+            gradient: Some(gradient),
+            ..
+        } => Some((gradient.start_color, gradient.end_color)),
+        _ => None,
+    })
+}
+
+/// How many of the node's rects carry a shadow.
+fn shadow_count(node: &RenderNode) -> usize {
+    node.commands
+        .iter()
+        .filter(|c| {
+            matches!(
+                &***c,
+                DrawCommand::RoundedRect {
+                    shadow: Some(_),
+                    ..
+                }
+            )
+        })
+        .count()
+}
+
+/// A shadow belongs to the box, not to the fill, so a gradient must not lose
+/// it. Both are reactive, so a signal can move a container from one branch of
+/// the decoration to the other between frames — an elevation animation that
+/// crossed into the gradient branch stopped drawing while still asking for a
+/// frame at every step.
+#[test]
+fn a_gradient_keeps_its_shadow() {
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(20.0)
+            .elevation(3.0)
+            .gradient_horizontal(Color::RED, Color::BLUE),
+    );
+    h.fit(100.0, 100.0);
+    let node = h.paint();
+
+    assert_eq!(gradient_ends(&node), Some((Color::RED, Color::BLUE)));
+    assert_eq!(shadow_count(&node), 1, "the gradient is still elevated");
+}
+
+/// A border resolving to nothing visible must draw nothing, rather than send an
+/// invisible frame to the instance buffer every frame.
+///
+/// Every border names both halves, so this is only reachable deliberately — a
+/// transparent colour, a zero width — or in passing, while an animated colour
+/// crosses transparent.
+#[test]
+fn a_border_with_nothing_to_show_draws_nothing() {
+    let mut h = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .border(2.0, Color::TRANSPARENT),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(borders(&h.paint()), Vec::new(), "an invisible colour");
+
+    let mut h = H::new(container().width(20.0).height(20.0).border(0.0, Color::RED));
+    h.fit(100.0, 100.0);
+    assert_eq!(borders(&h.paint()), Vec::new(), "a zero width");
+}
+
+/// A colour fading in behind a declared width has to start drawing the moment it
+/// is visible, so the gate cannot be a build-time decision.
+#[test]
+fn a_border_appears_when_its_colour_does() {
+    let visible = create_signal(false);
+    let mut h = H::new(container().width(20.0).height(20.0).border(2.0, move || {
+        if visible.get() {
+            Color::RED
+        } else {
+            Color::TRANSPARENT
+        }
+    }));
+    h.fit(100.0, 100.0);
+    assert_eq!(borders(&h.paint()), Vec::new());
+
+    visible.set(true);
+    assert_eq!(borders(&h.paint()), vec![(2.0, Color::RED)]);
+}
+
+/// A clipped child is invisible, and an invisible child must not answer for a
+/// click landing outside its parent's bounds.
+///
+/// Content overflows by *summing*: each child answers to the parent's maximum,
+/// their row does not. So the second pill sits beyond the parent's right edge.
+fn clip_host(clipped: Signal<bool>, clicked: RwSignal<i32>) -> Container {
+    container()
+        .width(40.0)
+        .height(20.0)
+        .layout(Flex::row())
+        .overflow(move || {
+            if clipped.get() {
+                Overflow::Hidden
+            } else {
+                Overflow::Visible
+            }
+        })
+        .child(box_of(40.0, 20.0))
+        .child(
+            container()
+                .width(40.0)
+                .height(20.0)
+                .on_click(move || clicked.update(|c| *c += 1)),
+        )
+}
+
+#[test]
+fn hidden_overflow_stops_events_reaching_a_clipped_child() {
+    let clicked = create_signal(0);
+    let clipped = create_signal(true);
+    let mut h = H::new(clip_host(clipped.into(), clicked));
+    h.fit(500.0, 500.0);
+    h.paint();
+
+    // x = 60 is inside the second pill and outside the clipping parent.
+    for event in click_at(60.0, 10.0) {
+        h.send(event);
+    }
+    assert_eq!(clicked.get_untracked(), 0, "clipped away, so not clickable");
+
+    clipped.set(false);
+    pump(&mut h);
+    h.fit(500.0, 500.0);
+    h.paint();
+
+    for event in click_at(60.0, 10.0) {
+        h.send(event);
+    }
+    assert_eq!(clicked.get_untracked(), 1, "unclipped, so clickable");
+}
+
+/// Events resolve against the frame on screen, not against the frame about to
+/// be drawn: the pointer is aimed at what the user can see. `hit.bounds` already
+/// come from the last layout, and the clip has to agree with them — which is
+/// also why the event path reads a cached value rather than running the
+/// container's own closure once per container per coalesced MouseMove.
+#[test]
+fn events_use_the_clip_of_the_frame_on_screen() {
+    let clicked = create_signal(0);
+    let clipped = create_signal(false);
+    let mut h = H::new(clip_host(clipped.into(), clicked));
+    h.fit(500.0, 500.0);
+    h.paint();
+
+    // The signal flips, but nothing has been laid out or drawn since.
+    clipped.set(true);
+    for event in click_at(60.0, 10.0) {
+        h.send(event);
+    }
+    assert_eq!(
+        clicked.get_untracked(),
+        1,
+        "the pill the user can see is still clickable"
+    );
+
+    // Once the clip is on screen, it applies.
+    pump(&mut h);
+    h.fit(500.0, 500.0);
+    h.paint();
+    for event in click_at(60.0, 10.0) {
+        h.send(event);
+    }
+    assert_eq!(clicked.get_untracked(), 1);
+}
+
+/// A shadow falls outside the box that casts it, so the damage a container
+/// reports has to reach past its own bounds — and it has to reach far enough for
+/// the *largest* shadow it can cast, not the one showing.
+///
+/// Elevation animates paint-only, so a hover that lifts a card never re-runs the
+/// layout that records the reach. Sized to the resting value, the shadow ring
+/// falls outside every damage rect: absent on the way up, left on screen on the
+/// way down.
+#[test]
+fn the_damage_reach_covers_the_elevation_a_hover_can_reach() {
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .elevation(0.0)
+            .when_hovered(|s| s.elevation(8.0))
+            .animate_elevation(Transition::new(80.0, TimingFunction::Linear)),
+    );
+    h.fit(100.0, 100.0);
+
+    let reach = h.tree.paint_overflow(h.root);
+    let lifted = style::elevation_to_shadow(8.0).extent();
+    assert!(
+        reach >= lifted && lifted > 0.0,
+        "reach {reach} must cover the hovered shadow {lifted}"
+    );
+
+    // And a container that can never lift pays nothing for it.
+    let mut flat = H::new(container().width(40.0).height(40.0).background(Color::RED));
+    flat.fit(100.0, 100.0);
+    assert_eq!(flat.tree.paint_overflow(flat.root), 0.0);
+}
+
+/// A spring goes past its target on purpose, so a reach measured from the target
+/// leaves the shadow ring outside the damage rect exactly at the peak — the same
+/// artefact the reach exists to prevent, moved to the moment it is most visible.
+#[test]
+fn the_damage_reach_allows_for_a_spring_overshooting() {
+    let bouncy = |c: Container| {
+        c.width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .elevation(0.0)
+            .when_hovered(|s| s.elevation(8.0))
+    };
+
+    let mut eased = H::new(
+        bouncy(container()).animate_elevation(Transition::new(80.0, TimingFunction::Linear)),
+    );
+    eased.fit(100.0, 100.0);
+    let without_bounce = eased.tree.paint_overflow(eased.root);
+
+    let mut sprung =
+        H::new(bouncy(container()).animate_elevation(Transition::spring(SpringConfig::BOUNCY)));
+    sprung.fit(100.0, 100.0);
+    let with_bounce = sprung.tree.paint_overflow(sprung.root);
+
+    assert!(
+        with_bounce > without_bounce,
+        "a bouncy spring has to reach further than an ease: {with_bounce} vs {without_bounce}"
+    );
+    assert!(
+        with_bounce >= style::elevation_to_shadow(8.0 * 1.17).extent() - 0.01,
+        "and far enough for BOUNCY's ~17%, got {with_bounce}"
+    );
+}
+
+/// The shadow's reach, as drawn — `None` where the box casts none.
+fn shadow_extent(node: &RenderNode) -> Option<f32> {
+    node.commands.iter().find_map(|c| match &**c {
+        DrawCommand::RoundedRect {
+            shadow: Some(shadow),
+            ..
+        } => Some(shadow.extent()),
+        _ => None,
+    })
+}
+
+/// A `.elevation(signal)` that falls has to *animate* down. It used to rise
+/// animated and drop in one frame.
+///
+/// The reach the layout records is also the ceiling paint clamps to, and the
+/// ceiling was recomputed at paint time from the declarations — which by then
+/// say 0, while the shadow on screen is still 8 deep. Every frame of the descent
+/// drew `min(interpolated, 0.0)`: no shadow at all, for an animation that went
+/// on running and asking for frames.
+///
+/// The descent runs on a ramp no loaded runner can reach the end of, because the
+/// claim is about what is drawn *while* it falls: with a short ramp, a slow
+/// machine would finish the fall between two sleeps and the test would read the
+/// correct absence of a shadow as the bug. Arrival is checked separately, by
+/// settling rather than by a clock.
+#[test]
+fn a_falling_elevation_animates_down_instead_of_snapping() {
+    let falling = |ramp_ms: f32| {
+        let level = create_signal(8.0f32);
+        let h = H::new(
+            container()
+                .width(40.0)
+                .height(40.0)
+                .background(Color::RED)
+                .elevation(move || level.get())
+                .animate_elevation(Transition::new(ramp_ms, TimingFunction::Linear)),
+        );
+        (h, level)
+    };
+
+    let (mut h, level) = falling(60_000.0);
+    h.fit(100.0, 100.0);
+    assert!(
+        shadow_extent(&h.paint()).is_some(),
+        "a lifted card casts a shadow"
+    );
+
+    level.set(0.0);
+    for step in 0..5 {
+        std::thread::sleep(std::time::Duration::from_millis(4));
+        pump(&mut h);
+        h.fit(100.0, 100.0);
+        assert!(
+            shadow_extent(&h.paint()).is_some(),
+            "frame {step} of the descent drew no shadow at all"
+        );
+    }
+
+    // And it does arrive, on a ramp it can finish.
+    let (mut h, level) = falling(60.0);
+    h.fit(100.0, 100.0);
+    h.paint();
+    level.set(0.0);
+    pump(&mut h);
+    settle(&mut h, 200);
+    assert_eq!(shadow_count(&h.paint()), 0, "and settles flat");
+}
+
+/// The clamp the descent above must not trip is still doing its job.
+///
+/// A spring keeps its momentum across a retarget, so hover flicker pumps it:
+/// driven near its damped natural frequency it settles at the resonant gain,
+/// which for a lightly damped spring is several times the step response the
+/// reach is measured from. Whatever it reaches, it is not allowed to draw
+/// outside the rect the layout reserved — that ring would be composited nowhere
+/// and left on screen.
+#[test]
+fn hover_flicker_cannot_push_a_shadow_outside_its_damage_rect() {
+    // Lightly damped (zeta = 0.1, resonant gain ~3.7x) and fast, so the pumping
+    // shows up within a test's worth of frames.
+    let pumpable = SpringConfig {
+        mass: 1.0,
+        stiffness: 3600.0,
+        damping: 12.0,
+    };
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            // Small enough that the shadow is still growing with the number:
+            // past ~12 the blur and the offset are both capped, so a clamp
+            // there would have nothing to show for itself.
+            .elevation(0.0)
+            .when_hovered(|s| s.elevation(2.0))
+            .animate_elevation(Transition::spring(pumpable)),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    let reach = h.tree.paint_overflow(h.root);
+    let mut inside = false;
+    let mut worst: f32 = 0.0;
+    // Flipped by the clock, not by a frame count: pumping means reversing every
+    // half period (~53ms here), and a frame is only worth ~8ms of it.
+    let mut last_flip = std::time::Instant::now();
+    for step in 0..120 {
+        if last_flip.elapsed() >= std::time::Duration::from_millis(52) {
+            inside = !inside;
+            set_hover(&mut h, inside);
+            last_flip = std::time::Instant::now();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(4));
+        pump(&mut h);
+        h.fit(100.0, 100.0);
+        let node = h.paint();
+        if let Some(extent) = shadow_extent(&node) {
+            worst = worst.max(extent);
+            assert!(
+                extent <= reach + 0.01,
+                "step {step} drew a shadow reaching {extent} outside a damage rect of {reach}"
+            );
+        }
+    }
+    assert!(worst > 0.0, "the flicker has to actually raise a shadow");
+}
+
+/// A declared elevation changing does need a new reach, so it must invalidate
+/// the layout that recorded the old one.
+#[test]
+fn a_declared_elevation_change_invalidates_the_reach() {
+    let level = create_signal(0.0f32);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .elevation(move || level.get()),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+    assert_eq!(h.tree.paint_overflow(h.root), 0.0);
+
+    let queued = h.jobs_from(|| level.set(6.0));
+    assert!(queued.contains(&JobType::Layout), "got {queued:?}");
+
+    // `jobs_from` consumes the jobs without running them, so the reach is
+    // recomputed by a write that gets pumped.
+    level.set(9.0);
+    pump(&mut h);
+    h.fit(100.0, 100.0);
+    assert!(h.tree.paint_overflow(h.root) > 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// Compositor blur regions — every one of these is about which widgets painted
+// ---------------------------------------------------------------------------
+//
+// The surface half of a backdrop blur is a draw command in the render tree. The
+// compositor half is a `wl_region` derived from the same command after
+// flattening, which is what makes these tests about *painting*: a container that
+// did not paint has no command, one served from the cache carries its along, and
+// a frame that repaints nothing publishes from the buffer it retained.
+//
+// They all go through `H::frame`, which runs those phases in the loop's order
+// and with the loop's own `cache_paint_results` — the two things a test of this
+// cannot model loosely and still be a test.
+
+/// Turning a blur off has to reach the compositor on the frame that turns it
+/// off. While the region was collected before the paint, the frame that switched
+/// it off published the *previous* frame's answer, and nothing was dirty
+/// afterwards — so the withdrawal waited for a frame a settled surface never
+/// renders.
+#[test]
+fn switching_a_compositor_blur_off_withdraws_it_on_that_frame() {
+    let frosted = create_signal(true);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(20.0)
+            .backdrop_blur(move || if frosted.get() { 24.0 } else { 0.0 }),
+    );
+    assert!(!h.frame(100.0, 100.0).blur.is_empty(), "frosted");
+
+    frosted.set(false);
+    assert_eq!(
+        h.frame(100.0, 100.0).blur,
+        Vec::new(),
+        "the frame that turns it off is the frame that stops publishing it"
+    );
+
+    // And a settled surface keeps it off: nothing is dirty, so this frame does
+    // not repaint, and the region must not come back.
+    assert_eq!(h.frame(100.0, 100.0).blur, Vec::new());
+
+    frosted.set(true);
+    assert!(!h.frame(100.0, 100.0).blur.is_empty(), "and back on");
+}
+
+/// Restricting the sources to the surface publishes no compositor region at all,
+/// whatever the radius — while still drawing one.
+#[test]
+fn a_surface_only_blur_publishes_no_compositor_region() {
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(20.0)
+            .backdrop_blur(BackdropBlur::new(24.0).sources(BackdropSources::SURFACE)),
+    );
+    let frame = h.frame(100.0, 100.0);
+    assert_eq!(frame.blur, Vec::new());
+    assert_eq!(blur_radii(&frame.node), vec![24.0], "but it draws one");
+}
+
+/// A hidden panel blurs nothing, and neither does anything inside it. The
+/// parent's paint returns at the visibility gate before its children are
+/// painted, so a blurred *descendant* never gets to withdraw its own region —
+/// and layout returning zero for the parent leaves the child's own bounds
+/// exactly where they were.
+#[test]
+fn hiding_a_panel_withdraws_the_blur_of_everything_inside_it() {
+    let open = create_signal(true);
+    let mut h = H::new(
+        container()
+            .width(60.0)
+            .height(40.0)
+            .visible(move || open.get())
+            .child(container().width(40.0).height(20.0).backdrop_blur(24.0)),
+    );
+    assert!(!h.frame(100.0, 100.0).blur.is_empty(), "open");
+
+    open.set(false);
+    assert_eq!(
+        h.frame(100.0, 100.0).blur,
+        Vec::new(),
+        "a hidden panel blurs nothing, descendants included"
+    );
+    assert_eq!(h.frame(100.0, 100.0).blur, Vec::new(), "and stays that way");
+
+    open.set(true);
+    assert!(!h.frame(100.0, 100.0).blur.is_empty(), "and back");
+}
+
+/// Hiding and showing a panel has to work in *both* directions, and the return
+/// trip is the one that breaks: the panel repaints, but its child is clean and
+/// is served from the paint cache, so the child's own paint never runs.
+///
+/// While the region was a registry written during paint, that meant the blur
+/// went off and never came back — the withdrawal had a path and the
+/// re-registration did not. Reading the region off the frame instead makes the
+/// two directions one operation: a cached node carries its commands with it, so
+/// it carries its blur.
+#[test]
+fn a_blur_served_from_the_paint_cache_is_still_published() {
+    let open = create_signal(true);
+    let mut h = H::new(
+        container()
+            .width(60.0)
+            .height(40.0)
+            .visible(move || open.get())
+            .child(container().width(40.0).height(20.0).backdrop_blur(24.0)),
+    );
+    assert!(!h.frame(100.0, 100.0).blur.is_empty(), "open");
+
+    open.set(false);
+    assert_eq!(h.frame(100.0, 100.0).blur, Vec::new(), "hidden");
+
+    // The panel is dirty and repaints; the child is not, and comes from the
+    // cache without its paint running.
+    open.set(true);
+    assert!(
+        !h.frame(100.0, 100.0).blur.is_empty(),
+        "a blur that came back from the cache still has to be published"
+    );
+
+    // And it survives a frame in which nothing at all repaints.
+    assert!(!h.frame(100.0, 100.0).blur.is_empty(), "and stays");
+}
+
+/// A child scrolled out of a viewport blurs nothing. It never paints — culled,
+/// or outside the window the scroller even offers to `paint_children` — so it
+/// cannot withdraw its own region, and its bounds stay where they were.
+#[test]
+fn scrolling_a_frosted_card_away_withdraws_its_blur() {
+    // Enough rows that the scroller takes its windowing fast path, which is the
+    // case the sweep exists for and the one a two-child list never reaches.
+    let mut rows: Vec<crate::widgets::AnyWidget> = vec![
+        container()
+            .width(40.0)
+            .height(20.0)
+            .backdrop_blur(24.0)
+            .into_any(),
+    ];
+    rows.extend((0..60).map(|_| box_of(40.0, 20.0).into_any()));
+
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(30.0)
+            .scrollable(ScrollAxis::Vertical)
+            .children(rows),
+    );
+    assert!(
+        !h.frame(40.0, 30.0).blur.is_empty(),
+        "visible at the top of the scroll"
+    );
+
+    h.send(Event::Scroll {
+        x: 20.0,
+        y: 15.0,
+        delta_x: 0.0,
+        delta_y: 600.0,
+        source: ScrollSource::Wheel,
+    });
+    // Two frames: the first repaints the scroller and settles the flags, the
+    // second is where a clean card is culled — or never offered at all.
+    h.frame(40.0, 30.0);
+    assert_eq!(
+        h.frame(40.0, 30.0).blur,
+        Vec::new(),
+        "scrolled away, so it blurs nothing"
+    );
+}
+
+/// A gradient needs a value that means "no gradient", or the rule the whole
+/// branch is about — a property you can turn off with the signal that turned it
+/// on — has a hole exactly where a header expands and collapses.
+#[test]
+fn a_gradient_can_be_switched_off_and_the_background_returns() {
+    let expanded = create_signal(true);
+    let mut h = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .background(Color::GRAY)
+            .gradient(move || {
+                expanded
+                    .get()
+                    .then(|| LinearGradient::horizontal(Color::RED, Color::BLUE))
+            }),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(gradient_ends(&h.paint()), Some((Color::RED, Color::BLUE)));
+
+    expanded.set(false);
+    let node = h.paint();
+    assert_eq!(gradient_ends(&node), None, "no gradient");
+    assert_eq!(
+        rects(&node).first().map(|(_, color)| *color),
+        Some(Color::GRAY),
+        "and the background it was covering is drawn again"
+    );
+}
+
+/// The border is gated on resolving to something visible; the shadow has to be
+/// too. The opening frames of a lift are at ~0.001, where the shadow's alpha
+/// rounds to nothing — and without a floor each one still pushed a rect
+/// carrying it, every frame, for as long as the animation was leaving zero.
+#[test]
+fn a_shadow_too_faint_to_see_is_not_drawn() {
+    let level = create_signal(0.001f32);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .elevation(move || level.get()),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(shadow_count(&h.paint()), 0, "invisible, so not drawn");
+
+    level.set(1.0);
+    h.fit(100.0, 100.0);
+    assert_eq!(shadow_count(&h.paint()), 1, "and drawn once it can be seen");
+}
+
+/// The clip is part of the shape, for the region as much as for the renderer. A
+/// blurred card cut off by its parent must publish only the part on show, or the
+/// desktop is blurred beside a panel that is not there.
+#[test]
+fn a_clipped_blur_publishes_only_what_is_on_show() {
+    // Content overflows by summing: each child answers to the parent's maximum,
+    // their row does not. So the second card sits entirely past the clip.
+    let card = || container().width(40.0).height(40.0).backdrop_blur(24.0);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .overflow(Overflow::Hidden)
+            .layout(Flex::row())
+            .child(card())
+            .child(card()),
+    );
+    let frame = h.frame(200.0, 200.0);
+
+    let widest = frame
+        .blur
+        .iter()
+        .map(|r| r.x + r.width)
+        .max()
+        .expect("the visible card still blurs");
+    assert!(
+        widest <= 40,
+        "the row is 80 wide inside a 40-wide clip, so no region may reach {widest}"
+    );
+}
+
+/// The region is the shape *as drawn*, so a transform has to reach it: a scaled
+/// card covers more of the desktop and a rotated one covers a diagonal.
+///
+/// End to end through the real paint and flatten, because the geometry is
+/// derived there. The unit tests in `renderer::flatten` measure the arithmetic;
+/// this is the wiring — a region built from a command's local rect instead of
+/// its world one passes every one of those and still publishes a 40x40 upright
+/// box for a card the compositor is showing at 80x80 turned on its corner.
+#[test]
+fn a_transformed_blur_publishes_the_shape_it_is_drawn_as() {
+    let card = |c: Container| c.width(40.0).height(40.0).backdrop_blur(24.0);
+
+    let plain = H::new(card(container())).frame(200.0, 200.0).blur;
+    let scaled = H::new(card(container()).scale(2.0))
+        .frame(200.0, 200.0)
+        .blur;
+    let turned = H::new(card(container()).rotate(45.0))
+        .frame(200.0, 200.0)
+        .blur;
+
+    let span = |rects: &[crate::blur::BlurRect]| {
+        let left = rects.iter().map(|r| r.x).min().expect("a region");
+        let right = rects.iter().map(|r| r.x + r.width).max().expect("a region");
+        right - left
+    };
+
+    let (plain, scaled, turned) = (span(&plain), span(&scaled), span(&turned));
+    assert!(
+        scaled >= plain * 2 - 2,
+        "twice the card is twice the region: {scaled} against {plain}"
+    );
+    assert!(
+        turned > plain && turned < scaled,
+        "turned on its corner it covers its diagonal, {turned} against {plain}"
+    );
+}
+
+/// A gradient between two fully transparent colours draws nothing, and must not
+/// push a rect per frame to do it — the same gate the fill, the border and the
+/// shadow have. With both endpoints reactive, one animating out through
+/// transparent reaches this every frame.
+#[test]
+fn a_fully_transparent_gradient_draws_nothing() {
+    let clear = Color::rgba(1.0, 0.0, 0.0, 0.0);
+
+    let mut h = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .gradient(LinearGradient::horizontal(clear, clear)),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(rects(&h.paint()), Vec::new(), "nothing to draw");
+
+    // One end still visible is still a gradient.
+    let mut half = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .gradient(LinearGradient::horizontal(clear, Color::BLUE)),
+    );
+    half.fit(100.0, 100.0);
+    assert_eq!(
+        gradient_ends(&half.paint()),
+        Some((clear, Color::BLUE)),
+        "fading to transparent is a gradient"
+    );
+
+    // And an invisible gradient does not hide the background under it.
+    let mut over = H::new(
+        container()
+            .width(20.0)
+            .height(20.0)
+            .background(Color::GRAY)
+            .gradient(LinearGradient::horizontal(clear, clear)),
+    );
+    over.fit(100.0, 100.0);
+    assert_eq!(
+        rects(&over.paint()).first().map(|(_, c)| *c),
+        Some(Color::GRAY)
     );
 }

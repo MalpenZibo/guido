@@ -129,8 +129,7 @@ fn test_writers_set_batches_effects() {
     let run_count_ptr = &run_count as *const Cell<u32>;
 
     // Effect reads both fields — should run once on creation.
-    // Hold the effect so it doesn't get disposed on drop.
-    let _effect = create_effect(move || {
+    create_effect(move || {
         let _ = signals.count.get();
         let _ = signals.name.get();
         unsafe { &*run_count_ptr }.set(unsafe { &*run_count_ptr }.get() + 1);
@@ -236,4 +235,18 @@ fn test_where_clause_generic() {
         data: vec![1, 2, 3],
     });
     assert_eq!(signals.data.get(), vec![1, 2, 3]);
+}
+
+/// A string literal is a default like any other. It used to be impossible:
+/// the quoted form was parsed as Rust source, so `default = "Guest"` compiled
+/// to a reference to a variable named `Guest`.
+#[test]
+fn a_component_prop_can_default_to_a_string_literal() {
+    #[guido::component]
+    fn greeting(#[prop(default = "Guest".to_owned())] who: String) -> impl Widget {
+        text(move || format!("hello {}", who.get()))
+    }
+
+    let w = greeting();
+    assert_eq!(w.who.get(), "Guest");
 }

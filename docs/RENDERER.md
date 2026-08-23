@@ -117,10 +117,10 @@ ctx.draw_rounded_rect(rect, color, radius);
 ctx.draw_rounded_rect_with_curvature(rect, color, radius, curvature);
 
 // Gradient rectangle
-ctx.draw_gradient_rect(rect, gradient, radius, curvature);
+ctx.draw_rounded_rect_full(rect, color, radius, curvature, border, shadow, gradient);
 
 // Border frame (no fill)
-ctx.draw_border_frame(rect, border_color, radius, border_width);
+ctx.draw_border_frame_with_curvature(rect, border_color, radius, border_width, curvature);
 
 // With shadow
 ctx.draw_rounded_rect_with_shadow(rect, color, radius, curvature, shadow);

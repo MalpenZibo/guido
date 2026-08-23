@@ -34,6 +34,10 @@ pub(super) struct BoxLengths {
     pub padding: Padding,
     pub width: Length,
     pub height: Length,
+    /// Read here rather than at the point of use: `overflow` is reactive and
+    /// decides whether a box may shrink below its content, so the read has to
+    /// happen inside the layout tracking scope like every other length.
+    pub overflow: Overflow,
 }
 
 /// What the children of one layout pass are laid out into.
@@ -84,13 +88,15 @@ impl Container {
     /// Read the declared padding and lengths, tracked so a later write
     /// re-runs this layout, with fractions resolved against `constraints`.
     pub(super) fn read_box_lengths(&self, id: WidgetId, constraints: Constraints) -> BoxLengths {
-        let (padding, mut width, mut height) = with_signal_tracking(id, JobType::Layout, || {
-            (
-                self.animated_padding(),
-                self.width.as_ref().map(|w| w.get()).unwrap_or_default(),
-                self.height.as_ref().map(|h| h.get()).unwrap_or_default(),
-            )
-        });
+        let (padding, mut width, mut height, overflow) =
+            with_signal_tracking(id, JobType::Layout, || {
+                (
+                    self.animated_padding(),
+                    self.width.as_ref().map(|w| w.get()).unwrap_or_default(),
+                    self.height.as_ref().map(|h| h.get()).unwrap_or_default(),
+                    self.overflow.get_or(Overflow::Visible),
+                )
+            });
 
         if let Some(f) = width.fraction
             && constraints.max_width.is_finite()
@@ -103,10 +109,15 @@ impl Container {
             height.exact = Some((constraints.max_height * f).max(0.0));
         }
 
+        // Event dispatch reads the resolved value from here rather than from
+        // the signal, so it costs nothing on the pointer path.
+        self.overflow_resolved.set(overflow);
+
         BoxLengths {
             padding,
             width,
             height,
+            overflow,
         }
     }
 
@@ -161,8 +172,8 @@ impl Container {
             constraints.max_height,
         );
 
-        let mut max_width = (layout_width - padding.horizontal()).max(0.0);
-        let mut max_height = (layout_height - padding.vertical()).max(0.0);
+        let mut max_width = (layout_width - padding.horizontal_total()).max(0.0);
+        let mut max_height = (layout_height - padding.vertical_total()).max(0.0);
 
         // A reserved gutter is space the content never gets, scrollbar shown
         // or not — that is the point of reserving it.
@@ -185,7 +196,9 @@ impl Container {
             max_width
         } else {
             let effective = lengths.width.min.unwrap_or(0.0).max(constraints.min_width);
-            (effective - padding.horizontal()).max(0.0).min(max_width)
+            (effective - padding.horizontal_total())
+                .max(0.0)
+                .min(max_width)
         };
         let min_height = if lengths.height.exact.is_some() || lengths.height.fill {
             max_height
@@ -195,7 +208,9 @@ impl Container {
                 .min
                 .unwrap_or(0.0)
                 .max(constraints.min_height);
-            (effective - padding.vertical()).max(0.0).min(max_height)
+            (effective - padding.vertical_total())
+                .max(0.0)
+                .min(max_height)
         };
 
         // The visible extent, captured before the scrolled axis is opened up.
@@ -249,14 +264,16 @@ impl Container {
             self.resolve_axis(
                 Axis::Horizontal,
                 &lengths.width,
-                content.width + lengths.padding.horizontal(),
+                lengths.overflow,
+                content.width + lengths.padding.horizontal_total(),
                 constraints.min_width,
                 constraints.max_width,
             ),
             self.resolve_axis(
                 Axis::Vertical,
                 &lengths.height,
-                content.height + lengths.padding.vertical(),
+                lengths.overflow,
+                content.height + lengths.padding.vertical_total(),
                 constraints.min_height,
                 constraints.max_height,
             ),
@@ -267,6 +284,7 @@ impl Container {
         &self,
         axis: Axis,
         length: &Length,
+        overflow: Overflow,
         content: f32,
         parent_min: f32,
         parent_max: f32,
@@ -280,7 +298,7 @@ impl Container {
 
         // Growing back to fit the content is the default; these are the cases
         // where the author asked for a smaller box on purpose.
-        let allow_shrink = self.overflow == Overflow::Hidden
+        let allow_shrink = overflow == Overflow::Hidden
             || animating
             || has_exact
             || match axis {

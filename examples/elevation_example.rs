@@ -13,23 +13,24 @@ fn main() {
     App::new().run(|app| {
         app.add_surface(
             SurfaceConfig::new()
-                .width(600)
-                .height(280)
+                .width(1200)
+                .height(700)
                 .anchor(Anchor::TOP | Anchor::LEFT)
                 .background_color(Color::rgb(0.85, 0.85, 0.9)),
             || {
                 container()
-                    .layout(Flex::column().spacing(16.0))
+                    .padding(48.0)
+                    .layout(Flex::column().spacing(48.0))
                     // Declared once: the cards below inherit it through the
                     // rows, and row 3 overrides it per card.
                     .text_color(Color::rgb(0.2, 0.2, 0.2))
                     .child(
                         // Row 1: Basic elevation levels
                         container()
-                            .layout(Flex::row().spacing(16.0))
+                            .layout(Flex::row().spacing(48.0))
                             .child(
                                 container()
-                                    .padding(16.0)
+                                    .padding(28.0)
                                     .background(Color::WHITE)
                                     .corner_radius(8.0)
                                     .elevation(0.0)
@@ -37,7 +38,7 @@ fn main() {
                             )
                             .child(
                                 container()
-                                    .padding(16.0)
+                                    .padding(28.0)
                                     .background(Color::WHITE)
                                     .corner_radius(8.0)
                                     .elevation(1.0)
@@ -45,7 +46,7 @@ fn main() {
                             )
                             .child(
                                 container()
-                                    .padding(16.0)
+                                    .padding(28.0)
                                     .background(Color::WHITE)
                                     .corner_radius(8.0)
                                     .elevation(2.0)
@@ -53,7 +54,7 @@ fn main() {
                             )
                             .child(
                                 container()
-                                    .padding(16.0)
+                                    .padding(28.0)
                                     .background(Color::WHITE)
                                     .corner_radius(8.0)
                                     .elevation(3.0)
@@ -63,10 +64,10 @@ fn main() {
                     .child(
                         // Row 2: Higher elevation levels
                         container()
-                            .layout(Flex::row().spacing(16.0))
+                            .layout(Flex::row().spacing(48.0))
                             .child(
                                 container()
-                                    .padding(16.0)
+                                    .padding(28.0)
                                     .background(Color::WHITE)
                                     .corner_radius(8.0)
                                     .elevation(4.0)
@@ -74,7 +75,7 @@ fn main() {
                             )
                             .child(
                                 container()
-                                    .padding(16.0)
+                                    .padding(28.0)
                                     .background(Color::WHITE)
                                     .corner_radius(8.0)
                                     .elevation(5.0)
@@ -82,7 +83,7 @@ fn main() {
                             )
                             .child(
                                 container()
-                                    .padding(16.0)
+                                    .padding(28.0)
                                     .background(Color::WHITE)
                                     .corner_radius(8.0)
                                     .elevation(7.0)
@@ -90,7 +91,7 @@ fn main() {
                             )
                             .child(
                                 container()
-                                    .padding(16.0)
+                                    .padding(28.0)
                                     .background(Color::WHITE)
                                     .corner_radius(8.0)
                                     .elevation(10.0)
@@ -100,10 +101,10 @@ fn main() {
                     .child(
                         // Row 3: Colored cards with elevation
                         container()
-                            .layout(Flex::row().spacing(16.0))
+                            .layout(Flex::row().spacing(48.0))
                             .child(
                                 container()
-                                    .padding(16.0)
+                                    .padding(28.0)
                                     .background(Color::rgb(0.9, 0.7, 0.7))
                                     .corner_radius(12.0)
                                     .elevation(2.0)
@@ -112,7 +113,7 @@ fn main() {
                             )
                             .child(
                                 container()
-                                    .padding(16.0)
+                                    .padding(28.0)
                                     .background(Color::rgb(0.7, 0.9, 0.7))
                                     .corner_radius(12.0)
                                     .elevation(3.0)
@@ -121,7 +122,7 @@ fn main() {
                             )
                             .child(
                                 container()
-                                    .padding(16.0)
+                                    .padding(28.0)
                                     .background(Color::rgb(0.7, 0.7, 0.9))
                                     .corner_radius(12.0)
                                     .elevation(4.0)
@@ -132,10 +133,10 @@ fn main() {
                     .child(
                         // Row 4: Squircle with elevation
                         container()
-                            .layout(Flex::row().spacing(16.0))
+                            .layout(Flex::row().spacing(48.0))
                             .child(
                                 container()
-                                    .padding(16.0)
+                                    .padding(28.0)
                                     .background(Color::rgb(0.95, 0.95, 0.95))
                                     .corner_radius(16.0)
                                     .squircle()
@@ -144,7 +145,7 @@ fn main() {
                             )
                             .child(
                                 container()
-                                    .padding(16.0)
+                                    .padding(28.0)
                                     .background(Color::rgb(0.95, 0.95, 0.95))
                                     .corner_radius(16.0)
                                     .squircle()
@@ -153,7 +154,7 @@ fn main() {
                             )
                             .child(
                                 container()
-                                    .padding(16.0)
+                                    .padding(28.0)
                                     .background(Color::rgb(0.95, 0.95, 0.95))
                                     .corner_radius(16.0)
                                     .squircle()
