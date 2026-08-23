@@ -359,8 +359,8 @@ impl PopupHandler for WaylandState {
 
     fn done(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, popup: &Popup) {
         // Compositor dismissed the popup (outside click on a grab, parent
-        // gone). Flip the reactive dismissal signal and route through the
-        // normal close command for full teardown.
+        // gone). Mark it dismissed for anything watching, and route through
+        // the normal close command for full teardown.
         if let Some(id) = self.surface_lookup.get(&popup.wl_surface().id()).copied() {
             log::info!("Popup {:?} dismissed by compositor", id);
             crate::surface::mark_popup_dismissed(id);
