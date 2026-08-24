@@ -386,9 +386,9 @@ impl TextInput {
 
     /// Text to show while the field is empty.
     ///
-    /// Drawn in the placeholder colour — the inherited text colour at reduced
-    /// alpha unless a container declares
-    /// [`placeholder_color`](crate::widgets::Container::placeholder_color) — and
+    /// Drawn in the placeholder colour — this field's text colour at reduced
+    /// alpha unless it declares
+    /// [`placeholder_color`](crate::widgets::InputStyled::placeholder_color) — and
     /// never masked, since it is a label rather than a value: a password field
     /// with a placeholder shows the word, not bullets.
     ///
@@ -525,10 +525,10 @@ impl TextInput {
         (byte_start, byte_end)
     }
 
-    /// Refresh cached values from the bound signal and the inherited style.
+    /// Refresh cached values from the bound signal and this field's style.
     ///
-    /// The reads happen in this widget's tracking scope, so whichever ancestor
-    /// supplied a metric is the one whose change re-lays-out this input.
+    /// The reads happen in this widget's tracking scope, so a change to a
+    /// declared metric re-lays-out this input and nothing else.
     fn refresh(&mut self, tree: &Tree, id: WidgetId) -> f32 {
         let (new_value, new_font_size, new_font_family, new_font_weight, overflow) =
             with_signal_tracking(id, JobType::Layout, || {
@@ -1161,8 +1161,8 @@ impl Widget for TextInput {
         let display = self.display_text_cached();
         let is_focused = has_focus(id);
 
-        // Read the inherited colours with tracking so a change on whichever
-        // ancestor supplied them repaints this input and nothing else.
+        // Read the declared colours with tracking, so a change to one repaints
+        // this input and nothing else.
         let (text_color, selection_color, cursor_color, stroke, shadow, placeholder) =
             with_signal_tracking(id, JobType::Paint, || {
                 let style = self.resolved_text_style(tree, id);

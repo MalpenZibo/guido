@@ -8,12 +8,11 @@
 //! a property in the wrong struct.
 //!
 //! Splitting them out costs nothing at the call site and buys two things: a
-//! text no longer walks its ancestors looking for properties it cannot draw,
-//! and the next property belonging to an input has an obvious place to go.
+//! text is never asked about properties it cannot draw, and the next property
+//! belonging to an input has an obvious place to go.
 //!
-//! Resolution works exactly like [`TextStyle`]'s — per property, nearest
-//! declaration wins, walked from the input itself so the subscription lands
-//! where the value is read. See that module for why the walk starts there.
+//! Declared on the input itself, like every other part of how it looks — see
+//! [`TextStyle`] for why the widget that draws is the widget that says.
 //!
 //! [`TextStyle`]: crate::widgets::TextStyle
 
@@ -21,10 +20,10 @@ use crate::reactive::{IntoSignal, Signal};
 
 use super::widget::Color;
 
-/// The input style a container declares for the inputs below it.
+/// The caret, selection and placeholder an input declares for itself.
 ///
-/// Every field is optional and resolved independently, so a container setting
-/// only the caret colour leaves the selection to whatever an ancestor said.
+/// Every field is optional and independent, so declaring only the caret colour
+/// leaves the selection at its default.
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct InputStyle {
     /// Colour of the caret. Defaults to the resolved text colour — an input
