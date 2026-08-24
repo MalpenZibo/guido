@@ -13,7 +13,7 @@ text("Hello, World!")
 A text declares how it looks:
 
 ```rust
-text("Hello").font_size(24.0).color(theme.text).bold()
+text("Hello").font_size(24.0).color(theme.text)
 ```
 
 The methods come from the `TextStyled` trait — `color`, `font_size`,
@@ -153,8 +153,8 @@ text("09:41")
 ### Font Size
 
 ```rust
-container().child(text("Large text"))
-container().child(text("Small text").font_size(12.0).font_size(24.0))
+container().child(text("Large text").font_size(24.0))
+container().child(text("Small text").font_size(12.0))
 ```
 
 ### Color
@@ -170,15 +170,15 @@ Set the font family using predefined families or custom font names:
 
 ```rust
 // Predefined font families
-container().child(text("Sans-serif text"))
-container().child(text("Serif text"))
-container().child(text("Monospace text"))
+container().child(text("Sans-serif text").font_family(FontFamily::SansSerif))
+container().child(text("Serif text").font_family(FontFamily::Serif))
+container().child(text("Monospace text").font_family(FontFamily::Monospace))
 
 // Shorthand for monospace
 container().child(text("Code example"))
 
 // Custom font by name (if available on system)
-container().child(text("Custom font").mono().font_family(FontFamily::Name("Inter".into())).font_family(FontFamily::Monospace).font_family(FontFamily::SansSerif).font_family(FontFamily::Serif))
+container().child(text("Custom font").font_family(FontFamily::Name("Inter".into())))
 ```
 
 Available font families:
@@ -195,19 +195,19 @@ Set the font weight using predefined constants or numeric values (100-900):
 
 ```rust
 // Using constants
-container().child(text("Thin text"))
-container().child(text("Light text"))
-container().child(text("Normal text"))
-container().child(text("Medium text"))
-container().child(text("Semi-bold text"))
-container().child(text("Bold text"))
-container().child(text("Black text"))
+container().child(text("Thin text").font_weight(FontWeight::THIN))
+container().child(text("Light text").font_weight(FontWeight::LIGHT))
+container().child(text("Normal text").font_weight(FontWeight::NORMAL))
+container().child(text("Medium text").font_weight(FontWeight::MEDIUM))
+container().child(text("Semi-bold text").font_weight(FontWeight::SEMI_BOLD))
+container().child(text("Bold text").font_weight(FontWeight::BOLD))
+container().child(text("Black text").font_weight(FontWeight::BLACK))
 
 // Shorthand for bold
 container().child(text("Bold text"))
 
 // Custom numeric weight
-container().child(text("Custom weight").bold().font_weight(FontWeight(550)).font_weight(FontWeight::BLACK).font_weight(FontWeight::SEMI_BOLD).font_weight(FontWeight::NORMAL).font_weight(FontWeight::THIN).font_weight(FontWeight::LIGHT).font_weight(FontWeight::MEDIUM).font_weight(FontWeight::BOLD))
+container().child(text("Custom weight").font_weight(FontWeight(550)))
 ```
 
 Available weight constants:
@@ -252,7 +252,7 @@ text(move || format!("Count: {}", count.get()))
 Chain style methods:
 
 ```rust
-container().child(text("Styled Text").bold().font_family(FontFamily::Serif).font_size(18.0).color(Color::WHITE).nowrap())
+container().child(text("Styled Text").font_family(FontFamily::Serif).font_size(18.0).color(Color::WHITE).nowrap())
 ```
 
 ## Text in Containers
@@ -274,7 +274,7 @@ container()
 ### Headings
 
 ```rust
-container().child(text("Page Title").bold().font_size(24.0).color(Color::WHITE))
+container().child(text("Page Title").font_size(24.0).color(Color::WHITE))
 ```
 
 ### Body Text
@@ -292,13 +292,13 @@ container().child(text("Subtitle or caption").font_size(12.0).color(Color::rgb(0
 ### Code/Monospace Text
 
 ```rust
-container().child(text("let x = 42;").mono().font_size(13.0).color(Color::rgb(0.6, 0.9, 0.6)))
+container().child(text("let x = 42;").font_size(13.0).color(Color::rgb(0.6, 0.9, 0.6)))
 ```
 
 ### Labels
 
 ```rust
-container().child(text("LABEL").bold().font_size(11.0).color(Color::rgb(0.5, 0.5, 0.55)))
+container().child(text("LABEL").font_size(11.0).color(Color::rgb(0.5, 0.5, 0.55)))
 ```
 
 ## App-Level Default Font
@@ -326,15 +326,15 @@ fn article_card(title: &str, author: &str, preview: &str) -> Container {
         .layout(Flex::column().spacing(8.0))
         .child(
             // Title - bold serif
-            container().child(text(title).color(Color::WHITE))
+            container().child(text(title).font_family(FontFamily::Serif).font_size(18.0).color(Color::WHITE))
         )
         .child(
             // Author - light weight
-            container().child(text(format!("By {}", author)).color(Color::rgb(0.5, 0.5, 0.6)))
+            container().child(text(format!("By {}", author)).font_weight(FontWeight::LIGHT).font_size(12.0).color(Color::rgb(0.5, 0.5, 0.6)))
         )
         .child(
             // Preview text
-            container().child(text(preview).bold().font_weight(FontWeight::LIGHT).font_family(FontFamily::Serif).font_size(14.0).font_size(18.0).font_size(12.0).color(Color::rgb(0.7, 0.7, 0.75)))
+            container().child(text(preview).font_size(14.0).color(Color::rgb(0.7, 0.7, 0.75)))
         )
 }
 ```

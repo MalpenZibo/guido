@@ -142,11 +142,13 @@ Ripples respect different corner styles:
 // Squircle ripple
 container()
     .corners(Corners::squircle(12.0))
+    
     .when_pressed(|s| s.ripple())
 
 // Beveled ripple
 container()
     .corners(Corners::bevel(12.0))
+    
     .when_pressed(|s| s.ripple())
 ```
 

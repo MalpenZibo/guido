@@ -23,13 +23,19 @@ fn main() {
             .layout(Flex::column().spacing(16.0))
             .child(
                 // Title
-                container().child(text("Text Input Demo").color(Color::WHITE)),
+                container().child(text("Text Input Demo").font_size(20.0).color(Color::WHITE)),
             )
             .child(
                 // Username section
                 container()
                     .layout(Flex::column().spacing(4.0))
-                    .child(container().child(text("Username").color(Color::rgb(0.7, 0.7, 0.8))))
+                    .child(
+                        container().child(
+                            text("Username")
+                                .font_size(12.0)
+                                .color(Color::rgb(0.7, 0.7, 0.8)),
+                        ),
+                    )
                     .child(
                         container()
                             .width(at_least(300.0))
@@ -43,6 +49,7 @@ fn main() {
                                 text_input(username)
                                     .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
                                     .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                                    .font_size(14.0)
                                     .color(Color::WHITE),
                             ),
                     ),
@@ -51,7 +58,13 @@ fn main() {
                 // Password section
                 container()
                     .layout(Flex::column().spacing(4.0))
-                    .child(container().child(text("Password").color(Color::rgb(0.7, 0.7, 0.8))))
+                    .child(
+                        container().child(
+                            text("Password")
+                                .font_size(12.0)
+                                .color(Color::rgb(0.7, 0.7, 0.8)),
+                        ),
+                    )
                     .child(
                         container()
                             .width(at_least(300.0))
@@ -65,6 +78,7 @@ fn main() {
                                 text_input(password)
                                     .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
                                     .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                                    .font_size(14.0)
                                     .color(Color::WHITE)
                                     .password(true)
                                     .on_submit(move |_| {
@@ -82,17 +96,23 @@ fn main() {
                     .corners(6.0)
                     .layout(Flex::column().spacing(8.0))
                     .child(
-                        container().child(text("Current Values:").color(Color::rgb(0.6, 0.6, 0.7))),
+                        container().child(
+                            text("Current Values:")
+                                .font_size(12.0)
+                                .color(Color::rgb(0.6, 0.6, 0.7)),
+                        ),
                     )
                     .child(
                         container().child(
                             text(move || format!("Username: {}", username.get()))
+                                .font_size(13.0)
                                 .color(Color::rgb(0.8, 0.8, 0.9)),
                         ),
                     )
                     .child(
                         container().child(
                             text(move || format!("Password: {} chars", password.get().len()))
+                                .font_size(13.0)
                                 .color(Color::rgb(0.8, 0.8, 0.9)),
                         ),
                     ),
@@ -108,6 +128,7 @@ fn main() {
                             msg
                         }
                     })
+                    .font_size(13.0)
                     .color(Color::rgb(0.5, 0.8, 0.5)),
                 ),
             )
@@ -119,63 +140,71 @@ fn main() {
                     .corners(6.0)
                     .layout(Flex::column().spacing(4.0))
                     .child(
-                        container()
-                            .child(text("Keyboard shortcuts:").color(Color::rgb(0.5, 0.5, 0.6))),
+                        container().child(
+                            text("Keyboard shortcuts:")
+                                .font_size(11.0)
+                                .color(Color::rgb(0.5, 0.5, 0.6)),
+                        ),
                     )
                     .child(
                         container().child(
                             text("• Click to focus and position cursor")
+                                .font_size(11.0)
                                 .color(Color::rgb(0.5, 0.5, 0.6)),
                         ),
                     )
-                    .child(container().child(
-                        text("• Arrow keys to move cursor").color(Color::rgb(0.5, 0.5, 0.6)),
-                    ))
-                    .child(container().child(
-                        text("• Shift+Arrow to select text").color(Color::rgb(0.5, 0.5, 0.6)),
-                    ))
                     .child(
-                        container()
-                            .child(text("• Ctrl+A to select all").color(Color::rgb(0.5, 0.5, 0.6))),
+                        container().child(
+                            text("• Arrow keys to move cursor")
+                                .font_size(11.0)
+                                .color(Color::rgb(0.5, 0.5, 0.6)),
+                        ),
                     )
                     .child(
                         container().child(
-                            text("• Ctrl+Arrow for word jump").color(Color::rgb(0.5, 0.5, 0.6)),
+                            text("• Shift+Arrow to select text")
+                                .font_size(11.0)
+                                .color(Color::rgb(0.5, 0.5, 0.6)),
                         ),
                     )
-                    .child(container().child(
-                        text("• Home/End to go to start/end").color(Color::rgb(0.5, 0.5, 0.6)),
-                    ))
+                    .child(
+                        container().child(
+                            text("• Ctrl+A to select all")
+                                .font_size(11.0)
+                                .color(Color::rgb(0.5, 0.5, 0.6)),
+                        ),
+                    )
+                    .child(
+                        container().child(
+                            text("• Ctrl+Arrow for word jump")
+                                .font_size(11.0)
+                                .color(Color::rgb(0.5, 0.5, 0.6)),
+                        ),
+                    )
+                    .child(
+                        container().child(
+                            text("• Home/End to go to start/end")
+                                .font_size(11.0)
+                                .color(Color::rgb(0.5, 0.5, 0.6)),
+                        ),
+                    )
                     .child(
                         container().child(
                             text("• Enter to submit (in password field)")
+                                .font_size(11.0)
                                 .color(Color::rgb(0.5, 0.5, 0.6)),
                         ),
                     )
-                    .child(container().child(
-                        text("• Ctrl+C/X/V to copy/cut/paste").color(Color::rgb(0.5, 0.5, 0.6)),
-                    ))
+                    .child(
+                        container().child(
+                            text("• Ctrl+C/X/V to copy/cut/paste")
+                                .font_size(11.0)
+                                .color(Color::rgb(0.5, 0.5, 0.6)),
+                        ),
+                    )
                     .child(
                         container().child(
                             text("• Ctrl+Z to undo, Ctrl+Y to redo")
-                                .font_size(11.0)
-                                .font_size(11.0)
-                                .font_size(11.0)
-                                .font_size(11.0)
-                                .font_size(11.0)
-                                .font_size(13.0)
-                                .font_size(13.0)
-                                .font_size(14.0)
-                                .font_size(14.0)
-                                .font_size(20.0)
-                                .font_size(12.0)
-                                .font_size(12.0)
-                                .font_size(12.0)
-                                .font_size(13.0)
-                                .font_size(11.0)
-                                .font_size(11.0)
-                                .font_size(11.0)
-                                .font_size(11.0)
                                 .font_size(11.0)
                                 .color(Color::rgb(0.5, 0.5, 0.6)),
                         ),

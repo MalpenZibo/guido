@@ -98,8 +98,8 @@ puts them on the line they are written on:
 container()
     .layout(Flex::row().spacing(8.0).cross_alignment(CrossAlignment::Baseline))
     .children([
-        container().font_size(24.0).child(text("28")),
-        container().font_size(12.0).child(text("°C")),
+        container().child(text("28").font_size(24.0)),
+        container().child(text("°C").font_size(12.0)),
     ])
 ```
 
@@ -146,14 +146,14 @@ container()
     )
     .padding(20.0)
     .children([
-        container().font_size(24.0).child(text("Left")),
+        container().child(text("Left").font_size(24.0)),
         container()
             .layout(Flex::column().spacing(4.0))
             .children([
                 text("Center"),
                 text("Items"),
             ]),
-        container().font_size(24.0).child(text("Right")),
+        container().child(text("Right").font_size(24.0)),
     ])
 ```
 

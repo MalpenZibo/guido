@@ -66,7 +66,7 @@ Defines a clip area for a node and its children:
 ```rust
 pub struct ClipRegion {
     pub rect: Rect,         // Clip rectangle in local coordinates
-    pub corner_radius: CornerRadii, // Per-corner radii for rounded clipping
+    pub corner_radius: f32, // Corner radius for rounded clipping
     pub curvature: f32,     // Superellipse curvature (K-value)
 }
 ```
@@ -98,7 +98,7 @@ ctx.set_transform_origin(TransformOrigin::TOP_LEFT);
 
 ```rust
 // Set clip for this node and children
-ctx.set_clip(rect, corner_radii, curvature);
+ctx.set_clip(rect, corner_radius, curvature);
 
 // Set rectangular clip (no rounded corners)
 ctx.set_clip_rect(rect);

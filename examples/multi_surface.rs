@@ -31,10 +31,18 @@ fn main() {
                             .cross_alignment(CrossAlignment::Center),
                     )
                     .padding([0.0, 16.0])
-                    .child(container().child(text("Multi-Surface Demo").color(Color::WHITE)))
                     .child(
                         container().child(
-                            text(move || format!("Count: {}", count.get())).color(Color::WHITE),
+                            text("Multi-Surface Demo")
+                                .font_size(14.0)
+                                .color(Color::WHITE),
+                        ),
+                    )
+                    .child(
+                        container().child(
+                            text(move || format!("Count: {}", count.get()))
+                                .font_size(14.0)
+                                .color(Color::WHITE),
                         ),
                     )
             },
@@ -64,7 +72,7 @@ fn main() {
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || count.update(|c| *c += 1))
-                            .child(text("+").color(Color::WHITE)),
+                            .child(text("+").font_size(16.0).color(Color::WHITE)),
                         container()
                             .background(Color::rgb(0.3, 0.3, 0.4))
                             .padding([8.0, 16.0])
@@ -72,7 +80,7 @@ fn main() {
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || count.update(|c| *c -= 1))
-                            .child(text("-").color(Color::WHITE)),
+                            .child(text("-").font_size(16.0).color(Color::WHITE)),
                         container()
                             .background(Color::rgb(0.4, 0.2, 0.2))
                             .padding([8.0, 16.0])
@@ -80,15 +88,7 @@ fn main() {
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || count.set(0))
-                            .child(
-                                text("Reset")
-                                    .font_size(16.0)
-                                    .font_size(16.0)
-                                    .font_size(14.0)
-                                    .font_size(14.0)
-                                    .font_size(16.0)
-                                    .color(Color::WHITE),
-                            ),
+                            .child(text("Reset").font_size(16.0).color(Color::WHITE)),
                     ])
             },
         );

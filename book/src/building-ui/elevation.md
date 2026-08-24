@@ -52,6 +52,7 @@ Shadows respect corner radius:
 ```rust
 container()
     .corners(Corners::squircle(12.0))
+    
     .elevation(8.0)  // Shadow follows rounded shape
 ```
 
@@ -71,8 +72,8 @@ fn elevated_card() -> Container {
         .when_pressed(|s| s.elevation(2.0).darker(0.05))
         .layout(Flex::column().spacing(8.0))
         .children([
-            container().child(text("Card Title").color(Color::WHITE)),
-            container().child(text("Card content goes here").bold().font_size(18.0).color(Color::rgb(0.7, 0.7, 0.75))),
+            container().child(text("Card Title").font_size(18.0).color(Color::WHITE)),
+            container().child(text("Card content goes here").color(Color::rgb(0.7, 0.7, 0.75))),
         ])
 }
 ```

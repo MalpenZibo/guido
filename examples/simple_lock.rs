@@ -49,12 +49,17 @@ fn lock_screen(output: OutputInfo) -> Container {
                     "Locked — {}",
                     output.name.unwrap_or_else(|| "output".into())
                 ))
+                .font_size(24.0)
                 .color(Color::WHITE),
             ),
         )
-        .child(container().child(
-            text("password: guido (auto-unlocks after 30s)").color(Color::rgb(0.6, 0.6, 0.7)),
-        ))
+        .child(
+            container().child(
+                text("password: guido (auto-unlocks after 30s)")
+                    .font_size(13.0)
+                    .color(Color::rgb(0.6, 0.6, 0.7)),
+            ),
+        )
         .child(
             container()
                 .width(at_least(280.0))
@@ -64,8 +69,8 @@ fn lock_screen(output: OutputInfo) -> Container {
                 .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
                 .child(
                     text_input(attempt)
-                        .color(Color::WHITE)
                         .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                        .color(Color::WHITE)
                         .password(true)
                         .on_submit(move |s| {
                             if s == PASSWORD {
@@ -113,11 +118,7 @@ fn main() {
                             .on_click(|| lock_session(lock_screen))
                             .child(text("Lock session")),
                     )
-                    .child(
-                        text(move || format!("state: {:?}", lock_state().get()))
-                            .font_size(13.0)
-                            .font_size(24.0),
-                    )
+                    .child(text(move || format!("state: {:?}", lock_state().get())))
             },
         );
     });

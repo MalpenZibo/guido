@@ -16,7 +16,7 @@ fn main() {
         container()
             .layout(Flex::column().spacing(8.0))
             .child(widget)
-            .child(container().child(text(label).color(Color::rgb(0.7, 0.7, 0.7))))
+            .child(container().child(text(label).font_size(11.0).color(Color::rgb(0.7, 0.7, 0.7))))
     }
 
     // Helper to create a clipped container with visible border
@@ -46,7 +46,13 @@ fn main() {
     let view = container()
         .padding(24.0)
         .layout(Flex::column().spacing(24.0))
-        .child(container().child(text("Image Clipping Test").color(Color::WHITE)))
+        .child(
+            container().child(
+                text("Image Clipping Test")
+                    .font_size(20.0)
+                    .color(Color::WHITE),
+            ),
+        )
         // Row 1: Clipping comparison
         .child(
             container()
@@ -54,6 +60,7 @@ fn main() {
                 .child(
                     container().child(
                         text("Clipping: 120x120 container with 257x248 image (ContentFit::None)")
+                            .font_size(13.0)
                             .color(Color::rgb(0.7, 0.7, 0.7)),
                     ),
                 )
@@ -82,9 +89,13 @@ fn main() {
         .child(
             container()
                 .layout(Flex::column().spacing(12.0))
-                .child(container().child(
-                    text("Clipped containers at different sizes").color(Color::rgb(0.7, 0.7, 0.7)),
-                ))
+                .child(
+                    container().child(
+                        text("Clipped containers at different sizes")
+                            .font_size(13.0)
+                            .color(Color::rgb(0.7, 0.7, 0.7)),
+                    ),
+                )
                 .child(
                     container()
                         .layout(
@@ -133,10 +144,6 @@ fn main() {
                 .child(
                     container().child(
                         text("Intrinsic size layout (no explicit dimensions)")
-                            .font_size(13.0)
-                            .font_size(13.0)
-                            .font_size(11.0)
-                            .font_size(20.0)
                             .font_size(13.0)
                             .color(Color::rgb(0.7, 0.7, 0.7)),
                     ),

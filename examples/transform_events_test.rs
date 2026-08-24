@@ -100,6 +100,7 @@ fn main() {
                         // Click counter display
                         container().child(
                             text(move || format!("Clicks: {}", click_count.get()))
+                                .font_size(20.0)
                                 .color(Color::WHITE),
                         ),
                     ])
@@ -122,11 +123,5 @@ fn make_box(label: &'static str, base_color: Color, click_count: RwSignal<i32>) 
                 .main_alignment(MainAlignment::Center)
                 .cross_alignment(CrossAlignment::Center),
         )
-        .child(
-            text(label)
-                .font_size(10.0)
-                .font_size(20.0)
-                .color(Color::WHITE)
-                .nowrap(),
-        )
+        .child(text(label).font_size(10.0).color(Color::WHITE).nowrap())
 }

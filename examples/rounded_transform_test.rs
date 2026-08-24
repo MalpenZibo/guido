@@ -61,11 +61,13 @@ fn main() {
                         // Instructions
                         container().child(
                             text("Rectangular boxes with transforms. Hover and click to test.")
+                                .font_size(14.0)
                                 .color(Color::rgb(0.7, 0.7, 0.7)),
                         ),
                         // Click counter display
                         container().child(
                             text(move || format!("Clicks: {}", click_count.get()))
+                                .font_size(20.0)
                                 .color(Color::WHITE),
                         ),
                     ])
@@ -87,11 +89,5 @@ fn make_box(label: &'static str, base_color: Color, click_count: RwSignal<i32>) 
                 .main_alignment(MainAlignment::Center)
                 .cross_alignment(CrossAlignment::Center),
         )
-        .child(
-            text(label)
-                .font_size(12.0)
-                .font_size(14.0)
-                .font_size(20.0)
-                .color(Color::WHITE),
-        )
+        .child(text(label).font_size(12.0).color(Color::WHITE))
 }

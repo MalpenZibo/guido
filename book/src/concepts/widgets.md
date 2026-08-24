@@ -47,7 +47,7 @@ See [Container](container.md) for details.
 Renders text content:
 
 ```rust
-container().child(text("Hello, World!").bold().font_size(16.0).color(Color::WHITE))
+container().child(text("Hello, World!").font_size(16.0).color(Color::WHITE))
 ```
 
 See [Text](../building-ui/text.md) for styling options.
@@ -72,12 +72,12 @@ Guido UIs are built through composition - nesting widgets inside containers:
 container()
     .layout(Flex::column().spacing(8.0))
     .children([
-        container().child(text("Title")),
+        container().child(text("Title").font_size(24.0)),
         container()
             .layout(Flex::row().spacing(4.0))
             .children([
                 text("Item 1"),
-                text("Item 2").font_size(24.0),
+                text("Item 2"),
             ]),
     ])
 ```

@@ -56,12 +56,14 @@ let module = container()
 
 // The popup, centered under the module
 let popup = container()
-    .transform(move || Transform::translate({
+    .translate(
+        move || {
             let r = module_ref.rect().get();
             let midpoint = r.x + r.width / 2.0;
             (midpoint - POPUP_WIDTH / 2.0).clamp(8.0, SCREEN_WIDTH - POPUP_WIDTH - 8.0)
         },
-        BAR_HEIGHT,))
+        BAR_HEIGHT,
+    )
     .child(popup_content());
 ```
 

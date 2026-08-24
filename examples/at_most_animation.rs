@@ -62,6 +62,7 @@ fn pair(title: &str, build: impl Fn(bool) -> Container + 'static) -> Container {
                         let b = r.rect().get();
                         format!("{:.1} x {:.1}", b.width, b.height)
                     })
+                    .font_size(12.0)
                     .color(Color::rgb(0.55, 0.85, 0.6)),
                 ),
             )
@@ -97,21 +98,14 @@ fn main() {
                     .child(
                         container().child(
                             text("at_most + animazione: le coppie devono essere identiche")
+                                .font_size(17.0)
                                 .color(Color::WHITE),
                         ),
                     )
                     .child(pair("testo che va a capo", |animated| {
                         capped(
                             animated,
-                            container().child(
-                                text(SENTENCE)
-                                    .font_size(13.0)
-                                    .font_size(12.0)
-                                    .font_size(12.0)
-                                    .font_size(15.0)
-                                    .font_size(17.0)
-                                    .color(Color::WHITE),
-                            ),
+                            container().child(text(SENTENCE).font_size(13.0).color(Color::WHITE)),
                         )
                     }))
                     .child(pair("figlio con fill()", |animated| {

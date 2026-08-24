@@ -22,8 +22,8 @@ fn main() {
                 .child(
                     // Title section
                     container().layout(Flex::column().spacing(8.0)).children([
-                        container().child(text("State Layer Demo").color(Color::rgb(0.9, 0.9, 0.95))),
-                        container().child(text("Hover and click the buttons to see state changes and ripple effects").color(Color::rgb(0.6, 0.6, 0.7))),
+                        container().child(text("State Layer Demo").font_size(24.0).color(Color::rgb(0.9, 0.9, 0.95))),
+                        container().child(text("Hover and click the buttons to see state changes and ripple effects").font_size(14.0).color(Color::rgb(0.6, 0.6, 0.7))),
                     ]),
                 )
                 .child(
@@ -60,8 +60,8 @@ fn create_lighter_button() -> Container {
         .control()
         .when_hovered(|s| s.lighter(0.1))
         .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
-        // The hover belongs to the box and the colour to the glyphs: the label
-        // brightens with the background because `control()` joins them.
+        // The hover belongs to the box and the colour to the glyphs: the
+        // label brightens with the background because `control()` joins them.
         .child(
             text("Hover me (lighter + text)")
                 .color(Color::rgb(0.6, 0.6, 0.66))
@@ -159,10 +159,5 @@ fn create_rotated_ripple_button() -> Container {
         .transform(Transform::rotate_degrees(5.0).then(&Transform::translate(10.0, 15.0)))
         .when_hovered(|s| s.lighter(0.1))
         .when_pressed(|s| s.ripple_with_color(Color::rgba(1.0, 1.0, 1.0, 0.5)))
-        .child(
-            text("Rotated + translated")
-                .font_size(24.0)
-                .font_size(14.0)
-                .color(Color::WHITE),
-        )
+        .child(text("Rotated + translated").color(Color::WHITE))
 }

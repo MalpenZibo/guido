@@ -19,7 +19,9 @@ fn main() {
         fn form_field(label: &'static str, input_signal: RwSignal<String>) -> Container {
             container()
                 .layout(Flex::column().spacing(4.0))
-                .child(container().child(text(label).color(Color::rgb(0.7, 0.7, 0.8))))
+                .child(
+                    container().child(text(label).font_size(12.0).color(Color::rgb(0.7, 0.7, 0.8))),
+                )
                 .child(
                     container()
                         .padding(8.0)
@@ -31,6 +33,7 @@ fn main() {
                             text_input(input_signal)
                                 .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
                                 .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                                .font_size(14.0)
                                 .color(Color::WHITE),
                         ),
                 )
@@ -49,7 +52,9 @@ fn main() {
                         .when_hovered(|s| s.lighter(0.05))
                         .child(image(path).content_fit(ContentFit::Cover)),
                 )
-                .child(container().child(text(label).color(Color::rgb(0.6, 0.6, 0.7))))
+                .child(
+                    container().child(text(label).font_size(11.0).color(Color::rgb(0.6, 0.6, 0.7))),
+                )
         }
 
         // Main scrollable content
@@ -60,7 +65,14 @@ fn main() {
             .child(
                 container()
                     .layout(Flex::column().spacing(8.0))
-                    .child(container().child(text("User Profile").color(Color::WHITE)))
+                    .child(
+                        container().child(
+                            text("User Profile")
+                                .font_weight(FontWeight::BOLD)
+                                .font_size(16.0)
+                                .color(Color::WHITE),
+                        ),
+                    )
                     .child(
                         container()
                             .width(320.0)
@@ -100,12 +112,17 @@ fn main() {
                                             .child(
                                                 container()
                                                     .layout(Flex::column().spacing(4.0))
-                                                    .child(container().child(
-                                                        text("Edit Profile").color(Color::WHITE),
-                                                    ))
+                                                    .child(
+                                                        container().child(
+                                                            text("Edit Profile")
+                                                                .font_size(18.0)
+                                                                .color(Color::WHITE),
+                                                        ),
+                                                    )
                                                     .child(
                                                         container().child(
                                                             text("Update your information")
+                                                                .font_size(12.0)
                                                                 .color(Color::rgb(0.5, 0.5, 0.6)),
                                                         ),
                                                     ),
@@ -119,9 +136,13 @@ fn main() {
                                     .child(
                                         container()
                                             .layout(Flex::column().spacing(8.0))
-                                            .child(container().child(
-                                                text("Account Settings").color(Color::WHITE),
-                                            ))
+                                            .child(
+                                                container().child(
+                                                    text("Account Settings")
+                                                        .font_size(14.0)
+                                                        .color(Color::WHITE),
+                                                ),
+                                            )
                                             .children(
                                                 [
                                                     "Notifications",
@@ -152,7 +173,9 @@ fn main() {
                                             .layout(Flex::column().spacing(8.0))
                                             .child(
                                                 container().child(
-                                                    text("Recent Activity").color(Color::WHITE),
+                                                    text("Recent Activity")
+                                                        .font_size(14.0)
+                                                        .color(Color::WHITE),
                                                 ),
                                             )
                                             .children(
@@ -185,6 +208,7 @@ fn main() {
                                                                                 "Activity {}",
                                                                                 i
                                                                             ))
+                                                                            .font_size(13.0)
                                                                             .color(Color::rgb(
                                                                                 0.8, 0.8, 0.9,
                                                                             )),
@@ -196,6 +220,7 @@ fn main() {
                                                                                 "{} hours ago",
                                                                                 i * 2
                                                                             ))
+                                                                            .font_size(11.0)
                                                                             .color(Color::rgb(
                                                                                 0.5, 0.5, 0.6,
                                                                             )),
@@ -213,7 +238,14 @@ fn main() {
             .child(
                 container()
                     .layout(Flex::column().spacing(8.0))
-                    .child(container().child(text("Image Gallery").color(Color::WHITE)))
+                    .child(
+                        container().child(
+                            text("Image Gallery")
+                                .font_weight(FontWeight::BOLD)
+                                .font_size(16.0)
+                                .color(Color::WHITE),
+                        ),
+                    )
                     .child(
                         container()
                             .width(400.0)
@@ -240,7 +272,14 @@ fn main() {
                             ),
                     )
                     // SVG icons row
-                    .child(container().child(text("Icons").color(Color::WHITE)))
+                    .child(
+                        container().child(
+                            text("Icons")
+                                .font_weight(FontWeight::BOLD)
+                                .font_size(16.0)
+                                .color(Color::WHITE),
+                        ),
+                    )
                     .child(
                         container()
                             .width(400.0)
@@ -297,6 +336,7 @@ fn main() {
                                                     .child(
                                                         container().child(
                                                             text(format!("Icon {}", i + 1))
+                                                                .font_size(10.0)
                                                                 .color(Color::rgb(0.5, 0.5, 0.6)),
                                                         ),
                                                     )
@@ -313,43 +353,29 @@ fn main() {
                             .corners(8.0)
                             .layout(Flex::column().spacing(4.0))
                             .child(
-                                container()
-                                    .child(text("Form Values:").color(Color::rgb(0.5, 0.5, 0.6))),
+                                container().child(
+                                    text("Form Values:")
+                                        .font_size(11.0)
+                                        .color(Color::rgb(0.5, 0.5, 0.6)),
+                                ),
                             )
                             .child(
                                 container().child(
                                     text(move || format!("Name: {}", name.get()))
+                                        .font_size(12.0)
                                         .color(Color::rgb(0.7, 0.7, 0.8)),
                                 ),
                             )
                             .child(
                                 container().child(
                                     text(move || format!("Email: {}", email.get()))
+                                        .font_size(12.0)
                                         .color(Color::rgb(0.7, 0.7, 0.8)),
                                 ),
                             )
                             .child(
                                 container().child(
                                     text(move || format!("Bio: {}", bio.get()))
-                                        .font_weight(FontWeight::BOLD)
-                                        .font_weight(FontWeight::BOLD)
-                                        .font_weight(FontWeight::BOLD)
-                                        .font_size(12.0)
-                                        .font_size(12.0)
-                                        .font_size(10.0)
-                                        .font_size(16.0)
-                                        .font_size(13.0)
-                                        .font_size(12.0)
-                                        .font_size(16.0)
-                                        .font_size(14.0)
-                                        .font_size(12.0)
-                                        .font_size(11.0)
-                                        .font_size(18.0)
-                                        .font_size(14.0)
-                                        .font_size(14.0)
-                                        .font_size(11.0)
-                                        .font_size(16.0)
-                                        .font_size(11.0)
                                         .font_size(12.0)
                                         .color(Color::rgb(0.7, 0.7, 0.8)),
                                 ),

@@ -31,7 +31,13 @@ fn panel(label: &'static str, content: Container) -> Container {
     container()
         .layout(Flex::column().spacing(8.0))
         .child(content)
-        .child(container().child(text(label).color(Color::rgb(0.7, 0.7, 0.75))))
+        .child(
+            container().child(
+                text(label)
+                    .font_size(12.0)
+                    .color(Color::rgb(0.7, 0.7, 0.75)),
+            ),
+        )
 }
 
 fn main() {
@@ -83,7 +89,7 @@ fn main() {
                 container()
                     .width(220.0)
                     .height(140.0)
-                    .corners(8.0)
+                    .corners(Corners::squircle(8.0))
                     .overflow(Overflow::Hidden)
                     .layout(ZStack::new())
                     .child(photo())
@@ -100,7 +106,7 @@ fn main() {
                                 container()
                                     .width(150.0)
                                     .height(70.0)
-                                    .corners(Corners::squircle(16.0))
+                                    .corners(16.0)
                                     // Blurs the photo beneath it, then paints
                                     // its own translucent tint over the result.
                                     .backdrop_blur(18.0)
@@ -110,7 +116,11 @@ fn main() {
                                             .main_alignment(MainAlignment::Center)
                                             .cross_alignment(CrossAlignment::Center),
                                     )
-                                    .child(text("frosted").color(Color::rgb(0.95, 0.95, 1.0))),
+                                    .child(
+                                        text("frosted")
+                                            .font_size(18.0)
+                                            .color(Color::rgb(0.95, 0.95, 1.0)),
+                                    ),
                             ),
                     ),
             ))
@@ -127,8 +137,6 @@ fn main() {
                         container().child(
                             text("BEHIND")
                                 .font_size(40.0)
-                                .font_size(12.0)
-                                .font_size(18.0)
                                 .color(Color::rgb(0.9, 0.3, 0.3))
                                 .nowrap(),
                         ),

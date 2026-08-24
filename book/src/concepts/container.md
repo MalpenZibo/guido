@@ -49,7 +49,8 @@ container()
     .background(Color::rgb(0.2, 0.2, 0.3))
 
     // Corners
-    .corners(Corners::squircle(8.0)) // iOS-style smooth corners
+    .corners(Corners::squircle(8.0))
+     // iOS-style smooth corners
 
     // Border
     .border(2.0, Color::WHITE)
@@ -250,10 +251,10 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 ### Styling
 - `.background(color)` - Solid background
 - `.gradient(LinearGradient::horizontal(start, end))` - Horizontal gradient
-- `.gradient(LinearGradient::vertical(start, end))` / `.gradient(LinearGradient::diagonal(start, end))`
-- `.corners(8.0)` / `.corners([16.0, 0.0])` - Rounded corners, one, two or four values
-- `.corners(Corners::squircle(12.0))` / `Corners::bevel(..)` / `Corners::scoop(..)` /
-  `Corners::superellipse(.., k)` - the shape of the corner
+- `.gradient_vertical(start, end)` / `.gradient_diagonal(start, end)`
+- `.corners(8.0)` / `.corners([16.0, 0.0])` - Rounded corners: one, two or four values
+- `.corners(Corners::squircle(12.0))` / `Corners::bevel(..)` / `Corners::scoop(..)` -
+  the shape of the corner
 - `.border(width, color)` - Border
 - `.elevation(level)` - Shadow
 
@@ -281,10 +282,9 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 - `.when_pressed(|s| s...)` - Pressed overrides
 
 ### Transforms
-- `.transform(Transform::translate(x, y))` - Move
-- `.transform(Transform::rotate_degrees(d))` - Rotate
-- `.transform(Transform::scale(f))` - Scale, and `then_rotate`/`then_scale`/
-  `then_translate` to chain them
+- `.translate(x, y)` - Move
+- `.rotate(degrees)` - Rotate
+- `.scale(factor)` - Scale
 - `.transform_origin(origin)` - Pivot point
 
 ### Animations

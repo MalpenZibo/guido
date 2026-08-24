@@ -159,7 +159,7 @@ because `Padding` is one `Animatable` whose four edges lerp together; a border i
 not.
 
 The documentation was audited against the code in the same pass. It described
-`.children_dyn()`, `.padding_horizontal()`, `.min_width()`, `.gradient(LinearGradient::diagonal())`
+`.children_dyn()`, `.padding_horizontal()`, `.min_width()`, `.gradient_diagonal()`
 and `.animate_elevation()`, none of which existed; `Row` and `Column` widgets,
 which have never existed; the pre-`Tree` `Widget` signatures; and
 `hover_state`/`pressed_state`, renamed in #189. Of that list `gradient_diagonal`
@@ -203,28 +203,37 @@ invisible container. `corner_radii` folded into the main tuple in #169.
 
 ---
 
-## Shipped: the container stopped being a style source
+## Open: the container as a style source
 
-`Container` carried `text_color`, `font_size`, `cursor_color`,
-`placeholder_color` and eight more, published to descendants through two typed
-slots on the tree node and resolved by a walk. Since #185 every one of those
-properties can be declared on the widget that draws it, and since #188 a leaf
-resolves its own hover, press and focus from the nearest `control()` — so the
-container's copies had become a second way to say what the leaf could already
-say, plus a wrapper node to say it in.
+`Container` still carries `text_color`, `font_size`, `cursor_color`,
+`placeholder_color` and the rest, published to its descendants. Since #185 those
+same properties can be declared on the widget that draws them, which is where
+they belong, so the container's copies are now a second way to say the same
+thing.
 
-The direction recorded here was a courier: one generic method the container
-does not interpret. What shipped instead was the deletion. Eleven setters, the
-`animate_text_color` beside them, the publication, the walk, `is_complete`,
-and the derived fold that wove state layers into a published colour are all
-gone; the call sites moved the declaration onto the text, or into a function
-that returns one, which `docs/STYLING.md` already documented as the answer for
-"the same kind of label, many times".
+The direction, when this is taken up, is a **courier**: one generic method that
+the container does not interpret.
 
-Two things went with it and have not been replaced: a text you did not author
-— inside a component you are calling — can no longer be styled from outside,
-and text colour can no longer animate, because a leaf has no animation of its
-own. Both are open.
+```rust
+container().provide(TextStyle::new().color(theme.weak).font_size(12.0))
+```
+
+Stored type-erased on the node — `TypeId` plus a box, the shape
+`reactive/context.rs` already uses — so `Container` and `Tree` stop naming any
+style property at all, and a future `SliderStyle` touches neither. The typed
+setters are then deleted, migrating the call sites once.
+
+Two things were considered and rejected. A dedicated `text_style()` *node* buys
+no mechanism over this — a container with no box properties is already
+layout-transparent — only the same discipline at the cost of a type and a slot.
+And grouping the setters into `.text_style(|s| ..)` on the container would
+migrate every call site twice, since that surface is meant to go.
+
+For "the same kind of label, many times", the documented answer is not
+inheritance at all but a function, which keeps the declaration next to the
+widget that draws it: see `docs/STYLING.md`.
+
+---
 
 ## Shipped: interaction controls
 

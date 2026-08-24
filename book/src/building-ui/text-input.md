@@ -48,23 +48,23 @@ container().child(text_input(value).font_size(16.0))
 
 ```rust
 // Predefined families
-container().child(text_input(value))
+container().child(text_input(value).font_family(FontFamily::Monospace))
 
 // Shorthand for monospace
 container().child(text_input(value))
 
 // Custom font
-container().child(text_input(value).mono().font_family(FontFamily::Name("JetBrains Mono".into())).font_family(FontFamily::Monospace))
+container().child(text_input(value).font_family(FontFamily::Name("JetBrains Mono".into())))
 ```
 
 ### Font Weight
 
 ```rust
 // Using constants
-container().child(text_input(value))
+container().child(text_input(value).font_weight(FontWeight::BOLD))
 
 // Shorthand for bold
-container().child(text_input(value).bold().font_weight(FontWeight::BOLD))
+container().child(text_input(value))
 ```
 
 ## Password Mode
@@ -246,7 +246,7 @@ fn login_form() -> Container {
             container()
                 .layout(Flex::column().spacing(4.0))
                 .children([
-                    container().child(text("Username").color(Color::rgb(0.6, 0.6, 0.7))),
+                    container().child(text("Username").font_size(12.0).color(Color::rgb(0.6, 0.6, 0.7))),
                     container()
                         .padding([8.0, 12.0])
                         .background(Color::rgb(0.15, 0.15, 0.2))
@@ -254,14 +254,14 @@ fn login_form() -> Container {
                         .corners(4.0)
                         .when_focused(|s| s.border(1.0, Color::rgb(0.4, 0.6, 1.0)))
                         .child(
-                            container().child(text_input(username).color(Color::WHITE))
+                            container().child(text_input(username).font_size(14.0).color(Color::WHITE))
                         ),
                 ]),
             // Password field
             container()
                 .layout(Flex::column().spacing(4.0))
                 .children([
-                    container().child(text("Password").color(Color::rgb(0.6, 0.6, 0.7))),
+                    container().child(text("Password").font_size(12.0).color(Color::rgb(0.6, 0.6, 0.7))),
                     container()
                         .padding([8.0, 12.0])
                         .background(Color::rgb(0.15, 0.15, 0.2))
@@ -269,7 +269,7 @@ fn login_form() -> Container {
                         .corners(4.0)
                         .when_focused(|s| s.border(1.0, Color::rgb(0.4, 0.6, 1.0)))
                         .child(
-                            container().child(text_input(password).color(Color::WHITE).password(true))
+                            container().child(text_input(password).font_size(14.0).color(Color::WHITE).password(true))
                         ),
                 ]),
             // Submit button
@@ -283,7 +283,7 @@ fn login_form() -> Container {
                     println!("Login: {} / {}", username.get(), password.get());
                 })
                 .child(
-                    container().child(text("Sign In").bold().font_size(14.0).font_size(12.0).font_size(12.0).font_size(14.0).font_size(14.0).color(Color::WHITE))
+                    container().child(text("Sign In").font_size(14.0).color(Color::WHITE))
                 ),
         ])
 }

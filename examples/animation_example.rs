@@ -36,6 +36,8 @@ fn main() {
                     .layout(Flex::column().spacing(10.0))
                     .children([
                         text("Animated properties — click a card to drive it")
+                            .font_size(16.0)
+                            .bold()
                             .color(Color::WHITE)
                             .into_any(),
                         width_card().into_any(),
@@ -57,16 +59,13 @@ fn card(title: &str, hint: impl Into<String>, body: Container) -> Container {
         .when_hovered(|s| s.lighter(0.04))
         .animate_background(Transition::new(150.0, TimingFunction::EaseOut))
         .children([
-            text(title.to_string()).color(LABEL).into_any(),
-            body.into_any(),
-            text(hint.into())
-                .bold()
-                .bold()
+            text(title.to_string())
                 .font_size(14.0)
-                .font_size(16.0)
-                .font_size(12.0)
-                .color(MUTED)
+                .bold()
+                .color(LABEL)
                 .into_any(),
+            body.into_any(),
+            text(hint.into()).font_size(12.0).color(MUTED).into_any(),
         ])
 }
 

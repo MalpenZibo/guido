@@ -206,13 +206,13 @@ Combine static and dynamic children freely, in any order:
 container()
     .layout(Flex::column().spacing(8.0))
     // Static header
-    .child(container().child(text("Items:").color(Color::WHITE)))
+    .child(container().child(text("Items:").font_size(18.0).color(Color::WHITE)))
     // Reactive middle
     .child(move || warning.get().then(|| warning_banner()))
     // Reactive keyed list
     .children(keyed(move || items.get(), |i| i.id, item_view))
     // Static footer
-    .child(container().child(text("End of list").font_size(18.0).color(Color::rgb(0.6, 0.6, 0.7))))
+    .child(container().child(text("End of list").color(Color::rgb(0.6, 0.6, 0.7))))
 ```
 
 ## API Reference

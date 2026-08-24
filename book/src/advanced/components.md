@@ -282,7 +282,7 @@ pub fn card(
         .background(background)
         .corners(8.0)
         .layout(Flex::column().spacing(8.0))
-        .child(container().child(text(title).color(Color::WHITE)))
+        .child(container().child(text(title).font_size(18.0).color(Color::WHITE)))
         .children_source(children)
 }
 
@@ -296,7 +296,7 @@ fn main() {
             .child(
                 card()
                     .title("Counter")
-                    .child(container().child(text(move || format!("Count: {}", count.get())).font_size(18.0).color(Color::WHITE)))
+                    .child(container().child(text(move || format!("Count: {}", count.get())).color(Color::WHITE)))
                     .child(
                         container()
                             .layout(Flex::row().spacing(8.0))

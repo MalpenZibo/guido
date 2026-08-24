@@ -92,8 +92,8 @@ the box around it:
 ```rust
 container()
     
-    .when_hovered(|s| s)
-    .child(text("Label").color(theme.text).color(theme.text_weak))
+    .control()   // the text below declares .when_hovered(|s| s.color(theme.text))
+    .child(text("Label").color(theme.text_weak))
 ```
 
 This works the same way the ordinary declaration does — the container publishes
@@ -110,8 +110,8 @@ container()
                   // set once, further up
     .child(
         container()
-            .when_hovered(|s| s)
-            .child(text("Label").color(theme.text).color(theme.text_weak)),            // weak, then strong, then weak
+            .control()   // the text below declares .when_hovered(|s| s.color(theme.text))
+            .child(text("Label").color(theme.text_weak)),            // weak, then strong, then weak
     )
 ```
 
@@ -120,8 +120,9 @@ It can be animated like any other container property:
 ```rust
 container()
     
-    .when_hovered(|s| s)
-    .child(text("Label").color(theme.text).color(theme.text_weak))
+    .control()   // the text below declares .when_hovered(|s| s.color(theme.text))
+    .animate_text_color(Transition::new(200.0, TimingFunction::EaseOut))
+    .child(text("Label").color(theme.text_weak))
 ```
 
 A transition declared on two levels — an animated colour whose own base comes
@@ -319,7 +320,7 @@ impl StateStyleBuilder {
     pub fn border(self, width: f32, color: Color) -> Self;
 
     // Other
-    pub fn corners(self, corners: impl Into<Corners>) -> Self;
+    pub fn corner_radius(self, radius: f32) -> Self;
     pub fn transform(self, transform: Transform) -> Self;
     pub fn elevation(self, level: f32) -> Self;
 

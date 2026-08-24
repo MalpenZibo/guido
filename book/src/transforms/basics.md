@@ -157,7 +157,7 @@ fn transform_demo() -> impl Widget {
 
 ### Container Methods
 
-`transform` accepts a value or a closure that builds one, like every other property: `.transform(move || Transform::rotate_degrees(angle.get()))`.
+All transform properties accept static values, signals, or closures. Integers also work (e.g., `.rotate(45)`, `.scale(2)`).
 
 ```rust
 impl Container {

@@ -27,7 +27,8 @@ fn main() {
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.3, 0.2, 0.4))
-                                    .corners(Corners::squircle(12.0)) // K=2 → n=4
+                                    .corners(Corners::squircle(12.0))
+                                    // K=2 → n=4
                                     .child(text("Squircle\n(K=2)").color(Color::WHITE)),
                             )
                             .child(
@@ -42,14 +43,16 @@ fn main() {
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.4, 0.3, 0.2))
-                                    .corners(Corners::bevel(12.0)) // K=0 → n=1
+                                    .corners(Corners::bevel(12.0))
+                                    // K=0 → n=1
                                     .child(text("Bevel\n(K=0)").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.2, 0.4, 0.3))
-                                    .corners(Corners::scoop(12.0)) // K=-1 → n=0.5
+                                    .corners(Corners::scoop(12.0))
+                                    // K=-1 → n=0.5
                                     .when_hovered(|s| s.lighter(0.1))
                                     .when_pressed(|s| s.ripple())
                                     .child(text("Scoop\n(K=-1)").color(Color::WHITE)),
@@ -147,28 +150,32 @@ fn main() {
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.3, 0.3, 0.4))
-                                    .corners(Corners::superellipse(12.0, 0.5)) // K=0.5 → n=1.41
+                                    .corners(Corners::superellipse(12.0, 0.5))
+                                    // K=0.5 → n=1.41
                                     .child(text("K=0.5").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.3, 0.4, 0.3))
-                                    .corners(Corners::superellipse(12.0, 1.5)) // K=1.5 → n=2.83
+                                    .corners(Corners::superellipse(12.0, 1.5))
+                                    // K=1.5 → n=2.83
                                     .child(text("K=1.5").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.4, 0.3, 0.3))
-                                    .corners(Corners::superellipse(12.0, 2.5)) // K=2.5 → n=5.66
+                                    .corners(Corners::superellipse(12.0, 2.5))
+                                    // K=2.5 → n=5.66
                                     .child(text("K=2.5").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.35, 0.3, 0.4))
-                                    .corners(Corners::superellipse(12.0, -0.5)) // K=-0.5 → n=0.707
+                                    .corners(Corners::superellipse(12.0, -0.5))
+                                    // K=-0.5 → n=0.707
                                     .child(text("K=-0.5").color(Color::WHITE)),
                             ),
                     )

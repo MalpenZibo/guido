@@ -25,7 +25,7 @@ Guido is a GPU-accelerated GUI library for building Wayland layer shell applicat
 - **GPU Rendering** - Hardware-accelerated rendering via wgpu with SDF-based shapes
 - **Transform System** - Translate, rotate, and scale widgets with proper hit testing and animations
 - **Multi-Surface Apps** - Create multiple layer shell surfaces that share reactive state, with dynamic property modification
-- **Superellipse Corners** - Configurable corner curvature from squircle (iOS-style) to bevel to scoop
+- **Superellipse Corners** - `corners(Corners::squircle(12.0))`, and bevel, scoop, or any K value
 - **SDF Borders** - Crisp anti-aliased borders using signed distance field rendering
 - **Component Macro** - `#[component]` macro for creating reusable widgets with reactive props, callbacks, children, and slots
 - **Type Erasure** - `AnyWidget` and `Widget::into_any()` for conditional widget branches
@@ -60,17 +60,18 @@ fn main() {
                             .cross_alignment(CrossAlignment::Center),
                     )
                     .padding([0.0, 16.0])
-                    .text_color(Color::WHITE)
-                    .child(text(move || format!("Count: {}", count.get())))
+                    .child(
+                        text(move || format!("Count: {}", count.get())).color(Color::WHITE),
+                    )
                     .child(
                         container()
                             .background(Color::rgb(0.3, 0.3, 0.4))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .padding(8.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || count.update(|c| *c += 1))
-                            .child(text("Click me")),
+                            .child(text("Click me").color(Color::WHITE)),
                     )
             },
         );

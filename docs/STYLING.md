@@ -47,10 +47,10 @@ container().background(Color::rgb(0.2, 0.2, 0.3))
 container().gradient(LinearGradient::horizontal(Color::RED, Color::BLUE))
 
 // Vertical gradient (top to bottom)
-container().gradient(LinearGradient::vertical(Color::RED, Color::BLUE))
+container().gradient_vertical(Color::RED, Color::BLUE)
 
 // Diagonal gradient
-container().gradient(LinearGradient::diagonal(Color::RED, Color::BLUE))
+container().gradient_diagonal(Color::RED, Color::BLUE)
 ```
 
 ## Borders
@@ -112,9 +112,13 @@ container().corners([16.0, 0.0])             // the top pair, then the bottom
 container().corners([16.0, 4.0, 16.0, 4.0])  // top-left, top-right, bottom-right, bottom-left
 ```
 
-The two-value form is `[top, bottom]` rather than CSS's diagonal pairing:
-"round the top of this row" is what people write, and `padding([a, b])` in this
-library already reads as two pairs of sides. The four-value form *is* CSS.
+The two-value form is `[top, bottom]` rather than CSS's diagonal pairing
+(`top-left & bottom-right`, then the other two), which is a curiosity almost
+nobody writes on purpose; what people write is "round the top of this row".
+Note that it does not mirror `padding([a, b])`, which pairs *opposite sides*
+(vertical, then horizontal) — corners have no opposite pairs to give, so the
+two-value form pairs adjacent ones. The four-value form *is* CSS, clockwise
+from the top left.
 
 Named constructors say the same thing in words:
 
@@ -128,39 +132,18 @@ shadow, the gradient, the blur behind it, the clip its children are cut to,
 and the region that answers a click. A box rounded only at the top clips and
 is clicked as a box rounded only at the top.
 
-### Corner Curvature (Superellipse)
+### The shape of the corner
 
-Control the shape of corners using CSS K-values:
+A constructor names the shape and takes the size. The curve is a CSS K-value:
+how far from the corner the arc starts.
 
 ```rust
-// Squircle - iOS-style smooth corners (K=2)
-container()
-    .corners(Corners::squircle(12.0))
-
-// Circle - standard circular corners (K=1, default)
-container()
-    .corners(12.0)  // Default is circular
-
-// Bevel - diagonal cut corners (K=0)
-container()
-    .corners(Corners::bevel(12.0))
-
-// Scoop - concave/inward corners (K=-1)
-container()
-    .corners(Corners::scoop(12.0))
-
-// Custom curvature value
-container()
-    .corners(Corners::superellipse(12.0, 1.5))  // Between circle and squircle
+container().corners(Corners::squircle(12.0))          // K=2, iOS-style
+container().corners(Corners::rounded(12.0))           // K=1, circular (default)
+container().corners(Corners::bevel(12.0))             // K=0, diagonal cut
+container().corners(Corners::scoop(12.0))             // K=-1, concave
+container().corners(Corners::superellipse(12.0, 1.5)) // anything between
 ```
-
-**Curvature reference:**
-| Style | K value | Description |
-|-------|---------|-------------|
-| Squircle | 2.0 | Smooth, iOS-style |
-| Circle | 1.0 | Standard rounded |
-| Bevel | 0.0 | Diagonal/chamfered |
-| Scoop | -1.0 | Concave inward |
 
 ## Shadows and Elevation
 
@@ -247,7 +230,7 @@ different widget, so declare it in the closure that builds the widget instead.
 How a text looks can be declared on the text itself:
 
 ```rust
-text("Hello").font_size(16.0).color(Color::WHITE).bold()
+text("Hello").font_size(16.0).color(Color::WHITE)
 ```
 
 `color`, `font_size`, `font_family`, `font_weight`, `bold`, `mono`,
@@ -353,6 +336,7 @@ fn styled_card(title: &str, content: &str) -> Container {
         // Background and corners
         .background(Color::rgb(0.15, 0.15, 0.2))
         .corners(Corners::squircle(12.0))
+        
         // Border
         .border(1.0, Color::rgb(0.25, 0.25, 0.3))
         // Shadow
@@ -364,8 +348,8 @@ fn styled_card(title: &str, content: &str) -> Container {
         .when_hovered(|s| s.lighter(0.05).elevation(6.0))
         // Children
         .children([
-            container().child(text(title).color(Color::WHITE)),
-            container().child(text(content).bold().font_size(14.0).font_size(18.0).color(Color::rgb(0.7, 0.7, 0.75))),
+            container().child(text(title).font_size(18.0).color(Color::WHITE)),
+            container().child(text(content).font_size(14.0).color(Color::rgb(0.7, 0.7, 0.75))),
         ])
 }
 ```

@@ -33,25 +33,18 @@ container().transform(Transform::scale_xy(2.0, 0.5))   // 200% width, 50% height
 
 ## Transform Composition
 
-The `then_*` chainers post-compose, so they read in the order they are written:
+Combine multiple transforms using `.then()`:
 
 ```rust
-container().transform(
-    Transform::translate(10.0, 0.0)
-        .then_rotate(30.0)
-        .then_scale(0.8),
-)
+// Rotate then scale
+Transform::rotate_degrees(30.0).then(&Transform::scale(0.8))
+
+// Or use the .transform() method with composed transform
+container()
+    .transform(Transform::rotate_degrees(30.0).then(&Transform::scale(0.8)))
 ```
 
-`then(&other)` is the same thing with a whole transform on the right, and there
-the order is the matrix one: `a.then(&b)` applies `b` first, then `a`.
-
-A transform is reactive the way every other property is — a closure that
-builds one:
-
-```rust
-container().transform(move || Transform::rotate_degrees(angle.get()).then_scale(zoom.get()))
-```
+**Order matters**: `a.then(&b)` applies `b` first, then `a`.
 
 ## Transform Origin
 

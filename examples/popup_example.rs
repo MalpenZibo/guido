@@ -21,7 +21,7 @@ fn menu_entry(label: &str) -> Container {
         .padding([8.0, 12.0])
         .corners(6.0)
         .when_hovered(|s| s.lighter(0.12))
-        .child(text(label))
+        .child(text(label).font_size(13))
 }
 
 /// The entry that opens a popup parented to the popup it lives in.
@@ -82,13 +82,16 @@ fn submenu_entry(parent: Rc<RefCell<Option<PopupHandle>>>, open: RwSignal<bool>)
 
             *child_slot.borrow_mut() = Some(child);
         })
-        .child(text(move || {
-            if open.get() {
-                "Settings ◂".to_string()
-            } else {
-                "Settings ▸".to_string()
-            }
-        }))
+        .child(
+            text(move || {
+                if open.get() {
+                    "Settings ◂".to_string()
+                } else {
+                    "Settings ▸".to_string()
+                }
+            })
+            .font_size(13),
+        )
 }
 
 fn main() {
@@ -182,17 +185,13 @@ fn main() {
 
                                 *popup_slot.borrow_mut() = Some(popup);
                             })
-                            .child(
-                                text(move || {
-                                    if menu_open.get() {
-                                        "Menu ▾ (click outside to dismiss)".to_string()
-                                    } else {
-                                        "Menu ▸".to_string()
-                                    }
-                                })
-                                .font_size(13)
-                                .font_size(13),
-                            ),
+                            .child(text(move || {
+                                if menu_open.get() {
+                                    "Menu ▾ (click outside to dismiss)".to_string()
+                                } else {
+                                    "Menu ▸".to_string()
+                                }
+                            })),
                     )
             },
         );

@@ -34,7 +34,8 @@ All styling is done in Rust code, not external CSS files. This provides type saf
 .gradient(LinearGradient::horizontal(start, end))
 
 // Corners
-.corners(Corners::squircle(8.0))  // iOS-style smooth
+.corners(Corners::squircle(8.0))
+  // iOS-style smooth
 
 // Border
 .border(2.0, Color::WHITE)

@@ -66,16 +66,11 @@ fn main() {
 }
 
 fn section_title(title: &'static str) -> impl Widget {
-    container().child(text(title).color(Color::rgb(0.7, 0.7, 0.8)))
+    container().child(text(title).font_size(11.0).color(Color::rgb(0.7, 0.7, 0.8)))
 }
 
 fn label(s: &'static str) -> impl Widget {
-    container().child(
-        text(s)
-            .font_size(9.0)
-            .font_size(11.0)
-            .color(Color::rgb(0.6, 0.6, 0.7)),
-    )
+    container().child(text(s).font_size(9.0).color(Color::rgb(0.6, 0.6, 0.7)))
 }
 
 fn test_box(color: Color) -> Container {

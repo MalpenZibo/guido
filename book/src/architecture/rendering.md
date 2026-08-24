@@ -65,7 +65,7 @@ fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
 
     // Background and border are one command: a rounded rect carries its own
     // border, shadow and gradient.
-    ctx.draw_rounded_rect(local, self.background, corners.radii);
+    ctx.draw_rounded_rect(local, self.background, self.corner_radius);
 
     // Paint children
     for &child_id in self.children.iter() {
@@ -123,8 +123,8 @@ This ensures ripples appear on top of text.
 struct RoundedRect {
     bounds: Rect,
     color: Color,
-    corner_radii: CornerRadii,   // one per corner
-    corner_curvature: f32,       // K-value
+    corner_radius: f32,
+    corner_curvature: f32,  // K-value
 }
 ```
 
@@ -148,7 +148,7 @@ struct Border {
     bounds: Rect,
     width: f32,
     color: Color,
-    corner_radii: CornerRadii,
+    corner_radius: f32,
 }
 ```
 
@@ -201,10 +201,10 @@ Containers set a clip region for their content:
 
 ```rust
 // Set clip for this node and all children (in local coordinates)
-ctx.set_clip(local_bounds, corners.radii, corners.curvature);
+ctx.set_clip(local_bounds, self.corner_radius, self.corner_curvature);
 
 // For overlay-only clipping (e.g., ripple effects)
-ctx.set_overlay_clip(local_bounds, corners.radii, corners.curvature);
+ctx.set_overlay_clip(local_bounds, self.corner_radius, self.corner_curvature);
 ```
 
 Clipping respects corner radius and curvature for proper rounded container clipping. Clip regions are inherited through the render tree and transformed along with their parent nodes.

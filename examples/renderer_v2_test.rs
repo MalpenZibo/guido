@@ -26,53 +26,53 @@ fn main() {
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.8, 0.2, 0.2))
-                            .corners(8.0),
+                            .corners(Corners::squircle(8.0)),
                         // Box with border
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.2, 0.8, 0.2))
-                            .corners(8.0)
+                            .corners(Corners::squircle(8.0))
                             .border(2.0, Color::WHITE),
                         // Rotated box
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.2, 0.2, 0.8))
-                            .corners(8.0)
+                            .corners(Corners::scoop(8.0))
                             .transform(Transform::rotate_degrees(15.0)),
                         // Scaled box
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.8, 0.8, 0.2))
-                            .corners(8.0)
+                            .corners(Corners::scoop(8.0))
                             .transform(Transform::scale(0.8)),
                         // Box with squircle corners
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.8, 0.2, 0.8))
-                            .corners(Corners::squircle(12.0)),
+                            .corners(12.0),
                         // Squircle with border
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.6, 0.3, 0.7))
-                            .corners(Corners::squircle(12.0))
+                            .corners(12.0)
                             .border(2.0, Color::WHITE),
                         // Scoop corners (concave)
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.9, 0.5, 0.2))
-                            .corners(Corners::scoop(16.0)),
+                            .corners(16.0),
                         // Scoop with border
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.7, 0.4, 0.1))
-                            .corners(Corners::scoop(16.0))
+                            .corners(16.0)
                             .border(2.0, Color::WHITE),
                         // Box with shadow (elevation)
                         container()

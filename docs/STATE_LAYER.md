@@ -238,14 +238,14 @@ fn create_button(label: &str) -> Container {
         .border(1.0, Color::rgb(0.4, 0.6, 0.9))
         
         // The label follows the state too, not just the box
-        .when_hovered(|s| s)
+        .control()   // the text below declares .when_hovered(|s| s.color(Color::rgb(0.95, 0.98, 1.0)))
         // Animations
         .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
         .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
         // State overrides
         .when_hovered(|s| s.lighter(0.1).border(2.0, Color::rgb(0.5, 0.7, 1.0)))
         .when_pressed(|s| s.ripple().darker(0.05).transform(Transform::scale(0.98)))
-        .child(text(label).color(Color::rgb(0.95, 0.98, 1.0)).color(Color::WHITE))
+        .child(text(label).color(Color::WHITE))
 }
 ```
 
@@ -260,9 +260,10 @@ pub struct StateStyle {
     pub background: Option<BackgroundOverride>,
     /// Both halves or neither — half a border is no border.
     pub border: Option<BorderOverride>,
-    pub corners: Option<Signal<Corners>>,
+    pub corner_radius: Option<Signal<f32>>,
     pub transform: Option<Signal<Transform>>,
     pub elevation: Option<Signal<f32>>,
+    pub text_color: Option<Signal<Color>>,
     pub alpha: Option<Signal<f32>>,
     pub ripple: Option<RippleConfig>,
 }

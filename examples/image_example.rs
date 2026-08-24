@@ -20,7 +20,7 @@ fn main() {
                     .corners(4.0)
                     .child(img),
             )
-            .child(container().child(text(label).color(Color::rgb(0.7, 0.7, 0.7))))
+            .child(container().child(text(label).font_size(12.0).color(Color::rgb(0.7, 0.7, 0.7))))
     }
 
     // Helper to create a transformed image card
@@ -40,7 +40,7 @@ fn main() {
                     .corners(4.0)
                     .child(img),
             )
-            .child(container().child(text(label).color(Color::rgb(0.7, 0.7, 0.7))))
+            .child(container().child(text(label).font_size(12.0).color(Color::rgb(0.7, 0.7, 0.7))))
     }
 
     // Panel with two columns: raster images and SVG images
@@ -51,7 +51,7 @@ fn main() {
             // Left column: Raster images
             container()
                 .layout(Flex::column().spacing(32.0))
-                .child(container().child(text("Raster Image").color(Color::WHITE)))
+                .child(container().child(text("Raster Image").font_size(16.0).color(Color::WHITE)))
                 .child(
                     container()
                         .layout(Flex::row().spacing(32.0))
@@ -92,16 +92,7 @@ fn main() {
             // Right column: SVG images
             container()
                 .layout(Flex::column().spacing(32.0))
-                .child(
-                    container().child(
-                        text("SVG Image")
-                            .font_size(16.0)
-                            .font_size(12.0)
-                            .font_size(12.0)
-                            .font_size(16.0)
-                            .color(Color::WHITE),
-                    ),
-                )
+                .child(container().child(text("SVG Image").font_size(16.0).color(Color::WHITE)))
                 .child(
                     container()
                         .layout(Flex::row().spacing(32.0))

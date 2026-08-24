@@ -30,7 +30,7 @@ pub fn card(
         .background(background)
         .corners(8.0)
         .layout(Flex::column().spacing(8.0))
-        .child(text(title).color(Color::WHITE))
+        .child(text(title).font_size(18.0).color(Color::WHITE))
         .children_source(children)
 }
 
@@ -56,14 +56,14 @@ fn main() {
                     .background(Color::rgb(0.1, 0.1, 0.15))
                     .layout(Flex::column().spacing(12.0))
                     .child(
-                        container().child(text("Component Example").color(Color::WHITE)),
+                        container().child(text("Component Example").font_size(24.0).color(Color::WHITE)),
                     )
                     .child(
                         card()
                             .title("Counter")
                             .background(Color::rgb(0.15, 0.2, 0.25))
                             .child(
-                                container().child(text(move || format!("Count: {}", count.get())).color(Color::WHITE)),
+                                container().child(text(move || format!("Count: {}", count.get())).font_size(16.0).color(Color::WHITE)),
                             )
                             .child(
                                 container()
@@ -139,7 +139,7 @@ fn main() {
                                 }
                             })
                             .child(
-                                container().child(text("The card background changes color based on the count value.").font_size(24.0).font_size(18.0).font_size(16.0).color(Color::rgb(0.8, 0.8, 0.8))),
+                                container().child(text("The card background changes color based on the count value.").color(Color::rgb(0.8, 0.8, 0.8))),
                             )
                             .child(
                                 container().layout(Flex::row().spacing(8.0)).child(
