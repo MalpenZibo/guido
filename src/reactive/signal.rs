@@ -10,7 +10,8 @@ use super::runtime::{
 use super::storage::{
     allocate_signal_slot, compare_and_set_signal_value, compare_and_update_signal_value,
     create_signal_value, create_stored_value, get_signal_value, get_stored_value, has_signal,
-    store_derived_closure, try_call_derived, with_signal_value, with_stored_value,
+    store_derived_closure, try_call_derived, try_get_signal_value, with_signal_value,
+    with_stored_value,
 };
 
 /// Implement Clone (via Copy), Copy, PartialEq (by SignalId), and Eq for a signal type.
@@ -271,6 +272,17 @@ impl<T: Clone + 'static> RwSignal<T> {
     #[inline]
     pub fn get_untracked(&self) -> T {
         get_signal_value(self.id)
+    }
+
+    /// Get the current value without tracking, or `None` if the owner that
+    /// created this signal has been disposed.
+    ///
+    /// For state that outlives the scopes it holds handles from and has to
+    /// ask rather than assume — the widget-ref registry. Ordinary reads
+    /// should keep panicking: a dead handle there is a bug, not a race.
+    #[inline]
+    pub(crate) fn try_get_untracked(&self) -> Option<T> {
+        try_get_signal_value(self.id)
     }
 
     /// Borrow the value for reading

@@ -27,7 +27,7 @@ use smithay_client_toolkit::reexports::client::QueueHandle;
 
 use crate::outputs::{self, OutputId, OutputInfo};
 use crate::platform::{LockEvent, WaylandState};
-use crate::reactive::owner::with_owner;
+use crate::reactive::owner::{with_owner, with_root_owner};
 use crate::reactive::{RwSignal, Signal, create_signal};
 use crate::surface::{SurfaceConfig, SurfaceId};
 use crate::surface_manager::{ManagedSurface, SurfaceManager};
@@ -69,7 +69,7 @@ fn state_signal() -> RwSignal<LockState> {
         *lock
             .borrow_mut()
             .state
-            .get_or_insert_with(|| create_signal(LockState::default()))
+            .get_or_insert_with(|| with_root_owner(|| create_signal(LockState::default())))
     })
 }
 
@@ -249,4 +249,26 @@ fn teardown_lock_surfaces(
 /// Called during `App::drop()`.
 pub(crate) fn reset_session_lock() {
     LOCK.with(|lock| *lock.borrow_mut() = LockData::default());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reactive::owner::{create_root_owner, dispose_owner_now, with_owner};
+
+    /// The lock state is process-wide and lives behind a thread-local built on
+    /// first use, so *whoever reads it first* would otherwise decide its owner.
+    /// When that first reader is a widget closure or an event handler — the
+    /// natural place to ask whether the session is locked — the signal dies
+    /// with that scope while the thread-local goes on holding the handle.
+    #[test]
+    fn the_lock_state_outlives_whoever_reads_it_first() {
+        create_root_owner();
+        let ((), first_reader) = with_owner(|| {
+            let _ = lock_state().get_untracked();
+        });
+        dispose_owner_now(first_reader);
+
+        assert_eq!(lock_state().get_untracked(), LockState::default());
+    }
 }

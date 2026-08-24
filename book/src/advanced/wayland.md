@@ -609,6 +609,8 @@ create_effect(move || {
 `popup.close()` closes it programmatically. Popups render their own
 widget tree and share the app's reactive state like any surface;
 anchoring a popup to another popup creates a nested popup (submenus).
+A handle outlives its popup: reading `dismissed()` is safe after the
+popup is gone, including from a submenu whose parent closed with it.
 
 Note: for a bottom bar use `anchor(Top)` + `gravity(Top)` so the menu
 opens upward — or just rely on the compositor's flip adjustment.
