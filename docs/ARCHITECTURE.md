@@ -321,9 +321,20 @@ thread as the *only* wakeup for queued work.
 
 Messages are counted while in flight, because a wakeup living inside
 calloop's channel is invisible from the sending side and the loop's pre-block
-check has to be able to ask about it. `ingress::arm()` puts the count up and
-hands back the message to send; the loop's channel callback takes it back down
-when it reads one.
+check has to be able to ask about it. There are two entry points, and the
+difference is what the message stands for:
+
+- `ingress::arm()` raises the count *before* the work is queued and hands back
+  the message to send after — for a doorbell like `BgWritesQueued`, whose
+  payload sits in a queue the loop can already see;
+- `IngressSender::send` raises it around the send — for a message that carries
+  its own payload, which leaves no queue behind and so has nothing to arm
+  before. Its sender is bound to the loop that was running when the read
+  started, so a slow result cannot land in a later session's loop.
+
+The loop's channel callback takes the count back down when it reads a message.
+Nothing else may send: `ingress::sender` is private precisely so that every
+message the callback decrements for was counted up by one of these two.
 
 **Main thread → `jobs::wake_loop()`.**
 The frame-request ping is coalesced per loop iteration through a dedicated

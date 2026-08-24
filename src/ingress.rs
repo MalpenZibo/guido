@@ -147,9 +147,10 @@ impl Armed {
     /// running or its receiver is gone. The count stays up until the loop
     /// takes delivery — [`delivered`].
     pub(crate) fn notify(mut self) {
-        let Some(message) = self.message.take() else {
-            return;
-        };
+        // `arm` is the only constructor and this consumes `self`, so the
+        // message is always there; `Drop` reads the same field to tell an
+        // armed-and-sent from an armed-and-abandoned.
+        let message = self.message.take().expect("an armed message to send");
         if let Some(tx) = sender()
             && tx.send(message).is_ok()
         {
@@ -284,6 +285,5 @@ mod tests {
             !in_flight(),
             "and must not leave the count owed for a message nobody has"
         );
-        crate::jobs::reset_jobs();
     }
 }

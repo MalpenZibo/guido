@@ -572,12 +572,12 @@ static EXIT_REQUEST: AtomicU8 = AtomicU8::new(ExitRequest::Running as u8);
 /// Wakes the event loop so the main loop checks promptly.
 pub(crate) fn set_exit_request(req: ExitRequest) {
     EXIT_REQUEST.store(req as u8, Ordering::Release);
-    // Wake the event loop so it notices the exit request
-    if let Ok(guard) = WAKEUP_PING.lock()
-        && let Some(ref ping) = *guard
-    {
-        ping.ping();
-    }
+    // Through `wake_loop`, not straight to the ping: a ping written behind its
+    // back is one `ping_in_flight` cannot see, and the loop's pre-block check
+    // would call a woken loop unwoken. Coalescing is the right answer here too
+    // — if a ping is already armed the loop is already coming back, and it
+    // reads the exit request at the top of every pass.
+    wake_loop();
 }
 
 /// Read the current exit request (non-destructive — persists until `reset_jobs()`).
@@ -629,21 +629,24 @@ pub(crate) fn wake_loop() {
     // would revive it). PING_SENT is instead cleared exactly once per
     // wakeup (mark_loop_awake), so during any blocked period the first
     // request always pings.
-    let already_pinged = PING_SENT.swap(true, Ordering::Relaxed);
-    if already_pinged {
-        return;
+    //
+    // The flag is raised under the ping's own lock and only with a handle in
+    // hand, so it is never up over a ping that was not written: it is read as
+    // *the eventfd is armed*, and a raise-then-lower around a failed attempt
+    // would let a second caller coalesce against a flag that is about to come
+    // back down — no ping written, nobody pinged, both callers believing
+    // otherwise.
+    if PING_SENT.load(Ordering::Acquire) {
+        return; // already armed; the lock is the slow path, not this one
     }
-    let pinged = WAKEUP_PING
-        .lock()
-        .ok()
-        .and_then(|guard| guard.as_ref().map(|ping| ping.ping()))
-        .is_some();
-    if !pinged {
-        // No loop to ping (setup, tests, teardown). The flag has to come back
-        // down: `ping_in_flight` is read as *the eventfd is armed*, and a flag
-        // raised over a ping that was never written would tell the loop it is
-        // safe to block when nothing is coming.
-        PING_SENT.store(false, Ordering::Relaxed);
+    let Ok(guard) = WAKEUP_PING.lock() else {
+        return;
+    };
+    let Some(ping) = guard.as_ref() else {
+        return; // no loop to ping (setup, tests, teardown)
+    };
+    if !PING_SENT.swap(true, Ordering::Release) {
+        ping.ping();
     }
 }
 
@@ -656,22 +659,36 @@ pub(crate) fn wake_loop() {
 /// cannot answer: work produced after its own drain point is the ordinary
 /// case, and what makes it a bug is nobody having asked for the next pass.
 ///
-/// It says *written*, not *requested*, which is why `wake_loop` lowers the
-/// flag again when there was no ping to write.
+/// It says *written*, not *requested*: `wake_loop` raises it under the ping's
+/// lock, with the handle in hand, so there is no window where it stands for a
+/// ping that does not exist.
 pub(crate) fn ping_in_flight() -> bool {
-    PING_SENT.load(Ordering::Relaxed)
+    PING_SENT.load(Ordering::Acquire)
 }
 
-/// Serialises the tests that drive the process-wide wakeup state directly —
-/// here, in `ingress`, and in `lib.rs`. They set and clear the very flags
-/// each other reads, and `cargo test` runs them on different threads.
+/// Exclusive use of the process-wide wakeup state for one test, given back on
+/// the way out — including out of a panic, which a trailing `reset_jobs()`
+/// does not cover: a failing assertion would otherwise leave a ping handle and
+/// a raised flag behind and turn one real failure into a run of unrelated ones.
 ///
-/// Not a substitute for the retries in this file: tests elsewhere (memo,
-/// anything requesting a job) touch the same flags without taking this.
+/// Taken by every test that writes this state — here, in `ingress`, in
+/// `lib.rs`. Not a substitute for the retries in this file: tests elsewhere
+/// (memo, anything requesting a job) touch the same flags without taking it.
 #[cfg(test)]
-pub(crate) fn wakeup_test_lock() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn wakeup_test_lock() -> WakeupTestState {
     static LOCK: Mutex<()> = Mutex::new(());
-    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    WakeupTestState(LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner()))
+}
+
+#[cfg(test)]
+pub(crate) struct WakeupTestState(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+#[cfg(test)]
+impl Drop for WakeupTestState {
+    fn drop(&mut self) {
+        reset_jobs();
+        crate::ingress::reset_ingress();
+    }
 }
 
 /// Reset ping coalescing after the event loop woke up. Any `wake_loop`
@@ -1040,8 +1057,29 @@ mod wakeup_contract {
     /// setup from scratch. The asymmetry is what makes this sound: a real
     /// regression pings on *no* attempt, so the failure needs no luck, while a
     /// pass needs only one clean window out of many.
+    /// An exit request is a wakeup like any other, and has to be one the
+    /// loop's pre-block check can see. It used to write the ping directly,
+    /// behind `PING_SENT`'s back: the loop was woken and the check said
+    /// nobody had woken it.
+    #[test]
+    fn an_exit_request_arms_a_wakeup_the_check_can_see() {
+        let _state = wakeup_test_lock();
+        let (ping, _source) = make_ping().expect("ping");
+
+        let seen = (0..64).any(|_| {
+            init_wakeup(ping.clone());
+            mark_loop_awake();
+            set_exit_request(ExitRequest::Quit);
+            ping_in_flight()
+        });
+        assert!(seen, "quit_app must arm a wakeup the loop can account for");
+    }
+
     #[test]
     fn a_request_pings_even_when_the_frame_flag_is_already_set() {
+        // This test writes PING_SENT and WAKEUP_PING directly, which is what
+        // the guard exists to keep one test from doing under another's feet.
+        let _state = wakeup_test_lock();
         let mut event_loop: EventLoop<bool> = EventLoop::try_new().expect("event loop");
         let (ping, source) = make_ping().expect("ping");
         event_loop
@@ -1073,7 +1111,6 @@ mod wakeup_contract {
                     PING_SENT.load(Ordering::Relaxed),
                     "a sent ping must leave the coalescing flag armed"
                 );
-                reset_jobs();
                 return;
             }
         }

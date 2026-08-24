@@ -723,14 +723,25 @@ fn queued_but_unwoken() -> Option<&'static str> {
     (!wakeup_armed()).then_some(queued)
 }
 
-/// What the loop still owes a pass, named. Every queue it drains, in the
-/// order the iteration drains them — so a new queue goes next to its own
-/// drain here too, and the list keeps reading as the loop body does.
+/// What the loop still owes a pass, named. Every queue the *loop body* drains,
+/// in the order it drains them — so a new queue goes next to its own drain
+/// here too, and the list keeps reading as the loop body does.
+///
+/// Deliberately not every deferred queue in the library: a parked
+/// `WidgetRef::focus` is drained by `run_jobs`, inside the surface's own pass,
+/// because a focus request means nothing until there is a tree to resolve it
+/// against. Work that only a surface can drain cannot be judged by a check
+/// that runs whether or not one exists — which is the same reason the
+/// clipboard and the cursor had to move *out* of that pass to be listed here.
 fn queued_work() -> Option<&'static str> {
     [
         ("owner disposals", reactive::owner::disposals_pending()),
         ("surface commands", surface::surface_commands_pending()),
         ("background signal writes", reactive::bg_writes_pending()),
+        // Unreachable from `queued_but_unwoken`: `needs_polling` refuses to
+        // block while any job is queued, so the check is never reached with
+        // one. Listed because this is the inventory of what the loop drains,
+        // and leaving a queue out of it is how the next one gets forgotten.
         ("widget jobs", has_pending_jobs()),
         ("a selection change", reactive::selection_change_pending()),
         ("a cursor change", reactive::cursor_change_pending()),
@@ -1432,6 +1443,51 @@ impl App {
             EventLoop::try_new().expect("Failed to create event loop");
         let loop_handle = event_loop.handle();
 
+        // Both wakeup mechanisms are installed before anything can use them.
+        // The compositor talks during `create_wayland_app`'s roundtrips and
+        // during the configure loop below — a clipboard offer arriving there
+        // starts a reader thread, and an app's own `create_task` can queue a
+        // background write — and a producer that finds neither a channel nor a
+        // ping handle has nowhere to put its wakeup.
+        // Create ping mechanism for wakeup on signal changes
+        let (ping, ping_source) = make_ping().expect("Failed to create ping");
+        init_wakeup(ping);
+
+        // Insert ping source - this wakes the loop when signals change
+        loop_handle
+            .insert_source(ping_source, |_, _, _| {
+                // Ping received - a signal was updated, frame will be rendered
+            })
+            .expect("Failed to insert ping source");
+
+        // Cross-thread ingress channel: background threads send messages
+        // here instead of hand-rolling wakeups. calloop guarantees a send
+        // wakes the next dispatch — see the ingress module.
+        let (ingress_tx, ingress_channel) = calloop_channel::channel();
+        ingress::install_ingress(ingress_tx);
+        loop_handle
+            .insert_source(ingress_channel, |event, _, wayland_state| {
+                if let calloop_channel::Event::Msg(message) = event {
+                    // This message was itself the wakeup, and it is spent
+                    // now — the drains it speaks for run later this same
+                    // iteration.
+                    ingress::delivered();
+                    match message {
+                        // Doorbell only: the write payloads live in the
+                        // reactive write queue, drained at the flush point
+                        // later this same iteration.
+                        ingress::IngressMessage::BgWritesQueued => {}
+                        // Prefetched selection content from a reader thread
+                        ingress::IngressMessage::ClipboardUpdate {
+                            kind,
+                            generation,
+                            content,
+                        } => wayland_state.apply_clipboard_update(kind, generation, content),
+                    }
+                }
+            })
+            .expect("Failed to insert ingress channel");
+
         let (connection, mut event_queue, mut wayland_state, qh) =
             match create_wayland_app(loop_handle.clone()) {
                 Ok(app) => app,
@@ -1502,45 +1558,6 @@ impl App {
 
             surface_manager.add(managed);
         }
-
-        // Create ping mechanism for wakeup on signal changes
-        let (ping, ping_source) = make_ping().expect("Failed to create ping");
-        init_wakeup(ping);
-
-        // Insert ping source - this wakes the loop when signals change
-        loop_handle
-            .insert_source(ping_source, |_, _, _| {
-                // Ping received - a signal was updated, frame will be rendered
-            })
-            .expect("Failed to insert ping source");
-
-        // Cross-thread ingress channel: background threads send messages
-        // here instead of hand-rolling wakeups. calloop guarantees a send
-        // wakes the next dispatch — see the ingress module.
-        let (ingress_tx, ingress_channel) = calloop_channel::channel();
-        ingress::install_ingress(ingress_tx);
-        loop_handle
-            .insert_source(ingress_channel, |event, _, wayland_state| {
-                if let calloop_channel::Event::Msg(message) = event {
-                    // This message was itself the wakeup, and it is spent
-                    // now — the drains it speaks for run later this same
-                    // iteration.
-                    ingress::delivered();
-                    match message {
-                        // Doorbell only: the write payloads live in the
-                        // reactive write queue, drained at the flush point
-                        // later this same iteration.
-                        ingress::IngressMessage::BgWritesQueued => {}
-                        // Prefetched selection content from a reader thread
-                        ingress::IngressMessage::ClipboardUpdate {
-                            kind,
-                            generation,
-                            content,
-                        } => wayland_state.apply_clipboard_update(kind, generation, content),
-                    }
-                }
-            })
-            .expect("Failed to insert ingress channel");
 
         // Insert Wayland source - this handles all Wayland protocol events
         WaylandSource::new(connection.clone(), event_queue)
@@ -2113,7 +2130,6 @@ mod wakeup_contract_coverage {
         );
 
         let _ = reactive::take_cursor_change();
-        jobs::reset_jobs();
     }
 
     /// The reported window, in the loop's own order: an effect running at the
@@ -2131,13 +2147,14 @@ mod wakeup_contract_coverage {
         let (ping, _source) = make_ping().expect("ping");
         jobs::init_wakeup(ping);
 
+        let handle = surface::surface_handle(SurfaceId::next());
         let quiet = (0..64).any(|_| {
             surface::reset_surface_commands();
             jobs::mark_loop_awake(); // the dispatch that woke us returned
 
             // …the loop drains surface commands here, and only then flushes
             // background writes, whose effects run before the take below.
-            surface::surface_handle(SurfaceId::next()).set_margin(8);
+            handle.set_margin(8);
             let _ = jobs::take_wake_request();
 
             queued_but_unwoken().is_none()
@@ -2148,7 +2165,6 @@ mod wakeup_contract_coverage {
         );
 
         surface::reset_surface_commands();
-        jobs::reset_jobs();
     }
 
     /// Each arming mechanism has to be visible to `wakeup_armed`, or the
@@ -2212,7 +2228,5 @@ mod wakeup_contract_coverage {
             !ingress::in_flight(),
             "and must stop being visible if it is never sent"
         );
-
-        jobs::reset_jobs();
     }
 }
