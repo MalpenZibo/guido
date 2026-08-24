@@ -332,6 +332,22 @@ See [docs/STYLING.md](docs/STYLING.md) for full styling reference.
 
 ## Development Workflow
 
+### Architectural changes are agreed before they are written
+
+**Before introducing a new architectural structure, explain why it is needed
+and get the design validated. Do not implement first and present after.**
+
+This covers anything other code will then be written against: a new core type
+or trait, a new cross-cutting mechanism, a new ownership or lifetime rule, a
+new registry, or a change to how a whole family of call sites is spelled.
+Ordinary work does not — fixing a bug at its definition, adding a widget
+method, following a pattern that already exists.
+
+"Explain why" means: the problem as it stands in the code, the sites that have
+it, why the existing pieces cannot answer it, the alternatives weighed, and a
+measurement wherever performance is claimed. The decision is the user's; the
+implementation starts after they have made it.
+
 ### Git Workflow
 
 **IMPORTANT: Never commit directly to the main branch.**
