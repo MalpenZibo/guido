@@ -6,7 +6,7 @@ Animate transform changes with smooth transitions.
 
 ```rust
 container()
-    .rotate(rotation_signal)
+    .transform(Transform::rotate_degrees(rotation_signal))
     .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
 ```
 
@@ -19,7 +19,7 @@ Standard easing curve transitions:
 ```rust
 // Smooth ease-out rotation
 container()
-    .rotate(rotation)
+    .transform(Transform::rotate_degrees(rotation))
     .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
     .on_click(move || rotation.update(|r| *r += 45.0))
 ```
@@ -30,7 +30,7 @@ Physics simulation for bouncy, natural motion:
 
 ```rust
 container()
-    .scale(scale_signal)
+    .transform(Transform::scale(scale_signal))
     .animate_transform(Transition::spring(SpringConfig::BOUNCY))
 ```
 
@@ -50,8 +50,8 @@ container()
     .width(80.0)
     .height(80.0)
     .background(Color::rgb(0.3, 0.6, 0.8))
-    .corner_radius(8.0)
-    .rotate(rotation)
+    .corners(8.0)
+    .transform(Transform::rotate_degrees(rotation))
     .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
     .when_hovered(|s| s.lighter(0.1))
     .when_pressed(|s| s.ripple())
@@ -65,7 +65,7 @@ let scale_factor = create_signal(1.0f32);
 let is_scaled = create_signal(false);
 
 container()
-    .scale(scale_factor)
+    .transform(Transform::scale(scale_factor))
     .animate_transform(Transition::spring(SpringConfig::BOUNCY))
     .on_click(move || {
         is_scaled.update(|s| *s = !*s);
@@ -88,7 +88,7 @@ container()
 let offset_x = create_signal(0.0f32);
 
 container()
-    .translate(offset_x, 0.0)
+    .transform(Transform::translate(offset_x, 0.0))
     .animate_transform(Transition::new(400.0, TimingFunction::EaseInOut))
     .on_scroll(move |_, dy, _| {
         offset_x.update(|x| *x += dy * 10.0);
@@ -124,22 +124,22 @@ fn animated_transforms_demo() -> impl Widget {
                 .width(80.0)
                 .height(80.0)
                 .background(Color::rgb(0.3, 0.5, 0.8))
-                .corner_radius(8.0)
-                .rotate(rotation)
+                .corners(8.0)
+                .transform(Transform::rotate_degrees(rotation))
                 .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
                 .when_hovered(|s| s.lighter(0.1))
                 .when_pressed(|s| s.ripple())
                 .on_click(move || rotation.update(|r| *r += 45.0))
                 .layout(Flex::column().main_alignment(MainAlignment::Center).cross_alignment(CrossAlignment::Center))
-                .child(container().text_color(Color::WHITE).font_size(12.0).child(text("Rotate"))),
+                .child(container().child(text("Rotate").font_size(12.0).color(Color::WHITE))),
 
             // Spring-based scale
             container()
                 .width(80.0)
                 .height(80.0)
                 .background(Color::rgb(0.3, 0.8, 0.4))
-                .corner_radius(8.0)
-                .scale(scale)
+                .corners(8.0)
+                .transform(Transform::scale(scale))
                 .animate_transform(Transition::spring(SpringConfig::BOUNCY))
                 .when_hovered(|s| s.lighter(0.1))
                 .when_pressed(|s| s.ripple())
@@ -148,7 +148,7 @@ fn animated_transforms_demo() -> impl Widget {
                     scale.set(if is_scaled.get() { 1.3 } else { 1.0 });
                 })
                 .layout(Flex::column().main_alignment(MainAlignment::Center).cross_alignment(CrossAlignment::Center))
-                .child(container().text_color(Color::WHITE).font_size(12.0).child(text("Scale"))),
+                .child(container().child(text("Scale").font_size(12.0).color(Color::WHITE))),
         ])
 }
 ```

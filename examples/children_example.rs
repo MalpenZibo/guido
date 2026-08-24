@@ -54,12 +54,12 @@ fn main() {
                     container()
                 .padding(12.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .child(
                     container()
                         .layout(Flex::column().spacing(8.0))
-                        .child(container().text_color(Color::rgb(0.9, 0.9, 1.0)).child(text("1. Static Children (.child)")))
-                        .child(container().text_color(Color::WHITE).child(text("These children are fixed at creation time:")))
+                        .child(container().child(text("1. Static Children (.child)").color(Color::rgb(0.9, 0.9, 1.0))))
+                        .child(container().child(text("These children are fixed at creation time:").color(Color::WHITE)))
                         .child(
                             container()
                                 .layout(Flex::row().spacing(4.0))
@@ -67,22 +67,22 @@ fn main() {
                                     container()
                                         .padding(8.0)
                                         .background(Color::rgb(0.3, 0.2, 0.4))
-                                        .corner_radius(4.0)
-                                        .text_color(Color::WHITE).child(text("Child A"))
+                                        .corners(4.0)
+                                        .child(text("Child A").color(Color::WHITE))
                                 )
                                 .child(
                                     container()
                                         .padding(8.0)
                                         .background(Color::rgb(0.2, 0.3, 0.4))
-                                        .corner_radius(4.0)
-                                        .text_color(Color::WHITE).child(text("Child B"))
+                                        .corners(4.0)
+                                        .child(text("Child B").color(Color::WHITE))
                                 )
                                 .child(
                                     container()
                                         .padding(8.0)
                                         .background(Color::rgb(0.4, 0.3, 0.2))
-                                        .corner_radius(4.0)
-                                        .text_color(Color::WHITE).child(text("Child C"))
+                                        .corners(4.0)
+                                        .child(text("Child C").color(Color::WHITE))
                                 )
                         )
                 )
@@ -92,23 +92,23 @@ fn main() {
                     container()
                 .padding(12.0)
                 .background(Color::rgb(0.2, 0.15, 0.15))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .child(
                     container()
                         .layout(Flex::column().spacing(8.0))
                         .child(
-                            container().text_color(Color::rgb(1.0, 0.9, 0.9)).child(text("2. .maybe_child() - NOT REACTIVE!"))
+                            container().child(text("2. .maybe_child() - NOT REACTIVE!").color(Color::rgb(1.0, 0.9, 0.9)))
                         )
                         .child(
-                            container().text_color(Color::rgb(1.0, 0.7, 0.7)).child(text("LIMITATION: Evaluated ONCE at creation"))
+                            container().child(text("LIMITATION: Evaluated ONCE at creation").color(Color::rgb(1.0, 0.7, 0.7)))
                         )
                         .child(
-                            container().text_color(Color::WHITE).child(text(move || format!("Signal: {} (but .maybe_child won't react!)", show_optional.get())))
+                            container().child(text(move || format!("Signal: {} (but .maybe_child won't react!)", show_optional.get())).color(Color::WHITE))
                         )
                         .child(
                             container()
                                 .layout(Flex::row().spacing(4.0))
-                                .child(container().text_color(Color::WHITE).child(text("Fixed")))
+                                .child(container().child(text("Fixed").color(Color::WHITE)))
                                 // Evaluated ONCE at creation — it will never
                                 // update. Debug builds warn about exactly this
                                 // read; the closure below is the fix.
@@ -118,8 +118,8 @@ fn main() {
                                             container()
                                                 .padding(6.0)
                                                 .background(Color::rgb(0.4, 0.2, 0.2))
-                                                .corner_radius(4.0)
-                                                .text_color(Color::WHITE).child(text("Frozen"))
+                                                .corners(4.0)
+                                                .child(text("Frozen").color(Color::WHITE))
                                         )
                                     } else {
                                         None
@@ -138,15 +138,15 @@ fn main() {
                     container()
                 .padding(12.0)
                 .background(Color::rgb(0.15, 0.2, 0.15))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .child(
                     container()
                         .layout(Flex::column().spacing(8.0))
                         .child(
-                            container().text_color(Color::rgb(0.9, 1.0, 0.9)).child(text("3. Dynamic Children (.children) - REACTIVE!"))
+                            container().child(text("3. Dynamic Children (.children) - REACTIVE!").color(Color::rgb(0.9, 1.0, 0.9)))
                         )
                         .child(
-                            container().text_color(Color::WHITE).child(text("These react to signal changes with state preservation"))
+                            container().child(text("These react to signal changes with state preservation").color(Color::WHITE))
                         )
                         .child(
                             // Control buttons
@@ -156,7 +156,7 @@ fn main() {
                                     container()
                                         .padding(6.0)
                                         .background(Color::rgb(0.2, 0.4, 0.2))
-                                        .corner_radius(4.0)
+                                        .corners(4.0)
                                         .when_hovered(|s| s.lighter(0.1))
                                         .when_pressed(|s| s.ripple())
                                         .on_click(move || {
@@ -173,13 +173,13 @@ fn main() {
                                                 });
                                             });
                                         })
-                                        .text_color(Color::WHITE).child(text("Add"))
+                                        .child(text("Add").color(Color::WHITE))
                                 )
                                 .child(
                                     container()
                                         .padding(6.0)
                                         .background(Color::rgb(0.4, 0.2, 0.2))
-                                        .corner_radius(4.0)
+                                        .corners(4.0)
                                         .when_hovered(|s| s.lighter(0.1))
                                         .when_pressed(|s| s.ripple())
                                         .on_click(move || {
@@ -189,13 +189,13 @@ fn main() {
                                                 }
                                             });
                                         })
-                                        .text_color(Color::WHITE).child(text("Remove"))
+                                        .child(text("Remove").color(Color::WHITE))
                                 )
                                 .child(
                                     container()
                                         .padding(6.0)
                                         .background(Color::rgb(0.2, 0.2, 0.4))
-                                        .corner_radius(4.0)
+                                        .corners(4.0)
                                         .when_hovered(|s| s.lighter(0.1))
                                         .when_pressed(|s| s.ripple())
                                         .on_click(move || {
@@ -203,11 +203,11 @@ fn main() {
                                                 list.reverse();
                                             });
                                         })
-                                        .text_color(Color::WHITE).child(text("Reverse"))
+                                        .child(text("Reverse").color(Color::WHITE))
                                 )
                         )
                         .child(
-                            container().text_color(Color::rgb(0.8, 0.8, 0.8)).child(text("Notice: Reversing preserves widget state (animations, etc.)"))
+                            container().child(text("Notice: Reversing preserves widget state (animations, etc.)").color(Color::rgb(0.8, 0.8, 0.8)))
                         )
                         .child(
                             // Dynamic list: key by ID preserves widget state on
@@ -220,8 +220,8 @@ fn main() {
                                     |item| container()
                                         .padding(8.0)
                                         .background(item.color)
-                                        .corner_radius(4.0)
-                                        .text_color(Color::WHITE).child(text(item.name)),
+                                        .corners(4.0)
+                                        .child(text(item.name).color(Color::WHITE)),
                                 ))
                         )
                 )
@@ -231,33 +231,33 @@ fn main() {
                     container()
                 .padding(12.0)
                 .background(Color::rgb(0.15, 0.25, 0.15))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .child(
                     container()
                         .layout(Flex::column().spacing(8.0))
                         .child(
-                            container().text_color(Color::rgb(0.9, 1.0, 0.9)).child(text("4. NEW! Mixing Static and Dynamic - ANY ORDER!"))
+                            container().child(text("4. NEW! Mixing Static and Dynamic - ANY ORDER!").color(Color::rgb(0.9, 1.0, 0.9)))
                         )
                         .child(
-                            container().text_color(Color::WHITE).child(text("You can now freely mix static and dynamic children!"))
+                            container().child(text("You can now freely mix static and dynamic children!").color(Color::WHITE))
                         )
                         .child(
                             container()
                                 .padding(6.0)
                                 .background(Color::rgb(0.3, 0.2, 0.4))
-                                .corner_radius(4.0)
+                                .corners(4.0)
                                 .when_hovered(|s| s.lighter(0.1))
                                 .when_pressed(|s| s.ripple())
                                 .on_click(move || {
                                     show_optional.update(|v| *v = !*v);
                                 })
-                                .text_color(Color::WHITE).child(text(move || {
+                                .child(text(move || {
                                         if show_optional.get() {
                                             "Click to Hide Middle".to_string()
                                         } else {
                                             "Click to Show Middle".to_string()
                                         }
-                                    }))
+                                    }).color(Color::WHITE))
                         )
                         .child(
                             // Demonstrate mixing: static -> dynamic -> static
@@ -267,8 +267,8 @@ fn main() {
                                     container()
                                         .padding(8.0)
                                         .background(Color::rgb(0.3, 0.4, 0.3))
-                                        .corner_radius(4.0)
-                                        .text_color(Color::WHITE).child(text("Static Header"))
+                                        .corners(4.0)
+                                        .child(text("Static Header").color(Color::WHITE))
                                 )
                                 .child(
                                     // Dynamic child in the middle!
@@ -276,20 +276,20 @@ fn main() {
                                         show_optional.get().then(|| container()
                                             .padding(8.0)
                                             .background(Color::rgb(0.5, 0.3, 0.5))
-                                            .corner_radius(4.0)
-                                            .text_color(Color::WHITE).child(text("Dynamic Middle!")))
+                                            .corners(4.0)
+                                            .child(text("Dynamic Middle!").color(Color::WHITE)))
                                     }
                                 )
                                 .child(
                                     container()
                                         .padding(8.0)
                                         .background(Color::rgb(0.3, 0.4, 0.3))
-                                        .corner_radius(4.0)
-                                        .text_color(Color::WHITE).child(text("Static Footer"))
+                                        .corners(4.0)
+                                        .child(text("Static Footer").color(Color::WHITE))
                                 )
                         )
                         .child(
-                            container().text_color(Color::rgb(0.8, 1.0, 0.8)).child(text("This was IMPOSSIBLE before - would panic!"))
+                            container().child(text("This was IMPOSSIBLE before - would panic!").color(Color::rgb(0.8, 1.0, 0.8)))
                         )
                 )
                 )
@@ -303,55 +303,55 @@ fn main() {
                     container()
                 .padding(12.0)
                 .background(Color::rgb(0.18, 0.15, 0.25))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .child(
                     container()
                         .layout(Flex::column().spacing(8.0))
                         .child(
-                            container().text_color(Color::rgb(1.0, 0.9, 1.0)).child(text("5. Complex Mixing Example"))
+                            container().child(text("5. Complex Mixing Example").color(Color::rgb(1.0, 0.9, 1.0)))
                         )
                         .child(
-                            container().text_color(Color::WHITE).child(text("Multiple static and dynamic children in any order:"))
+                            container().child(text("Multiple static and dynamic children in any order:").color(Color::WHITE))
                         )
                         .child(
                             container()
                                 .padding(6.0)
                                 .background(Color::rgb(0.3, 0.2, 0.4))
-                                .corner_radius(4.0)
+                                .corners(4.0)
                                 .when_hovered(|s| s.lighter(0.1))
                                 .when_pressed(|s| s.ripple())
                                 .on_click(move || {
                                     show_optional2.update(|v| *v = !*v);
                                 })
-                                .text_color(Color::WHITE).child(text(move || {
+                                .child(text(move || {
                                         if show_optional2.get() {
                                             "Click to Hide Dynamics".to_string()
                                         } else {
                                             "Click to Show Dynamics".to_string()
                                         }
-                                    }))
+                                    }).color(Color::WHITE))
                         )
                         .child(
                             // Complex pattern: S D S D S
                             container()
                                 .layout(Flex::column().spacing(4.0))
-                                .child(container().text_color(Color::WHITE).child(text("Static 1")))
+                                .child(container().child(text("Static 1").color(Color::WHITE)))
                                 .child(move || {
                                     show_optional2.get().then(|| container()
                                         .padding(6.0)
                                         .background(Color::rgb(0.5, 0.2, 0.3))
-                                        .corner_radius(4.0)
-                                        .text_color(Color::WHITE).child(text("Dynamic 1")))
+                                        .corners(4.0)
+                                        .child(text("Dynamic 1").color(Color::WHITE)))
                                 })
-                                .child(container().text_color(Color::WHITE).child(text("Static 2")))
+                                .child(container().child(text("Static 2").color(Color::WHITE)))
                                 .child(move || {
                                     show_optional2.get().then(|| container()
                                         .padding(6.0)
                                         .background(Color::rgb(0.3, 0.2, 0.5))
-                                        .corner_radius(4.0)
-                                        .text_color(Color::WHITE).child(text("Dynamic 2")))
+                                        .corners(4.0)
+                                        .child(text("Dynamic 2").color(Color::WHITE)))
                                 })
-                                .child(container().text_color(Color::WHITE).child(text("Static 3")))
+                                .child(container().child(text("Static 3").color(Color::WHITE)))
                         )
                 )
                 )
@@ -360,21 +360,21 @@ fn main() {
                     container()
                 .padding(12.0)
                 .background(Color::rgb(0.18, 0.15, 0.2))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .child(
                     container()
                         .layout(Flex::column().spacing(8.0))
                         .child(
-                            container().text_color(Color::rgb(0.9, 0.9, 1.0)).child(text("6. .children() - For keyed lists"))
+                            container().child(text("6. .children() - For keyed lists").color(Color::rgb(0.9, 0.9, 1.0)))
                         )
                         .child(
-                            container().text_color(Color::WHITE).child(text("Use this for lists that need state preservation:"))
+                            container().child(text("Use this for lists that need state preservation:").color(Color::WHITE))
                         )
                         .child(
                             // Can even mix static before keyed list!
                             container()
                                 .layout(Flex::column().spacing(4.0))
-                                .child(container().text_color(Color::rgb(0.8, 0.8, 0.8)).child(text("Static header before list")))
+                                .child(container().child(text("Static header before list").color(Color::rgb(0.8, 0.8, 0.8))))
                                 .children(keyed(
                                     || vec!["Keyed Item 1", "Keyed Item 2"],
                                     |content| {
@@ -385,10 +385,10 @@ fn main() {
                                     |content| container()
                                         .padding(8.0)
                                         .background(Color::rgb(0.5, 0.3, 0.5))
-                                        .corner_radius(4.0)
-                                        .text_color(Color::WHITE).child(text(content)),
+                                        .corners(4.0)
+                                        .child(text(content).color(Color::WHITE)),
                                 ))
-                                .child(container().text_color(Color::rgb(0.8, 0.8, 0.8)).child(text("Static footer after list")))
+                                .child(container().child(text("Static footer after list").color(Color::rgb(0.8, 0.8, 0.8))))
                         )
                 )
         )

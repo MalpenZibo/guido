@@ -39,8 +39,8 @@ pub enum RenderLayer {
 pub struct WorldClip {
     /// Axis-aligned clip rect in world coordinates (logical pixels).
     pub rect: Rect,
-    /// Corner radius for rounded clipping (in logical pixels).
-    pub corner_radius: f32,
+    /// Corner radii for rounded clipping (in logical pixels).
+    pub corner_radius: CornerRadii,
     /// Superellipse curvature (K-value).
     pub curvature: f32,
 }
@@ -153,13 +153,10 @@ impl FlattenedCommand {
         let (clip_rect, clip_radii) = if self.clip_is_local {
             (
                 self.world_aabb(clip.rect),
-                EllipticalRadii::scaled_xy(CornerRadii::uniform(clip.corner_radius), sx, sy),
+                EllipticalRadii::scaled_xy(clip.corner_radius, sx, sy),
             )
         } else {
-            (
-                clip.rect,
-                EllipticalRadii::circular(CornerRadii::uniform(clip.corner_radius)),
-            )
+            (clip.rect, EllipticalRadii::circular(clip.corner_radius))
         };
 
         let x = world.x.max(clip_rect.x);
@@ -831,7 +828,7 @@ fn transform_clip_to_world(clip: &ClipRegion, transform: &Transform) -> WorldCli
 
     WorldClip {
         rect: aabb_from_points(&corners),
-        corner_radius: clip.corner_radius * scale,
+        corner_radius: clip.corner_radius.scaled(scale),
         curvature: clip.curvature,
     }
 }
@@ -851,10 +848,19 @@ fn intersect_clips(a: &WorldClip, b: &WorldClip) -> WorldClip {
     let width = (max_x - min_x).max(0.0);
     let height = (max_y - min_y).max(0.0);
 
-    // Use the smaller corner radius (more conservative)
-    let corner_radius = a.corner_radius.min(b.corner_radius);
-    // Use the curvature from the clip with the smaller radius
-    let curvature = if a.corner_radius <= b.corner_radius {
+    // Corner by corner, the smaller radius: an intersection can only be
+    // rounded where both clips are.
+    let corner_radius = CornerRadii {
+        top_left: a.corner_radius.top_left.min(b.corner_radius.top_left),
+        top_right: a.corner_radius.top_right.min(b.corner_radius.top_right),
+        bottom_right: a
+            .corner_radius
+            .bottom_right
+            .min(b.corner_radius.bottom_right),
+        bottom_left: a.corner_radius.bottom_left.min(b.corner_radius.bottom_left),
+    };
+    // The curvature of whichever clip rounds the least, for the same reason.
+    let curvature = if a.corner_radius.max() <= b.corner_radius.max() {
         a.curvature
     } else {
         b.curvature
@@ -1264,7 +1270,7 @@ mod world_geometry_tests {
         let mut cmd = command(Transform::translate(0.0, 0.0));
         cmd.clip = Some(WorldClip {
             rect: Rect::new(0.0, 0.0, 40.0, 100.0),
-            corner_radius: 0.0,
+            corner_radius: CornerRadii::uniform(0.0),
             curvature: 1.0,
         });
 
@@ -1285,7 +1291,7 @@ mod world_geometry_tests {
         let mut cmd = command(Transform::translate(0.0, 0.0));
         cmd.clip = Some(WorldClip {
             rect: Rect::new(0.0, 0.0, 40.0, 100.0),
-            corner_radius: 0.0,
+            corner_radius: CornerRadii::uniform(0.0),
             curvature: 1.0,
         });
 
@@ -1316,7 +1322,7 @@ mod world_geometry_tests {
         let mut cmd = command(Transform::translate(0.0, 0.0));
         cmd.clip = Some(WorldClip {
             rect: Rect::new(0.0, 0.0, 100.0, 100.0),
-            corner_radius: 16.0,
+            corner_radius: CornerRadii::uniform(16.0),
             curvature: 1.0,
         });
 
@@ -1347,7 +1353,7 @@ mod world_geometry_tests {
         let mut cmd = command(Transform::translate(0.0, 0.0));
         cmd.clip = Some(WorldClip {
             rect: Rect::new(0.0, 0.0, 100.0, 100.0),
-            corner_radius: 16.0,
+            corner_radius: CornerRadii::uniform(16.0),
             curvature: 1.0,
         });
 
@@ -1384,7 +1390,7 @@ mod world_geometry_tests {
         let mut cmd = command(Transform::translate(500.0, 0.0));
         cmd.clip = Some(WorldClip {
             rect: Rect::new(0.0, 0.0, 100.0, 100.0),
-            corner_radius: 0.0,
+            corner_radius: CornerRadii::uniform(0.0),
             curvature: 1.0,
         });
 
@@ -1404,7 +1410,7 @@ mod world_geometry_tests {
         let mut cmd = command(Transform::translate(500.0, 300.0));
         cmd.clip = Some(WorldClip {
             rect: Rect::new(0.0, 0.0, 100.0, 100.0),
-            corner_radius: 0.0,
+            corner_radius: CornerRadii::uniform(0.0),
             curvature: 1.0,
         });
         cmd.clip_is_local = true;

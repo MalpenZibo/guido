@@ -98,17 +98,11 @@ fn create_child_widget(id: u64) -> impl Widget {
         .layout(Flex::row().spacing(8.0))
         .padding(12.0)
         .background(Color::rgb(0.2, 0.2, 0.3))
-        .corner_radius(8.0)
-        .child(
-            container()
-                .text_color(Color::WHITE)
-                .child(text(format!("Child {}", id))),
-        )
-        .child(
-            container()
-                .text_color(Color::rgb(0.6, 0.8, 1.0))
-                .child(text(move || format!("Ticks: {}", tick_signal.get()))),
-        )
+        .corners(8.0)
+        .child(container().child(text(format!("Child {}", id)).color(Color::WHITE)))
+        .child(container().child(
+            text(move || format!("Ticks: {}", tick_signal.get())).color(Color::rgb(0.6, 0.8, 1.0)),
+        ))
 }
 
 fn main() {
@@ -132,13 +126,13 @@ fn main() {
                 container()
                     .layout(Flex::column().spacing(4.0))
                     .child(
-                        container().text_color(Color::WHITE).child(text("Effect Cleanup Test (Automatic Ownership)")),
+                        container().child(text("Effect Cleanup Test (Automatic Ownership)").color(Color::WHITE)),
                     )
                     .child(
-                        container().text_color(Color::rgb(0.7, 0.7, 0.7)).child(text("Watch the console: each child logs every 2 seconds.")),
+                        container().child(text("Watch the console: each child logs every 2 seconds.").color(Color::rgb(0.7, 0.7, 0.7))),
                     )
                     .child(
-                        container().text_color(Color::rgb(0.7, 0.7, 0.7)).child(text("When removed, on_cleanup runs and effect logs STOP.")),
+                        container().child(text("When removed, on_cleanup runs and effect logs STOP.").color(Color::rgb(0.7, 0.7, 0.7))),
                     ),
             )
             .child(
@@ -149,7 +143,7 @@ fn main() {
                         container()
                             .padding(10.0)
                             .background(Color::rgb(0.2, 0.5, 0.3))
-                            .corner_radius(6.0)
+                            .corners(6.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || {
@@ -157,13 +151,13 @@ fn main() {
                                 log::info!("[Child {}] Adding to list", id);
                                 children_ids.update(|list| list.push(id));
                             })
-                            .text_color(Color::WHITE).child(text("Add Child")),
+                            .child(text("Add Child").color(Color::WHITE)),
                     )
                     .child(
                         container()
                             .padding(10.0)
                             .background(Color::rgb(0.5, 0.2, 0.2))
-                            .corner_radius(6.0)
+                            .corners(6.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || {
@@ -176,13 +170,13 @@ fn main() {
                                     }
                                 });
                             })
-                            .text_color(Color::WHITE).child(text("Remove Last")),
+                            .child(text("Remove Last").color(Color::WHITE)),
                     )
                     .child(
                         container()
                             .padding(10.0)
                             .background(Color::rgb(0.5, 0.3, 0.2))
-                            .corner_radius(6.0)
+                            .corners(6.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || {
@@ -194,15 +188,15 @@ fn main() {
                                     list.clear();
                                 });
                             })
-                            .text_color(Color::WHITE).child(text("Remove All")),
+                            .child(text("Remove All").color(Color::WHITE)),
                     ),
             )
             .child(
                 // Status display
-                container().text_color(Color::WHITE).child(text(move || {
+                container().child(text(move || {
                     let count = children_ids.get().len();
                     format!("Active children: {}", count)
-                })),
+                }).color(Color::WHITE)),
             )
             .child(
                 // Children container with dynamic children — the builder runs

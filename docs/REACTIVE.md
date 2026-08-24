@@ -252,7 +252,7 @@ The `IntoSignal<T>` trait allows properties to accept any of:
 - **Closures**: `container().background(move || if dark { Color::BLACK } else { Color::WHITE })` → calls `create_derived()`
 - **Signals**: `container().background(my_signal)` → passed through directly (accepts both `Signal<T>` and `RwSignal<T>`)
 
-For numeric properties (`f32`, `Length`, `Padding`), integer and float literals both coerce to the target type: `container().corner_radius(12)` and `.corner_radius(12.5)` are equivalent to `12.0_f32`. Float coercion is lossy (`f64 as f32`), matching the precision of the destination.
+For numeric properties (`f32`, `Length`, `Padding`), integer and float literals both coerce to the target type: `container().corners(12)` and `.corners(12.5)` are equivalent to `12.0_f32`. Float coercion is lossy (`f64 as f32`), matching the precision of the destination.
 
 All produce a `Signal<T>` (which is `Copy`). `create_signal` returns `RwSignal<T>` (read-write, Clone+PartialEq+Send) which has `.set()`, `.update()`, and `.writer()`. `Signal<T>` is read-only — use it when you only need to read values.
 

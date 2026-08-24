@@ -16,12 +16,7 @@ fn main() {
         container()
             .layout(Flex::column().spacing(8.0))
             .child(widget)
-            .child(
-                container()
-                    .font_size(11.0)
-                    .text_color(Color::rgb(0.7, 0.7, 0.7))
-                    .child(text(label)),
-            )
+            .child(container().child(text(label).font_size(11.0).color(Color::rgb(0.7, 0.7, 0.7))))
     }
 
     // Helper to create a clipped container with visible border
@@ -30,7 +25,7 @@ fn main() {
             .width(width)
             .height(height)
             .background(Color::rgb(0.15, 0.15, 0.2))
-            .corner_radius(12.0)
+            .corners(12.0)
             .border(2.0, Color::rgb(0.4, 0.4, 0.5))
             .overflow(Overflow::Hidden)
             .child(widget)
@@ -42,7 +37,7 @@ fn main() {
             .width(width)
             .height(height)
             .background(Color::rgb(0.15, 0.15, 0.2))
-            .corner_radius(12.0)
+            .corners(12.0)
             .border(2.0, Color::rgb(0.6, 0.3, 0.3))
             .overflow(Overflow::Visible)
             .child(widget)
@@ -52,22 +47,22 @@ fn main() {
         .padding(24.0)
         .layout(Flex::column().spacing(24.0))
         .child(
-            container()
-                .font_size(20.0)
-                .text_color(Color::WHITE)
-                .child(text("Image Clipping Test")),
+            container().child(
+                text("Image Clipping Test")
+                    .font_size(20.0)
+                    .color(Color::WHITE),
+            ),
         )
         // Row 1: Clipping comparison
         .child(
             container()
                 .layout(Flex::column().spacing(12.0))
                 .child(
-                    container()
-                        .font_size(13.0)
-                        .text_color(Color::rgb(0.7, 0.7, 0.7))
-                        .child(text(
-                            "Clipping: 120x120 container with 257x248 image (ContentFit::None)",
-                        )),
+                    container().child(
+                        text("Clipping: 120x120 container with 257x248 image (ContentFit::None)")
+                            .font_size(13.0)
+                            .color(Color::rgb(0.7, 0.7, 0.7)),
+                    ),
                 )
                 .child(
                     container()
@@ -95,10 +90,11 @@ fn main() {
             container()
                 .layout(Flex::column().spacing(12.0))
                 .child(
-                    container()
-                        .font_size(13.0)
-                        .text_color(Color::rgb(0.7, 0.7, 0.7))
-                        .child(text("Clipped containers at different sizes")),
+                    container().child(
+                        text("Clipped containers at different sizes")
+                            .font_size(13.0)
+                            .color(Color::rgb(0.7, 0.7, 0.7)),
+                    ),
                 )
                 .child(
                     container()
@@ -146,16 +142,17 @@ fn main() {
             container()
                 .layout(Flex::column().spacing(12.0))
                 .child(
-                    container()
-                        .font_size(13.0)
-                        .text_color(Color::rgb(0.7, 0.7, 0.7))
-                        .child(text("Intrinsic size layout (no explicit dimensions)")),
+                    container().child(
+                        text("Intrinsic size layout (no explicit dimensions)")
+                            .font_size(13.0)
+                            .color(Color::rgb(0.7, 0.7, 0.7)),
+                    ),
                 )
                 .child(labeled(
                     "ContentFit::None at intrinsic size (~257x248)",
                     container()
                         .background(Color::rgb(0.15, 0.15, 0.2))
-                        .corner_radius(8.0)
+                        .corners(8.0)
                         .border(1.0, Color::rgb(0.3, 0.5, 0.3))
                         .child(image("examples/assets/logo.svg").content_fit(ContentFit::None)),
                 )),

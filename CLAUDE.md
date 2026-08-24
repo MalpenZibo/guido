@@ -215,7 +215,7 @@ Use the state layer API for hover and pressed visual feedback:
 ```rust
 container()
     .background(Color::rgb(0.2, 0.2, 0.3))
-    .corner_radius(8.0)
+    .corners(8.0)
     .when_hovered(|s| s.lighter(0.1))      // Lighten on hover
     .when_pressed(|s| s.ripple())         // Ripple on press
     .on_click(move || count.update(|c| *c += 1))
@@ -314,16 +314,18 @@ let service = create_service(move |mut rx, ctx| async move {
 service.send(MyCommand::DoSomething);
 ```
 
-### Corner Curvature
+### Corners
 
-Corner styles use CSS K-values for superellipse rendering:
+Radius and curvature are one property: a bare size means rounded corners and
+takes what `padding` takes, a constructor names another shape.
 
 ```rust
-container().corner_radius(12.0).squircle()  // K=2, iOS-style smooth
-container().corner_radius(12.0)              // K=1, standard circular (default)
-container().corner_radius(12.0).bevel()      // K=0, diagonal cut
-container().corner_radius(12.0).scoop()      // K=-1, concave inward
-container().corner_radius(12.0).corner_curvature(1.5)  // Custom K value
+container().corners(12.0)                        // circular, all four
+container().corners([16.0, 0.0])                 // rounded on top, square below
+container().corners(Corners::squircle(12.0))     // K=2, iOS-style
+container().corners(Corners::bevel(12.0))        // K=0, diagonal cut
+container().corners(Corners::scoop(12.0))        // K=-1, concave
+container().corners(Corners::superellipse(12.0, 1.5))
 ```
 
 See [docs/STYLING.md](docs/STYLING.md) for full styling reference.

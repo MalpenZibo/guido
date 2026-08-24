@@ -19,10 +19,9 @@ use guido::prelude::*;
 fn menu_entry(label: &str) -> Container {
     container()
         .padding([8.0, 12.0])
-        .corner_radius(6.0)
+        .corners(6.0)
         .when_hovered(|s| s.lighter(0.12))
-        .font_size(13)
-        .child(text(label))
+        .child(text(label).font_size(13))
 }
 
 /// The entry that opens a popup parented to the popup it lives in.
@@ -37,9 +36,8 @@ fn submenu_entry(parent: Rc<RefCell<Option<PopupHandle>>>, open: RwSignal<bool>)
     container()
         .widget_ref(entry_ref)
         .padding([8.0, 12.0])
-        .corner_radius(6.0)
+        .corners(6.0)
         .when_hovered(|s| s.lighter(0.12))
-        .font_size(13)
         .on_click(move || {
             if open.get() {
                 if let Some(child) = child_slot.borrow_mut().take() {
@@ -66,7 +64,7 @@ fn submenu_entry(parent: Rc<RefCell<Option<PopupHandle>>>, open: RwSignal<bool>)
                     container()
                         .width(fill())
                         .background(Color::rgb(0.16, 0.16, 0.24))
-                        .corner_radius(10.0)
+                        .corners(10.0)
                         .padding(8.0)
                         .layout(Flex::column().spacing(2.0))
                         .child(menu_entry("Appearance"))
@@ -84,13 +82,16 @@ fn submenu_entry(parent: Rc<RefCell<Option<PopupHandle>>>, open: RwSignal<bool>)
 
             *child_slot.borrow_mut() = Some(child);
         })
-        .child(text(move || {
-            if open.get() {
-                "Settings ◂".to_string()
-            } else {
-                "Settings ▸".to_string()
-            }
-        }))
+        .child(
+            text(move || {
+                if open.get() {
+                    "Settings ◂".to_string()
+                } else {
+                    "Settings ▸".to_string()
+                }
+            })
+            .font_size(13),
+        )
 }
 
 fn main() {
@@ -135,7 +136,7 @@ fn main() {
                                     Color::rgb(0.25, 0.25, 0.35)
                                 }
                             })
-                            .corner_radius(6.0)
+                            .corners(6.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .on_click(move || {
                                 if menu_open.get() {
@@ -162,7 +163,7 @@ fn main() {
                                             container()
                                                 .width(fill())
                                                 .background(Color::rgb(0.13, 0.13, 0.2))
-                                                .corner_radius(10.0)
+                                                .corners(10.0)
                                                 .padding(8.0)
                                                 .layout(Flex::column().spacing(2.0))
                                                 .child(menu_entry("Profile"))

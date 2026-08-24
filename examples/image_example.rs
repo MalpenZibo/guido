@@ -17,15 +17,10 @@ fn main() {
                     .width(w)
                     .height(h)
                     .background(Color::rgb(0.2, 0.2, 0.25))
-                    .corner_radius(4.0)
+                    .corners(4.0)
                     .child(img),
             )
-            .child(
-                container()
-                    .font_size(12.0)
-                    .text_color(Color::rgb(0.7, 0.7, 0.7))
-                    .child(text(label)),
-            )
+            .child(container().child(text(label).font_size(12.0).color(Color::rgb(0.7, 0.7, 0.7))))
     }
 
     // Helper to create a transformed image card
@@ -42,15 +37,10 @@ fn main() {
                     .width(w)
                     .height(h)
                     .background(Color::rgb(0.2, 0.2, 0.25))
-                    .corner_radius(4.0)
+                    .corners(4.0)
                     .child(img),
             )
-            .child(
-                container()
-                    .font_size(12.0)
-                    .text_color(Color::rgb(0.7, 0.7, 0.7))
-                    .child(text(label)),
-            )
+            .child(container().child(text(label).font_size(12.0).color(Color::rgb(0.7, 0.7, 0.7))))
     }
 
     // Panel with two columns: raster images and SVG images
@@ -61,12 +51,7 @@ fn main() {
             // Left column: Raster images
             container()
                 .layout(Flex::column().spacing(32.0))
-                .child(
-                    container()
-                        .font_size(16.0)
-                        .text_color(Color::WHITE)
-                        .child(text("Raster Image")),
-                )
+                .child(container().child(text("Raster Image").font_size(16.0).color(Color::WHITE)))
                 .child(
                     container()
                         .layout(Flex::row().spacing(32.0))
@@ -93,13 +78,13 @@ fn main() {
                             "Rotated 10°",
                             (90.0, 90.0),
                             image("examples/assets/photo.webp").content_fit(ContentFit::Cover),
-                            container().rotate(10.0),
+                            container().transform(Transform::rotate_degrees(10.0)),
                         ))
                         .child(transformed_card(
                             "Scaled 1.5x",
                             (90.0, 90.0),
                             image("examples/assets/photo.webp").content_fit(ContentFit::Cover),
-                            container().scale(1.5),
+                            container().transform(Transform::scale(1.5)),
                         )),
                 ),
         )
@@ -107,12 +92,7 @@ fn main() {
             // Right column: SVG images
             container()
                 .layout(Flex::column().spacing(32.0))
-                .child(
-                    container()
-                        .font_size(16.0)
-                        .text_color(Color::WHITE)
-                        .child(text("SVG Image")),
-                )
+                .child(container().child(text("SVG Image").font_size(16.0).color(Color::WHITE)))
                 .child(
                     container()
                         .layout(Flex::row().spacing(32.0))
@@ -125,13 +105,13 @@ fn main() {
                             "Rotated 15°",
                             (80.0, 60.0),
                             image("examples/assets/logo.svg"),
-                            container().rotate(15.0),
+                            container().transform(Transform::rotate_degrees(15.0)),
                         ))
                         .child(transformed_card(
                             "Scaled 1.5x",
                             (80.0, 60.0),
                             image("examples/assets/logo.svg"),
-                            container().scale(1.5),
+                            container().transform(Transform::scale(1.5)),
                         )),
                 ),
         );

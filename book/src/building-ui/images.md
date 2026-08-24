@@ -101,7 +101,7 @@ Images inherit transforms from parent containers, just like text:
 ```rust
 // Rotated image
 container()
-    .rotate(15.0)
+    .transform(Transform::rotate_degrees(15.0))
     .child(
         container()
             .width(32.0)
@@ -111,7 +111,7 @@ container()
 
 // Scaled image
 container()
-    .scale(1.5)
+    .transform(Transform::scale(1.5))
     .child(
         container()
             .width(24.0)
@@ -121,8 +121,7 @@ container()
 
 // Combined transforms
 container()
-    .rotate(45.0)
-    .scale(2.0)
+    .transform(Transform::rotate_degrees(45.0).then_scale(2.0))
     .child(image("./logo.svg"))
 ```
 
@@ -224,7 +223,7 @@ fn main() {
             .child(
                 // Rotated image
                 container()
-                    .rotate(15.0)
+                    .transform(Transform::rotate_degrees(15.0))
                     .child(
                         container()
                             .width(24.0)

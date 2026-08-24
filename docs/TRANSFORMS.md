@@ -10,7 +10,7 @@ Move a widget by offset values:
 
 ```rust
 container()
-    .translate(20.0, 10.0)  // Move 20px right, 10px down
+    .transform(Transform::translate(20.0, 10.0))  // Move 20px right, 10px down
 ```
 
 ### Rotation
@@ -19,7 +19,7 @@ Rotate a widget around its center:
 
 ```rust
 container()
-    .rotate(45.0)  // Rotate 45 degrees clockwise
+    .transform(Transform::rotate_degrees(45.0))  // Rotate 45 degrees clockwise
 ```
 
 ### Scale
@@ -27,8 +27,8 @@ container()
 Scale a widget uniformly or non-uniformly:
 
 ```rust
-container().scale(1.5)           // 150% size
-container().scale_xy(2.0, 0.5)   // 200% width, 50% height
+container().transform(Transform::scale(1.5))           // 150% size
+container().transform(Transform::scale_xy(2.0, 0.5))   // 200% width, 50% height
 ```
 
 ## Transform Composition
@@ -53,12 +53,12 @@ By default, rotation and scale occur around the widget's center. Use transform o
 ```rust
 // Rotate around top-left corner
 container()
-    .rotate(45.0)
+    .transform(Transform::rotate_degrees(45.0))
     .transform_origin(TransformOrigin::TOP_LEFT)
 
 // Scale from bottom-right
 container()
-    .scale(0.8)
+    .transform(Transform::scale(0.8))
     .transform_origin(TransformOrigin::BOTTOM_RIGHT)
 ```
 
@@ -91,7 +91,7 @@ Transforms can be reactive using signals:
 let rotation = create_signal(0.0f32);
 
 container()
-    .rotate(rotation)  // Updates when signal changes
+    .transform(Transform::rotate_degrees(rotation))  // Updates when signal changes
     .on_click(move || rotation.update(|r| *r += 45.0))
 ```
 
@@ -103,7 +103,7 @@ Animate transform changes with transitions:
 let rotation = create_signal(0.0f32);
 
 container()
-    .rotate(rotation)
+    .transform(Transform::rotate_degrees(rotation))
     .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
     .on_click(move || rotation.update(|r| *r += 45.0))
 ```
@@ -114,7 +114,7 @@ For physics-based animation:
 
 ```rust
 container()
-    .scale(scale_signal)
+    .transform(Transform::scale(scale_signal))
     .animate_transform(Transition::spring(SpringConfig::BOUNCY))
 ```
 
@@ -124,10 +124,10 @@ Transforms compose through the widget hierarchy. A child inherits its parent's t
 
 ```rust
 container()
-    .rotate(20.0)  // Parent rotated
+    .transform(Transform::rotate_degrees(20.0))  // Parent rotated
     .child(
         container()
-            .scale(0.8)  // Child scaled within rotated parent
+            .transform(Transform::scale(0.8))  // Child scaled within rotated parent
             .child(text("Nested transforms"))
     )
 ```

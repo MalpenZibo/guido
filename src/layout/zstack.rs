@@ -53,7 +53,7 @@ use super::{Constraints, Layout, Size};
 ///             .width(fill())
 ///             .height(fill())
 ///             .layout(Flex::row().main_alignment(MainAlignment::End))
-///             .child(container().width(4).height(4).corner_radius(2)),
+///             .child(container().width(4).height(4).corners(2)),
 ///     );
 /// ```
 #[derive(Default)]

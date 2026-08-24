@@ -17,45 +17,39 @@ fn main() {
                 .width(120.0)
                 .height(60.0)
                 .background(Color::rgba(0.3, 0.6, 0.3, 0.8))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .layout(
                     Flex::column()
                         .main_alignment(MainAlignment::Center)
                         .cross_alignment(CrossAlignment::Center),
                 )
-                .font_size(14.0)
-                .text_color(Color::WHITE)
-                .child(text("No Transform")),
+                .child(text("No Transform").font_size(14.0).color(Color::WHITE)),
             // With rotation - should use texture
             container()
                 .width(120.0)
                 .height(60.0)
                 .background(Color::rgba(0.3, 0.3, 0.8, 0.8))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .layout(
                     Flex::column()
                         .main_alignment(MainAlignment::Center)
                         .cross_alignment(CrossAlignment::Center),
                 )
-                .rotate(15.0)
-                .font_size(14.0)
-                .text_color(Color::WHITE)
-                .child(text("Rotated 15")),
+                .transform(Transform::rotate_degrees(15.0))
+                .child(text("Rotated 15").font_size(14.0).color(Color::WHITE)),
             // With scale - should use texture
             container()
                 .width(120.0)
                 .height(60.0)
                 .background(Color::rgba(0.8, 0.5, 0.3, 0.8))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .layout(
                     Flex::column()
                         .main_alignment(MainAlignment::Center)
                         .cross_alignment(CrossAlignment::Center),
                 )
-                .scale(1.2)
-                .font_size(14.0)
-                .text_color(Color::WHITE)
-                .child(text("Scale 1.2")),
+                .transform(Transform::scale(1.2))
+                .child(text("Scale 1.2").font_size(14.0).color(Color::WHITE)),
         ]);
 
     App::new().run(|app| {

@@ -903,7 +903,7 @@ mod tests {
         let mut cmd = frosted(Rect::new(10.0, 20.0, 100.0, 30.0), Transform::IDENTITY);
         cmd.clip = Some(crate::renderer::flatten::WorldClip {
             rect: Rect::new(0.0, 0.0, 200.0, 200.0),
-            corner_radius: 0.0,
+            corner_radius: CornerRadii::uniform(0.0),
             curvature: 1.0,
         });
         let frost = command_to_text_backdrop(&cmd, 2.0).expect("a frost");

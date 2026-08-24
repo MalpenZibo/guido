@@ -415,11 +415,12 @@ impl TextQuadRenderer {
                     clip.width * scale_factor,
                     clip.height * scale_factor,
                 ],
-                [0.0, 1.0, 0.0, 0.0], // No corner radius for text clip (uses rect from TextEntry)
+                // Four corner radii: a text clip is a plain rect.
+                [0.0; 4],
             )
         } else {
             // No clipping
-            (NO_CLIP_RECT, [0.0, 1.0, 0.0, 0.0])
+            (NO_CLIP_RECT, [0.0; 4])
         };
 
         // Convert to NDC and create vertices with clip data

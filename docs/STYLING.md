@@ -44,7 +44,7 @@ container().background(Color::rgb(0.2, 0.2, 0.3))
 
 ```rust
 // Horizontal gradient (left to right)
-container().gradient_horizontal(Color::RED, Color::BLUE)
+container().gradient(LinearGradient::horizontal(Color::RED, Color::BLUE))
 
 // Vertical gradient (top to bottom)
 container().gradient_vertical(Color::RED, Color::BLUE)
@@ -103,71 +103,47 @@ container()
 
 ## Corner Radius
 
-### Uniform Radius
+One call, one to four values — the shorthand `padding` uses, with CSS's
+clockwise order where CSS has one:
 
 ```rust
-container().corner_radius(8.0)  // 8px radius on all corners
+container().corners(8.0)                     // all four
+container().corners([16.0, 0.0])             // the top pair, then the bottom
+container().corners([16.0, 4.0, 16.0, 4.0])  // top-left, top-right, bottom-right, bottom-left
 ```
 
-### Per-Corner Radii
+The two-value form is `[top, bottom]` rather than CSS's diagonal pairing
+(`top-left & bottom-right`, then the other two), which is a curiosity almost
+nobody writes on purpose; what people write is "round the top of this row".
+Note that it does not mirror `padding([a, b])`, which pairs *opposite sides*
+(vertical, then horizontal) — corners have no opposite pairs to give, so the
+two-value form pairs adjacent ones. The four-value form *is* CSS, clockwise
+from the top left.
 
-Round each corner independently with `corner_radii` — accordion-style
-lists round only the top of the first row and only the bottom of the last:
+Named constructors say the same thing in words:
 
 ```rust
-use guido::prelude::CornerRadii;
-
-container().corner_radii(CornerRadii::top(16.0))     // first row
-container().corner_radii(CornerRadii::bottom(16.0))  // last row
-container().corner_radii(CornerRadii {
-    top_left: 16.0,
-    top_right: 4.0,
-    bottom_right: 16.0,
-    bottom_left: 4.0,
-})
+container().corners(CornerRadii::top(16.0))     // first row of a list
+container().corners(CornerRadii::bottom(16.0))  // last row
 ```
 
-`corner_radii` overrides `corner_radius` for drawing (background, border,
-shadow, gradient). Child clipping, blur regions and rounded hit testing
-keep using a uniform radius — the largest of the four.
+The shape reaches everything that has one: the background, the border, the
+shadow, the gradient, the blur behind it, the clip its children are cut to,
+and the region that answers a click. A box rounded only at the top clips and
+is clicked as a box rounded only at the top.
 
-### Corner Curvature (Superellipse)
+### The shape of the corner
 
-Control the shape of corners using CSS K-values:
+A constructor names the shape and takes the size. The curve is a CSS K-value:
+how far from the corner the arc starts.
 
 ```rust
-// Squircle - iOS-style smooth corners (K=2)
-container()
-    .corner_radius(12.0)
-    .squircle()
-
-// Circle - standard circular corners (K=1, default)
-container()
-    .corner_radius(12.0)  // Default is circular
-
-// Bevel - diagonal cut corners (K=0)
-container()
-    .corner_radius(12.0)
-    .bevel()
-
-// Scoop - concave/inward corners (K=-1)
-container()
-    .corner_radius(12.0)
-    .scoop()
-
-// Custom curvature value
-container()
-    .corner_radius(12.0)
-    .corner_curvature(1.5)  // Between circle and squircle
+container().corners(Corners::squircle(12.0))          // K=2, iOS-style
+container().corners(Corners::rounded(12.0))           // K=1, circular (default)
+container().corners(Corners::bevel(12.0))             // K=0, diagonal cut
+container().corners(Corners::scoop(12.0))             // K=-1, concave
+container().corners(Corners::superellipse(12.0, 1.5)) // anything between
 ```
-
-**Curvature reference:**
-| Style | K value | Description |
-|-------|---------|-------------|
-| Squircle | 2.0 | Smooth, iOS-style |
-| Circle | 1.0 | Standard rounded |
-| Bevel | 0.0 | Diagonal/chamfered |
-| Scoop | -1.0 | Concave inward |
 
 ## Shadows and Elevation
 
@@ -254,7 +230,7 @@ different widget, so declare it in the closure that builds the widget instead.
 How a text looks can be declared on the text itself:
 
 ```rust
-text("Hello").font_size(16.0).color(Color::WHITE).bold()
+text("Hello").font_size(16.0).color(Color::WHITE)
 ```
 
 `color`, `font_size`, `font_family`, `font_weight`, `bold`, `mono`,
@@ -263,64 +239,11 @@ by `Text` and `TextInput` — the two widgets that draw glyphs. A `TextInput`
 also implements `InputStyled` for `cursor_color`, `selection_color` and
 `placeholder_color`, which only it can draw.
 
-### One declaration for a group
+### The same style, many times: write a function
 
-The same properties can be declared on a container, where they are inherited
-by everything below it:
-
-```rust
-container()
-    .font_size(16.0)
-    .text_color(Color::WHITE)
-    .bold()
-    .child(text("Hello").nowrap())   // nowrap is about wrapping, not looks
-```
-
-Each property is inherited by everything below the container, until a nearer
-one overrides that property — and only that one:
-
-```rust
-container()
-    .text_color(theme.text)
-    .font_size(14.0)
-    .layout(Flex::column().spacing(8.0))
-    .child(text("inherits both"))
-    .child(
-        // Overrides the size; the colour still comes from above.
-        container().font_size(21.0).child(text("bigger, same colour")),
-    )
-```
-
-The same declarations style a `text_input`, which additionally reads
-`cursor_color`, `selection_color` and `placeholder_color`. Those three are
-`InputStyle`, not `TextStyle`, and resolve on their own walk — a `text` never
-looks for properties it cannot draw:
-
-```rust
-container()
-    .mono()
-    .text_color(Color::WHITE)
-    .cursor_color(Color::rgb(0.4, 0.8, 1.0))
-    .child(text_input(value))
-```
-
-A declaration on the text itself is the nearest one there is, so it wins over
-every container above it — per property, like everything else:
-
-```rust
-container().text_color(theme.weak).font_size(14.0)
-    .child(text("quiet"))
-    .child(text("loud").color(theme.strong))   // own colour, inherited size
-```
-
-Properties nothing declares fall back to white, 14 logical pixels, the
-registered default family and normal weight.
-
-### Repeating a style: write a function
-
-Inheritance is for dressing a subtree you do not otherwise touch. For "the same
-kind of label, many times", the cheaper tool is the one the language already
-gives you:
+There is no inheritance: a container declares nothing about the text inside
+it, because a container draws a box. For "the same kind of label, many times",
+the tool is the one the language already gives you:
 
 ```rust
 let label = |s: &str| text(s).color(theme.weak).font_size(12.0);
@@ -331,10 +254,30 @@ container()
 ```
 
 That keeps the declaration next to the widget that draws it, costs no wrapper
-node, and gives the style a name. Reach for a container's inherited
-declaration when the texts are not yours to write — inside a component you are
-calling, say — or when there are enough of them that naming each one is the
-noise.
+node, and gives the style a name.
+
+### A state that reaches the glyphs
+
+Hover belongs to the box and colour to the glyphs, so each is declared where it
+happens and [`control()`](../docs/STATE_LAYER.md) joins them: the leaf resolves
+its own states from the nearest control above it.
+
+```rust
+container()
+    .padding(8.0)
+    .control()
+    .when_hovered(|s| s.lighter(0.1))
+    .child(
+        text("Label")
+            .color(theme.weak)
+            .when_hovered(|s| s.color(theme.strong)),
+    )
+```
+
+### Properties with no declaration
+
+Fall back to white, 14 logical pixels, the registered default family and normal
+weight.
 
 ### Stroke and shadow
 
@@ -343,10 +286,10 @@ picture:
 
 ```rust
 container()
-    .text_color(Color::WHITE)
-    .text_stroke(TextStroke::new(1.5, Color::BLACK))
-    .text_shadow(TextShadow::new(0.0, 2.0, 10.0, Color::rgba(0.0, 0.0, 0.0, 0.75)))
-    .child(text("09:41"))
+    
+    
+    
+    .child(text("09:41").text_shadow(TextShadow::new(0.0, 2.0, 10.0, Color::rgba(0.0, 0.0, 0.0, 0.75))).text_stroke(TextStroke::new(1.5, Color::BLACK)).color(Color::WHITE))
 ```
 
 Both are drawn under the fill — a stroke painted over it would eat half the
@@ -392,8 +335,8 @@ fn styled_card(title: &str, content: &str) -> Container {
         .padding(20.0)
         // Background and corners
         .background(Color::rgb(0.15, 0.15, 0.2))
-        .corner_radius(12.0)
-        .squircle()
+        .corners(Corners::squircle(12.0))
+        
         // Border
         .border(1.0, Color::rgb(0.25, 0.25, 0.3))
         // Shadow
@@ -405,8 +348,8 @@ fn styled_card(title: &str, content: &str) -> Container {
         .when_hovered(|s| s.lighter(0.05).elevation(6.0))
         // Children
         .children([
-            container().font_size(18.0).bold().text_color(Color::WHITE).child(text(title)),
-            container().font_size(14.0).text_color(Color::rgb(0.7, 0.7, 0.75)).child(text(content)),
+            container().child(text(title).font_size(18.0).color(Color::WHITE)),
+            container().child(text(content).font_size(14.0).color(Color::rgb(0.7, 0.7, 0.75))),
         ])
 }
 ```

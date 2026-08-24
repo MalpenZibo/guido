@@ -23,20 +23,18 @@ fn main() {
             .layout(Flex::column().spacing(16.0))
             .child(
                 // Title
-                container()
-                    .text_color(Color::WHITE)
-                    .font_size(20.0)
-                    .child(text("Text Input Demo")),
+                container().child(text("Text Input Demo").font_size(20.0).color(Color::WHITE)),
             )
             .child(
                 // Username section
                 container()
                     .layout(Flex::column().spacing(4.0))
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.7, 0.7, 0.8))
-                            .font_size(12.0)
-                            .child(text("Username")),
+                        container().child(
+                            text("Username")
+                                .font_size(12.0)
+                                .color(Color::rgb(0.7, 0.7, 0.8)),
+                        ),
                     )
                     .child(
                         container()
@@ -44,14 +42,16 @@ fn main() {
                             .padding(8.0)
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-                            .corner_radius(6.0)
+                            .corners(6.0)
                             // Highlight border when text input is focused
                             .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
-                            .text_color(Color::WHITE)
-                            .cursor_color(Color::rgb(0.4, 0.8, 1.0))
-                            .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
-                            .font_size(14.0)
-                            .child(text_input(username)),
+                            .child(
+                                text_input(username)
+                                    .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
+                                    .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                                    .font_size(14.0)
+                                    .color(Color::WHITE),
+                            ),
                     ),
             )
             .child(
@@ -59,10 +59,11 @@ fn main() {
                 container()
                     .layout(Flex::column().spacing(4.0))
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.7, 0.7, 0.8))
-                            .font_size(12.0)
-                            .child(text("Password")),
+                        container().child(
+                            text("Password")
+                                .font_size(12.0)
+                                .color(Color::rgb(0.7, 0.7, 0.8)),
+                        ),
                     )
                     .child(
                         container()
@@ -70,17 +71,21 @@ fn main() {
                             .padding(8.0)
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-                            .corner_radius(6.0)
+                            .corners(6.0)
                             // Highlight border when text input is focused
                             .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
-                            .text_color(Color::WHITE)
-                            .cursor_color(Color::rgb(0.4, 0.8, 1.0))
-                            .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
-                            .font_size(14.0)
-                            .child(text_input(password).password(true).on_submit(move |_| {
-                                let msg = format!("Login attempt: {}", username.get());
-                                submitted.set(msg);
-                            })),
+                            .child(
+                                text_input(password)
+                                    .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
+                                    .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                                    .font_size(14.0)
+                                    .color(Color::WHITE)
+                                    .password(true)
+                                    .on_submit(move |_| {
+                                        let msg = format!("Login attempt: {}", username.get());
+                                        submitted.set(msg);
+                                    }),
+                            ),
                     ),
             )
             .child(
@@ -88,109 +93,121 @@ fn main() {
                 container()
                     .padding(12.0)
                     .background(Color::rgb(0.15, 0.15, 0.2))
-                    .corner_radius(6.0)
+                    .corners(6.0)
                     .layout(Flex::column().spacing(8.0))
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.6, 0.6, 0.7))
-                            .font_size(12.0)
-                            .child(text("Current Values:")),
+                        container().child(
+                            text("Current Values:")
+                                .font_size(12.0)
+                                .color(Color::rgb(0.6, 0.6, 0.7)),
+                        ),
                     )
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.8, 0.8, 0.9))
-                            .font_size(13.0)
-                            .child(text(move || format!("Username: {}", username.get()))),
+                        container().child(
+                            text(move || format!("Username: {}", username.get()))
+                                .font_size(13.0)
+                                .color(Color::rgb(0.8, 0.8, 0.9)),
+                        ),
                     )
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.8, 0.8, 0.9))
-                            .font_size(13.0)
-                            .child(text(move || {
-                                format!("Password: {} chars", password.get().len())
-                            })),
+                        container().child(
+                            text(move || format!("Password: {} chars", password.get().len()))
+                                .font_size(13.0)
+                                .color(Color::rgb(0.8, 0.8, 0.9)),
+                        ),
                     ),
             )
             .child(
                 // Submit status
-                container()
-                    .text_color(Color::rgb(0.5, 0.8, 0.5))
-                    .font_size(13.0)
-                    .child(text(move || {
+                container().child(
+                    text(move || {
                         let msg = submitted.get();
                         if msg.is_empty() {
                             "Press Enter in password field to submit".to_string()
                         } else {
                             msg
                         }
-                    })),
+                    })
+                    .font_size(13.0)
+                    .color(Color::rgb(0.5, 0.8, 0.5)),
+                ),
             )
             .child(
                 // Instructions
                 container()
                     .padding(12.0)
                     .background(Color::rgb(0.1, 0.1, 0.14))
-                    .corner_radius(6.0)
+                    .corners(6.0)
                     .layout(Flex::column().spacing(4.0))
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.5, 0.5, 0.6))
-                            .font_size(11.0)
-                            .child(text("Keyboard shortcuts:")),
+                        container().child(
+                            text("Keyboard shortcuts:")
+                                .font_size(11.0)
+                                .color(Color::rgb(0.5, 0.5, 0.6)),
+                        ),
                     )
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.5, 0.5, 0.6))
-                            .font_size(11.0)
-                            .child(text("• Click to focus and position cursor")),
+                        container().child(
+                            text("• Click to focus and position cursor")
+                                .font_size(11.0)
+                                .color(Color::rgb(0.5, 0.5, 0.6)),
+                        ),
                     )
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.5, 0.5, 0.6))
-                            .font_size(11.0)
-                            .child(text("• Arrow keys to move cursor")),
+                        container().child(
+                            text("• Arrow keys to move cursor")
+                                .font_size(11.0)
+                                .color(Color::rgb(0.5, 0.5, 0.6)),
+                        ),
                     )
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.5, 0.5, 0.6))
-                            .font_size(11.0)
-                            .child(text("• Shift+Arrow to select text")),
+                        container().child(
+                            text("• Shift+Arrow to select text")
+                                .font_size(11.0)
+                                .color(Color::rgb(0.5, 0.5, 0.6)),
+                        ),
                     )
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.5, 0.5, 0.6))
-                            .font_size(11.0)
-                            .child(text("• Ctrl+A to select all")),
+                        container().child(
+                            text("• Ctrl+A to select all")
+                                .font_size(11.0)
+                                .color(Color::rgb(0.5, 0.5, 0.6)),
+                        ),
                     )
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.5, 0.5, 0.6))
-                            .font_size(11.0)
-                            .child(text("• Ctrl+Arrow for word jump")),
+                        container().child(
+                            text("• Ctrl+Arrow for word jump")
+                                .font_size(11.0)
+                                .color(Color::rgb(0.5, 0.5, 0.6)),
+                        ),
                     )
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.5, 0.5, 0.6))
-                            .font_size(11.0)
-                            .child(text("• Home/End to go to start/end")),
+                        container().child(
+                            text("• Home/End to go to start/end")
+                                .font_size(11.0)
+                                .color(Color::rgb(0.5, 0.5, 0.6)),
+                        ),
                     )
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.5, 0.5, 0.6))
-                            .font_size(11.0)
-                            .child(text("• Enter to submit (in password field)")),
+                        container().child(
+                            text("• Enter to submit (in password field)")
+                                .font_size(11.0)
+                                .color(Color::rgb(0.5, 0.5, 0.6)),
+                        ),
                     )
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.5, 0.5, 0.6))
-                            .font_size(11.0)
-                            .child(text("• Ctrl+C/X/V to copy/cut/paste")),
+                        container().child(
+                            text("• Ctrl+C/X/V to copy/cut/paste")
+                                .font_size(11.0)
+                                .color(Color::rgb(0.5, 0.5, 0.6)),
+                        ),
                     )
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.5, 0.5, 0.6))
-                            .font_size(11.0)
-                            .child(text("• Ctrl+Z to undo, Ctrl+Y to redo")),
+                        container().child(
+                            text("• Ctrl+Z to undo, Ctrl+Y to redo")
+                                .font_size(11.0)
+                                .color(Color::rgb(0.5, 0.5, 0.6)),
+                        ),
                     ),
             );
 

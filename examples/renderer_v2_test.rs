@@ -26,71 +26,67 @@ fn main() {
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.8, 0.2, 0.2))
-                            .corner_radius(8.0),
+                            .corners(Corners::squircle(8.0)),
                         // Box with border
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.2, 0.8, 0.2))
-                            .corner_radius(8.0)
+                            .corners(Corners::squircle(8.0))
                             .border(2.0, Color::WHITE),
                         // Rotated box
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.2, 0.2, 0.8))
-                            .corner_radius(8.0)
-                            .rotate(15.0),
+                            .corners(Corners::scoop(8.0))
+                            .transform(Transform::rotate_degrees(15.0)),
                         // Scaled box
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.8, 0.8, 0.2))
-                            .corner_radius(8.0)
-                            .scale(0.8),
+                            .corners(Corners::scoop(8.0))
+                            .transform(Transform::scale(0.8)),
                         // Box with squircle corners
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.8, 0.2, 0.8))
-                            .corner_radius(12.0)
-                            .squircle(),
+                            .corners(12.0),
                         // Squircle with border
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.6, 0.3, 0.7))
-                            .corner_radius(12.0)
-                            .squircle()
+                            .corners(12.0)
                             .border(2.0, Color::WHITE),
                         // Scoop corners (concave)
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.9, 0.5, 0.2))
-                            .corner_radius(16.0)
-                            .scoop(),
+                            .corners(16.0),
                         // Scoop with border
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.7, 0.4, 0.1))
-                            .corner_radius(16.0)
-                            .scoop()
+                            .corners(16.0)
                             .border(2.0, Color::WHITE),
                         // Box with shadow (elevation)
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.2, 0.8, 0.8))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .elevation(4.0),
                         // Clickable box with ripple
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.5, 0.5, 0.5))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(|| {
@@ -101,12 +97,12 @@ fn main() {
                             .width(70.0)
                             .height(60.0)
                             .background(Color::rgb(0.3, 0.3, 0.4))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .padding(8.0)
                             .child(
                                 container()
                                     .background(Color::rgb(0.6, 0.4, 0.2))
-                                    .corner_radius(4.0),
+                                    .corners(4.0),
                             ),
                     ])
             },

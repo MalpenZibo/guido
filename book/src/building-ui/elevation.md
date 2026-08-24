@@ -51,8 +51,8 @@ Shadows respect corner radius:
 
 ```rust
 container()
-    .corner_radius(12.0)
-    .squircle()
+    .corners(Corners::squircle(12.0))
+    
     .elevation(8.0)  // Shadow follows rounded shape
 ```
 
@@ -64,7 +64,7 @@ fn elevated_card() -> Container {
         .width(200.0)
         .padding(20.0)
         .background(Color::rgb(0.15, 0.15, 0.2))
-        .corner_radius(12.0)
+        .corners(12.0)
         .elevation(4.0)
         .animate_background(Transition::new(150.0, TimingFunction::EaseOut))
         .animate_elevation(Transition::new(200.0, TimingFunction::EaseOut))
@@ -72,8 +72,8 @@ fn elevated_card() -> Container {
         .when_pressed(|s| s.elevation(2.0).darker(0.05))
         .layout(Flex::column().spacing(8.0))
         .children([
-            container().font_size(18.0).bold().text_color(Color::WHITE).child(text("Card Title")),
-            container().text_color(Color::rgb(0.7, 0.7, 0.75)).child(text("Card content goes here")),
+            container().child(text("Card Title").font_size(18.0).color(Color::WHITE)),
+            container().child(text("Card content goes here").color(Color::rgb(0.7, 0.7, 0.75))),
         ])
 }
 ```

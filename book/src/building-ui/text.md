@@ -13,45 +13,18 @@ text("Hello, World!")
 A text declares how it looks:
 
 ```rust
-text("Hello").font_size(24.0).color(theme.text).bold()
+text("Hello").font_size(24.0).color(theme.text)
 ```
 
 The methods come from the `TextStyled` trait — `color`, `font_size`,
 `font_family`, `font_weight`, `bold`, `mono`, `text_stroke`, `text_shadow` —
 implemented by the two widgets that draw glyphs, `Text` and `TextInput`.
 
-### Dressing a whole subtree
-
-The same properties can be declared on a container instead, where everything
-below inherits them. Resolution is per property, so overriding the size leaves
-a colour set further up alone:
-
-```rust
-container()
-    .text_color(theme.text)
-    .font_size(14.0)
-    .layout(Flex::column().spacing(8.0))
-    .child(text("inherits both"))
-    .child(container().font_size(21.0).child(text("bigger, same colour")))
-```
-
-Containers that say nothing about text are transparent to this, so layout
-wrappers do not interrupt it. A declaration on the text itself is the nearest
-one there is, so it wins over every container above it:
-
-```rust
-container().text_color(theme.weak)
-    .child(text("quiet"))
-    .child(text("loud").color(theme.strong))
-```
-
-Properties nothing declares fall back to white, 14 logical pixels, the
-registered default family and normal weight.
-
 ### Repeating a style
 
-For "the same kind of label, many times", write a function rather than reaching
-for a wrapper:
+A container declares nothing about the text inside it: it draws a box, and the
+widget that draws the glyphs is the one that says how they look. For "the same
+kind of label, many times", write a function:
 
 ```rust
 let label = |s: &str| text(s).color(theme.weak).font_size(12.0);
@@ -62,9 +35,28 @@ container()
 ```
 
 The style keeps a name, stays next to the widget that draws it, and costs no
-extra node. A container's inherited declaration is the right tool when the
-texts are not yours to write — inside a component you are calling — or when
-there are too many to name.
+extra node.
+
+Properties nothing declares fall back to white, 14 logical pixels, the
+registered default family and normal weight.
+
+### A hover that reaches the glyphs
+
+The pointer is over the *box*, and the colour belongs to the *glyphs*. Declare
+each where it happens, and let `control()` join them — the text resolves its
+own states from the nearest control above it:
+
+```rust
+container()
+    .padding(8.0)
+    .control()
+    .when_hovered(|s| s.lighter(0.1))
+    .child(
+        text("Label")
+            .color(theme.weak)
+            .when_hovered(|s| s.color(theme.strong)),
+    )
+```
 
 ## Legibility over an image
 
@@ -74,13 +66,13 @@ whatever is behind them:
 
 ```rust
 container()
-    .text_color(Color::WHITE)
+    
     // A contour around the glyphs. CSS spells this `-webkit-text-stroke`;
     // CSS `outline` is the contour of a box, which is why the name differs.
-    .text_stroke(TextStroke::new(1.5, Color::BLACK))
+    
     // As CSS `text-shadow`: offset x, offset y, blur, colour.
-    .text_shadow(TextShadow::new(0.0, 2.0, 10.0, Color::rgba(0.0, 0.0, 0.0, 0.75)))
-    .child(text("09:41"))
+    
+    .child(text("09:41").text_shadow(TextShadow::new(0.0, 2.0, 10.0, Color::rgba(0.0, 0.0, 0.0, 0.75))).text_stroke(TextStroke::new(1.5, Color::BLACK)).color(Color::WHITE))
 ```
 
 The shadow is usually the more effective of the two: it darkens the whole
@@ -131,7 +123,7 @@ region, and regions are rectangles, so glyphs cannot be expressed in it.
 
 Three things to know before reaching for it:
 
-- **It is not inherited.** Every other text property can be declared on a
+- **It is declared on the text.** Every text property is declared on a
   container for the subtree below it; this one cannot, because each frosted
   text ends the render pass to filter the target. It is asked for one text at
   a time on purpose.
@@ -161,15 +153,15 @@ text("09:41")
 ### Font Size
 
 ```rust
-container().font_size(24.0).child(text("Large text"))
-container().font_size(12.0).child(text("Small text"))
+container().child(text("Large text").font_size(24.0))
+container().child(text("Small text").font_size(12.0))
 ```
 
 ### Color
 
 ```rust
-container().text_color(Color::rgb(0.9, 0.3, 0.3)).child(text("Colored text"))
-container().text_color(Color::WHITE).child(text("White text"))
+container().child(text("Colored text").color(Color::rgb(0.9, 0.3, 0.3)))
+container().child(text("White text").color(Color::WHITE))
 ```
 
 ### Font Family
@@ -178,15 +170,15 @@ Set the font family using predefined families or custom font names:
 
 ```rust
 // Predefined font families
-container().font_family(FontFamily::SansSerif).child(text("Sans-serif text"))
-container().font_family(FontFamily::Serif).child(text("Serif text"))
-container().font_family(FontFamily::Monospace).child(text("Monospace text"))
+container().child(text("Sans-serif text").font_family(FontFamily::SansSerif))
+container().child(text("Serif text").font_family(FontFamily::Serif))
+container().child(text("Monospace text").font_family(FontFamily::Monospace))
 
 // Shorthand for monospace
-container().mono().child(text("Code example"))
+container().child(text("Code example"))
 
 // Custom font by name (if available on system)
-container().font_family(FontFamily::Name("Inter".into())).child(text("Custom font"))
+container().child(text("Custom font").font_family(FontFamily::Name("Inter".into())))
 ```
 
 Available font families:
@@ -203,19 +195,19 @@ Set the font weight using predefined constants or numeric values (100-900):
 
 ```rust
 // Using constants
-container().font_weight(FontWeight::THIN).child(text("Thin text"))
-container().font_weight(FontWeight::LIGHT).child(text("Light text"))
-container().font_weight(FontWeight::NORMAL).child(text("Normal text"))
-container().font_weight(FontWeight::MEDIUM).child(text("Medium text"))
-container().font_weight(FontWeight::SEMI_BOLD).child(text("Semi-bold text"))
-container().font_weight(FontWeight::BOLD).child(text("Bold text"))
-container().font_weight(FontWeight::BLACK).child(text("Black text"))
+container().child(text("Thin text").font_weight(FontWeight::THIN))
+container().child(text("Light text").font_weight(FontWeight::LIGHT))
+container().child(text("Normal text").font_weight(FontWeight::NORMAL))
+container().child(text("Medium text").font_weight(FontWeight::MEDIUM))
+container().child(text("Semi-bold text").font_weight(FontWeight::SEMI_BOLD))
+container().child(text("Bold text").font_weight(FontWeight::BOLD))
+container().child(text("Black text").font_weight(FontWeight::BLACK))
 
 // Shorthand for bold
-container().bold().child(text("Bold text"))
+container().child(text("Bold text"))
 
 // Custom numeric weight
-container().font_weight(FontWeight(550)).child(text("Custom weight"))
+container().child(text("Custom weight").font_weight(FontWeight(550)))
 ```
 
 Available weight constants:
@@ -260,7 +252,7 @@ text(move || format!("Count: {}", count.get()))
 Chain style methods:
 
 ```rust
-container().font_size(18.0).text_color(Color::WHITE).font_family(FontFamily::Serif).bold().child(text("Styled Text").nowrap())
+container().child(text("Styled Text").font_family(FontFamily::Serif).font_size(18.0).color(Color::WHITE).nowrap())
 ```
 
 ## Text in Containers
@@ -271,9 +263,9 @@ Text is typically placed inside containers for padding and backgrounds:
 container()
     .padding(12.0)
     .background(Color::rgb(0.2, 0.2, 0.3))
-    .corner_radius(4.0)
+    .corners(4.0)
     .child(
-        container().text_color(Color::WHITE).font_size(14.0).child(text("Button Label"))
+        container().child(text("Button Label").font_size(14.0).color(Color::WHITE))
     )
 ```
 
@@ -282,31 +274,31 @@ container()
 ### Headings
 
 ```rust
-container().font_size(24.0).bold().text_color(Color::WHITE).child(text("Page Title"))
+container().child(text("Page Title").font_size(24.0).color(Color::WHITE))
 ```
 
 ### Body Text
 
 ```rust
-container().font_size(14.0).text_color(Color::rgb(0.8, 0.8, 0.85)).child(text("Regular content text"))
+container().child(text("Regular content text").font_size(14.0).color(Color::rgb(0.8, 0.8, 0.85)))
 ```
 
 ### Secondary Text
 
 ```rust
-container().font_size(12.0).text_color(Color::rgb(0.6, 0.6, 0.65)).child(text("Subtitle or caption"))
+container().child(text("Subtitle or caption").font_size(12.0).color(Color::rgb(0.6, 0.6, 0.65)))
 ```
 
 ### Code/Monospace Text
 
 ```rust
-container().mono().font_size(13.0).text_color(Color::rgb(0.6, 0.9, 0.6)).child(text("let x = 42;"))
+container().child(text("let x = 42;").font_size(13.0).color(Color::rgb(0.6, 0.9, 0.6)))
 ```
 
 ### Labels
 
 ```rust
-container().font_size(11.0).bold().text_color(Color::rgb(0.5, 0.5, 0.55)).child(text("LABEL"))
+container().child(text("LABEL").font_size(11.0).color(Color::rgb(0.5, 0.5, 0.55)))
 ```
 
 ## App-Level Default Font
@@ -330,19 +322,19 @@ fn article_card(title: &str, author: &str, preview: &str) -> Container {
     container()
         .padding(16.0)
         .background(Color::rgb(0.12, 0.12, 0.16))
-        .corner_radius(8.0)
+        .corners(8.0)
         .layout(Flex::column().spacing(8.0))
         .child(
             // Title - bold serif
-            container().font_size(18.0).font_family(FontFamily::Serif).bold().text_color(Color::WHITE).child(text(title))
+            container().child(text(title).font_family(FontFamily::Serif).font_size(18.0).color(Color::WHITE))
         )
         .child(
             // Author - light weight
-            container().font_size(12.0).font_weight(FontWeight::LIGHT).text_color(Color::rgb(0.5, 0.5, 0.6)).child(text(format!("By {}", author)))
+            container().child(text(format!("By {}", author)).font_weight(FontWeight::LIGHT).font_size(12.0).color(Color::rgb(0.5, 0.5, 0.6)))
         )
         .child(
             // Preview text
-            container().font_size(14.0).text_color(Color::rgb(0.7, 0.7, 0.75)).child(text(preview))
+            container().child(text(preview).font_size(14.0).color(Color::rgb(0.7, 0.7, 0.75)))
         )
 }
 ```

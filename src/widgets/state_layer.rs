@@ -108,17 +108,11 @@ pub struct StateStyle {
     /// is one field rather than two that could disagree.
     pub border: Option<BorderOverride>,
     /// Corner radius override
-    pub corner_radius: Option<Signal<f32>>,
+    pub corners: Option<Signal<crate::widgets::Corners>>,
     /// Transform override (e.g., scale on press)
     pub transform: Option<Signal<Transform>>,
     /// Elevation (shadow) override
     pub elevation: Option<Signal<f32>>,
-    /// Colour of the text below this container while the state is active.
-    ///
-    /// Reaches the glyphs, not just the box: the container publishes its text
-    /// colour to descendants as a derived over the interaction flags, so a
-    /// text that inherited it is subscribed to the flip.
-    pub text_color: Option<Signal<Color>>,
     /// Override the background alpha channel (applied after background override)
     pub alpha: Option<Signal<f32>>,
     /// Ripple effect configuration (typically used in a pressed layer)
@@ -134,19 +128,6 @@ impl StateStyle {
     /// Set an explicit background color for this state.
     pub fn background<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
         self.background = Some(BackgroundOverride::Exact(color.into_signal()));
-        self
-    }
-
-    /// Set the colour of the text below this container for this state.
-    ///
-    /// ```ignore
-    /// container()
-    ///     .text_color(theme.text_weak)
-    ///     .when_hovered(|s| s.text_color(theme.text))
-    ///     .child(text("Label"))
-    /// ```
-    pub fn text_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.text_color = Some(color.into_signal());
         self
     }
 
@@ -196,9 +177,16 @@ impl StateStyle {
         self
     }
 
-    /// Set the corner radius for this state.
-    pub fn corner_radius<M>(mut self, radius: impl IntoSignal<f32, M>) -> Self {
-        self.corner_radius = Some(radius.into_signal());
+    /// The corner shape while this state is active.
+    ///
+    /// It replaces the whole shape, as the border override replaces the whole
+    /// border: a bare size means *rounded* at that size, so a squircle that
+    /// wants to grow on hover has to say so —
+    /// `when_hovered(|s| s.corners(Corners::squircle(20.0)))`. Radius and
+    /// curvature are one value precisely because half a corner is not a
+    /// corner.
+    pub fn corners<M>(mut self, corners: impl IntoSignal<crate::widgets::Corners, M>) -> Self {
+        self.corners = Some(corners.into_signal());
         self
     }
 

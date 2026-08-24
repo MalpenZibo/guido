@@ -154,6 +154,31 @@ impl Animatable for Padding {
     }
 }
 
+impl Animatable for crate::renderer::CornerRadii {
+    fn lerp(from: &Self, to: &Self, t: f32) -> Self {
+        Self {
+            top_left: from.top_left + (to.top_left - from.top_left) * t,
+            top_right: from.top_right + (to.top_right - from.top_right) * t,
+            bottom_right: from.bottom_right + (to.bottom_right - from.bottom_right) * t,
+            bottom_left: from.bottom_left + (to.bottom_left - from.bottom_left) * t,
+        }
+    }
+
+    fn is_reverse(from: &Self, to: &Self) -> bool {
+        let total = |r: &Self| r.top_left + r.top_right + r.bottom_right + r.bottom_left;
+        total(to) < total(from)
+    }
+
+    fn channels(&self) -> Channels {
+        Channels::from_slice(&[
+            self.top_left,
+            self.top_right,
+            self.bottom_right,
+            self.bottom_left,
+        ])
+    }
+}
+
 impl Animatable for Transform {
     fn lerp(from: &Self, to: &Self, t: f32) -> Self {
         let mut data = [0.0f32; 6];

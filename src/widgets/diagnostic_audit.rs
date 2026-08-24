@@ -130,13 +130,12 @@ fn a_fully_reactive_container_is_quiet() {
         .padding(move || n.get())
         .background(move || if flag.get() { Color::RED } else { Color::BLUE })
         .border(move || n.get() + 1.0, Color::WHITE)
-        .corner_radius(move || n.get() + 4.0)
-        .corner_curvature(move || n.get() + 1.0)
+        .corners(move || crate::widgets::Corners::superellipse(n.get() + 4.0, n.get() + 1.0))
         .elevation(move || n.get())
         .width(move || n.get() + 100.0)
         .height(move || n.get() + 100.0)
         .visible(move || !flag.get())
-        .rotate(move || n.get())
+        .transform(move || crate::transform::Transform::rotate_degrees(n.get()))
         .gradient(move || {
             Some(LinearGradient::horizontal(
                 if flag.get() { Color::RED } else { Color::BLUE },
@@ -154,7 +153,7 @@ fn a_fully_reactive_container_is_quiet() {
         .animate_background(t())
         .animate_border_width(t())
         .animate_border_color(t())
-        .animate_corner_radius(t())
+        .animate_corners(t())
         .animate_elevation(t())
         .animate_padding(t())
         .animate_width(t())
@@ -203,31 +202,6 @@ fn a_container_with_reactive_children_is_quiet() {
 
     assert_quiet(
         "a container with reactive children",
-        diagnostics_from_full_lifecycle(widget),
-    );
-}
-
-#[test]
-fn a_fully_reactive_text_is_quiet() {
-    let n = create_signal(0.0f32);
-    let label = create_signal(String::from("ciao"));
-
-    // The style is reactive on the container and read by the text as it walks
-    // up, so this also covers the inherited path being resolved inside the
-    // text's own tracking scope rather than someone else's.
-    let widget = container()
-        .text_color(move || {
-            if n.get() > 0.0 {
-                Color::RED
-            } else {
-                Color::WHITE
-            }
-        })
-        .font_size(move || n.get() + 12.0)
-        .child(text(move || label.get()));
-
-    assert_quiet(
-        "a fully reactive text",
         diagnostics_from_full_lifecycle(widget),
     );
 }
@@ -326,58 +300,22 @@ fn a_text_that_is_its_own_unit_is_quiet() {
 }
 
 #[test]
-fn a_text_inheriting_through_a_plain_container_is_quiet() {
-    let n = create_signal(0.0f32);
-
-    let widget = container()
-        .font_size(move || n.get() + 12.0)
-        .child(container().child(text("ciao")));
-
-    assert_quiet(
-        "a text inheriting across a container that declares nothing",
-        diagnostics_from_full_lifecycle(widget),
-    );
-}
-
-/// The state layer now feeds the text through a derived created at
-/// registration, outside any tracking scope of its own. If that closure read
-/// something it should have snapshotted — or read it where nobody could
-/// subscribe — this is where it shows up.
-#[test]
-fn a_hover_driven_text_colour_is_quiet() {
-    let n = create_signal(0.0f32);
-
-    let widget = container()
-        .width(50.0)
-        .height(50.0)
-        .text_color(move || Color::WHITE.with_alpha(n.get().max(0.5)))
-        .when_hovered(|s| s.text_color(Color::RED))
-        .when_pressed(|s| s.text_color(Color::BLUE))
-        .when_focused(|s| s.text_color(Color::GREEN))
-        .child(container().child(text("ciao")));
-
-    assert_quiet(
-        "a text whose colour comes from a state layer",
-        diagnostics_from_full_lifecycle(widget),
-    );
-}
-
-#[test]
 fn a_fully_reactive_text_input_is_quiet() {
     let value = create_signal(String::from("ciao"));
     let n = create_signal(0.0f32);
 
-    let widget = container()
-        .text_color(move || {
-            if n.get() > 0.0 {
-                Color::RED
-            } else {
-                Color::WHITE
-            }
-        })
-        .cursor_color(move || Color::WHITE.with_alpha(n.get().max(0.5)))
-        .font_size(move || n.get() + 12.0)
-        .child(text_input(value));
+    let widget = container().child(
+        text_input(value)
+            .color(move || {
+                if n.get() > 0.0 {
+                    Color::RED
+                } else {
+                    Color::WHITE
+                }
+            })
+            .cursor_color(move || Color::WHITE.with_alpha(n.get().max(0.5)))
+            .font_size(move || n.get() + 12.0),
+    );
 
     assert_quiet(
         "a fully reactive text input",

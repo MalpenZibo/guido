@@ -66,17 +66,11 @@ fn main() {
 }
 
 fn section_title(title: &'static str) -> impl Widget {
-    container()
-        .text_color(Color::rgb(0.7, 0.7, 0.8))
-        .font_size(11.0)
-        .child(text(title))
+    container().child(text(title).font_size(11.0).color(Color::rgb(0.7, 0.7, 0.8)))
 }
 
 fn label(s: &'static str) -> impl Widget {
-    container()
-        .text_color(Color::rgb(0.6, 0.6, 0.7))
-        .font_size(9.0)
-        .child(text(s))
+    container().child(text(s).font_size(9.0).color(Color::rgb(0.6, 0.6, 0.7)))
 }
 
 fn test_box(color: Color) -> Container {
@@ -84,7 +78,7 @@ fn test_box(color: Color) -> Container {
         .width(24.0)
         .height(16.0)
         .background(color)
-        .corner_radius(2.0)
+        .corners(2.0)
 }
 
 fn test_box_varied(width: f32, height: f32, color: Color) -> Container {
@@ -92,7 +86,7 @@ fn test_box_varied(width: f32, height: f32, color: Color) -> Container {
         .width(width)
         .height(height)
         .background(color)
-        .corner_radius(2.0)
+        .corners(2.0)
 }
 
 /// Test box with minimum height (for row cross-axis tests)
@@ -102,7 +96,7 @@ fn test_box_min_height(width: f32, min_height: f32, color: Color) -> Container {
         .width(width)
         .height(at_least(min_height))
         .background(color)
-        .corner_radius(2.0)
+        .corners(2.0)
 }
 
 /// Test box with minimum width (for column cross-axis tests)
@@ -112,7 +106,7 @@ fn test_box_min_width(min_width: f32, height: f32, color: Color) -> Container {
         .width(at_least(min_width))
         .height(height)
         .background(color)
-        .corner_radius(2.0)
+        .corners(2.0)
 }
 
 // =============================================================================
@@ -139,7 +133,7 @@ fn row_main_axis_row(name: &'static str, alignment: MainAlignment) -> impl Widge
                 .width(200.0)
                 .height(22.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
-                .corner_radius(3.0)
+                .corners(3.0)
                 .layout(Flex::row().spacing(3.0).main_alignment(alignment))
                 .child(test_box(Color::rgb(0.8, 0.3, 0.3)))
                 .child(test_box(Color::rgb(0.3, 0.8, 0.3)))
@@ -169,7 +163,7 @@ fn row_cross_axis_row(name: &'static str, alignment: CrossAlignment) -> impl Wid
                 .width(200.0)
                 .height(36.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
-                .corner_radius(3.0)
+                .corners(3.0)
                 .layout(Flex::row().spacing(3.0).cross_alignment(alignment))
                 // Use at_least() for height (cross-axis in row) so Stretch can expand them
                 .child(test_box_min_height(24.0, 12.0, Color::rgb(0.8, 0.3, 0.3)))
@@ -202,7 +196,7 @@ fn column_main_axis_col(name: &'static str, alignment: MainAlignment) -> impl Wi
                 .width(48.0)
                 .height(80.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
-                .corner_radius(3.0)
+                .corners(3.0)
                 .layout(Flex::column().spacing(2.0).main_alignment(alignment))
                 .child(test_box_varied(32.0, 12.0, Color::rgb(0.8, 0.5, 0.3)))
                 .child(test_box_varied(32.0, 12.0, Color::rgb(0.5, 0.8, 0.3)))
@@ -232,7 +226,7 @@ fn column_cross_axis_col(name: &'static str, alignment: CrossAlignment) -> impl 
                 .width(56.0)
                 .height(80.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
-                .corner_radius(3.0)
+                .corners(3.0)
                 .layout(Flex::column().spacing(2.0).cross_alignment(alignment))
                 // Use at_least() for width (cross-axis in column) so Stretch can expand them
                 .child(test_box_min_width(16.0, 12.0, Color::rgb(0.8, 0.5, 0.3)))
@@ -257,7 +251,7 @@ fn center_test() -> impl Widget {
                         .width(70.0)
                         .height(60.0)
                         .background(Color::rgb(0.2, 0.15, 0.25))
-                        .corner_radius(4.0)
+                        .corners(4.0)
                         .layout(
                             Flex::row()
                                 .main_alignment(MainAlignment::Center)
@@ -270,7 +264,7 @@ fn center_test() -> impl Widget {
                         .width(70.0)
                         .height(60.0)
                         .background(Color::rgb(0.15, 0.2, 0.25))
-                        .corner_radius(4.0)
+                        .corners(4.0)
                         .layout(
                             Flex::column()
                                 .main_alignment(MainAlignment::Center)
@@ -293,7 +287,7 @@ fn center_test() -> impl Widget {
                         .width(70.0)
                         .height(50.0)
                         .background(Color::rgb(0.2, 0.25, 0.2))
-                        .corner_radius(4.0)
+                        .corners(4.0)
                         .layout(
                             Flex::row()
                                 .main_alignment(MainAlignment::Center)
@@ -316,7 +310,7 @@ fn center_test() -> impl Widget {
                         .width(100.0)
                         .height(50.0)
                         .background(Color::rgb(0.15, 0.25, 0.2))
-                        .corner_radius(4.0)
+                        .corners(4.0)
                         .layout(
                             Flex::row()
                                 .spacing(6.0)

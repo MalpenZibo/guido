@@ -564,11 +564,14 @@ impl ImageQuadRenderer {
                     clip.rect.width * scale_factor,
                     clip.rect.height * scale_factor,
                 ],
-                [clip.corner_radius * scale_factor, clip.curvature, 0.0, 0.0],
+                {
+                    let r = clip.corner_radius.scaled(scale_factor);
+                    [r.top_left, r.top_right, r.bottom_right, r.bottom_left]
+                },
             )
         } else {
             // No clipping
-            (NO_CLIP_RECT, [0.0, 1.0, 0.0, 0.0])
+            (NO_CLIP_RECT, [0.0; 4])
         };
 
         // Transform corners from local to screen coordinates

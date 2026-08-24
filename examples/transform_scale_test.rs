@@ -25,23 +25,23 @@ fn main() {
                             .height(60.0)
                             .padding(10.)
                             .background(Color::rgb(0.8, 0.3, 0.3))
-                            .corner_radius(8.0),
+                            .corners(8.0),
                         // Scaled up box (should be bigger)
                         container()
                             .width(60.0)
                             .height(60.0)
                             .padding(10.0)
                             .background(Color::rgb(0.3, 0.8, 0.3))
-                            .corner_radius(8.0)
-                            .scale(1.5),
+                            .corners(8.0)
+                            .transform(Transform::scale(1.5)),
                         // Scaled down box (should be smaller)
                         container()
                             .width(60.0)
                             .height(60.0)
                             .padding(10.0)
                             .background(Color::rgb(0.3, 0.3, 0.8))
-                            .corner_radius(8.0)
-                            .scale(0.5),
+                            .corners(8.0)
+                            .transform(Transform::scale(0.5)),
                     ])
             },
         );

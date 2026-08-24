@@ -49,8 +49,8 @@ container()
     .background(Color::rgb(0.2, 0.2, 0.3))
 
     // Corners
-    .corner_radius(8.0)
-    .squircle() // iOS-style smooth corners
+    .corners(Corners::squircle(8.0))
+     // iOS-style smooth corners
 
     // Border
     .border(2.0, Color::WHITE)
@@ -75,7 +75,7 @@ through:
 ```rust
 container()
     .background(Color::rgba(0.12, 0.12, 0.18, 0.55)) // translucent
-    .corner_radius(16.0)
+    .corners(16.0)
     .backdrop_blur(32.0)
 ```
 
@@ -128,9 +128,9 @@ Apply 2D transformations:
 
 ```rust
 container()
-    .translate(10.0, 20.0)  // Move
-    .rotate(45.0)           // Rotate degrees
-    .scale(1.5)             // Scale
+    .transform(Transform::translate(10.0, 20.0))  // Move
+    .transform(Transform::rotate_degrees(45.0))           // Rotate degrees
+    .transform(Transform::scale(1.5))             // Scale
     .transform_origin(TransformOrigin::TOP_LEFT)
 ```
 
@@ -220,7 +220,7 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 
         // Styling
         .background(Color::rgb(0.3, 0.5, 0.8))
-        .corner_radius(8.0)
+        .corners(8.0)
         .border(1.0, Color::rgb(0.4, 0.6, 0.9))
 
         // Animations
@@ -235,7 +235,7 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
         .on_click(on_click)
 
         // Content
-        .child(container().text_color(Color::WHITE).child(text(label)))
+        .child(container().child(text(label).color(Color::WHITE)))
 }
 ```
 
@@ -250,10 +250,11 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 
 ### Styling
 - `.background(color)` - Solid background
-- `.gradient_horizontal(start, end)` - Horizontal gradient
+- `.gradient(LinearGradient::horizontal(start, end))` - Horizontal gradient
 - `.gradient_vertical(start, end)` / `.gradient_diagonal(start, end)`
-- `.corner_radius(radius)` - Rounded corners
-- `.squircle()` / `.bevel()` / `.scoop()` - Corner curvature
+- `.corners(8.0)` / `.corners([16.0, 0.0])` - Rounded corners: one, two or four values
+- `.corners(Corners::squircle(12.0))` / `Corners::bevel(..)` / `Corners::scoop(..)` -
+  the shape of the corner
 - `.border(width, color)` - Border
 - `.elevation(level)` - Shadow
 

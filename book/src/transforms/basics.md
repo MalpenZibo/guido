@@ -8,14 +8,14 @@ Move a widget by offset values:
 
 ```rust
 container()
-    .translate(20.0, 10.0)  // Move 20px right, 10px down
+    .transform(Transform::translate(20.0, 10.0))  // Move 20px right, 10px down
 ```
 
 Negative values move in the opposite direction:
 
 ```rust
 container()
-    .translate(-10.0, 0.0)  // Move 10px left
+    .transform(Transform::translate(-10.0, 0.0))  // Move 10px left
 ```
 
 ## Rotation
@@ -24,7 +24,7 @@ Rotate a widget around its center (default):
 
 ```rust
 container()
-    .rotate(45.0)  // Rotate 45 degrees clockwise
+    .transform(Transform::rotate_degrees(45.0))  // Rotate 45 degrees clockwise
 ```
 
 Rotation uses degrees by default. For radians:
@@ -41,8 +41,8 @@ Transform::rotate(PI / 4.0)  // 45 degrees in radians
 Scale equally in both dimensions:
 
 ```rust
-container().scale(1.5)   // 150% size
-container().scale(0.8)   // 80% size
+container().transform(Transform::scale(1.5))   // 150% size
+container().transform(Transform::scale(0.8))   // 80% size
 ```
 
 ### Non-Uniform Scale
@@ -50,7 +50,7 @@ container().scale(0.8)   // 80% size
 Scale differently on each axis:
 
 ```rust
-container().scale_xy(2.0, 0.5)  // 200% width, 50% height
+container().transform(Transform::scale_xy(2.0, 0.5))  // 200% width, 50% height
 ```
 
 ## Using the Transform Type
@@ -100,7 +100,7 @@ Transforms can use signals for dynamic updates:
 let rotation = create_signal(0.0f32);
 
 container()
-    .rotate(rotation)
+    .transform(Transform::rotate_degrees(rotation))
     .on_click(move || rotation.update(|r| *r += 45.0))
 ```
 
@@ -121,34 +121,34 @@ fn transform_demo() -> impl Widget {
                 .width(60.0)
                 .height(60.0)
                 .background(Color::rgb(0.8, 0.3, 0.3))
-                .corner_radius(8.0)
-                .rotate(45.0)
-                .child(container().text_color(Color::WHITE).child(text("45°"))),
+                .corners(8.0)
+                .transform(Transform::rotate_degrees(45.0))
+                .child(container().child(text("45°").color(Color::WHITE))),
 
             // Click to rotate
             container()
                 .width(60.0)
                 .height(60.0)
                 .background(Color::rgb(0.3, 0.6, 0.8))
-                .corner_radius(8.0)
-                .rotate(rotation)
+                .corners(8.0)
+                .transform(Transform::rotate_degrees(rotation))
                 .when_hovered(|s| s.lighter(0.1))
                 .on_click(move || rotation.update(|r| *r += 45.0))
-                .child(container().text_color(Color::WHITE).child(text("Click"))),
+                .child(container().child(text("Click").color(Color::WHITE))),
 
             // Click to scale
             container()
                 .width(60.0)
                 .height(60.0)
                 .background(Color::rgb(0.3, 0.8, 0.4))
-                .corner_radius(8.0)
-                .scale(scale_factor)
+                .corners(8.0)
+                .transform(Transform::scale(scale_factor))
                 .when_hovered(|s| s.lighter(0.1))
                 .on_click(move || {
                     let new = if scale_factor.get() > 1.0 { 1.0 } else { 1.3 };
                     scale_factor.set(new);
                 })
-                .child(container().text_color(Color::WHITE).child(text("Scale"))),
+                .child(container().child(text("Scale").color(Color::WHITE))),
         ])
 }
 ```

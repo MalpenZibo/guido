@@ -25,16 +25,11 @@ fn main() {
                         .background(Color::rgb(0.08, 0.08, 0.12))
                         .padding(24.0)
                         .layout(Flex::column().spacing(20.0))
-                        // Declared once for the whole screen. Every sample
-                        // below inherits it through the sections and cards,
-                        // and overrides only what it is demonstrating.
-                        .text_color(Color::WHITE)
                         .child(
-                            container()
+                            text("Text Styling Demo")
                                 .font_size(28.0)
                                 .bold()
-                                .text_color(Color::rgb(0.9, 0.9, 0.95))
-                                .child(text("Text Styling Demo")),
+                                .color(Color::rgb(0.9, 0.9, 0.95)),
                         )
                         .child(create_font_family_section())
                         .child(create_font_weight_section())
@@ -46,12 +41,11 @@ fn main() {
 }
 
 /// A section heading — the one place its style is written.
-fn heading(label: &str) -> Container {
-    container()
+fn heading(label: &str) -> Text {
+    text(label)
         .font_size(16.0)
         .bold()
-        .text_color(Color::rgb(0.7, 0.7, 0.8))
-        .child(text(label))
+        .color(Color::rgb(0.7, 0.7, 0.8))
 }
 
 /// The card each section's samples sit in. It declares nothing about text, so
@@ -60,14 +54,14 @@ fn card() -> Container {
     container()
         .padding(12.0)
         .background(Color::rgb(0.12, 0.12, 0.18))
-        .corner_radius(8.0)
+        .corners(8.0)
         .layout(Flex::column().spacing(8.0))
 }
 
 /// Section demonstrating different font families
 fn create_font_family_section() -> Container {
     let sample = |label: &'static str, family: FontFamily| {
-        container().font_family(family).child(text(label))
+        text(label).font_family(family).color(Color::WHITE)
     };
 
     container()
@@ -79,12 +73,9 @@ fn create_font_family_section() -> Container {
                 .child(sample("Serif font family", FontFamily::Serif))
                 .child(sample("Monospace font family", FontFamily::Monospace))
                 .child(
-                    container()
+                    text("Using .mono() shorthand")
                         .mono()
-                        // Overrides only the colour: the family comes from
-                        // .mono() here and the size from the root.
-                        .text_color(Color::rgb(0.6, 0.9, 0.6))
-                        .child(text("Using .mono() shorthand")),
+                        .color(Color::rgb(0.6, 0.9, 0.6)),
                 ),
         )
 }
@@ -92,7 +83,7 @@ fn create_font_family_section() -> Container {
 /// Section demonstrating different font weights
 fn create_font_weight_section() -> Container {
     let sample = |label: &'static str, weight: FontWeight| {
-        container().font_weight(weight).child(text(label))
+        text(label).font_weight(weight).color(Color::WHITE)
     };
 
     container()
@@ -107,10 +98,9 @@ fn create_font_weight_section() -> Container {
                 .child(sample("Semi-Bold (600)", FontWeight::SEMI_BOLD))
                 .child(sample("Bold (700)", FontWeight::BOLD))
                 .child(
-                    container()
+                    text("Using .bold() shorthand")
                         .bold()
-                        .text_color(Color::rgb(0.9, 0.7, 0.4))
-                        .child(text("Using .bold() shorthand")),
+                        .color(Color::rgb(0.9, 0.7, 0.4)),
                 ),
         )
 }
@@ -123,25 +113,22 @@ fn create_combined_section() -> Container {
         .child(
             card()
                 .child(
-                    container()
+                    text("Bold Monospace")
                         .mono()
                         .bold()
-                        .text_color(Color::rgb(0.4, 0.8, 1.0))
-                        .child(text("Bold Monospace")),
+                        .color(Color::rgb(0.4, 0.8, 1.0)),
                 )
                 .child(
-                    container()
+                    text("Light Serif")
                         .font_family(FontFamily::Serif)
                         .font_weight(FontWeight::LIGHT)
-                        .text_color(Color::rgb(0.9, 0.8, 0.7))
-                        .child(text("Light Serif")),
+                        .color(Color::rgb(0.9, 0.8, 0.7)),
                 )
                 .child(
-                    container()
+                    text("Bold Serif")
                         .font_family(FontFamily::Serif)
                         .bold()
-                        .text_color(Color::rgb(1.0, 0.9, 0.8))
-                        .child(text("Bold Serif")),
+                        .color(Color::rgb(1.0, 0.9, 0.8)),
                 ),
         )
 }
@@ -160,10 +147,12 @@ fn create_text_input_section() -> Container {
             container()
                 .padding(12.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
-                .corner_radius(8.0)
-                .mono()
-                .font_size(16.0)
-                .text_color(Color::rgb(0.4, 1.0, 0.6))
-                .child(text_input(input_value)),
+                .corners(8.0)
+                .child(
+                    text_input(input_value)
+                        .mono()
+                        .font_size(16.0)
+                        .color(Color::rgb(0.4, 1.0, 0.6)),
+                ),
         )
 }

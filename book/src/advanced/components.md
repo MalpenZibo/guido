@@ -14,10 +14,10 @@ pub fn button(label: String) -> impl Widget {
     container()
         .padding(12.0)
         .background(Color::rgb(0.3, 0.5, 0.8))
-        .corner_radius(6.0)
+        .corners(6.0)
         .when_hovered(|s| s.lighter(0.1))
         .when_pressed(|s| s.ripple())
-        .child(container().text_color(Color::WHITE).child(text(label)))
+        .child(container().child(text(label).color(Color::WHITE)))
 }
 ```
 
@@ -62,7 +62,7 @@ pub fn button(
     container()
         .padding(padding)
         .background(background)
-        .child(container().text_color(Color::WHITE).child(text(label)))
+        .child(container().child(text(label).color(Color::WHITE)))
 }
 ```
 
@@ -181,9 +181,9 @@ pub fn card(
     container()
         .padding(16.0)
         .background(Color::rgb(0.18, 0.18, 0.22))
-        .corner_radius(8.0)
+        .corners(8.0)
         .layout(Flex::column().spacing(8.0))
-        .child(container().font_size(18.0).text_color(Color::WHITE).child(text(title)))
+        .child(container().child(text(title).font_size(18.0).color(Color::WHITE)))
         .children_source(children)
 }
 ```
@@ -264,11 +264,11 @@ pub fn button(
     container()
         .padding(padding)
         .background(background)
-        .corner_radius(6.0)
+        .corners(6.0)
         .when_hovered(|s| s.lighter(0.1))
         .when_pressed(|s| s.ripple())
         .on_click(on_click)
-        .child(container().text_color(Color::WHITE).child(text(label)))
+        .child(container().child(text(label).color(Color::WHITE)))
 }
 
 #[component]
@@ -280,9 +280,9 @@ pub fn card(
     container()
         .padding(16.0)
         .background(background)
-        .corner_radius(8.0)
+        .corners(8.0)
         .layout(Flex::column().spacing(8.0))
-        .child(container().font_size(18.0).text_color(Color::WHITE).child(text(title)))
+        .child(container().child(text(title).font_size(18.0).color(Color::WHITE)))
         .children_source(children)
 }
 
@@ -296,7 +296,7 @@ fn main() {
             .child(
                 card()
                     .title("Counter")
-                    .child(container().text_color(Color::WHITE).child(text(move || format!("Count: {}", count.get()))))
+                    .child(container().child(text(move || format!("Count: {}", count.get())).color(Color::WHITE)))
                     .child(
                         container()
                             .layout(Flex::row().spacing(8.0))

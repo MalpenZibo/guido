@@ -39,14 +39,14 @@ fn nested(parent_rotation: f32, child_color: Color) -> Container {
         .width(100.0)
         .height(100.0)
         .background(Color::rgb(0.3, 0.3, 0.4))
-        .corner_radius(10.0)
-        .rotate(parent_rotation)
+        .corners(10.0)
+        .transform(Transform::rotate_degrees(parent_rotation))
         .padding(20.0)
         .child(
             container()
                 .width(60.0)
                 .height(60.0)
                 .background(child_color)
-                .corner_radius(6.0),
+                .corners(6.0),
         )
 }

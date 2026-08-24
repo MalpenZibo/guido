@@ -63,10 +63,11 @@ fn main() {
             .padding(20.0)
             .layout(Flex::column().spacing(20.0))
             .child(
-                container()
-                    .text_color(Color::WHITE)
-                    .font_size(28.0)
-                    .child(text("Performance Stress Test")),
+                container().child(
+                    text("Performance Stress Test")
+                        .font_size(28.0)
+                        .color(Color::WHITE),
+                ),
             )
             .child(create_add_button(item_ids, store_for_button))
             .child(
@@ -104,7 +105,7 @@ fn create_add_button(
     container()
         .padding([8.0, 16.0])
         .background(Color::rgb(0.2, 0.4, 0.6))
-        .corner_radius(6.0)
+        .corners(6.0)
         .when_hovered(|s| s.lighter(0.1))
         .when_pressed(|s| s.ripple())
         .on_click(move || {
@@ -115,9 +116,7 @@ fn create_add_button(
             });
             item_ids.update(|ids| ids.push(id));
         })
-        .text_color(Color::WHITE)
-        .font_size(14.0)
-        .child(text("Add Item"))
+        .child(text("Add Item").font_size(14.0).color(Color::WHITE))
 }
 
 fn create_item_row(
@@ -131,7 +130,7 @@ fn create_item_row(
     container()
         .padding(15.0)
         .background(Color::rgb(0.18, 0.18, 0.24))
-        .corner_radius(8.0)
+        .corners(8.0)
         .layout(
             Flex::row()
                 .spacing(20.0)
@@ -155,21 +154,23 @@ fn create_toggle_button(enabled: RwSignal<bool>) -> Container {
                 Color::rgb(0.3, 0.3, 0.35)
             }
         })
-        .corner_radius(4.0)
+        .corners(4.0)
         .when_hovered(|s| s.lighter(0.1))
         .when_pressed(|s| s.ripple())
         .on_click(move || {
             enabled.update(|e| *e = !*e);
         })
-        .text_color(Color::WHITE)
-        .font_size(12.0)
-        .child(text(move || {
-            if enabled.get() {
-                "Enabled".to_string()
-            } else {
-                "Disabled".to_string()
-            }
-        }))
+        .child(
+            text(move || {
+                if enabled.get() {
+                    "Enabled".to_string()
+                } else {
+                    "Disabled".to_string()
+                }
+            })
+            .font_size(12.0)
+            .color(Color::WHITE),
+        )
 }
 
 fn create_info_section(
@@ -180,23 +181,20 @@ fn create_info_section(
     container()
         .width(at_least(200.0))
         .layout(Flex::column().spacing(4.0))
+        .child(container().child(text(name).font_size(18.0).color(Color::WHITE)))
         .child(
-            container()
-                .text_color(Color::WHITE)
-                .font_size(18.0)
-                .child(text(name)),
+            container().child(
+                text(description)
+                    .font_size(14.0)
+                    .color(Color::rgb(0.7, 0.7, 0.8)),
+            ),
         )
         .child(
-            container()
-                .text_color(Color::rgb(0.7, 0.7, 0.8))
-                .font_size(14.0)
-                .child(text(description)),
-        )
-        .child(
-            container()
-                .text_color(Color::rgb(0.6, 0.6, 0.7))
-                .font_size(12.0)
-                .child(text(move || format!("Input: {}", input_value.get()))),
+            container().child(
+                text(move || format!("Input: {}", input_value.get()))
+                    .font_size(12.0)
+                    .color(Color::rgb(0.6, 0.6, 0.7)),
+            ),
         )
 }
 
@@ -206,11 +204,13 @@ fn create_text_input_field(input_value: RwSignal<String>) -> Container {
         .padding(8.0)
         .background(Color::rgb(0.15, 0.15, 0.2))
         .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-        .corner_radius(6.0)
+        .corners(6.0)
         .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
-        .text_color(Color::WHITE)
-        .cursor_color(Color::rgb(0.4, 0.8, 1.0))
-        .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
-        .font_size(14.0)
-        .child(text_input(input_value))
+        .child(
+            text_input(input_value)
+                .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
+                .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                .font_size(14.0)
+                .color(Color::WHITE),
+        )
 }

@@ -103,6 +103,36 @@ impl Transform {
         }
     }
 
+    /// Then translate by `(x, y)`.
+    ///
+    /// The chainers read in the order CSS `transform` reads: each one applies
+    /// in the frame the previous ones left, so
+    /// `Transform::translate(10.0, 0.0).then_rotate(45.0)` moves and then
+    /// turns about where it has moved to.
+    ///
+    /// In matrix terms each is a right-multiplication — `self * other`, which
+    /// is [`then`](Self::then) — so the *point* meets them in the reverse
+    /// order. The two readings are the same movement described from opposite
+    /// ends; the one above is the one the call site is written in.
+    pub fn then_translate(self, x: f32, y: f32) -> Self {
+        self.then(&Self::translate(x, y))
+    }
+
+    /// Then rotate by `degrees`.
+    pub fn then_rotate(self, degrees: f32) -> Self {
+        self.then(&Self::rotate_degrees(degrees))
+    }
+
+    /// Then scale uniformly by `factor`.
+    pub fn then_scale(self, factor: f32) -> Self {
+        self.then(&Self::scale(factor))
+    }
+
+    /// Then scale each axis.
+    pub fn then_scale_xy(self, x: f32, y: f32) -> Self {
+        self.then(&Self::scale_xy(x, y))
+    }
+
     /// Compose this transform with another: self * other
     /// Applies `other` first, then `self`.
     pub fn then(&self, other: &Transform) -> Transform {

@@ -32,16 +32,18 @@ fn main() {
                     )
                     .padding([0.0, 16.0])
                     .child(
-                        container()
-                            .text_color(Color::WHITE)
-                            .font_size(14.0)
-                            .child(text("Multi-Surface Demo")),
+                        container().child(
+                            text("Multi-Surface Demo")
+                                .font_size(14.0)
+                                .color(Color::WHITE),
+                        ),
                     )
                     .child(
-                        container()
-                            .text_color(Color::WHITE)
-                            .font_size(14.0)
-                            .child(text(move || format!("Count: {}", count.get()))),
+                        container().child(
+                            text(move || format!("Count: {}", count.get()))
+                                .font_size(14.0)
+                                .color(Color::WHITE),
+                        ),
                     )
             },
         );
@@ -66,33 +68,27 @@ fn main() {
                         container()
                             .background(Color::rgb(0.3, 0.3, 0.4))
                             .padding([8.0, 16.0])
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || count.update(|c| *c += 1))
-                            .text_color(Color::WHITE)
-                            .font_size(16.0)
-                            .child(text("+")),
+                            .child(text("+").font_size(16.0).color(Color::WHITE)),
                         container()
                             .background(Color::rgb(0.3, 0.3, 0.4))
                             .padding([8.0, 16.0])
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || count.update(|c| *c -= 1))
-                            .text_color(Color::WHITE)
-                            .font_size(16.0)
-                            .child(text("-")),
+                            .child(text("-").font_size(16.0).color(Color::WHITE)),
                         container()
                             .background(Color::rgb(0.4, 0.2, 0.2))
                             .padding([8.0, 16.0])
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || count.set(0))
-                            .text_color(Color::WHITE)
-                            .font_size(16.0)
-                            .child(text("Reset")),
+                            .child(text("Reset").font_size(16.0).color(Color::WHITE)),
                     ])
             },
         );

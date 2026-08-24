@@ -20,6 +20,7 @@ use crate::jobs::{self, JobType};
 use crate::layout::{Constraints, Flex, at_least, at_most, fill, fraction};
 use crate::reactive::create_signal;
 use crate::renderer::{DrawCommand, PaintContext, RenderNode};
+use crate::widgets::TextStyled;
 use crate::widgets::widget::{Event, EventResponse, MouseButton};
 
 // ---------------------------------------------------------------------------
@@ -660,7 +661,7 @@ fn a_corner_radius_excludes_the_corner() {
         container()
             .width(40.0)
             .height(40.0)
-            .corner_radius(20.0)
+            .corners(20.0)
             .on_click(move || counter.set(counter.get() + 1)),
     );
     h.fit(500.0, 500.0);
@@ -774,9 +775,9 @@ fn advancing_animations_does_not_report_a_missing_scope() {
             .height(50.0)
             .background(Color::RED)
             .border(move || if wide.get() { 6.0 } else { 2.0 }, Color::BLUE)
-            .corner_radius(move || if wide.get() { 20.0 } else { 4.0 })
+            .corners(move || if wide.get() { 20.0 } else { 4.0 })
             .animate_border_width(t())
-            .animate_corner_radius(t()),
+            .animate_corners(t()),
     );
     h.fit(200.0, 200.0);
     h.paint();
@@ -893,7 +894,7 @@ fn corner_radius_invalidates_paint_only() {
             .width(10.0)
             .height(10.0)
             .background(Color::RED)
-            .corner_radius(move || r.get()),
+            .corners(move || r.get()),
     );
     h.fit(500.0, 500.0);
     h.paint();
@@ -972,162 +973,24 @@ fn set_hover(h: &mut H, inside: bool) {
 /// The failure this guards against is cache-shaped and silent: the container
 /// repaints with its new background while the text's cached render node is
 /// reused with the old colour still inside its draw commands.
+///
+/// The hover belongs to the box and the colour to the glyphs, so each is
+/// declared where it happens and `control()` joins them.
 #[test]
 fn a_hover_layer_reaches_the_text() {
     let mut h = H::new(
-        container()
-            .width(100.0)
-            .height(40.0)
-            .text_color(Color::rgb(0.5, 0.5, 0.5))
-            .when_hovered(|s| s.text_color(Color::WHITE))
-            .child(crate::widgets::text("Label")),
-    );
-
-    assert_eq!(painted_text_color(&mut h), Color::rgb(0.5, 0.5, 0.5));
-    set_hover(&mut h, true);
-    assert_eq!(painted_text_color(&mut h), Color::WHITE);
-    set_hover(&mut h, false);
-    assert_eq!(painted_text_color(&mut h), Color::rgb(0.5, 0.5, 0.5));
-}
-
-#[test]
-fn a_hover_layer_reaches_text_below_a_plain_container() {
-    let mut h = H::new(
-        container()
-            .width(100.0)
-            .height(40.0)
-            .text_color(Color::rgb(0.5, 0.5, 0.5))
-            .when_hovered(|s| s.text_color(Color::WHITE))
-            .child(
-                container()
-                    .layout(Flex::row())
-                    .child(crate::widgets::text("Label")),
-            ),
-    );
-
-    assert_eq!(painted_text_color(&mut h), Color::rgb(0.5, 0.5, 0.5));
-    set_hover(&mut h, true);
-    assert_eq!(painted_text_color(&mut h), Color::WHITE);
-}
-
-/// The hovered container declares no colour of its own, so releasing the hover
-/// has to land on what an ancestor said. That base is resolved by a walk done
-/// once at registration — a derived closure has no tree to walk.
-#[test]
-fn a_state_colour_falls_back_to_the_inherited_base() {
-    let mut h = H::new(
-        container().text_color(Color::RED).child(
-            container()
-                .width(100.0)
-                .height(40.0)
-                .when_hovered(|s| s.text_color(Color::WHITE))
-                .child(crate::widgets::text("Label")),
+        container().width(100.0).height(40.0).control().child(
+            crate::widgets::text("Label")
+                .color(Color::rgb(0.5, 0.5, 0.5))
+                .when_hovered(|s| s.color(Color::WHITE)),
         ),
     );
 
-    assert_eq!(painted_text_color(&mut h), Color::RED);
+    assert_eq!(painted_text_color(&mut h), Color::rgb(0.5, 0.5, 0.5));
     set_hover(&mut h, true);
     assert_eq!(painted_text_color(&mut h), Color::WHITE);
     set_hover(&mut h, false);
-    assert_eq!(painted_text_color(&mut h), Color::RED);
-}
-
-#[test]
-fn a_nearer_declaration_wins_over_an_outer_hover() {
-    let mut h = H::new(
-        container()
-            .width(100.0)
-            .height(40.0)
-            .text_color(Color::rgb(0.5, 0.5, 0.5))
-            .when_hovered(|s| s.text_color(Color::WHITE))
-            .child(
-                container()
-                    .text_color(Color::BLUE)
-                    .child(crate::widgets::text("Label")),
-            ),
-    );
-
-    painted_text_color(&mut h);
-    set_hover(&mut h, true);
-    assert_eq!(
-        painted_text_color(&mut h),
-        Color::BLUE,
-        "a text told its own colour must not follow someone else's hover"
-    );
-}
-
-/// Nothing is created when no state layer mentions text, so a hover cannot
-/// disturb the published colour at all.
-#[test]
-fn a_container_with_no_state_text_colour_publishes_the_base_signal() {
-    let mut h = H::new(
-        container()
-            .width(100.0)
-            .height(40.0)
-            .text_color(Color::RED)
-            .when_hovered(|s| s.lighter(0.1))
-            .child(crate::widgets::text("Label")),
-    );
-
-    painted_text_color(&mut h);
-    set_hover(&mut h, true);
-    assert_eq!(painted_text_color(&mut h), Color::RED);
-}
-
-// ---------------------------------------------------------------------------
-// The published derived must not outlive its container
-// ---------------------------------------------------------------------------
-
-/// The one reactive resource a container creates outside any user scope.
-///
-/// Everything else is built in the builder chain and freed with the caller's
-/// scope. The published derived is created at *registration*, where the
-/// ambient owner is the surface's and outlives any single container — so
-/// without the explicit teardown in `Drop`, a dynamic-children update that
-/// replaces this container leaks one derived per rebuild.
-///
-/// The shape below is what makes this test able to fail: the builder runs in
-/// a short-lived scope that is disposed each round, while registration happens
-/// under a long-lived one that is not. Building and dropping inside a single
-/// scope would free the derived as a side effect of freeing its parent, and
-/// the test would pass with the teardown removed.
-#[test]
-fn the_published_text_derived_is_freed_with_its_container() {
-    use crate::reactive::owner::{dispose_owner_now, with_owner};
-    use crate::reactive::storage::live_signal_count;
-
-    fn round() {
-        // Builder signals belong to this scope, as a component's would.
-        let (widget, item) = with_owner(|| {
-            container()
-                .text_color(Color::RED)
-                .when_hovered(|s| s.text_color(Color::WHITE))
-                .child(crate::widgets::text("x"))
-        });
-        // Registration happens under the surrounding (surface) owner.
-        let mut h = H::new(widget);
-        h.fit(100.0, 100.0);
-        drop(h);
-        dispose_owner_now(item);
-    }
-
-    let (counts, surface) = with_owner(|| {
-        round(); // warm whatever is allocated lazily
-        let before = live_signal_count();
-        for _ in 0..50 {
-            round();
-        }
-        (before, live_signal_count())
-    });
-    dispose_owner_now(surface);
-
-    let (before, after) = counts;
-    assert_eq!(
-        after,
-        before,
-        "50 build-and-drop rounds leaked {} signals",
-        after as i64 - before as i64
-    );
+    assert_eq!(painted_text_color(&mut h), Color::rgb(0.5, 0.5, 0.5));
 }
 
 // ---------------------------------------------------------------------------
@@ -1493,133 +1356,6 @@ fn a_layer_silent_on_a_property_does_not_shadow_the_one_below_it() {
 }
 
 // ---------------------------------------------------------------------------
-// An animated text colour
-// ---------------------------------------------------------------------------
-
-/// Run frames until nothing is animating, or `limit` frames pass.
-///
-/// Animations step against the wall clock, so a tight loop would advance them
-/// by microseconds and never arrive — the frames have to take real time.
-fn settle(h: &mut H, limit: usize) -> usize {
-    for frame in 0..limit {
-        std::thread::sleep(std::time::Duration::from_millis(4));
-        let animating = pump(h);
-        h.fit(400.0, 400.0);
-        h.paint();
-        if !animating {
-            return frame;
-        }
-    }
-    limit
-}
-
-/// One frame: let time pass, run the jobs, and report what the text ended up.
-fn frame(h: &mut H) -> Color {
-    std::thread::sleep(std::time::Duration::from_millis(8));
-    painted_text_color(h)
-}
-
-/// The in-flight value has to reach a widget that is not the one animating.
-/// Every other animated property is consumed by the paint of the container
-/// that owns it; this one is drawn by a descendant, so each step leaves
-/// through a signal — and if that write did not happen, the text would simply
-/// jump to the final colour on the first frame while the box eased.
-#[test]
-fn an_animated_text_colour_passes_through_intermediate_values() {
-    let mut h = H::new(
-        container()
-            .width(100.0)
-            .height(40.0)
-            .text_color(Color::BLACK)
-            .when_hovered(|s| s.text_color(Color::WHITE))
-            .animate_text_color(Transition::new(80.0, TimingFunction::Linear))
-            .child(crate::widgets::text("Label")),
-    );
-
-    assert_eq!(painted_text_color(&mut h), Color::BLACK);
-
-    set_hover(&mut h, true);
-    let mid = frame(&mut h);
-    assert!(
-        mid != Color::BLACK && mid != Color::WHITE,
-        "expected a value between the two, got {mid:?}"
-    );
-
-    settle(&mut h, 80);
-    assert_eq!(
-        painted_text_color(&mut h),
-        Color::WHITE,
-        "and it has to arrive"
-    );
-}
-
-/// Once settled the derived goes back to the ordinary fold, so the animation
-/// is not left pinning its last frame.
-#[test]
-fn a_settled_animation_releases_the_colour_back_to_the_fold() {
-    let mut h = H::new(
-        container()
-            .width(100.0)
-            .height(40.0)
-            .text_color(Color::BLACK)
-            .when_hovered(|s| s.text_color(Color::WHITE))
-            .animate_text_color(Transition::new(80.0, TimingFunction::Linear))
-            .child(crate::widgets::text("Label")),
-    );
-
-    painted_text_color(&mut h);
-    set_hover(&mut h, true);
-    settle(&mut h, 80);
-    assert_eq!(painted_text_color(&mut h), Color::WHITE);
-
-    set_hover(&mut h, false);
-    settle(&mut h, 80);
-    assert_eq!(painted_text_color(&mut h), Color::BLACK);
-}
-
-/// The animation has to start from the colour a descendant would actually have
-/// shown — which, for a container with no colour of its own, is the inherited
-/// one.
-///
-/// Two notions of "base" have to agree: the one the published derived folds
-/// (declared, else inherited) and the one the animation is seeded from and
-/// aims at. Where they diverge the transition departs from somewhere the text
-/// never was, so hovering flashes through a third colour on the way.
-#[test]
-fn an_animated_colour_starts_from_the_inherited_base() {
-    let mut h = H::new(
-        container().text_color(Color::RED).child(
-            container()
-                .width(100.0)
-                .height(40.0)
-                .when_hovered(|s| s.text_color(Color::BLUE))
-                .animate_text_color(Transition::new(80.0, TimingFunction::Linear))
-                .child(crate::widgets::text("Label")),
-        ),
-    );
-
-    assert_eq!(painted_text_color(&mut h), Color::RED);
-
-    set_hover(&mut h, true);
-    let first = frame(&mut h);
-    assert!(
-        first.r > first.b,
-        "the transition must leave from the inherited red, got {first:?}"
-    );
-
-    settle(&mut h, 80);
-    assert_eq!(painted_text_color(&mut h), Color::BLUE);
-
-    set_hover(&mut h, false);
-    settle(&mut h, 80);
-    assert_eq!(
-        painted_text_color(&mut h),
-        Color::RED,
-        "and come back to it"
-    );
-}
-
-// ---------------------------------------------------------------------------
 // Reactivity — properties that used to accept only a constant
 // ---------------------------------------------------------------------------
 
@@ -1643,35 +1379,15 @@ fn a_gradient_is_reactive_and_paint_only() {
     assert_eq!(gradient_ends(&h.paint()), Some((Color::BLUE, Color::CYAN)));
 }
 
-/// Two constant endpoints must not cost a derived that boxes a closure and
-/// recomputes, every read, a value that cannot change.
+/// A gradient built in a closure follows the signals that built it.
 #[test]
-fn a_constant_gradient_shorthand_stays_constant() {
-    let constant = container().gradient_vertical(Color::RED, Color::BLUE);
-    assert_eq!(
-        constant.gradient.and_then(|g| g.constant()).flatten(),
-        Some(LinearGradient::vertical(Color::RED, Color::BLUE)),
-        "two constants make one constant"
-    );
-
-    let end = create_signal(Color::GREEN);
-    let reactive = container().gradient_vertical(Color::RED, end);
-    assert!(
-        reactive.gradient.expect("declared").constant().is_none(),
-        "a reactive endpoint has to stay reactive"
-    );
-}
-
-/// The endpoints are reactive on their own, so the common case needs no
-/// closure building a whole gradient.
-#[test]
-fn gradient_endpoints_are_reactive_one_by_one() {
+fn a_gradient_follows_the_signals_it_was_built_from() {
     let end = create_signal(Color::YELLOW);
     let mut h = H::new(
         container()
             .width(20.0)
             .height(20.0)
-            .gradient_vertical(Color::RED, end),
+            .gradient(move || LinearGradient::vertical(Color::RED, end.get())),
     );
     h.fit(100.0, 100.0);
     assert_eq!(gradient_ends(&h.paint()), Some((Color::RED, Color::YELLOW)));
@@ -1817,6 +1533,67 @@ fn elevation_animates_towards_its_state_layer() {
     assert_eq!(shadow_count(&h.paint()), 0, "and settles back down");
 }
 
+/// Run frames until nothing is animating, or `limit` frames pass.
+///
+/// Animations step against the wall clock, so a tight loop would advance them
+/// by microseconds and never arrive — the frames have to take real time.
+fn settle(h: &mut H, limit: usize) -> usize {
+    for frame in 0..limit {
+        std::thread::sleep(std::time::Duration::from_millis(4));
+        let animating = pump(h);
+        h.fit(400.0, 400.0);
+        h.paint();
+        if !animating {
+            return frame;
+        }
+    }
+    limit
+}
+
+/// The four radii reach the clip, not just the paint: a row that rounds only
+/// its top must cut its children there and leave them square at the bottom.
+#[test]
+fn the_clip_carries_every_corner() {
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(40.0)
+            .corners([16.0, 0.0])
+            .overflow(Overflow::Hidden)
+            .child(container().width(100.0).height(40.0).background(Color::RED)),
+    );
+    let node = h.frame(200.0, 200.0).node;
+
+    let clip = node.children[0]
+        .clip
+        .as_ref()
+        .or(node.clip.as_ref())
+        .expect("a hidden overflow clips");
+    assert_eq!(clip.corner_radius.top_left, 16.0);
+    assert_eq!(clip.corner_radius.top_right, 16.0);
+    assert_eq!(clip.corner_radius.bottom_right, 0.0);
+    assert_eq!(clip.corner_radius.bottom_left, 0.0);
+}
+
+/// A state override carries the whole shape, so a squircle that only asks to
+/// grow on hover becomes an ordinary rounded box — the same trade the border
+/// override makes, and the reason a bare size is spelled as one.
+#[test]
+fn a_state_override_replaces_the_whole_corner_shape() {
+    let c = container()
+        .corners(crate::widgets::Corners::squircle(12.0))
+        .when_hovered(|s| s.corners(20.0));
+
+    let hovered = c.interaction.as_ref().expect("a hover layer").states[0]
+        .1
+        .corners
+        .expect("which declares a shape")
+        .get_untracked();
+
+    assert_eq!(hovered.curvature, 1.0, "rounded, not squircle");
+    assert_eq!(hovered.radii.top_left, 20.0);
+}
+
 /// Every `BackdropBlur` radius drawn by a node.
 fn blur_radii(node: &RenderNode) -> Vec<f32> {
     node.commands
@@ -1867,7 +1644,7 @@ fn a_gradient_keeps_its_shadow() {
             .width(40.0)
             .height(20.0)
             .elevation(3.0)
-            .gradient_horizontal(Color::RED, Color::BLUE),
+            .gradient(LinearGradient::horizontal(Color::RED, Color::BLUE)),
     );
     h.fit(100.0, 100.0);
     let node = h.paint();
@@ -2490,10 +2267,10 @@ fn a_transformed_blur_publishes_the_shape_it_is_drawn_as() {
     let card = |c: Container| c.width(40.0).height(40.0).backdrop_blur(24.0);
 
     let plain = H::new(card(container())).frame(200.0, 200.0).blur;
-    let scaled = H::new(card(container()).scale(2.0))
+    let scaled = H::new(card(container()).transform(Transform::scale(2.0)))
         .frame(200.0, 200.0)
         .blur;
-    let turned = H::new(card(container()).rotate(45.0))
+    let turned = H::new(card(container()).transform(Transform::rotate_degrees(45.0)))
         .frame(200.0, 200.0)
         .blur;
 

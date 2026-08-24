@@ -32,10 +32,11 @@ fn panel(label: &'static str, content: Container) -> Container {
         .layout(Flex::column().spacing(8.0))
         .child(content)
         .child(
-            container()
-                .font_size(12.0)
-                .text_color(Color::rgb(0.7, 0.7, 0.75))
-                .child(text(label)),
+            container().child(
+                text(label)
+                    .font_size(12.0)
+                    .color(Color::rgb(0.7, 0.7, 0.75)),
+            ),
         )
 }
 
@@ -51,7 +52,7 @@ fn main() {
                 container()
                     .width(220.0)
                     .height(140.0)
-                    .corner_radius(8.0)
+                    .corners(8.0)
                     .overflow(Overflow::Hidden)
                     .layout(ZStack::new())
                     .child(photo())
@@ -69,7 +70,7 @@ fn main() {
                 container()
                     .width(220.0)
                     .height(140.0)
-                    .corner_radius(8.0)
+                    .corners(8.0)
                     .overflow(Overflow::Hidden)
                     // Two regressions in one subtree, so two extra groups.
                     .background(Color::rgb(0.8, 0.2, 0.2))
@@ -79,7 +80,7 @@ fn main() {
                         container()
                             .width(80.0)
                             .height(80.0)
-                            .corner_radius(40.0)
+                            .corners(40.0)
                             .background(Color::rgba(1.0, 1.0, 1.0, 0.85)),
                     ),
             ))
@@ -88,7 +89,7 @@ fn main() {
                 container()
                     .width(220.0)
                     .height(140.0)
-                    .corner_radius(8.0)
+                    .corners(Corners::squircle(8.0))
                     .overflow(Overflow::Hidden)
                     .layout(ZStack::new())
                     .child(photo())
@@ -105,8 +106,7 @@ fn main() {
                                 container()
                                     .width(150.0)
                                     .height(70.0)
-                                    .corner_radius(16.0)
-                                    .squircle()
+                                    .corners(16.0)
                                     // Blurs the photo beneath it, then paints
                                     // its own translucent tint over the result.
                                     .backdrop_blur(18.0)
@@ -116,9 +116,11 @@ fn main() {
                                             .main_alignment(MainAlignment::Center)
                                             .cross_alignment(CrossAlignment::Center),
                                     )
-                                    .font_size(18.0)
-                                    .text_color(Color::rgb(0.95, 0.95, 1.0))
-                                    .child(text("frosted")),
+                                    .child(
+                                        text("frosted")
+                                            .font_size(18.0)
+                                            .color(Color::rgb(0.95, 0.95, 1.0)),
+                                    ),
                             ),
                     ),
             ))
@@ -127,15 +129,17 @@ fn main() {
                 container()
                     .width(220.0)
                     .height(140.0)
-                    .corner_radius(8.0)
+                    .corners(8.0)
                     .overflow(Overflow::Hidden)
                     .background(Color::rgb(0.15, 0.15, 0.2))
                     .layout(ZStack::new())
                     .child(
-                        container()
-                            .font_size(40.0)
-                            .text_color(Color::rgb(0.9, 0.3, 0.3))
-                            .child(text("BEHIND").nowrap()),
+                        container().child(
+                            text("BEHIND")
+                                .font_size(40.0)
+                                .color(Color::rgb(0.9, 0.3, 0.3))
+                                .nowrap(),
+                        ),
                     )
                     // Text sits above images in the batch order, so this photo
                     // needs a group of its own to land on top of the label.

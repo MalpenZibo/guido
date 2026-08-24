@@ -23,7 +23,7 @@ use super::*;
 /// what shape it is, and the transform standing between the two.
 pub(super) struct HitContext {
     pub bounds: Rect,
-    pub corner_radius: f32,
+    pub corners: crate::widgets::Corners,
     pub transform: Transform,
     pub transform_origin: TransformOrigin,
 }
@@ -32,7 +32,7 @@ impl HitContext {
     /// Whether a point falls inside the container's *shape* — its bounds
     /// narrowed by the corner radius, not the bounding box.
     pub(super) fn contains(&self, x: f32, y: f32) -> bool {
-        self.bounds.contains_rounded(x, y, self.corner_radius)
+        self.bounds.contains_shape(x, y, self.corners)
     }
 
     /// A surface-space point expressed relative to the container's own origin.

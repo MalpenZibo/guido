@@ -102,9 +102,9 @@ fn main() {
             .layout(Flex::column().spacing(8.0))
             .padding(16.0)
             .children([
-                container().text_color(Color::WHITE).child(text(move || format!("CPU: {:.1}%", cpu_usage.get()))),
-                container().text_color(Color::WHITE).child(text(move || format!("Memory: {:.1}%", memory_usage.get()))),
-                container().text_color(Color::WHITE).child(text(move || format!("Time: {}", time.get()))),
+                container().child(text(move || format!("CPU: {:.1}%", cpu_usage.get())).color(Color::WHITE)),
+                container().child(text(move || format!("Memory: {:.1}%", memory_usage.get())).color(Color::WHITE)),
+                container().child(text(move || format!("Time: {}", time.get())).color(Color::WHITE)),
             ]);
 
         app.add_surface(
@@ -196,7 +196,7 @@ create_task(move |ctx| async move {
 
 let view = container()
     .padding(20.0)
-    .child(container().font_size(48.0).text_color(Color::WHITE).child(text(move || time.get())));
+    .child(container().child(text(move || time.get()).font_size(48.0).color(Color::WHITE)));
 ```
 
 ## Reading UI State From a Task: `watch()`

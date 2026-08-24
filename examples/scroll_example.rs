@@ -17,17 +17,13 @@ fn main() {
         .child(
             container()
                 .layout(Flex::column().spacing(4.0))
-                .child(
-                    container()
-                        .text_color(Color::WHITE)
-                        .child(text("Vertical Scroll")),
-                )
+                .child(container().child(text("Vertical Scroll").color(Color::WHITE)))
                 .child(
                     container()
                         .width(200.0)
                         .height(200.0)
                         .background(Color::rgb(0.15, 0.15, 0.2))
-                        .corner_radius(8.0)
+                        .corners(8.0)
                         .scrollable(ScrollAxis::Vertical)
                         .child(
                             container()
@@ -39,10 +35,12 @@ fn main() {
                                             container()
                                                 .padding(8.0)
                                                 .background(Color::rgb(0.25, 0.25, 0.35))
-                                                .corner_radius(4.0)
+                                                .corners(4.0)
                                                 .when_hovered(|s| s.lighter(0.05))
-                                                .text_color(Color::WHITE)
-                                                .child(text(format!("Item {}", i + 1)))
+                                                .child(
+                                                    text(format!("Item {}", i + 1))
+                                                        .color(Color::WHITE),
+                                                )
                                         })
                                         .collect::<Vec<_>>(),
                                 ),
@@ -53,17 +51,13 @@ fn main() {
         .child(
             container()
                 .layout(Flex::column().spacing(4.0))
-                .child(
-                    container()
-                        .text_color(Color::WHITE)
-                        .child(text("Horizontal Scroll")),
-                )
+                .child(container().child(text("Horizontal Scroll").color(Color::WHITE)))
                 .child(
                     container()
                         .width(200.0)
                         .height(80.0)
                         .background(Color::rgb(0.15, 0.15, 0.2))
-                        .corner_radius(8.0)
+                        .corners(8.0)
                         .scrollable(ScrollAxis::Horizontal)
                         .child(
                             container()
@@ -80,15 +74,16 @@ fn main() {
                                                     0.3,
                                                     0.4,
                                                 ))
-                                                .corner_radius(8.0)
+                                                .corners(8.0)
                                                 .when_hovered(|s| s.lighter(0.1))
                                                 .layout(
                                                     Flex::column()
                                                         .main_alignment(MainAlignment::Center)
                                                         .cross_alignment(CrossAlignment::Center),
                                                 )
-                                                .text_color(Color::WHITE)
-                                                .child(text(format!("{}", i + 1)))
+                                                .child(
+                                                    text(format!("{}", i + 1)).color(Color::WHITE),
+                                                )
                                         })
                                         .collect::<Vec<_>>(),
                                 ),
@@ -99,17 +94,13 @@ fn main() {
         .child(
             container()
                 .layout(Flex::column().spacing(4.0))
-                .child(
-                    container()
-                        .text_color(Color::WHITE)
-                        .child(text("Custom Scrollbar")),
-                )
+                .child(container().child(text("Custom Scrollbar").color(Color::WHITE)))
                 .child(
                     container()
                         .width(200.0)
                         .height(200.0)
                         .background(Color::rgb(0.15, 0.15, 0.2))
-                        .corner_radius(8.0)
+                        .corners(8.0)
                         .scrollable(ScrollAxis::Vertical)
                         .scrollbar(|sb| {
                             sb.width(6.0)
@@ -129,10 +120,12 @@ fn main() {
                                             container()
                                                 .padding(8.0)
                                                 .background(Color::rgb(0.2, 0.3, 0.45))
-                                                .corner_radius(4.0)
+                                                .corners(4.0)
                                                 .when_hovered(|s| s.lighter(0.05))
-                                                .text_color(Color::WHITE)
-                                                .child(text(format!("Blue Item {}", i + 1)))
+                                                .child(
+                                                    text(format!("Blue Item {}", i + 1))
+                                                        .color(Color::WHITE),
+                                                )
                                         })
                                         .collect::<Vec<_>>(),
                                 ),
@@ -143,17 +136,13 @@ fn main() {
         .child(
             container()
                 .layout(Flex::column().spacing(4.0))
-                .child(
-                    container()
-                        .text_color(Color::WHITE)
-                        .child(text("Hidden Scrollbar")),
-                )
+                .child(container().child(text("Hidden Scrollbar").color(Color::WHITE)))
                 .child(
                     container()
                         .width(200.0)
                         .height(200.0)
                         .background(Color::rgb(0.15, 0.15, 0.2))
-                        .corner_radius(8.0)
+                        .corners(8.0)
                         .scrollable(ScrollAxis::Vertical)
                         .scrollbar_visibility(ScrollbarVisibility::Hidden)
                         .child(
@@ -166,10 +155,12 @@ fn main() {
                                             container()
                                                 .padding(8.0)
                                                 .background(Color::rgb(0.3, 0.25, 0.2))
-                                                .corner_radius(4.0)
+                                                .corners(4.0)
                                                 .when_hovered(|s| s.lighter(0.05))
-                                                .text_color(Color::WHITE)
-                                                .child(text(format!("Hidden {}", i + 1)))
+                                                .child(
+                                                    text(format!("Hidden {}", i + 1))
+                                                        .color(Color::WHITE),
+                                                )
                                         })
                                         .collect::<Vec<_>>(),
                                 ),

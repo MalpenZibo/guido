@@ -26,10 +26,9 @@ pub(crate) fn decoration_overflow(stroke: Option<TextStroke>, shadow: Option<Tex
 
 /// A run of text.
 ///
-/// Style may be declared here — [`TextStyled`] — or on an
-/// enclosing container, in which case it is inherited from the nearest one
-/// that sets each property. A declaration on the text itself is the nearest
-/// there is, so it wins.
+/// Style is declared here — [`TextStyled`] — because this is the widget that
+/// draws the glyphs. Whatever it does not declare falls back to the defaults:
+/// white, 14 logical pixels, the registered family, normal weight.
 ///
 /// ```ignore
 /// text("Hello").font_size(21.0).color(theme.text)
@@ -107,9 +106,8 @@ impl Text {
     /// protocol takes a region, and regions are rectangles, so glyphs cannot be
     /// expressed in it.
     ///
-    /// Unlike the rest of a text's style this is not inherited from a container,
-    /// on purpose: each frosted text ends the render pass to filter the target,
-    /// so it is asked for one text at a time rather than dressed onto a subtree.
+    /// Asked for one text at a time, on purpose: each frosted text ends the
+    /// render pass to filter the target.
     /// A rotated or scaled text ignores it — the mask is axis-aligned.
     ///
     /// Legibility is not what it buys on its own, and of the two decorations
@@ -126,10 +124,10 @@ impl Text {
         self
     }
 
-    /// This text's own declaration, completed by the ancestors' for whatever
-    /// it leaves out. The walk is skipped when nothing is left to find.
+    /// This text's own declaration, with whatever an active state overrides
+    /// folded over it, nearest first.
     ///
-    /// Called inside the caller's tracking scope, like the walk it wraps: the
+    /// Called inside the caller's tracking scope, like the fold it wraps: the
     /// signals come back unread, and reading them is what subscribes.
     fn resolved_style(&self, tree: &Tree, id: WidgetId) -> TextStyle {
         let mut style = TextStyle::default();
@@ -146,9 +144,6 @@ impl Text {
         }
         if let Some(own) = self.style.as_deref() {
             style.inherit_from(own);
-        }
-        if !style.is_complete() {
-            style.inherit_from(&tree.inherited_text_style(id));
         }
         style
     }
@@ -171,11 +166,11 @@ impl Text {
         }
     }
 
-    /// Refresh cached values from the inherited style.
+    /// Refresh cached values from the declared style.
     ///
-    /// The signals are read here, inside this widget's tracking scope, so the
-    /// text is re-laid-out when whichever ancestor supplied a metric changes
-    /// it — and is left alone when an ancestor it does not depend on changes.
+    /// The signals are read here, inside this widget's tracking scope, so a
+    /// change to a metric this text declared re-lays-out this text and nothing
+    /// else.
     ///
     /// Returns how far the decoration reaches past the glyphs, which the
     /// caller records as damage slop.
@@ -230,7 +225,7 @@ impl Widget for Text {
             },
         );
 
-        // Refresh cached values from content and inherited style.
+        // Refresh cached values from content and declared style.
         // This reads signals and registers layout dependencies.
         let overflow = self.refresh(tree, id);
         tree.set_paint_overflow(id, overflow);
@@ -565,53 +560,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_text_follows_the_ancestor_signal_it_resolved_from() {
-        let size = create_signal(10.0f32);
-        let color = create_signal(Color::RED);
-
-        let mut tree = Tree::new();
-        let root = tree.register(Box::new(
-            container()
-                .font_size(move || size.get())
-                .text_color(move || color.get())
-                // A plain container in between: the text must still end up
-                // subscribed to the signals two levels up.
-                .child(container().child(text("hi"))),
-        ));
-        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-
-        assert_eq!(frame(&mut tree, root), (Color::RED, 10.0));
-
-        size.set(40.0);
-        color.set(Color::BLUE);
-
-        assert_eq!(
-            frame(&mut tree, root),
-            (Color::BLUE, 40.0),
-            "a change to an inherited declaration must re-measure and repaint \
-             the text that read it"
-        );
-    }
-
     /// A declaration on the text is the nearest one there is, per property:
-    /// the size below comes from the text, the colour from the container.
-    #[test]
-    fn a_texts_own_declaration_wins_over_its_ancestors() {
-        let mut tree = Tree::new();
-        let root = tree.register(Box::new(
-            container()
-                .font_size(10.0)
-                .text_color(Color::RED)
-                .child(text("hi").font_size(40.0)),
-        ));
-        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-
-        assert_eq!(frame(&mut tree, root), (Color::RED, 40.0));
-    }
-
-    /// And it is reactive on the same terms as an inherited one: the signal is
-    /// read where the style is resolved, inside the text's own scope.
+    /// The declaration is reactive: the signal is read where the style is
+    /// resolved, inside the text's own scope.
     #[test]
     fn a_texts_own_declaration_follows_its_signal() {
         let color = create_signal(Color::RED);

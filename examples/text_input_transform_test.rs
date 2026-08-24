@@ -20,20 +20,22 @@ fn main() {
             .padding(32.0)
             .layout(Flex::column().spacing(32.0))
             .child(
-                container()
-                    .text_color(Color::WHITE)
-                    .font_size(18.0)
-                    .child(text("TextInput Transform Test")),
+                container().child(
+                    text("TextInput Transform Test")
+                        .font_size(18.0)
+                        .color(Color::WHITE),
+                ),
             )
             // 1. Normal (no transform) - baseline
             .child(
                 container()
                     .layout(Flex::column().spacing(4.0))
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.6, 0.6, 0.7))
-                            .font_size(12.0)
-                            .child(text("No transform (baseline)")),
+                        container().child(
+                            text("No transform (baseline)")
+                                .font_size(12.0)
+                                .color(Color::rgb(0.6, 0.6, 0.7)),
+                        ),
                     )
                     .child(
                         container()
@@ -41,11 +43,13 @@ fn main() {
                             .padding(8.0)
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.3, 0.8, 0.3))
-                            .corner_radius(6.0)
-                            .text_color(Color::WHITE)
-                            .cursor_color(Color::rgb(0.4, 0.8, 1.0))
-                            .font_size(14.0)
-                            .child(text_input(input1)),
+                            .corners(6.0)
+                            .child(
+                                text_input(input1)
+                                    .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                                    .font_size(14.0)
+                                    .color(Color::WHITE),
+                            ),
                     ),
             )
             // 2. Rotated container
@@ -53,10 +57,11 @@ fn main() {
                 container()
                     .layout(Flex::column().spacing(4.0))
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.6, 0.6, 0.7))
-                            .font_size(12.0)
-                            .child(text("Rotated 15°")),
+                        container().child(
+                            text("Rotated 15°")
+                                .font_size(12.0)
+                                .color(Color::rgb(0.6, 0.6, 0.7)),
+                        ),
                     )
                     .child(
                         container()
@@ -64,12 +69,14 @@ fn main() {
                             .padding(8.0)
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.8, 0.5, 0.3))
-                            .corner_radius(6.0)
-                            .rotate(15.0)
-                            .text_color(Color::WHITE)
-                            .cursor_color(Color::rgb(0.4, 0.8, 1.0))
-                            .font_size(14.0)
-                            .child(text_input(input2)),
+                            .corners(6.0)
+                            .transform(Transform::rotate_degrees(15.0))
+                            .child(
+                                text_input(input2)
+                                    .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                                    .font_size(14.0)
+                                    .color(Color::WHITE),
+                            ),
                     ),
             )
             // 3. Scaled container
@@ -77,10 +84,11 @@ fn main() {
                 container()
                     .layout(Flex::column().spacing(4.0))
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.6, 0.6, 0.7))
-                            .font_size(12.0)
-                            .child(text("Scaled 1.2x")),
+                        container().child(
+                            text("Scaled 1.2x")
+                                .font_size(12.0)
+                                .color(Color::rgb(0.6, 0.6, 0.7)),
+                        ),
                     )
                     .child(
                         container()
@@ -88,12 +96,14 @@ fn main() {
                             .padding(8.0)
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.3, 0.5, 0.8))
-                            .corner_radius(6.0)
-                            .scale(1.2)
-                            .text_color(Color::WHITE)
-                            .cursor_color(Color::rgb(0.4, 0.8, 1.0))
-                            .font_size(14.0)
-                            .child(text_input(input3)),
+                            .corners(6.0)
+                            .transform(Transform::scale(1.2))
+                            .child(
+                                text_input(input3)
+                                    .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                                    .font_size(14.0)
+                                    .color(Color::WHITE),
+                            ),
                     ),
             )
             // 4. Translated container
@@ -101,10 +111,11 @@ fn main() {
                 container()
                     .layout(Flex::column().spacing(4.0))
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.6, 0.6, 0.7))
-                            .font_size(12.0)
-                            .child(text("Translated (50, 10)")),
+                        container().child(
+                            text("Translated (50, 10)")
+                                .font_size(12.0)
+                                .color(Color::rgb(0.6, 0.6, 0.7)),
+                        ),
                     )
                     .child(
                         container()
@@ -112,12 +123,14 @@ fn main() {
                             .padding(8.0)
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.8, 0.8, 0.3))
-                            .corner_radius(6.0)
-                            .translate(50.0, 10.0)
-                            .text_color(Color::WHITE)
-                            .cursor_color(Color::rgb(0.4, 0.8, 1.0))
-                            .font_size(14.0)
-                            .child(text_input(input4)),
+                            .corners(6.0)
+                            .transform(Transform::translate(50.0, 10.0))
+                            .child(
+                                text_input(input4)
+                                    .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                                    .font_size(14.0)
+                                    .color(Color::WHITE),
+                            ),
                     ),
             )
             // 5. All transforms combined: translate + rotate + scale
@@ -125,10 +138,11 @@ fn main() {
                 container()
                     .layout(Flex::column().spacing(4.0))
                     .child(
-                        container()
-                            .text_color(Color::rgb(0.6, 0.6, 0.7))
-                            .font_size(12.0)
-                            .child(text("Translate(20,5) + Rotate(-10°) + Scale(0.9)")),
+                        container().child(
+                            text("Translate(20,5) + Rotate(-10°) + Scale(0.9)")
+                                .font_size(12.0)
+                                .color(Color::rgb(0.6, 0.6, 0.7)),
+                        ),
                     )
                     .child(
                         container()
@@ -136,24 +150,27 @@ fn main() {
                             .padding(8.0)
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.8, 0.3, 0.8))
-                            .corner_radius(6.0)
+                            .corners(6.0)
                             .transform(
                                 Transform::translate(20.0, 5.0)
                                     .then(&Transform::rotate_degrees(-10.0))
                                     .then(&Transform::scale(0.9)),
                             )
-                            .text_color(Color::WHITE)
-                            .cursor_color(Color::rgb(0.4, 0.8, 1.0))
-                            .font_size(14.0)
-                            .child(text_input(input5)),
+                            .child(
+                                text_input(input5)
+                                    .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                                    .font_size(14.0)
+                                    .color(Color::WHITE),
+                            ),
                     ),
             )
             // Instructions
             .child(
-                container()
-                    .text_color(Color::rgb(0.5, 0.5, 0.6))
-                    .font_size(11.0)
-                    .child(text("Click in each input to test cursor positioning")),
+                container().child(
+                    text("Click in each input to test cursor positioning")
+                        .font_size(11.0)
+                        .color(Color::rgb(0.5, 0.5, 0.6)),
+                ),
             );
 
         app.add_surface(

@@ -27,39 +27,35 @@ fn main() {
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.3, 0.2, 0.4))
-                                    .corner_radius(12.0)
-                                    .squircle() // K=2 → n=4
-                                    .text_color(Color::WHITE)
-                                    .child(text("Squircle\n(K=2)")),
+                                    .corners(Corners::squircle(12.0))
+                                    // K=2 → n=4
+                                    .child(text("Squircle\n(K=2)").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.2, 0.3, 0.4))
-                                    .corner_radius(12.0)
+                                    .corners(12.0)
                                     // Default circular K=1 → n=2
-                                    .text_color(Color::WHITE)
-                                    .child(text("Circle\n(K=1)")),
+                                    .child(text("Circle\n(K=1)").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.4, 0.3, 0.2))
-                                    .corner_radius(12.0)
-                                    .bevel() // K=0 → n=1
-                                    .text_color(Color::WHITE)
-                                    .child(text("Bevel\n(K=0)")),
+                                    .corners(Corners::bevel(12.0))
+                                    // K=0 → n=1
+                                    .child(text("Bevel\n(K=0)").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.2, 0.4, 0.3))
-                                    .corner_radius(12.0)
-                                    .scoop() // K=-1 → n=0.5
+                                    .corners(Corners::scoop(12.0))
+                                    // K=-1 → n=0.5
                                     .when_hovered(|s| s.lighter(0.1))
                                     .when_pressed(|s| s.ripple())
-                                    .text_color(Color::WHITE)
-                                    .child(text("Scoop\n(K=-1)")),
+                                    .child(text("Scoop\n(K=-1)").color(Color::WHITE)),
                             ),
                     )
                     .child(
@@ -70,42 +66,35 @@ fn main() {
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.15, 0.15, 0.2))
-                                    .corner_radius(12.0)
+                                    .corners(Corners::squircle(12.0))
                                     .border(2.0, Color::rgb(0.5, 0.3, 0.7))
-                                    .squircle()
-                                    .text_color(Color::WHITE)
-                                    .child(text("Squircle\nBorder")),
+                                    .child(text("Squircle\nBorder").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.15, 0.15, 0.2))
-                                    .corner_radius(12.0)
+                                    .corners(12.0)
                                     .border(2.0, Color::rgb(0.3, 0.5, 0.7))
-                                    .text_color(Color::WHITE)
-                                    .child(text("Circle\nBorder")),
+                                    .child(text("Circle\nBorder").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.15, 0.15, 0.2))
-                                    .corner_radius(12.0)
+                                    .corners(Corners::bevel(12.0))
                                     .border(2.0, Color::rgb(0.7, 0.5, 0.3))
-                                    .bevel()
-                                    .text_color(Color::WHITE)
-                                    .child(text("Bevel\nBorder")),
+                                    .child(text("Bevel\nBorder").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.15, 0.15, 0.2))
-                                    .corner_radius(12.0)
+                                    .corners(Corners::scoop(12.0))
                                     .border(2.0, Color::rgb(0.3, 0.7, 0.5))
-                                    .scoop()
                                     .when_hovered(|s| s.lighter(0.1))
                                     .when_pressed(|s| s.ripple())
-                                    .text_color(Color::WHITE)
-                                    .child(text("Scoop\nBorder")),
+                                    .child(text("Scoop\nBorder").color(Color::WHITE)),
                             ),
                     )
                     .child(
@@ -115,49 +104,42 @@ fn main() {
                             .child(
                                 container()
                                     .padding(12.0)
-                                    .gradient_horizontal(
+                                    .gradient(LinearGradient::horizontal(
                                         Color::rgb(0.4, 0.2, 0.5),
                                         Color::rgb(0.2, 0.4, 0.6),
-                                    )
-                                    .corner_radius(12.0)
-                                    .squircle()
-                                    .text_color(Color::WHITE)
-                                    .child(text("Squircle\nGradient")),
+                                    ))
+                                    .corners(Corners::squircle(12.0))
+                                    .child(text("Squircle\nGradient").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
-                                    .gradient_horizontal(
+                                    .gradient(LinearGradient::horizontal(
                                         Color::rgb(0.2, 0.4, 0.5),
                                         Color::rgb(0.4, 0.2, 0.6),
-                                    )
-                                    .corner_radius(12.0)
-                                    .text_color(Color::WHITE)
-                                    .child(text("Circle\nGradient")),
+                                    ))
+                                    .corners(12.0)
+                                    .child(text("Circle\nGradient").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
-                                    .gradient_horizontal(
+                                    .gradient(LinearGradient::horizontal(
                                         Color::rgb(0.5, 0.4, 0.2),
                                         Color::rgb(0.6, 0.2, 0.4),
-                                    )
-                                    .corner_radius(12.0)
-                                    .bevel()
-                                    .text_color(Color::WHITE)
-                                    .child(text("Bevel\nGradient")),
+                                    ))
+                                    .corners(Corners::bevel(12.0))
+                                    .child(text("Bevel\nGradient").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
-                                    .gradient_horizontal(
+                                    .gradient(LinearGradient::horizontal(
                                         Color::rgb(0.2, 0.5, 0.4),
                                         Color::rgb(0.4, 0.6, 0.2),
-                                    )
-                                    .corner_radius(12.0)
-                                    .scoop()
-                                    .text_color(Color::WHITE)
-                                    .child(text("Scoop\nGradient")),
+                                    ))
+                                    .corners(Corners::scoop(12.0))
+                                    .child(text("Scoop\nGradient").color(Color::WHITE)),
                             ),
                     )
                     .child(
@@ -168,37 +150,33 @@ fn main() {
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.3, 0.3, 0.4))
-                                    .corner_radius(12.0)
-                                    .corner_curvature(0.5) // K=0.5 → n=1.41
-                                    .text_color(Color::WHITE)
-                                    .child(text("K=0.5")),
+                                    .corners(Corners::superellipse(12.0, 0.5))
+                                    // K=0.5 → n=1.41
+                                    .child(text("K=0.5").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.3, 0.4, 0.3))
-                                    .corner_radius(12.0)
-                                    .corner_curvature(1.5) // K=1.5 → n=2.83
-                                    .text_color(Color::WHITE)
-                                    .child(text("K=1.5")),
+                                    .corners(Corners::superellipse(12.0, 1.5))
+                                    // K=1.5 → n=2.83
+                                    .child(text("K=1.5").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.4, 0.3, 0.3))
-                                    .corner_radius(12.0)
-                                    .corner_curvature(2.5) // K=2.5 → n=5.66
-                                    .text_color(Color::WHITE)
-                                    .child(text("K=2.5")),
+                                    .corners(Corners::superellipse(12.0, 2.5))
+                                    // K=2.5 → n=5.66
+                                    .child(text("K=2.5").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
                                     .background(Color::rgb(0.35, 0.3, 0.4))
-                                    .corner_radius(12.0)
-                                    .corner_curvature(-0.5) // K=-0.5 → n=0.707
-                                    .text_color(Color::WHITE)
-                                    .child(text("K=-0.5")),
+                                    .corners(Corners::superellipse(12.0, -0.5))
+                                    // K=-0.5 → n=0.707
+                                    .child(text("K=-0.5").color(Color::WHITE)),
                             ),
                     )
             },

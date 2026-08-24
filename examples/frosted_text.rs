@@ -35,7 +35,7 @@ fn panel(caption: &'static str, label: Text) -> Container {
             container()
                 .width(240.0)
                 .height(120.0)
-                .corner_radius(8.0)
+                .corners(8.0)
                 .overflow(Overflow::Hidden)
                 .layout(ZStack::new())
                 .child(photo())
@@ -52,10 +52,11 @@ fn panel(caption: &'static str, label: Text) -> Container {
                 ),
         )
         .child(
-            container()
-                .font_size(12.0)
-                .text_color(Color::rgb(0.7, 0.7, 0.75))
-                .child(text(caption)),
+            container().child(
+                text(caption)
+                    .font_size(12.0)
+                    .color(Color::rgb(0.7, 0.7, 0.75)),
+            ),
         )
 }
 

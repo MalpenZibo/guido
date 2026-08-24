@@ -23,9 +23,9 @@ fn main() {
                             .height(100.0)
                             .padding(10.0)
                             .background(Color::rgb(0.8, 0.3, 0.3))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .elevation(4.0) // Add shadow to test shadow rendering with rotation
-                            .rotate(45.0), // Should be clearly rotated
+                            .transform(Transform::rotate_degrees(45.0)), // Should be clearly rotated
                     )
             },
         );

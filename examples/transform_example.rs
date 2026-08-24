@@ -37,8 +37,8 @@ fn main() {
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.8, 0.3, 0.3))
-                            .corner_radius(8.0)
-                            .rotate(45.0)
+                            .corners(8.0)
+                            .transform(Transform::rotate_degrees(45.0))
                             .child(
                                 container()
                                     .layout(
@@ -46,17 +46,15 @@ fn main() {
                                             .main_alignment(MainAlignment::Center)
                                             .cross_alignment(CrossAlignment::Center),
                                     )
-                                    .text_color(Color::WHITE)
-                                    .font_size(12.0)
-                                    .child(text("45")),
+                                    .child(text("45").font_size(12.0).color(Color::WHITE)),
                             ),
                         // 2. Click to rotate (increments by 45 degrees)
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.3, 0.6, 0.8))
-                            .corner_radius(8.0)
-                            .rotate(rotation)
+                            .corners(8.0)
+                            .transform(move || Transform::rotate_degrees(rotation.get()))
                             .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
@@ -70,17 +68,17 @@ fn main() {
                                             .main_alignment(MainAlignment::Center)
                                             .cross_alignment(CrossAlignment::Center),
                                     )
-                                    .text_color(Color::WHITE)
-                                    .font_size(10.0)
-                                    .child(text("Click").nowrap()),
+                                    .child(
+                                        text("Click").font_size(10.0).color(Color::WHITE).nowrap(),
+                                    ),
                             ),
                         // 3. Click to toggle scale with spring animation
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.3, 0.8, 0.4))
-                            .corner_radius(8.0)
-                            .scale(scale_factor)
+                            .corners(8.0)
+                            .transform(move || Transform::scale(scale_factor.get()))
                             .animate_transform(Transition::spring(SpringConfig::BOUNCY))
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
@@ -96,17 +94,17 @@ fn main() {
                                             .main_alignment(MainAlignment::Center)
                                             .cross_alignment(CrossAlignment::Center),
                                     )
-                                    .text_color(Color::WHITE)
-                                    .font_size(10.0)
-                                    .child(text("Scale").nowrap()),
+                                    .child(
+                                        text("Scale").font_size(10.0).color(Color::WHITE).nowrap(),
+                                    ),
                             ),
                         // 4. Static scale (smaller)
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.6, 0.4, 0.8))
-                            .corner_radius(8.0)
-                            .scale(0.7)
+                            .corners(8.0)
+                            .transform(Transform::scale(0.7))
                             .child(
                                 container()
                                     .layout(
@@ -114,16 +112,14 @@ fn main() {
                                             .main_alignment(MainAlignment::Center)
                                             .cross_alignment(CrossAlignment::Center),
                                     )
-                                    .text_color(Color::WHITE)
-                                    .font_size(12.0)
-                                    .child(text("0.7x")),
+                                    .child(text("0.7x").font_size(12.0).color(Color::WHITE)),
                             ),
                         // 5. Combined rotation + scale
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.8, 0.6, 0.2))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .transform(Transform::rotate_degrees(30.0).then(&Transform::scale(0.8)))
                             .child(
                                 container()
@@ -132,17 +128,17 @@ fn main() {
                                             .main_alignment(MainAlignment::Center)
                                             .cross_alignment(CrossAlignment::Center),
                                     )
-                                    .text_color(Color::WHITE)
-                                    .font_size(10.0)
-                                    .child(text("Both").nowrap()),
+                                    .child(
+                                        text("Both").font_size(10.0).color(Color::WHITE).nowrap(),
+                                    ),
                             ),
                         // 6. Rotation around top-left corner (transform origin)
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.8, 0.5, 0.7))
-                            .corner_radius(8.0)
-                            .rotate(45.0)
+                            .corners(8.0)
+                            .transform(Transform::rotate_degrees(45.0))
                             .transform_origin(TransformOrigin::TOP_LEFT)
                             .child(
                                 container()
@@ -151,17 +147,15 @@ fn main() {
                                             .main_alignment(MainAlignment::Center)
                                             .cross_alignment(CrossAlignment::Center),
                                     )
-                                    .text_color(Color::WHITE)
-                                    .font_size(12.0)
-                                    .child(text("TL")),
+                                    .child(text("TL").font_size(12.0).color(Color::WHITE)),
                             ),
                         // 7. Scale from bottom-right corner (transform origin)
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.5, 0.7, 0.8))
-                            .corner_radius(8.0)
-                            .scale(0.8)
+                            .corners(8.0)
+                            .transform(Transform::scale(0.8))
                             .transform_origin(TransformOrigin::BOTTOM_RIGHT)
                             .child(
                                 container()
@@ -170,9 +164,7 @@ fn main() {
                                             .main_alignment(MainAlignment::Center)
                                             .cross_alignment(CrossAlignment::Center),
                                     )
-                                    .text_color(Color::WHITE)
-                                    .font_size(12.0)
-                                    .child(text("BR")),
+                                    .child(text("BR").font_size(12.0).color(Color::WHITE)),
                             ),
                         // 8. Interactive: click to cycle through origins
                         {
@@ -181,8 +173,8 @@ fn main() {
                                 .width(60.0)
                                 .height(60.0)
                                 .background(Color::rgb(0.7, 0.8, 0.5))
-                                .corner_radius(8.0)
-                                .rotate(30.0)
+                                .corners(8.0)
+                                .transform(Transform::rotate_degrees(30.0))
                                 .transform_origin(move || match origin_index.get() % 5 {
                                     0 => TransformOrigin::CENTER,
                                     1 => TransformOrigin::TOP_LEFT,
@@ -200,9 +192,12 @@ fn main() {
                                                 .main_alignment(MainAlignment::Center)
                                                 .cross_alignment(CrossAlignment::Center),
                                         )
-                                        .text_color(Color::WHITE)
-                                        .font_size(10.0)
-                                        .child(text("Cycle").nowrap()),
+                                        .child(
+                                            text("Cycle")
+                                                .font_size(10.0)
+                                                .color(Color::WHITE)
+                                                .nowrap(),
+                                        ),
                                 )
                         },
                     ])

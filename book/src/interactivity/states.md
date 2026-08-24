@@ -91,9 +91,9 @@ the box around it:
 
 ```rust
 container()
-    .text_color(theme.text_weak)
-    .when_hovered(|s| s.text_color(theme.text))
-    .child(text("Label"))
+    
+    .control()   // the text below declares .when_hovered(|s| s.color(theme.text))
+    .child(text("Label").color(theme.text_weak))
 ```
 
 This works the same way the ordinary declaration does — the container publishes
@@ -107,11 +107,11 @@ its ancestors already said:
 
 ```rust
 container()
-    .text_color(theme.text_weak)              // set once, further up
+                  // set once, further up
     .child(
         container()
-            .when_hovered(|s| s.text_color(theme.text))
-            .child(text("Label")),            // weak, then strong, then weak
+            .control()   // the text below declares .when_hovered(|s| s.color(theme.text))
+            .child(text("Label").color(theme.text_weak)),            // weak, then strong, then weak
     )
 ```
 
@@ -119,10 +119,10 @@ It can be animated like any other container property:
 
 ```rust
 container()
-    .text_color(theme.text_weak)
-    .when_hovered(|s| s.text_color(theme.text))
+    
+    .control()   // the text below declares .when_hovered(|s| s.color(theme.text))
     .animate_text_color(Transition::new(200.0, TimingFunction::EaseOut))
-    .child(text("Label"))
+    .child(text("Label").color(theme.text_weak))
 ```
 
 A transition declared on two levels — an animated colour whose own base comes
@@ -271,11 +271,11 @@ container()
 container()
     .padding(12.0)
     .background(Color::rgb(0.3, 0.5, 0.8))
-    .corner_radius(6.0)
+    .corners(6.0)
     .when_hovered(|s| s.lighter(0.1))
     .when_pressed(|s| s.ripple())
     .on_click(|| println!("Clicked!"))
-    .child(container().text_color(Color::WHITE).child(text("Click me")))
+    .child(container().child(text("Click me").color(Color::WHITE)))
 ```
 
 ### Outlined Button
@@ -284,11 +284,11 @@ container()
 container()
     .padding(12.0)
     .background(Color::TRANSPARENT)
-    .corner_radius(6.0)
+    .corners(6.0)
     .border(1.0, Color::rgb(0.5, 0.5, 0.6))
     .when_hovered(|s| s.background(Color::rgba(1.0, 1.0, 1.0, 0.1)))
     .when_pressed(|s| s.ripple())
-    .child(container().text_color(Color::WHITE).child(text("Outlined")))
+    .child(container().child(text("Outlined").color(Color::WHITE)))
 ```
 
 ### Card with Lift
@@ -297,7 +297,7 @@ container()
 container()
     .padding(16.0)
     .background(Color::rgb(0.15, 0.15, 0.2))
-    .corner_radius(8.0)
+    .corners(8.0)
     .elevation(2.0)
     .animate_elevation(Transition::new(200.0, TimingFunction::EaseOut))
     .when_hovered(|s| s.elevation(6.0).lighter(0.03))

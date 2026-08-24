@@ -1,58 +1,46 @@
-//! How text looks — declared on the container, not on the text.
+//! How text looks — declared on the widget that draws the glyphs.
 //!
-//! Guido keeps one styling widget. A container decides what its box looks
-//! like, and that includes the text inside it: colour, metrics, and the
-//! caret and selection of an input. [`Text`](crate::widgets::Text) and
-//! [`TextInput`](crate::widgets::TextInput) carry the content and nothing
-//! else.
-//!
-//! The payoff is that text stops being a second styling system with its own
-//! parallel setters, its own caches, and no access to anything else. Because
-//! the declaration lives on the container, text colour reaches the state
-//! layers ([`StateStyle::text_color`](crate::widgets::StateStyle::text_color))
-//! and the animation machinery
-//! ([`animate_text_color`](crate::widgets::Container::animate_text_color))
-//! that already exist there, instead of needing a second copy of both.
-//!
-//! # Inheritance
-//!
-//! A text resolves each property from the nearest ancestor that declares it.
-//! Containers in between that say nothing about text are transparent, so the
-//! declaration can sit on the card while the layout rows underneath stay
-//! plain:
+//! [`Text`](crate::widgets::Text) and [`TextInput`](crate::widgets::TextInput)
+//! are the two widgets that put glyphs on the screen, so they are the two that
+//! say how those glyphs look. A container draws a box and says nothing about
+//! what is written inside it.
 //!
 //! ```ignore
-//! container().text_color(theme.text).font_size(14.0)
-//!     .child(container().layout(Flex::row())
-//!         .child(text("inherits both"))
-//!         .child(container().font_size(21.0).child(text("own size, inherited colour"))))
+//! text("Hello").font_size(16.0).color(theme.text).bold()
 //! ```
 //!
-//! Resolution is **per property**, like CSS computed values: the inner
-//! container above overrides the size without disturbing the colour. Whole
-//! struct nearest-wins would have made every partial declaration reset
-//! everything it did not mention.
+//! # A style is a partial record
 //!
-//! # Why the walk starts at the text
+//! Every field is an `Option`, so a declaration says only what it means to
+//! say. What fills the rest is the widget's own default — white, 14 logical
+//! pixels, the registered family, normal weight — not a neighbouring
+//! declaration: nothing is inherited from anywhere.
 //!
-//! The obvious alternative is for each container to compute a resolved style
-//! and hand it down. It is wrong here, and quietly so: guido skips layout for
-//! subtrees whose constraints did not change, so a container could recompute
-//! its style, its children skip their layout, and the text would keep
-//! rendering at the old size.
+//! The partiality earns its keep on state overrides, which *are* merged:
+//! `when_hovered(|s| s.color(..))` changes the colour of a hovered label and
+//! leaves its metrics alone. [`inherit_from`](TextStyle::inherit_from) is what
+//! folds them, nearest declaration first.
 //!
-//! Walking up from the text instead makes the reactivity fall out. The walk
-//! happens inside the text's own
-//! [`with_signal_tracking`](crate::reactive::with_signal_tracking) scope, so
-//! the text subscribes to exactly the ancestor signals it actually read, and
-//! stops at the first ancestor that answers. A container changing its colour
-//! invalidates the descendants that inherited it and not the ones that
-//! declared their own — no invalidation plumbing, and no window in which a
-//! stale value can be drawn.
+//! # The same style, many times
 //!
-//! Which ancestors *declare* what is fixed once the tree is built, so the
-//! shape of the walk cannot change under a text without the container being
-//! rebuilt, and a rebuild re-registers the subtree anyway.
+//! Write a function. It keeps the declaration next to the widget that draws
+//! it, costs no wrapper node, and gives the style a name:
+//!
+//! ```ignore
+//! let label = |s: &str| text(s).color(theme.weak).font_size(12.0);
+//! container().children([label("one"), label("two"), label("three")])
+//! ```
+//!
+//! # A state that reaches the glyphs
+//!
+//! The pointer is over the box and the colour belongs to the glyphs. Declare
+//! each where it happens and let [`control()`](crate::widgets::Container::control)
+//! join them: a leaf resolves its own states from the nearest control above it.
+//!
+//! ```ignore
+//! container().control().when_hovered(|s| s.lighter(0.1))
+//!     .child(text("Label").color(weak).when_hovered(|s| s.color(strong)))
+//! ```
 
 use smallvec::SmallVec;
 
@@ -212,11 +200,10 @@ impl TextShadow {
 
 /// The text style a container declares for its descendants.
 ///
-/// Every field is optional and resolved independently: a container that sets
-/// only `color` leaves the metrics to whatever an ancestor said, rather than
-/// resetting them. Properties no ancestor declares fall back to
-/// [`Text`](crate::widgets::Text)'s defaults — white, 14 logical pixels, the
-/// registered default family, normal weight.
+/// Every field is optional and resolved independently: a state override that
+/// sets only `color` leaves the metrics the widget declared alone. Properties
+/// nothing declares fall back to [`Text`](crate::widgets::Text)'s defaults —
+/// white, 14 logical pixels, the registered default family, normal weight.
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct TextStyle {
     /// Colour of the glyphs.
@@ -234,18 +221,11 @@ pub struct TextStyle {
 }
 
 impl TextStyle {
-    /// Whether nothing at all is declared.
-    ///
-    /// A container in this state is not recorded on its node, so the walk
-    /// skips it with a null check instead of a dereference.
-    pub fn is_empty(&self) -> bool {
-        *self == Self::default()
-    }
-
     /// Take from `outer` every property this style does not already declare.
     ///
-    /// Called as the walk moves away from the text, so a nearer container
-    /// always wins: whatever is already set was found closer.
+    /// Called as the fold moves outward from the most specific declaration —
+    /// an active state override, then the widget's own — so the nearer one
+    /// always wins: whatever is already set was found first.
     pub(crate) fn inherit_from(&mut self, outer: &Self) {
         self.color = self.color.or(outer.color);
         self.font_size = self.font_size.or(outer.font_size);
@@ -254,32 +234,18 @@ impl TextStyle {
         self.stroke = self.stroke.or(outer.stroke);
         self.shadow = self.shadow.or(outer.shadow);
     }
-
-    /// Whether every property has been resolved, so the walk can stop early.
-    pub(crate) fn is_complete(&self) -> bool {
-        self.color.is_some()
-            && self.font_size.is_some()
-            && self.font_family.is_some()
-            && self.font_weight.is_some()
-            && self.stroke.is_some()
-            && self.shadow.is_some()
-    }
 }
 
 /// The vocabulary for declaring text style, written once.
 ///
 /// Implemented by whoever *draws* glyphs — [`Text`](crate::widgets::Text) and
-/// [`TextInput`](crate::widgets::TextInput). A container declares text style
-/// for its descendants through setters of its own, and deliberately does not
-/// implement this trait: it draws a box, and the rule that keeps properties
-/// where they belong is that a widget declares what it draws.
-///
-/// A declaration here is the nearest one there is, so it wins over every
-/// ancestor:
+/// [`TextInput`](crate::widgets::TextInput) — and by [`TextStyle`] itself, so
+/// a state override is built with the same words as the widget:
+/// `when_hovered(|s| s.color(..))`.
 ///
 /// ```ignore
-/// container().text_color(theme.weak)
-///     .child(text("quiet"))
+/// container()
+///     .child(text("quiet").color(theme.weak))
 ///     .child(text("loud").color(theme.strong))
 /// ```
 pub trait TextStyled: Sized {

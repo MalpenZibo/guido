@@ -41,7 +41,7 @@ fn main() {
                         container()
                             .padding(8.0)
                             .background(Color::rgb(0.2, 0.2, 0.3))
-                            .corner_radius(4.0)
+                            .corners(4.0)
                             .child(text("Guido")),
                     )
                     .child(container().padding(8.0).child(text("Hello World!")))
@@ -49,7 +49,7 @@ fn main() {
                         container()
                             .padding(8.0)
                             .background(Color::rgb(0.3, 0.2, 0.2))
-                            .corner_radius(4.0)
+                            .corners(4.0)
                             .child(text("Status Bar")),
                     )
             },
@@ -123,7 +123,7 @@ Each section of the status bar is a child container:
     container()
         .padding(8.0)
         .background(Color::rgb(0.2, 0.2, 0.3))
-        .corner_radius(4.0)
+        .corners(4.0)
         .child(text("Guido")),
 )
 ```
@@ -145,7 +145,7 @@ else: colour, size, family and weight are declared on an enclosing container and
 inherited from the nearest one that sets them.
 
 ```rust
-container().font_size(24.0).text_color(Color::WHITE).child(text("Hello World!"))
+container().child(text("Hello World!").font_size(24.0).color(Color::WHITE))
 ```
 
 With nothing declared above it, text is white at 14 logical pixels.
@@ -179,7 +179,7 @@ fn main() {
                         container()
                             .padding(8.0)
                             .background(Color::rgb(0.2, 0.2, 0.3))
-                            .corner_radius(4.0)
+                            .corners(4.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || count.update(|c| *c += 1))
@@ -190,7 +190,7 @@ fn main() {
                         container()
                             .padding(8.0)
                             .background(Color::rgb(0.3, 0.2, 0.2))
-                            .corner_radius(4.0)
+                            .corners(4.0)
                             .child(text("Status Bar")),
                     )
             },

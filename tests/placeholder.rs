@@ -95,14 +95,18 @@ fn the_value_of_a_password_field_still_is() {
 fn a_placeholder_is_quieter_than_the_text() {
     let text_color = Color::rgba(1.0, 1.0, 1.0, 1.0);
     let empty = drawn(
-        container()
-            .text_color(text_color)
-            .child(text_input(create_signal(String::new())).placeholder("Password")),
+        container().child(
+            text_input(create_signal(String::new()))
+                .color(text_color)
+                .placeholder("Password"),
+        ),
     );
     let filled = drawn(
-        container()
-            .text_color(text_color)
-            .child(text_input(create_signal("x".to_owned())).placeholder("Password")),
+        container().child(
+            text_input(create_signal("x".to_owned()))
+                .color(text_color)
+                .placeholder("Password"),
+        ),
     );
 
     let placeholder_alpha = empty[0].1.a;
@@ -118,33 +122,17 @@ fn a_placeholder_is_quieter_than_the_text() {
     );
 }
 
-#[test]
-fn a_container_can_declare_the_placeholder_colour() {
-    let declared = Color::rgba(1.0, 0.0, 0.0, 1.0);
-    let texts = drawn(
-        container()
-            .text_color(Color::rgba(1.0, 1.0, 1.0, 1.0))
-            .placeholder_color(declared)
-            .child(text_input(create_signal(String::new())).placeholder("Password")),
-    );
-
-    assert_eq!(texts[0].1, declared);
-}
-
-/// The field draws the placeholder, so the field can say what colour it is —
-/// and being the nearest declaration, it wins over the container's.
+/// The field draws the placeholder, so the field is what says its colour.
 #[test]
 fn a_field_can_declare_its_own_placeholder_colour() {
     let own = Color::rgba(0.0, 1.0, 0.0, 1.0);
     let texts = drawn(
-        container()
-            .text_color(Color::rgba(1.0, 1.0, 1.0, 1.0))
-            .placeholder_color(Color::rgba(1.0, 0.0, 0.0, 1.0))
-            .child(
-                text_input(create_signal(String::new()))
-                    .placeholder("Password")
-                    .placeholder_color(own),
-            ),
+        container().child(
+            text_input(create_signal(String::new()))
+                .color(Color::rgba(1.0, 1.0, 1.0, 1.0))
+                .placeholder("Password")
+                .placeholder_color(own),
+        ),
     );
 
     assert_eq!(texts[0].1, own);

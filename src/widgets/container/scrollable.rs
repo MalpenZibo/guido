@@ -74,16 +74,17 @@ impl Container {
         let handle_pressed_color = config.handle_pressed_color;
 
         // Track container
-        let track = Container::new()
-            .background(track_color)
-            .corner_radius(track_corner_radius)
-            .corner_curvature(track_corner_curvature);
+        let track = Container::new().background(track_color).corners(
+            crate::widgets::Corners::superellipse(track_corner_radius, track_corner_curvature),
+        );
 
         // Handle container with hover state for color change and ripple on press
         let handle = Container::new()
             .background(handle_color)
-            .corner_radius(handle_corner_radius)
-            .corner_curvature(handle_corner_curvature)
+            .corners(crate::widgets::Corners::superellipse(
+                handle_corner_radius,
+                handle_corner_curvature,
+            ))
             .when_hovered(move |s: StateStyle| s.background(handle_hover_color))
             .when_pressed(move |s: StateStyle| s.background(handle_pressed_color).ripple());
 

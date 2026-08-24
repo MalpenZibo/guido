@@ -47,7 +47,7 @@ See [Container](container.md) for details.
 Renders text content:
 
 ```rust
-container().font_size(16.0).text_color(Color::WHITE).bold().child(text("Hello, World!"))
+container().child(text("Hello, World!").font_size(16.0).color(Color::WHITE))
 ```
 
 See [Text](../building-ui/text.md) for styling options.
@@ -59,7 +59,7 @@ Single-line text editing with selection, clipboard, and undo/redo:
 ```rust
 let username = create_signal(String::new());
 
-container().text_color(Color::WHITE).child(text_input(username).on_submit(|text| println!("Submitted: {}", text)))
+container().child(text_input(username).color(Color::WHITE).on_submit(|text| println!("Submitted: {}", text)))
 ```
 
 See [Text Input](../building-ui/text-input.md) for details.
@@ -72,7 +72,7 @@ Guido UIs are built through composition - nesting widgets inside containers:
 container()
     .layout(Flex::column().spacing(8.0))
     .children([
-        container().font_size(24.0).child(text("Title")),
+        container().child(text("Title").font_size(24.0)),
         container()
             .layout(Flex::row().spacing(4.0))
             .children([
@@ -110,7 +110,7 @@ These use the builder pattern for configuration:
 container()
     .padding(16.0)          // Returns Container
     .background(Color::RED) // Returns Container
-    .corner_radius(8.0)     // Returns Container
+    .corners(8.0)     // Returns Container
 ```
 
 ## The impl Widget Pattern
@@ -122,8 +122,8 @@ fn my_button(label: &str) -> impl Widget {
     container()
         .padding(12.0)
         .background(Color::rgb(0.3, 0.5, 0.8))
-        .corner_radius(8.0)
-        .child(container().text_color(Color::WHITE).child(text(label)))
+        .corners(8.0)
+        .child(container().child(text(label).color(Color::WHITE)))
 }
 ```
 

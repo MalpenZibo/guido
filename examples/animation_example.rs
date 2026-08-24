@@ -53,7 +53,7 @@ fn main() {
 fn card(title: &str, hint: impl Into<String>, body: Container) -> Container {
     container()
         .background(CARD)
-        .corner_radius(12.0)
+        .corners(12.0)
         .padding(12.0)
         .layout(Flex::column().spacing(7.0))
         .when_hovered(|s| s.lighter(0.04))
@@ -75,7 +75,7 @@ fn track(height: f32, body: Container) -> Container {
         .width(fill())
         .height(height)
         .background(TRACK)
-        .corner_radius(8.0)
+        .corners(8.0)
         .padding(5.0)
         .child(body)
 }
@@ -97,7 +97,7 @@ fn width_card() -> Container {
                 .animate_width(Transition::spring(SpringConfig::DEFAULT))
                 .height(fill())
                 .background(INK)
-                .corner_radius(6.0),
+                .corners(6.0),
         )
         .on_click(move || wide.update(|w| *w = !*w)),
     )
@@ -110,7 +110,7 @@ fn colour_card() -> Container {
         container()
             .width(280.0)
             .height(48.0)
-            .corner_radius(8.0)
+            .corners(8.0)
             .background(Color::rgb(0.22, 0.20, 0.30))
             .animate_background(transition)
             .when_hovered(|s| s.background(HOT))
@@ -149,8 +149,8 @@ fn corner_and_size_card() -> Container {
                     }
                 })
                 .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
-                .corner_radius(move || if open.get() { 30.0 } else { 6.0 })
-                .animate_corner_radius(Transition::new(250.0, TimingFunction::EaseInOut)),
+                .corners(move || if open.get() { 30.0 } else { 6.0 })
+                .animate_corners(Transition::new(250.0, TimingFunction::EaseInOut)),
         )
         .on_click(move || open.update(|o| *o = !*o)),
     )
@@ -168,7 +168,7 @@ fn border_card() -> Container {
             .width(fill())
             .height(56.0)
             .background(Color::rgb(0.13, 0.13, 0.18))
-            .corner_radius(10.0)
+            .corners(10.0)
             .border(
                 move || if thick.get() { 14.0 } else { 2.0 },
                 Color::rgb(0.40, 0.50, 0.70),

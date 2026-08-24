@@ -18,33 +18,33 @@ fn row(label: &str, align: CrossAlignment) -> Container {
         .layout(Flex::row().spacing(10.0).cross_alignment(align))
         .padding([6.0, 10.0])
         .background(Color::rgb(0.16, 0.16, 0.22))
-        .corner_radius(8.0)
+        .corners(8.0)
         .children([
             container()
                 .width(96.0)
-                .text_color(Color::rgb(0.55, 0.55, 0.65))
-                .font_size(12.0)
-                .child(text(label.to_string()))
+                .child(
+                    text(label.to_string())
+                        .font_size(12.0)
+                        .color(Color::rgb(0.55, 0.55, 0.65)),
+                )
                 .into_any(),
             container()
-                .text_color(Color::WHITE)
-                .font_size(30.0)
-                .child(text("28"))
+                .child(text("28").font_size(30.0).color(Color::WHITE))
                 .into_any(),
             container()
-                .text_color(Color::rgb(0.9, 0.7, 0.3))
-                .font_size(13.0)
-                .child(text("°C"))
+                .child(text("°C").font_size(13.0).color(Color::rgb(0.9, 0.7, 0.3)))
                 .into_any(),
             container()
-                .text_color(Color::rgb(0.6, 0.8, 1.0))
-                .font_size(18.0)
-                .child(text("umidità 41%"))
+                .child(
+                    text("umidità 41%")
+                        .font_size(18.0)
+                        .color(Color::rgb(0.6, 0.8, 1.0)),
+                )
                 .into_any(),
             container()
                 .width(22.0)
                 .height(22.0)
-                .corner_radius(11.0)
+                .corners(11.0)
                 .background(Color::rgb(0.4, 0.8, 0.5))
                 .into_any(),
         ])

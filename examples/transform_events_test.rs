@@ -40,16 +40,16 @@ fn main() {
                                 make_box("None", Color::rgb(0.5, 0.5, 0.5), click_count),
                                 // Translation
                                 make_box("Translate", Color::rgb(0.3, 0.8, 0.3), click_count)
-                                    .translate(20.0, 10.0),
+                                    .transform(Transform::translate(20.0, 10.0)),
                                 // Rotation
                                 make_box("Rotate", Color::rgb(0.3, 0.3, 0.8), click_count)
-                                    .rotate(15.0),
+                                    .transform(Transform::rotate_degrees(15.0)),
                                 // Scale up
                                 make_box("Scale+", Color::rgb(0.8, 0.3, 0.8), click_count)
-                                    .scale(1.2),
+                                    .transform(Transform::scale(1.2)),
                                 // Scale down
                                 make_box("Scale-", Color::rgb(0.8, 0.6, 0.3), click_count)
-                                    .scale(0.7),
+                                    .transform(Transform::scale(0.7)),
                             ]),
                         // Row 2: Nested transforms
                         container()
@@ -64,8 +64,8 @@ fn main() {
                                     .width(100.0)
                                     .height(100.0)
                                     .background(Color::rgba(0.8, 0.3, 0.3, 0.3))
-                                    .corner_radius(8.0)
-                                    .rotate(20.0)
+                                    .corners(8.0)
+                                    .transform(Transform::rotate_degrees(20.0))
                                     .layout(
                                         Flex::column()
                                             .main_alignment(MainAlignment::Center)
@@ -81,8 +81,8 @@ fn main() {
                                     .width(100.0)
                                     .height(100.0)
                                     .background(Color::rgba(0.3, 0.8, 0.3, 0.3))
-                                    .corner_radius(8.0)
-                                    .scale(1.3)
+                                    .corners(8.0)
+                                    .transform(Transform::scale(1.3))
                                     .layout(
                                         Flex::column()
                                             .main_alignment(MainAlignment::Center)
@@ -94,14 +94,15 @@ fn main() {
                                             Color::rgb(0.3, 0.8, 0.8),
                                             click_count,
                                         )
-                                        .rotate(30.0),
+                                        .transform(Transform::rotate_degrees(30.0)),
                                     ),
                             ]),
                         // Click counter display
-                        container()
-                            .font_size(20.0)
-                            .text_color(Color::WHITE)
-                            .child(text(move || format!("Clicks: {}", click_count.get()))),
+                        container().child(
+                            text(move || format!("Clicks: {}", click_count.get()))
+                                .font_size(20.0)
+                                .color(Color::WHITE),
+                        ),
                     ])
             },
         );
@@ -113,7 +114,7 @@ fn make_box(label: &'static str, base_color: Color, click_count: RwSignal<i32>) 
         .width(70.0)
         .height(70.0)
         .background(base_color)
-        .corner_radius(8.0)
+        .corners(8.0)
         .when_hovered(|s| s.lighter(0.15))
         .when_pressed(|s| s.ripple())
         .on_click(move || click_count.update(|c| *c += 1))
@@ -122,7 +123,5 @@ fn make_box(label: &'static str, base_color: Color, click_count: RwSignal<i32>) 
                 .main_alignment(MainAlignment::Center)
                 .cross_alignment(CrossAlignment::Center),
         )
-        .font_size(10.0)
-        .text_color(Color::WHITE)
-        .child(text(label).nowrap())
+        .child(text(label).font_size(10.0).color(Color::WHITE).nowrap())
 }
