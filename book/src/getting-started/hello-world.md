@@ -41,7 +41,7 @@ fn main() {
                         container()
                             .padding(8.0)
                             .background(Color::rgb(0.2, 0.2, 0.3))
-                            .corner_radius(4.0)
+                            .corners(4.0)
                             .child(text("Guido")),
                     )
                     .child(container().padding(8.0).child(text("Hello World!")))
@@ -49,7 +49,7 @@ fn main() {
                         container()
                             .padding(8.0)
                             .background(Color::rgb(0.3, 0.2, 0.2))
-                            .corner_radius(4.0)
+                            .corners(4.0)
                             .child(text("Status Bar")),
                     )
             },
@@ -123,7 +123,7 @@ Each section of the status bar is a child container:
     container()
         .padding(8.0)
         .background(Color::rgb(0.2, 0.2, 0.3))
-        .corner_radius(4.0)
+        .corners(4.0)
         .child(text("Guido")),
 )
 ```
@@ -179,7 +179,7 @@ fn main() {
                         container()
                             .padding(8.0)
                             .background(Color::rgb(0.2, 0.2, 0.3))
-                            .corner_radius(4.0)
+                            .corners(4.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || count.update(|c| *c += 1))
@@ -190,7 +190,7 @@ fn main() {
                         container()
                             .padding(8.0)
                             .background(Color::rgb(0.3, 0.2, 0.2))
-                            .corner_radius(4.0)
+                            .corners(4.0)
                             .child(text("Status Bar")),
                     )
             },

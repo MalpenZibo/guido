@@ -60,7 +60,7 @@ fn lock_screen(output: OutputInfo) -> Container {
                 .width(at_least(280.0))
                 .padding(10.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
                 .child(
                     text_input(attempt)
@@ -107,7 +107,7 @@ fn main() {
                         container()
                             .padding([6.0, 16.0])
                             .background(Color::rgb(0.3, 0.2, 0.2))
-                            .corner_radius(6.0)
+                            .corners(6.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(|| lock_session(lock_screen))

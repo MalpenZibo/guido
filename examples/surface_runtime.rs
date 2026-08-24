@@ -72,7 +72,7 @@ fn button<M>(label: impl IntoSignal<String, M>, on_click: impl Fn() + 'static) -
     container()
         .padding([6.0, 12.0])
         .background(Color::rgb(0.22, 0.24, 0.34))
-        .corner_radius(6.0)
+        .corners(6.0)
         .when_hovered(|s| s.lighter(0.10))
         .when_pressed(|s| s.ripple())
         .on_click(on_click)
@@ -242,7 +242,7 @@ fn main() {
                             .height(move || if tall.get() { 150.0 } else { 50.0 })
                             .animate_height(Transition::new(400.0, TimingFunction::EaseOut))
                             .background(Color::rgb(0.30, 0.45, 0.35))
-                            .corner_radius(6.0)
+                            .corners(6.0)
                             .into_any();
                         if top_bar.get() {
                             container()

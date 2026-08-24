@@ -52,14 +52,14 @@ async fn main() {
                                     .width(100.0)
                                     .height(80.0)
                                     .background(Color::rgba(0.3, 0.5, 0.8, 0.8))
-                                    .corner_radius(8.0)
+                                    .corners(8.0)
                                     .transform(Transform::rotate_degrees(20.0)),
                                 // Top-left origin
                                 container()
                                     .width(100.0)
                                     .height(80.0)
                                     .background(Color::rgba(0.8, 0.5, 0.3, 0.8))
-                                    .corner_radius(8.0)
+                                    .corners(8.0)
                                     .transform_origin(TransformOrigin::TOP_LEFT)
                                     .transform(Transform::rotate_degrees(20.0)),
                                 // Top-right origin
@@ -67,7 +67,7 @@ async fn main() {
                                     .width(100.0)
                                     .height(80.0)
                                     .background(Color::rgba(0.5, 0.8, 0.3, 0.8))
-                                    .corner_radius(8.0)
+                                    .corners(8.0)
                                     .transform_origin(TransformOrigin::TOP_RIGHT)
                                     .transform(Transform::rotate_degrees(20.0)),
                                 // Bottom-left origin
@@ -75,7 +75,7 @@ async fn main() {
                                     .width(100.0)
                                     .height(80.0)
                                     .background(Color::rgba(0.8, 0.3, 0.8, 0.8))
-                                    .corner_radius(8.0)
+                                    .corners(8.0)
                                     .transform_origin(TransformOrigin::BOTTOM_LEFT)
                                     .transform(Transform::rotate_degrees(20.0)),
                                 // Bottom-right origin
@@ -83,7 +83,7 @@ async fn main() {
                                     .width(100.0)
                                     .height(80.0)
                                     .background(Color::rgba(0.3, 0.8, 0.8, 0.8))
-                                    .corner_radius(8.0)
+                                    .corners(8.0)
                                     .transform_origin(TransformOrigin::BOTTOM_RIGHT)
                                     .transform(Transform::rotate_degrees(20.0)),
                             ]),
@@ -101,14 +101,14 @@ async fn main() {
                                     .width(80.0)
                                     .height(60.0)
                                     .background(Color::rgba(0.6, 0.3, 0.3, 0.8))
-                                    .corner_radius(6.0)
+                                    .corners(6.0)
                                     .transform(Transform::scale(1.3)),
                                 // Top-left origin - scale
                                 container()
                                     .width(80.0)
                                     .height(60.0)
                                     .background(Color::rgba(0.3, 0.6, 0.3, 0.8))
-                                    .corner_radius(6.0)
+                                    .corners(6.0)
                                     .transform_origin(TransformOrigin::TOP_LEFT)
                                     .transform(Transform::scale(1.3)),
                                 // Bottom-right origin - scale
@@ -116,7 +116,7 @@ async fn main() {
                                     .width(80.0)
                                     .height(60.0)
                                     .background(Color::rgba(0.3, 0.3, 0.6, 0.8))
-                                    .corner_radius(6.0)
+                                    .corners(6.0)
                                     .transform_origin(TransformOrigin::BOTTOM_RIGHT)
                                     .transform(Transform::scale(1.3)),
                             ]),
@@ -134,14 +134,14 @@ async fn main() {
                                     .width(80.0)
                                     .height(60.0)
                                     .background(Color::rgba(0.7, 0.5, 0.2, 0.8))
-                                    .corner_radius(6.0)
+                                    .corners(6.0)
                                     .transform(move || Transform::rotate_degrees(angle.get())),
                                 // Top-left origin - animated
                                 container()
                                     .width(80.0)
                                     .height(60.0)
                                     .background(Color::rgba(0.2, 0.5, 0.7, 0.8))
-                                    .corner_radius(6.0)
+                                    .corners(6.0)
                                     .transform_origin(TransformOrigin::TOP_LEFT)
                                     .transform(move || Transform::rotate_degrees(angle.get())),
                                 // Custom origin (25%, 75%) - animated
@@ -149,7 +149,7 @@ async fn main() {
                                     .width(80.0)
                                     .height(60.0)
                                     .background(Color::rgba(0.5, 0.7, 0.2, 0.8))
-                                    .corner_radius(6.0)
+                                    .corners(6.0)
                                     .transform_origin(TransformOrigin::percent(25.0, 75.0))
                                     .transform(move || Transform::rotate_degrees(angle.get())),
                             ]),
@@ -167,7 +167,7 @@ async fn main() {
                                     .width(120.0)
                                     .height(100.0)
                                     .background(Color::rgba(0.4, 0.4, 0.6, 0.5))
-                                    .corner_radius(10.0)
+                                    .corners(10.0)
                                     .layout(
                                         Flex::column()
                                             .main_alignment(MainAlignment::Center)
@@ -179,14 +179,14 @@ async fn main() {
                                             .width(60.0)
                                             .height(40.0)
                                             .background(Color::rgba(0.6, 0.6, 0.8, 0.9))
-                                            .corner_radius(4.0),
+                                            .corners(4.0),
                                     ),
                                 // Parent rotated at top-left, child inside
                                 container()
                                     .width(120.0)
                                     .height(100.0)
                                     .background(Color::rgba(0.6, 0.4, 0.4, 0.5))
-                                    .corner_radius(10.0)
+                                    .corners(10.0)
                                     .layout(
                                         Flex::column()
                                             .main_alignment(MainAlignment::Center)
@@ -199,7 +199,7 @@ async fn main() {
                                             .width(60.0)
                                             .height(40.0)
                                             .background(Color::rgba(0.8, 0.6, 0.6, 0.9))
-                                            .corner_radius(4.0),
+                                            .corners(4.0),
                                     ),
                             ]),
                     ])

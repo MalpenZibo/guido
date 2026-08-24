@@ -9,7 +9,7 @@ Add a default ripple to the pressed state:
 ```rust
 container()
     .background(Color::rgb(0.2, 0.2, 0.3))
-    .corner_radius(8.0)
+    .corners(8.0)
     .when_pressed(|s| s.ripple())
 ```
 
@@ -126,7 +126,7 @@ Ripples work correctly even with transforms:
 container()
     .padding(16.0)
     .background(Color::rgb(0.4, 0.6, 0.4))
-    .corner_radius(8.0)
+    .corners(8.0)
     .transform(Transform::rotate_degrees(5.0).then(&Transform::translate(10.0, 15.0)))
     .when_hovered(|s| s.lighter(0.1))
     .when_pressed(|s| s.ripple())
@@ -141,14 +141,12 @@ Ripples respect different corner styles:
 ```rust
 // Squircle ripple
 container()
-    .corner_radius(12.0)
-    .corner_curvature(Curvature::SQUIRCLE)
+    .corners(Corners::squircle(12.0))
     .when_pressed(|s| s.ripple())
 
 // Beveled ripple
 container()
-    .corner_radius(12.0)
-    .corner_curvature(Curvature::BEVEL)
+    .corners(Corners::bevel(12.0))
     .when_pressed(|s| s.ripple())
 ```
 
@@ -159,7 +157,7 @@ fn ripple_button(label: &str, color: Color) -> Container {
     container()
         .padding(16.0)
         .background(color)
-        .corner_radius(8.0)
+        .corners(8.0)
 
         // Subtle hover, ripple on press
         .when_hovered(|s| s.lighter(0.1))

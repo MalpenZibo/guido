@@ -270,7 +270,7 @@ container()
 container()
     .padding(12.0)
     .background(Color::rgb(0.3, 0.5, 0.8))
-    .corner_radius(6.0)
+    .corners(6.0)
     .when_hovered(|s| s.lighter(0.1))
     .when_pressed(|s| s.ripple())
     .on_click(|| println!("Clicked!"))
@@ -283,7 +283,7 @@ container()
 container()
     .padding(12.0)
     .background(Color::TRANSPARENT)
-    .corner_radius(6.0)
+    .corners(6.0)
     .border(1.0, Color::rgb(0.5, 0.5, 0.6))
     .when_hovered(|s| s.background(Color::rgba(1.0, 1.0, 1.0, 0.1)))
     .when_pressed(|s| s.ripple())
@@ -296,7 +296,7 @@ container()
 container()
     .padding(16.0)
     .background(Color::rgb(0.15, 0.15, 0.2))
-    .corner_radius(8.0)
+    .corners(8.0)
     .elevation(2.0)
     .animate_elevation(Transition::new(200.0, TimingFunction::EaseOut))
     .when_hovered(|s| s.elevation(6.0).lighter(0.03))
@@ -319,7 +319,7 @@ impl StateStyleBuilder {
     pub fn border(self, width: f32, color: Color) -> Self;
 
     // Other
-    pub fn corner_radius(self, radius: f32) -> Self;
+    pub fn corners(self, corners: impl Into<Corners>) -> Self;
     pub fn transform(self, transform: Transform) -> Self;
     pub fn elevation(self, level: f32) -> Self;
 

@@ -25,7 +25,7 @@ fn main() {
             .width(width)
             .height(height)
             .background(Color::rgb(0.15, 0.15, 0.2))
-            .corner_radius(12.0)
+            .corners(12.0)
             .border(2.0, Color::rgb(0.4, 0.4, 0.5))
             .overflow(Overflow::Hidden)
             .child(widget)
@@ -37,7 +37,7 @@ fn main() {
             .width(width)
             .height(height)
             .background(Color::rgb(0.15, 0.15, 0.2))
-            .corner_radius(12.0)
+            .corners(12.0)
             .border(2.0, Color::rgb(0.6, 0.3, 0.3))
             .overflow(Overflow::Visible)
             .child(widget)
@@ -145,7 +145,7 @@ fn main() {
                     "ContentFit::None at intrinsic size (~257x248)",
                     container()
                         .background(Color::rgb(0.15, 0.15, 0.2))
-                        .corner_radius(8.0)
+                        .corners(8.0)
                         .border(1.0, Color::rgb(0.3, 0.5, 0.3))
                         .child(image("examples/assets/logo.svg").content_fit(ContentFit::None)),
                 )),

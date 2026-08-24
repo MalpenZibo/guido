@@ -49,7 +49,7 @@ fn main() {
                         container()
                             .padding(16.0)
                             .background(Color::rgb(0.2, 0.2, 0.3))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || count.update(|c| *c += 1))

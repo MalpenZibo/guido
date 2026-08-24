@@ -52,13 +52,13 @@ fn bench_row(i: usize) -> Container {
         .layout(Flex::row().spacing(8.0))
         .padding(4.0)
         .background(Color::rgb(0.14, 0.14, 0.19))
-        .corner_radius(6.0)
+        .corners(6.0)
         .child(
             // Checkbox composed from a container
             container()
                 .width(18.0)
                 .height(18.0)
-                .corner_radius(4.0)
+                .corners(4.0)
                 .border(1.5, Color::rgb(0.45, 0.45, 0.55))
                 .background(move || {
                     if checked.get() {
@@ -79,7 +79,7 @@ fn bench_row(i: usize) -> Container {
                 .width(fill())
                 .padding(6.0)
                 .background(Color::rgb(0.18, 0.18, 0.24))
-                .corner_radius(4.0)
+                .corners(4.0)
                 .when_focused(|s| s.border(1.5, Color::rgb(0.4, 0.8, 1.0)))
                 .child(
                     text_input(value)

@@ -38,7 +38,7 @@ fn main() {
                         container()
                             .padding(12.0)
                             .background(Color::rgb(0.15, 0.15, 0.2))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .layout(Flex::column().spacing(8.0))
                             .child(
                                 container().child(
@@ -133,7 +133,7 @@ fn main() {
                         container()
                             .padding(12.0)
                             .background(Color::rgb(0.12, 0.12, 0.16))
-                            .corner_radius(6.0)
+                            .corners(6.0)
                             .layout(Flex::column().spacing(4.0))
                             .child(
                                 container().child(text("Tips:").color(Color::rgb(0.5, 0.5, 0.6))),
@@ -174,7 +174,7 @@ fn layer_button(
     container()
         .padding([8.0, 12.0])
         .background(Color::rgb(0.25, 0.25, 0.35))
-        .corner_radius(6.0)
+        .corners(6.0)
         .when_hovered(|s| s.lighter(0.1))
         .when_pressed(|s| s.ripple())
         .on_click(move || {
@@ -196,7 +196,7 @@ fn keyboard_button(
     container()
         .padding([8.0, 12.0])
         .background(Color::rgb(0.25, 0.3, 0.35))
-        .corner_radius(6.0)
+        .corners(6.0)
         .when_hovered(|s| s.lighter(0.1))
         .when_pressed(|s| s.ripple())
         .on_click(move || {

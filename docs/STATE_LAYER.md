@@ -21,7 +21,7 @@ use guido::prelude::*;
 
 container()
     .background(Color::rgb(0.2, 0.2, 0.3))
-    .corner_radius(8.0)
+    .corners(8.0)
     .when_hovered(|s| s.lighter(0.1))      // Lighten on hover
     .when_pressed(|s| s.ripple())         // Ripple on press
     .child(text("Click me"))
@@ -34,7 +34,7 @@ The `when_focused` is applied when any child widget has keyboard focus. This is 
 ```rust
 container()
     .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-    .corner_radius(6.0)
+    .corners(6.0)
     .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))  // Highlight when focused
     .child(text_input(value))
 ```
@@ -154,8 +154,8 @@ Note that a layer *replaces* the base value rather than ranking against it. A pr
 ### Corner Radius
 
 ```rust
-.corner_radius(8.0)
-.when_hovered(|s| s.corner_radius(12.0))
+.corners(8.0)
+.when_hovered(|s| s.corners(12.0))
 ```
 
 ### Elevation (Shadow)
@@ -234,7 +234,7 @@ fn create_button(label: &str) -> Container {
     container()
         .padding(16.0)
         .background(Color::rgb(0.3, 0.5, 0.8))
-        .corner_radius(8.0)
+        .corners(8.0)
         .border(1.0, Color::rgb(0.4, 0.6, 0.9))
         
         // The label follows the state too, not just the box
@@ -260,7 +260,7 @@ pub struct StateStyle {
     pub background: Option<BackgroundOverride>,
     /// Both halves or neither — half a border is no border.
     pub border: Option<BorderOverride>,
-    pub corner_radius: Option<Signal<f32>>,
+    pub corners: Option<Signal<Corners>>,
     pub transform: Option<Signal<Transform>>,
     pub elevation: Option<Signal<f32>>,
     pub alpha: Option<Signal<f32>>,

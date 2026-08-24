@@ -12,7 +12,7 @@ Guido uses a **builder pattern** for styling - each method returns the widget, a
 container()
     .padding(16.0)
     .background(Color::rgb(0.2, 0.2, 0.3))
-    .corner_radius(8.0)
+    .corners(8.0)
     .border(1.0, Color::WHITE)
 ```
 
@@ -34,8 +34,7 @@ All styling is done in Rust code, not external CSS files. This provides type saf
 .gradient(LinearGradient::horizontal(start, end))
 
 // Corners
-.corner_radius(8.0)
-.corner_curvature(Curvature::SQUIRCLE)  // iOS-style smooth
+.corners(Corners::squircle(8.0))  // iOS-style smooth
 
 // Border
 .border(2.0, Color::WHITE)

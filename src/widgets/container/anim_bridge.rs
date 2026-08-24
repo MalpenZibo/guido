@@ -117,8 +117,7 @@ impl Container {
         let bw_init =
             anims.is_some_and(|a| a.border_width.as_ref().is_some_and(|a| a.is_initial()));
         let bg_init = anims.is_some_and(|a| a.background.as_ref().is_some_and(|a| a.is_initial()));
-        let cr_init =
-            anims.is_some_and(|a| a.corner_radius.as_ref().is_some_and(|a| a.is_initial()));
+        let cr_init = anims.is_some_and(|a| a.corners.as_ref().is_some_and(|a| a.is_initial()));
         let el_init = anims.is_some_and(|a| a.elevation.as_ref().is_some_and(|a| a.is_initial()));
         let bc_init =
             anims.is_some_and(|a| a.border_color.as_ref().is_some_and(|a| a.is_initial()));
@@ -141,7 +140,7 @@ impl Container {
                 }
                 (
                     bg_init.then(|| self.effective_background_target(id)),
-                    cr_init.then(|| self.effective_corner_radius_target(id)),
+                    cr_init.then(|| self.effective_corners_target(id)),
                     el_init.then(|| self.effective_elevation_target(id)),
                     bc_init.then(|| self.effective_border_color_target(id)),
                     tf_init.then(|| self.effective_transform_target(id)),
@@ -154,7 +153,7 @@ impl Container {
         if let (Some(anim), Some(target)) = (&mut anims.background, bg_target) {
             anim.set_immediate(target);
         }
-        if let (Some(anim), Some(target)) = (&mut anims.corner_radius, cr_target) {
+        if let (Some(anim), Some(target)) = (&mut anims.corners, cr_target) {
             anim.set_immediate(target);
         }
         if let (Some(anim), Some(target)) = (&mut anims.elevation, el_target) {
@@ -211,10 +210,10 @@ impl Container {
                     *a.target() == self.effective_background_target(id),
                 );
             }
-            if let Some(a) = &anims.corner_radius {
+            if let Some(a) = &anims.corners {
                 drift |= moved(
                     a.is_initial(),
-                    *a.target() == self.effective_corner_radius_target(id),
+                    *a.target() == self.effective_corners_target(id),
                 );
             }
             if let Some(a) = &anims.elevation {

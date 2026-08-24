@@ -37,7 +37,7 @@ fn main() {
                             .widget_ref(pill_ref)
                             .padding([10.0, 24.0])
                             .background(Color::rgba(0.15, 0.15, 0.25, 0.95))
-                            .corner_radius(20.0)
+                            .corners(20.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || count.update(|c| *c += 1))

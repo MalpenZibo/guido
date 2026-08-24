@@ -23,7 +23,7 @@ fn main() {
                         .width(200.0)
                         .height(200.0)
                         .background(Color::rgb(0.15, 0.15, 0.2))
-                        .corner_radius(8.0)
+                        .corners(8.0)
                         .scrollable(ScrollAxis::Vertical)
                         .child(
                             container()
@@ -35,7 +35,7 @@ fn main() {
                                             container()
                                                 .padding(8.0)
                                                 .background(Color::rgb(0.25, 0.25, 0.35))
-                                                .corner_radius(4.0)
+                                                .corners(4.0)
                                                 .when_hovered(|s| s.lighter(0.05))
                                                 .child(
                                                     text(format!("Item {}", i + 1))
@@ -57,7 +57,7 @@ fn main() {
                         .width(200.0)
                         .height(80.0)
                         .background(Color::rgb(0.15, 0.15, 0.2))
-                        .corner_radius(8.0)
+                        .corners(8.0)
                         .scrollable(ScrollAxis::Horizontal)
                         .child(
                             container()
@@ -74,7 +74,7 @@ fn main() {
                                                     0.3,
                                                     0.4,
                                                 ))
-                                                .corner_radius(8.0)
+                                                .corners(8.0)
                                                 .when_hovered(|s| s.lighter(0.1))
                                                 .layout(
                                                     Flex::column()
@@ -100,7 +100,7 @@ fn main() {
                         .width(200.0)
                         .height(200.0)
                         .background(Color::rgb(0.15, 0.15, 0.2))
-                        .corner_radius(8.0)
+                        .corners(8.0)
                         .scrollable(ScrollAxis::Vertical)
                         .scrollbar(|sb| {
                             sb.width(6.0)
@@ -120,7 +120,7 @@ fn main() {
                                             container()
                                                 .padding(8.0)
                                                 .background(Color::rgb(0.2, 0.3, 0.45))
-                                                .corner_radius(4.0)
+                                                .corners(4.0)
                                                 .when_hovered(|s| s.lighter(0.05))
                                                 .child(
                                                     text(format!("Blue Item {}", i + 1))
@@ -142,7 +142,7 @@ fn main() {
                         .width(200.0)
                         .height(200.0)
                         .background(Color::rgb(0.15, 0.15, 0.2))
-                        .corner_radius(8.0)
+                        .corners(8.0)
                         .scrollable(ScrollAxis::Vertical)
                         .scrollbar_visibility(ScrollbarVisibility::Hidden)
                         .child(
@@ -155,7 +155,7 @@ fn main() {
                                             container()
                                                 .padding(8.0)
                                                 .background(Color::rgb(0.3, 0.25, 0.2))
-                                                .corner_radius(4.0)
+                                                .corners(4.0)
                                                 .when_hovered(|s| s.lighter(0.05))
                                                 .child(
                                                     text(format!("Hidden {}", i + 1))

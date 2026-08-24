@@ -51,8 +51,7 @@ Shadows respect corner radius:
 
 ```rust
 container()
-    .corner_radius(12.0)
-    .corner_curvature(Curvature::SQUIRCLE)
+    .corners(Corners::squircle(12.0))
     .elevation(8.0)  // Shadow follows rounded shape
 ```
 
@@ -64,7 +63,7 @@ fn elevated_card() -> Container {
         .width(200.0)
         .padding(20.0)
         .background(Color::rgb(0.15, 0.15, 0.2))
-        .corner_radius(12.0)
+        .corners(12.0)
         .elevation(4.0)
         .animate_background(Transition::new(150.0, TimingFunction::EaseOut))
         .animate_elevation(Transition::new(200.0, TimingFunction::EaseOut))

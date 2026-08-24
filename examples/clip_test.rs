@@ -44,34 +44,34 @@ fn simple_clip_row() -> Container {
             .width(80.0)
             .height(80.0)
             .background(Color::rgb(0.2, 0.2, 0.3))
-            .corner_radius(8.0)
+            .corners(8.0)
             .child(
                 container()
                     .width(60.0)
                     .height(60.0)
                     .background(Color::rgb(0.8, 0.3, 0.3))
-                    .corner_radius(4.0),
+                    .corners(4.0),
             ),
         // With clip - child is clipped to parent bounds
         container()
             .width(80.0)
             .height(80.0)
             .background(Color::rgb(0.2, 0.2, 0.3))
-            .corner_radius(8.0)
+            .corners(8.0)
             .overflow(Overflow::Hidden)
             .child(
                 container()
                     .width(120.0)
                     .height(120.0)
                     .background(Color::rgb(0.3, 0.8, 0.3))
-                    .corner_radius(4.0),
+                    .corners(4.0),
             ),
         // Rounded clip with larger child
         container()
             .width(80.0)
             .height(80.0)
             .background(Color::rgb(0.2, 0.2, 0.3))
-            .corner_radius(20.0)
+            .corners(20.0)
             .overflow(Overflow::Hidden)
             .child(
                 container()
@@ -90,7 +90,7 @@ fn rotated_clip_row() -> Container {
             .width(80.0)
             .height(80.0)
             .background(Color::rgb(0.2, 0.2, 0.3))
-            .corner_radius(8.0)
+            .corners(8.0)
             .overflow(Overflow::Hidden)
             .transform(Transform::rotate_degrees(15.0))
             .child(
@@ -104,7 +104,7 @@ fn rotated_clip_row() -> Container {
             .width(80.0)
             .height(80.0)
             .background(Color::rgb(0.2, 0.2, 0.3))
-            .corner_radius(8.0)
+            .corners(8.0)
             .overflow(Overflow::Hidden)
             .transform(Transform::rotate_degrees(30.0))
             .child(
@@ -118,7 +118,7 @@ fn rotated_clip_row() -> Container {
             .width(80.0)
             .height(80.0)
             .background(Color::rgb(0.2, 0.2, 0.3))
-            .corner_radius(8.0)
+            .corners(8.0)
             .overflow(Overflow::Hidden)
             .transform(Transform::rotate_degrees(45.0))
             .child(
@@ -132,7 +132,7 @@ fn rotated_clip_row() -> Container {
             .width(80.0)
             .height(80.0)
             .background(Color::rgb(0.2, 0.2, 0.3))
-            .corner_radius(8.0)
+            .corners(8.0)
             .overflow(Overflow::Hidden)
             .transform(Transform::rotate_degrees(-30.0))
             .child(
@@ -152,7 +152,7 @@ fn scaled_clip_row() -> Container {
             .width(80.0)
             .height(80.0)
             .background(Color::rgb(0.2, 0.2, 0.3))
-            .corner_radius(8.0)
+            .corners(8.0)
             .overflow(Overflow::Hidden)
             .transform(Transform::scale(0.8))
             .child(
@@ -166,7 +166,7 @@ fn scaled_clip_row() -> Container {
             .width(80.0)
             .height(80.0)
             .background(Color::rgb(0.2, 0.2, 0.3))
-            .corner_radius(8.0)
+            .corners(8.0)
             .overflow(Overflow::Hidden)
             .transform(Transform::scale(1.2))
             .child(
@@ -180,7 +180,7 @@ fn scaled_clip_row() -> Container {
             .width(80.0)
             .height(80.0)
             .background(Color::rgb(0.2, 0.2, 0.3))
-            .corner_radius(8.0)
+            .corners(8.0)
             .overflow(Overflow::Hidden)
             .transform(Transform::scale_xy(1.5, 0.7))
             .child(
@@ -200,7 +200,7 @@ fn nested_clip_row() -> Container {
             .width(80.0)
             .height(80.0)
             .background(Color::rgb(0.15, 0.15, 0.2))
-            .corner_radius(4.0)
+            .corners(4.0)
             .transform(Transform::rotate_degrees(15.0))
             .child(
                 // Middle container with clip
@@ -208,7 +208,7 @@ fn nested_clip_row() -> Container {
                     .width(60.0)
                     .height(60.0)
                     .background(Color::rgb(0.2, 0.2, 0.3))
-                    .corner_radius(8.0)
+                    .corners(8.0)
                     .overflow(Overflow::Hidden)
                     .child(
                         // Inner child that should be clipped
@@ -223,14 +223,14 @@ fn nested_clip_row() -> Container {
             .width(80.0)
             .height(80.0)
             .background(Color::rgb(0.15, 0.15, 0.2))
-            .corner_radius(4.0)
+            .corners(4.0)
             .transform(Transform::scale(0.9))
             .child(
                 container()
                     .width(60.0)
                     .height(60.0)
                     .background(Color::rgb(0.2, 0.2, 0.3))
-                    .corner_radius(8.0)
+                    .corners(8.0)
                     .overflow(Overflow::Hidden)
                     .transform(Transform::rotate_degrees(20.0))
                     .child(
@@ -245,14 +245,14 @@ fn nested_clip_row() -> Container {
             .width(80.0)
             .height(80.0)
             .background(Color::rgb(0.15, 0.15, 0.2))
-            .corner_radius(4.0)
+            .corners(4.0)
             .transform(Transform::rotate_degrees(-10.0))
             .child(
                 container()
                     .width(60.0)
                     .height(60.0)
                     .background(Color::rgb(0.2, 0.2, 0.3))
-                    .corner_radius(8.0)
+                    .corners(8.0)
                     .overflow(Overflow::Hidden)
                     .transform(Transform::scale(1.1))
                     .child(

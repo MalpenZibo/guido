@@ -99,7 +99,7 @@ fn create_add_button(
     container()
         .padding([8.0, 16.0])
         .background(Color::rgb(0.2, 0.4, 0.6))
-        .corner_radius(6.0)
+        .corners(6.0)
         .when_hovered(|s| s.lighter(0.1))
         .when_pressed(|s| s.ripple())
         .on_click(move || {
@@ -124,7 +124,7 @@ fn create_item_row(
     container()
         .padding(15.0)
         .background(Color::rgb(0.18, 0.18, 0.24))
-        .corner_radius(8.0)
+        .corners(8.0)
         .layout(
             Flex::row()
                 .spacing(20.0)
@@ -148,7 +148,7 @@ fn create_toggle_button(enabled: RwSignal<bool>) -> Container {
                 Color::rgb(0.3, 0.3, 0.35)
             }
         })
-        .corner_radius(4.0)
+        .corners(4.0)
         .when_hovered(|s| s.lighter(0.1))
         .when_pressed(|s| s.ripple())
         .on_click(move || {
@@ -187,7 +187,7 @@ fn create_text_input_field(input_value: RwSignal<String>) -> Container {
         .padding(8.0)
         .background(Color::rgb(0.15, 0.15, 0.2))
         .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-        .corner_radius(6.0)
+        .corners(6.0)
         .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
         .child(
             text_input(input_value)

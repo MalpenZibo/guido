@@ -28,7 +28,7 @@ container().gradient(LinearGradient::diagonal(Color::RED, Color::BLUE))
 ### Basic Radius
 
 ```rust
-container().corner_radius(8.0)  // 8px radius on all corners
+container().corners(8.0)  // 8px radius on all corners
 ```
 
 ### Corner Curvature
@@ -36,11 +36,11 @@ container().corner_radius(8.0)  // 8px radius on all corners
 Control corner shape using CSS K-values:
 
 ```rust
-container().corner_radius(12.0).corner_curvature(Curvature::SQUIRCLE)  // iOS-style (K=2)
-container().corner_radius(12.0)              // Circular (K=1, default)
-container().corner_radius(12.0).corner_curvature(Curvature::BEVEL)      // Diagonal (K=0)
-container().corner_radius(12.0).corner_curvature(Curvature::SCOOP)      // Concave (K=-1)
-container().corner_radius(12.0).corner_curvature(1.5)  // Custom
+container().corners(Corners::squircle(12.0))  // iOS-style (K=2)
+container().corners(12.0)              // Circular (K=1, default)
+container().corners(Corners::bevel(12.0))      // Diagonal (K=0)
+container().corners(Corners::scoop(12.0))      // Concave (K=-1)
+container().corners(Corners::superellipse(12.0, 1.5))  // Custom
 ```
 
 ## Borders
@@ -159,8 +159,7 @@ fn styled_card(title: &str, content: &str) -> Container {
 
         // Background and corners
         .background(Color::rgb(0.15, 0.15, 0.2))
-        .corner_radius(12.0)
-        .corner_curvature(Curvature::SQUIRCLE)
+        .corners(Corners::squircle(12.0))
 
         // Border
         .border(1.0, Color::rgb(0.25, 0.25, 0.3))

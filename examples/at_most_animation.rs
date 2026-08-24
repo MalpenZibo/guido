@@ -32,7 +32,7 @@ fn capped(animated: bool, body: impl Widget + 'static) -> Container {
     let c = container()
         .width(at_most(CAP))
         .border(1.0, Color::rgb(0.45, 0.5, 0.65))
-        .corner_radius(4.0)
+        .corners(4.0)
         .padding(6.0)
         // Visible, not Hidden: clipping would conceal exactly what we are here
         // to look at.
@@ -121,7 +121,7 @@ fn main() {
                                 .width(fill())
                                 .height(22.0)
                                 .background(Color::rgb(0.85, 0.35, 0.35))
-                                .corner_radius(3.0),
+                                .corners(3.0),
                         )
                     }))
                     .child(label("Esc per chiudere").color(Color::rgb(0.5, 0.53, 0.6)))

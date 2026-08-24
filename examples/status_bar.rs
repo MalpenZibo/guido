@@ -19,7 +19,7 @@ fn main() {
                         container()
                             .padding(8.0)
                             .background(Color::rgb(0.2, 0.2, 0.3))
-                            .corner_radius(4.0)
+                            .corners(4.0)
                             .child(text("Guido")),
                     )
                     .child(container().padding(8.0).child(text("Hello World!")))
@@ -27,7 +27,7 @@ fn main() {
                         container()
                             .padding(8.0)
                             .background(Color::rgb(0.3, 0.2, 0.2))
-                            .corner_radius(4.0)
+                            .corners(4.0)
                             .child(text("Status Bar")),
                     )
             },

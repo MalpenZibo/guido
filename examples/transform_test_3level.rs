@@ -39,7 +39,7 @@ fn three_level(gp_rot: f32, p_rot: f32, c_rot: f32) -> Container {
         .width(120.0)
         .height(120.0)
         .background(Color::rgb(0.25, 0.25, 0.35))
-        .corner_radius(12.0)
+        .corners(12.0)
         .transform(Transform::rotate_degrees(gp_rot))
         .padding(15.0)
         .child(
@@ -47,7 +47,7 @@ fn three_level(gp_rot: f32, p_rot: f32, c_rot: f32) -> Container {
                 .width(90.0)
                 .height(90.0)
                 .background(Color::rgb(0.45, 0.45, 0.55))
-                .corner_radius(10.0)
+                .corners(10.0)
                 .transform(Transform::rotate_degrees(p_rot))
                 .padding(12.0)
                 .child(
@@ -55,7 +55,7 @@ fn three_level(gp_rot: f32, p_rot: f32, c_rot: f32) -> Container {
                         .width(50.0)
                         .height(50.0)
                         .background(Color::rgb(0.9, 0.6, 0.3))
-                        .corner_radius(6.0)
+                        .corners(6.0)
                         .transform(Transform::rotate_degrees(c_rot)),
                 ),
         )

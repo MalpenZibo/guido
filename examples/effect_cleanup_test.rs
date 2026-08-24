@@ -98,7 +98,7 @@ fn create_child_widget(id: u64) -> impl Widget {
         .layout(Flex::row().spacing(8.0))
         .padding(12.0)
         .background(Color::rgb(0.2, 0.2, 0.3))
-        .corner_radius(8.0)
+        .corners(8.0)
         .child(container().child(text(format!("Child {}", id)).color(Color::WHITE)))
         .child(container().child(
             text(move || format!("Ticks: {}", tick_signal.get())).color(Color::rgb(0.6, 0.8, 1.0)),
@@ -143,7 +143,7 @@ fn main() {
                         container()
                             .padding(10.0)
                             .background(Color::rgb(0.2, 0.5, 0.3))
-                            .corner_radius(6.0)
+                            .corners(6.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || {
@@ -157,7 +157,7 @@ fn main() {
                         container()
                             .padding(10.0)
                             .background(Color::rgb(0.5, 0.2, 0.2))
-                            .corner_radius(6.0)
+                            .corners(6.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || {
@@ -176,7 +176,7 @@ fn main() {
                         container()
                             .padding(10.0)
                             .background(Color::rgb(0.5, 0.3, 0.2))
-                            .corner_radius(6.0)
+                            .corners(6.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || {

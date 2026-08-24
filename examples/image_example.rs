@@ -17,7 +17,7 @@ fn main() {
                     .width(w)
                     .height(h)
                     .background(Color::rgb(0.2, 0.2, 0.25))
-                    .corner_radius(4.0)
+                    .corners(4.0)
                     .child(img),
             )
             .child(container().child(text(label).color(Color::rgb(0.7, 0.7, 0.7))))
@@ -37,7 +37,7 @@ fn main() {
                     .width(w)
                     .height(h)
                     .background(Color::rgb(0.2, 0.2, 0.25))
-                    .corner_radius(4.0)
+                    .corners(4.0)
                     .child(img),
             )
             .child(container().child(text(label).color(Color::rgb(0.7, 0.7, 0.7))))

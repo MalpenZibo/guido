@@ -107,14 +107,9 @@ impl Container {
         self.resolve_state_value(id, base, |state| state.border.map(|b| b.color.get()))
     }
 
-    pub(super) fn effective_corner_radius_target(
-        &self,
-        id: WidgetId,
-    ) -> crate::renderer::CornerRadii {
-        let base = self
-            .corner_radius
-            .get_or(crate::renderer::CornerRadii::uniform(0.0));
-        self.resolve_state_value(id, base, |state| state.corner_radius.map(|s| s.get()))
+    pub(super) fn effective_corners_target(&self, id: WidgetId) -> crate::widgets::Corners {
+        let base = self.corners.get_or(crate::widgets::Corners::SQUARE);
+        self.resolve_state_value(id, base, |state| state.corners.map(|s| s.get()))
     }
 
     pub(super) fn effective_transform_target(&self, id: WidgetId) -> Transform {
@@ -195,11 +190,10 @@ impl Container {
         )
     }
 
-    pub(super) fn animated_corner_radius(&self, id: WidgetId) -> crate::renderer::CornerRadii {
-        get_animated_value(
-            self.anims.as_ref().and_then(|a| a.corner_radius.as_ref()),
-            || self.effective_corner_radius_target(id),
-        )
+    pub(super) fn animated_corners(&self, id: WidgetId) -> crate::widgets::Corners {
+        get_animated_value(self.anims.as_ref().and_then(|a| a.corners.as_ref()), || {
+            self.effective_corners_target(id)
+        })
     }
 
     pub(super) fn animated_border_width(&self, id: WidgetId) -> f32 {
@@ -261,7 +255,7 @@ impl Container {
     pub(super) fn has_animated_state_properties(&self) -> bool {
         self.anims.as_ref().is_some_and(|a| {
             a.background.is_some()
-                || a.corner_radius.is_some()
+                || a.corners.is_some()
                 || a.elevation.is_some()
                 || a.border_width.is_some()
                 || a.border_color.is_some()
@@ -278,7 +272,7 @@ impl Container {
             a.padding.is_some()
                 || a.border_width.is_some()
                 || a.background.is_some()
-                || a.corner_radius.is_some()
+                || a.corners.is_some()
                 || a.elevation.is_some()
                 || a.border_color.is_some()
                 || a.transform.is_some()

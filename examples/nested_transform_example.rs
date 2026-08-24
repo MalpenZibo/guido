@@ -28,13 +28,13 @@ fn main() {
                             .width(100.0)
                             .height(100.0)
                             .background(Color::rgba(0.8, 0.3, 0.3, 0.5))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .child(
                                 container()
                                     .width(60.0)
                                     .height(60.0)
                                     .background(Color::rgb(0.3, 0.8, 0.3))
-                                    .corner_radius(4.0),
+                                    .corners(4.0),
                             ),
                         // Case 1: Parent rotated 30, child scaled 0.7
                         // Expected: Inner box rotated 30deg AND smaller
@@ -42,14 +42,14 @@ fn main() {
                             .width(100.0)
                             .height(100.0)
                             .background(Color::rgba(0.8, 0.3, 0.3, 0.5))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .transform(Transform::rotate_degrees(30.0))
                             .child(
                                 container()
                                     .width(60.0)
                                     .height(60.0)
                                     .background(Color::rgb(0.3, 0.8, 0.3))
-                                    .corner_radius(4.0)
+                                    .corners(4.0)
                                     .transform(Transform::scale(0.7)),
                             ),
                         // Case 2: Both parent and child rotated 20deg each
@@ -58,14 +58,14 @@ fn main() {
                             .width(100.0)
                             .height(100.0)
                             .background(Color::rgba(0.3, 0.3, 0.8, 0.5))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .transform(Transform::rotate_degrees(20.0))
                             .child(
                                 container()
                                     .width(60.0)
                                     .height(60.0)
                                     .background(Color::rgb(0.8, 0.8, 0.3))
-                                    .corner_radius(4.0)
+                                    .corners(4.0)
                                     .transform(Transform::rotate_degrees(20.0)),
                             ),
                         // Case 3: Parent scaled 1.3, child rotated 45deg
@@ -74,14 +74,14 @@ fn main() {
                             .width(100.0)
                             .height(100.0)
                             .background(Color::rgba(0.8, 0.5, 0.2, 0.5))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .transform(Transform::scale(1.3))
                             .child(
                                 container()
                                     .width(60.0)
                                     .height(60.0)
                                     .background(Color::rgb(0.5, 0.2, 0.8))
-                                    .corner_radius(4.0)
+                                    .corners(4.0)
                                     .transform(Transform::rotate_degrees(45.0)),
                             ),
                         // Case 4: Child with NO transform (inherits parent's rotation)
@@ -90,14 +90,14 @@ fn main() {
                             .width(100.0)
                             .height(100.0)
                             .background(Color::rgba(0.2, 0.7, 0.7, 0.5))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .transform(Transform::rotate_degrees(30.0))
                             .child(
                                 container()
                                     .width(60.0)
                                     .height(60.0)
                                     .background(Color::rgb(0.7, 0.2, 0.7))
-                                    .corner_radius(4.0),
+                                    .corners(4.0),
                             ),
                     ])
             },

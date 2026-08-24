@@ -28,17 +28,28 @@ container()
     .when_focused(|s| s.border(1.5, theme.accent))
 ```
 
-## Corner Radius
+## Corners
 
-### Uniform Radius
+How far the corners are rounded, and how — one property, because a curvature
+with no radius has no arc to apply itself to.
+
+A bare size means rounded corners, and takes what `padding` takes: one value
+for all four, `[top, bottom]` for the two pairs, or
+`[top-left, top-right, bottom-right, bottom-left]` clockwise as CSS writes it.
 
 ```rust
-container().corner_radius(8.0)  // 8px radius on all corners
+container().corners(8.0)              // all four
+container().corners([16.0, 0.0])      // the top pair only
+container().corners([16.0, 4.0, 16.0, 4.0])
 ```
 
-## Corner Curvature (Superellipse)
+The shape reaches everything: the box, its border and shadow, the blur behind
+it, the clip its children are cut to, and the region that answers a click.
 
-Control the shape of corners using CSS K-values. This determines how the corner curves from the edge to the arc.
+### The shape of the corner (Superellipse)
+
+A constructor names the shape and takes the size. The curve is a CSS K-value —
+how far from the corner the arc starts.
 
 ### Squircle (K=2)
 
@@ -46,8 +57,7 @@ iOS-style smooth corners. The curve starts further from the corner for a smoothe
 
 ```rust
 container()
-    .corner_radius(12.0)
-    .corner_curvature(Curvature::SQUIRCLE)
+    .corners(Corners::squircle(12.0))
 ```
 
 ### Circle (K=1)
@@ -56,7 +66,7 @@ Standard circular corners. This is the default.
 
 ```rust
 container()
-    .corner_radius(12.0)  // Default is circular
+    .corners(12.0)  // Default is circular
 ```
 
 ### Bevel (K=0)
@@ -65,8 +75,7 @@ Diagonal cut corners. Creates a chamfered look.
 
 ```rust
 container()
-    .corner_radius(12.0)
-    .corner_curvature(Curvature::BEVEL)
+    .corners(Corners::bevel(12.0))
 ```
 
 ### Scoop (K=-1)
@@ -75,8 +84,7 @@ Concave/inward corners. Creates a scooped appearance.
 
 ```rust
 container()
-    .corner_radius(12.0)
-    .corner_curvature(Curvature::SCOOP)
+    .corners(Corners::scoop(12.0))
 ```
 
 ### Custom Curvature
@@ -85,8 +93,7 @@ For values between the presets:
 
 ```rust
 container()
-    .corner_radius(12.0)
-    .corner_curvature(1.5)  // Between circle and squircle
+    .corners(Corners::superellipse(12.0, 1.5))  // Between circle and squircle
 ```
 
 ## Curvature Reference
@@ -118,8 +125,7 @@ Borders respect corner curvature:
 ```rust
 container()
     .border(2.0, Color::rgb(0.5, 0.3, 0.7))
-    .corner_radius(12.0)
-    .corner_curvature(Curvature::SQUIRCLE)  // Border follows squircle shape
+    .corners(Corners::squircle(12.0))  // Border follows squircle shape
 ```
 
 ## Borders with Gradients
@@ -129,7 +135,7 @@ Borders work with gradient backgrounds:
 ```rust
 container()
     .gradient(LinearGradient::horizontal(Color::rgb(0.3, 0.1, 0.4), Color::rgb(0.1, 0.3, 0.5)))
-    .corner_radius(8.0)
+    .corners(8.0)
     .border(2.0, Color::rgba(1.0, 1.0, 1.0, 0.3))  // Semi-transparent white
 ```
 
@@ -140,8 +146,7 @@ fn card_with_border() -> Container {
     container()
         .padding(16.0)
         .background(Color::rgb(0.12, 0.12, 0.16))
-        .corner_radius(12.0)
-        .corner_curvature(Curvature::SQUIRCLE)
+        .corners(Corners::squircle(12.0))
         .border(1.0, Color::rgb(0.2, 0.2, 0.25))
         .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
         .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))

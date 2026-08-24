@@ -316,24 +316,6 @@ impl Padding {
 
 // From conversions for Padding — enables padding(8.0), padding(8), padding([8.0, 16.0]), etc.
 
-/// The corner curvatures that have a name, on the CSS K-value scale.
-///
-/// A namespace rather than an enum: the scale is continuous, and these are the
-/// four points on it worth calling something. Pass any other number to
-/// [`corner_curvature`](crate::widgets::Container::corner_curvature) directly.
-pub struct Curvature;
-
-impl Curvature {
-    /// The default: an ordinary circular arc.
-    pub const CIRCULAR: f32 = 1.0;
-    /// iOS-style continuous corner.
-    pub const SQUIRCLE: f32 = 2.0;
-    /// A diagonal cut.
-    pub const BEVEL: f32 = 0.0;
-    /// Concave, curving inward.
-    pub const SCOOP: f32 = -1.0;
-}
-
 impl From<f32> for Padding {
     fn from(v: f32) -> Self {
         Padding::all(v)

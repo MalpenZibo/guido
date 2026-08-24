@@ -43,7 +43,7 @@ fn main() {
 fn panel(title: &str, what_to_do: &str, body: Container) -> Container {
     container()
         .background(CARD)
-        .corner_radius(10.0)
+        .corners(10.0)
         .padding(14.0)
         .layout(Flex::column().spacing(8.0))
         .children([
@@ -61,7 +61,7 @@ fn track(dot: Container) -> Container {
         .width(fill())
         .height(46.0)
         .background(Color::rgb(0.11, 0.11, 0.16))
-        .corner_radius(8.0)
+        .corners(8.0)
         .padding(6.0)
         .child(dot)
 }
@@ -71,7 +71,7 @@ fn dot(color: Color) -> Container {
         .width(34.0)
         .height(34.0)
         .background(color)
-        .corner_radius(17.0)
+        .corners(17.0)
 }
 
 /// The headline: reversed mid-flight, the spring turns around instead of
@@ -168,7 +168,7 @@ fn shake() -> Container {
             .width(140.0)
             .height(46.0)
             .background(HOT)
-            .corner_radius(8.0)
+            .corners(8.0)
             .padding(10.0)
             .transform(move || Transform::rotate_degrees(angle.get()))
             .animate_transform(Transition::spring(SpringConfig::BOUNCY))

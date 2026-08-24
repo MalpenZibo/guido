@@ -190,7 +190,7 @@ fn button(label: &str, on_click: impl Fn() + 'static) -> Container {
     container()
         .padding(8.0)
         .background(Color::rgb(0.3, 0.3, 0.4))
-        .corner_radius(4.0)
+        .corners(4.0)
         .when_hovered(|s| s.lighter(0.1))
         .when_pressed(|s| s.ripple())
         .on_click(on_click)

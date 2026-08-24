@@ -182,7 +182,7 @@ fn interactive_counter() -> impl Widget {
             container()
                 .padding(12.0)
                 .background(Color::rgb(0.3, 0.5, 0.8))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .when_hovered(|s| s.lighter(0.1))
                 .when_pressed(|s| s.ripple())
                 .on_click(move || count.update(|c| *c += 1))
@@ -194,7 +194,7 @@ fn interactive_counter() -> impl Widget {
             container()
                 .padding(12.0)
                 .background(Color::rgb(0.2, 0.3, 0.2))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .when_hovered(|s| s.lighter(0.05))
                 .on_scroll(move |_dx, dy, _source| {
                     scroll_offset.update(|o| *o += dy);

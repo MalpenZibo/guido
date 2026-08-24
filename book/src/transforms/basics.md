@@ -121,7 +121,7 @@ fn transform_demo() -> impl Widget {
                 .width(60.0)
                 .height(60.0)
                 .background(Color::rgb(0.8, 0.3, 0.3))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .transform(Transform::rotate_degrees(45.0))
                 .child(container().child(text("45°").color(Color::WHITE))),
 
@@ -130,7 +130,7 @@ fn transform_demo() -> impl Widget {
                 .width(60.0)
                 .height(60.0)
                 .background(Color::rgb(0.3, 0.6, 0.8))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .transform(Transform::rotate_degrees(rotation))
                 .when_hovered(|s| s.lighter(0.1))
                 .on_click(move || rotation.update(|r| *r += 45.0))
@@ -141,7 +141,7 @@ fn transform_demo() -> impl Widget {
                 .width(60.0)
                 .height(60.0)
                 .background(Color::rgb(0.3, 0.8, 0.4))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .transform(Transform::scale(scale_factor))
                 .when_hovered(|s| s.lighter(0.1))
                 .on_click(move || {

@@ -285,7 +285,7 @@ fn scrolling() {
             .padding(8.0)
             .children((0..n).map(|i| {
                 swatch(120.0, 24.0, Color::rgb(0.25, 0.25, 0.35))
-                    .corner_radius(4.0)
+                    .corners(4.0)
                     .transform(Transform::translate(0.0, i as f32))
             }))
     };
@@ -296,7 +296,7 @@ fn scrolling() {
         .child(
             box_of(200.0, 200.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .scrollable(ScrollAxis::Vertical)
                 .child(column(20)),
         )
@@ -368,7 +368,7 @@ fn flex_alignment_matrix() {
 /// another so the composition shows up.
 #[test]
 fn transforms_and_origins() {
-    let card = |c: Color| swatch(80.0, 40.0, c).corner_radius(6.0);
+    let card = |c: Color| swatch(80.0, 40.0, c).corners(6.0);
 
     let view = container()
         .layout(Flex::column().spacing(12.0))
@@ -399,7 +399,7 @@ fn transforms_and_origins() {
 /// the emitted draw commands.
 #[test]
 fn corners_borders_and_elevation() {
-    let base = |c: Color| swatch(70.0, 70.0, c).corner_radius(16.0);
+    let base = |c: Color| swatch(70.0, 70.0, c).corners(16.0);
 
     let view = container()
         .layout(Flex::column().spacing(10.0))
@@ -408,17 +408,17 @@ fn corners_borders_and_elevation() {
             container()
                 .layout(Flex::row().spacing(10.0))
                 .child(base(Color::rgb(0.3, 0.5, 0.9)))
-                .child(base(Color::rgb(0.3, 0.5, 0.9)).corner_curvature(Curvature::SQUIRCLE))
-                .child(base(Color::rgb(0.3, 0.5, 0.9)).corner_curvature(Curvature::BEVEL))
-                .child(base(Color::rgb(0.3, 0.5, 0.9)).corner_curvature(Curvature::SCOOP))
-                .child(base(Color::rgb(0.3, 0.5, 0.9)).corner_curvature(1.5)),
+                .child(base(Color::rgb(0.3, 0.5, 0.9)).corners(Corners::squircle(16.0)))
+                .child(base(Color::rgb(0.3, 0.5, 0.9)).corners(Corners::bevel(16.0)))
+                .child(base(Color::rgb(0.3, 0.5, 0.9)).corners(Corners::scoop(16.0)))
+                .child(base(Color::rgb(0.3, 0.5, 0.9)).corners(Corners::superellipse(16.0, 1.5))),
         )
         .child(
             container()
                 .layout(Flex::row().spacing(10.0))
                 .children((0..6).map(|level| {
                     swatch(60.0, 60.0, Color::rgb(0.9, 0.9, 0.95))
-                        .corner_radius(8.0)
+                        .corners(8.0)
                         .elevation(level as f32)
                 })),
         )
@@ -428,7 +428,7 @@ fn corners_borders_and_elevation() {
                 .child(base(Color::TRANSPARENT).border(2.0, Color::WHITE))
                 .child(
                     box_of(70.0, 70.0)
-                        .corner_radius(CornerRadii {
+                        .corners(CornerRadii {
                             top_left: 16.0,
                             top_right: 0.0,
                             bottom_right: 16.0,
@@ -460,7 +460,7 @@ fn backdrop_blur_sources_and_geometry() {
     let frosted = |radius: f32| {
         box_of(80.0, 60.0)
             .background(Color::rgba(1.0, 1.0, 1.0, 0.15))
-            .corner_radius(16.0)
+            .corners(16.0)
             .backdrop_blur(radius)
     };
 
@@ -493,7 +493,7 @@ fn overflow_and_clipping() {
         .child(
             box_of(100.0, 60.0)
                 .overflow(Overflow::Hidden)
-                .corner_radius(12.0)
+                .corners(12.0)
                 .background(Color::rgb(0.2, 0.2, 0.3))
                 .child(swatch(300.0, 40.0, Color::RED)),
         )
@@ -504,7 +504,7 @@ fn overflow_and_clipping() {
                 .child(
                     box_of(200.0, 40.0)
                         .overflow(Overflow::Hidden)
-                        .corner_radius(8.0)
+                        .corners(8.0)
                         .child(swatch(400.0, 30.0, Color::GREEN)),
                 ),
         )
@@ -530,7 +530,7 @@ fn dynamic_children() {
         .children(keyed(
             move || items.get(),
             |(id, _)| *id,
-            |(_, height)| swatch(120.0, height, Color::rgb(0.3, 0.3, 0.4)).corner_radius(4.0),
+            |(_, height)| swatch(120.0, height, Color::rgb(0.3, 0.3, 0.4)).corners(4.0),
         ))
         .child(move || {
             show_footer
@@ -549,7 +549,7 @@ fn bar_like_composition() {
         container()
             .padding([4.0, 8.0])
             .background(c)
-            .corner_radius(10.0)
+            .corners(10.0)
             .when_hovered(|s| s.lighter(0.1))
             .child(swatch(w, 14.0, Color::WHITE.with_alpha(0.8)))
     };
@@ -571,7 +571,7 @@ fn bar_like_composition() {
             box_of(90.0, 24.0)
                 .scrollable(ScrollAxis::Horizontal)
                 .background(Color::rgb(0.15, 0.15, 0.2))
-                .corner_radius(6.0)
+                .corners(6.0)
                 .child(
                     container()
                         .layout(Flex::row().spacing(4.0))
@@ -600,7 +600,7 @@ fn text_input_clips_overflowing_content() {
             .width(180.0)
             .padding(8.0)
             .background(Color::rgb(0.18, 0.18, 0.24))
-            .corner_radius(6.0)
+            .corners(6.0)
             .child(text_input(value).color(Color::WHITE).font_size(14.0)),
     );
 

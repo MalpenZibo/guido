@@ -15,7 +15,7 @@ Changes are defined declaratively, and the framework handles state transitions, 
 ```rust
 container()
     .background(Color::rgb(0.2, 0.2, 0.3))
-    .corner_radius(8.0)
+    .corners(8.0)
     .when_hovered(|s| s.lighter(0.1))      // Style when hovered
     .when_pressed(|s| s.ripple())         // Style when pressed
     .child(text("Click me"))
@@ -51,7 +51,7 @@ State layers can override these properties:
 ### Corner Radius
 
 ```rust
-.when_hovered(|s| s.corner_radius(12.0))
+.when_hovered(|s| s.corners(12.0))
 ```
 
 ### Elevation
@@ -105,7 +105,7 @@ fn interactive_button(label: &str) -> Container {
     container()
         .padding(16.0)
         .background(Color::rgb(0.3, 0.5, 0.8))
-        .corner_radius(8.0)
+        .corners(8.0)
         .border(1.0, Color::rgb(0.4, 0.6, 0.9))
 
         // Animations
@@ -137,7 +137,7 @@ pub struct StateStyle {
     pub background: Option<BackgroundOverride>,
     // Both halves or neither: half a border is no border.
     pub border: Option<BorderOverride>,
-    pub corner_radius: Option<Signal<f32>>,
+    pub corners: Option<Signal<Corners>>,
     pub transform: Option<Signal<Transform>>,
     pub elevation: Option<Signal<f32>>,
     pub alpha: Option<Signal<f32>>,

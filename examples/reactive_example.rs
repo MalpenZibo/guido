@@ -46,7 +46,7 @@ fn main() {
                         container()
                             .padding(8.0)
                             .background(Color::rgb(0.2, 0.2, 0.3))
-                            .corner_radius(4.0)
+                            .corners(4.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || {
@@ -62,7 +62,7 @@ fn main() {
                         container()
                             .padding(8.0)
                             .background(Color::rgb(0.2, 0.3, 0.2))
-                            .corner_radius(4.0)
+                            .corners(4.0)
                             .when_hovered(|s| s.lighter(0.05))
                             .on_scroll(move |_dx, dy, _source| {
                                 scroll_offset.update(|offset| {
@@ -91,7 +91,7 @@ fn main() {
                                 Color::rgb(0.3, 0.1, 0.4),
                                 Color::rgb(0.1, 0.3, 0.5),
                             ))
-                            .corner_radius(4.0)
+                            .corners(4.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .child(text("Gradient!").color(Color::WHITE)),
                     )

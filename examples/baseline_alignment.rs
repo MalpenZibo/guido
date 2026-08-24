@@ -18,7 +18,7 @@ fn row(label: &str, align: CrossAlignment) -> Container {
         .layout(Flex::row().spacing(10.0).cross_alignment(align))
         .padding([6.0, 10.0])
         .background(Color::rgb(0.16, 0.16, 0.22))
-        .corner_radius(8.0)
+        .corners(8.0)
         .children([
             container()
                 .width(96.0)
@@ -41,7 +41,7 @@ fn row(label: &str, align: CrossAlignment) -> Container {
             container()
                 .width(22.0)
                 .height(22.0)
-                .corner_radius(11.0)
+                .corners(11.0)
                 .background(Color::rgb(0.4, 0.8, 0.5))
                 .into_any(),
         ])

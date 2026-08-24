@@ -62,7 +62,7 @@ fn make_box(
         .width(100.0)
         .height(100.0)
         .background(base_color)
-        .corner_radius(corner_radius)
+        .corners(corner_radius)
         .when_hovered(|s| s.lighter(0.15))
         .when_pressed(|s| s.ripple())
         .on_click(move || click_count.update(|c| *c += 1))

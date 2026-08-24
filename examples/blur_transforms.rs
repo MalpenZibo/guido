@@ -53,7 +53,7 @@ fn card() -> Container {
     container()
         .width(150.0)
         .height(90.0)
-        .corner_radius(18.0)
+        .corners(18.0)
         .background(CARD)
         .border(2.0, FRAME)
         .backdrop_blur(BackdropBlur::new(14.0).sources(BackdropSources::SURFACE))

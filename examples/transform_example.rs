@@ -37,7 +37,7 @@ fn main() {
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.8, 0.3, 0.3))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .transform(Transform::rotate_degrees(45.0))
                             .child(
                                 container()
@@ -53,7 +53,7 @@ fn main() {
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.3, 0.6, 0.8))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .transform(move || Transform::rotate_degrees(rotation.get()))
                             .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
                             .when_hovered(|s| s.lighter(0.1))
@@ -75,7 +75,7 @@ fn main() {
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.3, 0.8, 0.4))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .transform(move || Transform::scale(scale_factor.get()))
                             .animate_transform(Transition::spring(SpringConfig::BOUNCY))
                             .when_hovered(|s| s.lighter(0.1))
@@ -99,7 +99,7 @@ fn main() {
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.6, 0.4, 0.8))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .transform(Transform::scale(0.7))
                             .child(
                                 container()
@@ -115,7 +115,7 @@ fn main() {
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.8, 0.6, 0.2))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .transform(Transform::rotate_degrees(30.0).then(&Transform::scale(0.8)))
                             .child(
                                 container()
@@ -131,7 +131,7 @@ fn main() {
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.8, 0.5, 0.7))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .transform(Transform::rotate_degrees(45.0))
                             .transform_origin(TransformOrigin::TOP_LEFT)
                             .child(
@@ -148,7 +148,7 @@ fn main() {
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.5, 0.7, 0.8))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .transform(Transform::scale(0.8))
                             .transform_origin(TransformOrigin::BOTTOM_RIGHT)
                             .child(
@@ -167,7 +167,7 @@ fn main() {
                                 .width(60.0)
                                 .height(60.0)
                                 .background(Color::rgb(0.7, 0.8, 0.5))
-                                .corner_radius(8.0)
+                                .corners(8.0)
                                 .transform(Transform::rotate_degrees(30.0))
                                 .transform_origin(move || match origin_index.get() % 5 {
                                     0 => TransformOrigin::CENTER,

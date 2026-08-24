@@ -190,7 +190,7 @@ pub(super) struct ContainerAnims {
     pub(super) width: Option<AnimationState<f32>>,
     pub(super) height: Option<AnimationState<f32>>,
     pub(super) background: Option<AnimationState<Color>>,
-    pub(super) corner_radius: Option<AnimationState<crate::renderer::CornerRadii>>,
+    pub(super) corners: Option<AnimationState<crate::widgets::Corners>>,
     pub(super) elevation: Option<AnimationState<f32>>,
     pub(super) padding: Option<AnimationState<Padding>>,
     pub(super) border_width: Option<AnimationState<f32>>,
@@ -362,8 +362,7 @@ pub struct Container {
     pub(super) padding: Option<Signal<Padding>>,
     pub(super) background: Option<Signal<Color>>,
     pub(super) gradient: Option<Signal<Option<LinearGradient>>>,
-    pub(super) corner_radius: Option<Signal<crate::renderer::CornerRadii>>,
-    pub(super) corner_curvature: Option<Signal<f32>>,
+    pub(super) corners: Option<Signal<crate::widgets::Corners>>,
     pub(super) border_width: Option<Signal<f32>>,
     pub(super) border_color: Option<Signal<Color>>,
     pub(super) elevation: Option<Signal<f32>>,
@@ -428,8 +427,7 @@ impl Container {
             padding: None,
             background: None,
             gradient: None,
-            corner_radius: None,
-            corner_curvature: None,
+            corners: None,
             border_width: None,
             border_color: None,
             elevation: None,
@@ -548,43 +546,25 @@ impl Container {
     // overrides it — see [`TextStyle`](crate::widgets::TextStyle).
     // -----------------------------------------------------------------------
 
-    /// Round the corners.
+    /// The shape of the corners: how far they are rounded, and how.
     ///
-    /// One value for all four, `[top, bottom]` for the two pairs, or
+    /// A bare size means rounded corners, taking what `padding` takes — one
+    /// value for all four, `[top, bottom]` for the two pairs, or
     /// `[top-left, top-right, bottom-right, bottom-left]` clockwise as CSS
-    /// writes it:
+    /// writes it. A constructor names another shape:
     ///
     /// ```ignore
-    /// container().corner_radius(8.0)                     // all four
-    /// container().corner_radius([16.0, 0.0])             // the top pair only
-    /// container().corner_radius([16.0, 16.0, 0.0, 0.0])  // the same, spelled out
+    /// container().corners(8.0)
+    /// container().corners([16.0, 0.0])
+    /// container().corners(Corners::squircle(12.0))
+    /// container().corners(Corners::bevel([16.0, 0.0]))
     /// ```
     ///
     /// The shape reaches everything: the box, its border and shadow, the blur
     /// behind it, the clip its children are cut to, and the region that
     /// answers a click.
-    ///
-    /// Combine with [`corner_curvature`](Self::corner_curvature) for the shape
-    /// of the corner itself — circular by default, or squircle, bevel, scoop.
-    pub fn corner_radius<M>(
-        mut self,
-        radius: impl IntoSignal<crate::renderer::CornerRadii, M>,
-    ) -> Self {
-        self.corner_radius = Some(radius.into_signal());
-        self
-    }
-
-    /// How the corners are shaped, on the CSS K-value scale.
-    ///
-    /// [`Curvature`](crate::widgets::Curvature) names the four that have one:
-    /// `CIRCULAR` (the default), `SQUIRCLE`, `BEVEL`, `SCOOP`. Any other number
-    /// is legal, and so is a signal — a corner can round and unround.
-    ///
-    /// ```ignore
-    /// container().corner_radius(12.0).corner_curvature(Curvature::SQUIRCLE)
-    /// ```
-    pub fn corner_curvature<M>(mut self, curvature: impl IntoSignal<f32, M>) -> Self {
-        self.corner_curvature = Some(curvature.into_signal());
+    pub fn corners<M>(mut self, corners: impl IntoSignal<crate::widgets::Corners, M>) -> Self {
+        self.corners = Some(corners.into_signal());
         self
     }
 
@@ -597,7 +577,7 @@ impl Container {
     ///
     /// ```ignore
     /// container()
-    ///     .corner_radius(16.0)
+    ///     .corners(16.0)
     ///     .backdrop_blur(32.0)
     ///     .background(Color::rgba(0.1, 0.1, 0.15, 0.6))
     /// ```
@@ -855,11 +835,11 @@ impl Container {
     }
 
     /// Enable animation for corner radius changes
-    pub fn animate_corner_radius(mut self, transition: impl Into<TransitionConfig>) -> Self {
+    pub fn animate_corners(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self
-            .corner_radius
-            .get_or_untracked(crate::renderer::CornerRadii::uniform(0.0));
-        self.anims_mut().corner_radius = Some(AnimationState::new(initial, transition));
+            .corners
+            .get_or_untracked(crate::widgets::Corners::SQUARE);
+        self.anims_mut().corners = Some(AnimationState::new(initial, transition));
         self
     }
 
@@ -1093,7 +1073,7 @@ impl Widget for Container {
                 padding_target,
                 border_width_target,
                 bg_target,
-                corner_radius_target,
+                corners_target,
                 elevation_target,
                 border_color_target,
                 transform_target,
@@ -1102,7 +1082,7 @@ impl Widget for Container {
                     self.padding.get_or(Padding::default()),
                     self.effective_border_width_target(id),
                     self.effective_background_target(id),
-                    self.effective_corner_radius_target(id),
+                    self.effective_corners_target(id),
                     self.effective_elevation_target(id),
                     self.effective_border_color_target(id),
                     self.effective_transform_target(id),
@@ -1125,14 +1105,7 @@ impl Widget for Container {
                 paint
             );
             advance_anim!(anims, background, bg_target, id, any_animating, paint);
-            advance_anim!(
-                anims,
-                corner_radius,
-                corner_radius_target,
-                id,
-                any_animating,
-                paint
-            );
+            advance_anim!(anims, corners, corners_target, id, any_animating, paint);
             advance_anim!(anims, elevation, elevation_target, id, any_animating, paint);
             advance_anim!(
                 anims,
@@ -1363,7 +1336,7 @@ impl Widget for Container {
 
         let hit = HitContext {
             bounds: tree.get_bounds(id).unwrap_or_default(),
-            corner_radius: self.animated_corner_radius(id),
+            corner_radius: self.animated_corners(id).radii,
             transform: self.animated_transform(id),
             transform_origin: self.transform_origin.get_or(TransformOrigin::CENTER),
         };
@@ -1437,8 +1410,7 @@ impl Widget for Container {
         // as a Paint subscriber so future changes trigger repaint.
         let (
             background,
-            corner_radius,
-            corner_curvature,
+            corners,
             elevation_level,
             user_transform,
             transform_origin,
@@ -1450,8 +1422,7 @@ impl Widget for Container {
         ) = with_signal_tracking(id, JobType::Paint, || {
             (
                 self.animated_background(id),
-                self.animated_corner_radius(id),
-                self.corner_curvature.get_or(1.0),
+                self.animated_corners(id),
                 self.animated_elevation(id),
                 self.animated_transform(id),
                 self.transform_origin.get_or(TransformOrigin::CENTER),
@@ -1466,7 +1437,7 @@ impl Widget for Container {
 
         self.resync_animation_targets(id);
 
-        let corner_radii = corner_radius;
+        let (corner_radii, corner_curvature) = (corners.radii, corners.curvature);
 
         // LOCAL bounds: the origin is this container, the parent already
         // positioned the node.
@@ -1520,7 +1491,7 @@ impl Widget for Container {
         // Set clip region for scrollable or overflow:hidden containers
         // This clips all children to the container bounds
         if is_scrollable || overflow == Overflow::Hidden {
-            ctx.set_clip(local_bounds, corner_radius, corner_curvature);
+            ctx.set_clip(local_bounds, corner_radii, corner_curvature);
         }
 
         // Determine the effective cull rect for children.
@@ -1628,7 +1599,7 @@ impl Widget for Container {
             && ix.ripple.iter().any(|r| r.opacity() > 0.0)
         {
             // Clips the ripples without affecting children.
-            ctx.set_overlay_clip(local_bounds, corner_radius, corner_curvature);
+            ctx.set_overlay_clip(local_bounds, corner_radii, corner_curvature);
 
             for ripple in ix.ripple.iter() {
                 let opacity = ripple.opacity();

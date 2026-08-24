@@ -1,6 +1,7 @@
 pub mod children;
 pub mod container;
 pub mod control;
+mod corners;
 pub mod font;
 pub mod image;
 pub mod input_style;
@@ -22,6 +23,7 @@ pub use container::{
     Border, Container, GradientDirection, IntoClickHandler, LinearGradient, Overflow, container,
 };
 pub use control::Control;
+pub use corners::Corners;
 pub use font::{FontFamily, FontWeight};
 pub use image::{ContentFit, Image, ImageSource, image};
 pub use input_style::{InputStyle, InputStyled};
@@ -36,12 +38,43 @@ pub use text::{Text, text};
 pub use text_input::{Selection, TextInput, text_input};
 pub use text_style::{TextShadow, TextStroke, TextStyle, TextStyled};
 pub use widget::{
-    AnyWidget, Color, Curvature, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton,
-    Padding, Rect, ScrollSource, Widget,
+    AnyWidget, Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding,
+    Rect, ScrollSource, Widget,
 };
 
 // IntoVal<Padding> impls for closures returning numeric types
 use crate::reactive::IntoVal;
+
+// And for a closure that returns a bare size where a corner shape is wanted.
+impl IntoVal<Corners> for f32 {
+    fn into_val(self) -> Corners {
+        Corners::from(self)
+    }
+}
+
+impl IntoVal<Corners> for f64 {
+    fn into_val(self) -> Corners {
+        Corners::from(self as f32)
+    }
+}
+
+impl IntoVal<Corners> for i32 {
+    fn into_val(self) -> Corners {
+        Corners::from(self)
+    }
+}
+
+impl IntoVal<Corners> for [f32; 2] {
+    fn into_val(self) -> Corners {
+        Corners::from(self)
+    }
+}
+
+impl IntoVal<Corners> for [f32; 4] {
+    fn into_val(self) -> Corners {
+        Corners::from(self)
+    }
+}
 
 // The same, for a closure that returns a radius rather than four.
 impl IntoVal<crate::renderer::CornerRadii> for f32 {

@@ -91,7 +91,7 @@ fn main() {
                                     glass()
                                         .width(200.0)
                                         .height(120.0)
-                                        .corner_radius([36.0, 0.0, 36.0, 0.0])
+                                        .corners([36.0, 0.0, 36.0, 0.0])
                                         .border(1.0, FRAME),
                                 )
                                 .into_any(),
@@ -106,7 +106,7 @@ fn main() {
                                     container()
                                         .width(200.0)
                                         .height(120.0)
-                                        .corner_radius(28.0)
+                                        .corners(28.0)
                                         .border(1.0, FRAME)
                                         .overflow(Overflow::Hidden)
                                         .child(glass().width(fill()).height(fill())),
@@ -121,13 +121,11 @@ fn main() {
                                     container()
                                         .width(200.0)
                                         .height(120.0)
-                                        .corner_radius(28.0)
+                                        .corners(28.0)
                                         .border(1.0, FRAME)
                                         .overflow(Overflow::Hidden)
                                         .layout(Flex::row())
-                                        .child(
-                                            glass().width(320.0).height(fill()).corner_radius(20.0),
-                                        ),
+                                        .child(glass().width(320.0).height(fill()).corners(20.0)),
                                 )
                                 .into_any(),
                             ])
@@ -145,7 +143,7 @@ fn main() {
                                         glass()
                                             .width(120.0)
                                             .height(120.0)
-                                            .corner_radius(28.0)
+                                            .corners(28.0)
                                             .border(1.0, FRAME)
                                             .transform(Transform::scale_xy(1.6, 1.0)),
                                     ),
@@ -160,7 +158,7 @@ fn main() {
                                         glass()
                                             .width(150.0)
                                             .height(90.0)
-                                            .corner_radius(16.0)
+                                            .corners(16.0)
                                             .border(1.0, FRAME)
                                             .transform(Transform::rotate_degrees(20.0)),
                                     ),
@@ -175,7 +173,7 @@ fn main() {
                                     container()
                                         .width(200.0)
                                         .height(120.0)
-                                        .corner_radius(24.0)
+                                        .corners(24.0)
                                         .background(GLASS)
                                         .border(1.0, FRAME)
                                         .backdrop_blur(move || {

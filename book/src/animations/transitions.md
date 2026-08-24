@@ -74,7 +74,7 @@ fn animated_card() -> Container {
     container()
         .padding(20.0)
         .background(Color::rgb(0.15, 0.15, 0.2))
-        .corner_radius(12.0)
+        .corners(12.0)
         .border(1.0, Color::rgb(0.25, 0.25, 0.3))
         .elevation(4.0)
 

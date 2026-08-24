@@ -31,7 +31,7 @@ fn main() {
                                 container()
                                     .padding(28.0)
                                     .background(Color::WHITE)
-                                    .corner_radius(8.0)
+                                    .corners(8.0)
                                     .elevation(0.0)
                                     .child(
                                         text("Level 0\n(No shadow)")
@@ -42,7 +42,7 @@ fn main() {
                                 container()
                                     .padding(28.0)
                                     .background(Color::WHITE)
-                                    .corner_radius(8.0)
+                                    .corners(8.0)
                                     .elevation(1.0)
                                     .child(text("Level 1")),
                             )
@@ -50,7 +50,7 @@ fn main() {
                                 container()
                                     .padding(28.0)
                                     .background(Color::WHITE)
-                                    .corner_radius(8.0)
+                                    .corners(8.0)
                                     .elevation(2.0)
                                     .child(text("Level 2")),
                             )
@@ -58,7 +58,7 @@ fn main() {
                                 container()
                                     .padding(28.0)
                                     .background(Color::WHITE)
-                                    .corner_radius(8.0)
+                                    .corners(8.0)
                                     .elevation(3.0)
                                     .child(text("Level 3")),
                             ),
@@ -71,7 +71,7 @@ fn main() {
                                 container()
                                     .padding(28.0)
                                     .background(Color::WHITE)
-                                    .corner_radius(8.0)
+                                    .corners(8.0)
                                     .elevation(4.0)
                                     .child(text("Level 4")),
                             )
@@ -79,7 +79,7 @@ fn main() {
                                 container()
                                     .padding(28.0)
                                     .background(Color::WHITE)
-                                    .corner_radius(8.0)
+                                    .corners(8.0)
                                     .elevation(5.0)
                                     .child(text("Level 5")),
                             )
@@ -87,7 +87,7 @@ fn main() {
                                 container()
                                     .padding(28.0)
                                     .background(Color::WHITE)
-                                    .corner_radius(8.0)
+                                    .corners(8.0)
                                     .elevation(7.0)
                                     .child(text("Level 7")),
                             )
@@ -95,7 +95,7 @@ fn main() {
                                 container()
                                     .padding(28.0)
                                     .background(Color::WHITE)
-                                    .corner_radius(8.0)
+                                    .corners(8.0)
                                     .elevation(10.0)
                                     .child(text("Level 10")),
                             ),
@@ -108,7 +108,7 @@ fn main() {
                                 container()
                                     .padding(28.0)
                                     .background(Color::rgb(0.9, 0.7, 0.7))
-                                    .corner_radius(12.0)
+                                    .corners(12.0)
                                     .elevation(2.0)
                                     .child(text("Card 1").color(Color::rgb(0.3, 0.1, 0.1))),
                             )
@@ -116,7 +116,7 @@ fn main() {
                                 container()
                                     .padding(28.0)
                                     .background(Color::rgb(0.7, 0.9, 0.7))
-                                    .corner_radius(12.0)
+                                    .corners(12.0)
                                     .elevation(3.0)
                                     .child(text("Card 2").color(Color::rgb(0.1, 0.3, 0.1))),
                             )
@@ -124,7 +124,7 @@ fn main() {
                                 container()
                                     .padding(28.0)
                                     .background(Color::rgb(0.7, 0.7, 0.9))
-                                    .corner_radius(12.0)
+                                    .corners(12.0)
                                     .elevation(4.0)
                                     .child(text("Card 3").color(Color::rgb(0.1, 0.1, 0.3))),
                             ),
@@ -137,8 +137,7 @@ fn main() {
                                 container()
                                     .padding(28.0)
                                     .background(Color::rgb(0.95, 0.95, 0.95))
-                                    .corner_radius(16.0)
-                                    .corner_curvature(Curvature::SQUIRCLE)
+                                    .corners(Corners::squircle(16.0))
                                     .elevation(2.0)
                                     .child(text("Squircle\nElevation 2")),
                             )
@@ -146,8 +145,7 @@ fn main() {
                                 container()
                                     .padding(28.0)
                                     .background(Color::rgb(0.95, 0.95, 0.95))
-                                    .corner_radius(16.0)
-                                    .corner_curvature(Curvature::SQUIRCLE)
+                                    .corners(Corners::squircle(16.0))
                                     .elevation(4.0)
                                     .child(text("Squircle\nElevation 4")),
                             )
@@ -155,8 +153,7 @@ fn main() {
                                 container()
                                     .padding(28.0)
                                     .background(Color::rgb(0.95, 0.95, 0.95))
-                                    .corner_radius(16.0)
-                                    .corner_curvature(Curvature::SQUIRCLE)
+                                    .corners(Corners::squircle(16.0))
                                     .elevation(6.0)
                                     .child(text("Squircle\nElevation 6")),
                             ),

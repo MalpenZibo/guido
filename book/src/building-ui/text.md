@@ -263,7 +263,7 @@ Text is typically placed inside containers for padding and backgrounds:
 container()
     .padding(12.0)
     .background(Color::rgb(0.2, 0.2, 0.3))
-    .corner_radius(4.0)
+    .corners(4.0)
     .child(
         container().child(text("Button Label").font_size(14.0).color(Color::WHITE))
     )
@@ -322,7 +322,7 @@ fn article_card(title: &str, author: &str, preview: &str) -> Container {
     container()
         .padding(16.0)
         .background(Color::rgb(0.12, 0.12, 0.16))
-        .corner_radius(8.0)
+        .corners(8.0)
         .layout(Flex::column().spacing(8.0))
         .child(
             // Title - bold serif

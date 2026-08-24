@@ -36,7 +36,7 @@ fn main() {
                             .padding(8.0)
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-                            .corner_radius(6.0)
+                            .corners(6.0)
                             // Highlight border when text input is focused
                             .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
                             .child(
@@ -58,7 +58,7 @@ fn main() {
                             .padding(8.0)
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-                            .corner_radius(6.0)
+                            .corners(6.0)
                             // Highlight border when text input is focused
                             .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
                             .child(
@@ -79,7 +79,7 @@ fn main() {
                 container()
                     .padding(12.0)
                     .background(Color::rgb(0.15, 0.15, 0.2))
-                    .corner_radius(6.0)
+                    .corners(6.0)
                     .layout(Flex::column().spacing(8.0))
                     .child(
                         container().child(text("Current Values:").color(Color::rgb(0.6, 0.6, 0.7))),
@@ -116,7 +116,7 @@ fn main() {
                 container()
                     .padding(12.0)
                     .background(Color::rgb(0.1, 0.1, 0.14))
-                    .corner_radius(6.0)
+                    .corners(6.0)
                     .layout(Flex::column().spacing(4.0))
                     .child(
                         container()

@@ -39,7 +39,7 @@ async fn main() {
                     container()
                         .padding(8.0)
                         .background(Color::rgb(0.3 + id as f32 * 0.1, 0.3, 0.4))
-                        .corner_radius(4.0)
+                        .corners(4.0)
                         .child(text(format!("Item {}", id)).color(Color::WHITE))
                 },
             )));

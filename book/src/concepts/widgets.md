@@ -110,7 +110,7 @@ These use the builder pattern for configuration:
 container()
     .padding(16.0)          // Returns Container
     .background(Color::RED) // Returns Container
-    .corner_radius(8.0)     // Returns Container
+    .corners(8.0)     // Returns Container
 ```
 
 ## The impl Widget Pattern
@@ -122,7 +122,7 @@ fn my_button(label: &str) -> impl Widget {
     container()
         .padding(12.0)
         .background(Color::rgb(0.3, 0.5, 0.8))
-        .corner_radius(8.0)
+        .corners(8.0)
         .child(container().child(text(label).color(Color::WHITE)))
 }
 ```

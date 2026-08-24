@@ -54,7 +54,7 @@ fn card() -> Container {
     container()
         .padding(12.0)
         .background(Color::rgb(0.12, 0.12, 0.18))
-        .corner_radius(8.0)
+        .corners(8.0)
         .layout(Flex::column().spacing(8.0))
 }
 
@@ -147,7 +147,7 @@ fn create_text_input_section() -> Container {
             container()
                 .padding(12.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .child(
                     text_input(input_value)
                         .mono()

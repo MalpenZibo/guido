@@ -26,7 +26,7 @@ fn panel(caption: &'static str, styled: Text) -> Container {
             container()
                 .width(240.0)
                 .height(120.0)
-                .corner_radius(8.0)
+                .corners(8.0)
                 .overflow(Overflow::Hidden)
                 .layout(ZStack::new())
                 .child(photo())

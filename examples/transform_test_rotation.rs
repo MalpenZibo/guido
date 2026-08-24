@@ -45,5 +45,5 @@ fn box_60(color: Color) -> Container {
         .width(60.0)
         .height(60.0)
         .background(color)
-        .corner_radius(8.0)
+        .corners(8.0)
 }

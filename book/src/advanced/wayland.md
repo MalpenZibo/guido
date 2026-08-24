@@ -224,7 +224,7 @@ fn main() {
                         container()
                             .padding([8.0, 16.0])
                             .background(Color::rgb(0.3, 0.3, 0.4))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .on_click(move || count.update(|c| *c += 1))
                             .child(container().child(text("+").color(Color::WHITE)))
@@ -512,7 +512,7 @@ are filtered:
 ```rust
 container()
     .background(Color::rgba(0.12, 0.12, 0.18, 0.55))
-    .corner_radius(16.0)
+    .corners(16.0)
     .backdrop_blur(32.0)
     .child(text("Frosted glass"))
 ```
@@ -751,7 +751,7 @@ fn main() {
                 container()
                     .padding(20.0)
                     .background(Color::rgb(0.15, 0.15, 0.2))
-                    .corner_radius(12.0)
+                    .corners(12.0)
                     .child(container().child(text("Notification").color(Color::WHITE)))
             },
         );

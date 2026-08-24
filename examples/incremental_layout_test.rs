@@ -47,7 +47,7 @@ async fn main() {
                         container()
                             .width(fill())
                             .padding(12.0)
-                            .corner_radius(12.0)
+                            .corners(12.0)
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .child(text(move || format!("elapsed: {} ticks", ticks.get()))),
                     )
@@ -62,14 +62,14 @@ fn static_row(i: usize) -> Container {
     container()
         .width(fill())
         .padding(8.0)
-        .corner_radius(8.0)
+        .corners(8.0)
         .background(Color::rgb(0.14, 0.14, 0.19))
         .layout(Flex::row().spacing(8.0))
         .child(
             container()
                 .width(16.0)
                 .height(16.0)
-                .corner_radius(8.0)
+                .corners(8.0)
                 .background(Color::rgb(0.3, 0.5, 0.9)),
         )
         .child(container().child(text(format!("row {i}")).font_size(14.0).font_size(18.0)))

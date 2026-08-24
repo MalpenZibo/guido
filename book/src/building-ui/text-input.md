@@ -205,7 +205,7 @@ container()
     .padding([8.0, 12.0])
     .background(Color::rgb(0.15, 0.15, 0.2))
     .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-    .corner_radius(4.0)
+    .corners(4.0)
     .child(
         container().child(text_input(value).font_size(14.0).color(Color::WHITE))
     )
@@ -220,7 +220,7 @@ container()
     .padding([8.0, 12.0])
     .background(Color::rgb(0.15, 0.15, 0.2))
     .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-    .corner_radius(4.0)
+    .corners(4.0)
     .when_focused(|s| s.border(1.0, Color::rgb(0.4, 0.6, 1.0)))
     .child(
         container().child(text_input(value).color(Color::WHITE))
@@ -239,7 +239,7 @@ fn login_form() -> Container {
     container()
         .padding(24.0)
         .background(Color::rgb(0.1, 0.1, 0.15))
-        .corner_radius(12.0)
+        .corners(12.0)
         .layout(Flex::column().spacing(16.0))
         .children([
             // Username field
@@ -251,7 +251,7 @@ fn login_form() -> Container {
                         .padding([8.0, 12.0])
                         .background(Color::rgb(0.15, 0.15, 0.2))
                         .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-                        .corner_radius(4.0)
+                        .corners(4.0)
                         .when_focused(|s| s.border(1.0, Color::rgb(0.4, 0.6, 1.0)))
                         .child(
                             container().child(text_input(username).color(Color::WHITE))
@@ -266,7 +266,7 @@ fn login_form() -> Container {
                         .padding([8.0, 12.0])
                         .background(Color::rgb(0.15, 0.15, 0.2))
                         .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-                        .corner_radius(4.0)
+                        .corners(4.0)
                         .when_focused(|s| s.border(1.0, Color::rgb(0.4, 0.6, 1.0)))
                         .child(
                             container().child(text_input(password).color(Color::WHITE).password(true))
@@ -276,7 +276,7 @@ fn login_form() -> Container {
             container()
                 .padding([10.0, 16.0])
                 .background(Color::rgb(0.3, 0.5, 0.9))
-                .corner_radius(6.0)
+                .corners(6.0)
                 .when_hovered(|s| s.lighter(0.1))
                 .when_pressed(|s| s.darker(0.1))
                 .on_click(move || {

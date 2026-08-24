@@ -41,7 +41,7 @@ fn card(label: &'static str, keyframes: Keyframes<Transform>, plays: RwSignal<u3
     container()
         .width(220.0)
         .height(120.0)
-        .corner_radius(12.0)
+        .corners(12.0)
         .background(Color::rgb(0.18, 0.18, 0.24))
         .border(1.0, Color::rgb(0.32, 0.32, 0.4))
         .layout(

@@ -46,7 +46,7 @@ fn main() {
                 container()
                     .width(220.0)
                     .height(140.0)
-                    .corner_radius(8.0)
+                    .corners(8.0)
                     .overflow(Overflow::Hidden)
                     .layout(ZStack::new())
                     .child(photo())
@@ -64,7 +64,7 @@ fn main() {
                 container()
                     .width(220.0)
                     .height(140.0)
-                    .corner_radius(8.0)
+                    .corners(8.0)
                     .overflow(Overflow::Hidden)
                     // Two regressions in one subtree, so two extra groups.
                     .background(Color::rgb(0.8, 0.2, 0.2))
@@ -74,7 +74,7 @@ fn main() {
                         container()
                             .width(80.0)
                             .height(80.0)
-                            .corner_radius(40.0)
+                            .corners(40.0)
                             .background(Color::rgba(1.0, 1.0, 1.0, 0.85)),
                     ),
             ))
@@ -83,7 +83,7 @@ fn main() {
                 container()
                     .width(220.0)
                     .height(140.0)
-                    .corner_radius(8.0)
+                    .corners(8.0)
                     .overflow(Overflow::Hidden)
                     .layout(ZStack::new())
                     .child(photo())
@@ -100,8 +100,7 @@ fn main() {
                                 container()
                                     .width(150.0)
                                     .height(70.0)
-                                    .corner_radius(16.0)
-                                    .corner_curvature(Curvature::SQUIRCLE)
+                                    .corners(Corners::squircle(16.0))
                                     // Blurs the photo beneath it, then paints
                                     // its own translucent tint over the result.
                                     .backdrop_blur(18.0)
@@ -120,7 +119,7 @@ fn main() {
                 container()
                     .width(220.0)
                     .height(140.0)
-                    .corner_radius(8.0)
+                    .corners(8.0)
                     .overflow(Overflow::Hidden)
                     .background(Color::rgb(0.15, 0.15, 0.2))
                     .layout(ZStack::new())

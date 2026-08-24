@@ -134,7 +134,7 @@ fn create_rotating_box(origin: TransformOrigin, label: &'static str) -> Containe
                 .width(60.0)
                 .height(60.0)
                 .background(Color::rgb(0.3, 0.5, 0.8))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .transform(Transform::rotate_degrees(rotation))
                 .transform_origin(origin)
                 .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))

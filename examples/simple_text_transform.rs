@@ -17,7 +17,7 @@ fn main() {
                 .width(120.0)
                 .height(60.0)
                 .background(Color::rgba(0.3, 0.6, 0.3, 0.8))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .layout(
                     Flex::column()
                         .main_alignment(MainAlignment::Center)
@@ -29,7 +29,7 @@ fn main() {
                 .width(120.0)
                 .height(60.0)
                 .background(Color::rgba(0.3, 0.3, 0.8, 0.8))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .layout(
                     Flex::column()
                         .main_alignment(MainAlignment::Center)
@@ -42,7 +42,7 @@ fn main() {
                 .width(120.0)
                 .height(60.0)
                 .background(Color::rgba(0.8, 0.5, 0.3, 0.8))
-                .corner_radius(8.0)
+                .corners(8.0)
                 .layout(
                     Flex::column()
                         .main_alignment(MainAlignment::Center)

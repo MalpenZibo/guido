@@ -138,7 +138,7 @@ fn spring_button() -> Container {
     container()
         .padding(20.0)
         .background(Color::rgb(0.3, 0.5, 0.8))
-        .corner_radius(12.0)
+        .corners(12.0)
         .transform(move || Transform::scale(if pressed.get() { 1.1 } else { 1.0 }))
 
         // Spring for scale - bouncy feedback

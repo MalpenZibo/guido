@@ -25,7 +25,7 @@ fn main() {
                         .padding(8.0)
                         .background(Color::rgb(0.18, 0.18, 0.24))
                         .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-                        .corner_radius(6.0)
+                        .corners(6.0)
                         .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
                         .child(
                             text_input(input_signal)
@@ -43,7 +43,7 @@ fn main() {
                 .child(
                     container()
                         .background(Color::rgb(0.2, 0.2, 0.25))
-                        .corner_radius(8.0)
+                        .corners(8.0)
                         .width(120.0)
                         .height(90.0)
                         .when_hovered(|s| s.lighter(0.05))
@@ -66,7 +66,7 @@ fn main() {
                             .width(320.0)
                             .height(400.0)
                             .background(Color::rgb(0.12, 0.12, 0.18))
-                            .corner_radius(12.0)
+                            .corners(12.0)
                             .scrollable(ScrollAxis::Vertical)
                             .scrollbar(|sb| {
                                 sb.width(6.0)
@@ -88,7 +88,7 @@ fn main() {
                                             )
                                             .child(
                                                 container()
-                                                    .corner_radius(40.0)
+                                                    .corners(40.0)
                                                     .width(80.0)
                                                     .height(80.0)
                                                     .background(Color::rgb(0.25, 0.25, 0.3))
@@ -135,7 +135,7 @@ fn main() {
                                                     container()
                                                         .padding(12.0)
                                                         .background(Color::rgb(0.18, 0.18, 0.24))
-                                                        .corner_radius(6.0)
+                                                        .corners(6.0)
                                                         .when_hovered(|s| s.lighter(0.05))
                                                         .when_pressed(|s| s.ripple())
                                                         .child(
@@ -162,7 +162,7 @@ fn main() {
                                                             .layout(Flex::row().spacing(8.0))
                                                             .padding(8.0)
                                                             .background(Color::rgb(0.15, 0.15, 0.2))
-                                                            .corner_radius(4.0)
+                                                            .corners(4.0)
                                                             .child(
                                                                 container()
                                                                     .width(32.0)
@@ -172,7 +172,7 @@ fn main() {
                                                                         0.3,
                                                                         0.4,
                                                                     ))
-                                                                    .corner_radius(16.0),
+                                                                    .corners(16.0),
                                                             )
                                                             .child(
                                                                 container()
@@ -219,7 +219,7 @@ fn main() {
                             .width(400.0)
                             .height(160.0)
                             .background(Color::rgb(0.12, 0.12, 0.18))
-                            .corner_radius(12.0)
+                            .corners(12.0)
                             .scrollable(ScrollAxis::Horizontal)
                             .scrollbar(|sb| {
                                 sb.width(6.0)
@@ -246,7 +246,7 @@ fn main() {
                             .width(400.0)
                             .height(100.0)
                             .background(Color::rgb(0.12, 0.12, 0.18))
-                            .corner_radius(12.0)
+                            .corners(12.0)
                             .scrollable(ScrollAxis::Horizontal)
                             .scrollbar(|sb| {
                                 sb.width(4.0)
@@ -273,7 +273,7 @@ fn main() {
                                                             .width(48.0)
                                                             .height(48.0)
                                                             .background(Color::rgb(0.2, 0.2, 0.28))
-                                                            .corner_radius(8.0)
+                                                            .corners(8.0)
                                                             .when_hovered(|s| s.lighter(0.1))
                                                             .when_pressed(|s| s.ripple())
                                                             .layout(
@@ -310,7 +310,7 @@ fn main() {
                         container()
                             .padding(12.0)
                             .background(Color::rgb(0.12, 0.12, 0.18))
-                            .corner_radius(8.0)
+                            .corners(8.0)
                             .layout(Flex::column().spacing(4.0))
                             .child(
                                 container()

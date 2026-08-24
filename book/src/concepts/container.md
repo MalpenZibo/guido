@@ -49,8 +49,7 @@ container()
     .background(Color::rgb(0.2, 0.2, 0.3))
 
     // Corners
-    .corner_radius(8.0)
-    .corner_curvature(Curvature::SQUIRCLE) // iOS-style smooth corners
+    .corners(Corners::squircle(8.0)) // iOS-style smooth corners
 
     // Border
     .border(2.0, Color::WHITE)
@@ -75,7 +74,7 @@ through:
 ```rust
 container()
     .background(Color::rgba(0.12, 0.12, 0.18, 0.55)) // translucent
-    .corner_radius(16.0)
+    .corners(16.0)
     .backdrop_blur(32.0)
 ```
 
@@ -220,7 +219,7 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 
         // Styling
         .background(Color::rgb(0.3, 0.5, 0.8))
-        .corner_radius(8.0)
+        .corners(8.0)
         .border(1.0, Color::rgb(0.4, 0.6, 0.9))
 
         // Animations
@@ -252,8 +251,9 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 - `.background(color)` - Solid background
 - `.gradient(LinearGradient::horizontal(start, end))` - Horizontal gradient
 - `.gradient(LinearGradient::vertical(start, end))` / `.gradient(LinearGradient::diagonal(start, end))`
-- `.corner_radius(radius)` - Rounded corners
-- `.corner_curvature(Curvature::SQUIRCLE)` / `.corner_curvature(Curvature::BEVEL)` / `.corner_curvature(Curvature::SCOOP)` - Corner curvature
+- `.corners(8.0)` / `.corners([16.0, 0.0])` - Rounded corners, one, two or four values
+- `.corners(Corners::squircle(12.0))` / `Corners::bevel(..)` / `Corners::scoop(..)` /
+  `Corners::superellipse(.., k)` - the shape of the corner
 - `.border(width, color)` - Border
 - `.elevation(level)` - Shadow
 

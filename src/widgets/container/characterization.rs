@@ -661,7 +661,7 @@ fn a_corner_radius_excludes_the_corner() {
         container()
             .width(40.0)
             .height(40.0)
-            .corner_radius(20.0)
+            .corners(20.0)
             .on_click(move || counter.set(counter.get() + 1)),
     );
     h.fit(500.0, 500.0);
@@ -775,9 +775,9 @@ fn advancing_animations_does_not_report_a_missing_scope() {
             .height(50.0)
             .background(Color::RED)
             .border(move || if wide.get() { 6.0 } else { 2.0 }, Color::BLUE)
-            .corner_radius(move || if wide.get() { 20.0 } else { 4.0 })
+            .corners(move || if wide.get() { 20.0 } else { 4.0 })
             .animate_border_width(t())
-            .animate_corner_radius(t()),
+            .animate_corners(t()),
     );
     h.fit(200.0, 200.0);
     h.paint();
@@ -894,7 +894,7 @@ fn corner_radius_invalidates_paint_only() {
             .width(10.0)
             .height(10.0)
             .background(Color::RED)
-            .corner_radius(move || r.get()),
+            .corners(move || r.get()),
     );
     h.fit(500.0, 500.0);
     h.paint();
@@ -1566,7 +1566,7 @@ fn the_clip_carries_every_corner() {
         container()
             .width(100.0)
             .height(40.0)
-            .corner_radius([16.0, 0.0])
+            .corners([16.0, 0.0])
             .overflow(Overflow::Hidden)
             .child(container().width(100.0).height(40.0).background(Color::RED)),
     );

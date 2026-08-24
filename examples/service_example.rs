@@ -89,7 +89,7 @@ async fn main() {
                                         Color::rgb(0.2, 0.2, 0.3)
                                     }
                                 })
-                                .corner_radius(4.0)
+                                .corners(4.0)
                                 .when_hovered(|s| s.lighter(0.1))
                                 .when_pressed(|s| s.ripple())
                                 .on_click(move || svc.send(WorkspaceCmd::Switch(id)))
@@ -109,7 +109,7 @@ async fn main() {
                         container()
                             .padding(8.0)
                             .background(Color::rgb(0.2, 0.2, 0.3))
-                            .corner_radius(4.0)
+                            .corners(4.0)
                             .child(text(move || time.get()).color(Color::WHITE)),
                     )
             },
