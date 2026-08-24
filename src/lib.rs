@@ -688,26 +688,36 @@ fn run_jobs(
     jobs::recycle_job_buffer(followup);
 }
 
-/// Deferred work that is queued and still waiting for the loop to drain it.
+/// Deferred work that is queued with nothing owed to wake the loop for it.
 ///
 /// The wakeup contract says a producer that queues work must also guarantee a
 /// wakeup that survives until its consumer runs. This is that contract as a
 /// check instead of as prose — prose does not fail a test run.
 ///
-/// Why an empty result is the only correct answer at the blocking point: each
-/// of these is drained unconditionally, once per iteration. Anything still
-/// queued was therefore produced *after* its own drain, and the only thing
-/// that can bring the loop back to drain it is a wake request — which would
-/// have kept it from blocking in the first place. So a non-empty queue here
-/// means nobody asked to be woken, and the app is about to go deaf until an
-/// unrelated compositor event happens along. That is precisely the shape of
-/// the lost-wakeup bug this contract exists to prevent.
+/// Both halves have to be asked. A queue left non-empty at the blocking point
+/// is the ordinary case, not the bug: the drains sit in the middle of the
+/// iteration and effects, event handlers and background threads all run after
+/// them, so work riding the next pass is what a working application looks
+/// like. What makes it a lost wakeup is nobody having asked for that pass —
+/// so the queues answer *what* is waiting, and [`wakeup_armed`] answers
+/// whether anything is coming to drain it.
+///
+/// Read in that order, never the other way round: a producer arms before it
+/// queues, so a queue seen non-empty already has its wakeup armed, while an
+/// arming read first can miss one that lands a moment later — the producer
+/// is on another thread.
 ///
 /// Returns the name of the offender, because the point is the message.
 fn queued_but_unwoken() -> Option<&'static str> {
+    let queued = queued_work()?;
+    (!wakeup_armed()).then_some(queued)
+}
+
+/// What the loop still owes a pass, named. Every queue it drains, in the
+/// order it drains them.
+fn queued_work() -> Option<&'static str> {
     [
         ("widget jobs", has_pending_jobs()),
-        ("a wake request", jobs::wake_request_pending()),
         ("background signal writes", reactive::bg_writes_pending()),
         ("owner disposals", reactive::owner::disposals_pending()),
         ("surface commands", surface::surface_commands_pending()),
@@ -716,6 +726,24 @@ fn queued_but_unwoken() -> Option<&'static str> {
     ]
     .into_iter()
     .find_map(|(name, pending)| pending.then_some(name))
+}
+
+/// Whether something already owes the loop the pass that drains what is
+/// queued.
+///
+/// Three ways to owe one, one per mechanism in the contract:
+///
+/// - a ping is readable, so the next `dispatch` returns immediately;
+/// - a wake request is still set, so the loop refuses to block at all;
+/// - an ingress message has been sent and not yet read, and calloop
+///   guarantees it is delivered before the loop can block again.
+///
+/// Any of them and the loop is not going deaf — it takes another pass, and
+/// every queue above is drained unconditionally on it. The state this leaves
+/// the assertion looking for is the one that was meant: work queued by a
+/// producer that woke nobody at all.
+fn wakeup_armed() -> bool {
+    jobs::ping_in_flight() || jobs::wake_request_pending() || ingress::in_flight()
 }
 
 /// What this surface tells us about itself, read once at the top of a frame.
@@ -1479,6 +1507,10 @@ impl App {
         loop_handle
             .insert_source(ingress_channel, |event, _, wayland_state| {
                 if let calloop_channel::Event::Msg(message) = event {
+                    // This message was itself the wakeup, and it is spent
+                    // now — the drains it speaks for run later this same
+                    // iteration.
+                    ingress::delivered();
                     match message {
                         // Doorbell only: the write payloads live in the
                         // reactive write queue, drained at the flush point
@@ -1530,13 +1562,13 @@ impl App {
                 Some(deadline.saturating_duration_since(std::time::Instant::now()))
             } else {
                 // About to block with nothing left to wake us but the
-                // compositor. Every queue must be empty by now — see
-                // `queued_but_unwoken`.
+                // compositor. Anything still queued must have a wakeup armed
+                // for it by now — see `queued_but_unwoken`.
                 debug_assert!(
                     queued_but_unwoken().is_none(),
-                    "the loop is about to block indefinitely with {} still queued — \
-                     whatever produced it owes a wakeup. See the Event Loop Wakeup \
-                     Contract in docs/ARCHITECTURE.md.",
+                    "the loop is about to block indefinitely with {} still queued and \
+                     no wakeup armed for it — whatever produced it woke nobody. See \
+                     the Event Loop Wakeup Contract in docs/ARCHITECTURE.md.",
                     queued_but_unwoken().unwrap_or_default()
                 );
                 None // Block indefinitely until event
@@ -2004,5 +2036,100 @@ mod wakeup_contract_coverage {
         );
         let _ = reactive::take_cursor_change();
         assert!(!reactive::cursor_change_pending());
+    }
+
+    /// The bug this check had for as long as it existed: it asked what was
+    /// queued and never what was owed, so ordinary work — a background write
+    /// landing after the flush, a surface command pushed by an effect — read
+    /// as a lost wakeup and panicked a debug build.
+    #[test]
+    fn work_queued_with_a_wakeup_armed_is_not_a_lost_wakeup() {
+        let _ = reactive::take_cursor_change();
+        reactive::set_cursor(reactive::CursorIcon::Text);
+        assert_eq!(
+            queued_work(),
+            Some("a cursor change"),
+            "the queue itself is still what names the offender"
+        );
+
+        // `set_cursor` woke the loop on its way past, which is the whole
+        // difference between work riding the next pass and work nobody is
+        // coming back for.
+        //
+        // Retried because the arming flags are process-wide and other tests
+        // in this binary clear them (`reset_jobs`). The asymmetry is what
+        // makes it sound: the queue is this thread's own, so a regression —
+        // the check reading the queues alone — reports it on every attempt,
+        // while a pass needs one quiet window out of many.
+        let quiet = (0..64).any(|_| {
+            reactive::set_cursor(reactive::CursorIcon::Text);
+            queued_but_unwoken().is_none()
+        });
+        assert!(
+            quiet,
+            "a queue whose producer woke the loop must not be reported as unwoken"
+        );
+
+        let _ = reactive::take_cursor_change();
+    }
+
+    /// The reported window, in the loop's own order: an effect running at the
+    /// flush point pushes a surface command *after* that queue's drain, and
+    /// `take_wake_request()` then clears the flag it set. The ping it sent is
+    /// the only thing left saying the loop is coming back — and reading the
+    /// queues alone cannot see it, which is how a healthy application panicked
+    /// its own debug build.
+    #[test]
+    fn a_command_queued_after_its_drain_rides_the_next_pass() {
+        surface::reset_surface_commands();
+
+        // Retried for the arming flags other tests clear; see above. The
+        // command queue is this thread's own, so a regression reports it on
+        // every attempt.
+        let quiet = (0..64).any(|_| {
+            surface::reset_surface_commands();
+            jobs::mark_loop_awake(); // the dispatch that woke us returned
+
+            // …the loop drains surface commands here, and only then flushes
+            // background writes, whose effects run before the take below.
+            surface::surface_handle(SurfaceId::next()).set_margin(8);
+            let _ = jobs::take_wake_request();
+
+            queued_but_unwoken().is_none()
+        });
+        assert!(
+            quiet,
+            "a surface command pushed after its drain has a ping armed for it"
+        );
+
+        surface::reset_surface_commands();
+    }
+
+    /// Each arming mechanism has to be visible to `wakeup_armed`, or the
+    /// check is back to guessing from the queues alone.
+    #[test]
+    fn every_way_of_owing_a_wakeup_reports_itself() {
+        // A ping stays readable until the dispatch that consumes it, which is
+        // exactly the window the pre-block check runs in. Retried for the
+        // same reason as above: `reset_jobs` in other tests clears the flag.
+        let ping_seen = (0..64).any(|_| {
+            jobs::wake_loop();
+            jobs::ping_in_flight()
+        });
+        assert!(ping_seen, "a sent ping must be visible to the check");
+
+        // An ingress message is armed before the work it speaks for is
+        // queued, and stays counted until the loop takes delivery.
+        let _guard = ingress::test_count_lock();
+        let armed = ingress::arm(ingress::IngressMessage::BgWritesQueued);
+        assert!(
+            ingress::in_flight(),
+            "an armed message must be visible before it is even sent"
+        );
+        drop(armed);
+        assert!(
+            !ingress::in_flight(),
+            "and must stop being visible if it is never sent"
+        );
     }
 }

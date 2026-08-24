@@ -319,6 +319,12 @@ either carry their payload or act as doorbells for data queued elsewhere
 flush point). Never call `jobs::wake_loop()` directly from a background
 thread as the *only* wakeup for queued work.
 
+Messages are counted while in flight, because a wakeup living inside
+calloop's channel is invisible from the sending side and the loop's pre-block
+check has to be able to ask about it. `ingress::arm()` puts the count up and
+hands back the message to send; the loop's channel callback takes it back down
+when it reads one.
+
 **Main thread → `jobs::wake_loop()`.**
 The frame-request ping is coalesced per loop iteration through a dedicated
 `PING_SENT` flag cleared once per wakeup (`mark_loop_awake`, right after
@@ -350,17 +356,36 @@ A focused input is the resting state of a lock screen, so that ran all night.
 
 **The contract is checked, not just written down.** Debug builds assert it at
 the one moment where breaking it is fatal: `queued_but_unwoken()` in
-`src/lib.rs` names every queue the loop drains, and nothing may be
-outstanding when the loop is about to block indefinitely. The reasoning is
-that each queue is drained unconditionally once per iteration, so anything
-still queued was produced *after* its own drain — and the only thing that
-brings the loop back is a frame request, which would have kept it from
-blocking. A non-empty queue there means nobody asked to be woken.
+`src/lib.rs`, run just before the loop blocks with no timeout.
 
-So a new queue needs one line in `queued_but_unwoken()` alongside its drain.
-Forget the wakeup and the next idle moment panics with the queue's name,
-instead of the app going quietly deaf until an unrelated compositor event
-happens along. Two of the bugs documented above were exactly that.
+It asks two questions, and needs both. `queued_work()` names every queue the
+loop drains and answers *what* is waiting. `wakeup_armed()` answers whether
+anything is coming to drain it — a ping still readable (`jobs::ping_in_flight`,
+the coalescing flag, cleared right after the dispatch that consumed it), a wake
+request still set, or an ingress message sent and not yet read
+(`ingress::in_flight`). Only a queue with none of those is reported.
+
+The second question is not optional, because a non-empty queue at that point
+is the ordinary case rather than the bug: the drains sit in the middle of the
+iteration and effects, event handlers and background threads all run after
+them, so work riding the next pass is what a working application looks like.
+An earlier version of this check asked the first question alone and panicked
+on healthy states — a background write landing after `flush_bg_writes()`, a
+surface command pushed by an effect whose `WAKE_REQUESTED` was then cleared by
+`take_wake_request()` later in the same iteration.
+
+The order of the two is part of the contract: **a producer arms before it
+queues**, so a queue seen non-empty already has its wakeup armed, and reading
+the arming first can miss one that lands a moment later on another thread.
+That is why `queue_bg_write` calls `ingress::arm()` before pushing and sends
+after — between the push and the send there is an instant where the queue is
+observably non-empty, and the main thread reads it.
+
+So a new queue needs one line in `queued_work()` alongside its drain, and its
+producer needs a wakeup through one of the two mechanisms above. Forget the
+wakeup and the next idle moment panics with the queue's name, instead of the
+app going quietly deaf until an unrelated compositor event happens along. Two
+of the bugs documented above were exactly that.
 
 ## Widget Trait
 

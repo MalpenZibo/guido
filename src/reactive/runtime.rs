@@ -184,13 +184,18 @@ pub(crate) fn current_write_epoch() -> u64 {
 /// flushed (e.g. App restart), the epoch will be stale and the write is
 /// silently discarded.
 pub fn queue_bg_write(epoch: u64, f: impl FnOnce() + Send + 'static) {
+    // Armed before the push, sent after it. The wakeup is owed for a write
+    // the loop cannot see yet, which costs nothing — where the other order
+    // leaves an instant with the queue observably non-empty and nothing owed
+    // for it, and the loop's pre-block check runs on the other thread.
+    let wakeup = crate::ingress::arm(crate::ingress::IngressMessage::BgWritesQueued);
     if let Ok(mut q) = WRITE_QUEUE.lock() {
         q.push((epoch, Box::new(f)));
     }
     // Wake the event loop so flush_bg_writes() runs on the next frame.
     // Routed through the calloop ingress channel: its readiness guarantees
     // the loop wakes no matter where in its iteration the write landed.
-    crate::ingress::notify(crate::ingress::IngressMessage::BgWritesQueued);
+    wakeup.notify();
 }
 
 /// Drain queued background writes and execute them on the main thread.

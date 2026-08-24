@@ -638,6 +638,18 @@ pub(crate) fn wake_loop() {
     }
 }
 
+/// Whether a ping is readable by the next dispatch.
+///
+/// True from the moment `wake_loop` sends one until `mark_loop_awake` clears
+/// the flag, right after the dispatch that consumed it — so at the loop's
+/// pre-block check it means the eventfd is still armed and `dispatch(None)`
+/// returns immediately. That is the half of "queued but unwoken" the queues
+/// cannot answer: work produced after its own drain point is the ordinary
+/// case, and what makes it a bug is nobody having asked for the next pass.
+pub(crate) fn ping_in_flight() -> bool {
+    PING_SENT.load(Ordering::Relaxed)
+}
+
 /// Reset ping coalescing after the event loop woke up. Any `wake_loop`
 /// from here until the next dispatch sends (at most) one fresh ping, which
 /// keeps the eventfd readable so that dispatch returns immediately.
