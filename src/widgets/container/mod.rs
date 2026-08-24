@@ -539,19 +539,15 @@ impl Container {
     }
 
     // -----------------------------------------------------------------------
-    // Text
-    //
-    // Text widgets carry content, not style; how they look is declared here.
-    // Each property is inherited by descendants until a nearer container
-    // overrides it — see [`TextStyle`](crate::widgets::TextStyle).
+    // Shape
     // -----------------------------------------------------------------------
 
     /// The shape of the corners: how far they are rounded, and how.
     ///
-    /// A bare size means rounded corners, taking what `padding` takes — one
-    /// value for all four, `[top, bottom]` for the two pairs, or
-    /// `[top-left, top-right, bottom-right, bottom-left]` clockwise as CSS
-    /// writes it. A constructor names another shape:
+    /// A bare size means rounded corners: one value for all four,
+    /// `[top, bottom]` for the two pairs, or `[top-left, top-right,
+    /// bottom-right, bottom-left]` clockwise as CSS writes it. A constructor
+    /// names another shape:
     ///
     /// ```ignore
     /// container().corners(8.0)
@@ -834,7 +830,13 @@ impl Container {
         self
     }
 
-    /// Enable animation for corner radius changes
+    /// Ease the corner *shape* — the four radii and the curvature — instead
+    /// of snapping to it.
+    ///
+    /// A transition that crosses zero curvature changes family in one frame:
+    /// below zero a corner is concave, and the formula that draws it (and the
+    /// one that answers a click) is a different one. Within a family it is
+    /// continuous.
     pub fn animate_corners(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self
             .corners
@@ -1034,19 +1036,6 @@ impl Default for Container {
     fn default() -> Self {
         Self::new()
     }
-}
-
-impl Drop for Container {
-    /// Tear down the owner holding the published text derived.
-    ///
-    /// That derived is the one reactive resource a container creates outside
-    /// any user scope — at registration, where the ambient owner is the
-    /// surface's and would hold it until the app exits. A container removed by
-    /// a dynamic-children update would leak one derived per rebuild.
-    ///
-    /// Every other signal a container holds was created in the builder chain,
-    /// inside the caller's own scope, and is freed with it.
-    fn drop(&mut self) {}
 }
 
 impl Widget for Container {

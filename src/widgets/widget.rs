@@ -226,8 +226,12 @@ impl Rect {
     /// inward, so a circular test would answer for a shape nobody drew. What
     /// is drawn and what is clicked come from one formula, which is the only
     /// way they stay in step when the formula changes.
+    /// The rectangle is tested half-open, as [`contains`](Self::contains) does:
+    /// the far edge belongs to whatever comes next, so two boxes side by side
+    /// in a row do not both answer for the column between them. The shape only
+    /// takes more away.
     pub fn contains_shape(&self, x: f32, y: f32, corners: crate::widgets::Corners) -> bool {
-        self.shape_distance(x, y, corners) <= 0.0
+        self.contains(x, y) && self.shape_distance(x, y, corners) <= 0.0
     }
 
     /// Distance from the point to the shape's edge: negative inside, positive
@@ -732,6 +736,29 @@ mod tests {
         // Both agree well past the cut, and well inside it.
         assert!(!r.contains_shape(5.0, 5.0, Corners::bevel(80.0)));
         assert!(r.contains_shape(100.0, 100.0, Corners::bevel(80.0)));
+    }
+
+    /// The far edge belongs to the next box along, corners or no corners —
+    /// otherwise two containers in a row both answer for the column they
+    /// share.
+    #[test]
+    fn the_far_edge_is_not_inside() {
+        let r = Rect::new(0.0, 0.0, 100.0, 40.0);
+        for corners in [Corners::SQUARE, Corners::rounded(8.0)] {
+            assert!(
+                !r.contains_shape(100.0, 20.0, corners),
+                "the right edge is out"
+            );
+            assert!(
+                !r.contains_shape(50.0, 40.0, corners),
+                "the bottom edge is out"
+            );
+            assert!(r.contains_shape(0.0, 20.0, corners), "the left edge is in");
+            assert!(
+                r.contains_shape(99.0, 20.0, corners),
+                "and so is the pixel before"
+            );
+        }
     }
 
     /// A scoop curves *inward*, so the corner is hollow: a point that a

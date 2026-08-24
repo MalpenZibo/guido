@@ -16,9 +16,10 @@
 //! container().corners(Corners::superellipse(12.0, 1.5))
 //! ```
 //!
-//! The radii themselves take what `padding` takes: one value for all four,
-//! `[top, bottom]` for the two pairs, or `[top-left, top-right, bottom-right,
-//! bottom-left]` clockwise as CSS writes it — see [`CornerRadii`].
+//! The radii take one value for all four, `[top, bottom]` for the two pairs,
+//! or `[top-left, top-right, bottom-right, bottom-left]` clockwise as CSS
+//! writes it — see [`CornerRadii`], which spells out why the two-value form
+//! pairs adjacent corners where `padding` pairs opposite sides.
 
 use crate::renderer::CornerRadii;
 
@@ -87,6 +88,14 @@ impl<T: Into<CornerRadii>> From<T> for Corners {
     }
 }
 
+/// Animating a shape moves five numbers: the four radii and the curvature.
+///
+/// The curvature crosses one boundary the interpolation cannot smooth: below
+/// zero a corner is *concave*, and both this crate's hit test and the shader
+/// change formula there. A transition from a scoop to a squircle therefore
+/// passes through a bevel and changes family in one frame, on screen and in
+/// the clickable region alike. Transitions within a family — rounded to
+/// squircle, any radius to any other — are continuous.
 impl crate::animation::Animatable for Corners {
     fn lerp(from: &Self, to: &Self, t: f32) -> Self {
         Self {
@@ -96,7 +105,17 @@ impl crate::animation::Animatable for Corners {
     }
 
     fn is_reverse(from: &Self, to: &Self) -> bool {
-        crate::animation::Animatable::is_reverse(&from.radii, &to.radii)
+        // Curvature counts too: a shape that only softens is still going
+        // somewhere, and a spring that ignored it would never call it a
+        // reversal.
+        let total = |c: &Self| {
+            c.radii.top_left
+                + c.radii.top_right
+                + c.radii.bottom_right
+                + c.radii.bottom_left
+                + c.curvature
+        };
+        total(to) < total(from)
     }
 
     fn channels(&self) -> crate::animation::Channels {
@@ -125,7 +144,8 @@ mod tests {
         assert_eq!(Corners::squircle(12.0).radii, CornerRadii::uniform(12.0));
     }
 
-    /// Radii are spelled the way padding is.
+    /// One, two or four values, and the two-value form pairs the top corners
+    /// against the bottom ones.
     #[test]
     fn the_radii_take_one_two_or_four_values() {
         assert_eq!(Corners::from(8.0).radii, CornerRadii::uniform(8.0));

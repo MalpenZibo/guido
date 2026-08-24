@@ -177,7 +177,14 @@ impl StateStyle {
         self
     }
 
-    /// Set the corner radius for this state.
+    /// The corner shape while this state is active.
+    ///
+    /// It replaces the whole shape, as the border override replaces the whole
+    /// border: a bare size means *rounded* at that size, so a squircle that
+    /// wants to grow on hover has to say so —
+    /// `when_hovered(|s| s.corners(Corners::squircle(20.0)))`. Radius and
+    /// curvature are one value precisely because half a corner is not a
+    /// corner.
     pub fn corners<M>(mut self, corners: impl IntoSignal<crate::widgets::Corners, M>) -> Self {
         self.corners = Some(corners.into_signal());
         self

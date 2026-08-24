@@ -994,10 +994,6 @@ fn a_hover_layer_reaches_the_text() {
 }
 
 // ---------------------------------------------------------------------------
-// The published derived must not outlive its container
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Keyframes
 // ---------------------------------------------------------------------------
 
@@ -1360,10 +1356,6 @@ fn a_layer_silent_on_a_property_does_not_shadow_the_one_below_it() {
 }
 
 // ---------------------------------------------------------------------------
-// An animated text colour
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Reactivity — properties that used to accept only a constant
 // ---------------------------------------------------------------------------
 
@@ -1581,6 +1573,25 @@ fn the_clip_carries_every_corner() {
     assert_eq!(clip.corner_radius.top_right, 16.0);
     assert_eq!(clip.corner_radius.bottom_right, 0.0);
     assert_eq!(clip.corner_radius.bottom_left, 0.0);
+}
+
+/// A state override carries the whole shape, so a squircle that only asks to
+/// grow on hover becomes an ordinary rounded box — the same trade the border
+/// override makes, and the reason a bare size is spelled as one.
+#[test]
+fn a_state_override_replaces_the_whole_corner_shape() {
+    let c = container()
+        .corners(crate::widgets::Corners::squircle(12.0))
+        .when_hovered(|s| s.corners(20.0));
+
+    let hovered = c.interaction.as_ref().expect("a hover layer").states[0]
+        .1
+        .corners
+        .expect("which declares a shape")
+        .get_untracked();
+
+    assert_eq!(hovered.curvature, 1.0, "rounded, not squircle");
+    assert_eq!(hovered.radii.top_left, 20.0);
 }
 
 /// Every `BackdropBlur` radius drawn by a node.
