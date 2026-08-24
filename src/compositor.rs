@@ -6,10 +6,8 @@
 //! where a blurred one is not on offer — needs to read that as a signal
 //! rather than ask once at startup.
 
-use std::cell::RefCell;
-
-use crate::reactive::owner::with_root_owner;
-use crate::reactive::{RwSignal, Signal, create_signal};
+use crate::reactive::global::GlobalSignal;
+use crate::reactive::{RwSignal, Signal};
 
 /// Compositor-side effects currently on offer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -22,18 +20,10 @@ pub struct CompositorEffects {
     pub blur: bool,
 }
 
-thread_local! {
-    /// Lazily created so it works both before and after platform init;
-    /// wiped by `reset_compositor_effects()`.
-    static EFFECTS: RefCell<Option<RwSignal<CompositorEffects>>> = const { RefCell::new(None) };
-}
+static EFFECTS: GlobalSignal<CompositorEffects> = GlobalSignal::new(CompositorEffects::default);
 
 fn effects_signal() -> RwSignal<CompositorEffects> {
-    EFFECTS.with(|cell| {
-        *cell
-            .borrow_mut()
-            .get_or_insert_with(|| with_root_owner(|| create_signal(CompositorEffects::default())))
-    })
+    EFFECTS.get()
 }
 
 /// Reactive view of the compositor's effect capabilities.
@@ -47,9 +37,4 @@ pub fn compositor_effects() -> Signal<CompositorEffects> {
 /// Record the compositor's blur capability. Called by the platform layer.
 pub(crate) fn set_blur_capability(blur: bool) {
     effects_signal().update(|effects| effects.blur = blur);
-}
-
-/// Reset capabilities. Called during `App::drop()`.
-pub(crate) fn reset_compositor_effects() {
-    EFFECTS.with(|cell| *cell.borrow_mut() = None);
 }

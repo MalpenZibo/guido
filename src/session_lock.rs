@@ -27,8 +27,9 @@ use smithay_client_toolkit::reexports::client::QueueHandle;
 
 use crate::outputs::{self, OutputId, OutputInfo};
 use crate::platform::{LockEvent, WaylandState};
-use crate::reactive::owner::{with_owner, with_root_owner};
-use crate::reactive::{RwSignal, Signal, create_signal};
+use crate::reactive::global::GlobalSignal;
+use crate::reactive::owner::with_owner;
+use crate::reactive::{RwSignal, Signal};
 use crate::surface::{SurfaceConfig, SurfaceId};
 use crate::surface_manager::{ManagedSurface, SurfaceManager};
 use crate::tree::Tree;
@@ -55,7 +56,6 @@ struct LockData {
     factory: Option<LockWidgetFn>,
     /// Lock surface per output.
     surfaces: HashMap<OutputId, SurfaceId>,
-    state: Option<RwSignal<LockState>>,
     lock_requested: bool,
     unlock_requested: bool,
 }
@@ -64,13 +64,13 @@ thread_local! {
     static LOCK: RefCell<LockData> = RefCell::new(LockData::default());
 }
 
+/// The lifecycle the application watches. Its own global rather than a field
+/// of `LockData`: the rest of that struct is the platform's bookkeeping, which
+/// dies with the `App`, while this is read from widget scopes that come and go.
+static STATE: GlobalSignal<LockState> = GlobalSignal::new(LockState::default);
+
 fn state_signal() -> RwSignal<LockState> {
-    LOCK.with(|lock| {
-        *lock
-            .borrow_mut()
-            .state
-            .get_or_insert_with(|| with_root_owner(|| create_signal(LockState::default())))
-    })
+    STATE.get()
 }
 
 fn set_state(state: LockState) {
@@ -104,7 +104,7 @@ where
 {
     LOCK.with(|lock| {
         let mut lock = lock.borrow_mut();
-        if lock.lock_requested || lock.state.map(|s| s.get_untracked()) == Some(LockState::Locked) {
+        if lock.lock_requested || STATE.get().get_untracked() == LockState::Locked {
             log::warn!("lock_session() called while already locked or locking");
             return;
         }

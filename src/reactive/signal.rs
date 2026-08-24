@@ -248,6 +248,26 @@ pub struct RwSignal<T> {
 
 impl_signal_id_traits!(RwSignal);
 
+impl<T> RwSignal<T> {
+    /// Rebuild a handle from an id kept elsewhere.
+    ///
+    /// For the global registry, which stores ids because it holds signals of
+    /// many types (`reactive/global.rs`). An id whose signal was disposed
+    /// fails the generation check on the next read, as any stale handle does.
+    pub(crate) const fn from_id(id: SignalId) -> Self {
+        Self {
+            id,
+            _marker: PhantomData,
+            _not_send: PhantomData,
+        }
+    }
+
+    /// This signal's id.
+    pub(crate) fn id(&self) -> SignalId {
+        self.id
+    }
+}
+
 impl<T: Clone + 'static> RwSignal<T> {
     /// Get the current value (tracks as dependency for effects)
     #[inline]

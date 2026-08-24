@@ -27,7 +27,8 @@ use std::cell::RefCell;
 use smallvec::SmallVec;
 
 use crate::jobs::{JobRequest, request_job};
-use crate::reactive::signal::{RwSignal, create_signal};
+use crate::reactive::global::GlobalSignal;
+use crate::reactive::signal::RwSignal;
 use crate::tree::{Tree, WidgetId};
 
 /// The focused widget and every ancestor of it, innermost first.
@@ -62,31 +63,12 @@ impl FocusPath {
     }
 }
 
-thread_local! {
-    /// The focused widget and its ancestors. A signal, so that resolving a
-    /// `when_focused` subscribes to it.
-    ///
-    /// Held as an `Option` rather than eagerly, because the handle has to be
-    /// *droppable*: `reset_reactive` wipes the signal storage at `App::drop`,
-    /// and a thread-local holding an id into the old arena would leave a
-    /// second `App` on the same thread with a focus that silently never
-    /// updates. As a plain `RefCell<Option<WidgetId>>` this was immune by
-    /// construction; as a signal it has to be released explicitly.
-    static FOCUS: RefCell<Option<RwSignal<FocusPath>>> = const { RefCell::new(None) };
-}
+/// The focused widget and its ancestors. A signal, so that resolving a
+/// `when_focused` subscribes to it.
+static FOCUS: GlobalSignal<FocusPath> = GlobalSignal::new(FocusPath::default);
 
 fn focus() -> RwSignal<FocusPath> {
-    FOCUS.with(|cell| {
-        *cell
-            .borrow_mut()
-            .get_or_insert_with(|| create_signal(FocusPath::default()))
-    })
-}
-
-/// Create the focus signal under the root owner, before anything can create it
-/// under a narrower one that might be disposed mid-run.
-pub(crate) fn init_focus() {
-    let _ = focus();
+    FOCUS.get()
 }
 
 /// The current focus path. Reading this subscribes, like any other signal.
@@ -189,14 +171,6 @@ pub fn has_focus(id: WidgetId) -> bool {
 /// Get the ID of the currently focused widget, if any.
 pub fn focused_widget() -> Option<WidgetId> {
     focus().get_untracked().widget()
-}
-
-/// Release the focus signal (without paint jobs — used during App teardown).
-///
-/// Drops the handle rather than writing through it: the storage it points into
-/// is about to be replaced, and the next `App` has to get a fresh one.
-pub(crate) fn reset_focus() {
-    FOCUS.with(|cell| *cell.borrow_mut() = None);
 }
 
 /// Clear all focus (no widget will have focus).

@@ -1369,8 +1369,6 @@ impl App {
     pub fn run(mut self, setup: impl FnOnce(&mut Self)) -> ExitReason {
         // Create root owner scope — all signals/effects created in setup are owned
         self.root_owner_id = Some(reactive::create_root_owner());
-        // Under the root owner, so it outlives every component scope.
-        reactive::init_focus();
         setup(&mut self);
 
         if self.surface_definitions.is_empty() {
@@ -1697,9 +1695,6 @@ impl Drop for App {
         surface::reset_surface_commands();
         surface::reset_popups();
         widget_ref::reset_widget_refs();
-        outputs::reset_outputs();
-        compositor::reset_compositor_effects();
-        keyboard::reset_keyboard_modifiers();
         reactive::focus::reset_pending_focus();
         session_lock::reset_session_lock();
         FONTS_CONSUMED.with(|f| f.set(false));
