@@ -573,7 +573,7 @@ impl ImageQuadRenderer {
             )
         } else {
             // No clipping
-            (NO_CLIP_RECT, [0.0, 1.0, 0.0, 0.0])
+            (NO_CLIP_RECT, [0.0; 4])
         };
 
         // Transform corners from local to screen coordinates

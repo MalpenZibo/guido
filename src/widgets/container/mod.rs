@@ -1336,7 +1336,7 @@ impl Widget for Container {
 
         let hit = HitContext {
             bounds: tree.get_bounds(id).unwrap_or_default(),
-            corner_radius: self.animated_corners(id).radii,
+            corners: self.animated_corners(id),
             transform: self.animated_transform(id),
             transform_origin: self.transform_origin.get_or(TransformOrigin::CENTER),
         };

@@ -158,6 +158,20 @@ pub struct Rect {
     pub height: f32,
 }
 
+/// The superellipse "length" of a vector — the shader's `superellipse_length`.
+///
+/// `n = 1` is the diamond a bevel cuts, `n = 2` the circle of an ordinary
+/// rounded corner, and everything between is a squircle on its way.
+fn superellipse_length(x: f32, y: f32, n: f32) -> f32 {
+    if (n - 1.0).abs() < 0.01 {
+        x.abs() + y.abs()
+    } else if (n - 2.0).abs() < 0.01 {
+        x.hypot(y)
+    } else {
+        (x.abs().powf(n) + y.abs().powf(n)).powf(1.0 / n)
+    }
+}
+
 impl Rect {
     pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
         Self {
@@ -205,59 +219,52 @@ impl Rect {
         x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
     }
 
-    /// Check if a point is inside this rect with rounded corners.
-    /// The corner_radius is clamped to half of the smaller dimension.
-    pub fn contains_rounded(&self, x: f32, y: f32, radii: crate::renderer::CornerRadii) -> bool {
-        if !self.contains(x, y) {
-            return false;
-        }
-        if radii.is_zero() {
-            return true;
+    /// Whether a point is inside this rect once its corners are taken off.
+    ///
+    /// The same signed-distance function the shader draws with, evaluated on
+    /// the CPU: a bevelled corner is a straight cut and a scooped one curves
+    /// inward, so a circular test would answer for a shape nobody drew. What
+    /// is drawn and what is clicked come from one formula, which is the only
+    /// way they stay in step when the formula changes.
+    pub fn contains_shape(&self, x: f32, y: f32, corners: crate::widgets::Corners) -> bool {
+        self.shape_distance(x, y, corners) <= 0.0
+    }
+
+    /// Distance from the point to the shape's edge: negative inside, positive
+    /// outside. Mirrors `rounded_rect_sdf` in `shader.wgsl`.
+    fn shape_distance(&self, x: f32, y: f32, corners: crate::widgets::Corners) -> f32 {
+        let (cx, cy) = (self.x + self.width * 0.5, self.y + self.height * 0.5);
+        let (hx, hy) = (self.width * 0.5, self.height * 0.5);
+        let (rx, ry) = (x - cx, y - cy);
+
+        // The quadrant the point falls in chooses its radius.
+        let radii = corners.radii;
+        let radius = match (rx < 0.0, ry < 0.0) {
+            (true, true) => radii.top_left,
+            (false, true) => radii.top_right,
+            (false, false) => radii.bottom_right,
+            (true, false) => radii.bottom_left,
+        };
+        let r = radius.min(hx.min(hy));
+
+        let (px, py) = (rx.abs(), ry.abs());
+        if r <= 0.0 {
+            return (px - hx).max(py - hy);
         }
 
-        // Each corner answers for itself, with its own radius clamped to what
-        // the box can hold.
-        let max_radius = (self.width.min(self.height) / 2.0).max(0.0);
-        let (left, top) = (self.x, self.y);
-        let (right, bottom) = (self.x + self.width, self.y + self.height);
-
-        for (r, cx, cy, inside) in [
-            (
-                radii.top_left,
-                left,
-                top,
-                x < left + radii.top_left && y < top + radii.top_left,
-            ),
-            (
-                radii.top_right,
-                right,
-                top,
-                x > right - radii.top_right && y < top + radii.top_right,
-            ),
-            (
-                radii.bottom_right,
-                right,
-                bottom,
-                x > right - radii.bottom_right && y > bottom - radii.bottom_right,
-            ),
-            (
-                radii.bottom_left,
-                left,
-                bottom,
-                x < left + radii.bottom_left && y > bottom - radii.bottom_left,
-            ),
-        ] {
-            if r <= 0.0 || !inside {
-                continue;
-            }
-            // The centre of this corner's circle sits `r` in from both edges.
-            let r = r.min(max_radius);
-            let cx = if cx == left { left + r } else { right - r };
-            let cy = if cy == top { top + r } else { bottom - r };
-            let (dx, dy) = (x - cx, y - cy);
-            return dx * dx + dy * dy <= r * r;
+        // Scooped corners curve inward: the box minus a circle at the corner.
+        if corners.curvature < 0.0 {
+            let box_sdf = (px - hx).max(py - hy);
+            let circle_sdf = ((px - hx).hypot(py - hy)) - r;
+            return box_sdf.max(-circle_sdf);
         }
-        true
+
+        // Convex corners: bevel, round, squircle and everything between.
+        let n = 2f32.powf(corners.curvature);
+        let (qx, qy) = (px - hx + r, py - hy + r);
+        let (mx, my) = (qx.max(0.0), qy.max(0.0));
+        let inside = qx.max(qy).min(0.0);
+        inside + superellipse_length(mx, my, n) - r
     }
 }
 
@@ -671,7 +678,7 @@ impl Widget for Box<dyn Widget> {
 
 #[cfg(test)]
 mod tests {
-    use crate::renderer::CornerRadii;
+    use crate::widgets::Corners;
 
     /// The shape that is drawn is the shape that answers a click: a corner
     /// rounded only at the top must let a point through at the bottom, where
@@ -679,35 +686,75 @@ mod tests {
     #[test]
     fn a_click_asks_the_corner_it_landed_in() {
         let r = Rect::new(0.0, 0.0, 100.0, 100.0);
-        let radii = CornerRadii::from([20.0, 0.0]); // top pair rounded
+        let radii = Corners::rounded([20.0, 0.0]); // top pair rounded
 
         assert!(
-            !r.contains_rounded(2.0, 2.0, radii),
+            !r.contains_shape(2.0, 2.0, radii),
             "the top-left corner is cut away"
         );
         assert!(
-            !r.contains_rounded(98.0, 2.0, radii),
+            !r.contains_shape(98.0, 2.0, radii),
             "and so is the top-right"
         );
         assert!(
-            r.contains_rounded(2.0, 98.0, radii),
+            r.contains_shape(2.0, 98.0, radii),
             "the bottom-left is square, so the same offset is inside"
         );
         assert!(
-            r.contains_rounded(98.0, 98.0, radii),
+            r.contains_shape(98.0, 98.0, radii),
             "and the bottom-right too"
         );
+    }
+
+    /// The picture that found this: a bevelled box lit up while the pointer
+    /// was well outside the drawn octagon, because the test was circular
+    /// whatever the shape.
+    ///
+    /// A bevel cuts the corner with a chord, an ordinary radius with an arc,
+    /// and the arc bulges toward the corner — so between the two lies a
+    /// wedge that one keeps and the other does not. That wedge is what a
+    /// circular test got wrong, and it is what this pins.
+    #[test]
+    fn a_bevel_is_clicked_as_a_straight_cut() {
+        let r = Rect::new(0.0, 0.0, 200.0, 200.0);
+        // Corner radius 80: the chord runs from (0, 80) to (80, 0), and the
+        // arc of the same radius passes about 23 units from the corner.
+        // (30, 30) sits between them.
+        assert!(
+            !r.contains_shape(30.0, 30.0, Corners::bevel(80.0)),
+            "the chord has already cut this away"
+        );
+        assert!(
+            r.contains_shape(30.0, 30.0, Corners::rounded(80.0)),
+            "while the arc of the same radius still keeps it"
+        );
+
+        // Both agree well past the cut, and well inside it.
+        assert!(!r.contains_shape(5.0, 5.0, Corners::bevel(80.0)));
+        assert!(r.contains_shape(100.0, 100.0, Corners::bevel(80.0)));
+    }
+
+    /// A scoop curves *inward*, so the corner is hollow: a point that a
+    /// rounded corner would keep is outside a scooped one.
+    #[test]
+    fn a_scoop_is_clicked_as_a_hollow() {
+        let r = Rect::new(0.0, 0.0, 200.0, 200.0);
+        assert!(
+            !r.contains_shape(10.0, 10.0, Corners::scoop(80.0)),
+            "the hollow is not part of the box"
+        );
+        assert!(r.contains_shape(100.0, 100.0, Corners::scoop(80.0)));
     }
 
     /// A uniform radius still behaves as it always did.
     #[test]
     fn a_uniform_radius_cuts_all_four_corners() {
         let r = Rect::new(0.0, 0.0, 100.0, 100.0);
-        let radii = CornerRadii::uniform(20.0);
+        let radii = Corners::rounded(20.0);
         for (x, y) in [(2.0, 2.0), (98.0, 2.0), (2.0, 98.0), (98.0, 98.0)] {
-            assert!(!r.contains_rounded(x, y, radii), "({x}, {y}) is cut away");
+            assert!(!r.contains_shape(x, y, radii), "({x}, {y}) is cut away");
         }
-        assert!(r.contains_rounded(50.0, 50.0, radii), "the middle is not");
+        assert!(r.contains_shape(50.0, 50.0, radii), "the middle is not");
     }
 
     use super::*;
