@@ -244,6 +244,8 @@ mod tests {
     /// armed message it is about to find no receiver for. Wrapping there
     /// would pin the count above zero for the rest of the process and turn
     /// the loop's check into a no-op that reports nothing, forever.
+    /// Debug-only: the count is, and this is about its arithmetic.
+    #[cfg(debug_assertions)]
     #[test]
     fn a_reset_between_arming_and_giving_up_does_not_wrap_the_count() {
         let _guard = crate::jobs::wakeup_test_lock();

@@ -2197,12 +2197,16 @@ mod wakeup_contract_coverage {
         );
 
         // An ingress message, armed before the work it speaks for is queued
-        // and counted until the loop takes delivery.
+        // and counted until the loop takes delivery. The count is debug-only,
+        // like the check it answers — in a release build there is nothing
+        // owed to anybody, and `in_flight` says so.
         let armed = ingress::arm(ingress::IngressMessage::BgWritesQueued);
-        assert!(
-            ingress::in_flight(),
-            "an armed message must be visible before it is even sent"
-        );
+        if cfg!(debug_assertions) {
+            assert!(
+                ingress::in_flight(),
+                "an armed message must be visible before it is even sent"
+            );
+        }
         drop(armed);
         assert!(
             !ingress::in_flight(),

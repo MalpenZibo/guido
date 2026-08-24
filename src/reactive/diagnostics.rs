@@ -136,7 +136,12 @@ pub(crate) fn report_count() -> u64 {
     imp::REPORTS.with(|c| c.get())
 }
 
-#[cfg(test)]
+/// Debug-only, like the diagnostic they are about: with the assertions off
+/// there is no counter to read, so `report_count` — gated `all(debug_assertions,
+/// test)` since it was written — does not exist and these tests do not compile.
+/// The gate belongs on both or neither, and the two later callers already
+/// carry it (`widgets::diagnostic_audit`, the animation characterization).
+#[cfg(all(test, debug_assertions))]
 mod tests {
     use super::*;
     use crate::jobs::JobType;
