@@ -126,6 +126,13 @@ pub fn apply_pending_focus(tree: &Tree) {
     let Some(widget_ref) = PENDING.with(|pending| *pending.borrow()) else {
         return;
     };
+    // A request whose ref died with the scope that made it can never be
+    // honoured — `.focus()` from inside a popup that closed before the frame
+    // came round. Parked, it would be read again on every frame that follows.
+    if !widget_ref.is_alive() {
+        PENDING.with(|pending| *pending.borrow_mut() = None);
+        return;
+    }
     // A request naming a widget that is still not in the tree stays parked: the
     // app asked for a field that has not been built yet, which is the ordinary
     // shape of `focus()` called from a startup effect.
@@ -180,5 +187,33 @@ pub fn clear_focus() {
     if let Some(old_id) = old.widget() {
         request_job(old_id, JobRequest::Paint);
         focus().set(FocusPath::default());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reactive::owner::{create_root_owner, dispose_owner_now, with_owner};
+
+    /// `.focus()` from inside a popup, on a ref composed in that popup, when the
+    /// popup closes before the loop comes round: the request is parked by
+    /// design — a widget not yet in the tree is the ordinary case — so a dead
+    /// one would be read again on every frame from then on.
+    #[test]
+    fn a_parked_request_whose_ref_died_is_dropped_rather_than_read_forever() {
+        create_root_owner();
+        let tree = Tree::new();
+        let ((), popup_scope) = with_owner(|| {
+            request_focus_deferred(crate::widget_ref::create_widget_ref());
+        });
+        dispose_owner_now(popup_scope);
+
+        apply_pending_focus(&tree);
+        apply_pending_focus(&tree);
+
+        assert!(
+            PENDING.with(|pending| pending.borrow().is_none()),
+            "a request that can never be honoured does not stay parked"
+        );
     }
 }

@@ -46,8 +46,25 @@ impl WidgetRef {
     }
 
     /// The widget this ref is attached to, once it has been laid out.
+    ///
+    /// `None` before that first layout — and `None` again once the scope that
+    /// created the ref is gone, which is the same answer to the same question:
+    /// this handle does not point at a live widget. A `WidgetRef` is `Copy` and
+    /// can outlive the tree it named, so asking has to be safe whenever anyone
+    /// still holds one.
     pub fn widget(&self) -> Option<WidgetId> {
-        self.widget.get_untracked()
+        self.widget.try_get_untracked().flatten()
+    }
+
+    /// Whether this ref's own signals are still alive — that is, whether the
+    /// scope that created it is.
+    ///
+    /// Distinguishes the two cases [`widget`](Self::widget) folds together, for
+    /// the one caller that has to: a parked focus request naming a dead ref can
+    /// never be honoured, while one naming a widget not yet laid out is waiting
+    /// for exactly that.
+    pub(crate) fn is_alive(&self) -> bool {
+        self.widget.try_get_untracked().is_some()
     }
 
     /// Move the keyboard focus to this widget.
@@ -137,12 +154,12 @@ pub(crate) fn update_widget_refs(tree: &Tree) {
         reg.borrow_mut().retain(|&id, widget_ref| {
             // A ref's signals belong to the scope that created it — a popup's
             // widget tree, a dynamic child — and this registry outlives every
-            // one of them. Asking whether the handle is still alive is how an
-            // entry learns to go; reading it outright is how the frame after a
-            // popup closed used to panic.
-            let Some(attached) = widget_ref.widget.try_get_untracked() else {
+            // one of them. A ref that no longer points at a live widget is an
+            // entry with nothing left to update.
+            let attached = widget_ref.widget();
+            if attached.is_none() {
                 return false;
-            };
+            }
             if let Some(rect) = tree.get_surface_relative_bounds(id) {
                 widget_ref.signal.set(rect);
                 true
@@ -163,6 +180,19 @@ mod tests {
     use super::*;
     use crate::reactive::owner::{create_root_owner, dispose_owner_now, with_owner};
     use crate::widgets::container;
+
+    /// Every question a handle answers about its own identity has to survive
+    /// the scope that made it: it is `Copy`, so anyone can still be holding one.
+    #[test]
+    fn a_dead_ref_answers_instead_of_panicking() {
+        create_root_owner();
+        let (widget_ref, scope) = with_owner(create_widget_ref);
+        dispose_owner_now(scope);
+
+        assert_eq!(widget_ref.widget(), None, "it points at no live widget");
+        assert!(!widget_ref.is_focused(), "and it does not hold the focus");
+        assert!(!widget_ref.is_alive());
+    }
 
     /// A widget ref is created wherever its widget is composed, and a popup's
     /// content is composed inside the popup's own scope. The registry is
