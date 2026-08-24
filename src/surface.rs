@@ -1272,10 +1272,11 @@ mod tests {
         popup.close();
 
         assert!(!popup.dismissed(), "still open until the loop closes it");
+        let queued = SURFACE_COMMANDS.with(|cmds| cmds.drain());
         assert!(
-            SURFACE_COMMANDS.with(|cmds| cmds.with_items(|queued| queued
+            queued
                 .iter()
-                .any(|c| matches!(c, SurfaceCommand::Close(id) if *id == popup.id())))),
+                .any(|c| matches!(c, SurfaceCommand::Close(id) if *id == popup.id())),
             "and the close is queued"
         );
     }

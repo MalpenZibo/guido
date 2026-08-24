@@ -572,11 +572,18 @@ static EXIT_REQUEST: AtomicU8 = AtomicU8::new(ExitRequest::Running as u8);
 /// Wakes the event loop so the main loop checks promptly.
 pub(crate) fn set_exit_request(req: ExitRequest) {
     EXIT_REQUEST.store(req as u8, Ordering::Release);
-    // Through `wake_loop`, not straight to the ping: one way in means one set
-    // of rules about the coalescing flag. If a ping is already armed the loop
-    // is already coming back, and it reads the exit request at the top of
-    // every pass.
-    wake_loop();
+    // Its own ping, written unconditionally — the one producer that does not
+    // coalesce. `wake_loop` would decline to write one while a ping is already
+    // armed, which is right for work the loop will find on its next pass and
+    // wrong here: the loop reads the exit flag once per pass, and a request
+    // that lands after that read has no second chance. The store is `Release`
+    // and this write is what the loop's next dispatch returns from, so the
+    // pass that follows it sees the flag.
+    if let Ok(guard) = WAKEUP_PING.lock()
+        && let Some(ref ping) = *guard
+    {
+        ping.ping();
+    }
 }
 
 /// Read the current exit request (non-destructive — persists until `reset_jobs()`).
@@ -1050,22 +1057,38 @@ mod wakeup_contract {
     /// setup from scratch. The asymmetry is what makes this sound: a real
     /// regression pings on *no* attempt, so the failure needs no luck, while a
     /// pass needs only one clean window out of many.
-    /// An exit request is a wakeup like any other, and goes through the same
-    /// door. It used to write the ping directly, past `PING_SENT`: a second
-    /// producer would then coalesce against a flag that nobody had raised, or
-    /// raise one for a ping already spent, depending on the order.
+    /// An exit request has to reach the eventfd, not just the flag: the loop
+    /// reads the exit flag once per pass, so a request that arrives while a
+    /// ping is already armed cannot be left to that ping — the pass it belongs
+    /// to may already have read the flag.
     #[test]
-    fn an_exit_request_goes_through_the_one_door() {
+    fn an_exit_request_writes_its_own_ping() {
         let _state = wakeup_test_lock();
-        let (ping, _source) = make_ping().expect("ping");
+        let mut event_loop: EventLoop<bool> = EventLoop::try_new().expect("event loop");
+        let (ping, source) = make_ping().expect("ping");
+        event_loop
+            .handle()
+            .insert_source(source, |_, _, woken: &mut bool| *woken = true)
+            .expect("insert ping source");
 
-        let seen = (0..64).any(|_| {
+        let woke = (0..64).any(|_| {
             init_wakeup(ping.clone());
-            mark_loop_awake();
+            let mut drained = false;
+            let _ = event_loop.dispatch(Some(Duration::ZERO), &mut drained);
+
+            // The state that would tempt a coalescing producer to write
+            // nothing at all.
+            PING_SENT.store(true, Ordering::Relaxed);
             set_exit_request(ExitRequest::Quit);
-            ping_in_flight()
+
+            let mut woken = false;
+            let _ = event_loop.dispatch(Some(Duration::from_millis(20)), &mut woken);
+            woken
         });
-        assert!(seen, "quit_app must write its ping through wake_loop");
+        assert!(
+            woke,
+            "an exit request must wake a loop that already had a ping armed"
+        );
     }
 
     #[test]
@@ -1108,7 +1131,6 @@ mod wakeup_contract {
             }
         }
 
-        reset_jobs();
         panic!(
             "wake_loop must ping while WAKE_REQUESTED is set — gating on \
              that flag is what lost wakeups"

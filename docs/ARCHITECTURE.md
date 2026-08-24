@@ -320,11 +320,12 @@ flush point). Never call `jobs::wake_loop()` directly from a background
 thread as the *only* wakeup for queued work.
 
 There are two ways in, and `ingress::sender` is private so there is no third.
-`notify()` resolves the sender at send time, for a producer whose payload is
-ready now. `IngressSender` is taken *before* the work starts and binds the send
-to the loop that was running then — a selection read has three seconds to
-finish, and a result that arrives after a restart would otherwise land in a
-loop whose generation counters have started over.
+`notify()` sends in the same call that queued the work, for a producer whose
+payload is ready then and there. `IngressSender` is taken *before* the work
+starts and binds the send to the loop that was running at that moment — a
+selection read has three seconds to finish, and a result that arrives after a
+restart would otherwise land in a loop whose generation counters have started
+over. Both hand the wakeup to the ping if the receiver has gone.
 
 **Main thread → `jobs::wake_loop()`.**
 The frame-request ping is coalesced per loop iteration through a dedicated
@@ -372,7 +373,7 @@ a coalescing flag for the ping and a count for messages in flight in the
 calloop channel. That is a lot of apparatus to verify at runtime a rule the
 type can make unbreakable.
 
-Three producers stay outside `deferred`, each for a reason worth knowing:
+Four producers stay outside `deferred`, each for a reason worth knowing:
 
 - **background writes** wake through the ingress channel rather than the ping,
   and there is exactly one of them (`queue_bg_write`), so the pairing is one
@@ -381,8 +382,14 @@ Three producers stay outside `deferred`, each for a reason worth knowing:
   per-surface lanes — and wake from inside `request_job`;
 - **a parked focus request** is the opposite invariant: it waits for a widget
   that may not be laid out for many frames, so *still full* is its resting
-  state, not a failure. It is applied once per iteration after the render
-  pass, where the tree is laid out.
+  state, not a failure. It is applied at the end of `layout_pass`, after the
+  tree has resolved and before the paint that shows it;
+- **the session lock's request flags** (`lock_session` / `unlock_session`) are
+  still a flag and a `wake_loop()` written as two statements. They belong in
+  `deferred` by shape — `process_session_lock` drains them unconditionally
+  once per iteration — and are not there yet because the request carries a
+  widget factory into a state machine with its own guards, and the path cannot
+  be exercised without locking the screen (see #209).
 
 Everything in `deferred` is drained unconditionally, once per iteration, in
 the loop body. That is what makes "the loop will get to it on the next pass"

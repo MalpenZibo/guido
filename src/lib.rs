@@ -933,6 +933,21 @@ fn layout_pass(
 
     // Update widget ref signals with current bounds after layout
     widget_ref::update_widget_refs(tree);
+
+    // A `WidgetRef::focus()` from application code lands here: after layout, so
+    // a handle attached this very frame has resolved to a widget, and before
+    // `paint_and_present`, so the frame that resolves it is the frame that
+    // draws the caret. Applying it after the render pass instead reads
+    // tidier — one call per iteration rather than one per surface — and costs
+    // an autofocused field a frame of looking unfocused.
+    //
+    // Staying parked is this one's resting state, unlike the queues in
+    // `deferred`: a request for a widget that does not exist yet is the
+    // ordinary shape of `focus()` from a startup effect, and it waits as many
+    // frames as it takes. Which is also why it does not matter that a surface
+    // must exist for this to run — without one there is no tree to resolve
+    // against.
+    reactive::focus::apply_pending_focus(tree);
 }
 
 /// The size the compositor has confirmed, if it has confirmed one.
@@ -1343,21 +1358,6 @@ impl App {
     /// });
     /// ```
     pub fn run(mut self, setup: impl FnOnce(&mut Self)) -> ExitReason {
-        // Create root owner scope — all signals/effects created in setup are owned
-        self.root_owner_id = Some(reactive::create_root_owner());
-        setup(&mut self);
-
-        if self.surface_definitions.is_empty() {
-            // Not an error: outputs-driven apps start with zero surfaces and
-            // spawn one per monitor from an effect once the compositor
-            // reports its outputs. An app that never spawns anything will
-            // just idle in the event loop.
-            log::info!(
-                "No static surfaces defined; waiting for dynamic surfaces \
-                 (spawn_surface, e.g. from an outputs() effect)"
-            );
-        }
-
         // The loop is created before the connection because the keyboard is
         // built during the first dispatch, and it needs the loop handle to arm
         // its key-repeat timer.
@@ -1365,12 +1365,12 @@ impl App {
             EventLoop::try_new().expect("Failed to create event loop");
         let loop_handle = event_loop.handle();
 
-        // Both wakeup mechanisms are installed before anything can use them.
-        // The compositor talks during `create_wayland_app`'s roundtrips and
-        // during the configure loop below — a clipboard offer arriving there
-        // starts a reader thread, and an app's own `create_task` can queue a
-        // background write — and a producer that finds neither a channel nor a
-        // ping handle has nowhere to put its wakeup.
+        // Both wakeup mechanisms are installed before anything can reach
+        // them, which means before `setup` runs: an app's very first act is
+        // often a `create_task` that writes a signal, and the compositor
+        // starts talking during `create_wayland_app`'s roundtrips and the
+        // configure loop. A producer that finds neither a channel nor a ping
+        // handle has nowhere to put its wakeup.
         // Create ping mechanism for wakeup on signal changes
         let (ping, ping_source) = make_ping().expect("Failed to create ping");
         init_wakeup(ping);
@@ -1405,6 +1405,21 @@ impl App {
                 }
             })
             .expect("Failed to insert ingress channel");
+
+        // Create root owner scope — all signals/effects created in setup are owned
+        self.root_owner_id = Some(reactive::create_root_owner());
+        setup(&mut self);
+
+        if self.surface_definitions.is_empty() {
+            // Not an error: outputs-driven apps start with zero surfaces and
+            // spawn one per monitor from an effect once the compositor
+            // reports its outputs. An app that never spawns anything will
+            // just idle in the event loop.
+            log::info!(
+                "No static surfaces defined; waiting for dynamic surfaces \
+                 (spawn_surface, e.g. from an outputs() effect)"
+            );
+        }
 
         let (connection, mut event_queue, mut wayland_state, qh) =
             match create_wayland_app(loop_handle.clone()) {
@@ -1637,18 +1652,6 @@ impl App {
                     render_surface(&mut ctx, layout_roots, woken, &active_roots);
                 }
             }
-
-            // A `WidgetRef::focus()` from application code lands here: after
-            // the render pass, so a handle attached during this iteration's
-            // layout has resolved to a widget, and once per iteration rather
-            // than once per surface — the tree is one, and the first surface
-            // to run this used to resolve for all of them.
-            //
-            // Unlike the queues below it, staying parked is this one's resting
-            // state: a request for a widget that does not exist yet is the
-            // ordinary shape of `focus()` from a startup effect, and it waits
-            // as many frames as it takes.
-            reactive::focus::apply_pending_focus(&self.tree);
 
             // Hand the seat what the widgets changed — after the render
             // pass, so a copy or a cursor set by this iteration's event

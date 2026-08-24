@@ -10,6 +10,14 @@
 //! *are* the wakeup: the cell is private to the type, so there is no way to
 //! put something in one and not ask for the pass that takes it out.
 //!
+//! What that guarantees is the pairing, not delivery. These live in
+//! thread-locals belonging to the main thread, so a producer calling from a
+//! background thread queues into its own thread's copy, which nothing drains
+//! — the wakeup fires and the value is lost. The public gestures that reach
+//! them (`set_cursor`, `clipboard_copy`, `primary_copy`, `dispose_owner`) are
+//! main-thread API for that reason; a background thread reaches the UI through
+//! `WriteSignal`, which is the one queue built to cross threads.
+//!
 //! Two shapes, because the queues in this crate are two shapes:
 //!
 //! - [`DeferredQueue`] accumulates — every disposal and every surface command
@@ -71,13 +79,6 @@ impl<T> DeferredQueue<T> {
     /// Forget everything queued, for `App::drop`.
     pub(crate) fn clear(&self) {
         self.items.borrow_mut().clear();
-    }
-
-    /// Look at what is queued without taking it. For tests that assert *what*
-    /// a gesture queued, which is the half `is_empty` cannot show.
-    #[cfg(test)]
-    pub(crate) fn with_items<R>(&self, f: impl FnOnce(&[T]) -> R) -> R {
-        f(&self.items.borrow())
     }
 }
 

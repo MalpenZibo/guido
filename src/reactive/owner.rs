@@ -173,6 +173,12 @@ pub(crate) fn reset_owners() {
     CURRENT_OWNER.with(|c| *c.borrow_mut() = None);
     ROOT_OWNER.with(|root| root.set(None));
     OWNERS.with(|o| *o.borrow_mut() = OwnerArena::new());
+    // With them, anything queued against them. Owner ids restart from zero
+    // with the arena, so a disposal left over from the App that is going away
+    // names a live owner in the App that comes next — the same hazard
+    // `App::drop` already clears the tree for, where a late Unregister job
+    // would destroy a new widget that reused the id.
+    PENDING_DISPOSALS.with(|v| v.clear());
 }
 
 /// Run `f` under the root owner instead of whatever scope is current.
