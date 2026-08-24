@@ -107,8 +107,13 @@ impl Container {
         self.resolve_state_value(id, base, |state| state.border.map(|b| b.color.get()))
     }
 
-    pub(super) fn effective_corner_radius_target(&self, id: WidgetId) -> f32 {
-        let base = self.corner_radius.get_or(0.0);
+    pub(super) fn effective_corner_radius_target(
+        &self,
+        id: WidgetId,
+    ) -> crate::renderer::CornerRadii {
+        let base = self
+            .corner_radius
+            .get_or(crate::renderer::CornerRadii::uniform(0.0));
         self.resolve_state_value(id, base, |state| state.corner_radius.map(|s| s.get()))
     }
 
@@ -190,7 +195,7 @@ impl Container {
         )
     }
 
-    pub(super) fn animated_corner_radius(&self, id: WidgetId) -> f32 {
+    pub(super) fn animated_corner_radius(&self, id: WidgetId) -> crate::renderer::CornerRadii {
         get_animated_value(
             self.anims.as_ref().and_then(|a| a.corner_radius.as_ref()),
             || self.effective_corner_radius_target(id),

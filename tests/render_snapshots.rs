@@ -107,7 +107,19 @@ fn dump_node(node: &RenderNode, depth: usize, out: &mut String) {
         format!(" origin={:?}/{:?}", o.horizontal, o.vertical)
     };
     let clip = match &node.clip {
-        Some(c) => format!(" clip({} r={})", rect(&c.rect), n(c.corner_radius)),
+        // One number while the four agree, so a uniform clip reads as it
+        // always did and a per-corner one is visible as four.
+        Some(c) if c.corner_radius == CornerRadii::uniform(c.corner_radius.top_left) => {
+            format!(" clip({} r={})", rect(&c.rect), n(c.corner_radius.top_left))
+        }
+        Some(c) => format!(
+            " clip({} r={}/{}/{}/{})",
+            rect(&c.rect),
+            n(c.corner_radius.top_left),
+            n(c.corner_radius.top_right),
+            n(c.corner_radius.bottom_right),
+            n(c.corner_radius.bottom_left)
+        ),
         None => String::new(),
     };
     let partial = if node.partial { " partial" } else { "" };
@@ -414,7 +426,7 @@ fn corners_borders_and_elevation() {
                 .child(base(Color::TRANSPARENT).border(2.0, Color::WHITE))
                 .child(
                     box_of(70.0, 70.0)
-                        .corner_radii(CornerRadii {
+                        .corner_radius(CornerRadii {
                             top_left: 16.0,
                             top_right: 0.0,
                             bottom_right: 16.0,

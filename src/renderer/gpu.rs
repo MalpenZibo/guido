@@ -132,8 +132,9 @@ pub struct ShapeInstance {
     /// Clip rect in physical pixels [x, y, width, height]
     /// Negative width/height = no clipping. Zero width/height = clip everything.
     pub clip_rect: [f32; 4],
-    /// Clip corner radius in physical pixels
-    pub clip_corner_radius: f32,
+    /// Unused: the clip's radii are four, and live at the end of the struct
+    /// so that no attribute offset above them had to move.
+    pub _pad_clip: f32,
     /// Clip curvature (K-value)
     pub clip_curvature: f32,
     /// Whether to use local coordinates (frag_pos) for clipping instead of world_pos.
@@ -151,6 +152,12 @@ pub struct ShapeInstance {
     pub gradient_type: u32,
     /// Padding for 16-byte alignment
     pub _pad4: [u32; 3],
+
+    // === Clip corner radii ===
+    /// [top_left, top_right, bottom_right, bottom_left], physical pixels.
+    /// Appended rather than placed beside `clip_rect` so that none of the
+    /// vertex attribute offsets above it move.
+    pub clip_radii: [f32; 4],
 }
 
 impl Default for ShapeInstance {
@@ -170,7 +177,7 @@ impl Default for ShapeInstance {
             transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0], // identity
             _pad2: [0.0, 0.0],
             clip_rect: NO_CLIP_RECT,
-            clip_corner_radius: 0.0,
+            _pad_clip: 0.0,
             clip_curvature: 1.0,
             clip_is_local: 0.0,
             _pad3: 0.0,
@@ -178,6 +185,7 @@ impl Default for ShapeInstance {
             gradient_end: [0.0, 0.0, 0.0, 0.0],
             gradient_type: 0, // No gradient
             _pad4: [0, 0, 0],
+            clip_radii: [0.0; 4],
         }
     }
 }
@@ -224,7 +232,12 @@ impl ShapeInstance {
             clip.rect.width * scale,
             clip.rect.height * scale,
         ];
-        self.clip_corner_radius = clip.corner_radius * scale;
+        self.clip_radii = [
+            clip.corner_radius.top_left * scale,
+            clip.corner_radius.top_right * scale,
+            clip.corner_radius.bottom_right * scale,
+            clip.corner_radius.bottom_left * scale,
+        ];
         self.clip_curvature = clip.curvature;
         self.clip_is_local = if is_local { 1.0 } else { 0.0 };
         self
@@ -345,7 +358,7 @@ impl ShapeInstance {
                     shader_location: 10,
                     format: VertexFormat::Float32x4,
                 },
-                // clip_corner_radius, clip_curvature, clip_is_local, _pad3
+                // _pad_clip, clip_curvature, clip_is_local, _pad3
                 VertexAttribute {
                     offset: 160,
                     shader_location: 11,
@@ -369,6 +382,12 @@ impl ShapeInstance {
                     shader_location: 14,
                     format: VertexFormat::Uint32x4,
                 },
+                // clip_radii
+                VertexAttribute {
+                    offset: 224,
+                    shader_location: 15,
+                    format: VertexFormat::Float32x4,
+                },
             ],
         }
     }
@@ -380,12 +399,13 @@ mod tests {
 
     #[test]
     fn test_shape_instance_size() {
-        // Verify the size is reasonable (should be around 224 bytes with clip + gradient)
+        // Every instance is uploaded per draw, so growth is paid on every
+        // shape on screen: 176 (base + clip) + 48 (gradient) + 16 (the clip's
+        // four corner radii) = 240.
         let size = std::mem::size_of::<ShapeInstance>();
         println!("ShapeInstance size: {} bytes", size);
         assert!(size <= 256, "ShapeInstance is too large: {} bytes", size);
-        // Verify expected size: 176 (base + clip) + 48 (gradient) = 224
-        assert_eq!(size, 224, "ShapeInstance size changed unexpectedly");
+        assert_eq!(size, 240, "ShapeInstance size changed unexpectedly");
     }
 
     #[test]

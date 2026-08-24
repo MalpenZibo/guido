@@ -23,7 +23,7 @@ use super::*;
 /// what shape it is, and the transform standing between the two.
 pub(super) struct HitContext {
     pub bounds: Rect,
-    pub corner_radius: f32,
+    pub corner_radius: crate::renderer::CornerRadii,
     pub transform: Transform,
     pub transform_origin: TransformOrigin,
 }

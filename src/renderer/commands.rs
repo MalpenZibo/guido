@@ -66,6 +66,11 @@ impl CornerRadii {
         }
     }
 
+    /// Whether every corner is square.
+    pub fn is_zero(&self) -> bool {
+        *self == Self::uniform(0.0)
+    }
+
     /// The largest of the four radii (uniform approximations: clip, blur).
     pub fn max(&self) -> f32 {
         self.top_left
@@ -92,6 +97,81 @@ impl CornerRadii {
             bottom_right: self.bottom_right * factor,
             bottom_left: self.bottom_left * factor,
         }
+    }
+}
+
+/// A single radius on all four corners.
+impl From<f32> for CornerRadii {
+    fn from(radius: f32) -> Self {
+        Self::uniform(radius)
+    }
+}
+
+impl From<f64> for CornerRadii {
+    fn from(radius: f64) -> Self {
+        Self::uniform(radius as f32)
+    }
+}
+
+impl From<i32> for CornerRadii {
+    fn from(radius: i32) -> Self {
+        Self::uniform(radius as f32)
+    }
+}
+
+impl From<u32> for CornerRadii {
+    fn from(radius: u32) -> Self {
+        Self::uniform(radius as f32)
+    }
+}
+
+impl From<u16> for CornerRadii {
+    fn from(radius: u16) -> Self {
+        Self::uniform(radius as f32)
+    }
+}
+
+/// `[top, bottom]` — the top pair and the bottom pair.
+///
+/// CSS pairs its two-value shorthand diagonally (`top-left & bottom-right`,
+/// then the other two), which is a curiosity almost nobody writes on purpose;
+/// what people write is "round the top of this row". This library also reads
+/// `padding([a, b])` as two pairs of sides, and two arrays of two that mean
+/// different things would be a trap. The four-value form below *is* CSS.
+impl From<[f32; 2]> for CornerRadii {
+    fn from(v: [f32; 2]) -> Self {
+        Self {
+            top_left: v[0],
+            top_right: v[0],
+            bottom_right: v[1],
+            bottom_left: v[1],
+        }
+    }
+}
+
+/// `[top-left, top-right, bottom-right, bottom-left]` — clockwise, as CSS.
+impl From<[f32; 4]> for CornerRadii {
+    fn from(v: [f32; 4]) -> Self {
+        Self {
+            top_left: v[0],
+            top_right: v[1],
+            bottom_right: v[2],
+            bottom_left: v[3],
+        }
+    }
+}
+
+/// `[top, bottom]`, integer.
+impl From<[i32; 2]> for CornerRadii {
+    fn from(v: [i32; 2]) -> Self {
+        [v[0] as f32, v[1] as f32].into()
+    }
+}
+
+/// `[top-left, top-right, bottom-right, bottom-left]`, integer.
+impl From<[i32; 4]> for CornerRadii {
+    fn from(v: [i32; 4]) -> Self {
+        [v[0] as f32, v[1] as f32, v[2] as f32, v[3] as f32].into()
     }
 }
 
@@ -141,25 +221,6 @@ impl EllipticalRadii {
             top_right: self.x.top_right.max(self.y.top_right),
             bottom_right: self.x.bottom_right.max(self.y.bottom_right),
             bottom_left: self.x.bottom_left.max(self.y.bottom_left),
-        }
-    }
-}
-
-impl From<f32> for CornerRadii {
-    fn from(radius: f32) -> Self {
-        Self::uniform(radius)
-    }
-}
-
-impl From<[f32; 4]> for CornerRadii {
-    /// `[top_left, top_right, bottom_right, bottom_left]` — clockwise from
-    /// the top left, CSS `border-radius` order.
-    fn from(r: [f32; 4]) -> Self {
-        Self {
-            top_left: r[0],
-            top_right: r[1],
-            bottom_right: r[2],
-            bottom_left: r[3],
         }
     }
 }

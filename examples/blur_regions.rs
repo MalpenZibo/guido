@@ -91,7 +91,7 @@ fn main() {
                                     glass()
                                         .width(200.0)
                                         .height(120.0)
-                                        .corner_radii([36.0, 0.0, 36.0, 0.0])
+                                        .corner_radius([36.0, 0.0, 36.0, 0.0])
                                         .border(1.0, FRAME),
                                 )
                                 .into_any(),

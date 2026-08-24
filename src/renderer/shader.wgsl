@@ -43,7 +43,7 @@ struct InstanceInput {
     @location(9) transform_1: vec4<f32>,
     // clip_rect: [x, y, width, height] in physical pixels (scaled from logical in render.rs)
     @location(10) clip_rect: vec4<f32>,
-    // clip_corner_radius, clip_curvature, clip_is_local, _pad
+    // _pad, clip_curvature, clip_is_local, _pad
     @location(11) clip_params: vec4<f32>,
     // gradient_start RGBA
     @location(12) gradient_start: vec4<f32>,
@@ -51,6 +51,8 @@ struct InstanceInput {
     @location(13) gradient_end: vec4<f32>,
     // gradient_type (0=none, 1=horizontal, 2=vertical, 3=diagonal, 4=diagonal_reverse), _pad, _pad, _pad
     @location(14) gradient_params: vec4<u32>,
+    // clip corner radii: [top_left, top_right, bottom_right, bottom_left]
+    @location(15) clip_radii: vec4<f32>,
 }
 
 // === Vertex Output ===
@@ -75,7 +77,7 @@ struct VertexOutput {
     @location(8) world_pos: vec2<f32>,
     // Clip rect in physical pixels
     @location(9) clip_rect: vec4<f32>,
-    // Clip corner_radius, curvature, is_local
+    // _, clip curvature, is_local
     @location(10) clip_params: vec3<f32>,
     // Gradient start color
     @location(11) gradient_start: vec4<f32>,
@@ -83,6 +85,8 @@ struct VertexOutput {
     @location(12) gradient_end: vec4<f32>,
     // Gradient type (0=none, 1=horizontal, 2=vertical, 3=diagonal, 4=diagonal_reverse)
     @location(13) @interpolate(flat) gradient_type: u32,
+    // clip corner radii: [top_left, top_right, bottom_right, bottom_left]
+    @location(14) clip_radii: vec4<f32>,
 }
 
 // === Helper Functions ===
@@ -178,7 +182,8 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
 
     // Pass clip data to fragment shader
     out.clip_rect = instance.clip_rect;
-    out.clip_params = instance.clip_params.xyz;  // corner_radius, curvature, is_local
+    out.clip_params = instance.clip_params.xyz;  // _, curvature, is_local
+    out.clip_radii = instance.clip_radii;
 
     // Pass gradient data to fragment shader
     out.gradient_start = instance.gradient_start;
@@ -372,12 +377,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // world_pos for world clips (regular clipping)
         let clip_pos = select(in.world_pos, in.frag_pos, in.clip_params.z > 0.5);
 
-        // Compute clip SDF (clips stay uniform-radius)
         let clip_dist = rounded_rect_sdf(
             clip_pos,
             in.clip_rect,
-            vec4<f32>(in.clip_params.x),  // corner_radius, all corners
-            in.clip_params.y              // curvature
+            in.clip_radii,
+            in.clip_params.y   // curvature
         );
 
         // Smooth clip edge (anti-aliased)

@@ -207,68 +207,56 @@ impl Rect {
 
     /// Check if a point is inside this rect with rounded corners.
     /// The corner_radius is clamped to half of the smaller dimension.
-    pub fn contains_rounded(&self, x: f32, y: f32, corner_radius: f32) -> bool {
-        // First check basic bounds
+    pub fn contains_rounded(&self, x: f32, y: f32, radii: crate::renderer::CornerRadii) -> bool {
         if !self.contains(x, y) {
             return false;
         }
-
-        // If no corner radius, we're done
-        if corner_radius <= 0.0 {
+        if radii.is_zero() {
             return true;
         }
 
-        // Clamp radius to half of smaller dimension
+        // Each corner answers for itself, with its own radius clamped to what
+        // the box can hold.
         let max_radius = (self.width.min(self.height) / 2.0).max(0.0);
-        let r = corner_radius.min(max_radius);
+        let (left, top) = (self.x, self.y);
+        let (right, bottom) = (self.x + self.width, self.y + self.height);
 
-        // Check if point is in a corner region
-        let left = self.x;
-        let right = self.x + self.width;
-        let top = self.y;
-        let bottom = self.y + self.height;
-
-        // Corner circle centers
-        let in_left = x < left + r;
-        let in_right = x > right - r;
-        let in_top = y < top + r;
-        let in_bottom = y > bottom - r;
-
-        // If in a corner region, check distance from corner circle center
-        if in_left && in_top {
-            // Top-left corner
-            let cx = left + r;
-            let cy = top + r;
-            let dx = x - cx;
-            let dy = y - cy;
+        for (r, cx, cy, inside) in [
+            (
+                radii.top_left,
+                left,
+                top,
+                x < left + radii.top_left && y < top + radii.top_left,
+            ),
+            (
+                radii.top_right,
+                right,
+                top,
+                x > right - radii.top_right && y < top + radii.top_right,
+            ),
+            (
+                radii.bottom_right,
+                right,
+                bottom,
+                x > right - radii.bottom_right && y > bottom - radii.bottom_right,
+            ),
+            (
+                radii.bottom_left,
+                left,
+                bottom,
+                x < left + radii.bottom_left && y > bottom - radii.bottom_left,
+            ),
+        ] {
+            if r <= 0.0 || !inside {
+                continue;
+            }
+            // The centre of this corner's circle sits `r` in from both edges.
+            let r = r.min(max_radius);
+            let cx = if cx == left { left + r } else { right - r };
+            let cy = if cy == top { top + r } else { bottom - r };
+            let (dx, dy) = (x - cx, y - cy);
             return dx * dx + dy * dy <= r * r;
         }
-        if in_right && in_top {
-            // Top-right corner
-            let cx = right - r;
-            let cy = top + r;
-            let dx = x - cx;
-            let dy = y - cy;
-            return dx * dx + dy * dy <= r * r;
-        }
-        if in_left && in_bottom {
-            // Bottom-left corner
-            let cx = left + r;
-            let cy = bottom - r;
-            let dx = x - cx;
-            let dy = y - cy;
-            return dx * dx + dy * dy <= r * r;
-        }
-        if in_right && in_bottom {
-            // Bottom-right corner
-            let cx = right - r;
-            let cy = bottom - r;
-            let dx = x - cx;
-            let dy = y - cy;
-            return dx * dx + dy * dy <= r * r;
-        }
-
-        // Not in a corner region, so it's inside
         true
     }
 }
@@ -701,6 +689,45 @@ impl Widget for Box<dyn Widget> {
 
 #[cfg(test)]
 mod tests {
+    use crate::renderer::CornerRadii;
+
+    /// The shape that is drawn is the shape that answers a click: a corner
+    /// rounded only at the top must let a point through at the bottom, where
+    /// the box is square.
+    #[test]
+    fn a_click_asks_the_corner_it_landed_in() {
+        let r = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let radii = CornerRadii::from([20.0, 0.0]); // top pair rounded
+
+        assert!(
+            !r.contains_rounded(2.0, 2.0, radii),
+            "the top-left corner is cut away"
+        );
+        assert!(
+            !r.contains_rounded(98.0, 2.0, radii),
+            "and so is the top-right"
+        );
+        assert!(
+            r.contains_rounded(2.0, 98.0, radii),
+            "the bottom-left is square, so the same offset is inside"
+        );
+        assert!(
+            r.contains_rounded(98.0, 98.0, radii),
+            "and the bottom-right too"
+        );
+    }
+
+    /// A uniform radius still behaves as it always did.
+    #[test]
+    fn a_uniform_radius_cuts_all_four_corners() {
+        let r = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let radii = CornerRadii::uniform(20.0);
+        for (x, y) in [(2.0, 2.0), (98.0, 2.0), (2.0, 98.0), (98.0, 98.0)] {
+            assert!(!r.contains_rounded(x, y, radii), "({x}, {y}) is cut away");
+        }
+        assert!(r.contains_rounded(50.0, 50.0, radii), "the middle is not");
+    }
+
     use super::*;
 
     #[test]

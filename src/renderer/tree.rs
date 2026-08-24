@@ -20,8 +20,8 @@ use super::flatten::FlattenedCommand;
 pub struct ClipRegion {
     /// The clip rectangle in local coordinates (0,0 = node origin).
     pub rect: Rect,
-    /// Corner radius for rounded clipping.
-    pub corner_radius: f32,
+    /// Corner radii for rounded clipping.
+    pub corner_radius: crate::renderer::CornerRadii,
     /// Superellipse curvature (K-value: 1.0=circle, 2.0=squircle).
     pub curvature: f32,
 }

@@ -108,7 +108,7 @@ pub struct StateStyle {
     /// is one field rather than two that could disagree.
     pub border: Option<BorderOverride>,
     /// Corner radius override
-    pub corner_radius: Option<Signal<f32>>,
+    pub corner_radius: Option<Signal<crate::renderer::CornerRadii>>,
     /// Transform override (e.g., scale on press)
     pub transform: Option<Signal<Transform>>,
     /// Elevation (shadow) override
@@ -178,7 +178,10 @@ impl StateStyle {
     }
 
     /// Set the corner radius for this state.
-    pub fn corner_radius<M>(mut self, radius: impl IntoSignal<f32, M>) -> Self {
+    pub fn corner_radius<M>(
+        mut self,
+        radius: impl IntoSignal<crate::renderer::CornerRadii, M>,
+    ) -> Self {
         self.corner_radius = Some(radius.into_signal());
         self
     }

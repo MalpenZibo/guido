@@ -42,7 +42,7 @@ fn main() {
                                 BackdropBlur::new(0.0).sources(BackdropSources::COMPOSITOR),
                             )
                             .background(Color::rgba(0.12, 0.12, 0.18, 0.55))
-                            .corner_radius(radius)
+                            .corner_radius(move || radius.get())
                             .padding(24.0)
                             .when_hovered(|s| s.lighter(0.05))
                             .on_click(move || {

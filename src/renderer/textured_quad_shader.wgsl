@@ -20,7 +20,7 @@ struct VertexOutput {
     @location(0) uv: vec2<f32>,
     @location(1) screen_pos: vec2<f32>,
     @location(2) clip_rect: vec4<f32>,
-    @location(3) clip_params: vec2<f32>,
+    @location(3) clip_radii: vec4<f32>,
 }
 
 // === Texture Bindings ===
@@ -37,16 +37,21 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.uv = in.uv;
     out.screen_pos = in.screen_pos;
     out.clip_rect = in.clip_rect;
-    out.clip_params = in.clip_params.xy;
+    out.clip_radii = in.clip_params;
     return out;
 }
 
 // === SDF Functions ===
 
-// SDF for rounded rectangle clipping
-fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radius: f32) -> f32 {
+// SDF for rounded rectangle clipping.
+// radii: [top_left, top_right, bottom_right, bottom_left] — the corner the
+// point falls in decides which one applies.
+fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radii: vec4<f32>) -> f32 {
     let center = vec2<f32>(rect.x + rect.z * 0.5, rect.y + rect.w * 0.5);
     let half_size = vec2<f32>(rect.z * 0.5, rect.w * 0.5);
+    let rel = pos - center;
+    let pair = select(vec2<f32>(radii.y, radii.z), vec2<f32>(radii.x, radii.w), rel.x < 0.0);
+    let radius = select(pair.y, pair.x, rel.y < 0.0);
     let r = min(radius, min(half_size.x, half_size.y));
 
     if (r <= 0.0) {
@@ -72,7 +77,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let clip_dist = rounded_rect_sdf(
             in.screen_pos,
             in.clip_rect,
-            in.clip_params.x  // corner_radius
+            in.clip_radii
         );
 
         // Anti-aliased clip edge

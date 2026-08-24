@@ -152,7 +152,12 @@ impl<'a> PaintContext<'a> {
     /// * `rect` - The clip rectangle in local coordinates
     /// * `corner_radius` - Corner radius for rounded clipping
     /// * `curvature` - Superellipse curvature (K-value: 1.0=circle, 2.0=squircle)
-    pub fn set_clip(&mut self, rect: Rect, corner_radius: f32, curvature: f32) {
+    pub fn set_clip(
+        &mut self,
+        rect: Rect,
+        corner_radius: crate::renderer::CornerRadii,
+        curvature: f32,
+    ) {
         self.node.clip = Some(ClipRegion {
             rect,
             corner_radius,
@@ -164,7 +169,7 @@ impl<'a> PaintContext<'a> {
     ///
     /// This is a convenience method for `set_clip(rect, 0.0, 1.0)`.
     pub fn set_clip_rect(&mut self, rect: Rect) {
-        self.set_clip(rect, 0.0, 1.0);
+        self.set_clip(rect, crate::renderer::CornerRadii::uniform(0.0), 1.0);
     }
 
     /// Set a clip region only for overlay commands (doesn't clip children).
@@ -176,7 +181,12 @@ impl<'a> PaintContext<'a> {
     /// * `rect` - The clip rectangle in local coordinates
     /// * `corner_radius` - Corner radius for rounded clipping
     /// * `curvature` - Superellipse curvature (K-value: 1.0=circle, 2.0=squircle)
-    pub fn set_overlay_clip(&mut self, rect: Rect, corner_radius: f32, curvature: f32) {
+    pub fn set_overlay_clip(
+        &mut self,
+        rect: Rect,
+        corner_radius: crate::renderer::CornerRadii,
+        curvature: f32,
+    ) {
         self.node.overlay_clip = Some(ClipRegion {
             rect,
             corner_radius,

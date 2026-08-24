@@ -103,33 +103,30 @@ container()
 
 ## Corner Radius
 
-### Uniform Radius
+One call, one to four values — the shorthand `padding` uses, with CSS's
+clockwise order where CSS has one:
 
 ```rust
-container().corner_radius(8.0)  // 8px radius on all corners
+container().corner_radius(8.0)                     // all four
+container().corner_radius([16.0, 0.0])             // the top pair, then the bottom
+container().corner_radius([16.0, 4.0, 16.0, 4.0])  // top-left, top-right, bottom-right, bottom-left
 ```
 
-### Per-Corner Radii
+The two-value form is `[top, bottom]` rather than CSS's diagonal pairing:
+"round the top of this row" is what people write, and `padding([a, b])` in this
+library already reads as two pairs of sides. The four-value form *is* CSS.
 
-Round each corner independently with `corner_radii` — accordion-style
-lists round only the top of the first row and only the bottom of the last:
+Named constructors say the same thing in words:
 
 ```rust
-use guido::prelude::CornerRadii;
-
-container().corner_radii(CornerRadii::top(16.0))     // first row
-container().corner_radii(CornerRadii::bottom(16.0))  // last row
-container().corner_radii(CornerRadii {
-    top_left: 16.0,
-    top_right: 4.0,
-    bottom_right: 16.0,
-    bottom_left: 4.0,
-})
+container().corner_radius(CornerRadii::top(16.0))     // first row of a list
+container().corner_radius(CornerRadii::bottom(16.0))  // last row
 ```
 
-`corner_radii` overrides `corner_radius` for drawing (background, border,
-shadow, gradient). Child clipping, blur regions and rounded hit testing
-keep using a uniform radius — the largest of the four.
+The shape reaches everything that has one: the background, the border, the
+shadow, the gradient, the blur behind it, the clip its children are cut to,
+and the region that answers a click. A box rounded only at the top clips and
+is clicked as a box rounded only at the top.
 
 ### Corner Curvature (Superellipse)
 

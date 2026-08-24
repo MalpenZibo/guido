@@ -564,7 +564,12 @@ impl ImageQuadRenderer {
                     clip.rect.width * scale_factor,
                     clip.rect.height * scale_factor,
                 ],
-                [clip.corner_radius * scale_factor, clip.curvature, 0.0, 0.0],
+                [
+                    clip.corner_radius.top_left * scale_factor,
+                    clip.corner_radius.top_right * scale_factor,
+                    clip.corner_radius.bottom_right * scale_factor,
+                    clip.corner_radius.bottom_left * scale_factor,
+                ],
             )
         } else {
             // No clipping

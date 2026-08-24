@@ -1558,6 +1558,31 @@ fn settle(h: &mut H, limit: usize) -> usize {
     limit
 }
 
+/// The four radii reach the clip, not just the paint: a row that rounds only
+/// its top must cut its children there and leave them square at the bottom.
+#[test]
+fn the_clip_carries_every_corner() {
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(40.0)
+            .corner_radius([16.0, 0.0])
+            .overflow(Overflow::Hidden)
+            .child(container().width(100.0).height(40.0).background(Color::RED)),
+    );
+    let node = h.frame(200.0, 200.0).node;
+
+    let clip = node.children[0]
+        .clip
+        .as_ref()
+        .or(node.clip.as_ref())
+        .expect("a hidden overflow clips");
+    assert_eq!(clip.corner_radius.top_left, 16.0);
+    assert_eq!(clip.corner_radius.top_right, 16.0);
+    assert_eq!(clip.corner_radius.bottom_right, 0.0);
+    assert_eq!(clip.corner_radius.bottom_left, 0.0);
+}
+
 /// Every `BackdropBlur` radius drawn by a node.
 fn blur_radii(node: &RenderNode) -> Vec<f32> {
     node.commands

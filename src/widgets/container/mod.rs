@@ -191,7 +191,7 @@ pub(super) struct ContainerAnims {
     pub(super) width: Option<AnimationState<f32>>,
     pub(super) height: Option<AnimationState<f32>>,
     pub(super) background: Option<AnimationState<Color>>,
-    pub(super) corner_radius: Option<AnimationState<f32>>,
+    pub(super) corner_radius: Option<AnimationState<crate::renderer::CornerRadii>>,
     pub(super) elevation: Option<AnimationState<f32>>,
     pub(super) padding: Option<AnimationState<Padding>>,
     pub(super) border_width: Option<AnimationState<f32>>,
@@ -363,8 +363,7 @@ pub struct Container {
     pub(super) padding: Option<Signal<Padding>>,
     pub(super) background: Option<Signal<Color>>,
     pub(super) gradient: Option<Signal<Option<LinearGradient>>>,
-    pub(super) corner_radius: Option<Signal<f32>>,
-    pub(super) corner_radii: Option<Signal<crate::renderer::CornerRadii>>,
+    pub(super) corner_radius: Option<Signal<crate::renderer::CornerRadii>>,
     pub(super) corner_curvature: Option<Signal<f32>>,
     pub(super) border_width: Option<Signal<f32>>,
     pub(super) border_color: Option<Signal<Color>>,
@@ -431,7 +430,6 @@ impl Container {
             background: None,
             gradient: None,
             corner_radius: None,
-            corner_radii: None,
             corner_curvature: None,
             border_width: None,
             border_color: None,
@@ -551,40 +549,29 @@ impl Container {
     // overrides it — see [`TextStyle`](crate::widgets::TextStyle).
     // -----------------------------------------------------------------------
 
-    /// Set the corner radius in logical pixels.
+    /// Round the corners.
     ///
-    /// Combined with [`corner_curvature()`](Self::corner_curvature) to control corner shape.
-    /// Default curvature is 1.0 (circular). Use [`squircle()`](Self::squircle),
-    /// [`bevel()`](Self::bevel), or [`scoop()`](Self::scoop) for preset shapes.
-    ///
-    /// # Example
+    /// One value for all four, `[top, bottom]` for the two pairs, or
+    /// `[top-left, top-right, bottom-right, bottom-left]` clockwise as CSS
+    /// writes it:
     ///
     /// ```ignore
-    /// container().corner_radius(8.0)                    // Standard rounded corners
-    /// container().corner_radius(12.0).corner_curvature(Curvature::SQUIRCLE)        // iOS-style smooth corners
-    /// ```
-    pub fn corner_radius<M>(mut self, radius: impl IntoSignal<f32, M>) -> Self {
-        self.corner_radius = Some(radius.into_signal());
-        self
-    }
-
-    /// Set per-corner radii (overrides `corner_radius` for drawing).
-    ///
-    /// Enables accordion-style lists where the first row rounds only its
-    /// top corners and the last row only its bottom ones:
-    ///
-    /// ```ignore
-    /// container().corner_radii(CornerRadii::top(16.0))     // first row
-    /// container().corner_radii(CornerRadii::bottom(16.0))  // last row
+    /// container().corner_radius(8.0)                     // all four
+    /// container().corner_radius([16.0, 0.0])             // the top pair only
+    /// container().corner_radius([16.0, 16.0, 0.0, 0.0])  // the same, spelled out
     /// ```
     ///
-    /// Child clipping, blur regions and rounded hit testing keep using a
-    /// uniform radius (the largest of the four).
-    pub fn corner_radii<M>(
+    /// The shape reaches everything: the box, its border and shadow, the blur
+    /// behind it, the clip its children are cut to, and the region that
+    /// answers a click.
+    ///
+    /// Combine with [`corner_curvature`](Self::corner_curvature) for the shape
+    /// of the corner itself — circular by default, or squircle, bevel, scoop.
+    pub fn corner_radius<M>(
         mut self,
-        radii: impl IntoSignal<crate::renderer::CornerRadii, M>,
+        radius: impl IntoSignal<crate::renderer::CornerRadii, M>,
     ) -> Self {
-        self.corner_radii = Some(radii.into_signal());
+        self.corner_radius = Some(radius.into_signal());
         self
     }
 
@@ -920,7 +907,9 @@ impl Container {
 
     /// Enable animation for corner radius changes
     pub fn animate_corner_radius(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.corner_radius.get_or_untracked(0.0);
+        let initial = self
+            .corner_radius
+            .get_or_untracked(crate::renderer::CornerRadii::uniform(0.0));
         self.anims_mut().corner_radius = Some(AnimationState::new(initial, transition));
         self
     }
@@ -1506,7 +1495,6 @@ impl Widget for Container {
             transform_origin,
             border_width,
             border_color,
-            per_corner_radii,
             gradient,
             backdrop_blur,
             overflow,
@@ -1520,7 +1508,6 @@ impl Widget for Container {
                 self.transform_origin.get_or(TransformOrigin::CENTER),
                 self.animated_border_width(id),
                 self.animated_border_color(id),
-                self.corner_radii.as_ref().map(|s| s.get()),
                 self.gradient.as_ref().and_then(|g| g.get()),
                 self.backdrop_blur.as_ref().map(|b| b.get()),
                 self.overflow.get_or(Overflow::Visible),
@@ -1530,12 +1517,7 @@ impl Widget for Container {
 
         self.resync_animation_targets(id);
 
-        // Per-corner radii override the uniform (animated) radius for
-        // drawing. Clip, blur region and rounded hit testing stay uniform,
-        // approximated by the largest corner.
-        let corner_radii = per_corner_radii
-            .unwrap_or_else(|| crate::renderer::CornerRadii::uniform(corner_radius));
-        let corner_radius = corner_radius.max(corner_radii.max());
+        let corner_radii = corner_radius;
 
         // LOCAL bounds: the origin is this container, the parent already
         // positioned the node.
