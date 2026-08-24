@@ -373,7 +373,7 @@ a coalescing flag for the ping and a count for messages in flight in the
 calloop channel. That is a lot of apparatus to verify at runtime a rule the
 type can make unbreakable.
 
-Four producers stay outside `deferred`, each for a reason worth knowing:
+Three producers stay outside `deferred`, each for a reason worth knowing:
 
 - **background writes** wake through the ingress channel rather than the ping,
   and there is exactly one of them (`queue_bg_write`), so the pairing is one
@@ -383,13 +383,12 @@ Four producers stay outside `deferred`, each for a reason worth knowing:
 - **a parked focus request** is the opposite invariant: it waits for a widget
   that may not be laid out for many frames, so *still full* is its resting
   state, not a failure. It is applied at the end of `layout_pass`, after the
-  tree has resolved and before the paint that shows it;
-- **the session lock's request flags** (`lock_session` / `unlock_session`) are
-  still a flag and a `wake_loop()` written as two statements. They belong in
-  `deferred` by shape — `process_session_lock` drains them unconditionally
-  once per iteration — and are not there yet because the request carries a
-  widget factory into a state machine with its own guards, and the path cannot
-  be exercised without locking the screen (see #209).
+  tree has resolved and before the paint that shows it.
+
+The session lock's request is *in* `deferred`, as a `DeferredSlot<LockRequest>`:
+`lock_session` and `unlock_session` are two answers to one question, and the
+pair of independent booleans they used to set let both be true at once — the
+loop then started a lock and undid it three steps later in the same iteration.
 
 Everything in `deferred` is drained unconditionally, once per iteration, in
 the loop body. That is what makes "the loop will get to it on the next pass"
