@@ -360,10 +360,17 @@ the one moment where breaking it is fatal: `queued_but_unwoken()` in
 
 It asks two questions, and needs both. `queued_work()` names every queue the
 loop drains and answers *what* is waiting. `wakeup_armed()` answers whether
-anything is coming to drain it — a ping still readable (`jobs::ping_in_flight`,
-the coalescing flag, cleared right after the dispatch that consumed it), a wake
-request still set, or an ingress message sent and not yet read
-(`ingress::in_flight`). Only a queue with none of those is reported.
+anything is coming to drain it — a ping written and not yet dispatched
+(`jobs::ping_in_flight`, the coalescing flag, cleared right after the dispatch
+that consumed it), or an ingress message sent and not yet read
+(`ingress::in_flight`). Only a queue with neither is reported.
+
+`ping_in_flight` means *written*, not *requested*: `wake_loop` lowers the flag
+again when there was no handle to write to, because a flag raised over a ping
+that does not exist would tell the loop it is safe to block when nothing is
+coming — hiding the exact bug this check is for. `WAKE_REQUESTED` is not a
+third answer: `needs_polling` refuses to block while it is set, so the check
+is never reached with one outstanding.
 
 The second question is not optional, because a non-empty queue at that point
 is the ordinary case rather than the bug: the drains sit in the middle of the
@@ -373,6 +380,15 @@ An earlier version of this check asked the first question alone and panicked
 on healthy states — a background write landing after `flush_bg_writes()`, a
 surface command pushed by an effect whose `WAKE_REQUESTED` was then cleared by
 `take_wake_request()` later in the same iteration.
+
+The first question only holds up while every queue it names is drained
+unconditionally. Widget jobs are the one exception, and are covered instead by
+`needs_polling`, which refuses to block while any are queued. The clipboard,
+primary selection and cursor used to be a second exception — `sync_platform_state`
+ran inside the per-surface pass, so an application with no surface configured
+yet could queue a copy or a cursor shape that nothing would ever drain. It runs
+once per iteration from the loop body now, which is where what it carries
+belongs anyway: the seat, not any one surface.
 
 The order of the two is part of the contract: **a producer arms before it
 queues**, so a queue seen non-empty already has its wakeup armed, and reading

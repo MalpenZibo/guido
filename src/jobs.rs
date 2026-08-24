@@ -630,24 +630,48 @@ pub(crate) fn wake_loop() {
     // wakeup (mark_loop_awake), so during any blocked period the first
     // request always pings.
     let already_pinged = PING_SENT.swap(true, Ordering::Relaxed);
-    if !already_pinged
-        && let Ok(guard) = WAKEUP_PING.lock()
-        && let Some(ref ping) = *guard
-    {
-        ping.ping();
+    if already_pinged {
+        return;
+    }
+    let pinged = WAKEUP_PING
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(|ping| ping.ping()))
+        .is_some();
+    if !pinged {
+        // No loop to ping (setup, tests, teardown). The flag has to come back
+        // down: `ping_in_flight` is read as *the eventfd is armed*, and a flag
+        // raised over a ping that was never written would tell the loop it is
+        // safe to block when nothing is coming.
+        PING_SENT.store(false, Ordering::Relaxed);
     }
 }
 
 /// Whether a ping is readable by the next dispatch.
 ///
-/// True from the moment `wake_loop` sends one until `mark_loop_awake` clears
+/// True from the moment `wake_loop` writes one until `mark_loop_awake` clears
 /// the flag, right after the dispatch that consumed it — so at the loop's
 /// pre-block check it means the eventfd is still armed and `dispatch(None)`
 /// returns immediately. That is the half of "queued but unwoken" the queues
 /// cannot answer: work produced after its own drain point is the ordinary
 /// case, and what makes it a bug is nobody having asked for the next pass.
+///
+/// It says *written*, not *requested*, which is why `wake_loop` lowers the
+/// flag again when there was no ping to write.
 pub(crate) fn ping_in_flight() -> bool {
     PING_SENT.load(Ordering::Relaxed)
+}
+
+/// Serialises the tests that drive the process-wide wakeup state directly —
+/// here, in `ingress`, and in `lib.rs`. They set and clear the very flags
+/// each other reads, and `cargo test` runs them on different threads.
+///
+/// Not a substitute for the retries in this file: tests elsewhere (memo,
+/// anything requesting a job) touch the same flags without taking this.
+#[cfg(test)]
+pub(crate) fn wakeup_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Reset ping coalescing after the event loop woke up. Any `wake_loop`

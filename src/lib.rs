@@ -635,6 +635,16 @@ fn dispatch_events(
 /// Push anything the widgets changed back out to the compositor: the
 /// clipboard after a copy, the primary selection after a select-to-copy, the
 /// cursor shape after a hover.
+///
+/// Called once per iteration from the loop, not per surface. What it carries
+/// belongs to the seat rather than to any one surface, and running it inside
+/// the per-surface pass meant it only ran when a surface had a frame to give
+/// it: an application with no surface yet — one that spawns its bars from an
+/// event, a lock screen before its lock is granted — could copy or set a
+/// cursor and have it sit in the queue with no pass coming to drain it. The
+/// loop's pre-block check reads that queue and would have called it a lost
+/// wakeup, which it is not: the producer woke the loop, and the loop had
+/// nowhere to put the work.
 fn sync_platform_state(
     wayland_state: &mut platform::WaylandState,
     qh: &QueueHandle<platform::WaylandState>,
@@ -714,13 +724,14 @@ fn queued_but_unwoken() -> Option<&'static str> {
 }
 
 /// What the loop still owes a pass, named. Every queue it drains, in the
-/// order it drains them.
+/// order the iteration drains them — so a new queue goes next to its own
+/// drain here too, and the list keeps reading as the loop body does.
 fn queued_work() -> Option<&'static str> {
     [
-        ("widget jobs", has_pending_jobs()),
-        ("background signal writes", reactive::bg_writes_pending()),
         ("owner disposals", reactive::owner::disposals_pending()),
         ("surface commands", surface::surface_commands_pending()),
+        ("background signal writes", reactive::bg_writes_pending()),
+        ("widget jobs", has_pending_jobs()),
         ("a selection change", reactive::selection_change_pending()),
         ("a cursor change", reactive::cursor_change_pending()),
     ]
@@ -731,19 +742,24 @@ fn queued_work() -> Option<&'static str> {
 /// Whether something already owes the loop the pass that drains what is
 /// queued.
 ///
-/// Three ways to owe one, one per mechanism in the contract:
+/// Two ways to owe one, one per mechanism in the contract:
 ///
-/// - a ping is readable, so the next `dispatch` returns immediately;
-/// - a wake request is still set, so the loop refuses to block at all;
+/// - a ping has been written and not yet dispatched, so the next `dispatch`
+///   returns immediately;
 /// - an ingress message has been sent and not yet read, and calloop
 ///   guarantees it is delivered before the loop can block again.
 ///
-/// Any of them and the loop is not going deaf — it takes another pass, and
-/// every queue above is drained unconditionally on it. The state this leaves
-/// the assertion looking for is the one that was meant: work queued by a
-/// producer that woke nobody at all.
+/// Either one and the loop is not going deaf: it takes another pass, and
+/// every queue in [`queued_work`] is drained unconditionally on it — widget
+/// jobs by `needs_polling`, which refuses to block while any are queued. So
+/// the state this leaves the assertion looking for is the one that was meant:
+/// work queued by a producer that woke nobody at all.
+///
+/// `WAKE_REQUESTED` is deliberately not a third: `needs_polling` already
+/// refuses to block while it is set, so the check is never reached with one
+/// outstanding, and naming it here would be a guarantee that never applies.
 fn wakeup_armed() -> bool {
-    jobs::ping_in_flight() || jobs::wake_request_pending() || ingress::in_flight()
+    jobs::ping_in_flight() || ingress::in_flight()
 }
 
 /// What this surface tells us about itself, read once at the top of a frame.
@@ -1254,7 +1270,6 @@ fn render_surface(
 
     let root = ctx.surface.widget_id;
     dispatch_events(&frame.events, root, ctx.tree, active_roots);
-    sync_platform_state(ctx.wayland_state, ctx.qh);
 
     let geometry = resolve_geometry(ctx, &frame);
 
@@ -1563,14 +1578,20 @@ impl App {
             } else {
                 // About to block with nothing left to wake us but the
                 // compositor. Anything still queued must have a wakeup armed
-                // for it by now — see `queued_but_unwoken`.
-                debug_assert!(
-                    queued_but_unwoken().is_none(),
-                    "the loop is about to block indefinitely with {} still queued and \
-                     no wakeup armed for it — whatever produced it woke nobody. See \
-                     the Event Loop Wakeup Contract in docs/ARCHITECTURE.md.",
-                    queued_but_unwoken().unwrap_or_default()
-                );
+                // for it by now — see `queued_but_unwoken`. Read once: asking
+                // twice can catch a wakeup landing in between and print a
+                // panic with no name in it, which is the only thing the panic
+                // is for.
+                if cfg!(debug_assertions)
+                    && let Some(queue) = queued_but_unwoken()
+                {
+                    panic!(
+                        "the loop is about to block indefinitely with {queue} still \
+                         queued and no wakeup armed for it — whatever produced it woke \
+                         nobody. See the Event Loop Wakeup Contract in \
+                         docs/ARCHITECTURE.md."
+                    );
+                }
                 None // Block indefinitely until event
             };
 
@@ -1694,6 +1715,12 @@ impl App {
                     render_surface(&mut ctx, layout_roots, woken, &active_roots);
                 }
             }
+
+            // Hand the seat what the widgets changed — after the render
+            // pass, so a copy or a cursor set by this iteration's event
+            // handling still goes out in this iteration, and outside it, so
+            // it goes out whether or not any surface had a frame to draw.
+            sync_platform_state(&mut wayland_state, &qh);
 
             // Flush the connection once for all surfaces
             if let Err(e) = connection.flush() {
@@ -1999,6 +2026,8 @@ mod font_registry_tests {
 #[cfg(test)]
 mod wakeup_contract_coverage {
     use super::*;
+    use smithay_client_toolkit::reexports::calloop;
+    use smithay_client_toolkit::reexports::calloop::ping::make_ping;
 
     /// A probe that never reports anything would make the check in
     /// `queued_but_unwoken` silently useless, so each one is pinned to the
@@ -2044,6 +2073,13 @@ mod wakeup_contract_coverage {
     /// as a lost wakeup and panicked a debug build.
     #[test]
     fn work_queued_with_a_wakeup_armed_is_not_a_lost_wakeup() {
+        let _guard = jobs::wakeup_test_lock();
+        // A ping handle, because there is no loop in a test binary and
+        // `wake_loop` arms nothing without one — correctly: with nothing to
+        // write to, the work really would be unwoken.
+        let (ping, _source) = make_ping().expect("ping");
+        jobs::init_wakeup(ping);
+
         let _ = reactive::take_cursor_change();
         reactive::set_cursor(reactive::CursorIcon::Text);
         assert_eq!(
@@ -2056,13 +2092,19 @@ mod wakeup_contract_coverage {
         // difference between work riding the next pass and work nobody is
         // coming back for.
         //
-        // Retried because the arming flags are process-wide and other tests
-        // in this binary clear them (`reset_jobs`). The asymmetry is what
-        // makes it sound: the queue is this thread's own, so a regression —
-        // the check reading the queues alone — reports it on every attempt,
-        // while a pass needs one quiet window out of many.
-        let quiet = (0..64).any(|_| {
-            reactive::set_cursor(reactive::CursorIcon::Text);
+        // Retried because the arming flag is process-wide and tests that do
+        // not take the lock above clear it (`reset_jobs`, in the memo tests).
+        // Each attempt re-arms with a *different* shape: `set_cursor` returns
+        // early on the one already set, and would arm nothing after the first.
+        // The asymmetry is what makes it sound — the queue is this thread's
+        // own, so a regression reports it on every attempt, while a pass needs
+        // one quiet window out of many.
+        let quiet = (0..64).any(|attempt| {
+            reactive::set_cursor(if attempt % 2 == 0 {
+                reactive::CursorIcon::Default
+            } else {
+                reactive::CursorIcon::Text
+            });
             queued_but_unwoken().is_none()
         });
         assert!(
@@ -2071,6 +2113,7 @@ mod wakeup_contract_coverage {
         );
 
         let _ = reactive::take_cursor_change();
+        jobs::reset_jobs();
     }
 
     /// The reported window, in the loop's own order: an effect running at the
@@ -2081,11 +2124,13 @@ mod wakeup_contract_coverage {
     /// its own debug build.
     #[test]
     fn a_command_queued_after_its_drain_rides_the_next_pass() {
-        surface::reset_surface_commands();
+        // This one *writes* the process-wide flags (`mark_loop_awake`,
+        // `take_wake_request`), so it holds the lock for the whole run rather
+        // than racing the tests that read them.
+        let _guard = jobs::wakeup_test_lock();
+        let (ping, _source) = make_ping().expect("ping");
+        jobs::init_wakeup(ping);
 
-        // Retried for the arming flags other tests clear; see above. The
-        // command queue is this thread's own, so a regression reports it on
-        // every attempt.
         let quiet = (0..64).any(|_| {
             surface::reset_surface_commands();
             jobs::mark_loop_awake(); // the dispatch that woke us returned
@@ -2103,24 +2148,56 @@ mod wakeup_contract_coverage {
         );
 
         surface::reset_surface_commands();
+        jobs::reset_jobs();
     }
 
     /// Each arming mechanism has to be visible to `wakeup_armed`, or the
-    /// check is back to guessing from the queues alone.
+    /// check is back to guessing from the queues alone — and it has to mean
+    /// what it says, or the check hides the very bug it exists to report.
     #[test]
     fn every_way_of_owing_a_wakeup_reports_itself() {
-        // A ping stays readable until the dispatch that consumes it, which is
-        // exactly the window the pre-block check runs in. Retried for the
-        // same reason as above: `reset_jobs` in other tests clears the flag.
-        let ping_seen = (0..64).any(|_| {
-            jobs::wake_loop();
-            jobs::ping_in_flight()
-        });
-        assert!(ping_seen, "a sent ping must be visible to the check");
+        let _guard = jobs::wakeup_test_lock();
 
-        // An ingress message is armed before the work it speaks for is
-        // queued, and stays counted until the loop takes delivery.
-        let _guard = ingress::test_count_lock();
+        // A written ping, still readable: exactly the window the pre-block
+        // check runs in. Retried for the flags other tests clear.
+        let mut event_loop: calloop::EventLoop<bool> = calloop::EventLoop::try_new().expect("loop");
+        let (ping, source) = make_ping().expect("ping");
+        event_loop
+            .handle()
+            .insert_source(source, |_, _, woken: &mut bool| *woken = true)
+            .expect("insert ping source");
+
+        let readable = (0..64).any(|_| {
+            jobs::init_wakeup(ping.clone());
+            let mut drained = false;
+            let _ = event_loop.dispatch(Some(std::time::Duration::ZERO), &mut drained);
+            jobs::mark_loop_awake();
+
+            jobs::wake_loop();
+            let mut woken = false;
+            let _ = event_loop.dispatch(Some(std::time::Duration::ZERO), &mut woken);
+            woken && jobs::ping_in_flight()
+        });
+        assert!(
+            readable,
+            "the flag must be up for a ping the loop can actually read"
+        );
+
+        // And down when there was no ping to write. `ping_in_flight` is read
+        // as *the loop cannot block*; raising it over a ping that was never
+        // written would let the check bless the state it exists to catch.
+        let honest = (0..64).any(|_| {
+            jobs::reset_jobs(); // drops the wakeup handle
+            jobs::wake_loop();
+            !jobs::ping_in_flight()
+        });
+        assert!(
+            honest,
+            "a request with no ping handle to write to must not read as armed"
+        );
+
+        // An ingress message, armed before the work it speaks for is queued
+        // and counted until the loop takes delivery.
         let armed = ingress::arm(ingress::IngressMessage::BgWritesQueued);
         assert!(
             ingress::in_flight(),
@@ -2131,5 +2208,7 @@ mod wakeup_contract_coverage {
             !ingress::in_flight(),
             "and must stop being visible if it is never sent"
         );
+
+        jobs::reset_jobs();
     }
 }

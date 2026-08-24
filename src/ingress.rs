@@ -49,16 +49,52 @@ static INGRESS_SENDER: Mutex<Option<Sender<IngressMessage>>> = Mutex::new(None);
 /// Messages armed but not yet taken delivery of by the loop.
 ///
 /// A calloop send wakes the next dispatch, and the message stays readable
-/// until the loop reads it — so a non-zero count means the loop cannot
-/// block indefinitely. That is invisible from the `Sender` side, which is
-/// why it is counted here: the loop's pre-block check has to be able to ask
-/// whether a wakeup is owed, not only whether a queue is empty
-/// (`queued_but_unwoken` in `lib.rs`).
+/// until the loop reads it — so a non-zero count means the loop cannot block
+/// indefinitely. That is invisible from the `Sender` side, which is why it is
+/// counted here: the loop's pre-block check has to be able to ask whether a
+/// wakeup is owed, not only whether a queue is empty (`queued_but_unwoken` in
+/// `lib.rs`).
+///
+/// Debug-only, like its one consumer. A status bar queues a background write
+/// several times a second, and in a release build the whole question is
+/// compiled out — the count would be two atomics paid to answer nobody.
+#[cfg(debug_assertions)]
 static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
 /// Whether the loop has a message coming that it has not read yet.
+#[cfg(debug_assertions)]
 pub(crate) fn in_flight() -> bool {
     IN_FLIGHT.load(Ordering::Acquire) > 0
+}
+
+/// One more message owed to the loop.
+///
+/// `AcqRel`, not `Release`: the invariant is that the count is up *before*
+/// the work becomes visible, which orders the writes that follow, not only
+/// the ones that came before. Today `queue_bg_write` pushes under a mutex
+/// whose unlock would carry it anyway — a queue without that edge would not.
+fn count_up() {
+    #[cfg(debug_assertions)]
+    IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
+}
+
+/// One fewer: the loop read it, or it turned out not to be coming.
+///
+/// Saturating, because [`reset_ingress`] can land between a thread arming and
+/// that thread finding out there is no loop left to send to. Wrapping past
+/// zero would leave the count permanently non-zero, which reads as *a wakeup
+/// is always armed* — the check would stop reporting anything at all, quietly.
+fn count_down() {
+    #[cfg(debug_assertions)]
+    let _ = IN_FLIGHT.fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+        Some(count.saturating_sub(1))
+    });
+}
+
+/// The loop took delivery of one message. Called by the ingress channel
+/// callback, before the drains that message speaks for.
+pub(crate) fn delivered() {
+    count_down();
 }
 
 /// A wakeup owed to the loop, counted from before the work it is owed for
@@ -79,7 +115,7 @@ pub(crate) struct Armed {
 /// Arm a wakeup, to be sent with [`Armed::notify`] once the work it speaks
 /// for is queued.
 pub(crate) fn arm(message: IngressMessage) -> Armed {
-    IN_FLIGHT.fetch_add(1, Ordering::Release);
+    count_up();
     Armed {
         message: Some(message),
     }
@@ -88,53 +124,32 @@ pub(crate) fn arm(message: IngressMessage) -> Armed {
 impl Armed {
     /// Send the armed message, falling back to the wake ping when no loop is
     /// running or its receiver is gone. The count stays up until the loop
-    /// takes delivery — `delivered()`.
+    /// takes delivery — [`delivered`].
     pub(crate) fn notify(mut self) {
-        let message = match self.message.take() {
-            Some(message) => message,
-            None => return,
+        let Some(message) = self.message.take() else {
+            return;
         };
-        match sender() {
-            Some(tx) if tx.send(message).is_ok() => {}
-            // No loop, or the receiver died while shutting down: nothing will
-            // ever take delivery, so the count comes back down and the work is
-            // at least flagged for a future loop.
-            _ => {
-                disarm();
-                crate::jobs::wake_loop();
-            }
+        if let Some(tx) = sender()
+            && tx.send(message).is_ok()
+        {
+            return;
         }
+        // No loop, or the receiver died while shutting down: nothing will
+        // ever take delivery. Wake first, give the count back after — the
+        // same order this whole module argues for, and for the same reason:
+        // in between, the work is queued and the check runs on another
+        // thread.
+        crate::jobs::wake_loop();
+        count_down();
     }
 }
 
 impl Drop for Armed {
     fn drop(&mut self) {
         if self.message.is_some() {
-            disarm();
+            count_down();
         }
     }
-}
-
-/// The loop took delivery of one message. Called by the ingress channel
-/// callback, before the drains that message speaks for.
-pub(crate) fn delivered() {
-    release_one();
-}
-
-/// Give back a wakeup that is not coming after all.
-fn disarm() {
-    release_one();
-}
-
-/// Saturating, because [`reset_ingress`] can land between a thread arming
-/// and that thread finding out there is no loop left to send to. Wrapping
-/// past zero would leave the count permanently non-zero, which reads as *a
-/// wakeup is always armed* — the check would stop reporting anything at all,
-/// quietly.
-fn release_one() {
-    let _ = IN_FLIGHT.fetch_update(Ordering::Release, Ordering::Acquire, |count| {
-        Some(count.saturating_sub(1))
-    });
 }
 
 /// Install the loop's channel sender. Called by `App::run` when the event
@@ -145,36 +160,48 @@ pub(crate) fn install_ingress(sender: Sender<IngressMessage>) {
     }
 }
 
-/// Whether a loop is running to deliver messages to. For a producer that
-/// wants to give up early rather than arm a wakeup nobody will take.
-pub(crate) fn loop_running() -> bool {
-    sender().is_some()
+/// A sender bound to the loop that was running when it was taken, for a
+/// producer that only has its payload much later — a selection read can take
+/// seconds. Resolving the sender at send time instead would let the result of
+/// one session's read land in the next session's loop, which restarts its
+/// generation counters and cannot tell the two apart.
+///
+/// The count is kept around the send, so this is not a way to slip a message
+/// past the loop's wakeup check.
+pub(crate) struct IngressSender(Sender<IngressMessage>);
+
+impl IngressSender {
+    /// Send, dropping the message if that loop is gone. Nothing is woken in
+    /// that case: the message carries its own payload, so there is no queue
+    /// left behind for anyone to drain.
+    pub(crate) fn send(self, message: IngressMessage) {
+        count_up();
+        if self.0.send(message).is_err() {
+            count_down();
+        }
+    }
 }
 
-/// Get a sender clone, if a loop is running. Private on purpose: a send that
-/// does not go through [`arm`] is a message the loop takes delivery of —
-/// and decrements the count for — without anything having counted it.
+/// Take a sender for the loop running now, if there is one.
+pub(crate) fn sender_handle() -> Option<IngressSender> {
+    sender().map(IngressSender)
+}
+
+/// Private on purpose: a send that does not go through [`arm`] or
+/// [`IngressSender`] is a message the loop takes delivery of — and
+/// decrements the count for — without anything having counted it.
 fn sender() -> Option<Sender<IngressMessage>> {
     INGRESS_SENDER.lock().ok().and_then(|g| g.as_ref().cloned())
 }
 
-/// Send a message to the main loop, falling back to the wake ping
-/// when no loop is running.
+/// Send a message to the main loop, falling back to the wake ping when no
+/// loop is running.
 ///
-/// For a message that carries its own payload. A message acting as a
-/// doorbell for a queue elsewhere arms first and sends after the push —
-/// [`arm`].
+/// For a message whose payload is ready now. A message acting as a doorbell
+/// for a queue elsewhere arms first and sends after the push — [`arm`].
+#[cfg(test)]
 pub(crate) fn notify(message: IngressMessage) {
     arm(message).notify();
-}
-
-/// The count is process-wide, and so are the tests that drive it directly
-/// — here and in `lib.rs`. Taking this first keeps one from reading the
-/// other's arming and calling it its own.
-#[cfg(test)]
-pub(crate) fn test_count_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: Mutex<()> = Mutex::new(());
-    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Reset ingress state.
@@ -191,6 +218,7 @@ pub(crate) fn reset_ingress() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use smithay_client_toolkit::reexports::calloop::ping::make_ping;
 
     /// `App::drop` resets the count while a reader thread may be holding an
     /// armed message it is about to find no receiver for. Wrapping there
@@ -198,7 +226,7 @@ mod tests {
     /// the loop's check into a no-op that reports nothing, forever.
     #[test]
     fn a_reset_between_arming_and_giving_up_does_not_wrap_the_count() {
-        let _guard = test_count_lock();
+        let _guard = crate::jobs::wakeup_test_lock();
         let armed = arm(IngressMessage::BgWritesQueued);
         assert!(in_flight());
 
@@ -209,5 +237,31 @@ mod tests {
             !in_flight(),
             "the count must be back at zero, not wrapped past it"
         );
+    }
+
+    /// The fallback branch, which is the one a real producer takes when the
+    /// loop it armed for is gone: the wakeup has to be handed over to the
+    /// ping *and* the count given back. Dropping the count without waking
+    /// leaves the work queued with nothing owed for it — the state the loop's
+    /// check panics on.
+    #[test]
+    fn giving_up_on_the_channel_hands_the_wakeup_to_the_ping() {
+        let _guard = crate::jobs::wakeup_test_lock();
+        reset_ingress(); // no receiver: force the fallback
+        let (ping, _source) = make_ping().expect("ping");
+        crate::jobs::init_wakeup(ping);
+        crate::jobs::mark_loop_awake();
+
+        notify(IngressMessage::BgWritesQueued);
+
+        assert!(
+            crate::jobs::ping_in_flight(),
+            "the fallback must wake the loop it could not send to"
+        );
+        assert!(
+            !in_flight(),
+            "and must not leave the count owed for a message nobody has"
+        );
+        crate::jobs::reset_jobs();
     }
 }
