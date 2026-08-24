@@ -26,10 +26,6 @@ use crate::reactive::{RwSignal, Signal, create_signal};
 use crate::tree::{Tree, WidgetId};
 use crate::widgets::Rect;
 
-/// A handle to one widget: its bounds, and its focus.
-///
-/// Created via [`create_widget_ref()`]. Attach to a container or a text input
-/// with `.widget_ref(r)`.
 /// What a [`WidgetRef`] points at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Attachment {
@@ -41,8 +37,13 @@ pub(crate) enum Attachment {
     Gone,
 }
 
-/// Two refs are the same ref when they name the same pair of signals — which
-/// is what a `Copy` of one is.
+/// A handle to one widget: its bounds, and its focus.
+///
+/// Created via [`create_widget_ref()`]. Attach to a container or a text input
+/// with `.widget_ref(r)`.
+///
+/// Two of them are equal when they name the same pair of signals — which is
+/// what a `Copy` of one is.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct WidgetRef {
     signal: RwSignal<Rect>,
