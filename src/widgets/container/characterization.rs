@@ -2256,10 +2256,10 @@ fn a_transformed_blur_publishes_the_shape_it_is_drawn_as() {
     let card = |c: Container| c.width(40.0).height(40.0).backdrop_blur(24.0);
 
     let plain = H::new(card(container())).frame(200.0, 200.0).blur;
-    let scaled = H::new(card(container()).scale(2.0))
+    let scaled = H::new(card(container()).transform(Transform::scale(2.0)))
         .frame(200.0, 200.0)
         .blur;
-    let turned = H::new(card(container()).rotate(45.0))
+    let turned = H::new(card(container()).transform(Transform::rotate_degrees(45.0)))
         .frame(200.0, 200.0)
         .blur;
 

@@ -136,7 +136,7 @@ fn a_fully_reactive_container_is_quiet() {
         .width(move || n.get() + 100.0)
         .height(move || n.get() + 100.0)
         .visible(move || !flag.get())
-        .rotate(move || n.get())
+        .transform(move || crate::transform::Transform::rotate_degrees(n.get()))
         .gradient(move || {
             Some(LinearGradient::horizontal(
                 if flag.get() { Color::RED } else { Color::BLUE },

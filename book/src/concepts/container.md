@@ -128,9 +128,9 @@ Apply 2D transformations:
 
 ```rust
 container()
-    .translate(10.0, 20.0)  // Move
-    .rotate(45.0)           // Rotate degrees
-    .scale(1.5)             // Scale
+    .transform(Transform::translate(10.0, 20.0))  // Move
+    .transform(Transform::rotate_degrees(45.0))           // Rotate degrees
+    .transform(Transform::scale(1.5))             // Scale
     .transform_origin(TransformOrigin::TOP_LEFT)
 ```
 
@@ -281,9 +281,10 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 - `.when_pressed(|s| s...)` - Pressed overrides
 
 ### Transforms
-- `.translate(x, y)` - Move
-- `.rotate(degrees)` - Rotate
-- `.scale(factor)` - Scale
+- `.transform(Transform::translate(x, y))` - Move
+- `.transform(Transform::rotate_degrees(d))` - Rotate
+- `.transform(Transform::scale(f))` - Scale, and `then_rotate`/`then_scale`/
+  `then_translate` to chain them
 - `.transform_origin(origin)` - Pivot point
 
 ### Animations

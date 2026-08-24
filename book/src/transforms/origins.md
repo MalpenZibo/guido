@@ -6,7 +6,7 @@ By default, rotation and scale occur around the widget's center. Transform origi
 
 ```rust
 container()
-    .rotate(45.0)
+    .transform(Transform::rotate_degrees(45.0))
     .transform_origin(TransformOrigin::TOP_LEFT)
 ```
 
@@ -51,7 +51,7 @@ container()
     .width(80.0)
     .height(80.0)
     .background(Color::rgb(0.3, 0.5, 0.8))
-    .rotate(30.0)
+    .transform(Transform::rotate_degrees(30.0))
     .transform_origin(TransformOrigin::TOP_LEFT)
 ```
 
@@ -59,7 +59,7 @@ container()
 
 ```rust
 container()
-    .scale(1.5)
+    .transform(Transform::scale(1.5))
     .transform_origin(TransformOrigin::BOTTOM_RIGHT)
 ```
 
@@ -67,7 +67,7 @@ container()
 
 ```rust
 container()
-    .rotate(15.0)
+    .transform(Transform::rotate_degrees(15.0))
     .transform_origin(TransformOrigin::TOP)
 ```
 
@@ -93,7 +93,7 @@ Transform origins can be reactive:
 let origin = create_signal(TransformOrigin::CENTER);
 
 container()
-    .rotate(45.0)
+    .transform(Transform::rotate_degrees(45.0))
     .transform_origin(origin)
     .on_click(move || {
         // Cycle through origins
@@ -135,7 +135,7 @@ fn create_rotating_box(origin: TransformOrigin, label: &'static str) -> Containe
                 .height(60.0)
                 .background(Color::rgb(0.3, 0.5, 0.8))
                 .corner_radius(8.0)
-                .rotate(rotation)
+                .transform(Transform::rotate_degrees(rotation))
                 .transform_origin(origin)
                 .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
                 .when_hovered(|s| s.lighter(0.1))

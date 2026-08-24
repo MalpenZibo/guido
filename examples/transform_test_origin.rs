@@ -42,6 +42,6 @@ fn box_with_origin(color: Color, origin: TransformOrigin) -> Container {
         .height(60.0)
         .background(color)
         .corner_radius(8.0)
-        .rotate(30.0)
+        .transform(Transform::rotate_degrees(30.0))
         .transform_origin(origin)
 }

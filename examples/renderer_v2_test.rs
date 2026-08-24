@@ -40,14 +40,14 @@ fn main() {
                             .height(60.0)
                             .background(Color::rgb(0.2, 0.2, 0.8))
                             .corner_radius(8.0)
-                            .rotate(15.0),
+                            .transform(Transform::rotate_degrees(15.0)),
                         // Scaled box
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.8, 0.8, 0.2))
                             .corner_radius(8.0)
-                            .scale(0.8),
+                            .transform(Transform::scale(0.8)),
                         // Box with squircle corners
                         container()
                             .width(60.0)

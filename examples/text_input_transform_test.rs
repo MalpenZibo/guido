@@ -55,7 +55,7 @@ fn main() {
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.8, 0.5, 0.3))
                             .corner_radius(6.0)
-                            .rotate(15.0)
+                            .transform(Transform::rotate_degrees(15.0))
                             .child(
                                 text_input(input2)
                                     .cursor_color(Color::rgb(0.4, 0.8, 1.0))
@@ -75,7 +75,7 @@ fn main() {
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.3, 0.5, 0.8))
                             .corner_radius(6.0)
-                            .scale(1.2)
+                            .transform(Transform::scale(1.2))
                             .child(
                                 text_input(input3)
                                     .cursor_color(Color::rgb(0.4, 0.8, 1.0))
@@ -98,7 +98,7 @@ fn main() {
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.8, 0.8, 0.3))
                             .corner_radius(6.0)
-                            .translate(50.0, 10.0)
+                            .transform(Transform::translate(50.0, 10.0))
                             .child(
                                 text_input(input4)
                                     .cursor_color(Color::rgb(0.4, 0.8, 1.0))

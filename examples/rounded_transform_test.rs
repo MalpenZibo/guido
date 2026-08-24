@@ -37,20 +37,26 @@ fn main() {
                                 make_box("None", Color::rgb(0.5, 0.5, 0.5), click_count),
                                 // Translate
                                 make_box("Translate", Color::rgb(0.3, 0.8, 0.3), click_count)
-                                    .translate(15.0, 10.0),
+                                    .transform(Transform::translate(15.0, 10.0)),
                                 // Rotate
                                 make_box("Rotate", Color::rgb(0.3, 0.3, 0.8), click_count)
-                                    .rotate(20.0),
+                                    .transform(Transform::rotate_degrees(20.0)),
                                 // All 3 transforms (nested)
-                                container().translate(10.0, 15.0).child(
-                                    container().scale(1.15).child(
-                                        make_box("All 3", Color::rgb(0.8, 0.8, 0.3), click_count)
-                                            .rotate(25.0),
+                                container()
+                                    .transform(Transform::translate(10.0, 15.0))
+                                    .child(
+                                        container().transform(Transform::scale(1.15)).child(
+                                            make_box(
+                                                "All 3",
+                                                Color::rgb(0.8, 0.8, 0.3),
+                                                click_count,
+                                            )
+                                            .transform(Transform::rotate_degrees(25.0)),
+                                        ),
                                     ),
-                                ),
                                 // Scale
                                 make_box("Scale", Color::rgb(0.8, 0.3, 0.8), click_count)
-                                    .scale(1.2),
+                                    .transform(Transform::scale(1.2)),
                             ]),
                         // Instructions
                         container().child(

@@ -37,7 +37,7 @@ async fn main() {
                 container()
                     .padding(8.0)
                     .background(Color::rgb(0.2, 0.2, 0.3))
-                    .rotate(rotation)
+                    .transform(move || Transform::rotate_degrees(rotation.get()))
                     .child(text("Rotating").color(Color::WHITE)),
             )
             // Static containers (should have layout skipped after first frame)

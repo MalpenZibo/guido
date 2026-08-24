@@ -103,6 +103,30 @@ impl Transform {
         }
     }
 
+    /// Then translate by `(x, y)`.
+    ///
+    /// The chainers below post-compose, so they read in the order they are
+    /// written: `Transform::translate(10.0, 0.0).then_rotate(45.0)` moves and
+    /// then turns.
+    pub fn then_translate(self, x: f32, y: f32) -> Self {
+        self.then(&Self::translate(x, y))
+    }
+
+    /// Then rotate by `degrees`.
+    pub fn then_rotate(self, degrees: f32) -> Self {
+        self.then(&Self::rotate_degrees(degrees))
+    }
+
+    /// Then scale uniformly by `factor`.
+    pub fn then_scale(self, factor: f32) -> Self {
+        self.then(&Self::scale(factor))
+    }
+
+    /// Then scale each axis.
+    pub fn then_scale_xy(self, x: f32, y: f32) -> Self {
+        self.then(&Self::scale_xy(x, y))
+    }
+
     /// Compose this transform with another: self * other
     /// Applies `other` first, then `self`.
     pub fn then(&self, other: &Transform) -> Transform {

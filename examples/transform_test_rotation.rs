@@ -23,13 +23,17 @@ fn main() {
                         // 0° (reference)
                         box_60(Color::rgb(0.8, 0.3, 0.3)),
                         // 15°
-                        box_60(Color::rgb(0.3, 0.8, 0.3)).rotate(15.0),
+                        box_60(Color::rgb(0.3, 0.8, 0.3))
+                            .transform(Transform::rotate_degrees(15.0)),
                         // 30°
-                        box_60(Color::rgb(0.3, 0.3, 0.8)).rotate(30.0),
+                        box_60(Color::rgb(0.3, 0.3, 0.8))
+                            .transform(Transform::rotate_degrees(30.0)),
                         // 45°
-                        box_60(Color::rgb(0.8, 0.8, 0.3)).rotate(45.0),
+                        box_60(Color::rgb(0.8, 0.8, 0.3))
+                            .transform(Transform::rotate_degrees(45.0)),
                         // -30°
-                        box_60(Color::rgb(0.8, 0.3, 0.8)).rotate(-30.0),
+                        box_60(Color::rgb(0.8, 0.3, 0.8))
+                            .transform(Transform::rotate_degrees(-30.0)),
                     ])
             },
         );

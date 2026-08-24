@@ -147,7 +147,7 @@ fn main() {
                                             .height(120.0)
                                             .corner_radius(28.0)
                                             .border(1.0, FRAME)
-                                            .scale_xy(1.6, 1.0),
+                                            .transform(Transform::scale_xy(1.6, 1.0)),
                                     ),
                                 )
                                 .into_any(),
@@ -162,7 +162,7 @@ fn main() {
                                             .height(90.0)
                                             .corner_radius(16.0)
                                             .border(1.0, FRAME)
-                                            .rotate(20.0),
+                                            .transform(Transform::rotate_degrees(20.0)),
                                     ),
                                 )
                                 .into_any(),

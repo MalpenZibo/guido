@@ -78,13 +78,13 @@ fn main() {
                             "Rotated 10°",
                             (90.0, 90.0),
                             image("examples/assets/photo.webp").content_fit(ContentFit::Cover),
-                            container().rotate(10.0),
+                            container().transform(Transform::rotate_degrees(10.0)),
                         ))
                         .child(transformed_card(
                             "Scaled 1.5x",
                             (90.0, 90.0),
                             image("examples/assets/photo.webp").content_fit(ContentFit::Cover),
-                            container().scale(1.5),
+                            container().transform(Transform::scale(1.5)),
                         )),
                 ),
         )
@@ -114,13 +114,13 @@ fn main() {
                             "Rotated 15°",
                             (80.0, 60.0),
                             image("examples/assets/logo.svg"),
-                            container().rotate(15.0),
+                            container().transform(Transform::rotate_degrees(15.0)),
                         ))
                         .child(transformed_card(
                             "Scaled 1.5x",
                             (80.0, 60.0),
                             image("examples/assets/logo.svg"),
-                            container().scale(1.5),
+                            container().transform(Transform::scale(1.5)),
                         )),
                 ),
         );

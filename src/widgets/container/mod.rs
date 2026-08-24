@@ -27,8 +27,7 @@ use crate::backdrop::BackdropBlur;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
-    IntoSignal, OptionSignalExt, RwSignal, Signal, create_derived, create_signal, focus_path,
-    with_signal_tracking,
+    IntoSignal, OptionSignalExt, RwSignal, Signal, create_signal, focus_path, with_signal_tracking,
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
@@ -810,56 +809,6 @@ impl Container {
     /// Set the transform for this container
     pub fn transform<M>(mut self, t: impl IntoSignal<Transform, M>) -> Self {
         self.transform = Some(t.into_signal());
-        self
-    }
-
-    /// Rotate this container by the given angle in degrees
-    pub fn rotate<M>(mut self, degrees: impl IntoSignal<f32, M>) -> Self {
-        let degrees = degrees.into_signal();
-        let prev = self.transform.signal_or(Transform::IDENTITY);
-        self.transform = Some(create_derived(move || {
-            prev.get().then(&Transform::rotate_degrees(degrees.get()))
-        }));
-        self
-    }
-
-    /// Scale this container uniformly
-    pub fn scale<M>(mut self, s: impl IntoSignal<f32, M>) -> Self {
-        let s = s.into_signal();
-        let prev = self.transform.signal_or(Transform::IDENTITY);
-        self.transform = Some(create_derived(move || {
-            prev.get().then(&Transform::scale(s.get()))
-        }));
-        self
-    }
-
-    /// Scale this container non-uniformly
-    pub fn scale_xy<M1, M2>(
-        mut self,
-        sx: impl IntoSignal<f32, M1>,
-        sy: impl IntoSignal<f32, M2>,
-    ) -> Self {
-        let sx = sx.into_signal();
-        let sy = sy.into_signal();
-        let prev = self.transform.signal_or(Transform::IDENTITY);
-        self.transform = Some(create_derived(move || {
-            prev.get().then(&Transform::scale_xy(sx.get(), sy.get()))
-        }));
-        self
-    }
-
-    /// Translate (move) this container by the given offset
-    pub fn translate<M1, M2>(
-        mut self,
-        x: impl IntoSignal<f32, M1>,
-        y: impl IntoSignal<f32, M2>,
-    ) -> Self {
-        let x = x.into_signal();
-        let y = y.into_signal();
-        let prev = self.transform.signal_or(Transform::IDENTITY);
-        self.transform = Some(create_derived(move || {
-            prev.get().then(&Transform::translate(x.get(), y.get()))
-        }));
         self
     }
 
