@@ -183,6 +183,30 @@ create_effect(move || {
 name.set("Guido".to_string()); // Effect re-runs, prints: Hello, Guido!
 ```
 
+### State the whole application shares
+
+A signal belongs to the scope that was current when it was created, and that
+scope is ambient: inside a widget factory it is that surface's, inside a click
+handler the root, on an effect's first run whoever created the effect. For the
+handful of things with one instance per process — what the compositor reports,
+where the keyboard focus is — the owner is none of those. It is the
+application.
+
+The library declares those as `GlobalSignal` (internal to the crate), which
+creates the signal under the root owner on first use and rebuilds it if the
+last one is gone:
+
+```rust
+static MODIFIERS: GlobalSignal<Modifiers> = GlobalSignal::new(Modifiers::default);
+
+pub fn keyboard_modifiers() -> Signal<Modifiers> {
+    MODIFIERS.get().read_only()
+}
+```
+
+Applications do not need it: a signal created in `App::run`'s setup already
+belongs to the root owner, which lives as long as the app.
+
 ## Using Signals in Widgets
 
 ### Static vs Reactive Properties

@@ -19,11 +19,10 @@
 //! `surface_output(id)` reports which output a surface is currently shown on
 //! (tracked read — reactive when called inside a tracked closure).
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::reactive::owner::with_root_owner;
-use crate::reactive::{RwSignal, Signal, create_signal};
+use crate::reactive::global::GlobalSignal;
+use crate::reactive::{RwSignal, Signal};
 use crate::surface::SurfaceId;
 
 /// Stable identifier for a connected output (monitor).
@@ -66,30 +65,18 @@ pub struct OutputInfo {
     pub logical_position: Option<(i32, i32)>,
 }
 
-thread_local! {
-    /// Reactive list of connected outputs. Lazily created so it works both
-    /// before and after platform init; wiped by `reset_outputs()`.
-    static OUTPUTS: RefCell<Option<RwSignal<Vec<OutputInfo>>>> = const { RefCell::new(None) };
-
-    /// Which output each surface is currently shown on (latest entered).
-    static SURFACE_OUTPUTS: RefCell<Option<RwSignal<HashMap<SurfaceId, OutputId>>>> =
-        const { RefCell::new(None) };
-}
+/// Reactive list of connected outputs.
+static OUTPUTS: GlobalSignal<Vec<OutputInfo>> = GlobalSignal::new(Vec::new);
+/// Which output each surface is currently shown on (latest entered).
+static SURFACE_OUTPUTS: GlobalSignal<HashMap<SurfaceId, OutputId>> =
+    GlobalSignal::new(HashMap::new);
 
 fn outputs_signal() -> RwSignal<Vec<OutputInfo>> {
-    OUTPUTS.with(|cell| {
-        *cell
-            .borrow_mut()
-            .get_or_insert_with(|| with_root_owner(|| create_signal(Vec::new())))
-    })
+    OUTPUTS.get()
 }
 
 fn surface_outputs_signal() -> RwSignal<HashMap<SurfaceId, OutputId>> {
-    SURFACE_OUTPUTS.with(|cell| {
-        *cell
-            .borrow_mut()
-            .get_or_insert_with(|| with_root_owner(|| create_signal(HashMap::new())))
-    })
+    SURFACE_OUTPUTS.get()
 }
 
 /// Reactive list of connected outputs (monitors), sorted by [`OutputId`].
@@ -152,13 +139,4 @@ pub(crate) fn output_removed(output: OutputId) {
     surface_outputs_signal().update(|m| {
         m.retain(|_, o| *o != output);
     });
-}
-
-/// Reset output state.
-///
-/// Called during `App::drop()`; the signals themselves die with the reactive
-/// storage reset, this just drops the stale handles.
-pub(crate) fn reset_outputs() {
-    OUTPUTS.with(|cell| *cell.borrow_mut() = None);
-    SURFACE_OUTPUTS.with(|cell| *cell.borrow_mut() = None);
 }

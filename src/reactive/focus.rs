@@ -27,8 +27,10 @@ use std::cell::RefCell;
 use smallvec::SmallVec;
 
 use crate::jobs::{JobRequest, request_job};
-use crate::reactive::signal::{RwSignal, create_signal};
+use crate::reactive::global::GlobalSignal;
+use crate::reactive::signal::RwSignal;
 use crate::tree::{Tree, WidgetId};
+use crate::widget_ref::Attachment;
 
 /// The focused widget and every ancestor of it, innermost first.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -62,31 +64,12 @@ impl FocusPath {
     }
 }
 
-thread_local! {
-    /// The focused widget and its ancestors. A signal, so that resolving a
-    /// `when_focused` subscribes to it.
-    ///
-    /// Held as an `Option` rather than eagerly, because the handle has to be
-    /// *droppable*: `reset_reactive` wipes the signal storage at `App::drop`,
-    /// and a thread-local holding an id into the old arena would leave a
-    /// second `App` on the same thread with a focus that silently never
-    /// updates. As a plain `RefCell<Option<WidgetId>>` this was immune by
-    /// construction; as a signal it has to be released explicitly.
-    static FOCUS: RefCell<Option<RwSignal<FocusPath>>> = const { RefCell::new(None) };
-}
+/// The focused widget and its ancestors. A signal, so that resolving a
+/// `when_focused` subscribes to it.
+static FOCUS: GlobalSignal<FocusPath> = GlobalSignal::new(FocusPath::default);
 
 fn focus() -> RwSignal<FocusPath> {
-    FOCUS.with(|cell| {
-        *cell
-            .borrow_mut()
-            .get_or_insert_with(|| create_signal(FocusPath::default()))
-    })
-}
-
-/// Create the focus signal under the root owner, before anything can create it
-/// under a narrower one that might be disposed mid-run.
-pub(crate) fn init_focus() {
-    let _ = focus();
+    FOCUS.get()
 }
 
 /// The current focus path. Reading this subscribes, like any other signal.
@@ -144,13 +127,37 @@ pub fn apply_pending_focus(tree: &Tree) {
     let Some(widget_ref) = PENDING.with(|pending| *pending.borrow()) else {
         return;
     };
-    // A request naming a widget that is still not in the tree stays parked: the
-    // app asked for a field that has not been built yet, which is the ordinary
-    // shape of `focus()` called from a startup effect.
-    if let Some(id) = widget_ref.widget() {
-        PENDING.with(|pending| *pending.borrow_mut() = None);
-        request_focus(tree, id);
+    // One read of the handle, three outcomes. A request whose ref died with
+    // the scope that made it can never be honoured — `.focus()` from inside a
+    // popup that closed before the frame came round — and parked it would be
+    // read again on every frame after. One naming a widget that is not in the
+    // tree *yet* stays parked: that is the ordinary shape of `focus()` from a
+    // startup effect. One that names a widget applies.
+    match widget_ref.attachment() {
+        Attachment::Gone => PENDING.with(|pending| *pending.borrow_mut() = None),
+        Attachment::Unattached => {}
+        Attachment::To(id) => {
+            PENDING.with(|pending| *pending.borrow_mut() = None);
+            request_focus(tree, id);
+        }
     }
+}
+
+/// Drop a parked request that names `widget_ref`.
+///
+/// Called by the widget-ref registry when a ref's widget leaves the tree. A
+/// request waits for a widget that has not been laid out *yet* — that is the
+/// ordinary shape of `focus()` from a startup effect — but one whose widget
+/// has been and is gone is waiting for something that already happened, and
+/// left parked it would fire at whatever takes that ref next, stealing the
+/// keyboard from wherever the user had put it.
+pub(crate) fn drop_pending_focus_for(widget_ref: crate::widget_ref::WidgetRef) {
+    PENDING.with(|pending| {
+        let mut pending = pending.borrow_mut();
+        if *pending == Some(widget_ref) {
+            *pending = None;
+        }
+    });
 }
 
 /// Drop any parked request. Called during `App::drop()`.
@@ -191,14 +198,6 @@ pub fn focused_widget() -> Option<WidgetId> {
     focus().get_untracked().widget()
 }
 
-/// Release the focus signal (without paint jobs — used during App teardown).
-///
-/// Drops the handle rather than writing through it: the storage it points into
-/// is about to be replaced, and the next `App` has to get a fresh one.
-pub(crate) fn reset_focus() {
-    FOCUS.with(|cell| *cell.borrow_mut() = None);
-}
-
 /// Clear all focus (no widget will have focus).
 /// Repaints the previously focused widget if any.
 pub fn clear_focus() {
@@ -206,5 +205,67 @@ pub fn clear_focus() {
     if let Some(old_id) = old.widget() {
         request_job(old_id, JobRequest::Paint);
         focus().set(FocusPath::default());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reactive::owner::{create_root_owner, dispose_owner_now, with_owner};
+
+    /// A request outlives a widget that comes and goes, and must not fire at
+    /// whatever takes its ref next: the field it named left the tree, so the
+    /// request is for something that already happened.
+    #[test]
+    fn a_request_dies_with_the_widget_it_named() {
+        use crate::layout::Constraints;
+        use crate::widgets::{container, text_input};
+
+        create_root_owner();
+        let field = crate::widget_ref::create_widget_ref();
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(container().child(
+            text_input(crate::reactive::create_signal(String::new())).widget_ref(field),
+        )));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        tree.with_widget_mut(root, |w, id, t| {
+            w.layout(t, id, Constraints::new(0.0, 0.0, 200.0, 40.0))
+        });
+        crate::widget_ref::update_widget_refs(&tree);
+        assert!(field.widget().is_some(), "laid out, so it names a widget");
+
+        request_focus_deferred(field);
+
+        // The field is taken out of the tree: the registry notices on its next
+        // pass, and the request goes with the widget it was waiting for.
+        crate::jobs::teardown_widget_subtree(&mut tree, root);
+        crate::widget_ref::update_widget_refs(&tree);
+
+        assert!(
+            PENDING.with(|pending| pending.borrow().is_none()),
+            "a request for a widget that has left does not wait for its ref to be reused"
+        );
+    }
+
+    /// `.focus()` from inside a popup, on a ref composed in that popup, when the
+    /// popup closes before the loop comes round: the request is parked by
+    /// design — a widget not yet in the tree is the ordinary case — so a dead
+    /// one would be read again on every frame from then on.
+    #[test]
+    fn a_parked_request_whose_ref_died_is_dropped_rather_than_read_forever() {
+        create_root_owner();
+        let tree = Tree::new();
+        let ((), popup_scope) = with_owner(|| {
+            request_focus_deferred(crate::widget_ref::create_widget_ref());
+        });
+        dispose_owner_now(popup_scope);
+
+        apply_pending_focus(&tree);
+        apply_pending_focus(&tree);
+
+        assert!(
+            PENDING.with(|pending| pending.borrow().is_none()),
+            "a request that can never be honoured does not stay parked"
+        );
     }
 }

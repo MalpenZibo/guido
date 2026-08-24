@@ -36,6 +36,7 @@ Single-threaded reactive primitives inspired by SolidJS and Floem.
 - `Memo<T>` - Eager derived values that recompute when dependencies change, only notify on actual changes (`PartialEq`)
 - `Effect` - Side effects that re-run when tracked signals change
 - `WriteSignal<T>` - `Send` handle for background thread updates, obtained via `RwSignal::writer()`
+- `GlobalSignal<T>` (internal) - a signal whose owner is the *application*, declared as a `static`. See "Owners" below.
 
 **How it works:**
 ```rust
@@ -47,6 +48,26 @@ count.set(5);                           // doubled automatically becomes 10
 ```
 
 The runtime uses thread-local storage for automatic dependency tracking. When a signal is read inside a `Memo`, `Effect`, or during widget `paint()`/`layout()`, it registers itself as a dependency.
+
+**Owners:** a signal belongs to whatever scope is current when it is created,
+and that scope is ambient and time-dependent — inside a widget factory it is
+that surface's, inside a click handler the root, on an effect's first run
+whoever created the effect. For state with one instance per process — the
+keyboard modifiers, the output list, the compositor's capabilities, the session
+lock, the focus path — none of those is the answer: the owner is the
+application, and drawing it by lot from whichever scope read it first is how
+"signal was disposed" panics get made (#175).
+
+`GlobalSignal` says so at the declaration:
+
+```rust
+static MODIFIERS: GlobalSignal<Modifiers> = GlobalSignal::new(Modifiers::default);
+```
+
+Created under the root owner on first use, and rebuilt if its signal is gone —
+so a teardown that reads one cannot panic, and forgetting to clear the registry
+costs a stale entry rather than a crash. The identity is the `static` taken by
+address, so two globals of the same type are two globals.
 
 **Identity safety:** signal, effect, owner, and widget ids are all generational
 (`index + generation`). Slots are recycled, but a stale `Copy` handle held after
@@ -523,6 +544,7 @@ The feature has zero overhead when disabled (code is completely compiled out).
 | `src/renderer/flatten.rs` | Tree flattening with transform inheritance |
 | `src/renderer/shader.wgsl` | GPU shaders for instanced SDF rendering |
 | `src/reactive/signal.rs` | Signal implementation |
+| `src/reactive/global.rs` | `GlobalSignal`: state whose owner is the application |
 | `src/transform.rs` | Transform matrix operations |
 | `src/platform/wayland.rs` | Wayland connection, surfaces and layer shell |
 | `src/platform/input.rs` | Seat input: pointer, touch, keyboard |

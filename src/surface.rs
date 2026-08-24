@@ -40,8 +40,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::outputs::OutputId;
 use crate::platform::{Anchor, KeyboardInteractivity, Layer};
-use crate::reactive::owner::with_root_owner;
-use crate::reactive::{Trigger, create_trigger};
+use crate::reactive::Trigger;
+use crate::reactive::global::GlobalSignal;
 use crate::widgets::{Color, Rect, Widget};
 
 /// Unique identifier for each surface in the application.
@@ -979,18 +979,14 @@ impl PopupHandle {
 thread_local! {
     static LIVE_POPUPS: RefCell<std::collections::HashSet<SurfaceId>> =
         RefCell::new(std::collections::HashSet::new());
-    static POPUP_DISMISSAL: RefCell<Option<Trigger>> = const { RefCell::new(None) };
 }
 
-/// The notifier that makes reading the registry reactive, created on first
-/// use under the root owner — it belongs to the application, not to whichever
-/// popup happened to be opened first.
+/// The notifier that makes reading the registry reactive. It belongs to the
+/// application, not to whichever popup happened to be opened first.
+static POPUP_DISMISSAL: GlobalSignal<()> = GlobalSignal::new(|| ());
+
 fn popup_dismissal() -> Trigger {
-    POPUP_DISMISSAL.with(|cell| {
-        *cell
-            .borrow_mut()
-            .get_or_insert_with(|| with_root_owner(create_trigger))
-    })
+    Trigger::from_signal(POPUP_DISMISSAL.get())
 }
 
 /// Mark a popup dismissed (called by the platform layer on popup_done, and
@@ -1004,12 +1000,10 @@ pub(crate) fn mark_popup_dismissed(id: SurfaceId) {
 
 /// Reset popup registry state.
 ///
-/// Called during `App::drop()`. The notifier is released rather than
-/// notified: the storage behind it is wiped in the same teardown, so keeping
-/// the handle would hand the next `App` on this thread a dead one.
+/// Called during `App::drop()`. The notifier needs nothing here — a global
+/// signal is forgotten with the rest of the reactive state.
 pub(crate) fn reset_popups() {
     LIVE_POPUPS.with(|live| live.borrow_mut().clear());
-    POPUP_DISMISSAL.with(|cell| *cell.borrow_mut() = None);
 }
 
 /// Spawn an xdg popup anchored to a parent surface.

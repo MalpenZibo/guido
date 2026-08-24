@@ -5,6 +5,7 @@ pub mod cursor;
 pub mod diagnostics;
 pub mod effect;
 pub mod focus;
+pub(crate) mod global;
 pub(crate) mod guard;
 pub mod into_signal;
 pub mod invalidation;
@@ -31,7 +32,7 @@ pub use cursor::{CursorIcon, set_cursor};
 pub(crate) use cursor::{cursor_change_pending, take_cursor_change};
 pub use effect::create_effect;
 pub(crate) use focus::{
-    focus_path, has_focus, init_focus, release_focus, release_focus_if_within, request_focus,
+    focus_path, has_focus, release_focus, release_focus_if_within, request_focus,
 };
 #[doc(hidden)]
 pub use into_signal::{
@@ -73,12 +74,10 @@ pub use signal::{
 /// enabling clean restart of the application.
 pub(crate) fn reset_reactive() {
     owner::reset_owners();
+    // Before `reset_storage`, with the same reason the focus release below has:
+    // these hold ids into the arena that is about to be replaced.
+    global::reset_globals();
     runtime::reset_runtime();
-    // Before `reset_storage`: the focus path lives in a signal now, held by a
-    // thread-local that outlives the storage. It releases the handle rather
-    // than writing through it, so the next `App` on this thread gets a fresh
-    // one instead of a silently dead signal.
-    focus::reset_focus();
     storage::reset_storage();
     invalidation::reset_invalidation();
     clipboard::reset_clipboard();

@@ -41,6 +41,12 @@ pub fn create_trigger() -> Trigger {
 }
 
 impl Trigger {
+    /// Wrap a signal that is already owned by someone else — the global
+    /// registry, for a trigger that has to outlive every scope that reads it.
+    pub(crate) const fn from_signal(inner: RwSignal<()>) -> Self {
+        Self { inner }
+    }
+
     /// Notify every tracker, unconditionally.
     pub fn notify(&self) {
         self.inner.set_always(());

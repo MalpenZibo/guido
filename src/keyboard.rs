@@ -19,24 +19,14 @@
 //! })
 //! ```
 
-use std::cell::RefCell;
-
-use crate::reactive::owner::with_root_owner;
-use crate::reactive::{RwSignal, Signal, create_signal};
+use crate::reactive::global::GlobalSignal;
+use crate::reactive::{RwSignal, Signal};
 use crate::widgets::Modifiers;
 
-thread_local! {
-    /// Lazily created so it works both before and after platform init;
-    /// wiped by `reset_keyboard_modifiers()`.
-    static MODIFIERS: RefCell<Option<RwSignal<Modifiers>>> = const { RefCell::new(None) };
-}
+static MODIFIERS: GlobalSignal<Modifiers> = GlobalSignal::new(Modifiers::default);
 
 fn modifiers_signal() -> RwSignal<Modifiers> {
-    MODIFIERS.with(|cell| {
-        *cell
-            .borrow_mut()
-            .get_or_insert_with(|| with_root_owner(|| create_signal(Modifiers::default())))
-    })
+    MODIFIERS.get()
 }
 
 /// Reactive view of the modifiers the keyboard currently reports.
@@ -59,18 +49,13 @@ pub(crate) fn set_keyboard_modifiers(modifiers: Modifiers) {
     }
 }
 
-/// Forget the modifier state. Called during `App::drop()`.
-pub(crate) fn reset_keyboard_modifiers() {
-    MODIFIERS.with(|cell| *cell.borrow_mut() = None);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn the_state_starts_empty_and_follows_the_platform() {
-        reset_keyboard_modifiers();
+        modifiers_signal().set(Modifiers::default());
         assert_eq!(keyboard_modifiers().get_untracked(), Modifiers::default());
 
         let latched = Modifiers {
@@ -92,7 +77,7 @@ mod tests {
         use crate::reactive::owner::{create_root_owner, dispose_owner_now, with_owner};
 
         create_root_owner();
-        reset_keyboard_modifiers();
+        modifiers_signal().set(Modifiers::default());
 
         let (_, scope) = with_owner(|| keyboard_modifiers().get_untracked());
         dispose_owner_now(scope);
@@ -109,15 +94,19 @@ mod tests {
         assert!(keyboard_modifiers().get_untracked().caps_lock);
     }
 
+    /// A second `App` on this thread starts from the declaration, not from
+    /// whatever the last one latched. What ends the first one is the storage
+    /// being wiped, which is what `App::drop` does — and the global answers by
+    /// building another signal rather than reading into the hole.
     #[test]
     fn a_new_app_does_not_inherit_the_last_one_s_state() {
-        reset_keyboard_modifiers();
         set_keyboard_modifiers(Modifiers {
             caps_lock: true,
             ..Default::default()
         });
+        assert!(keyboard_modifiers().get_untracked().caps_lock);
 
-        reset_keyboard_modifiers();
+        crate::reactive::storage::reset_storage();
 
         assert_eq!(keyboard_modifiers().get_untracked(), Modifiers::default());
     }
