@@ -849,27 +849,26 @@ pub(crate) enum SurfaceCommand {
 // Thread-local storage for the surface command queue.
 // Both sender and receiver are on the main thread — this is just a deferred command queue.
 thread_local! {
-    static SURFACE_COMMANDS: RefCell<Vec<SurfaceCommand>> = const { RefCell::new(Vec::new()) };
+    static SURFACE_COMMANDS: crate::deferred::DeferredQueue<SurfaceCommand> =
+        const { crate::deferred::DeferredQueue::new() };
 }
 
-/// Push a surface command to the thread-local queue.
+/// Push a surface command to the thread-local queue, waking the loop that
+/// will carry it out.
 pub(crate) fn push_surface_command(cmd: SurfaceCommand) {
-    SURFACE_COMMANDS.with(|cmds| {
-        cmds.borrow_mut().push(cmd);
-    });
-    crate::jobs::wake_loop();
+    SURFACE_COMMANDS.with(|cmds| cmds.push(cmd));
 }
 
 /// Reset the surface command queue.
 ///
 /// Called during `App::drop()` to clear stale surface commands.
 pub(crate) fn reset_surface_commands() {
-    SURFACE_COMMANDS.with(|cmds| cmds.borrow_mut().clear());
+    SURFACE_COMMANDS.with(|cmds| cmds.clear());
 }
 
 /// Drain all pending surface commands. Called by the main event loop.
 pub(crate) fn drain_surface_commands() -> Vec<SurfaceCommand> {
-    SURFACE_COMMANDS.with(|cmds| cmds.borrow_mut().drain(..).collect())
+    SURFACE_COMMANDS.with(|cmds| cmds.drain())
 }
 
 /// Spawn a new surface at runtime.
@@ -1084,7 +1083,7 @@ pub fn surface_handle(id: SurfaceId) -> SurfaceHandle {
 ///
 /// Part of the loop's wakeup check — see `queued_but_unwoken` in `lib.rs`.
 pub(crate) fn surface_commands_pending() -> bool {
-    SURFACE_COMMANDS.with(|cmds| !cmds.borrow().is_empty())
+    SURFACE_COMMANDS.with(|cmds| !cmds.is_empty())
 }
 
 #[cfg(test)]
@@ -1281,10 +1280,9 @@ mod tests {
 
         assert!(!popup.dismissed(), "still open until the loop closes it");
         assert!(
-            SURFACE_COMMANDS.with(|cmds| cmds
-                .borrow()
+            SURFACE_COMMANDS.with(|cmds| cmds.with_items(|queued| queued
                 .iter()
-                .any(|c| matches!(c, SurfaceCommand::Close(id) if *id == popup.id()))),
+                .any(|c| matches!(c, SurfaceCommand::Close(id) if *id == popup.id())))),
             "and the close is queued"
         );
     }

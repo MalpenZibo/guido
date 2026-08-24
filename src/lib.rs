@@ -2,6 +2,7 @@ pub mod animation;
 pub mod backdrop;
 mod blur;
 pub mod compositor;
+mod deferred;
 pub mod image_metadata;
 mod ingress;
 mod jobs;
@@ -1007,10 +1008,6 @@ fn layout_pass(
 
     // Update widget ref signals with current bounds after layout
     widget_ref::update_widget_refs(tree);
-
-    // A `WidgetRef::focus()` from application code lands here: after layout, so a
-    // handle attached this very frame has resolved to a widget.
-    reactive::focus::apply_pending_focus(tree);
 }
 
 /// The size the compositor has confirmed, if it has confirmed one.
@@ -1732,6 +1729,18 @@ impl App {
                     render_surface(&mut ctx, layout_roots, woken, &active_roots);
                 }
             }
+
+            // A `WidgetRef::focus()` from application code lands here: after
+            // the render pass, so a handle attached during this iteration's
+            // layout has resolved to a widget, and once per iteration rather
+            // than once per surface — the tree is one, and the first surface
+            // to run this used to resolve for all of them.
+            //
+            // Unlike the queues below it, staying parked is this one's resting
+            // state: a request for a widget that does not exist yet is the
+            // ordinary shape of `focus()` from a startup effect, and it waits
+            // as many frames as it takes.
+            reactive::focus::apply_pending_focus(&self.tree);
 
             // Hand the seat what the widgets changed — after the render
             // pass, so a copy or a cursor set by this iteration's event
