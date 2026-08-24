@@ -104,9 +104,16 @@ thread_local! {
 /// Called from the layout of every widget that carries a `WidgetRef`. Idempotent
 /// — HashMap insert overwrites.
 pub(crate) fn register_widget_ref(id: WidgetId, widget_ref: WidgetRef) {
+    // A ref whose scope is gone has nothing left to point at, and the registry
+    // nothing to keep for it: the read below would panic, and the write after
+    // it would be dropped anyway. The claim this handle makes — that it answers
+    // after its subject is gone — has to hold on the write path too.
+    let Some(attached) = widget_ref.widget.try_get_untracked() else {
+        return;
+    };
     // Cheap when unchanged, and the write is what lets `focus()` resolve: a ref
     // that has never been laid out has no widget to focus.
-    if widget_ref.widget.get_untracked() != Some(id) {
+    if attached != Some(id) {
         widget_ref.widget.set(Some(id));
     }
     WIDGET_REF_REGISTRY.with(|reg| {

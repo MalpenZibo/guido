@@ -939,8 +939,11 @@ impl PopupHandle {
     }
 
     /// Close the popup programmatically.
+    ///
+    /// Dismissal is announced when the loop closes it, not here: closing walks
+    /// the popup's descendants first, so a submenu is reported gone before the
+    /// menu it hangs from — the order the compositor's own dismissal gives.
     pub fn close(&self) {
-        mark_popup_dismissed(self.id);
         push_surface_command(SurfaceCommand::Close(self.id));
     }
 
@@ -951,8 +954,19 @@ impl PopupHandle {
     /// Safe to read after the popup is gone — including from a submenu whose
     /// parent was dismissed by the same click.
     pub fn dismissed(&self) -> bool {
-        popup_dismissal().track();
-        !LIVE_POPUPS.with(|live| live.borrow().contains(&self.id))
+        let live = LIVE_POPUPS.with(|live| live.borrow().contains(&self.id));
+        if live {
+            // Tracked only while there is still something to wait for. One
+            // notifier serves every popup, so a watcher that stayed subscribed
+            // after its own popup was gone would be woken by every dismissal
+            // that followed — and applications create these watchers in the
+            // click that opens the popup, where the owner is the root, so they
+            // accumulate for the life of the `App`. Reading a popup that is
+            // already gone subscribes to nothing: the answer can never change
+            // again.
+            popup_dismissal().track();
+        }
+        !live
     }
 }
 
@@ -1168,6 +1182,21 @@ mod tests {
         );
     }
 
+    /// A clean slate: a root owner for the effects, no popups left over from
+    /// another test on this thread, and the command queue drained of the
+    /// `CreatePopup`s these tests push and nobody consumes.
+    fn fresh() {
+        crate::reactive::owner::create_root_owner();
+        reset_popups();
+        let _ = drain_surface_commands();
+    }
+
+    fn popup() -> PopupHandle {
+        spawn_popup(SurfaceId::next(), PopupConfig::new(120), || {
+            crate::widgets::container()
+        })
+    }
+
     /// A `PopupHandle` is `Copy` and outlives its popup by design, so every
     /// read through it has to survive the scope that opened it. For a nested
     /// popup that scope *is* the parent popup — the click that opens the child
@@ -1176,11 +1205,9 @@ mod tests {
     /// that scope is announced to nobody.
     #[test]
     fn a_popup_reports_its_dismissal_after_the_scope_that_opened_it_is_gone() {
-        crate::reactive::owner::create_root_owner();
+        fresh();
         let (child, parent_scope) = crate::reactive::owner::with_owner(|| {
-            let child = spawn_popup(SurfaceId::next(), PopupConfig::new(120), || {
-                crate::widgets::container()
-            });
+            let child = popup();
             // The parent popup is also the first thing to watch its child.
             assert!(!child.dismissed());
             child
@@ -1197,9 +1224,8 @@ mod tests {
     /// opened it.
     #[test]
     fn watching_a_popup_reacts_to_its_dismissal() {
-        let popup = spawn_popup(SurfaceId::next(), PopupConfig::new(120), || {
-            crate::widgets::container()
-        });
+        fresh();
+        let popup = popup();
         let seen = std::rc::Rc::new(std::cell::Cell::new(false));
         let observer = seen.clone();
         crate::reactive::create_effect(move || observer.set(popup.dismissed()));
@@ -1212,12 +1238,60 @@ mod tests {
     /// One popup's death says nothing about another's.
     #[test]
     fn a_dismissal_speaks_only_for_the_popup_it_names() {
-        let build = || crate::widgets::container();
-        let first = spawn_popup(SurfaceId::next(), PopupConfig::new(120), build);
-        let second = spawn_popup(SurfaceId::next(), PopupConfig::new(120), build);
+        fresh();
+        let (first, second) = (popup(), popup());
 
         mark_popup_dismissed(first.id());
         assert!(first.dismissed());
         assert!(!second.dismissed(), "the other popup is still open");
+    }
+
+    /// One notifier serves every popup, and applications create their watchers
+    /// in the click that opens one — where the owner is the root, so the
+    /// watcher lives as long as the `App`. If a watcher stayed subscribed after
+    /// its own popup was gone, opening and closing a menu five hundred times
+    /// would leave five hundred of them to re-run on the next dismissal.
+    #[test]
+    fn a_watcher_stops_being_woken_once_its_own_popup_is_gone() {
+        fresh();
+        let (watched, other) = (popup(), popup());
+        let runs = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = runs.clone();
+        crate::reactive::create_effect(move || {
+            watched.dismissed();
+            counter.set(counter.get() + 1);
+        });
+        assert_eq!(runs.get(), 1, "the initial run");
+
+        mark_popup_dismissed(watched.id());
+        assert_eq!(runs.get(), 2, "woken for its own popup");
+
+        mark_popup_dismissed(other.id());
+        assert_eq!(
+            runs.get(),
+            2,
+            "and not for anybody else's, once its own answer can no longer change"
+        );
+    }
+
+    /// `close()` hands the popup to the loop rather than declaring it gone on
+    /// the spot: closing walks the descendants first, so a submenu is reported
+    /// gone before the menu it hangs from — the order the compositor's own
+    /// dismissal gives. Declaring it here would report them the other way
+    /// round, and only for this one path.
+    #[test]
+    fn closing_leaves_the_announcement_to_the_close_that_follows() {
+        fresh();
+        let popup = popup();
+        popup.close();
+
+        assert!(!popup.dismissed(), "still open until the loop closes it");
+        assert!(
+            SURFACE_COMMANDS.with(|cmds| cmds
+                .borrow()
+                .iter()
+                .any(|c| matches!(c, SurfaceCommand::Close(id) if *id == popup.id()))),
+            "and the close is queued"
+        );
     }
 }
