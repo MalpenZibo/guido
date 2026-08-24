@@ -572,11 +572,10 @@ static EXIT_REQUEST: AtomicU8 = AtomicU8::new(ExitRequest::Running as u8);
 /// Wakes the event loop so the main loop checks promptly.
 pub(crate) fn set_exit_request(req: ExitRequest) {
     EXIT_REQUEST.store(req as u8, Ordering::Release);
-    // Through `wake_loop`, not straight to the ping: a ping written behind its
-    // back is one `ping_in_flight` cannot see, and the loop's pre-block check
-    // would call a woken loop unwoken. Coalescing is the right answer here too
-    // — if a ping is already armed the loop is already coming back, and it
-    // reads the exit request at the top of every pass.
+    // Through `wake_loop`, not straight to the ping: one way in means one set
+    // of rules about the coalescing flag. If a ping is already armed the loop
+    // is already coming back, and it reads the exit request at the top of
+    // every pass.
     wake_loop();
 }
 
@@ -650,18 +649,12 @@ pub(crate) fn wake_loop() {
     }
 }
 
-/// Whether a ping is readable by the next dispatch.
+/// Whether a ping is readable by the next dispatch: written by `wake_loop`,
+/// cleared by `mark_loop_awake` right after the dispatch that consumed it.
 ///
-/// True from the moment `wake_loop` writes one until `mark_loop_awake` clears
-/// the flag, right after the dispatch that consumed it — so at the loop's
-/// pre-block check it means the eventfd is still armed and `dispatch(None)`
-/// returns immediately. That is the half of "queued but unwoken" the queues
-/// cannot answer: work produced after its own drain point is the ordinary
-/// case, and what makes it a bug is nobody having asked for the next pass.
-///
-/// It says *written*, not *requested*: `wake_loop` raises it under the ping's
-/// lock, with the handle in hand, so there is no window where it stands for a
-/// ping that does not exist.
+/// For the tests that assert a producer woke the loop, which is the half of
+/// "queued and woken" that is not visible from the queue.
+#[cfg(test)]
 pub(crate) fn ping_in_flight() -> bool {
     PING_SENT.load(Ordering::Acquire)
 }
@@ -1057,12 +1050,12 @@ mod wakeup_contract {
     /// setup from scratch. The asymmetry is what makes this sound: a real
     /// regression pings on *no* attempt, so the failure needs no luck, while a
     /// pass needs only one clean window out of many.
-    /// An exit request is a wakeup like any other, and has to be one the
-    /// loop's pre-block check can see. It used to write the ping directly,
-    /// behind `PING_SENT`'s back: the loop was woken and the check said
-    /// nobody had woken it.
+    /// An exit request is a wakeup like any other, and goes through the same
+    /// door. It used to write the ping directly, past `PING_SENT`: a second
+    /// producer would then coalesce against a flag that nobody had raised, or
+    /// raise one for a ping already spent, depending on the order.
     #[test]
-    fn an_exit_request_arms_a_wakeup_the_check_can_see() {
+    fn an_exit_request_goes_through_the_one_door() {
         let _state = wakeup_test_lock();
         let (ping, _source) = make_ping().expect("ping");
 
@@ -1072,7 +1065,7 @@ mod wakeup_contract {
             set_exit_request(ExitRequest::Quit);
             ping_in_flight()
         });
-        assert!(seen, "quit_app must arm a wakeup the loop can account for");
+        assert!(seen, "quit_app must write its ping through wake_loop");
     }
 
     #[test]

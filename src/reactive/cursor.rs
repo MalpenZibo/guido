@@ -90,10 +90,3 @@ pub(crate) fn reset_cursor() {
 pub fn get_current_cursor() -> CursorIcon {
     CURRENT_CURSOR.with(|c| *c.borrow())
 }
-
-/// Whether a cursor shape change is queued for the compositor.
-///
-/// Part of the loop's wakeup check — see `queued_but_unwoken` in `lib.rs`.
-pub(crate) fn cursor_change_pending() -> bool {
-    OUTGOING_CURSOR.with(|o| !o.is_empty())
-}

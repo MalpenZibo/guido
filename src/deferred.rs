@@ -60,6 +60,10 @@ impl<T> DeferredQueue<T> {
         std::mem::take(&mut *self.items.borrow_mut())
     }
 
+    /// Whether anything is waiting. Nobody outside asks any more — the loop
+    /// drains unconditionally rather than deciding whether to — so this is
+    /// what the tests below assert against.
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.items.borrow().is_empty()
     }
@@ -100,6 +104,7 @@ impl<T> DeferredSlot<T> {
         self.item.borrow_mut().take()
     }
 
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.item.borrow().is_none()
     }

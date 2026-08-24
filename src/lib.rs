@@ -699,81 +699,6 @@ fn run_jobs(
     jobs::recycle_job_buffer(followup);
 }
 
-/// Deferred work that is queued with nothing owed to wake the loop for it.
-///
-/// The wakeup contract says a producer that queues work must also guarantee a
-/// wakeup that survives until its consumer runs. This is that contract as a
-/// check instead of as prose — prose does not fail a test run.
-///
-/// Both halves have to be asked. A queue left non-empty at the blocking point
-/// is the ordinary case, not the bug: the drains sit in the middle of the
-/// iteration and effects, event handlers and background threads all run after
-/// them, so work riding the next pass is what a working application looks
-/// like. What makes it a lost wakeup is nobody having asked for that pass —
-/// so the queues answer *what* is waiting, and [`wakeup_armed`] answers
-/// whether anything is coming to drain it.
-///
-/// Read in that order, never the other way round: a producer arms before it
-/// queues, so a queue seen non-empty already has its wakeup armed, while an
-/// arming read first can miss one that lands a moment later — the producer
-/// is on another thread.
-///
-/// Returns the name of the offender, because the point is the message.
-fn queued_but_unwoken() -> Option<&'static str> {
-    let queued = queued_work()?;
-    (!wakeup_armed()).then_some(queued)
-}
-
-/// What the loop still owes a pass, named. Every queue the *loop body* drains,
-/// in the order it drains them — so a new queue goes next to its own drain
-/// here too, and the list keeps reading as the loop body does.
-///
-/// Deliberately not every deferred queue in the library: a parked
-/// `WidgetRef::focus` is drained by `run_jobs`, inside the surface's own pass,
-/// because a focus request means nothing until there is a tree to resolve it
-/// against. Work that only a surface can drain cannot be judged by a check
-/// that runs whether or not one exists — which is the same reason the
-/// clipboard and the cursor had to move *out* of that pass to be listed here.
-fn queued_work() -> Option<&'static str> {
-    [
-        ("owner disposals", reactive::owner::disposals_pending()),
-        ("surface commands", surface::surface_commands_pending()),
-        ("background signal writes", reactive::bg_writes_pending()),
-        // Unreachable from `queued_but_unwoken`: `needs_polling` refuses to
-        // block while any job is queued, so the check is never reached with
-        // one. Listed because this is the inventory of what the loop drains,
-        // and leaving a queue out of it is how the next one gets forgotten.
-        ("widget jobs", has_pending_jobs()),
-        ("a selection change", reactive::selection_change_pending()),
-        ("a cursor change", reactive::cursor_change_pending()),
-    ]
-    .into_iter()
-    .find_map(|(name, pending)| pending.then_some(name))
-}
-
-/// Whether something already owes the loop the pass that drains what is
-/// queued.
-///
-/// Two ways to owe one, one per mechanism in the contract:
-///
-/// - a ping has been written and not yet dispatched, so the next `dispatch`
-///   returns immediately;
-/// - an ingress message has been sent and not yet read, and calloop
-///   guarantees it is delivered before the loop can block again.
-///
-/// Either one and the loop is not going deaf: it takes another pass, and
-/// every queue in [`queued_work`] is drained unconditionally on it — widget
-/// jobs by `needs_polling`, which refuses to block while any are queued. So
-/// the state this leaves the assertion looking for is the one that was meant:
-/// work queued by a producer that woke nobody at all.
-///
-/// `WAKE_REQUESTED` is deliberately not a third: `needs_polling` already
-/// refuses to block while it is set, so the check is never reached with one
-/// outstanding, and naming it here would be a guarantee that never applies.
-fn wakeup_armed() -> bool {
-    jobs::ping_in_flight() || ingress::in_flight()
-}
-
 /// What this surface tells us about itself, read once at the top of a frame.
 ///
 /// Copying it frees the borrow on `wayland_state`, which the phases below
@@ -1465,10 +1390,6 @@ impl App {
         loop_handle
             .insert_source(ingress_channel, |event, _, wayland_state| {
                 if let calloop_channel::Event::Msg(message) = event {
-                    // This message was itself the wakeup, and it is spent
-                    // now — the drains it speaks for run later this same
-                    // iteration.
-                    ingress::delivered();
                     match message {
                         // Doorbell only: the write payloads live in the
                         // reactive write queue, drained at the flush point
@@ -1583,30 +1504,17 @@ impl App {
             // - Otherwise block until event (Wayland or ping wakeup)
             let timeout = if needs_polling {
                 Some(std::time::Duration::from_millis(16)) // ~60fps for animations
-            } else if let Some(deadline) = jobs::next_deadline() {
-                // Not polling — waiting. A caret blinks twice a second, so this
-                // sleeps ~530 ms and wakes once, where treating the schedule as
-                // pending work would spin at 60 fps to repaint nothing 113 times
-                // out of 114.
-                Some(deadline.saturating_duration_since(std::time::Instant::now()))
             } else {
-                // About to block with nothing left to wake us but the
-                // compositor. Anything still queued must have a wakeup armed
-                // for it by now — see `queued_but_unwoken`. Read once: asking
-                // twice can catch a wakeup landing in between and print a
-                // panic with no name in it, which is the only thing the panic
-                // is for.
-                if cfg!(debug_assertions)
-                    && let Some(queue) = queued_but_unwoken()
-                {
-                    panic!(
-                        "the loop is about to block indefinitely with {queue} still \
-                         queued and no wakeup armed for it — whatever produced it woke \
-                         nobody. See the Event Loop Wakeup Contract in \
-                         docs/ARCHITECTURE.md."
-                    );
-                }
-                None // Block indefinitely until event
+                // Not polling — waiting. A deadline sleeps exactly that long: a
+                // caret blinks twice a second, so this wakes once where treating
+                // the schedule as pending work would spin at 60 fps to repaint
+                // nothing 113 frames out of 114.
+                //
+                // No deadline means blocking until the compositor or a ping.
+                // Nothing queued can be stranded by that: work and its wakeup
+                // are one gesture — see `deferred` and the ingress channel.
+                jobs::next_deadline()
+                    .map(|deadline| deadline.saturating_duration_since(std::time::Instant::now()))
             };
 
             if let Err(e) = event_loop.dispatch(timeout, &mut wayland_state) {
@@ -2045,197 +1953,6 @@ mod font_registry_tests {
             super::CUSTOM_FONTS.with(|f| f.borrow().len()),
             after_second + 1,
             "a different font must still register"
-        );
-    }
-}
-
-#[cfg(test)]
-mod wakeup_contract_coverage {
-    use super::*;
-    use smithay_client_toolkit::reexports::calloop;
-    use smithay_client_toolkit::reexports::calloop::ping::make_ping;
-
-    /// A probe that never reports anything would make the check in
-    /// `queued_but_unwoken` silently useless, so each one is pinned to the
-    /// drain it speaks for: queue, see it, drain, see it gone.
-    #[test]
-    fn each_probe_tracks_its_own_queue() {
-        // Clipboard and primary share one probe.
-        let _ = reactive::take_clipboard_change();
-        let _ = reactive::take_primary_change();
-        assert!(!reactive::selection_change_pending());
-
-        reactive::clipboard_copy("queued");
-        assert!(
-            reactive::selection_change_pending(),
-            "a copy must be visible to the wakeup check"
-        );
-        let _ = reactive::take_clipboard_change();
-        assert!(!reactive::selection_change_pending());
-
-        reactive::primary_copy("queued");
-        assert!(
-            reactive::selection_change_pending(),
-            "a primary-selection copy must be visible too"
-        );
-        let _ = reactive::take_primary_change();
-        assert!(!reactive::selection_change_pending());
-
-        // Cursor.
-        let _ = reactive::take_cursor_change();
-        assert!(!reactive::cursor_change_pending());
-        reactive::set_cursor(reactive::CursorIcon::Text);
-        assert!(
-            reactive::cursor_change_pending(),
-            "a cursor change must be visible to the wakeup check"
-        );
-        let _ = reactive::take_cursor_change();
-        assert!(!reactive::cursor_change_pending());
-    }
-
-    /// The bug this check had for as long as it existed: it asked what was
-    /// queued and never what was owed, so ordinary work — a background write
-    /// landing after the flush, a surface command pushed by an effect — read
-    /// as a lost wakeup and panicked a debug build.
-    #[test]
-    fn work_queued_with_a_wakeup_armed_is_not_a_lost_wakeup() {
-        let _guard = jobs::wakeup_test_lock();
-        // A ping handle, because there is no loop in a test binary and
-        // `wake_loop` arms nothing without one — correctly: with nothing to
-        // write to, the work really would be unwoken.
-        let (ping, _source) = make_ping().expect("ping");
-        jobs::init_wakeup(ping);
-
-        let _ = reactive::take_cursor_change();
-        reactive::set_cursor(reactive::CursorIcon::Text);
-        assert_eq!(
-            queued_work(),
-            Some("a cursor change"),
-            "the queue itself is still what names the offender"
-        );
-
-        // `set_cursor` woke the loop on its way past, which is the whole
-        // difference between work riding the next pass and work nobody is
-        // coming back for.
-        //
-        // Retried because the arming flag is process-wide and tests that do
-        // not take the lock above clear it (`reset_jobs`, in the memo tests).
-        // Each attempt re-arms with a *different* shape: `set_cursor` returns
-        // early on the one already set, and would arm nothing after the first.
-        // The asymmetry is what makes it sound — the queue is this thread's
-        // own, so a regression reports it on every attempt, while a pass needs
-        // one quiet window out of many.
-        let quiet = (0..64).any(|attempt| {
-            reactive::set_cursor(if attempt % 2 == 0 {
-                reactive::CursorIcon::Default
-            } else {
-                reactive::CursorIcon::Text
-            });
-            queued_but_unwoken().is_none()
-        });
-        assert!(
-            quiet,
-            "a queue whose producer woke the loop must not be reported as unwoken"
-        );
-
-        let _ = reactive::take_cursor_change();
-    }
-
-    /// The reported window, in the loop's own order: an effect running at the
-    /// flush point pushes a surface command *after* that queue's drain, and
-    /// `take_wake_request()` then clears the flag it set. The ping it sent is
-    /// the only thing left saying the loop is coming back — and reading the
-    /// queues alone cannot see it, which is how a healthy application panicked
-    /// its own debug build.
-    #[test]
-    fn a_command_queued_after_its_drain_rides_the_next_pass() {
-        // This one *writes* the process-wide flags (`mark_loop_awake`,
-        // `take_wake_request`), so it holds the lock for the whole run rather
-        // than racing the tests that read them.
-        let _guard = jobs::wakeup_test_lock();
-        let (ping, _source) = make_ping().expect("ping");
-        jobs::init_wakeup(ping);
-
-        let handle = surface::surface_handle(SurfaceId::next());
-        let quiet = (0..64).any(|_| {
-            surface::reset_surface_commands();
-            jobs::mark_loop_awake(); // the dispatch that woke us returned
-
-            // …the loop drains surface commands here, and only then flushes
-            // background writes, whose effects run before the take below.
-            handle.set_margin(8);
-            let _ = jobs::take_wake_request();
-
-            queued_but_unwoken().is_none()
-        });
-        assert!(
-            quiet,
-            "a surface command pushed after its drain has a ping armed for it"
-        );
-
-        surface::reset_surface_commands();
-    }
-
-    /// Each arming mechanism has to be visible to `wakeup_armed`, or the
-    /// check is back to guessing from the queues alone — and it has to mean
-    /// what it says, or the check hides the very bug it exists to report.
-    #[test]
-    fn every_way_of_owing_a_wakeup_reports_itself() {
-        let _guard = jobs::wakeup_test_lock();
-
-        // A written ping, still readable: exactly the window the pre-block
-        // check runs in. Retried for the flags other tests clear.
-        let mut event_loop: calloop::EventLoop<bool> = calloop::EventLoop::try_new().expect("loop");
-        let (ping, source) = make_ping().expect("ping");
-        event_loop
-            .handle()
-            .insert_source(source, |_, _, woken: &mut bool| *woken = true)
-            .expect("insert ping source");
-
-        let readable = (0..64).any(|_| {
-            jobs::init_wakeup(ping.clone());
-            let mut drained = false;
-            let _ = event_loop.dispatch(Some(std::time::Duration::ZERO), &mut drained);
-            jobs::mark_loop_awake();
-
-            jobs::wake_loop();
-            let mut woken = false;
-            let _ = event_loop.dispatch(Some(std::time::Duration::ZERO), &mut woken);
-            woken && jobs::ping_in_flight()
-        });
-        assert!(
-            readable,
-            "the flag must be up for a ping the loop can actually read"
-        );
-
-        // And down when there was no ping to write. `ping_in_flight` is read
-        // as *the loop cannot block*; raising it over a ping that was never
-        // written would let the check bless the state it exists to catch.
-        let honest = (0..64).any(|_| {
-            jobs::reset_jobs(); // drops the wakeup handle
-            jobs::wake_loop();
-            !jobs::ping_in_flight()
-        });
-        assert!(
-            honest,
-            "a request with no ping handle to write to must not read as armed"
-        );
-
-        // An ingress message, armed before the work it speaks for is queued
-        // and counted until the loop takes delivery. The count is debug-only,
-        // like the check it answers — in a release build there is nothing
-        // owed to anybody, and `in_flight` says so.
-        let armed = ingress::arm(ingress::IngressMessage::BgWritesQueued);
-        if cfg!(debug_assertions) {
-            assert!(
-                ingress::in_flight(),
-                "an armed message must be visible before it is even sent"
-            );
-        }
-        drop(armed);
-        assert!(
-            !ingress::in_flight(),
-            "and must stop being visible if it is never sent"
         );
     }
 }

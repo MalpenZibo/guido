@@ -443,13 +443,6 @@ pub(crate) fn flush_pending_disposals() {
     }
 }
 
-/// Whether any owner is waiting to be disposed.
-///
-/// Part of the loop's wakeup check — see `queued_but_unwoken` in `lib.rs`.
-pub(crate) fn disposals_pending() -> bool {
-    PENDING_DISPOSALS.with(|v| !v.is_empty())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
