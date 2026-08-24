@@ -221,11 +221,6 @@ pub struct TextStyle {
 }
 
 impl TextStyle {
-    /// Whether nothing at all is declared.
-    pub fn is_empty(&self) -> bool {
-        *self == Self::default()
-    }
-
     /// Take from `outer` every property this style does not already declare.
     ///
     /// Called as the fold moves outward from the most specific declaration —

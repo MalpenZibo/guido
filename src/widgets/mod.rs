@@ -64,6 +64,24 @@ impl IntoVal<Corners> for i32 {
     }
 }
 
+impl IntoVal<Corners> for u32 {
+    fn into_val(self) -> Corners {
+        Corners::from(self)
+    }
+}
+
+impl IntoVal<Corners> for [i32; 2] {
+    fn into_val(self) -> Corners {
+        Corners::from(self)
+    }
+}
+
+impl IntoVal<Corners> for [i32; 4] {
+    fn into_val(self) -> Corners {
+        Corners::from(self)
+    }
+}
+
 impl IntoVal<Corners> for [f32; 2] {
     fn into_val(self) -> Corners {
         Corners::from(self)
@@ -73,43 +91,6 @@ impl IntoVal<Corners> for [f32; 2] {
 impl IntoVal<Corners> for [f32; 4] {
     fn into_val(self) -> Corners {
         Corners::from(self)
-    }
-}
-
-// The same, for a closure that returns a radius rather than four.
-impl IntoVal<crate::renderer::CornerRadii> for f32 {
-    fn into_val(self) -> crate::renderer::CornerRadii {
-        crate::renderer::CornerRadii::from(self)
-    }
-}
-
-impl IntoVal<crate::renderer::CornerRadii> for f64 {
-    fn into_val(self) -> crate::renderer::CornerRadii {
-        crate::renderer::CornerRadii::from(self)
-    }
-}
-
-impl IntoVal<crate::renderer::CornerRadii> for i32 {
-    fn into_val(self) -> crate::renderer::CornerRadii {
-        crate::renderer::CornerRadii::from(self)
-    }
-}
-
-impl IntoVal<crate::renderer::CornerRadii> for u32 {
-    fn into_val(self) -> crate::renderer::CornerRadii {
-        crate::renderer::CornerRadii::from(self)
-    }
-}
-
-impl IntoVal<crate::renderer::CornerRadii> for [f32; 2] {
-    fn into_val(self) -> crate::renderer::CornerRadii {
-        crate::renderer::CornerRadii::from(self)
-    }
-}
-
-impl IntoVal<crate::renderer::CornerRadii> for [f32; 4] {
-    fn into_val(self) -> crate::renderer::CornerRadii {
-        crate::renderer::CornerRadii::from(self)
     }
 }
 

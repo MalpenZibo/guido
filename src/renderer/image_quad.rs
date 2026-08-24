@@ -564,12 +564,10 @@ impl ImageQuadRenderer {
                     clip.rect.width * scale_factor,
                     clip.rect.height * scale_factor,
                 ],
-                [
-                    clip.corner_radius.top_left * scale_factor,
-                    clip.corner_radius.top_right * scale_factor,
-                    clip.corner_radius.bottom_right * scale_factor,
-                    clip.corner_radius.bottom_left * scale_factor,
-                ],
+                {
+                    let r = clip.corner_radius.scaled(scale_factor);
+                    [r.top_left, r.top_right, r.bottom_right, r.bottom_left]
+                },
             )
         } else {
             // No clipping

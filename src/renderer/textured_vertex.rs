@@ -17,7 +17,8 @@ pub struct TexturedVertex {
     pub screen_pos: [f32; 2],
     /// Clip rect in physical pixels [x, y, width, height]
     pub clip_rect: [f32; 4],
-    /// Clip parameters [corner_radius, curvature, 0, 0]
+    /// Clip corner radii [top_left, top_right, bottom_right, bottom_left],
+    /// physical pixels. The shader reads all four — a rect clip passes zeros.
     pub clip_params: [f32; 4],
 }
 

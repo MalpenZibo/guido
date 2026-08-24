@@ -132,16 +132,13 @@ pub struct ShapeInstance {
     /// Clip rect in physical pixels [x, y, width, height]
     /// Negative width/height = no clipping. Zero width/height = clip everything.
     pub clip_rect: [f32; 4],
-    /// Unused: the clip's radii are four, and live at the end of the struct
-    /// so that no attribute offset above them had to move.
-    pub _pad_clip: f32,
     /// Clip curvature (K-value)
     pub clip_curvature: f32,
     /// Whether to use local coordinates (frag_pos) for clipping instead of world_pos.
     /// 1.0 = local clip, 0.0 = world clip
     pub clip_is_local: f32,
     /// Padding for 16-byte alignment
-    pub _pad3: f32,
+    pub _pad3: [f32; 2],
 
     // === Gradient ===
     /// Gradient start color [r, g, b, a]
@@ -155,8 +152,12 @@ pub struct ShapeInstance {
 
     // === Clip corner radii ===
     /// [top_left, top_right, bottom_right, bottom_left], physical pixels.
-    /// Appended rather than placed beside `clip_rect` so that none of the
-    /// vertex attribute offsets above it move.
+    ///
+    /// Its own 16-byte slot: a `Float32x4` attribute needs four contiguous
+    /// floats, and the padding scattered through the struct — two floats here,
+    /// one there, three u32 at the end — cannot supply them without moving the
+    /// gradient block into a differently-typed attribute. Sixteen bytes per
+    /// instance is what a per-corner clip costs.
     pub clip_radii: [f32; 4],
 }
 
@@ -177,10 +178,9 @@ impl Default for ShapeInstance {
             transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0], // identity
             _pad2: [0.0, 0.0],
             clip_rect: NO_CLIP_RECT,
-            _pad_clip: 0.0,
             clip_curvature: 1.0,
             clip_is_local: 0.0,
-            _pad3: 0.0,
+            _pad3: [0.0, 0.0],
             gradient_start: [0.0, 0.0, 0.0, 0.0],
             gradient_end: [0.0, 0.0, 0.0, 0.0],
             gradient_type: 0, // No gradient
@@ -232,12 +232,8 @@ impl ShapeInstance {
             clip.rect.width * scale,
             clip.rect.height * scale,
         ];
-        self.clip_radii = [
-            clip.corner_radius.top_left * scale,
-            clip.corner_radius.top_right * scale,
-            clip.corner_radius.bottom_right * scale,
-            clip.corner_radius.bottom_left * scale,
-        ];
+        let r = clip.corner_radius.scaled(scale);
+        self.clip_radii = [r.top_left, r.top_right, r.bottom_right, r.bottom_left];
         self.clip_curvature = clip.curvature;
         self.clip_is_local = if is_local { 1.0 } else { 0.0 };
         self
@@ -358,7 +354,7 @@ impl ShapeInstance {
                     shader_location: 10,
                     format: VertexFormat::Float32x4,
                 },
-                // _pad_clip, clip_curvature, clip_is_local, _pad3
+                // clip_curvature, clip_is_local, _pad3
                 VertexAttribute {
                     offset: 160,
                     shader_location: 11,

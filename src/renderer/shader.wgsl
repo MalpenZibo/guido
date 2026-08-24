@@ -43,7 +43,7 @@ struct InstanceInput {
     @location(9) transform_1: vec4<f32>,
     // clip_rect: [x, y, width, height] in physical pixels (scaled from logical in render.rs)
     @location(10) clip_rect: vec4<f32>,
-    // _pad, clip_curvature, clip_is_local, _pad
+    // clip_curvature, clip_is_local, _pad, _pad
     @location(11) clip_params: vec4<f32>,
     // gradient_start RGBA
     @location(12) gradient_start: vec4<f32>,
@@ -77,7 +77,7 @@ struct VertexOutput {
     @location(8) world_pos: vec2<f32>,
     // Clip rect in physical pixels
     @location(9) clip_rect: vec4<f32>,
-    // _, clip curvature, is_local
+    // clip curvature, is_local, _
     @location(10) clip_params: vec3<f32>,
     // Gradient start color
     @location(11) gradient_start: vec4<f32>,
@@ -182,7 +182,7 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
 
     // Pass clip data to fragment shader
     out.clip_rect = instance.clip_rect;
-    out.clip_params = instance.clip_params.xyz;  // _, curvature, is_local
+    out.clip_params = instance.clip_params.xyz;  // curvature, is_local, _
     out.clip_radii = instance.clip_radii;
 
     // Pass gradient data to fragment shader
@@ -375,13 +375,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (in.clip_rect.z >= 0.0 && in.clip_rect.w >= 0.0) {
         // Use frag_pos for local clips (overlay clips on transformed containers),
         // world_pos for world clips (regular clipping)
-        let clip_pos = select(in.world_pos, in.frag_pos, in.clip_params.z > 0.5);
+        let clip_pos = select(in.world_pos, in.frag_pos, in.clip_params.y > 0.5);
 
         let clip_dist = rounded_rect_sdf(
             clip_pos,
             in.clip_rect,
             in.clip_radii,
-            in.clip_params.y   // curvature
+            in.clip_params.x   // curvature
         );
 
         // Smooth clip edge (anti-aliased)

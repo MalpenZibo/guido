@@ -66,12 +66,7 @@ impl CornerRadii {
         }
     }
 
-    /// Whether every corner is square.
-    pub fn is_zero(&self) -> bool {
-        *self == Self::uniform(0.0)
-    }
-
-    /// The largest of the four radii (uniform approximations: clip, blur).
+    /// The largest of the four radii.
     pub fn max(&self) -> f32 {
         self.top_left
             .max(self.top_right)
@@ -135,9 +130,9 @@ impl From<u16> for CornerRadii {
 ///
 /// CSS pairs its two-value shorthand diagonally (`top-left & bottom-right`,
 /// then the other two), which is a curiosity almost nobody writes on purpose;
-/// what people write is "round the top of this row". This library also reads
-/// `padding([a, b])` as two pairs of sides, and two arrays of two that mean
-/// different things would be a trap. The four-value form below *is* CSS.
+/// what people write is "round the top of this row". It deliberately does not
+/// mirror `padding([a, b])`, which pairs *opposite sides* — corners have no
+/// opposite pairs to give. The four-value form below *is* CSS.
 impl From<[f32; 2]> for CornerRadii {
     fn from(v: [f32; 2]) -> Self {
         Self {

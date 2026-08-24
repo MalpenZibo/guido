@@ -36,15 +36,7 @@ pub struct InputStyle {
     pub placeholder_color: Option<Signal<Color>>,
 }
 
-impl InputStyle {
-    /// Whether nothing at all is declared.
-    ///
-    /// A container in this state is not recorded on its node, so the walk
-    /// skips it with a null check instead of a dereference.
-    pub fn is_empty(&self) -> bool {
-        *self == Self::default()
-    }
-}
+impl InputStyle {}
 
 /// The vocabulary for declaring an input's own furniture, written once.
 ///

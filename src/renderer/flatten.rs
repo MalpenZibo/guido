@@ -828,12 +828,7 @@ fn transform_clip_to_world(clip: &ClipRegion, transform: &Transform) -> WorldCli
 
     WorldClip {
         rect: aabb_from_points(&corners),
-        corner_radius: CornerRadii {
-            top_left: clip.corner_radius.top_left * scale,
-            top_right: clip.corner_radius.top_right * scale,
-            bottom_right: clip.corner_radius.bottom_right * scale,
-            bottom_left: clip.corner_radius.bottom_left * scale,
-        },
+        corner_radius: clip.corner_radius.scaled(scale),
         curvature: clip.curvature,
     }
 }
