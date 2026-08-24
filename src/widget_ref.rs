@@ -30,7 +30,20 @@ use crate::widgets::Rect;
 ///
 /// Created via [`create_widget_ref()`]. Attach to a container or a text input
 /// with `.widget_ref(r)`.
-#[derive(Clone, Copy)]
+/// What a [`WidgetRef`] points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Attachment {
+    /// Laid out, and this is the widget.
+    To(WidgetId),
+    /// Alive, but not laid out yet — or no longer.
+    Unattached,
+    /// The scope that created the ref is gone.
+    Gone,
+}
+
+/// Two refs are the same ref when they name the same pair of signals — which
+/// is what a `Copy` of one is.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct WidgetRef {
     signal: RwSignal<Rect>,
     /// Which widget this ref is attached to, filled in when that widget is laid
@@ -56,15 +69,25 @@ impl WidgetRef {
         self.widget.try_get_untracked().flatten()
     }
 
+    /// What this ref points at, with the two cases [`widget`](Self::widget)
+    /// folds together kept apart.
+    ///
+    /// One read of the handle, for the callers that must tell "waiting for a
+    /// widget that has not been laid out yet" from "the scope that made this
+    /// ref is gone" — a parked focus request waits for the first and can never
+    /// be honoured by the second.
+    pub(crate) fn attachment(&self) -> Attachment {
+        match self.widget.try_get_untracked() {
+            None => Attachment::Gone,
+            Some(None) => Attachment::Unattached,
+            Some(Some(id)) => Attachment::To(id),
+        }
+    }
+
     /// Whether this ref's own signals are still alive — that is, whether the
     /// scope that created it is.
-    ///
-    /// Distinguishes the two cases [`widget`](Self::widget) folds together, for
-    /// the one caller that has to: a parked focus request naming a dead ref can
-    /// never be honoured, while one naming a widget not yet laid out is waiting
-    /// for exactly that.
     pub(crate) fn is_alive(&self) -> bool {
-        self.widget.try_get_untracked().is_some()
+        !matches!(self.attachment(), Attachment::Gone)
     }
 
     /// Move the keyboard focus to this widget.
@@ -154,20 +177,30 @@ pub(crate) fn update_widget_refs(tree: &Tree) {
         reg.borrow_mut().retain(|&id, widget_ref| {
             // A ref's signals belong to the scope that created it — a popup's
             // widget tree, a dynamic child — and this registry outlives every
-            // one of them. A ref that no longer points at a live widget is an
-            // entry with nothing left to update.
-            let attached = widget_ref.widget();
-            if attached.is_none() {
+            // one of them, so the handle is asked whether it is still there
+            // before it is read.
+            //
+            // Dead is not the same as detached: a `WidgetRef` is `Copy`, so one
+            // can be registered under two ids — the same view function used for
+            // two surfaces does it — and the entry whose widget left the tree
+            // clears the handle for both. The other entry is still live and
+            // still laid out, and evicting it would freeze its `rect()` until
+            // its container next re-registers.
+            if !widget_ref.is_alive() {
                 return false;
             }
+            let attached = widget_ref.widget();
             if let Some(rect) = tree.get_surface_relative_bounds(id) {
                 widget_ref.signal.set(rect);
                 true
             } else {
                 // Widget removed from tree — drop registry entry, and stop
-                // claiming the handle points at something.
+                // claiming the handle points at something. A focus request
+                // parked on this ref was waiting for the widget that just
+                // left, so it goes with it.
                 if attached == Some(id) {
                     widget_ref.widget.set(None);
+                    crate::reactive::focus::drop_pending_focus_for(*widget_ref);
                 }
                 false
             }

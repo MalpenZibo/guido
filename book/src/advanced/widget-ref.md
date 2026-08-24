@@ -94,16 +94,23 @@ you to request from a post-frame callback because during `initState` the widget 
 not mounted.
 
 Because of that, **asking early is allowed**: a request that names a widget which
-has not been laid out yet waits for it rather than being dropped, so `focus()` in a
-startup effect does what it looks like. Two requests in one frame are two answers
+has not been laid out *yet* waits for it rather than being dropped, so `focus()` in
+a startup effect does what it looks like. Two requests in one frame are two answers
 to the same question, and the later one wins.
+
+A request does not wait forever, though, and the difference matters: one whose
+widget has since **left** the tree is dropped, and so is one whose ref belonged to
+a scope that is gone — `.focus()` from inside a popup that closed before the frame
+came round. Both are waiting for something that already happened, and a request
+left parked would fire at whatever took that ref next.
 
 The rest of the verb:
 
 ```rust
 field.blur();          // give the keyboard back, if this widget has it
 field.is_focused();    // reactive when read in a tracked scope
-field.widget();        // Some(WidgetId) once laid out, None before
+field.widget();        // Some(WidgetId) once laid out; None before, and None
+                       // again once the widget leaves or the ref's scope dies
 ```
 
 For a field that should simply be ready when the screen appears, there is no need

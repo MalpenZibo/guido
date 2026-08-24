@@ -104,7 +104,17 @@ where
 {
     LOCK.with(|lock| {
         let mut lock = lock.borrow_mut();
-        if lock.lock_requested || STATE.get().get_untracked() == LockState::Locked {
+        // `Locking` counts: a second request while the first is in flight is
+        // granted here, then refused by the platform on the next iteration —
+        // and the refusal path clears the factory. The compositor's `Locked`
+        // then arrives with nothing to build the lock screen from, which is a
+        // locked session with no way to type a password into it.
+        if lock.lock_requested
+            || matches!(
+                STATE.get().get_untracked(),
+                LockState::Locked | LockState::Locking
+            )
+        {
             log::warn!("lock_session() called while already locked or locking");
             return;
         }
