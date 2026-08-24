@@ -1387,35 +1387,15 @@ fn a_gradient_is_reactive_and_paint_only() {
     assert_eq!(gradient_ends(&h.paint()), Some((Color::BLUE, Color::CYAN)));
 }
 
-/// Two constant endpoints must not cost a derived that boxes a closure and
-/// recomputes, every read, a value that cannot change.
+/// A gradient built in a closure follows the signals that built it.
 #[test]
-fn a_constant_gradient_shorthand_stays_constant() {
-    let constant = container().gradient_vertical(Color::RED, Color::BLUE);
-    assert_eq!(
-        constant.gradient.and_then(|g| g.constant()).flatten(),
-        Some(LinearGradient::vertical(Color::RED, Color::BLUE)),
-        "two constants make one constant"
-    );
-
-    let end = create_signal(Color::GREEN);
-    let reactive = container().gradient_vertical(Color::RED, end);
-    assert!(
-        reactive.gradient.expect("declared").constant().is_none(),
-        "a reactive endpoint has to stay reactive"
-    );
-}
-
-/// The endpoints are reactive on their own, so the common case needs no
-/// closure building a whole gradient.
-#[test]
-fn gradient_endpoints_are_reactive_one_by_one() {
+fn a_gradient_follows_the_signals_it_was_built_from() {
     let end = create_signal(Color::YELLOW);
     let mut h = H::new(
         container()
             .width(20.0)
             .height(20.0)
-            .gradient_vertical(Color::RED, end),
+            .gradient(move || LinearGradient::vertical(Color::RED, end.get())),
     );
     h.fit(100.0, 100.0);
     assert_eq!(gradient_ends(&h.paint()), Some((Color::RED, Color::YELLOW)));
@@ -1628,7 +1608,7 @@ fn a_gradient_keeps_its_shadow() {
             .width(40.0)
             .height(20.0)
             .elevation(3.0)
-            .gradient_horizontal(Color::RED, Color::BLUE),
+            .gradient(LinearGradient::horizontal(Color::RED, Color::BLUE)),
     );
     h.fit(100.0, 100.0);
     let node = h.paint();

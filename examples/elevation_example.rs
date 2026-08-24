@@ -138,7 +138,7 @@ fn main() {
                                     .padding(28.0)
                                     .background(Color::rgb(0.95, 0.95, 0.95))
                                     .corner_radius(16.0)
-                                    .squircle()
+                                    .corner_curvature(Curvature::SQUIRCLE)
                                     .elevation(2.0)
                                     .child(text("Squircle\nElevation 2")),
                             )
@@ -147,7 +147,7 @@ fn main() {
                                     .padding(28.0)
                                     .background(Color::rgb(0.95, 0.95, 0.95))
                                     .corner_radius(16.0)
-                                    .squircle()
+                                    .corner_curvature(Curvature::SQUIRCLE)
                                     .elevation(4.0)
                                     .child(text("Squircle\nElevation 4")),
                             )
@@ -156,7 +156,7 @@ fn main() {
                                     .padding(28.0)
                                     .background(Color::rgb(0.95, 0.95, 0.95))
                                     .corner_radius(16.0)
-                                    .squircle()
+                                    .corner_curvature(Curvature::SQUIRCLE)
                                     .elevation(6.0)
                                     .child(text("Squircle\nElevation 6")),
                             ),

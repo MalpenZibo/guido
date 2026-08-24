@@ -28,7 +28,7 @@ fn main() {
                                     .padding(12.0)
                                     .background(Color::rgb(0.3, 0.2, 0.4))
                                     .corner_radius(12.0)
-                                    .squircle() // K=2 → n=4
+                                    .corner_curvature(Curvature::SQUIRCLE) // K=2 → n=4
                                     .child(text("Squircle\n(K=2)").color(Color::WHITE)),
                             )
                             .child(
@@ -44,7 +44,7 @@ fn main() {
                                     .padding(12.0)
                                     .background(Color::rgb(0.4, 0.3, 0.2))
                                     .corner_radius(12.0)
-                                    .bevel() // K=0 → n=1
+                                    .corner_curvature(Curvature::BEVEL) // K=0 → n=1
                                     .child(text("Bevel\n(K=0)").color(Color::WHITE)),
                             )
                             .child(
@@ -52,7 +52,7 @@ fn main() {
                                     .padding(12.0)
                                     .background(Color::rgb(0.2, 0.4, 0.3))
                                     .corner_radius(12.0)
-                                    .scoop() // K=-1 → n=0.5
+                                    .corner_curvature(Curvature::SCOOP) // K=-1 → n=0.5
                                     .when_hovered(|s| s.lighter(0.1))
                                     .when_pressed(|s| s.ripple())
                                     .child(text("Scoop\n(K=-1)").color(Color::WHITE)),
@@ -68,7 +68,7 @@ fn main() {
                                     .background(Color::rgb(0.15, 0.15, 0.2))
                                     .corner_radius(12.0)
                                     .border(2.0, Color::rgb(0.5, 0.3, 0.7))
-                                    .squircle()
+                                    .corner_curvature(Curvature::SQUIRCLE)
                                     .child(text("Squircle\nBorder").color(Color::WHITE)),
                             )
                             .child(
@@ -85,7 +85,7 @@ fn main() {
                                     .background(Color::rgb(0.15, 0.15, 0.2))
                                     .corner_radius(12.0)
                                     .border(2.0, Color::rgb(0.7, 0.5, 0.3))
-                                    .bevel()
+                                    .corner_curvature(Curvature::BEVEL)
                                     .child(text("Bevel\nBorder").color(Color::WHITE)),
                             )
                             .child(
@@ -94,7 +94,7 @@ fn main() {
                                     .background(Color::rgb(0.15, 0.15, 0.2))
                                     .corner_radius(12.0)
                                     .border(2.0, Color::rgb(0.3, 0.7, 0.5))
-                                    .scoop()
+                                    .corner_curvature(Curvature::SCOOP)
                                     .when_hovered(|s| s.lighter(0.1))
                                     .when_pressed(|s| s.ripple())
                                     .child(text("Scoop\nBorder").color(Color::WHITE)),
@@ -107,44 +107,44 @@ fn main() {
                             .child(
                                 container()
                                     .padding(12.0)
-                                    .gradient_horizontal(
+                                    .gradient(LinearGradient::horizontal(
                                         Color::rgb(0.4, 0.2, 0.5),
                                         Color::rgb(0.2, 0.4, 0.6),
-                                    )
+                                    ))
                                     .corner_radius(12.0)
-                                    .squircle()
+                                    .corner_curvature(Curvature::SQUIRCLE)
                                     .child(text("Squircle\nGradient").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
-                                    .gradient_horizontal(
+                                    .gradient(LinearGradient::horizontal(
                                         Color::rgb(0.2, 0.4, 0.5),
                                         Color::rgb(0.4, 0.2, 0.6),
-                                    )
+                                    ))
                                     .corner_radius(12.0)
                                     .child(text("Circle\nGradient").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
-                                    .gradient_horizontal(
+                                    .gradient(LinearGradient::horizontal(
                                         Color::rgb(0.5, 0.4, 0.2),
                                         Color::rgb(0.6, 0.2, 0.4),
-                                    )
+                                    ))
                                     .corner_radius(12.0)
-                                    .bevel()
+                                    .corner_curvature(Curvature::BEVEL)
                                     .child(text("Bevel\nGradient").color(Color::WHITE)),
                             )
                             .child(
                                 container()
                                     .padding(12.0)
-                                    .gradient_horizontal(
+                                    .gradient(LinearGradient::horizontal(
                                         Color::rgb(0.2, 0.5, 0.4),
                                         Color::rgb(0.4, 0.6, 0.2),
-                                    )
+                                    ))
                                     .corner_radius(12.0)
-                                    .scoop()
+                                    .corner_curvature(Curvature::SCOOP)
                                     .child(text("Scoop\nGradient").color(Color::WHITE)),
                             ),
                     )

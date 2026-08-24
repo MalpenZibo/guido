@@ -31,11 +31,11 @@ All styling is done in Rust code, not external CSS files. This provides type saf
 ```rust
 // Background
 .background(Color::rgb(0.2, 0.2, 0.3))
-.gradient_horizontal(start, end)
+.gradient(LinearGradient::horizontal(start, end))
 
 // Corners
 .corner_radius(8.0)
-.squircle()  // iOS-style smooth
+.corner_curvature(Curvature::SQUIRCLE)  // iOS-style smooth
 
 // Border
 .border(2.0, Color::WHITE)

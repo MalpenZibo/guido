@@ -184,7 +184,7 @@ pub mod prelude {
     pub use crate::transform_origin::{HorizontalAnchor, TransformOrigin, VerticalAnchor};
     pub use crate::widget_ref::{WidgetRef, create_widget_ref};
     pub use crate::widgets::{
-        AnyWidget, Border, Color, Container, ContentFit, Control, CornerRadii, Event,
+        AnyWidget, Border, Color, Container, ContentFit, Control, CornerRadii, Curvature, Event,
         EventResponse, FontFamily, FontWeight, GradientDirection, Image, ImageSource, InputStyle,
         InputStyled, IntoChildren, IntoClickHandler, Key, LinearGradient, Modifiers, MouseButton,
         Overflow, Padding, Rect, ScrollAxis, ScrollSource, ScrollbarBuilder, ScrollbarVisibility,

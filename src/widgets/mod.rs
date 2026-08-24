@@ -36,8 +36,8 @@ pub use text::{Text, text};
 pub use text_input::{Selection, TextInput, text_input};
 pub use text_style::{TextShadow, TextStroke, TextStyle, TextStyled};
 pub use widget::{
-    AnyWidget, Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding,
-    Rect, ScrollSource, Widget,
+    AnyWidget, Color, Curvature, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton,
+    Padding, Rect, ScrollSource, Widget,
 };
 
 // IntoVal<Padding> impls for closures returning numeric types

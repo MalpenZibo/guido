@@ -47,7 +47,7 @@ iOS-style smooth corners. The curve starts further from the corner for a smoothe
 ```rust
 container()
     .corner_radius(12.0)
-    .squircle()
+    .corner_curvature(Curvature::SQUIRCLE)
 ```
 
 ### Circle (K=1)
@@ -66,7 +66,7 @@ Diagonal cut corners. Creates a chamfered look.
 ```rust
 container()
     .corner_radius(12.0)
-    .bevel()
+    .corner_curvature(Curvature::BEVEL)
 ```
 
 ### Scoop (K=-1)
@@ -76,7 +76,7 @@ Concave/inward corners. Creates a scooped appearance.
 ```rust
 container()
     .corner_radius(12.0)
-    .scoop()
+    .corner_curvature(Curvature::SCOOP)
 ```
 
 ### Custom Curvature
@@ -119,7 +119,7 @@ Borders respect corner curvature:
 container()
     .border(2.0, Color::rgb(0.5, 0.3, 0.7))
     .corner_radius(12.0)
-    .squircle()  // Border follows squircle shape
+    .corner_curvature(Curvature::SQUIRCLE)  // Border follows squircle shape
 ```
 
 ## Borders with Gradients
@@ -128,7 +128,7 @@ Borders work with gradient backgrounds:
 
 ```rust
 container()
-    .gradient_horizontal(Color::rgb(0.3, 0.1, 0.4), Color::rgb(0.1, 0.3, 0.5))
+    .gradient(LinearGradient::horizontal(Color::rgb(0.3, 0.1, 0.4), Color::rgb(0.1, 0.3, 0.5)))
     .corner_radius(8.0)
     .border(2.0, Color::rgba(1.0, 1.0, 1.0, 0.3))  // Semi-transparent white
 ```
@@ -141,7 +141,7 @@ fn card_with_border() -> Container {
         .padding(16.0)
         .background(Color::rgb(0.12, 0.12, 0.16))
         .corner_radius(12.0)
-        .squircle()
+        .corner_curvature(Curvature::SQUIRCLE)
         .border(1.0, Color::rgb(0.2, 0.2, 0.25))
         .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
         .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))

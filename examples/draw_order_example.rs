@@ -101,7 +101,7 @@ fn main() {
                                     .width(150.0)
                                     .height(70.0)
                                     .corner_radius(16.0)
-                                    .squircle()
+                                    .corner_curvature(Curvature::SQUIRCLE)
                                     // Blurs the photo beneath it, then paints
                                     // its own translucent tint over the result.
                                     .backdrop_blur(18.0)

@@ -52,7 +52,7 @@ Shadows respect corner radius:
 ```rust
 container()
     .corner_radius(12.0)
-    .squircle()
+    .corner_curvature(Curvature::SQUIRCLE)
     .elevation(8.0)  // Shadow follows rounded shape
 ```
 

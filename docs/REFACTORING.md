@@ -159,7 +159,7 @@ because `Padding` is one `Animatable` whose four edges lerp together; a border i
 not.
 
 The documentation was audited against the code in the same pass. It described
-`.children_dyn()`, `.padding_horizontal()`, `.min_width()`, `.gradient_diagonal()`
+`.children_dyn()`, `.padding_horizontal()`, `.min_width()`, `.gradient(LinearGradient::diagonal())`
 and `.animate_elevation()`, none of which existed; `Row` and `Column` widgets,
 which have never existed; the pre-`Tree` `Widget` signatures; and
 `hover_state`/`pressed_state`, renamed in #189. Of that list `gradient_diagonal`

@@ -27,8 +27,8 @@ use crate::backdrop::BackdropBlur;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
-    IntoSignal, OptionSignalExt, RwSignal, Signal, create_derived, create_signal, create_stored,
-    focus_path, with_signal_tracking,
+    IntoSignal, OptionSignalExt, RwSignal, Signal, create_derived, create_signal, focus_path,
+    with_signal_tracking,
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
@@ -150,6 +150,11 @@ impl LinearGradient {
 
     pub fn vertical(start: Color, end: Color) -> Self {
         Self::new(start, end, GradientDirection::Vertical)
+    }
+
+    /// Top-left to bottom-right.
+    pub fn diagonal(start: Color, end: Color) -> Self {
+        Self::new(start, end, GradientDirection::Diagonal)
     }
 }
 
@@ -556,7 +561,7 @@ impl Container {
     ///
     /// ```ignore
     /// container().corner_radius(8.0)                    // Standard rounded corners
-    /// container().corner_radius(12.0).squircle()        // iOS-style smooth corners
+    /// container().corner_radius(12.0).corner_curvature(Curvature::SQUIRCLE)        // iOS-style smooth corners
     /// ```
     pub fn corner_radius<M>(mut self, radius: impl IntoSignal<f32, M>) -> Self {
         self.corner_radius = Some(radius.into_signal());
@@ -583,7 +588,15 @@ impl Container {
         self
     }
 
-    /// Set the corner curvature using CSS K-value system
+    /// How the corners are shaped, on the CSS K-value scale.
+    ///
+    /// [`Curvature`](crate::widgets::Curvature) names the four that have one:
+    /// `CIRCULAR` (the default), `SQUIRCLE`, `BEVEL`, `SCOOP`. Any other number
+    /// is legal, and so is a signal — a corner can round and unround.
+    ///
+    /// ```ignore
+    /// container().corner_radius(12.0).corner_curvature(Curvature::SQUIRCLE)
+    /// ```
     pub fn corner_curvature<M>(mut self, curvature: impl IntoSignal<f32, M>) -> Self {
         self.corner_curvature = Some(curvature.into_signal());
         self
@@ -616,24 +629,6 @@ impl Container {
     /// [`Text::backdrop_blur`](crate::widgets::Text::backdrop_blur) already has.
     pub fn backdrop_blur<M>(mut self, blur: impl IntoSignal<BackdropBlur, M>) -> Self {
         self.backdrop_blur = Some(blur.into_signal());
-        self
-    }
-
-    /// Convenience: Set squircle/iOS-style corners
-    pub fn squircle(mut self) -> Self {
-        self.corner_curvature = Some(create_stored(2.0));
-        self
-    }
-
-    /// Convenience: Set concave/scooped corners
-    pub fn scoop(mut self) -> Self {
-        self.corner_curvature = Some(create_stored(-1.0));
-        self
-    }
-
-    /// Convenience: Set beveled corners
-    pub fn bevel(mut self) -> Self {
-        self.corner_curvature = Some(create_stored(0.0));
         self
     }
 
@@ -685,65 +680,6 @@ impl Container {
     pub fn gradient<M>(mut self, gradient: impl IntoSignal<Option<LinearGradient>, M>) -> Self {
         self.gradient = Some(gradient.into_signal());
         self
-    }
-
-    /// Convenience: horizontal gradient.
-    pub fn gradient_horizontal<M1, M2>(
-        self,
-        start: impl IntoSignal<Color, M1>,
-        end: impl IntoSignal<Color, M2>,
-    ) -> Self {
-        self.gradient_between(start, end, GradientDirection::Horizontal)
-    }
-
-    /// Convenience: vertical gradient.
-    pub fn gradient_vertical<M1, M2>(
-        self,
-        start: impl IntoSignal<Color, M1>,
-        end: impl IntoSignal<Color, M2>,
-    ) -> Self {
-        self.gradient_between(start, end, GradientDirection::Vertical)
-    }
-
-    /// Convenience: diagonal gradient, top-left to bottom-right.
-    pub fn gradient_diagonal<M1, M2>(
-        self,
-        start: impl IntoSignal<Color, M1>,
-        end: impl IntoSignal<Color, M2>,
-    ) -> Self {
-        self.gradient_between(start, end, GradientDirection::Diagonal)
-    }
-
-    /// The three shorthands above, which differ only in the direction.
-    ///
-    /// Two constant endpoints — much the commonest case — build one constant
-    /// gradient rather than a derived recomputing a value that cannot change.
-    ///
-    /// The endpoints are converted before being asked, so the constant path
-    /// leaves two stored signals behind that nothing reads. Reading them first
-    /// would need an `as_constant` on `IntoSignal` itself, and its blanket
-    /// `Into<T>` impl consumes `self`, so that hook costs a `Clone` bound on
-    /// every value ever passed to any reactive property. Two arena slots per
-    /// gradient shorthand, freed with the scope, is the cheaper side of that
-    /// trade — the closure and the per-read recomputation were the parts worth
-    /// removing.
-    fn gradient_between<M1, M2>(
-        self,
-        start: impl IntoSignal<Color, M1>,
-        end: impl IntoSignal<Color, M2>,
-        direction: GradientDirection,
-    ) -> Self {
-        // The shorthands always mean "a gradient", so they wrap in Some for the
-        // caller; the general setter is where `None` is spellable.
-        let (start, end) = (start.into_signal(), end.into_signal());
-        match (start.constant(), end.constant()) {
-            (Some(start), Some(end)) => {
-                self.gradient(Some(LinearGradient::new(start, end, direction)))
-            }
-            _ => {
-                self.gradient(move || Some(LinearGradient::new(start.get(), end.get(), direction)))
-            }
-        }
     }
 
     /// Set the width of the container.

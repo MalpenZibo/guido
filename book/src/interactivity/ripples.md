@@ -142,13 +142,13 @@ Ripples respect different corner styles:
 // Squircle ripple
 container()
     .corner_radius(12.0)
-    .squircle()
+    .corner_curvature(Curvature::SQUIRCLE)
     .when_pressed(|s| s.ripple())
 
 // Beveled ripple
 container()
     .corner_radius(12.0)
-    .bevel()
+    .corner_curvature(Curvature::BEVEL)
     .when_pressed(|s| s.ripple())
 ```
 

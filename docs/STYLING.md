@@ -44,13 +44,13 @@ container().background(Color::rgb(0.2, 0.2, 0.3))
 
 ```rust
 // Horizontal gradient (left to right)
-container().gradient_horizontal(Color::RED, Color::BLUE)
+container().gradient(LinearGradient::horizontal(Color::RED, Color::BLUE))
 
 // Vertical gradient (top to bottom)
-container().gradient_vertical(Color::RED, Color::BLUE)
+container().gradient(LinearGradient::vertical(Color::RED, Color::BLUE))
 
 // Diagonal gradient
-container().gradient_diagonal(Color::RED, Color::BLUE)
+container().gradient(LinearGradient::diagonal(Color::RED, Color::BLUE))
 ```
 
 ## Borders
@@ -139,7 +139,7 @@ Control the shape of corners using CSS K-values:
 // Squircle - iOS-style smooth corners (K=2)
 container()
     .corner_radius(12.0)
-    .squircle()
+    .corner_curvature(Curvature::SQUIRCLE)
 
 // Circle - standard circular corners (K=1, default)
 container()
@@ -148,12 +148,12 @@ container()
 // Bevel - diagonal cut corners (K=0)
 container()
     .corner_radius(12.0)
-    .bevel()
+    .corner_curvature(Curvature::BEVEL)
 
 // Scoop - concave/inward corners (K=-1)
 container()
     .corner_radius(12.0)
-    .scoop()
+    .corner_curvature(Curvature::SCOOP)
 
 // Custom curvature value
 container()
@@ -360,7 +360,7 @@ fn styled_card(title: &str, content: &str) -> Container {
         // Background and corners
         .background(Color::rgb(0.15, 0.15, 0.2))
         .corner_radius(12.0)
-        .squircle()
+        .corner_curvature(Curvature::SQUIRCLE)
         // Border
         .border(1.0, Color::rgb(0.25, 0.25, 0.3))
         // Shadow

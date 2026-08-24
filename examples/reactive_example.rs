@@ -87,10 +87,10 @@ fn main() {
                         // Container with gradient and hover state
                         container()
                             .padding(8.0)
-                            .gradient_horizontal(
+                            .gradient(LinearGradient::horizontal(
                                 Color::rgb(0.3, 0.1, 0.4),
                                 Color::rgb(0.1, 0.3, 0.5),
-                            )
+                            ))
                             .corner_radius(4.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .child(text("Gradient!").color(Color::WHITE)),

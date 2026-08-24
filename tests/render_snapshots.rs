@@ -394,9 +394,9 @@ fn corners_borders_and_elevation() {
             container()
                 .layout(Flex::row().spacing(10.0))
                 .child(base(Color::rgb(0.3, 0.5, 0.9)))
-                .child(base(Color::rgb(0.3, 0.5, 0.9)).squircle())
-                .child(base(Color::rgb(0.3, 0.5, 0.9)).bevel())
-                .child(base(Color::rgb(0.3, 0.5, 0.9)).scoop())
+                .child(base(Color::rgb(0.3, 0.5, 0.9)).corner_curvature(Curvature::SQUIRCLE))
+                .child(base(Color::rgb(0.3, 0.5, 0.9)).corner_curvature(Curvature::BEVEL))
+                .child(base(Color::rgb(0.3, 0.5, 0.9)).corner_curvature(Curvature::SCOOP))
                 .child(base(Color::rgb(0.3, 0.5, 0.9)).corner_curvature(1.5)),
         )
         .child(

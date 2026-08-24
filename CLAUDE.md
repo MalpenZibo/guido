@@ -319,11 +319,11 @@ service.send(MyCommand::DoSomething);
 Corner styles use CSS K-values for superellipse rendering:
 
 ```rust
-container().corner_radius(12.0).squircle()  // K=2, iOS-style smooth
-container().corner_radius(12.0)              // K=1, standard circular (default)
-container().corner_radius(12.0).bevel()      // K=0, diagonal cut
-container().corner_radius(12.0).scoop()      // K=-1, concave inward
-container().corner_radius(12.0).corner_curvature(1.5)  // Custom K value
+container().corner_radius(12.0)                                      // K=1, circular (default)
+container().corner_radius(12.0).corner_curvature(Curvature::SQUIRCLE) // K=2, iOS-style
+container().corner_radius(12.0).corner_curvature(Curvature::BEVEL)    // K=0, diagonal cut
+container().corner_radius(12.0).corner_curvature(Curvature::SCOOP)    // K=-1, concave
+container().corner_radius(12.0).corner_curvature(1.5)                 // any K
 ```
 
 See [docs/STYLING.md](docs/STYLING.md) for full styling reference.

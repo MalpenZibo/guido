@@ -54,14 +54,14 @@ fn main() {
                             .height(60.0)
                             .background(Color::rgb(0.8, 0.2, 0.8))
                             .corner_radius(12.0)
-                            .squircle(),
+                            .corner_curvature(Curvature::SQUIRCLE),
                         // Squircle with border
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.6, 0.3, 0.7))
                             .corner_radius(12.0)
-                            .squircle()
+                            .corner_curvature(Curvature::SQUIRCLE)
                             .border(2.0, Color::WHITE),
                         // Scoop corners (concave)
                         container()
@@ -69,14 +69,14 @@ fn main() {
                             .height(60.0)
                             .background(Color::rgb(0.9, 0.5, 0.2))
                             .corner_radius(16.0)
-                            .scoop(),
+                            .corner_curvature(Curvature::SCOOP),
                         // Scoop with border
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.7, 0.4, 0.1))
                             .corner_radius(16.0)
-                            .scoop()
+                            .corner_curvature(Curvature::SCOOP)
                             .border(2.0, Color::WHITE),
                         // Box with shadow (elevation)
                         container()

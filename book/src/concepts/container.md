@@ -50,7 +50,7 @@ container()
 
     // Corners
     .corner_radius(8.0)
-    .squircle() // iOS-style smooth corners
+    .corner_curvature(Curvature::SQUIRCLE) // iOS-style smooth corners
 
     // Border
     .border(2.0, Color::WHITE)
@@ -250,10 +250,10 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 
 ### Styling
 - `.background(color)` - Solid background
-- `.gradient_horizontal(start, end)` - Horizontal gradient
-- `.gradient_vertical(start, end)` / `.gradient_diagonal(start, end)`
+- `.gradient(LinearGradient::horizontal(start, end))` - Horizontal gradient
+- `.gradient(LinearGradient::vertical(start, end))` / `.gradient(LinearGradient::diagonal(start, end))`
 - `.corner_radius(radius)` - Rounded corners
-- `.squircle()` / `.bevel()` / `.scoop()` - Corner curvature
+- `.corner_curvature(Curvature::SQUIRCLE)` / `.corner_curvature(Curvature::BEVEL)` / `.corner_curvature(Curvature::SCOOP)` - Corner curvature
 - `.border(width, color)` - Border
 - `.elevation(level)` - Shadow
 
