@@ -21,7 +21,6 @@
 //! decides that a non-empty queue is a bug.
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use smithay_client_toolkit::reexports::calloop::channel::Sender;
 
@@ -55,46 +54,68 @@ static INGRESS_SENDER: Mutex<Option<Sender<IngressMessage>>> = Mutex::new(None);
 /// wakeup is owed, not only whether a queue is empty (`queued_but_unwoken` in
 /// `lib.rs`).
 ///
-/// Debug-only, like its one consumer. A status bar queues a background write
-/// several times a second, and in a release build the whole question is
-/// compiled out — the count would be two atomics paid to answer nobody.
+/// Debug-only, like the check it answers. A status bar queues a background
+/// write several times a second, and in a release build there is nobody to
+/// answer — so the release half is a set of no-ops and a `false`, and the
+/// atomics are not paid for.
 #[cfg(debug_assertions)]
-static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+mod count {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+
+    /// `AcqRel`, not `Release`: the invariant is that the count is up
+    /// *before* the work becomes visible, which orders the writes that
+    /// follow, not only the ones that came before. Today `queue_bg_write`
+    /// pushes under a mutex whose unlock would carry it anyway — a queue
+    /// without that edge would not.
+    pub(super) fn up() {
+        IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Saturating, because [`super::reset_ingress`] can land between a thread
+    /// arming and that thread finding out there is no loop left to send to.
+    /// Wrapping past zero would leave the count permanently non-zero, which
+    /// reads as *a wakeup is always armed* — the check would stop reporting
+    /// anything at all, quietly.
+    pub(super) fn down() {
+        let _ = IN_FLIGHT.fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            Some(count.saturating_sub(1))
+        });
+    }
+
+    /// Whatever was in flight is never arriving: the receiver goes with the
+    /// loop.
+    pub(super) fn reset() {
+        IN_FLIGHT.store(0, Ordering::Release);
+    }
+
+    pub(super) fn any() -> bool {
+        IN_FLIGHT.load(Ordering::Acquire) > 0
+    }
+}
+
+#[cfg(not(debug_assertions))]
+mod count {
+    pub(super) fn up() {}
+    pub(super) fn down() {}
+    pub(super) fn reset() {}
+    /// Nothing is ever counted, so nothing is ever owed — and the only caller
+    /// is compiled out anyway.
+    pub(super) fn any() -> bool {
+        false
+    }
+}
 
 /// Whether the loop has a message coming that it has not read yet.
-#[cfg(debug_assertions)]
 pub(crate) fn in_flight() -> bool {
-    IN_FLIGHT.load(Ordering::Acquire) > 0
-}
-
-/// One more message owed to the loop.
-///
-/// `AcqRel`, not `Release`: the invariant is that the count is up *before*
-/// the work becomes visible, which orders the writes that follow, not only
-/// the ones that came before. Today `queue_bg_write` pushes under a mutex
-/// whose unlock would carry it anyway — a queue without that edge would not.
-fn count_up() {
-    #[cfg(debug_assertions)]
-    IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
-}
-
-/// One fewer: the loop read it, or it turned out not to be coming.
-///
-/// Saturating, because [`reset_ingress`] can land between a thread arming and
-/// that thread finding out there is no loop left to send to. Wrapping past
-/// zero would leave the count permanently non-zero, which reads as *a wakeup
-/// is always armed* — the check would stop reporting anything at all, quietly.
-fn count_down() {
-    #[cfg(debug_assertions)]
-    let _ = IN_FLIGHT.fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-        Some(count.saturating_sub(1))
-    });
+    count::any()
 }
 
 /// The loop took delivery of one message. Called by the ingress channel
 /// callback, before the drains that message speaks for.
 pub(crate) fn delivered() {
-    count_down();
+    count::down();
 }
 
 /// A wakeup owed to the loop, counted from before the work it is owed for
@@ -115,7 +136,7 @@ pub(crate) struct Armed {
 /// Arm a wakeup, to be sent with [`Armed::notify`] once the work it speaks
 /// for is queued.
 pub(crate) fn arm(message: IngressMessage) -> Armed {
-    count_up();
+    count::up();
     Armed {
         message: Some(message),
     }
@@ -140,14 +161,14 @@ impl Armed {
         // in between, the work is queued and the check runs on another
         // thread.
         crate::jobs::wake_loop();
-        count_down();
+        count::down();
     }
 }
 
 impl Drop for Armed {
     fn drop(&mut self) {
         if self.message.is_some() {
-            count_down();
+            count::down();
         }
     }
 }
@@ -175,9 +196,9 @@ impl IngressSender {
     /// that case: the message carries its own payload, so there is no queue
     /// left behind for anyone to drain.
     pub(crate) fn send(self, message: IngressMessage) {
-        count_up();
+        count::up();
         if self.0.send(message).is_err() {
-            count_down();
+            count::down();
         }
     }
 }
@@ -211,8 +232,7 @@ pub(crate) fn reset_ingress() {
     if let Ok(mut guard) = INGRESS_SENDER.lock() {
         *guard = None;
     }
-    // Whatever was in flight is never arriving: the receiver goes with the loop.
-    IN_FLIGHT.store(0, Ordering::Release);
+    count::reset();
 }
 
 #[cfg(test)]
