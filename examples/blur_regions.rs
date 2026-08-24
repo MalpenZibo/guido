@@ -34,10 +34,7 @@ fn glass() -> Container {
 }
 
 fn label(s: &'static str) -> impl Widget {
-    container()
-        .font_size(11.0)
-        .text_color(Color::rgba(1.0, 1.0, 1.0, 0.75))
-        .child(text(s))
+    container().child(text(s).color(Color::rgba(1.0, 1.0, 1.0, 0.75)))
 }
 
 fn case(caption: &'static str, body: impl Widget + 'static) -> impl Widget {
@@ -196,13 +193,16 @@ fn main() {
                                                 .main_alignment(MainAlignment::Center)
                                                 .cross_alignment(CrossAlignment::Center),
                                         )
-                                        .child(text(move || {
-                                            if frosted.get() {
-                                                "blur on".to_owned()
-                                            } else {
-                                                "blur off".to_owned()
-                                            }
-                                        })),
+                                        .child(
+                                            text(move || {
+                                                if frosted.get() {
+                                                    "blur on".to_owned()
+                                                } else {
+                                                    "blur off".to_owned()
+                                                }
+                                            })
+                                            .font_size(11.0),
+                                        ),
                                 )
                                 .into_any(),
                             ])

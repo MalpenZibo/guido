@@ -52,8 +52,10 @@ fn main() {
                             .on_click(move || {
                                 count.update(|c| *c += 10);
                             })
-                            .text_color(Color::WHITE)
-                            .child(text(move || format!("Count: {} (click me!)", count.get()))),
+                            .child(
+                                text(move || format!("Count: {} (click me!)", count.get()))
+                                    .color(Color::WHITE),
+                            ),
                     )
                     .child(
                         // Scrollable container with hover state
@@ -67,10 +69,10 @@ fn main() {
                                     *offset += dy;
                                 });
                             })
-                            .text_color(Color::WHITE)
-                            .child(text(move || {
-                                format!("Scroll: {:.0}px", scroll_offset.get())
-                            })),
+                            .child(
+                                text(move || format!("Scroll: {:.0}px", scroll_offset.get()))
+                                    .color(Color::WHITE),
+                            ),
                     )
                     .child(
                         // Container with border and hover state
@@ -79,8 +81,7 @@ fn main() {
                             .background(Color::rgb(0.15, 0.15, 0.2))
                             .border(2.0, Color::rgb(0.4, 0.6, 0.8))
                             .when_hovered(|s| s.lighter(0.1))
-                            .text_color(Color::WHITE)
-                            .child(text("With border")),
+                            .child(text("With border").color(Color::WHITE)),
                     )
                     .child(
                         // Container with gradient and hover state
@@ -92,8 +93,7 @@ fn main() {
                             )
                             .corner_radius(4.0)
                             .when_hovered(|s| s.lighter(0.1))
-                            .text_color(Color::WHITE)
-                            .child(text("Gradient!")),
+                            .child(text("Gradient!").color(Color::WHITE)),
                     )
             },
         );

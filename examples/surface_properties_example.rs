@@ -32,12 +32,7 @@ fn main() {
                 container()
                     .padding(24.0)
                     .layout(Flex::column().spacing(16.0))
-                    .child(
-                        container()
-                            .font_size(20.0)
-                            .text_color(Color::WHITE)
-                            .child(text("Surface Properties Demo")),
-                    )
+                    .child(container().child(text("Surface Properties Demo").color(Color::WHITE)))
                     // Current state display
                     .child(
                         container()
@@ -46,23 +41,21 @@ fn main() {
                             .corner_radius(8.0)
                             .layout(Flex::column().spacing(8.0))
                             .child(
-                                container()
-                                    .text_color(Color::rgb(0.7, 0.9, 0.7))
-                                    .font_size(14.0)
-                                    .child(text(move || {
-                                        format!("Current Layer: {}", current_layer.get())
-                                    })),
+                                container().child(
+                                    text(move || format!("Current Layer: {}", current_layer.get()))
+                                        .color(Color::rgb(0.7, 0.9, 0.7)),
+                                ),
                             )
                             .child(
-                                container()
-                                    .text_color(Color::rgb(0.7, 0.9, 0.7))
-                                    .font_size(14.0)
-                                    .child(text(move || {
+                                container().child(
+                                    text(move || {
                                         format!(
                                             "Keyboard Interactivity: {}",
                                             current_keyboard.get()
                                         )
-                                    })),
+                                    })
+                                    .color(Color::rgb(0.7, 0.9, 0.7)),
+                                ),
                             ),
                     )
                     // Layer controls
@@ -71,9 +64,7 @@ fn main() {
                             .layout(Flex::column().spacing(8.0))
                             .child(
                                 container()
-                                    .text_color(Color::rgb(0.6, 0.6, 0.7))
-                                    .font_size(12.0)
-                                    .child(text("Change Layer:")),
+                                    .child(text("Change Layer:").color(Color::rgb(0.6, 0.6, 0.7))),
                             )
                             .child(
                                 container()
@@ -109,10 +100,10 @@ fn main() {
                         container()
                             .layout(Flex::column().spacing(8.0))
                             .child(
-                                container()
-                                    .text_color(Color::rgb(0.6, 0.6, 0.7))
-                                    .font_size(12.0)
-                                    .child(text("Change Keyboard Interactivity:")),
+                                container().child(
+                                    text("Change Keyboard Interactivity:")
+                                        .color(Color::rgb(0.6, 0.6, 0.7)),
+                                ),
                             )
                             .child(
                                 container()
@@ -145,30 +136,25 @@ fn main() {
                             .corner_radius(6.0)
                             .layout(Flex::column().spacing(4.0))
                             .child(
-                                container()
-                                    .text_color(Color::rgb(0.5, 0.5, 0.6))
-                                    .font_size(11.0)
-                                    .child(text("Tips:")),
+                                container().child(text("Tips:").color(Color::rgb(0.5, 0.5, 0.6))),
                             )
                             .child(
-                                container()
-                                    .text_color(Color::rgb(0.5, 0.5, 0.6))
-                                    .font_size(11.0)
-                                    .child(text("- Overlay layer appears above other windows")),
+                                container().child(
+                                    text("- Overlay layer appears above other windows")
+                                        .color(Color::rgb(0.5, 0.5, 0.6)),
+                                ),
                             )
                             .child(
-                                container()
-                                    .text_color(Color::rgb(0.5, 0.5, 0.6))
-                                    .font_size(11.0)
-                                    .child(text("- Background layer appears below the desktop")),
+                                container().child(
+                                    text("- Background layer appears below the desktop")
+                                        .color(Color::rgb(0.5, 0.5, 0.6)),
+                                ),
                             )
                             .child(
-                                container()
-                                    .text_color(Color::rgb(0.5, 0.5, 0.6))
-                                    .font_size(11.0)
-                                    .child(text(
-                                        "- Exclusive keyboard grabs focus from other apps",
-                                    )),
+                                container().child(
+                                    text("- Exclusive keyboard grabs focus from other apps")
+                                        .color(Color::rgb(0.5, 0.5, 0.6)),
+                                ),
                             ),
                     )
             },
@@ -198,9 +184,7 @@ fn layer_button(
                 current_layer.set(label);
             }
         })
-        .text_color(Color::WHITE)
-        .font_size(13.0)
-        .child(text(label))
+        .child(text(label).color(Color::WHITE))
 }
 
 fn keyboard_button(
@@ -222,7 +206,19 @@ fn keyboard_button(
                 current_keyboard.set(label);
             }
         })
-        .text_color(Color::WHITE)
-        .font_size(13.0)
-        .child(text(label))
+        .child(
+            text(label)
+                .font_size(13.0)
+                .font_size(11.0)
+                .font_size(11.0)
+                .font_size(12.0)
+                .font_size(14.0)
+                .font_size(20.0)
+                .font_size(14.0)
+                .font_size(12.0)
+                .font_size(11.0)
+                .font_size(11.0)
+                .font_size(13.0)
+                .color(Color::WHITE),
+        )
 }

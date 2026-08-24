@@ -263,64 +263,11 @@ by `Text` and `TextInput` — the two widgets that draw glyphs. A `TextInput`
 also implements `InputStyled` for `cursor_color`, `selection_color` and
 `placeholder_color`, which only it can draw.
 
-### One declaration for a group
+### The same style, many times: write a function
 
-The same properties can be declared on a container, where they are inherited
-by everything below it:
-
-```rust
-container()
-    .font_size(16.0)
-    .text_color(Color::WHITE)
-    .bold()
-    .child(text("Hello").nowrap())   // nowrap is about wrapping, not looks
-```
-
-Each property is inherited by everything below the container, until a nearer
-one overrides that property — and only that one:
-
-```rust
-container()
-    .text_color(theme.text)
-    .font_size(14.0)
-    .layout(Flex::column().spacing(8.0))
-    .child(text("inherits both"))
-    .child(
-        // Overrides the size; the colour still comes from above.
-        container().font_size(21.0).child(text("bigger, same colour")),
-    )
-```
-
-The same declarations style a `text_input`, which additionally reads
-`cursor_color`, `selection_color` and `placeholder_color`. Those three are
-`InputStyle`, not `TextStyle`, and resolve on their own walk — a `text` never
-looks for properties it cannot draw:
-
-```rust
-container()
-    .mono()
-    .text_color(Color::WHITE)
-    .cursor_color(Color::rgb(0.4, 0.8, 1.0))
-    .child(text_input(value))
-```
-
-A declaration on the text itself is the nearest one there is, so it wins over
-every container above it — per property, like everything else:
-
-```rust
-container().text_color(theme.weak).font_size(14.0)
-    .child(text("quiet"))
-    .child(text("loud").color(theme.strong))   // own colour, inherited size
-```
-
-Properties nothing declares fall back to white, 14 logical pixels, the
-registered default family and normal weight.
-
-### Repeating a style: write a function
-
-Inheritance is for dressing a subtree you do not otherwise touch. For "the same
-kind of label, many times", the cheaper tool is the one the language already
-gives you:
+There is no inheritance: a container declares nothing about the text inside
+it, because a container draws a box. For "the same kind of label, many times",
+the tool is the one the language already gives you:
 
 ```rust
 let label = |s: &str| text(s).color(theme.weak).font_size(12.0);
@@ -331,10 +278,30 @@ container()
 ```
 
 That keeps the declaration next to the widget that draws it, costs no wrapper
-node, and gives the style a name. Reach for a container's inherited
-declaration when the texts are not yours to write — inside a component you are
-calling, say — or when there are enough of them that naming each one is the
-noise.
+node, and gives the style a name.
+
+### A state that reaches the glyphs
+
+Hover belongs to the box and colour to the glyphs, so each is declared where it
+happens and [`control()`](../docs/STATE_LAYER.md) joins them: the leaf resolves
+its own states from the nearest control above it.
+
+```rust
+container()
+    .padding(8.0)
+    .control()
+    .when_hovered(|s| s.lighter(0.1))
+    .child(
+        text("Label")
+            .color(theme.weak)
+            .when_hovered(|s| s.color(theme.strong)),
+    )
+```
+
+### Properties with no declaration
+
+Fall back to white, 14 logical pixels, the registered default family and normal
+weight.
 
 ### Stroke and shadow
 
@@ -343,10 +310,10 @@ picture:
 
 ```rust
 container()
-    .text_color(Color::WHITE)
-    .text_stroke(TextStroke::new(1.5, Color::BLACK))
-    .text_shadow(TextShadow::new(0.0, 2.0, 10.0, Color::rgba(0.0, 0.0, 0.0, 0.75)))
-    .child(text("09:41"))
+    
+    
+    
+    .child(text("09:41").text_shadow(TextShadow::new(0.0, 2.0, 10.0, Color::rgba(0.0, 0.0, 0.0, 0.75))).text_stroke(TextStroke::new(1.5, Color::BLACK)).color(Color::WHITE))
 ```
 
 Both are drawn under the fill — a stroke painted over it would eat half the
@@ -405,8 +372,8 @@ fn styled_card(title: &str, content: &str) -> Container {
         .when_hovered(|s| s.lighter(0.05).elevation(6.0))
         // Children
         .children([
-            container().font_size(18.0).bold().text_color(Color::WHITE).child(text(title)),
-            container().font_size(14.0).text_color(Color::rgb(0.7, 0.7, 0.75)).child(text(content)),
+            container().child(text(title).color(Color::WHITE)),
+            container().child(text(content).bold().font_size(14.0).font_size(18.0).color(Color::rgb(0.7, 0.7, 0.75))),
         ])
 }
 ```

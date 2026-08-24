@@ -69,11 +69,10 @@ fn bench_row(i: usize) -> Container {
                 })
                 .when_hovered(|s| s.lighter(0.08))
                 .on_click(move || checked.update(|c| *c = !*c))
-                .text_color(Color::WHITE)
-                .font_size(12.0)
-                .child(text(move || {
-                    (if checked.get() { "x" } else { "" }).to_string()
-                })),
+                .child(
+                    text(move || (if checked.get() { "x" } else { "" }).to_string())
+                        .color(Color::WHITE),
+                ),
         )
         .child(
             container()
@@ -82,8 +81,11 @@ fn bench_row(i: usize) -> Container {
                 .background(Color::rgb(0.18, 0.18, 0.24))
                 .corner_radius(4.0)
                 .when_focused(|s| s.border(1.5, Color::rgb(0.4, 0.8, 1.0)))
-                .text_color(Color::WHITE)
-                .font_size(13.0)
-                .child(text_input(value)),
+                .child(
+                    text_input(value)
+                        .font_size(13.0)
+                        .font_size(12.0)
+                        .color(Color::WHITE),
+                ),
         )
 }

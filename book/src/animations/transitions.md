@@ -95,7 +95,7 @@ fn animated_card() -> Container {
             .elevation(2.0)
         )
 
-        .child(container().text_color(Color::WHITE).child(text("Hover me!")))
+        .child(container().child(text("Hover me!").color(Color::WHITE)))
 }
 ```
 

@@ -33,8 +33,7 @@ fn main() {
                             .padding([8.0, 16.0])
                             .background(Color::rgb(0.25, 0.25, 0.35))
                             .corner_radius(6.0)
-                            .text_color(Color::WHITE)
-                            .child(text("Measured Module")),
+                            .child(text("Measured Module").color(Color::WHITE)),
                     )
                     .child(
                         // Display the bounds reactively
@@ -42,14 +41,16 @@ fn main() {
                             .padding([8.0, 16.0])
                             .background(Color::rgb(0.15, 0.2, 0.15))
                             .corner_radius(6.0)
-                            .text_color(Color::WHITE)
-                            .child(text(move || {
-                                let r = module_ref.rect().get();
-                                format!(
-                                    "Bounds: x={:.0} y={:.0} w={:.0} h={:.0}",
-                                    r.x, r.y, r.width, r.height
-                                )
-                            })),
+                            .child(
+                                text(move || {
+                                    let r = module_ref.rect().get();
+                                    format!(
+                                        "Bounds: x={:.0} y={:.0} w={:.0} h={:.0}",
+                                        r.x, r.y, r.width, r.height
+                                    )
+                                })
+                                .color(Color::WHITE),
+                            ),
                     )
             },
         );

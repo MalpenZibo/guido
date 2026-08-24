@@ -145,7 +145,7 @@ else: colour, size, family and weight are declared on an enclosing container and
 inherited from the nearest one that sets them.
 
 ```rust
-container().font_size(24.0).text_color(Color::WHITE).child(text("Hello World!"))
+container().child(text("Hello World!").font_size(24.0).color(Color::WHITE))
 ```
 
 With nothing declared above it, text is white at 14 logical pixels.

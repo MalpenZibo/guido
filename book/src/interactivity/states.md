@@ -91,9 +91,9 @@ the box around it:
 
 ```rust
 container()
-    .text_color(theme.text_weak)
-    .when_hovered(|s| s.text_color(theme.text))
-    .child(text("Label"))
+    
+    .when_hovered(|s| s)
+    .child(text("Label").color(theme.text).color(theme.text_weak))
 ```
 
 This works the same way the ordinary declaration does — the container publishes
@@ -107,11 +107,11 @@ its ancestors already said:
 
 ```rust
 container()
-    .text_color(theme.text_weak)              // set once, further up
+                  // set once, further up
     .child(
         container()
-            .when_hovered(|s| s.text_color(theme.text))
-            .child(text("Label")),            // weak, then strong, then weak
+            .when_hovered(|s| s)
+            .child(text("Label").color(theme.text).color(theme.text_weak)),            // weak, then strong, then weak
     )
 ```
 
@@ -119,10 +119,9 @@ It can be animated like any other container property:
 
 ```rust
 container()
-    .text_color(theme.text_weak)
-    .when_hovered(|s| s.text_color(theme.text))
-    .animate_text_color(Transition::new(200.0, TimingFunction::EaseOut))
-    .child(text("Label"))
+    
+    .when_hovered(|s| s)
+    .child(text("Label").color(theme.text).color(theme.text_weak))
 ```
 
 A transition declared on two levels — an animated colour whose own base comes
@@ -275,7 +274,7 @@ container()
     .when_hovered(|s| s.lighter(0.1))
     .when_pressed(|s| s.ripple())
     .on_click(|| println!("Clicked!"))
-    .child(container().text_color(Color::WHITE).child(text("Click me")))
+    .child(container().child(text("Click me").color(Color::WHITE)))
 ```
 
 ### Outlined Button
@@ -288,7 +287,7 @@ container()
     .border(1.0, Color::rgb(0.5, 0.5, 0.6))
     .when_hovered(|s| s.background(Color::rgba(1.0, 1.0, 1.0, 0.1)))
     .when_pressed(|s| s.ripple())
-    .child(container().text_color(Color::WHITE).child(text("Outlined")))
+    .child(container().child(text("Outlined").color(Color::WHITE)))
 ```
 
 ### Card with Lift

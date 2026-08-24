@@ -80,9 +80,7 @@ fn case(caption: &'static str, body: impl Widget + 'static) -> AnyWidget {
                 .child(body)
                 .into_any(),
             container()
-                .font_size(12.0)
-                .text_color(Color::WHITE)
-                .child(text(caption))
+                .child(text(caption).font_size(12.0).color(Color::WHITE))
                 .into_any(),
         ])
         .into_any()

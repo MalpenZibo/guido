@@ -333,9 +333,6 @@ impl TextInput {
         if let Some(own) = self.text_style.as_deref() {
             style.inherit_from(own);
         }
-        if !style.is_complete() {
-            style.inherit_from(&tree.inherited_text_style(id));
-        }
         style
     }
 
@@ -356,12 +353,8 @@ impl TextInput {
         }
     }
 
-    fn resolved_input_style(&self, tree: &Tree, id: WidgetId) -> InputStyle {
-        let mut style = self.input_style.as_deref().copied().unwrap_or_default();
-        if !style.is_complete() {
-            style.inherit_from(&tree.inherited_input_style(id));
-        }
-        style
+    fn resolved_input_style(&self) -> InputStyle {
+        self.input_style.as_deref().copied().unwrap_or_default()
     }
 
     /// Enable password mode (masks text with bullet characters)
@@ -1173,7 +1166,7 @@ impl Widget for TextInput {
         let (text_color, selection_color, cursor_color, stroke, shadow, placeholder) =
             with_signal_tracking(id, JobType::Paint, || {
                 let style = self.resolved_text_style(tree, id);
-                let input = self.resolved_input_style(tree, id);
+                let input = self.resolved_input_style();
                 let text_color = style.color.get_or(Color::WHITE);
                 // Only when there is nothing to show instead. Read inside the
                 // tracking scope like every other paint input, so a prompt that

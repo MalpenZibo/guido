@@ -49,7 +49,6 @@ async fn main() {
                             .padding(12.0)
                             .corner_radius(12.0)
                             .background(Color::rgb(0.18, 0.18, 0.24))
-                            .font_size(18.0)
                             .child(text(move || format!("elapsed: {} ticks", ticks.get()))),
                     )
                     .children((0..100).map(static_row).collect::<Vec<_>>())
@@ -73,5 +72,5 @@ fn static_row(i: usize) -> Container {
                 .corner_radius(8.0)
                 .background(Color::rgb(0.3, 0.5, 0.9)),
         )
-        .child(container().font_size(14.0).child(text(format!("row {i}"))))
+        .child(container().child(text(format!("row {i}")).font_size(14.0).font_size(18.0)))
 }

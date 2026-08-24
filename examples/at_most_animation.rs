@@ -19,18 +19,12 @@ use guido::prelude::*;
 const CAP: f32 = 160.0;
 const SENTENCE: &str = "una frase lunga che deve andare a capo dentro il box";
 
-fn label(s: &str) -> Container {
-    container()
-        .text_color(Color::rgb(0.75, 0.78, 0.85))
-        .font_size(12.0)
-        .child(text(s))
+fn label(s: &str) -> Text {
+    text(s).font_size(12.0).color(Color::rgb(0.75, 0.78, 0.85))
 }
 
-fn heading(s: &str) -> Container {
-    container()
-        .text_color(Color::WHITE)
-        .font_size(15.0)
-        .child(text(s))
+fn heading(s: &str) -> Text {
+    text(s).font_size(15.0).color(Color::WHITE)
 }
 
 /// The cap, drawn as an outline so overflowing content is visible against it.
@@ -63,13 +57,13 @@ fn pair(title: &str, build: impl Fn(bool) -> Container + 'static) -> Container {
             .child(label(caption))
             .child(w.widget_ref(r))
             .child(
-                container()
-                    .text_color(Color::rgb(0.55, 0.85, 0.6))
-                    .font_size(12.0)
-                    .child(text(move || {
+                container().child(
+                    text(move || {
                         let b = r.rect().get();
                         format!("{:.1} x {:.1}", b.width, b.height)
-                    })),
+                    })
+                    .color(Color::rgb(0.55, 0.85, 0.6)),
+                ),
             )
     };
 
@@ -101,20 +95,23 @@ fn main() {
                     .padding(20.0)
                     .layout(Flex::column().spacing(28.0))
                     .child(
-                        container()
-                            .text_color(Color::WHITE)
-                            .font_size(17.0)
-                            .child(text(
-                                "at_most + animazione: le coppie devono essere identiche",
-                            )),
+                        container().child(
+                            text("at_most + animazione: le coppie devono essere identiche")
+                                .color(Color::WHITE),
+                        ),
                     )
                     .child(pair("testo che va a capo", |animated| {
                         capped(
                             animated,
-                            container()
-                                .text_color(Color::WHITE)
-                                .font_size(13.0)
-                                .child(text(SENTENCE)),
+                            container().child(
+                                text(SENTENCE)
+                                    .font_size(13.0)
+                                    .font_size(12.0)
+                                    .font_size(12.0)
+                                    .font_size(15.0)
+                                    .font_size(17.0)
+                                    .color(Color::WHITE),
+                            ),
                         )
                     }))
                     .child(pair("figlio con fill()", |animated| {
@@ -127,7 +124,7 @@ fn main() {
                                 .corner_radius(3.0),
                         )
                     }))
-                    .child(label("Esc per chiudere").text_color(Color::rgb(0.5, 0.53, 0.6)))
+                    .child(label("Esc per chiudere").color(Color::rgb(0.5, 0.53, 0.6)))
                     .on_key_down(|key, _| {
                         if key == Key::Escape {
                             quit_app();

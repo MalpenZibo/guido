@@ -166,7 +166,7 @@ fn ripple_button(label: &str, color: Color) -> Container {
         .when_pressed(|s| s.ripple().transform(Transform::scale(0.98)))
 
         .on_click(|| println!("Clicked!"))
-        .child(container().text_color(Color::WHITE).child(text(label)))
+        .child(container().child(text(label).color(Color::WHITE)))
 }
 
 // Usage

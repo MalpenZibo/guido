@@ -21,15 +21,15 @@ No manual synchronization is needed - just pass a `Signal<String>` and the bindi
 ### Text Color
 
 ```rust
-container().text_color(Color::WHITE).child(text_input(value))
+container().child(text_input(value).color(Color::WHITE))
 ```
 
 ### Cursor Color
 
 ```rust
-text_input(value).cursor_color(Color::rgb(0.4, 0.8, 1.0))
+text_input(value)
 // or, for every input below one container:
-container().cursor_color(Color::rgb(0.4, 0.8, 1.0)).child(text_input(value))
+container().child(text_input(value).cursor_color(Color::rgb(0.4, 0.8, 1.0)).cursor_color(Color::rgb(0.4, 0.8, 1.0)))
 ```
 
 ### Selection Color
@@ -41,30 +41,30 @@ text_input(value).selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
 ### Font Size
 
 ```rust
-container().font_size(16.0).child(text_input(value))
+container().child(text_input(value).font_size(16.0))
 ```
 
 ### Font Family
 
 ```rust
 // Predefined families
-container().font_family(FontFamily::Monospace).child(text_input(value))
+container().child(text_input(value))
 
 // Shorthand for monospace
-container().mono().child(text_input(value))
+container().child(text_input(value))
 
 // Custom font
-container().font_family(FontFamily::Name("JetBrains Mono".into())).child(text_input(value))
+container().child(text_input(value).mono().font_family(FontFamily::Name("JetBrains Mono".into())).font_family(FontFamily::Monospace))
 ```
 
 ### Font Weight
 
 ```rust
 // Using constants
-container().font_weight(FontWeight::BOLD).child(text_input(value))
+container().child(text_input(value))
 
 // Shorthand for bold
-container().bold().child(text_input(value))
+container().child(text_input(value).bold().font_weight(FontWeight::BOLD))
 ```
 
 ## Password Mode
@@ -125,15 +125,15 @@ Reactive, so a prompt that changes changes the empty field with it:
 text_input(answer).placeholder(move || prompt.get())
 ```
 
-The colour is the inherited text colour at reduced alpha — a placeholder is the
+The colour is the field's own text colour at reduced alpha — a placeholder is the
 same text, quieter. Declare `placeholder_color` on the field, or on a
 container to cover every field below it:
 
 ```rust
 container()
-    .text_color(theme.text)
-    .placeholder_color(theme.text_weak)
-    .child(text_input(value).placeholder("Search"))
+    
+    
+    .child(text_input(value).placeholder_color(theme.text_weak).color(theme.text).placeholder("Search"))
 ```
 
 ## No Caret
@@ -207,7 +207,7 @@ container()
     .border(1.0, Color::rgb(0.3, 0.3, 0.4))
     .corner_radius(4.0)
     .child(
-        container().text_color(Color::WHITE).font_size(14.0).child(text_input(value))
+        container().child(text_input(value).font_size(14.0).color(Color::WHITE))
     )
 ```
 
@@ -223,7 +223,7 @@ container()
     .corner_radius(4.0)
     .when_focused(|s| s.border(1.0, Color::rgb(0.4, 0.6, 1.0)))
     .child(
-        container().text_color(Color::WHITE).child(text_input(value))
+        container().child(text_input(value).color(Color::WHITE))
     )
 ```
 
@@ -246,7 +246,7 @@ fn login_form() -> Container {
             container()
                 .layout(Flex::column().spacing(4.0))
                 .children([
-                    container().font_size(12.0).text_color(Color::rgb(0.6, 0.6, 0.7)).child(text("Username")),
+                    container().child(text("Username").color(Color::rgb(0.6, 0.6, 0.7))),
                     container()
                         .padding([8.0, 12.0])
                         .background(Color::rgb(0.15, 0.15, 0.2))
@@ -254,14 +254,14 @@ fn login_form() -> Container {
                         .corner_radius(4.0)
                         .when_focused(|s| s.border(1.0, Color::rgb(0.4, 0.6, 1.0)))
                         .child(
-                            container().text_color(Color::WHITE).font_size(14.0).child(text_input(username))
+                            container().child(text_input(username).color(Color::WHITE))
                         ),
                 ]),
             // Password field
             container()
                 .layout(Flex::column().spacing(4.0))
                 .children([
-                    container().font_size(12.0).text_color(Color::rgb(0.6, 0.6, 0.7)).child(text("Password")),
+                    container().child(text("Password").color(Color::rgb(0.6, 0.6, 0.7))),
                     container()
                         .padding([8.0, 12.0])
                         .background(Color::rgb(0.15, 0.15, 0.2))
@@ -269,7 +269,7 @@ fn login_form() -> Container {
                         .corner_radius(4.0)
                         .when_focused(|s| s.border(1.0, Color::rgb(0.4, 0.6, 1.0)))
                         .child(
-                            container().text_color(Color::WHITE).font_size(14.0).child(text_input(password).password(true))
+                            container().child(text_input(password).color(Color::WHITE).password(true))
                         ),
                 ]),
             // Submit button
@@ -283,7 +283,7 @@ fn login_form() -> Container {
                     println!("Login: {} / {}", username.get(), password.get());
                 })
                 .child(
-                    container().text_color(Color::WHITE).font_size(14.0).bold().child(text("Sign In"))
+                    container().child(text("Sign In").bold().font_size(14.0).font_size(12.0).font_size(12.0).font_size(14.0).font_size(14.0).color(Color::WHITE))
                 ),
         ])
 }

@@ -15,8 +15,7 @@ pub fn button(
         .when_hovered(|s| s.lighter(0.1))
         .when_pressed(|s| s.ripple())
         .on_click(on_click)
-        .text_color(Color::WHITE)
-        .child(text(label))
+        .child(text(label).color(Color::WHITE))
 }
 
 /// A reusable Card component with children
@@ -31,9 +30,7 @@ pub fn card(
         .background(background)
         .corner_radius(8.0)
         .layout(Flex::column().spacing(8.0))
-        .font_size(18.0)
-        .text_color(Color::WHITE)
-        .child(text(title))
+        .child(text(title).color(Color::WHITE))
         .children_source(children)
 }
 
@@ -59,14 +56,14 @@ fn main() {
                     .background(Color::rgb(0.1, 0.1, 0.15))
                     .layout(Flex::column().spacing(12.0))
                     .child(
-                        container().font_size(24.0).text_color(Color::WHITE).child(text("Component Example")),
+                        container().child(text("Component Example").color(Color::WHITE)),
                     )
                     .child(
                         card()
                             .title("Counter")
                             .background(Color::rgb(0.15, 0.2, 0.25))
                             .child(
-                                container().font_size(16.0).text_color(Color::WHITE).child(text(move || format!("Count: {}", count.get()))),
+                                container().child(text(move || format!("Count: {}", count.get())).color(Color::WHITE)),
                             )
                             .child(
                                 container()
@@ -95,10 +92,10 @@ fn main() {
                         card()
                             .title("Static Content")
                             .child(
-                                container().text_color(Color::rgb(0.8, 0.8, 0.8)).child(text("This is a card with static content.")),
+                                container().child(text("This is a card with static content.").color(Color::rgb(0.8, 0.8, 0.8))),
                             )
                             .child(
-                                container().text_color(Color::rgb(0.8, 0.8, 0.8)).child(text("Cards can have multiple children.")),
+                                container().child(text("Cards can have multiple children.").color(Color::rgb(0.8, 0.8, 0.8))),
                             ),
                     )
                     .child(
@@ -142,7 +139,7 @@ fn main() {
                                 }
                             })
                             .child(
-                                container().text_color(Color::rgb(0.8, 0.8, 0.8)).child(text("The card background changes color based on the count value.")),
+                                container().child(text("The card background changes color based on the count value.").font_size(24.0).font_size(18.0).font_size(16.0).color(Color::rgb(0.8, 0.8, 0.8))),
                             )
                             .child(
                                 container().layout(Flex::row().spacing(8.0)).child(

@@ -227,7 +227,7 @@ fn main() {
                             .corner_radius(8.0)
                             .when_hovered(|s| s.lighter(0.1))
                             .on_click(move || count.update(|c| *c += 1))
-                            .child(container().text_color(Color::WHITE).child(text("+")))
+                            .child(container().child(text("+").color(Color::WHITE)))
                     )
             },
         );
@@ -752,7 +752,7 @@ fn main() {
                     .padding(20.0)
                     .background(Color::rgb(0.15, 0.15, 0.2))
                     .corner_radius(12.0)
-                    .child(container().text_color(Color::WHITE).child(text("Notification")))
+                    .child(container().child(text("Notification").color(Color::WHITE)))
             },
         );
     });

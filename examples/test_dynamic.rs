@@ -28,16 +28,10 @@ async fn main() {
             .layout(Flex::column().spacing(8.0))
             .padding(20.0)
             .background(Color::rgb(0.1, 0.1, 0.15))
-            .child(
-                container()
-                    .text_color(Color::WHITE)
-                    .child(text("Dynamic Children Test")),
-            )
-            .child(
-                container()
-                    .text_color(Color::rgb(0.7, 0.7, 0.7))
-                    .child(text("An item will be added after 2 seconds...")),
-            )
+            .child(container().child(text("Dynamic Children Test").color(Color::WHITE)))
+            .child(container().child(
+                text("An item will be added after 2 seconds...").color(Color::rgb(0.7, 0.7, 0.7)),
+            ))
             .child(container().layout(Flex::row().spacing(4.0)).children(keyed(
                 move || items.get(),
                 |id| *id,
@@ -46,8 +40,7 @@ async fn main() {
                         .padding(8.0)
                         .background(Color::rgb(0.3 + id as f32 * 0.1, 0.3, 0.4))
                         .corner_radius(4.0)
-                        .text_color(Color::WHITE)
-                        .child(text(format!("Item {}", id)))
+                        .child(text(format!("Item {}", id)).color(Color::WHITE))
                 },
             )));
 

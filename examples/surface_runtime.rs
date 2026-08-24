@@ -73,12 +73,10 @@ fn button<M>(label: impl IntoSignal<String, M>, on_click: impl Fn() + 'static) -
         .padding([6.0, 12.0])
         .background(Color::rgb(0.22, 0.24, 0.34))
         .corner_radius(6.0)
-        .text_color(Color::WHITE)
-        .font_size(13.0)
         .when_hovered(|s| s.lighter(0.10))
         .when_pressed(|s| s.ripple())
         .on_click(on_click)
-        .child(text(label))
+        .child(text(label).font_size(13.0).color(Color::WHITE))
         .into_any()
 }
 

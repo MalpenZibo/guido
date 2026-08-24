@@ -235,7 +235,7 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
         .on_click(on_click)
 
         // Content
-        .child(container().text_color(Color::WHITE).child(text(label)))
+        .child(container().child(text(label).color(Color::WHITE)))
 }
 ```
 

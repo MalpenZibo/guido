@@ -254,16 +254,6 @@ impl TextStyle {
         self.stroke = self.stroke.or(outer.stroke);
         self.shadow = self.shadow.or(outer.shadow);
     }
-
-    /// Whether every property has been resolved, so the walk can stop early.
-    pub(crate) fn is_complete(&self) -> bool {
-        self.color.is_some()
-            && self.font_size.is_some()
-            && self.font_family.is_some()
-            && self.font_weight.is_some()
-            && self.stroke.is_some()
-            && self.shadow.is_some()
-    }
 }
 
 /// The vocabulary for declaring text style, written once.

@@ -23,7 +23,6 @@ fn main() {
                     .layout(Flex::column().spacing(48.0))
                     // Declared once: the cards below inherit it through the
                     // rows, and row 3 overrides it per card.
-                    .text_color(Color::rgb(0.2, 0.2, 0.2))
                     .child(
                         // Row 1: Basic elevation levels
                         container()
@@ -34,7 +33,10 @@ fn main() {
                                     .background(Color::WHITE)
                                     .corner_radius(8.0)
                                     .elevation(0.0)
-                                    .child(text("Level 0\n(No shadow)")),
+                                    .child(
+                                        text("Level 0\n(No shadow)")
+                                            .color(Color::rgb(0.2, 0.2, 0.2)),
+                                    ),
                             )
                             .child(
                                 container()
@@ -108,8 +110,7 @@ fn main() {
                                     .background(Color::rgb(0.9, 0.7, 0.7))
                                     .corner_radius(12.0)
                                     .elevation(2.0)
-                                    .text_color(Color::rgb(0.3, 0.1, 0.1))
-                                    .child(text("Card 1")),
+                                    .child(text("Card 1").color(Color::rgb(0.3, 0.1, 0.1))),
                             )
                             .child(
                                 container()
@@ -117,8 +118,7 @@ fn main() {
                                     .background(Color::rgb(0.7, 0.9, 0.7))
                                     .corner_radius(12.0)
                                     .elevation(3.0)
-                                    .text_color(Color::rgb(0.1, 0.3, 0.1))
-                                    .child(text("Card 2")),
+                                    .child(text("Card 2").color(Color::rgb(0.1, 0.3, 0.1))),
                             )
                             .child(
                                 container()
@@ -126,8 +126,7 @@ fn main() {
                                     .background(Color::rgb(0.7, 0.7, 0.9))
                                     .corner_radius(12.0)
                                     .elevation(4.0)
-                                    .text_color(Color::rgb(0.1, 0.1, 0.3))
-                                    .child(text("Card 3")),
+                                    .child(text("Card 3").color(Color::rgb(0.1, 0.1, 0.3))),
                             ),
                     )
                     .child(

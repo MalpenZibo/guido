@@ -117,22 +117,6 @@ impl Container {
         self.resolve_state_value(id, base, |state| state.transform.map(|s| s.get()))
     }
 
-    /// The text colour a descendant should see, before any animation.
-    ///
-    /// The base has to be the same one the published derived folds — this
-    /// container's declaration *or the inherited one* — and not just the
-    /// declaration. Reading only the declaration made an animated container
-    /// with no colour of its own seed and aim at a `WHITE` placeholder, so
-    /// hovering left from a colour the text had never shown.
-    pub(super) fn effective_text_color_target(&self, id: WidgetId) -> Color {
-        let base = self
-            .text_base
-            .or_else(|| self.text.as_ref().and_then(|t| t.color))
-            .map(|color| color.get())
-            .unwrap_or(Color::WHITE);
-        self.resolve_state_value(id, base, |state| state.text_color.map(|s| s.get()))
-    }
-
     /// The largest elevation this container can reach, and the number its damage
     /// rect is sized from.
     ///
@@ -188,108 +172,6 @@ impl Container {
     // -----------------------------------------------------------------------
     // What descendants are told about text
     // -----------------------------------------------------------------------
-
-    /// Whether any state layer declares a text colour.
-    fn has_state_text_color(&self) -> bool {
-        self.interaction
-            .as_ref()
-            .is_some_and(|ix| ix.states.iter().any(|(_, s)| s.text_color.is_some()))
-    }
-
-    /// The text style this container publishes to its descendants.
-    ///
-    /// Usually exactly what the builder was handed. When a state layer
-    /// declares a text colour, the *colour* published is instead a derived
-    /// folding the base and the interaction flags together — so a descendant
-    /// that reads it subscribes to this container's hover, and a flip reaches
-    /// the glyphs instead of stopping at the box.
-    ///
-    /// Nothing is created when no state layer mentions text, which is almost
-    /// always: the cost of the feature is paid only where it is used.
-    pub(super) fn published_text_style(&mut self, tree: &Tree, id: WidgetId) -> Option<TextStyle> {
-        let declared = self.text.as_deref().copied();
-        let animated = self.animated_text;
-        if !self.has_state_text_color() && animated.is_none() {
-            return declared;
-        }
-
-        let ix = self.interaction.as_ref();
-        let flags = ix.map(|ix| ix.flags);
-        // Only the layers that speak about text, in declaration order. A
-        // derived closure has no container to ask later, so the fold below
-        // walks this instead of `states`.
-        let text_states: Vec<(StateWhen, Signal<Color>)> = ix
-            .map(|ix| {
-                ix.states
-                    .iter()
-                    .filter_map(|(when, s)| s.text_color.map(|c| (*when, c)))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        // What a descendant would have inherited without us — this container's
-        // own declaration, or the nearest ancestor's. Walked once, here: a
-        // derived closure has no tree, and which ancestor declares what cannot
-        // change without the subtree being rebuilt, which re-registers and
-        // re-walks.
-        let base = declared
-            .and_then(|s| s.color)
-            .or_else(|| tree.inherited_text_style(id).color);
-        // Kept so the animation aims at exactly what this fold falls back to.
-        self.text_base = base;
-
-        let (color, owner) = with_owner(|| {
-            create_derived(move || {
-                // An animation in flight speaks for the whole fold: it is
-                // already travelling from the old resolved colour to the new
-                // one. Reading it here is also what subscribes the text, so it
-                // repaints on every step.
-                if let Some(animated) = animated
-                    && let Some(color) = animated.get()
-                {
-                    return color;
-                }
-                // Backwards, and each trigger read only when a layer uses it:
-                // with no focused layer there is no reason to subscribe to the
-                // focus path, and with no hover layer none to subscribe to the
-                // flags.
-                for (when, color) in text_states.iter().rev() {
-                    let active = match when {
-                        StateWhen::Hovered => flags
-                            .map(|f| f.get())
-                            .unwrap_or_default()
-                            .contains(InteractionFlags::HOVERED),
-                        StateWhen::Pressed => flags
-                            .map(|f| f.get())
-                            .unwrap_or_default()
-                            .contains(InteractionFlags::PRESSED),
-                        StateWhen::Focused => Self::has_child_focus(id),
-                        StateWhen::When(condition) => condition.get(),
-                    };
-                    if active {
-                        return color.get();
-                    }
-                }
-                base.map(|base| base.get()).unwrap_or(Color::WHITE)
-            })
-        });
-
-        // Re-registration replaces the previous derived; without this the old
-        // one would outlive its container.
-        self.dispose_text_owner();
-        self.text_owner = Some(owner);
-
-        let mut style = declared.unwrap_or_default();
-        style.color = Some(color);
-        Some(style)
-    }
-
-    /// Tear down the owner holding the published derived, if there is one.
-    pub(super) fn dispose_text_owner(&mut self) {
-        if let Some(owner) = self.text_owner.take() {
-            dispose_owner_now(owner);
-        }
-    }
 
     // -----------------------------------------------------------------------
     // Animation: the in-flight value when one is running
@@ -379,7 +261,6 @@ impl Container {
                 || a.border_width.is_some()
                 || a.border_color.is_some()
                 || a.transform.is_some()
-                || a.text_color.is_some()
         })
     }
 
@@ -396,7 +277,6 @@ impl Container {
                 || a.elevation.is_some()
                 || a.border_color.is_some()
                 || a.transform.is_some()
-                || a.text_color.is_some()
         })
     }
 }

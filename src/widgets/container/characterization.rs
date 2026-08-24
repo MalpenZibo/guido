@@ -20,6 +20,7 @@ use crate::jobs::{self, JobType};
 use crate::layout::{Constraints, Flex, at_least, at_most, fill, fraction};
 use crate::reactive::create_signal;
 use crate::renderer::{DrawCommand, PaintContext, RenderNode};
+use crate::widgets::TextStyled;
 use crate::widgets::widget::{Event, EventResponse, MouseButton};
 
 // ---------------------------------------------------------------------------
@@ -972,163 +973,29 @@ fn set_hover(h: &mut H, inside: bool) {
 /// The failure this guards against is cache-shaped and silent: the container
 /// repaints with its new background while the text's cached render node is
 /// reused with the old colour still inside its draw commands.
+///
+/// The hover belongs to the box and the colour to the glyphs, so each is
+/// declared where it happens and `control()` joins them.
 #[test]
 fn a_hover_layer_reaches_the_text() {
     let mut h = H::new(
-        container()
-            .width(100.0)
-            .height(40.0)
-            .text_color(Color::rgb(0.5, 0.5, 0.5))
-            .when_hovered(|s| s.text_color(Color::WHITE))
-            .child(crate::widgets::text("Label")),
-    );
-
-    assert_eq!(painted_text_color(&mut h), Color::rgb(0.5, 0.5, 0.5));
-    set_hover(&mut h, true);
-    assert_eq!(painted_text_color(&mut h), Color::WHITE);
-    set_hover(&mut h, false);
-    assert_eq!(painted_text_color(&mut h), Color::rgb(0.5, 0.5, 0.5));
-}
-
-#[test]
-fn a_hover_layer_reaches_text_below_a_plain_container() {
-    let mut h = H::new(
-        container()
-            .width(100.0)
-            .height(40.0)
-            .text_color(Color::rgb(0.5, 0.5, 0.5))
-            .when_hovered(|s| s.text_color(Color::WHITE))
-            .child(
-                container()
-                    .layout(Flex::row())
-                    .child(crate::widgets::text("Label")),
-            ),
-    );
-
-    assert_eq!(painted_text_color(&mut h), Color::rgb(0.5, 0.5, 0.5));
-    set_hover(&mut h, true);
-    assert_eq!(painted_text_color(&mut h), Color::WHITE);
-}
-
-/// The hovered container declares no colour of its own, so releasing the hover
-/// has to land on what an ancestor said. That base is resolved by a walk done
-/// once at registration — a derived closure has no tree to walk.
-#[test]
-fn a_state_colour_falls_back_to_the_inherited_base() {
-    let mut h = H::new(
-        container().text_color(Color::RED).child(
-            container()
-                .width(100.0)
-                .height(40.0)
-                .when_hovered(|s| s.text_color(Color::WHITE))
-                .child(crate::widgets::text("Label")),
+        container().width(100.0).height(40.0).control().child(
+            crate::widgets::text("Label")
+                .color(Color::rgb(0.5, 0.5, 0.5))
+                .when_hovered(|s| s.color(Color::WHITE)),
         ),
     );
 
-    assert_eq!(painted_text_color(&mut h), Color::RED);
+    assert_eq!(painted_text_color(&mut h), Color::rgb(0.5, 0.5, 0.5));
     set_hover(&mut h, true);
     assert_eq!(painted_text_color(&mut h), Color::WHITE);
     set_hover(&mut h, false);
-    assert_eq!(painted_text_color(&mut h), Color::RED);
-}
-
-#[test]
-fn a_nearer_declaration_wins_over_an_outer_hover() {
-    let mut h = H::new(
-        container()
-            .width(100.0)
-            .height(40.0)
-            .text_color(Color::rgb(0.5, 0.5, 0.5))
-            .when_hovered(|s| s.text_color(Color::WHITE))
-            .child(
-                container()
-                    .text_color(Color::BLUE)
-                    .child(crate::widgets::text("Label")),
-            ),
-    );
-
-    painted_text_color(&mut h);
-    set_hover(&mut h, true);
-    assert_eq!(
-        painted_text_color(&mut h),
-        Color::BLUE,
-        "a text told its own colour must not follow someone else's hover"
-    );
-}
-
-/// Nothing is created when no state layer mentions text, so a hover cannot
-/// disturb the published colour at all.
-#[test]
-fn a_container_with_no_state_text_colour_publishes_the_base_signal() {
-    let mut h = H::new(
-        container()
-            .width(100.0)
-            .height(40.0)
-            .text_color(Color::RED)
-            .when_hovered(|s| s.lighter(0.1))
-            .child(crate::widgets::text("Label")),
-    );
-
-    painted_text_color(&mut h);
-    set_hover(&mut h, true);
-    assert_eq!(painted_text_color(&mut h), Color::RED);
+    assert_eq!(painted_text_color(&mut h), Color::rgb(0.5, 0.5, 0.5));
 }
 
 // ---------------------------------------------------------------------------
 // The published derived must not outlive its container
 // ---------------------------------------------------------------------------
-
-/// The one reactive resource a container creates outside any user scope.
-///
-/// Everything else is built in the builder chain and freed with the caller's
-/// scope. The published derived is created at *registration*, where the
-/// ambient owner is the surface's and outlives any single container — so
-/// without the explicit teardown in `Drop`, a dynamic-children update that
-/// replaces this container leaks one derived per rebuild.
-///
-/// The shape below is what makes this test able to fail: the builder runs in
-/// a short-lived scope that is disposed each round, while registration happens
-/// under a long-lived one that is not. Building and dropping inside a single
-/// scope would free the derived as a side effect of freeing its parent, and
-/// the test would pass with the teardown removed.
-#[test]
-fn the_published_text_derived_is_freed_with_its_container() {
-    use crate::reactive::owner::{dispose_owner_now, with_owner};
-    use crate::reactive::storage::live_signal_count;
-
-    fn round() {
-        // Builder signals belong to this scope, as a component's would.
-        let (widget, item) = with_owner(|| {
-            container()
-                .text_color(Color::RED)
-                .when_hovered(|s| s.text_color(Color::WHITE))
-                .child(crate::widgets::text("x"))
-        });
-        // Registration happens under the surrounding (surface) owner.
-        let mut h = H::new(widget);
-        h.fit(100.0, 100.0);
-        drop(h);
-        dispose_owner_now(item);
-    }
-
-    let (counts, surface) = with_owner(|| {
-        round(); // warm whatever is allocated lazily
-        let before = live_signal_count();
-        for _ in 0..50 {
-            round();
-        }
-        (before, live_signal_count())
-    });
-    dispose_owner_now(surface);
-
-    let (before, after) = counts;
-    assert_eq!(
-        after,
-        before,
-        "50 build-and-drop rounds leaked {} signals",
-        after as i64 - before as i64
-    );
-}
 
 // ---------------------------------------------------------------------------
 // Keyframes
@@ -1496,129 +1363,6 @@ fn a_layer_silent_on_a_property_does_not_shadow_the_one_below_it() {
 // An animated text colour
 // ---------------------------------------------------------------------------
 
-/// Run frames until nothing is animating, or `limit` frames pass.
-///
-/// Animations step against the wall clock, so a tight loop would advance them
-/// by microseconds and never arrive — the frames have to take real time.
-fn settle(h: &mut H, limit: usize) -> usize {
-    for frame in 0..limit {
-        std::thread::sleep(std::time::Duration::from_millis(4));
-        let animating = pump(h);
-        h.fit(400.0, 400.0);
-        h.paint();
-        if !animating {
-            return frame;
-        }
-    }
-    limit
-}
-
-/// One frame: let time pass, run the jobs, and report what the text ended up.
-fn frame(h: &mut H) -> Color {
-    std::thread::sleep(std::time::Duration::from_millis(8));
-    painted_text_color(h)
-}
-
-/// The in-flight value has to reach a widget that is not the one animating.
-/// Every other animated property is consumed by the paint of the container
-/// that owns it; this one is drawn by a descendant, so each step leaves
-/// through a signal — and if that write did not happen, the text would simply
-/// jump to the final colour on the first frame while the box eased.
-#[test]
-fn an_animated_text_colour_passes_through_intermediate_values() {
-    let mut h = H::new(
-        container()
-            .width(100.0)
-            .height(40.0)
-            .text_color(Color::BLACK)
-            .when_hovered(|s| s.text_color(Color::WHITE))
-            .animate_text_color(Transition::new(80.0, TimingFunction::Linear))
-            .child(crate::widgets::text("Label")),
-    );
-
-    assert_eq!(painted_text_color(&mut h), Color::BLACK);
-
-    set_hover(&mut h, true);
-    let mid = frame(&mut h);
-    assert!(
-        mid != Color::BLACK && mid != Color::WHITE,
-        "expected a value between the two, got {mid:?}"
-    );
-
-    settle(&mut h, 80);
-    assert_eq!(
-        painted_text_color(&mut h),
-        Color::WHITE,
-        "and it has to arrive"
-    );
-}
-
-/// Once settled the derived goes back to the ordinary fold, so the animation
-/// is not left pinning its last frame.
-#[test]
-fn a_settled_animation_releases_the_colour_back_to_the_fold() {
-    let mut h = H::new(
-        container()
-            .width(100.0)
-            .height(40.0)
-            .text_color(Color::BLACK)
-            .when_hovered(|s| s.text_color(Color::WHITE))
-            .animate_text_color(Transition::new(80.0, TimingFunction::Linear))
-            .child(crate::widgets::text("Label")),
-    );
-
-    painted_text_color(&mut h);
-    set_hover(&mut h, true);
-    settle(&mut h, 80);
-    assert_eq!(painted_text_color(&mut h), Color::WHITE);
-
-    set_hover(&mut h, false);
-    settle(&mut h, 80);
-    assert_eq!(painted_text_color(&mut h), Color::BLACK);
-}
-
-/// The animation has to start from the colour a descendant would actually have
-/// shown — which, for a container with no colour of its own, is the inherited
-/// one.
-///
-/// Two notions of "base" have to agree: the one the published derived folds
-/// (declared, else inherited) and the one the animation is seeded from and
-/// aims at. Where they diverge the transition departs from somewhere the text
-/// never was, so hovering flashes through a third colour on the way.
-#[test]
-fn an_animated_colour_starts_from_the_inherited_base() {
-    let mut h = H::new(
-        container().text_color(Color::RED).child(
-            container()
-                .width(100.0)
-                .height(40.0)
-                .when_hovered(|s| s.text_color(Color::BLUE))
-                .animate_text_color(Transition::new(80.0, TimingFunction::Linear))
-                .child(crate::widgets::text("Label")),
-        ),
-    );
-
-    assert_eq!(painted_text_color(&mut h), Color::RED);
-
-    set_hover(&mut h, true);
-    let first = frame(&mut h);
-    assert!(
-        first.r > first.b,
-        "the transition must leave from the inherited red, got {first:?}"
-    );
-
-    settle(&mut h, 80);
-    assert_eq!(painted_text_color(&mut h), Color::BLUE);
-
-    set_hover(&mut h, false);
-    settle(&mut h, 80);
-    assert_eq!(
-        painted_text_color(&mut h),
-        Color::RED,
-        "and come back to it"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Reactivity — properties that used to accept only a constant
 // ---------------------------------------------------------------------------
@@ -1815,6 +1559,23 @@ fn elevation_animates_towards_its_state_layer() {
     set_hover(&mut h, false);
     settle(&mut h, 80);
     assert_eq!(shadow_count(&h.paint()), 0, "and settles back down");
+}
+
+/// Run frames until nothing is animating, or `limit` frames pass.
+///
+/// Animations step against the wall clock, so a tight loop would advance them
+/// by microseconds and never arrive — the frames have to take real time.
+fn settle(h: &mut H, limit: usize) -> usize {
+    for frame in 0..limit {
+        std::thread::sleep(std::time::Duration::from_millis(4));
+        let animating = pump(h);
+        h.fit(400.0, 400.0);
+        h.paint();
+        if !animating {
+            return frame;
+        }
+    }
+    limit
 }
 
 /// Every `BackdropBlur` radius drawn by a node.

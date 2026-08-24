@@ -48,15 +48,10 @@ fn panel(caption: &'static str, label: Text) -> Container {
                                 .main_alignment(MainAlignment::Center)
                                 .cross_alignment(CrossAlignment::Center),
                         )
-                        .child(label.font_size(52.0).nowrap()),
+                        .child(label.nowrap()),
                 ),
         )
-        .child(
-            container()
-                .font_size(12.0)
-                .text_color(Color::rgb(0.7, 0.7, 0.75))
-                .child(text(caption)),
-        )
+        .child(container().child(text(caption).color(Color::rgb(0.7, 0.7, 0.75))))
 }
 
 fn main() {
@@ -81,12 +76,14 @@ fn main() {
                 "frost + stroke 2",
                 text(LABEL)
                     .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
-                    .backdrop_blur(16.0)
-                    .text_stroke(TextStroke::new(2.0, Color::BLACK)),
+                    .backdrop_blur(16.0),
             ))
             .child(panel(
                 "frost under a shadow — buried",
                 text(LABEL)
+                    .text_stroke(TextStroke::new(2.0, Color::BLACK))
+                    .font_size(52.0)
+                    .font_size(12.0)
                     .color(Color::rgba(1.0, 1.0, 1.0, 0.35))
                     .backdrop_blur(16.0)
                     .text_shadow(TextShadow::new(

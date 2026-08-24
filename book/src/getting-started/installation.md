@@ -80,7 +80,7 @@ fn main() {
                 container()
                     .padding(20.0)
                     .background(Color::rgb(0.2, 0.3, 0.4))
-                    .child(container().text_color(Color::WHITE).child(text("Hello, Guido!")))
+                    .child(container().child(text("Hello, Guido!").color(Color::WHITE)))
             },
         );
     });

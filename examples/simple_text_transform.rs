@@ -23,9 +23,7 @@ fn main() {
                         .main_alignment(MainAlignment::Center)
                         .cross_alignment(CrossAlignment::Center),
                 )
-                .font_size(14.0)
-                .text_color(Color::WHITE)
-                .child(text("No Transform")),
+                .child(text("No Transform").color(Color::WHITE)),
             // With rotation - should use texture
             container()
                 .width(120.0)
@@ -38,9 +36,7 @@ fn main() {
                         .cross_alignment(CrossAlignment::Center),
                 )
                 .rotate(15.0)
-                .font_size(14.0)
-                .text_color(Color::WHITE)
-                .child(text("Rotated 15")),
+                .child(text("Rotated 15").color(Color::WHITE)),
             // With scale - should use texture
             container()
                 .width(120.0)
@@ -53,9 +49,13 @@ fn main() {
                         .cross_alignment(CrossAlignment::Center),
                 )
                 .scale(1.2)
-                .font_size(14.0)
-                .text_color(Color::WHITE)
-                .child(text("Scale 1.2")),
+                .child(
+                    text("Scale 1.2")
+                        .font_size(14.0)
+                        .font_size(14.0)
+                        .font_size(14.0)
+                        .color(Color::WHITE),
+                ),
         ]);
 
     App::new().run(|app| {

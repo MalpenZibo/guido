@@ -45,23 +45,6 @@ impl InputStyle {
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
-
-    /// Take from `outer` every property this style does not already declare.
-    ///
-    /// Called as the walk moves away from the input, so a nearer container
-    /// always wins: whatever is already set was found closer.
-    pub(crate) fn inherit_from(&mut self, outer: &Self) {
-        self.cursor_color = self.cursor_color.or(outer.cursor_color);
-        self.selection_color = self.selection_color.or(outer.selection_color);
-        self.placeholder_color = self.placeholder_color.or(outer.placeholder_color);
-    }
-
-    /// Whether every property has been resolved, so the walk can stop early.
-    pub(crate) fn is_complete(&self) -> bool {
-        self.cursor_color.is_some()
-            && self.selection_color.is_some()
-            && self.placeholder_color.is_some()
-    }
 }
 
 /// The vocabulary for declaring an input's own furniture, written once.

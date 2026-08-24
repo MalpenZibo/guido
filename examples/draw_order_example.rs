@@ -31,12 +31,7 @@ fn panel(label: &'static str, content: Container) -> Container {
     container()
         .layout(Flex::column().spacing(8.0))
         .child(content)
-        .child(
-            container()
-                .font_size(12.0)
-                .text_color(Color::rgb(0.7, 0.7, 0.75))
-                .child(text(label)),
-        )
+        .child(container().child(text(label).color(Color::rgb(0.7, 0.7, 0.75))))
 }
 
 fn main() {
@@ -116,9 +111,7 @@ fn main() {
                                             .main_alignment(MainAlignment::Center)
                                             .cross_alignment(CrossAlignment::Center),
                                     )
-                                    .font_size(18.0)
-                                    .text_color(Color::rgb(0.95, 0.95, 1.0))
-                                    .child(text("frosted")),
+                                    .child(text("frosted").color(Color::rgb(0.95, 0.95, 1.0))),
                             ),
                     ),
             ))
@@ -132,10 +125,14 @@ fn main() {
                     .background(Color::rgb(0.15, 0.15, 0.2))
                     .layout(ZStack::new())
                     .child(
-                        container()
-                            .font_size(40.0)
-                            .text_color(Color::rgb(0.9, 0.3, 0.3))
-                            .child(text("BEHIND").nowrap()),
+                        container().child(
+                            text("BEHIND")
+                                .font_size(40.0)
+                                .font_size(12.0)
+                                .font_size(18.0)
+                                .color(Color::rgb(0.9, 0.3, 0.3))
+                                .nowrap(),
+                        ),
                     )
                     // Text sits above images in the batch order, so this photo
                     // needs a group of its own to land on top of the label.

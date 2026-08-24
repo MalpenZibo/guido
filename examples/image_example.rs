@@ -20,12 +20,7 @@ fn main() {
                     .corner_radius(4.0)
                     .child(img),
             )
-            .child(
-                container()
-                    .font_size(12.0)
-                    .text_color(Color::rgb(0.7, 0.7, 0.7))
-                    .child(text(label)),
-            )
+            .child(container().child(text(label).color(Color::rgb(0.7, 0.7, 0.7))))
     }
 
     // Helper to create a transformed image card
@@ -45,12 +40,7 @@ fn main() {
                     .corner_radius(4.0)
                     .child(img),
             )
-            .child(
-                container()
-                    .font_size(12.0)
-                    .text_color(Color::rgb(0.7, 0.7, 0.7))
-                    .child(text(label)),
-            )
+            .child(container().child(text(label).color(Color::rgb(0.7, 0.7, 0.7))))
     }
 
     // Panel with two columns: raster images and SVG images
@@ -61,12 +51,7 @@ fn main() {
             // Left column: Raster images
             container()
                 .layout(Flex::column().spacing(32.0))
-                .child(
-                    container()
-                        .font_size(16.0)
-                        .text_color(Color::WHITE)
-                        .child(text("Raster Image")),
-                )
+                .child(container().child(text("Raster Image").color(Color::WHITE)))
                 .child(
                     container()
                         .layout(Flex::row().spacing(32.0))
@@ -108,10 +93,14 @@ fn main() {
             container()
                 .layout(Flex::column().spacing(32.0))
                 .child(
-                    container()
-                        .font_size(16.0)
-                        .text_color(Color::WHITE)
-                        .child(text("SVG Image")),
+                    container().child(
+                        text("SVG Image")
+                            .font_size(16.0)
+                            .font_size(12.0)
+                            .font_size(12.0)
+                            .font_size(16.0)
+                            .color(Color::WHITE),
+                    ),
                 )
                 .child(
                     container()

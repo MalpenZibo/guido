@@ -22,24 +22,21 @@ fn row(label: &str, align: CrossAlignment) -> Container {
         .children([
             container()
                 .width(96.0)
-                .text_color(Color::rgb(0.55, 0.55, 0.65))
-                .font_size(12.0)
-                .child(text(label.to_string()))
+                .child(text(label.to_string()).color(Color::rgb(0.55, 0.55, 0.65)))
+                .into_any(),
+            container().child(text("28").color(Color::WHITE)).into_any(),
+            container()
+                .child(text("°C").color(Color::rgb(0.9, 0.7, 0.3)))
                 .into_any(),
             container()
-                .text_color(Color::WHITE)
-                .font_size(30.0)
-                .child(text("28"))
-                .into_any(),
-            container()
-                .text_color(Color::rgb(0.9, 0.7, 0.3))
-                .font_size(13.0)
-                .child(text("°C"))
-                .into_any(),
-            container()
-                .text_color(Color::rgb(0.6, 0.8, 1.0))
-                .font_size(18.0)
-                .child(text("umidità 41%"))
+                .child(
+                    text("umidità 41%")
+                        .font_size(18.0)
+                        .font_size(30.0)
+                        .font_size(12.0)
+                        .font_size(13.0)
+                        .color(Color::rgb(0.6, 0.8, 1.0)),
+                )
                 .into_any(),
             container()
                 .width(22.0)

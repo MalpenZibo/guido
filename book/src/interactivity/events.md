@@ -187,7 +187,7 @@ fn interactive_counter() -> impl Widget {
                 .when_pressed(|s| s.ripple())
                 .on_click(move || count.update(|c| *c += 1))
                 .child(
-                    container().text_color(Color::WHITE).child(text(move || format!("Clicked {} times", count.get())))
+                    container().child(text(move || format!("Clicked {} times", count.get())).color(Color::WHITE))
                 ),
 
             // Scroll display
@@ -200,7 +200,7 @@ fn interactive_counter() -> impl Widget {
                     scroll_offset.update(|o| *o += dy);
                 })
                 .child(
-                    container().text_color(Color::WHITE).child(text(move || format!("Scroll offset: {:.0}", scroll_offset.get())))
+                    container().child(text(move || format!("Scroll offset: {:.0}", scroll_offset.get())).color(Color::WHITE))
                 ),
         ])
 }

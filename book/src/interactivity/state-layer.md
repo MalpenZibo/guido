@@ -124,7 +124,7 @@ fn interactive_button(label: &str) -> Container {
             .transform(Transform::scale(0.98))
         )
 
-        .child(container().text_color(Color::WHITE).child(text(label)))
+        .child(container().child(text(label).color(Color::WHITE)))
 }
 ```
 
@@ -140,7 +140,6 @@ pub struct StateStyle {
     pub corner_radius: Option<Signal<f32>>,
     pub transform: Option<Signal<Transform>>,
     pub elevation: Option<Signal<f32>>,
-    pub text_color: Option<Signal<Color>>,
     pub alpha: Option<Signal<f32>>,
     pub ripple: Option<RippleConfig>,
 }

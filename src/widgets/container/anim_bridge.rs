@@ -123,15 +123,14 @@ impl Container {
         let bc_init =
             anims.is_some_and(|a| a.border_color.as_ref().is_some_and(|a| a.is_initial()));
         let tf_init = anims.is_some_and(|a| a.transform.as_ref().is_some_and(|a| a.is_initial()));
-        let tc_init = anims.is_some_and(|a| a.text_color.as_ref().is_some_and(|a| a.is_initial()));
 
-        if !(pd_init || bw_init || bg_init || cr_init || el_init || bc_init || tf_init || tc_init) {
+        if !(pd_init || bw_init || bg_init || cr_init || el_init || bc_init || tf_init) {
             return;
         }
 
         // Targets are computed under `&self` first: the writes below need
         // `&mut self.anims`, and the effective_* readers need `&self`.
-        let (bg_target, cr_target, el_target, bc_target, tf_target, tc_target) =
+        let (bg_target, cr_target, el_target, bc_target, tf_target) =
             with_signal_tracking(id, JobType::Animation, || {
                 // Read for the subscription even where the value is unused.
                 if pd_init {
@@ -146,22 +145,12 @@ impl Container {
                     el_init.then(|| self.effective_elevation_target(id)),
                     bc_init.then(|| self.effective_border_color_target(id)),
                     tf_init.then(|| self.effective_transform_target(id)),
-                    tc_init.then(|| self.effective_text_color_target(id)),
                 )
             });
 
-        let animated_text = self.animated_text;
         let Some(ref mut anims) = self.anims else {
             return;
         };
-        if let (Some(anim), Some(target)) = (&mut anims.text_color, tc_target) {
-            anim.set_immediate(target);
-            // Seeded, not animating: the published derived falls through to the
-            // ordinary fold, which resolves to this same value.
-            if let Some(signal) = animated_text {
-                signal.set(None);
-            }
-        }
         if let (Some(anim), Some(target)) = (&mut anims.background, bg_target) {
             anim.set_immediate(target);
         }
@@ -244,12 +233,6 @@ impl Container {
                 drift |= moved(
                     a.is_initial(),
                     *a.target() == self.effective_transform_target(id),
-                );
-            }
-            if let Some(a) = &anims.text_color {
-                drift |= moved(
-                    a.is_initial(),
-                    *a.target() == self.effective_text_color_target(id),
                 );
             }
             // The timeline's trigger, read here for the same reason as the

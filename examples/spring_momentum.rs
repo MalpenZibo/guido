@@ -27,8 +27,6 @@ fn main() {
                     .layout(Flex::column().spacing(16.0))
                     .children([
                         text("Spring momentum — interrupt each one by hand")
-                            .font_size(18.0)
-                            .bold()
                             .color(Color::WHITE)
                             .into_any(),
                         turn_around().into_any(),
@@ -49,13 +47,8 @@ fn panel(title: &str, what_to_do: &str, body: Container) -> Container {
         .padding(14.0)
         .layout(Flex::column().spacing(8.0))
         .children([
-            text(title.to_string())
-                .font_size(14.0)
-                .bold()
-                .color(Color::WHITE)
-                .into_any(),
+            text(title.to_string()).color(Color::WHITE).into_any(),
             text(what_to_do.to_string())
-                .font_size(12.0)
                 .color(Color::rgb(0.62, 0.64, 0.74))
                 .into_any(),
             body.into_any(),
@@ -183,6 +176,11 @@ fn shake() -> Container {
             .on_mouse_up(move |_, _| angle.set(0.0))
             .child(
                 text("press me")
+                    .bold()
+                    .bold()
+                    .font_size(12.0)
+                    .font_size(18.0)
+                    .font_size(14.0)
                     .font_size(13.0)
                     .color(Color::rgb(0.1, 0.08, 0.05)),
             ),

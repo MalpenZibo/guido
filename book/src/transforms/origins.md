@@ -140,7 +140,7 @@ fn create_rotating_box(origin: TransformOrigin, label: &'static str) -> Containe
                 .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
                 .when_hovered(|s| s.lighter(0.1))
                 .on_click(move || rotation.update(|r| *r += 45.0)),
-            container().font_size(12.0).text_color(Color::WHITE).child(text(label)),
+            container().child(text(label).font_size(12.0).color(Color::WHITE)),
         ])
 }
 ```

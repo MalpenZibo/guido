@@ -44,20 +44,17 @@ fn lock_screen(output: OutputInfo) -> Container {
                 .cross_alignment(CrossAlignment::Center),
         )
         .child(
-            container()
-                .text_color(Color::WHITE)
-                .font_size(24.0)
-                .child(text(format!(
+            container().child(
+                text(format!(
                     "Locked — {}",
                     output.name.unwrap_or_else(|| "output".into())
-                ))),
+                ))
+                .color(Color::WHITE),
+            ),
         )
-        .child(
-            container()
-                .text_color(Color::rgb(0.6, 0.6, 0.7))
-                .font_size(13.0)
-                .child(text("password: guido (auto-unlocks after 30s)")),
-        )
+        .child(container().child(
+            text("password: guido (auto-unlocks after 30s)").color(Color::rgb(0.6, 0.6, 0.7)),
+        ))
         .child(
             container()
                 .width(at_least(280.0))
@@ -65,15 +62,19 @@ fn lock_screen(output: OutputInfo) -> Container {
                 .background(Color::rgb(0.15, 0.15, 0.2))
                 .corner_radius(8.0)
                 .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
-                .text_color(Color::WHITE)
-                .cursor_color(Color::rgb(0.4, 0.8, 1.0))
-                .child(text_input(attempt).password(true).on_submit(move |s| {
-                    if s == PASSWORD {
-                        unlock_session();
-                    } else {
-                        error.set(true);
-                    }
-                })),
+                .child(
+                    text_input(attempt)
+                        .color(Color::WHITE)
+                        .cursor_color(Color::rgb(0.4, 0.8, 1.0))
+                        .password(true)
+                        .on_submit(move |s| {
+                            if s == PASSWORD {
+                                unlock_session();
+                            } else {
+                                error.set(true);
+                            }
+                        }),
+                ),
         )
         .child(text(move || {
             if error.get() {
@@ -112,7 +113,11 @@ fn main() {
                             .on_click(|| lock_session(lock_screen))
                             .child(text("Lock session")),
                     )
-                    .child(text(move || format!("state: {:?}", lock_state().get())))
+                    .child(
+                        text(move || format!("state: {:?}", lock_state().get()))
+                            .font_size(13.0)
+                            .font_size(24.0),
+                    )
             },
         );
     });

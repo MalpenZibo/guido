@@ -177,8 +177,8 @@ fn styled_card(title: &str, content: &str) -> Container {
 
         // Children
         .children([
-            container().font_size(18.0).bold().text_color(Color::WHITE).child(text(title)),
-            container().font_size(14.0).text_color(Color::rgb(0.7, 0.7, 0.75)).child(text(content)),
+            container().child(text(title).color(Color::WHITE)),
+            container().child(text(content).bold().font_size(14.0).font_size(18.0).color(Color::rgb(0.7, 0.7, 0.75))),
         ])
 }
 ```

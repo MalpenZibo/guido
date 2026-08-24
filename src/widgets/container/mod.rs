@@ -27,8 +27,8 @@ use crate::backdrop::BackdropBlur;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::reactive::{
-    IntoSignal, OptionSignalExt, OwnerId, RwSignal, Signal, create_derived, create_signal,
-    create_stored, dispose_owner_now, focus_path, with_owner, with_signal_tracking,
+    IntoSignal, OptionSignalExt, RwSignal, Signal, create_derived, create_signal, create_stored,
+    focus_path, with_signal_tracking,
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
@@ -38,15 +38,12 @@ use crate::widget_ref::{WidgetRef, register_widget_ref};
 
 use super::children::ChildrenSource;
 use super::control::Control;
-use super::font::{FontFamily, FontWeight};
-use super::input_style::InputStyle;
 use super::into_child::{IntoChild, IntoChildren};
 use super::paint_children::{ChildPaintOptions, paint_children};
 use super::scroll::{
     ScrollAxis, ScrollState, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibility,
 };
 use super::state_layer::{RippleConfig, StateStyle, StateWhen, Stateful, resolve_background};
-use super::text_style::{TextShadow, TextStroke, TextStyle};
 use super::widget::{
     Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding, Rect,
     ScrollSource, Widget,
@@ -195,7 +192,6 @@ pub(super) struct ContainerAnims {
     pub(super) border_width: Option<AnimationState<f32>>,
     pub(super) border_color: Option<AnimationState<Color>>,
     pub(super) transform: Option<AnimationState<Transform>>,
-    pub(super) text_color: Option<AnimationState<Color>>,
 }
 
 bitflags::bitflags! {
@@ -408,37 +404,9 @@ pub struct Container {
     // Backdrop blur: this surface's own content, the compositor's, or both.
     pub(super) backdrop_blur: Option<Signal<BackdropBlur>>,
 
-    // How text inside this container looks. Boxed: most containers hold no
-    // text and pay one pointer for the whole feature.
-    pub(super) text: Option<Box<TextStyle>>,
-
-    /// What this container declares for the inputs below it. Separate from
-    /// `text` because a text cannot draw any of it.
-    pub(super) input: Option<Box<InputStyle>>,
-
     /// Declared with `control()`. A container is an interaction unit for other
     /// reasons too — see `is_control` — so this is only the explicit half.
     pub(super) declared_control: bool,
-
-    // Owns the derived published in place of the text colour when a state
-    // layer declares one. Created at registration, so it belongs to no user
-    // scope and has to be torn down by hand when the container goes.
-    pub(super) text_owner: Option<OwnerId>,
-
-    // The in-flight value of an animated text colour, `None` while nothing is
-    // animating. Every other animated property is consumed by the paint of the
-    // container that owns it; this one is drawn by a *different* widget, so
-    // the value has to leave through a signal — a write per frame, which is
-    // what a per-frame repaint of the text costs under any design.
-    pub(super) animated_text: Option<RwSignal<Option<Color>>>,
-
-    // The base the published derived falls back to: this container's own
-    // declaration, or the nearest ancestor's, resolved once at registration.
-    //
-    // The animation has to aim at the same value the derived would fold, or it
-    // departs from a colour the text was never showing — see
-    // `effective_text_color_target`.
-    pub(super) text_base: Option<Signal<Color>>,
 
     // Animation state (boxed to save ~400 bytes per non-animated container)
     pub(super) anims: Option<Box<ContainerAnims>>,
@@ -474,12 +442,7 @@ impl Container {
             interaction: None,
             widget_ref: None,
             backdrop_blur: None,
-            text: None,
-            input: None,
             declared_control: false,
-            text_owner: None,
-            animated_text: None,
-            text_base: None,
             anims: None,
             scroll_axis: ScrollAxis::None,
             scroll_data: None,
@@ -582,108 +545,6 @@ impl Container {
     // Each property is inherited by descendants until a nearer container
     // overrides it — see [`TextStyle`](crate::widgets::TextStyle).
     // -----------------------------------------------------------------------
-
-    fn text_mut(&mut self) -> &mut TextStyle {
-        self.text.get_or_insert_with(Box::default)
-    }
-
-    fn input_mut(&mut self) -> &mut InputStyle {
-        self.input.get_or_insert_with(Box::default)
-    }
-
-    /// Set the colour of text in this container and its descendants.
-    ///
-    /// Named `text_color` rather than `color` because `color` on a box reads
-    /// as its fill — that one is [`background`](Self::background).
-    ///
-    /// ```ignore
-    /// container().text_color(theme.text).child(text("Hello"))
-    /// ```
-    pub fn text_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.text_mut().color = Some(color.into_signal());
-        self
-    }
-
-    /// Set the font size of text in this container and its descendants, in
-    /// logical pixels.
-    pub fn font_size<M>(mut self, size: impl IntoSignal<f32, M>) -> Self {
-        self.text_mut().font_size = Some(size.into_signal());
-        self
-    }
-
-    /// Set the font family of text in this container and its descendants.
-    ///
-    /// ```ignore
-    /// container().font_family(FontFamily::Name("Inter".into()))
-    /// ```
-    pub fn font_family<M>(mut self, family: impl IntoSignal<FontFamily, M>) -> Self {
-        self.text_mut().font_family = Some(family.into_signal());
-        self
-    }
-
-    /// Set the font weight of text in this container and its descendants, on
-    /// the CSS 100-900 scale.
-    pub fn font_weight<M>(mut self, weight: impl IntoSignal<FontWeight, M>) -> Self {
-        self.text_mut().font_weight = Some(weight.into_signal());
-        self
-    }
-
-    /// Shorthand for [`font_weight(FontWeight::BOLD)`](Self::font_weight).
-    pub fn bold(self) -> Self {
-        self.font_weight(FontWeight::BOLD)
-    }
-
-    /// Shorthand for [`font_family(FontFamily::Monospace)`](Self::font_family).
-    pub fn mono(self) -> Self {
-        self.font_family(FontFamily::Monospace)
-    }
-
-    /// Draw a contour around the glyphs, under the fill.
-    ///
-    /// Named `text_stroke` and not `text_outline` because CSS `outline` is the
-    /// contour of a *box* — this is the one CSS spells `-webkit-text-stroke`.
-    ///
-    /// ```ignore
-    /// container().text_color(Color::WHITE).text_stroke(1.5, Color::BLACK)
-    /// ```
-    pub fn text_stroke<M>(mut self, stroke: impl IntoSignal<TextStroke, M>) -> Self {
-        self.text_mut().stroke = Some(stroke.into_signal());
-        self
-    }
-
-    /// Cast a soft shadow from the glyphs, as CSS `text-shadow`.
-    ///
-    /// ```ignore
-    /// container().text_shadow(TextShadow::new(0.0, 2.0, 8.0, shadow_color))
-    /// ```
-    pub fn text_shadow<M>(mut self, shadow: impl IntoSignal<TextShadow, M>) -> Self {
-        self.text_mut().shadow = Some(shadow.into_signal());
-        self
-    }
-
-    /// Set the caret colour of any [`TextInput`](crate::widgets::TextInput)
-    /// below this container. Defaults to the text colour.
-    pub fn cursor_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.input_mut().cursor_color = Some(color.into_signal());
-        self
-    }
-
-    /// Set the selection highlight colour of any
-    /// [`TextInput`](crate::widgets::TextInput) below this container.
-    pub fn selection_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.input_mut().selection_color = Some(color.into_signal());
-        self
-    }
-
-    /// Set the placeholder colour of any
-    /// [`TextInput`](crate::widgets::TextInput) below this container.
-    ///
-    /// Defaults to the inherited text colour at reduced alpha, which is what a
-    /// placeholder is: the same text, quieter.
-    pub fn placeholder_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.input_mut().placeholder_color = Some(color.into_signal());
-        self
-    }
 
     /// Set the corner radius in logical pixels.
     ///
@@ -1157,27 +1018,6 @@ impl Container {
         self
     }
 
-    /// Animate the text colour of this container and its descendants.
-    ///
-    /// ```ignore
-    /// container()
-    ///     .text_color(theme.text_weak)
-    ///     .when_hovered(|s| s.text_color(theme.text))
-    ///     .animate_text_color(Transition::new(200.0, TimingFunction::EaseOut))
-    /// ```
-    ///
-    /// A transition declared on two levels — an animated colour whose own base
-    /// is inherited from an ancestor that is itself animating — currently
-    /// retargets every frame, giving a damped chase rather than a transition
-    /// with its own curve. CSS starts the inner one once, towards the outer's
-    /// *final* value; that is the rule to adopt if it ever comes up. The chase
-    /// converges either way.
-    pub fn animate_text_color(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        self.anims_mut().text_color = Some(AnimationState::new(Color::WHITE, transition.into()));
-        self.animated_text = Some(create_signal(None));
-        self
-    }
-
     /// Animate elevation changes — the Material lift on hover, in motion
     /// rather than as a jump.
     pub fn animate_elevation(mut self, transition: impl Into<TransitionConfig>) -> Self {
@@ -1352,9 +1192,7 @@ impl Drop for Container {
     ///
     /// Every other signal a container holds was created in the builder chain,
     /// inside the caller's own scope, and is freed with it.
-    fn drop(&mut self) {
-        self.dispose_text_owner();
-    }
+    fn drop(&mut self) {}
 }
 
 impl Widget for Container {
@@ -1396,40 +1234,8 @@ impl Widget for Container {
                     self.effective_transform_target(id),
                 )
             });
-            let text_color_target = self
-                .anims
-                .as_ref()
-                .is_some_and(|a| a.text_color.is_some())
-                .then(|| {
-                    crate::reactive::diagnostics::snapshot_zone(|| {
-                        self.effective_text_color_target(id)
-                    })
-                });
-            let animated_text = self.animated_text;
             let anims = self.anims.as_mut().unwrap();
 
-            // Text colour, by hand rather than through `advance_anim!`: every
-            // other animated property is consumed by this container's own
-            // paint, but this one is drawn by a descendant, so each step has
-            // to leave through a signal. The write is what wakes the text.
-            if let (Some(anim), Some(target)) = (anims.text_color.as_mut(), text_color_target) {
-                anim.animate_to(target);
-                if anim.is_animating() {
-                    any_animating = true;
-                    let required = if anim.advance().is_changed() {
-                        crate::jobs::RequiredJob::Paint
-                    } else {
-                        crate::jobs::RequiredJob::None
-                    };
-                    request_job(id, JobRequest::Animation(required));
-                }
-                if let Some(signal) = animated_text {
-                    // `None` once settled, so the derived goes back to the
-                    // ordinary fold rather than pinning the last frame.
-                    let current = anim.is_animating().then(|| anim.displayed());
-                    signal.set(current);
-                }
-            }
             // Layout-affecting animations: width, height, padding
             advance_anim!(anims, width, id, any_animating, layout);
             advance_anim!(anims, height, id, any_animating, layout);
@@ -1529,13 +1335,6 @@ impl Widget for Container {
         // Set container_id for children source
         self.children_source.set_container_id(id);
 
-        // Publish the declared text style on the node so descendants find it
-        // by walking up. The signals themselves are stable ids, so a value
-        // change needs no rewrite — only a rebuilt container does, and that
-        // re-registers anyway.
-        let published = self.published_text_style(tree, id);
-        tree.set_text_style(id, published);
-        tree.set_input_style(id, self.input.as_deref().copied());
         tree.set_control(
             id,
             self.is_control()

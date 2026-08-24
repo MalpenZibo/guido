@@ -147,9 +147,6 @@ impl Text {
         if let Some(own) = self.style.as_deref() {
             style.inherit_from(own);
         }
-        if !style.is_complete() {
-            style.inherit_from(&tree.inherited_text_style(id));
-        }
         style
     }
 
@@ -565,53 +562,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_text_follows_the_ancestor_signal_it_resolved_from() {
-        let size = create_signal(10.0f32);
-        let color = create_signal(Color::RED);
-
-        let mut tree = Tree::new();
-        let root = tree.register(Box::new(
-            container()
-                .font_size(move || size.get())
-                .text_color(move || color.get())
-                // A plain container in between: the text must still end up
-                // subscribed to the signals two levels up.
-                .child(container().child(text("hi"))),
-        ));
-        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-
-        assert_eq!(frame(&mut tree, root), (Color::RED, 10.0));
-
-        size.set(40.0);
-        color.set(Color::BLUE);
-
-        assert_eq!(
-            frame(&mut tree, root),
-            (Color::BLUE, 40.0),
-            "a change to an inherited declaration must re-measure and repaint \
-             the text that read it"
-        );
-    }
-
     /// A declaration on the text is the nearest one there is, per property:
-    /// the size below comes from the text, the colour from the container.
-    #[test]
-    fn a_texts_own_declaration_wins_over_its_ancestors() {
-        let mut tree = Tree::new();
-        let root = tree.register(Box::new(
-            container()
-                .font_size(10.0)
-                .text_color(Color::RED)
-                .child(text("hi").font_size(40.0)),
-        ));
-        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-
-        assert_eq!(frame(&mut tree, root), (Color::RED, 40.0));
-    }
-
-    /// And it is reactive on the same terms as an inherited one: the signal is
-    /// read where the style is resolved, inside the text's own scope.
+    /// The declaration is reactive: the signal is read where the style is
+    /// resolved, inside the text's own scope.
     #[test]
     fn a_texts_own_declaration_follows_its_signal() {
         let color = create_signal(Color::RED);

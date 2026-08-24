@@ -21,7 +21,6 @@ fn menu_entry(label: &str) -> Container {
         .padding([8.0, 12.0])
         .corner_radius(6.0)
         .when_hovered(|s| s.lighter(0.12))
-        .font_size(13)
         .child(text(label))
 }
 
@@ -39,7 +38,6 @@ fn submenu_entry(parent: Rc<RefCell<Option<PopupHandle>>>, open: RwSignal<bool>)
         .padding([8.0, 12.0])
         .corner_radius(6.0)
         .when_hovered(|s| s.lighter(0.12))
-        .font_size(13)
         .on_click(move || {
             if open.get() {
                 if let Some(child) = child_slot.borrow_mut().take() {
@@ -184,13 +182,17 @@ fn main() {
 
                                 *popup_slot.borrow_mut() = Some(popup);
                             })
-                            .child(text(move || {
-                                if menu_open.get() {
-                                    "Menu ▾ (click outside to dismiss)".to_string()
-                                } else {
-                                    "Menu ▸".to_string()
-                                }
-                            })),
+                            .child(
+                                text(move || {
+                                    if menu_open.get() {
+                                        "Menu ▾ (click outside to dismiss)".to_string()
+                                    } else {
+                                        "Menu ▸".to_string()
+                                    }
+                                })
+                                .font_size(13)
+                                .font_size(13),
+                            ),
                     )
             },
         );

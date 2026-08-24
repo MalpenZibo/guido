@@ -44,7 +44,7 @@ fn collect(node: &RenderNode, out: &mut Vec<(f32, f32, Color)>) {
 #[test]
 fn plain_text_is_a_single_draw() {
     assert_eq!(
-        draws(container().text_color(Color::WHITE).child(text("hi"))).len(),
+        draws(container().child(text("hi").color(Color::WHITE))).len(),
         1
     );
 }
@@ -54,11 +54,12 @@ fn the_fill_is_drawn_last() {
     // The one ordering that matters: painted over the fill, a stroke eats half
     // the weight of every stem and the text reads as thinner, not outlined.
     let cmds = draws(
-        container()
-            .text_color(Color::WHITE)
-            .text_stroke(TextStroke::new(2.0, Color::BLACK))
-            .text_shadow(TextShadow::new(0.0, 2.0, 4.0, Color::RED))
-            .child(text("hi")),
+        container().child(
+            text("hi")
+                .color(Color::WHITE)
+                .text_stroke(TextStroke::new(2.0, Color::BLACK))
+                .text_shadow(TextShadow::new(0.0, 2.0, 4.0, Color::RED)),
+        ),
     );
 
     let (x, y, color) = *cmds.last().unwrap();
@@ -75,11 +76,12 @@ fn the_fill_is_drawn_last() {
 #[test]
 fn the_shadow_is_drawn_before_the_stroke() {
     let cmds = draws(
-        container()
-            .text_color(Color::WHITE)
-            .text_stroke(TextStroke::new(1.0, Color::BLACK))
-            .text_shadow(TextShadow::new(0.0, 0.0, 0.0, Color::RED))
-            .child(text("hi")),
+        container().child(
+            text("hi")
+                .color(Color::WHITE)
+                .text_stroke(TextStroke::new(1.0, Color::BLACK))
+                .text_shadow(TextShadow::new(0.0, 0.0, 0.0, Color::RED)),
+        ),
     );
 
     let last_shadow = cmds.iter().rposition(|(_, _, c)| *c == Color::RED).unwrap();
@@ -93,10 +95,11 @@ fn the_shadow_is_drawn_before_the_stroke() {
 #[test]
 fn a_stroke_surrounds_the_glyphs() {
     let cmds = draws(
-        container()
-            .text_color(Color::WHITE)
-            .text_stroke(TextStroke::new(2.0, Color::BLACK))
-            .child(text("hi")),
+        container().child(
+            text("hi")
+                .color(Color::WHITE)
+                .text_stroke(TextStroke::new(2.0, Color::BLACK)),
+        ),
     );
 
     let ring: Vec<_> = cmds.iter().filter(|(_, _, c)| *c == Color::BLACK).collect();
@@ -121,14 +124,10 @@ fn a_stroke_surrounds_the_glyphs() {
 #[test]
 fn a_wider_stroke_uses_more_samples() {
     let count = |width: f32| {
-        draws(
-            container()
-                .text_stroke(TextStroke::new(width, Color::BLACK))
-                .child(text("hi")),
-        )
-        .iter()
-        .filter(|(_, _, c)| *c == Color::BLACK)
-        .count()
+        draws(container().child(text("hi").text_stroke(TextStroke::new(width, Color::BLACK))))
+            .iter()
+            .filter(|(_, _, c)| *c == Color::BLACK)
+            .count()
     };
     assert!(
         count(4.0) > count(1.0),
@@ -140,10 +139,12 @@ fn a_wider_stroke_uses_more_samples() {
 #[test]
 fn an_unblurred_shadow_is_one_offset_copy() {
     let cmds = draws(
-        container()
-            .text_color(Color::WHITE)
-            .text_shadow(TextShadow::new(3.0, 4.0, 0.0, Color::RED))
-            .child(text("hi")),
+        container().child(text("hi").color(Color::WHITE).text_shadow(TextShadow::new(
+            3.0,
+            4.0,
+            0.0,
+            Color::RED,
+        ))),
     );
 
     let shadow: Vec<_> = cmds.iter().filter(|(_, _, c)| *c == Color::RED).collect();
@@ -154,15 +155,12 @@ fn an_unblurred_shadow_is_one_offset_copy() {
 #[test]
 fn a_blurred_shadow_spreads_around_the_offset() {
     let cmds = draws(
-        container()
-            .text_color(Color::WHITE)
-            .text_shadow(TextShadow::new(
-                0.0,
-                4.0,
-                6.0,
-                Color::rgba(0.0, 0.0, 0.0, 0.8),
-            ))
-            .child(text("hi")),
+        container().child(text("hi").color(Color::WHITE).text_shadow(TextShadow::new(
+            0.0,
+            4.0,
+            6.0,
+            Color::rgba(0.0, 0.0, 0.0, 0.8),
+        ))),
     );
 
     let shadow: Vec<_> = cmds
@@ -189,10 +187,12 @@ fn a_blurred_shadow_spreads_around_the_offset() {
 /// Every copy of a black shadow, as offsets from the glyph.
 fn shadow_copies(blur: f32) -> Vec<(f32, f32)> {
     draws(
-        container()
-            .text_color(Color::WHITE)
-            .text_shadow(TextShadow::new(0.0, 0.0, blur, Color::BLACK))
-            .child(text("hi")),
+        container().child(text("hi").color(Color::WHITE).text_shadow(TextShadow::new(
+            0.0,
+            0.0,
+            blur,
+            Color::BLACK,
+        ))),
     )
     .into_iter()
     .filter(|(_, _, c)| c.r == 0.0 && c.g == 0.0 && c.b == 0.0)
@@ -265,24 +265,9 @@ fn a_huge_blur_spreads_the_budget_instead_of_spending_more() {
 #[test]
 fn a_zero_width_stroke_draws_nothing_extra() {
     assert_eq!(
-        draws(
-            container()
-                .text_stroke(TextStroke::new(0.0, Color::BLACK))
-                .child(text("hi"))
-        )
-        .len(),
+        draws(container().child(text("hi").text_stroke(TextStroke::new(0.0, Color::BLACK)))).len(),
         1
     );
-}
-
-#[test]
-fn decoration_is_inherited_like_everything_else() {
-    let cmds = draws(
-        container()
-            .text_stroke(TextStroke::new(1.0, Color::BLACK))
-            .child(container().layout(Flex::row()).child(text("hi"))),
-    );
-    assert!(cmds.iter().any(|(_, _, c)| *c == Color::BLACK));
 }
 
 #[test]
@@ -290,14 +275,15 @@ fn decoration_does_not_change_how_much_room_the_text_takes() {
     // A shadow must not push the text's neighbours around.
     let measure = |decorated: bool| {
         let mut tree = Tree::new();
-        let c = container().text_color(Color::WHITE);
-        let c = if decorated {
-            c.text_stroke(TextStroke::new(3.0, Color::BLACK))
+        let label = text("hi").color(Color::WHITE);
+        let label = if decorated {
+            label
+                .text_stroke(TextStroke::new(3.0, Color::BLACK))
                 .text_shadow(TextShadow::new(2.0, 2.0, 8.0, Color::RED))
         } else {
-            c
+            label
         };
-        let root = tree.register(Box::new(c.child(text("hi"))));
+        let root = tree.register(Box::new(container().child(label)));
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
         tree.with_widget_mut(root, |w, id, t| {
             w.layout(t, id, Constraints::new(0.0, 0.0, 800.0, 600.0))

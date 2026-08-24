@@ -194,7 +194,7 @@ fn button(label: &str, on_click: impl Fn() + 'static) -> Container {
         .when_hovered(|s| s.lighter(0.1))
         .when_pressed(|s| s.ripple())
         .on_click(on_click)
-        .child(container().text_color(Color::WHITE).child(text(label)))
+        .child(container().child(text(label).color(Color::WHITE)))
 }
 ```
 
@@ -206,13 +206,13 @@ Combine static and dynamic children freely, in any order:
 container()
     .layout(Flex::column().spacing(8.0))
     // Static header
-    .child(container().font_size(18.0).text_color(Color::WHITE).child(text("Items:")))
+    .child(container().child(text("Items:").color(Color::WHITE)))
     // Reactive middle
     .child(move || warning.get().then(|| warning_banner()))
     // Reactive keyed list
     .children(keyed(move || items.get(), |i| i.id, item_view))
     // Static footer
-    .child(container().text_color(Color::rgb(0.6, 0.6, 0.7)).child(text("End of list")))
+    .child(container().child(text("End of list").font_size(18.0).color(Color::rgb(0.6, 0.6, 0.7))))
 ```
 
 ## API Reference
