@@ -1084,7 +1084,7 @@ impl Widget for Container {
             advance_anim!(anims, height, id, any_animating, layout);
             advance_anim!(anims, padding, padding_target, id, any_animating, layout);
 
-            // Paint-only animations: border_width, background, corner_radius, border_color, transform
+            // Paint-only animations: border_width, background, corners, border_color, transform
             advance_anim!(
                 anims,
                 border_width,
