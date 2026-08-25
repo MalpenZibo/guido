@@ -35,7 +35,8 @@ pub(crate) use focus::{
 };
 #[doc(hidden)]
 pub use into_signal::{
-    ClosureMarker, LossyMarker, MemoMarker, RwSignalMarker, SignalMarker, ValueMarker,
+    ClosureMarker, ConvertedSignalMarker, LossyMarker, MemoMarker, RwSignalMarker, SignalMarker,
+    ValueMarker,
 };
 pub use into_signal::{IntoSignal, IntoVal};
 // The scope a widget opens around its own signal reads. Public because a

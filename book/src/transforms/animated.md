@@ -30,7 +30,7 @@ Physics simulation for bouncy, natural motion:
 
 ```rust
 container()
-    .scale(move || scale_signal.get())
+    .scale(scale_signal)
     .animate_scale(Transition::spring(SpringConfig::BOUNCY))
 ```
 
@@ -65,7 +65,7 @@ let scale_factor = create_signal(1.0f32);
 let is_scaled = create_signal(false);
 
 container()
-    .scale(move || scale_factor.get())
+    .scale(scale_factor)
     .animate_scale(Transition::spring(SpringConfig::BOUNCY))
     .on_click(move || {
         is_scaled.update(|s| *s = !*s);
@@ -139,7 +139,7 @@ fn animated_transforms_demo() -> impl Widget {
                 .height(80.0)
                 .background(Color::rgb(0.3, 0.8, 0.4))
                 .corners(8.0)
-                .scale(move || scale.get())
+                .scale(scale)
                 .animate_scale(Transition::spring(SpringConfig::BOUNCY))
                 .when_hovered(|s| s.lighter(0.1))
                 .when_pressed(|s| s.ripple())

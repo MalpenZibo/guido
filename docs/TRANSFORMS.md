@@ -124,7 +124,7 @@ For physics-based animation:
 
 ```rust
 container()
-    .scale(move || scale_signal.get())
+    .scale(scale_signal)
     .animate_scale(Transition::spring(SpringConfig::BOUNCY))
 ```
 

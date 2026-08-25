@@ -42,15 +42,22 @@ fn every_spelling_the_documentation_promises_compiles() {
         .rotate(sig)
         .pivot(Pivot::TOP_LEFT);
 
-    // A signal of a *different* type does not convert: `IntoSignal` accepts a
-    // `Signal<T>` only for the same `T`, so `.scale(sig)` on a `Signal<f32>`
-    // does not compile and `.scale(move || sig.get())` is the spelling. This
-    // is library-wide rather than particular to these properties —
-    // `.corners(signal_of_f32)` is refused the same way — so it is recorded
-    // here rather than worked around, and the documentation says the closure.
+    // A signal whose value converts, which is the natural thing to hold for a
+    // scale: the factor is an f32 long before it is a `Scale`.
+    let factor = create_signal(1.2f32);
+    let pair = create_signal((2.0f32, 0.5f32));
+    let _ = container().scale(factor).scale(pair).translate(pair);
+
+    // And a signal already holding the property's own type still arrives by
+    // identity rather than through a derived signal — the two impls carry
+    // different markers, so nothing is ambiguous.
     let scale_sig = create_signal(Scale::uniform(1.2));
     let offset_sig = create_signal(Translate::new(4.0, 0.0));
     let _ = container().scale(scale_sig).translate(offset_sig);
+
+    // What does NOT convert is a tuple *containing* signals — that is a
+    // `(RwSignal<f32>, f32)`, not a signal of a pair, and the closure is the
+    // spelling: `.translate(move || (x.get(), 0.0))`.
 
     // state layer
     let _ = container().when_pressed(|s| s.scale(0.98).rotate(2.0).translate((1.0, 0.0)));

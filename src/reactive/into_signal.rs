@@ -13,6 +13,8 @@ pub struct ClosureMarker;
 #[doc(hidden)]
 pub struct SignalMarker;
 #[doc(hidden)]
+pub struct ConvertedSignalMarker;
+#[doc(hidden)]
 pub struct RwSignalMarker;
 #[doc(hidden)]
 pub struct MemoMarker;
