@@ -9,6 +9,17 @@
 //! flattened and rendered into a texture this test owns, read back, and
 //! compared pixel by pixel against a committed PNG.
 //!
+//! **The font is part of the golden too.** Text metrics depend on the fonts
+//! installed on the machine, which is why the render-tree snapshots leave text
+//! out entirely. These do not: a font is vendored under `tests/assets/` and
+//! registered before any renderer exists, and every scenario that draws text
+//! names it. Nothing here can reach a system font, so nothing here depends on
+//! which machine it ran on.
+//!
+//! That matters because transformed text takes a path of its own — rasterised
+//! to a texture and drawn as a quad rather than handed to glyphon — and until
+//! there was a font, no golden had put a single glyph through it.
+//!
 //! **The rasterizer is part of the golden.** Two GPUs do not antialias an
 //! edge identically, so a golden blessed on a desktop GPU cannot be verified
 //! in CI. The reference is lavapipe, Mesa's software Vulkan implementation —
@@ -61,6 +72,13 @@ use guido::widgets::Widget;
 /// Non-sRGB 8-bit RGBA: the same family of format the Wayland surface picks,
 /// so what is read back here is what the compositor would have been handed.
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+/// Vendored so the goldens do not depend on what a machine happens to have
+/// installed: DejaVu Sans Mono, under the licence beside it. Registered per
+/// test thread, because the registry is thread-local and each test builds its
+/// own renderer.
+const FONT: &[u8] = include_bytes!("assets/DejaVuSansMono.ttf");
+const FONT_FAMILY: &str = "DejaVu Sans Mono";
 
 /// Per-channel difference below which two pixels are the same pixel. Blessed
 /// and compared on one rasterizer, the expected difference is zero; this
@@ -440,6 +458,11 @@ fn golden(
         return;
     }
 
+    // The font registry is thread-local and is read once, when a font system
+    // is first built. So it is filled on this thread, before the renderer that
+    // will read it exists. Registering the same bytes twice costs nothing.
+    guido::load_font(FONT.to_vec());
+
     // A renderer per test, and dropped before the test returns. It caches
     // with `Rc` — the library it belongs to draws from one thread — so it
     // cannot be shared between test threads, and keeping one per thread in a
@@ -461,6 +484,14 @@ fn box_of(w: f32, h: f32) -> Container {
 
 fn swatch(w: f32, h: f32, c: Color) -> Container {
     box_of(w, h).background(c)
+}
+
+/// Always the vendored family, never whatever the machine happens to have.
+fn label(content: &str, size: f32) -> Text {
+    text(content)
+        .font_family(FontFamily::Name(FONT_FAMILY.into()))
+        .font_size(size)
+        .color(Color::WHITE)
 }
 
 // ---------------------------------------------------------------------------
@@ -658,4 +689,74 @@ fn hidpi_at_scale_2x() {
         );
 
     golden("hidpi_at_scale_2x", (200.0, 84.0), 2.0, BACKDROP, view);
+}
+
+/// Text as glyphon draws it: axis-aligned, several sizes on one surface. This
+/// is the path every label takes until something transforms it.
+#[test]
+fn text_at_rest() {
+    let view = container()
+        .background(BACKDROP)
+        .padding(16.0)
+        .layout(Flex::column().spacing(10.0))
+        .child(label("Guido", 28.0))
+        .child(label("layer shell", 18.0))
+        .child(label("0123456789", 13.0))
+        .child(
+            box_of(200.0, 44.0)
+                .background(Color::rgb(0.20, 0.30, 0.45))
+                .corners(8.0)
+                .padding(10.0)
+                .child(label("on a card", 16.0)),
+        );
+
+    golden("text_at_rest", (240.0, 190.0), 1.0, BACKDROP, view);
+}
+
+/// Text under a transform, which is a pipeline of its own: rasterised to a
+/// texture and drawn as a quad rather than handed to glyphon. Until this
+/// scenario existed, no golden had put a glyph through it.
+///
+/// The angles stop short of 90° and 270° on purpose. At exactly those two the
+/// glyphs vanish — #218, measured across eighty angles and reproduced nowhere
+/// else, not at 89.9° and not at 90.1°. A golden blessed there would freeze the
+/// defect and call it the reference; the scenario covering them belongs to the
+/// change that fixes them.
+#[test]
+fn text_transformed() {
+    let card = |degrees: f32| {
+        box_of(150.0, 46.0)
+            .background(Color::rgb(0.18, 0.20, 0.28))
+            .corners(6.0)
+            .padding(8.0)
+            .rotate(degrees)
+            .child(label("rotated", 16.0))
+    };
+
+    let view = container()
+        .background(BACKDROP)
+        .padding(30.0)
+        .layout(Flex::column().spacing(30.0))
+        .child(
+            container()
+                .layout(Flex::row().spacing(40.0))
+                .child(card(0.0))
+                .child(card(30.0)),
+        )
+        .child(
+            container()
+                .layout(Flex::row().spacing(40.0))
+                .child(card(135.0))
+                .child(card(180.0)),
+        )
+        .child(
+            box_of(150.0, 46.0)
+                .background(Color::rgb(0.28, 0.18, 0.24))
+                .corners(6.0)
+                .padding(8.0)
+                .scale(1.4)
+                .child(label("scaled", 16.0)),
+        );
+
+    golden("text_transformed", (440.0, 320.0), 1.0, BACKDROP, view);
 }

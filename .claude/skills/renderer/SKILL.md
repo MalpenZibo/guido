@@ -53,9 +53,15 @@ is invisible to any test that renders at scale 1.
 
 `glyphon` over `cosmic-text`. Measurement lives in `text_measurer.rs` and is
 cached. Fonts come from the system plus anything the application handed to
-`load_font`. Text metrics depend on the fonts installed on the machine —
-which is why the render-tree snapshots exclude text, and why the goldens do not
-render any yet.
+`load_font`. Text metrics depend on the fonts installed on the machine, which
+is why the render-tree snapshots exclude text. The goldens do render it: they
+vendor a font under `tests/assets/` and name it in every scenario, so nothing
+there can reach a system font.
+
+Transformed text is a path of its own. Rotated or scaled text is not handed to
+glyphon — it is rasterised to a texture and drawn as a quad
+(`text_quad.rs`, `textured_quad_shader.wgsl`). Anything true of axis-aligned
+text has to be checked again there.
 
 ## Backdrop
 
