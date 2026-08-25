@@ -1,0 +1,52 @@
+name: Specification
+description: A change described so that it can be verified — the shape /implement expects
+title: "A sentence that says what should be true"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The title states the defect, or the truth that should hold — *"A container
+        collapsed to nothing still answers for the area it covers when open"* — not
+        a category and a summary.
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed
+      description: What happens now, and where in the code it happens.
+      placeholder: |
+        `Container::hit_test` returns the cached bounds even when height resolved to
+        0 (src/widgets/container/mod.rs:812), so a collapsed panel keeps swallowing
+        clicks meant for what is behind it.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: What should be true instead, phrased so that it can be checked.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: >
+        The test that fails before the change and passes after — which file, what it
+        asserts. If it is a golden scenario, say which one and what it would show. If
+        this change genuinely cannot be verified automatically, say so here and say
+        what the manual check is instead.
+      placeholder: |
+        `tests/interaction_controls.rs`: a container with height(0) does not receive
+        a click at its former centre, and the container behind it does.
+    validations:
+      required: true
+  - type: textarea
+    id: non-goals
+    attributes:
+      label: Non-goals
+      description: The neighbouring things this change deliberately does not do.
+  - type: textarea
+    id: where
+    attributes:
+      label: Where it lives
+      description: Files and functions involved.
