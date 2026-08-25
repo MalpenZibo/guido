@@ -98,7 +98,7 @@ cargo test
 
 **`widgets/`** - Composable UI primitives implementing the `Widget` trait
 - `Container`: Handles padding, background colors, gradients, borders, corner radius, and event handlers (click, hover, scroll)
-- **Reactivity rule**: everything that survives to paint takes `impl IntoSignal<T, M>` (background, gradient, backdrop_blur, overflow, corners, border, transform, …); structural declarations do not (`layout`, `scrollable`, `scrollbar`, `scrollbar_visibility`, `control`, `animate_*`)
+- **Reactivity rule**: everything that survives to paint takes `impl IntoSignal<T, M>` (background, gradient, backdrop_blur, overflow, corners, border, translate, rotate, scale, pivot, …); structural declarations do not (`layout`, `scrollable`, `scrollbar`, `scrollbar_visibility`, `control`, `animate_*`)
 - `Flex` / `ZStack`: layouts plugged into a container via `.layout(Flex::row())`; the `Layout` trait is public, so an app can write its own
 - `Text`: Text rendering with reactive content and styling
 - `AnyWidget`: Type alias for `Box<dyn Widget>` with `Widget::into_any()` for type erasure
@@ -313,6 +313,45 @@ let service = create_service(move |mut rx, ctx| async move {
 });
 service.send(MyCommand::DoSomething);
 ```
+
+### A reactive property has three spellings, and they must agree
+
+`IntoSignal` accepts a value, a closure, or a signal. A property is only
+properly reactive if the *same expression* compiles in all three positions:
+
+```rust
+container().width(100.0)             // value
+container().width(move || w.get())   // closure
+container().width(w)                 // signal
+```
+
+The three are served by three different sets of impls, and they can drift apart
+silently — nothing fails to build when one is missing, it just refuses at some
+call site months later. Every property with a conversion had exactly this hole
+until #225: `.width(signal_of_f32)`, `.padding(..)`, `.corners(..)`,
+`.backdrop_blur(..)` and `Flex::spacing(..)` all refused a signal of the type
+their own value form converts from.
+
+**When adding a conversion to a property type, add all three:**
+
+| spelling | impl to write | where it lives |
+|---|---|---|
+| value | `From<S> for T` | beside `T` |
+| closure | `IntoVal<T> for S` | beside `T` |
+| signal | `converting_signals!(S => T)` | beside `T` |
+
+The lists must match one for one. They cannot be collapsed into a single
+blanket impl: `IntoVal` is reflexive, so a blanket `S: IntoVal<T>` also covers
+`Signal<T> -> T`, collides with the passthrough impl and leaves the marker
+generic undecidable — it stops existing call sites compiling. Excluding the
+reflexive case needs negative bounds or specialisation, neither stable.
+
+So this stays a hand-kept list until something generates all three from one
+declaration. **Until then, treat "did I add the signal form too?" as part of
+adding any conversion**, and add a spelling to `tests/signal_conversions.rs`,
+which is the only thing standing between the lists and drift.
+
+Tracked in #226.
 
 ### Corners
 
