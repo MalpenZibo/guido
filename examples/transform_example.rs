@@ -139,7 +139,7 @@ fn main() {
                             .background(Color::rgb(0.8, 0.5, 0.7))
                             .corners(8.0)
                             .transform(Transform::rotate_degrees(45.0))
-                            .transform_origin(TransformOrigin::TOP_LEFT)
+                            .pivot(Pivot::TOP_LEFT)
                             .child(
                                 container()
                                     .layout(
@@ -156,7 +156,7 @@ fn main() {
                             .background(Color::rgb(0.5, 0.7, 0.8))
                             .corners(8.0)
                             .transform(Transform::scale(0.8))
-                            .transform_origin(TransformOrigin::BOTTOM_RIGHT)
+                            .pivot(Pivot::BOTTOM_RIGHT)
                             .child(
                                 container()
                                     .layout(
@@ -175,12 +175,12 @@ fn main() {
                                 .background(Color::rgb(0.7, 0.8, 0.5))
                                 .corners(8.0)
                                 .transform(Transform::rotate_degrees(30.0))
-                                .transform_origin(move || match origin_index.get() % 5 {
-                                    0 => TransformOrigin::CENTER,
-                                    1 => TransformOrigin::TOP_LEFT,
-                                    2 => TransformOrigin::TOP_RIGHT,
-                                    3 => TransformOrigin::BOTTOM_LEFT,
-                                    _ => TransformOrigin::BOTTOM_RIGHT,
+                                .pivot(move || match origin_index.get() % 5 {
+                                    0 => Pivot::CENTER,
+                                    1 => Pivot::TOP_LEFT,
+                                    2 => Pivot::TOP_RIGHT,
+                                    3 => Pivot::BOTTOM_LEFT,
+                                    _ => Pivot::BOTTOM_RIGHT,
                                 })
                                 .when_hovered(|s| s.lighter(0.1))
                                 .when_pressed(|s| s.ripple())

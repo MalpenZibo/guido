@@ -99,14 +99,14 @@ t1.then(&t2)  // Composition
 t.inverse()   // Inversion
 ```
 
-### `transform_origin.rs` - Pivot Points
+### `pivot.rs` - Pivot Points
 
 Define rotation/scale pivot:
 
 ```rust
-TransformOrigin::CENTER
-TransformOrigin::TOP_LEFT
-TransformOrigin::custom(0.25, 0.75)
+Pivot::CENTER
+Pivot::TOP_LEFT
+Pivot::custom(0.25, 0.75)
 ```
 
 ## Widget Trait

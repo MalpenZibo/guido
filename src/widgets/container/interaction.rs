@@ -25,7 +25,7 @@ pub(super) struct HitContext {
     pub bounds: Rect,
     pub corners: crate::widgets::Corners,
     pub transform: Transform,
-    pub transform_origin: TransformOrigin,
+    pub pivot: Pivot,
 }
 
 impl HitContext {
@@ -37,7 +37,7 @@ impl HitContext {
 
     /// A surface-space point expressed relative to the container's own origin.
     pub(super) fn local(&self, x: f32, y: f32) -> (f32, f32) {
-        local_point(&self.transform, self.transform_origin, self.bounds, x, y)
+        local_point(&self.transform, self.pivot, self.bounds, x, y)
     }
 
     /// The same, for a point that has already had the transform undone.
@@ -53,7 +53,7 @@ impl HitContext {
 /// An identity transform returns the point unchanged.
 pub(super) fn untransform_point(
     transform: &Transform,
-    origin: TransformOrigin,
+    origin: Pivot,
     bounds: Rect,
     x: f32,
     y: f32,
@@ -72,7 +72,7 @@ pub(super) fn untransform_point(
 /// the space ripples and pointer callbacks work in.
 pub(super) fn local_point(
     transform: &Transform,
-    origin: TransformOrigin,
+    origin: Pivot,
     bounds: Rect,
     x: f32,
     y: f32,

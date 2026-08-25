@@ -1,6 +1,6 @@
 use crate::widgets::Rect;
 
-/// Horizontal anchor position for transform origin
+/// Horizontal anchor position for a pivot
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum HorizontalAnchor {
     /// Anchor at the left edge (0%)
@@ -15,7 +15,7 @@ pub enum HorizontalAnchor {
     Px(f32),
 }
 
-/// Vertical anchor position for transform origin
+/// Vertical anchor position for a pivot
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VerticalAnchor {
     /// Anchor at the top edge (0%)
@@ -30,42 +30,47 @@ pub enum VerticalAnchor {
     Px(f32),
 }
 
-/// Specifies the pivot point for transforms, similar to CSS `transform-origin`.
+/// The point a rotation turns about and a scale grows from, as CSS
+/// `transform-origin` is.
 ///
-/// The origin is the point around which rotations and scales are applied.
-/// By default, transforms are centered on the widget (50%, 50%).
+/// A translation is unaffected by it — moving a box is the same movement
+/// wherever the pivot sits — so this governs `rotate` and `scale` alone. One
+/// pivot serves both, the way CSS gives one `transform-origin` to the whole
+/// group.
+///
+/// The centre of the widget by default.
 ///
 /// # Example
 /// ```ignore
 /// // Rotate around the top-left corner
 /// container()
 ///     .rotate(45.0)
-///     .transform_origin(TransformOrigin::TOP_LEFT)
+///     .pivot(Pivot::TOP_LEFT)
 ///
 /// // Scale from the bottom-right corner
 /// container()
 ///     .scale(1.5)
-///     .transform_origin(TransformOrigin::BOTTOM_RIGHT)
+///     .pivot(Pivot::BOTTOM_RIGHT)
 ///
 /// // Use percentage-based origin (25% from left, 75% from top)
 /// container()
 ///     .rotate(30.0)
-///     .transform_origin(TransformOrigin::percent(25.0, 75.0))
+///     .pivot(Pivot::percent(25.0, 75.0))
 ///
 /// // Use pixel-based offset (10px from left, 20px from top)
 /// container()
 ///     .scale(2.0)
-///     .transform_origin(TransformOrigin::px(10.0, 20.0))
+///     .pivot(Pivot::px(10.0, 20.0))
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TransformOrigin {
+pub struct Pivot {
     /// Horizontal position of the origin
     pub horizontal: HorizontalAnchor,
     /// Vertical position of the origin
     pub vertical: VerticalAnchor,
 }
 
-impl TransformOrigin {
+impl Pivot {
     /// Center of the widget (50%, 50%) - the default
     pub const CENTER: Self = Self {
         horizontal: HorizontalAnchor::Center,
@@ -120,7 +125,7 @@ impl TransformOrigin {
         vertical: VerticalAnchor::Bottom,
     };
 
-    /// Create a new transform origin with explicit anchors
+    /// A pivot from explicit anchors
     pub fn new(horizontal: HorizontalAnchor, vertical: VerticalAnchor) -> Self {
         Self {
             horizontal,
@@ -128,12 +133,12 @@ impl TransformOrigin {
         }
     }
 
-    /// Create a transform origin from percentages (0-100 scale)
+    /// A pivot from percentages (0-100 scale)
     ///
     /// # Example
     /// ```ignore
     /// // 25% from left, 75% from top
-    /// TransformOrigin::percent(25.0, 75.0)
+    /// Pivot::percent(25.0, 75.0)
     /// ```
     pub fn percent(x_percent: f32, y_percent: f32) -> Self {
         Self {
@@ -142,12 +147,12 @@ impl TransformOrigin {
         }
     }
 
-    /// Create a transform origin from pixel offsets from the top-left corner
+    /// A pivot from pixel offsets from the top-left corner
     ///
     /// # Example
     /// ```ignore
     /// // 10px from left, 20px from top
-    /// TransformOrigin::px(10.0, 20.0)
+    /// Pivot::px(10.0, 20.0)
     /// ```
     pub fn px(x: f32, y: f32) -> Self {
         Self {
@@ -156,7 +161,7 @@ impl TransformOrigin {
         }
     }
 
-    /// Resolve the transform origin to absolute coordinates within the given bounds.
+    /// Resolve to absolute coordinates within the given bounds.
     ///
     /// Returns `(x, y)` coordinates in the same coordinate system as the bounds.
     pub fn resolve(&self, bounds: Rect) -> (f32, f32) {
@@ -179,10 +184,10 @@ impl TransformOrigin {
         (x, y)
     }
 
-    /// Check if this is the center origin using the CENTER constant.
+    /// Whether this is the CENTER constant.
     ///
     /// Note: This checks the enum variant, not the resolved position.
-    /// `TransformOrigin::percent(50.0, 50.0).is_center()` returns `false`
+    /// `Pivot::percent(50.0, 50.0).is_center()` returns `false`
     /// even though it resolves to the same point as `CENTER`.
     /// This is intentional for performance - it enables a fast path
     /// when using the default center origin.
@@ -197,7 +202,7 @@ impl TransformOrigin {
     }
 }
 
-impl Default for TransformOrigin {
+impl Default for Pivot {
     fn default() -> Self {
         Self::CENTER
     }
@@ -216,47 +221,47 @@ mod tests {
         let bounds = Rect::new(100.0, 50.0, 200.0, 100.0);
 
         // CENTER: (200, 100)
-        let (x, y) = TransformOrigin::CENTER.resolve(bounds);
+        let (x, y) = Pivot::CENTER.resolve(bounds);
         assert!(approx_eq(x, 200.0));
         assert!(approx_eq(y, 100.0));
 
         // TOP_LEFT: (100, 50)
-        let (x, y) = TransformOrigin::TOP_LEFT.resolve(bounds);
+        let (x, y) = Pivot::TOP_LEFT.resolve(bounds);
         assert!(approx_eq(x, 100.0));
         assert!(approx_eq(y, 50.0));
 
         // TOP: (200, 50)
-        let (x, y) = TransformOrigin::TOP.resolve(bounds);
+        let (x, y) = Pivot::TOP.resolve(bounds);
         assert!(approx_eq(x, 200.0));
         assert!(approx_eq(y, 50.0));
 
         // TOP_RIGHT: (300, 50)
-        let (x, y) = TransformOrigin::TOP_RIGHT.resolve(bounds);
+        let (x, y) = Pivot::TOP_RIGHT.resolve(bounds);
         assert!(approx_eq(x, 300.0));
         assert!(approx_eq(y, 50.0));
 
         // LEFT: (100, 100)
-        let (x, y) = TransformOrigin::LEFT.resolve(bounds);
+        let (x, y) = Pivot::LEFT.resolve(bounds);
         assert!(approx_eq(x, 100.0));
         assert!(approx_eq(y, 100.0));
 
         // RIGHT: (300, 100)
-        let (x, y) = TransformOrigin::RIGHT.resolve(bounds);
+        let (x, y) = Pivot::RIGHT.resolve(bounds);
         assert!(approx_eq(x, 300.0));
         assert!(approx_eq(y, 100.0));
 
         // BOTTOM_LEFT: (100, 150)
-        let (x, y) = TransformOrigin::BOTTOM_LEFT.resolve(bounds);
+        let (x, y) = Pivot::BOTTOM_LEFT.resolve(bounds);
         assert!(approx_eq(x, 100.0));
         assert!(approx_eq(y, 150.0));
 
         // BOTTOM: (200, 150)
-        let (x, y) = TransformOrigin::BOTTOM.resolve(bounds);
+        let (x, y) = Pivot::BOTTOM.resolve(bounds);
         assert!(approx_eq(x, 200.0));
         assert!(approx_eq(y, 150.0));
 
         // BOTTOM_RIGHT: (300, 150)
-        let (x, y) = TransformOrigin::BOTTOM_RIGHT.resolve(bounds);
+        let (x, y) = Pivot::BOTTOM_RIGHT.resolve(bounds);
         assert!(approx_eq(x, 300.0));
         assert!(approx_eq(y, 150.0));
     }
@@ -266,19 +271,19 @@ mod tests {
         let bounds = Rect::new(0.0, 0.0, 100.0, 200.0);
 
         // 25%, 75%
-        let origin = TransformOrigin::percent(25.0, 75.0);
+        let origin = Pivot::percent(25.0, 75.0);
         let (x, y) = origin.resolve(bounds);
         assert!(approx_eq(x, 25.0));
         assert!(approx_eq(y, 150.0));
 
         // 0%, 0% should be same as TOP_LEFT
-        let origin = TransformOrigin::percent(0.0, 0.0);
+        let origin = Pivot::percent(0.0, 0.0);
         let (x, y) = origin.resolve(bounds);
         assert!(approx_eq(x, 0.0));
         assert!(approx_eq(y, 0.0));
 
         // 100%, 100% should be same as BOTTOM_RIGHT
-        let origin = TransformOrigin::percent(100.0, 100.0);
+        let origin = Pivot::percent(100.0, 100.0);
         let (x, y) = origin.resolve(bounds);
         assert!(approx_eq(x, 100.0));
         assert!(approx_eq(y, 200.0));
@@ -289,7 +294,7 @@ mod tests {
         let bounds = Rect::new(50.0, 100.0, 200.0, 300.0);
 
         // 10px, 20px from bounds origin
-        let origin = TransformOrigin::px(10.0, 20.0);
+        let origin = Pivot::px(10.0, 20.0);
         let (x, y) = origin.resolve(bounds);
         assert!(approx_eq(x, 60.0)); // 50 + 10
         assert!(approx_eq(y, 120.0)); // 100 + 20
@@ -297,14 +302,14 @@ mod tests {
 
     #[test]
     fn test_is_center() {
-        assert!(TransformOrigin::CENTER.is_center());
-        assert!(TransformOrigin::default().is_center());
-        assert!(!TransformOrigin::TOP_LEFT.is_center());
-        assert!(!TransformOrigin::percent(50.0, 50.0).is_center());
+        assert!(Pivot::CENTER.is_center());
+        assert!(Pivot::default().is_center());
+        assert!(!Pivot::TOP_LEFT.is_center());
+        assert!(!Pivot::percent(50.0, 50.0).is_center());
     }
 
     #[test]
     fn test_default() {
-        assert_eq!(TransformOrigin::default(), TransformOrigin::CENTER);
+        assert_eq!(Pivot::default(), Pivot::CENTER);
     }
 }

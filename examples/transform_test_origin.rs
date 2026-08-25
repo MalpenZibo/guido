@@ -21,27 +21,27 @@ fn main() {
                     .padding(30.0)
                     .children([
                         // CENTER (default)
-                        box_with_origin(Color::rgb(0.8, 0.3, 0.3), TransformOrigin::CENTER),
+                        box_with_origin(Color::rgb(0.8, 0.3, 0.3), Pivot::CENTER),
                         // TOP_LEFT
-                        box_with_origin(Color::rgb(0.3, 0.8, 0.3), TransformOrigin::TOP_LEFT),
+                        box_with_origin(Color::rgb(0.3, 0.8, 0.3), Pivot::TOP_LEFT),
                         // TOP_RIGHT
-                        box_with_origin(Color::rgb(0.3, 0.3, 0.8), TransformOrigin::TOP_RIGHT),
+                        box_with_origin(Color::rgb(0.3, 0.3, 0.8), Pivot::TOP_RIGHT),
                         // BOTTOM_LEFT
-                        box_with_origin(Color::rgb(0.8, 0.8, 0.3), TransformOrigin::BOTTOM_LEFT),
+                        box_with_origin(Color::rgb(0.8, 0.8, 0.3), Pivot::BOTTOM_LEFT),
                         // BOTTOM_RIGHT
-                        box_with_origin(Color::rgb(0.8, 0.3, 0.8), TransformOrigin::BOTTOM_RIGHT),
+                        box_with_origin(Color::rgb(0.8, 0.3, 0.8), Pivot::BOTTOM_RIGHT),
                     ])
             },
         );
     });
 }
 
-fn box_with_origin(color: Color, origin: TransformOrigin) -> Container {
+fn box_with_origin(color: Color, origin: Pivot) -> Container {
     container()
         .width(60.0)
         .height(60.0)
         .background(color)
         .corners(8.0)
         .transform(Transform::rotate_degrees(30.0))
-        .transform_origin(origin)
+        .pivot(origin)
 }

@@ -145,7 +145,7 @@ async fn main() {
                                     .main_alignment(MainAlignment::Center)
                                     .cross_alignment(CrossAlignment::Center),
                             )
-                            .transform_origin(TransformOrigin::TOP_LEFT)
+                            .pivot(Pivot::TOP_LEFT)
                             .transform(Transform::rotate_degrees(15.0))
                             .child(text("Origin: Top-Left").font_size(12.0).color(Color::WHITE)),
                         // Custom origin: bottom-right
@@ -159,7 +159,7 @@ async fn main() {
                                     .main_alignment(MainAlignment::Center)
                                     .cross_alignment(CrossAlignment::Center),
                             )
-                            .transform_origin(TransformOrigin::BOTTOM_RIGHT)
+                            .pivot(Pivot::BOTTOM_RIGHT)
                             .transform(Transform::rotate_degrees(15.0))
                             .child(
                                 text("Origin: Bot-Right")
@@ -177,7 +177,7 @@ async fn main() {
                                     .main_alignment(MainAlignment::Center)
                                     .cross_alignment(CrossAlignment::Center),
                             )
-                            .transform_origin(TransformOrigin::TOP_RIGHT)
+                            .pivot(Pivot::TOP_RIGHT)
                             .transform(Transform::scale(1.15).then_rotate(-10.0))
                             .child(text("Origin + Scale").font_size(12.0).color(Color::WHITE)),
                     ]),

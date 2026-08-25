@@ -131,7 +131,7 @@ container()
     .transform(Transform::translate(10.0, 20.0))  // Move
     .transform(Transform::rotate_degrees(45.0))           // Rotate degrees
     .transform(Transform::scale(1.5))             // Scale
-    .transform_origin(TransformOrigin::TOP_LEFT)
+    .pivot(Pivot::TOP_LEFT)
 ```
 
 See [Transforms](../transforms/README.md) for details.
@@ -285,7 +285,7 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 - `.translate(x, y)` - Move
 - `.rotate(degrees)` - Rotate
 - `.scale(factor)` - Scale
-- `.transform_origin(origin)` - Pivot point
+- `.pivot(origin)` - Pivot point
 
 ### Animations
 - `.animate_background(transition)` - Animate background

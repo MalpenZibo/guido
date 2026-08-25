@@ -103,7 +103,7 @@ fn dump_node(node: &RenderNode, depth: usize, out: &mut String) {
     let origin = if t.is_identity() || t.is_translation_only() {
         String::new()
     } else {
-        let o = node.transform_origin;
+        let o = node.pivot;
         format!(" origin={:?}/{:?}", o.horizontal, o.vertical)
     };
     let clip = match &node.clip {
@@ -377,7 +377,7 @@ fn transforms_and_origins() {
         .child(
             card(Color::GREEN)
                 .transform(Transform::rotate_degrees(30.0))
-                .transform_origin(TransformOrigin::TOP_LEFT),
+                .pivot(Pivot::TOP_LEFT),
         )
         .child(card(Color::BLUE).transform(Transform::scale(1.5)))
         .child(card(Color::YELLOW).transform(Transform::scale_xy(2.0, 0.5)))

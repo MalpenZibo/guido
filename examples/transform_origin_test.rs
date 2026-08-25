@@ -1,6 +1,6 @@
-//! Test example for transform_origin with shapes only (no text).
+//! Test example for pivot with shapes only (no text).
 //!
-//! This helps isolate transform_origin behavior from text rendering issues.
+//! This helps isolate pivot behavior from text rendering issues.
 
 use guido::prelude::*;
 use std::time::Duration;
@@ -60,7 +60,7 @@ async fn main() {
                                     .height(80.0)
                                     .background(Color::rgba(0.8, 0.5, 0.3, 0.8))
                                     .corners(8.0)
-                                    .transform_origin(TransformOrigin::TOP_LEFT)
+                                    .pivot(Pivot::TOP_LEFT)
                                     .transform(Transform::rotate_degrees(20.0)),
                                 // Top-right origin
                                 container()
@@ -68,7 +68,7 @@ async fn main() {
                                     .height(80.0)
                                     .background(Color::rgba(0.5, 0.8, 0.3, 0.8))
                                     .corners(8.0)
-                                    .transform_origin(TransformOrigin::TOP_RIGHT)
+                                    .pivot(Pivot::TOP_RIGHT)
                                     .transform(Transform::rotate_degrees(20.0)),
                                 // Bottom-left origin
                                 container()
@@ -76,7 +76,7 @@ async fn main() {
                                     .height(80.0)
                                     .background(Color::rgba(0.8, 0.3, 0.8, 0.8))
                                     .corners(8.0)
-                                    .transform_origin(TransformOrigin::BOTTOM_LEFT)
+                                    .pivot(Pivot::BOTTOM_LEFT)
                                     .transform(Transform::rotate_degrees(20.0)),
                                 // Bottom-right origin
                                 container()
@@ -84,7 +84,7 @@ async fn main() {
                                     .height(80.0)
                                     .background(Color::rgba(0.3, 0.8, 0.8, 0.8))
                                     .corners(8.0)
-                                    .transform_origin(TransformOrigin::BOTTOM_RIGHT)
+                                    .pivot(Pivot::BOTTOM_RIGHT)
                                     .transform(Transform::rotate_degrees(20.0)),
                             ]),
                         // Row 2: Scale with different origins
@@ -109,7 +109,7 @@ async fn main() {
                                     .height(60.0)
                                     .background(Color::rgba(0.3, 0.6, 0.3, 0.8))
                                     .corners(6.0)
-                                    .transform_origin(TransformOrigin::TOP_LEFT)
+                                    .pivot(Pivot::TOP_LEFT)
                                     .transform(Transform::scale(1.3)),
                                 // Bottom-right origin - scale
                                 container()
@@ -117,7 +117,7 @@ async fn main() {
                                     .height(60.0)
                                     .background(Color::rgba(0.3, 0.3, 0.6, 0.8))
                                     .corners(6.0)
-                                    .transform_origin(TransformOrigin::BOTTOM_RIGHT)
+                                    .pivot(Pivot::BOTTOM_RIGHT)
                                     .transform(Transform::scale(1.3)),
                             ]),
                         // Row 3: Animated rotation with different origins
@@ -142,7 +142,7 @@ async fn main() {
                                     .height(60.0)
                                     .background(Color::rgba(0.2, 0.5, 0.7, 0.8))
                                     .corners(6.0)
-                                    .transform_origin(TransformOrigin::TOP_LEFT)
+                                    .pivot(Pivot::TOP_LEFT)
                                     .transform(move || Transform::rotate_degrees(angle.get())),
                                 // Custom origin (25%, 75%) - animated
                                 container()
@@ -150,7 +150,7 @@ async fn main() {
                                     .height(60.0)
                                     .background(Color::rgba(0.5, 0.7, 0.2, 0.8))
                                     .corners(6.0)
-                                    .transform_origin(TransformOrigin::percent(25.0, 75.0))
+                                    .pivot(Pivot::percent(25.0, 75.0))
                                     .transform(move || Transform::rotate_degrees(angle.get())),
                             ]),
                         // Row 4: Nested containers with different origins
@@ -192,7 +192,7 @@ async fn main() {
                                             .main_alignment(MainAlignment::Center)
                                             .cross_alignment(CrossAlignment::Center),
                                     )
-                                    .transform_origin(TransformOrigin::TOP_LEFT)
+                                    .pivot(Pivot::TOP_LEFT)
                                     .transform(Transform::rotate_degrees(15.0))
                                     .child(
                                         container()

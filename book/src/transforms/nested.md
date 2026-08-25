@@ -144,7 +144,7 @@ container()
     .child(
         container()
             .transform(Transform::rotate_degrees(30.0))
-            .transform_origin(TransformOrigin::TOP_LEFT)  // Relative to child's top-left
+            .pivot(Pivot::TOP_LEFT)  // Relative to child's top-left
     )
 ```
 

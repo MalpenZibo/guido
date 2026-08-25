@@ -26,12 +26,12 @@ use crate::animation::TransitionConfig;
 use crate::backdrop::BackdropBlur;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Constraints, Flex, Layout, Length, Size};
+use crate::pivot::Pivot;
 use crate::reactive::{
     IntoSignal, OptionSignalExt, RwSignal, Signal, create_signal, focus_path, with_signal_tracking,
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::Transform;
-use crate::transform_origin::TransformOrigin;
 use crate::tree::{Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
 
@@ -394,7 +394,7 @@ pub struct Container {
     pub(super) elevation_reach: Cell<f32>,
     pub(super) visible: Option<Signal<bool>>,
     pub(super) transform: Option<Signal<Transform>>,
-    pub(super) transform_origin: Option<Signal<TransformOrigin>>,
+    pub(super) pivot: Option<Signal<Pivot>>,
 
     // Interaction state (callbacks, hover/press, state styles, ripple)
     // Only allocated when interaction features are used
@@ -438,7 +438,7 @@ impl Container {
             elevation_reach: Cell::new(0.0),
             visible: None,
             transform: None,
-            transform_origin: None,
+            pivot: None,
             interaction: None,
             widget_ref: None,
             backdrop_blur: None,
@@ -789,8 +789,8 @@ impl Container {
     }
 
     /// Set the transform origin (pivot point) for this container.
-    pub fn transform_origin<M>(mut self, origin: impl IntoSignal<TransformOrigin, M>) -> Self {
-        self.transform_origin = Some(origin.into_signal());
+    pub fn pivot<M>(mut self, origin: impl IntoSignal<Pivot, M>) -> Self {
+        self.pivot = Some(origin.into_signal());
         self
     }
 
@@ -1327,14 +1327,14 @@ impl Widget for Container {
             bounds: tree.get_bounds(id).unwrap_or_default(),
             corners: self.animated_corners(id),
             transform: self.animated_transform(id),
-            transform_origin: self.transform_origin.get_or(TransformOrigin::CENTER),
+            pivot: self.pivot.get_or(Pivot::CENTER),
         };
 
         // Undo our own transform before hit testing against the laid-out bounds
         let local_event: Cow<'_, Event> = match event.coords() {
             Some((x, y)) if !hit.transform.is_identity() => {
                 let (local_x, local_y) =
-                    untransform_point(&hit.transform, hit.transform_origin, hit.bounds, x, y);
+                    untransform_point(&hit.transform, hit.pivot, hit.bounds, x, y);
                 Cow::Owned(event.with_coords(local_x, local_y))
             }
             _ => Cow::Borrowed(event),
@@ -1402,7 +1402,7 @@ impl Widget for Container {
             corners,
             elevation_level,
             user_transform,
-            transform_origin,
+            pivot,
             border_width,
             border_color,
             gradient,
@@ -1414,7 +1414,7 @@ impl Widget for Container {
                 self.animated_corners(id),
                 self.animated_elevation(id),
                 self.animated_transform(id),
-                self.transform_origin.get_or(TransformOrigin::CENTER),
+                self.pivot.get_or(Pivot::CENTER),
                 self.animated_border_width(id),
                 self.animated_border_color(id),
                 self.gradient.as_ref().and_then(|g| g.get()),
@@ -1435,7 +1435,7 @@ impl Widget for Container {
 
         // Compose our own transform on top of the position the parent set.
         if !user_transform.is_identity() {
-            ctx.apply_transform_with_origin(user_transform, transform_origin);
+            ctx.apply_transform_with_pivot(user_transform, pivot);
         }
 
         // Before the decoration: the container paints over its own blurred

@@ -5,8 +5,8 @@ use std::rc::Rc;
 use super::commands::{Border, CornerRadii, DrawCommand};
 use super::tree::{ClipRegion, NodeId, RenderNode};
 use super::types::{Gradient, Shadow};
+use crate::pivot::Pivot;
 use crate::transform::Transform;
-use crate::transform_origin::TransformOrigin;
 use crate::widgets::font::{FontFamily, FontWeight};
 use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::text_style::{TextShadow, TextStroke};
@@ -33,7 +33,7 @@ use crate::widgets::{Color, Rect};
 ///     // Apply user transform (rotation, scale) - composes with parent's position transform
 ///     // Parent already set our position via set_transform before calling paint
 ///     if !self.user_transform.is_identity() {
-///         ctx.apply_transform_with_origin(self.user_transform, self.transform_origin);
+///         ctx.apply_transform_with_pivot(self.user_transform, self.pivot);
 ///     }
 ///
 ///     // Draw background in LOCAL coordinates
@@ -121,22 +121,22 @@ impl<'a> PaintContext<'a> {
     }
 
     /// Apply a transform with origin by composing it with the existing transform.
-    pub fn apply_transform_with_origin(&mut self, transform: Transform, origin: TransformOrigin) {
+    pub fn apply_transform_with_pivot(&mut self, transform: Transform, origin: Pivot) {
         if !transform.is_identity() {
             self.node.local_transform = self.node.local_transform.then(&transform);
-            self.node.transform_origin = origin;
+            self.node.pivot = origin;
         }
     }
 
     /// Set this node's transform origin.
-    pub fn set_transform_origin(&mut self, origin: TransformOrigin) {
-        self.node.transform_origin = origin;
+    pub fn set_pivot(&mut self, origin: Pivot) {
+        self.node.pivot = origin;
     }
 
     /// Set this node's local transform with origin.
-    pub fn set_transform_with_origin(&mut self, transform: Transform, origin: TransformOrigin) {
+    pub fn set_transform_with_pivot(&mut self, transform: Transform, origin: Pivot) {
         self.node.local_transform = transform;
-        self.node.transform_origin = origin;
+        self.node.pivot = origin;
     }
 
     // -------------------------------------------------------------------------

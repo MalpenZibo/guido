@@ -9,13 +9,13 @@ mod jobs;
 pub mod keyboard;
 pub mod layout;
 pub mod outputs;
+pub mod pivot;
 pub mod reactive;
 pub mod render_stats;
 pub mod session_lock;
 pub mod surface;
 mod surface_manager;
 pub mod transform;
-pub mod transform_origin;
 pub mod tree;
 pub mod widget_ref;
 pub mod widgets;
@@ -165,6 +165,7 @@ pub mod prelude {
         fraction,
     };
     pub use crate::outputs::{OutputId, OutputInfo, outputs, surface_output};
+    pub use crate::pivot::{HorizontalAnchor, Pivot, VerticalAnchor};
     pub use crate::platform::{Anchor, KeyboardInteractivity, Layer};
     pub use crate::reactive::{
         Callback, CursorIcon, IntoSignal, IntoVal, Memo, RwSignal, Service, Signal, Trigger,
@@ -182,7 +183,6 @@ pub mod prelude {
         surface_handle,
     };
     pub use crate::transform::Transform;
-    pub use crate::transform_origin::{HorizontalAnchor, TransformOrigin, VerticalAnchor};
     pub use crate::widget_ref::{WidgetRef, create_widget_ref};
     pub use crate::widgets::{
         AnyWidget, Border, Color, Container, ContentFit, Control, CornerRadii, Corners, Event,
