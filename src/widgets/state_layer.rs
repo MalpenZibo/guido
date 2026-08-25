@@ -124,6 +124,19 @@ pub struct StateStyle {
 }
 
 impl StateStyle {
+    /// Whether this layer moves, turns or resizes what it styles.
+    ///
+    /// Lives here, beside the fields, because that is where it stays true: a
+    /// component added to `StateStyle` is added a few lines above this, and a
+    /// caller that cached the answer somewhere else would go quietly stale.
+    /// `Container` gates its identity fast path on it — see
+    /// `InteractionState::declares_transform`.
+    pub(crate) fn moves_anything(&self) -> bool {
+        self.translate.is_some() || self.rotate.is_some() || self.scale.is_some()
+    }
+}
+
+impl StateStyle {
     /// Create a new empty state style.
     pub fn new() -> Self {
         Self::default()

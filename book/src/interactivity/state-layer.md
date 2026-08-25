@@ -137,7 +137,7 @@ pub struct StateStyle {
     pub background: Option<BackgroundOverride>,
     // Both halves or neither: half a border is no border.
     pub border: Option<BorderOverride>,
-    pub corner_radius: Option<Signal<f32>>,
+    pub corners: Option<Signal<Corners>>,
     pub translate: Option<Signal<Translate>>,
     pub rotate: Option<Signal<f32>>,
     pub scale: Option<Signal<Scale>>,

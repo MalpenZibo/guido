@@ -159,9 +159,17 @@ Transforms are properly accounted for in hit testing. A rotated button will corr
 
 ### Transform Struct
 
-Not in `guido::prelude` — an application declares the three components. This
-is what they compose into, and a widget written outside the crate reaches it
-through `guido::widget_prelude`.
+Not in `guido::prelude`, and **`Container` does not accept one** — an
+application declares the three components and nothing else. This is what they
+compose into on the way to the renderer, and it is in `guido::widget_prelude`
+for the other job: a widget written outside the crate positioning what it
+paints, through `PaintContext::set_transform`.
+
+So a shear, or a composition order other than translate → rotate → scale, is
+not expressible on a container. Where the old `.transform()` built a rotated
+offset with `rotate(5).then(&translate(10, 15))`, the equivalent now is a
+nested container: the outer one turns, the inner one moves inside the turned
+frame.
 
 ```rust
 impl Transform {

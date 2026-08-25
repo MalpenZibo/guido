@@ -190,6 +190,12 @@ impl Animatable for Translate {
         }
     }
 
+    /// Moving back towards where it started.
+    ///
+    /// A change from the old `Transform`, which compared `extract_scale()` and
+    /// so answered `false` for every pure translation: a container that slid
+    /// out and back played its forward transition both ways, whatever it had
+    /// declared for the reverse. A return leg is a reversal, and now says so.
     fn is_reverse(from: &Self, to: &Self) -> bool {
         to.x.hypot(to.y) < from.x.hypot(from.y)
     }
@@ -207,11 +213,19 @@ impl Animatable for Scale {
         }
     }
 
-    /// Area decreasing, taken unsigned: a negative factor is a mirror, and a
-    /// mirror that grows is growing. Comparing the signed product sent
-    /// `(-1, 1) -> (-2, 1)` down the reverse transition while it got bigger.
+    /// Getting smaller, measured as the two factors added rather than
+    /// multiplied, and unsigned.
+    ///
+    /// Unsigned because a negative factor is a mirror and a mirror that grows
+    /// is growing: the signed product sent `(-1, 1) -> (-2, 1)` down the
+    /// reverse transition while it got bigger.
+    ///
+    /// Added rather than multiplied because the product is blind to a change
+    /// of aspect: every `(k, 1/k)` stretch has area one, so `(1, 1) -> (2, 0.5)`
+    /// and its return leg both read as forward and a declared `.reverse()`
+    /// could never fire. `Padding` totals its four edges for the same reason.
     fn is_reverse(from: &Self, to: &Self) -> bool {
-        (to.x * to.y).abs() < (from.x * from.y).abs()
+        to.x.abs() + to.y.abs() < from.x.abs() + from.y.abs()
     }
 
     fn channels(&self) -> Channels {
@@ -222,6 +236,36 @@ impl Animatable for Scale {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stretch that keeps its area still has a direction. The product does
+    /// not see it — every `(k, 1/k)` has area one — so the reverse transition
+    /// was unreachable for the whole family.
+    #[test]
+    fn a_change_of_aspect_has_a_direction() {
+        let square = Scale::NONE;
+        let wide = Scale::new(2.0, 0.5);
+        assert!(!Scale::is_reverse(&square, &wide), "going out is forward");
+        assert!(Scale::is_reverse(&wide, &square), "and coming back is not");
+    }
+
+    /// A mirror that grows is growing.
+    #[test]
+    fn a_mirror_is_measured_by_its_size_not_its_sign() {
+        let small = Scale::new(-1.0, 1.0);
+        let large = Scale::new(-2.0, 1.0);
+        assert!(!Scale::is_reverse(&small, &large));
+        assert!(Scale::is_reverse(&large, &small));
+    }
+
+    /// A slide back is a reversal — which the old `Transform` could not say,
+    /// because it compared scale and a translation does not change it.
+    #[test]
+    fn a_return_leg_is_a_reversal() {
+        let home = Translate::NONE;
+        let away = Translate::new(200.0, 0.0);
+        assert!(!Translate::is_reverse(&home, &away));
+        assert!(Translate::is_reverse(&away, &home));
+    }
 
     #[test]
     fn test_f32_lerp() {

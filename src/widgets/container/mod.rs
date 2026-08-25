@@ -1195,7 +1195,7 @@ impl Stateful for Container {
     type Style = StateStyle;
 
     fn push_state_style(&mut self, when: StateWhen, style: StateStyle) {
-        let moves = style.translate.is_some() || style.rotate.is_some() || style.scale.is_some();
+        let moves = style.moves_anything();
         let ix = self.interact_mut();
         ix.declares_transform |= moves;
         ix.states.push((when, style));
@@ -1229,10 +1229,14 @@ impl Widget for Container {
             // "will not update", which is the opposite of true and trains the
             // reader to ignore a warning that is usually right.
             // Which of the three are actually animated, read before the
-            // mutable borrow below.
-            let has = self.anims.as_ref().map_or((false, false, false), |a| {
-                (a.translate.is_some(), a.rotate.is_some(), a.scale.is_some())
-            });
+            // mutable borrow below. `anims` is `Some` — the block is guarded
+            // on it and unwraps it two statements down.
+            let declared = self.anims.as_ref().expect("guarded above");
+            let (has_translate, has_rotate, has_scale) = (
+                declared.translate.is_some(),
+                declared.rotate.is_some(),
+                declared.scale.is_some(),
+            );
             let (
                 padding_target,
                 border_width_target,
@@ -1254,9 +1258,9 @@ impl Widget for Container {
                     // Only where there is an animation to aim: each of these
                     // walks the state layers, and all three used to run for a
                     // container that animates nothing but its background.
-                    has.0.then(|| self.effective_translate_target(id)),
-                    has.1.then(|| self.effective_rotate_target(id)),
-                    has.2.then(|| self.effective_scale_target(id)),
+                    has_translate.then(|| self.effective_translate_target(id)),
+                    has_rotate.then(|| self.effective_rotate_target(id)),
+                    has_scale.then(|| self.effective_scale_target(id)),
                 )
             });
             let anims = self.anims.as_mut().unwrap();

@@ -128,9 +128,10 @@ Apply 2D transformations:
 
 ```rust
 container()
-    .translate((10.0, 20.0))  // Move
-    .rotate(45.0)           // Rotate degrees
-    .scale(1.5)             // Scale
+    // The three compose, in this order whatever order they are written in
+    .translate((10.0, 20.0))
+    .rotate(45.0)
+    .scale(1.5)
     .pivot(Pivot::TOP_LEFT)
 ```
 

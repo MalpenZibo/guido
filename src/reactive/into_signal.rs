@@ -131,7 +131,7 @@ where
     }
 }
 
-// 6. A signal whose value converts to the property's type.
+// 3b. A signal whose value converts to the property's type.
 //
 // Without these a signal is the one form of `IntoSignal` that does not take
 // what the others take: `width(100.0)` and `width(move || w.get())` both

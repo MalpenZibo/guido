@@ -183,23 +183,6 @@ impl Pivot {
 
         (x, y)
     }
-
-    /// Whether this is the CENTER constant.
-    ///
-    /// Note: This checks the enum variant, not the resolved position.
-    /// `Pivot::percent(50.0, 50.0).is_center()` returns `false`
-    /// even though it resolves to the same point as `CENTER`.
-    /// This is intentional for performance - it enables a fast path
-    /// when using the default center origin.
-    pub fn is_center(&self) -> bool {
-        matches!(
-            self,
-            Self {
-                horizontal: HorizontalAnchor::Center,
-                vertical: VerticalAnchor::Center
-            }
-        )
-    }
 }
 
 impl Default for Pivot {
@@ -298,14 +281,6 @@ mod tests {
         let (x, y) = origin.resolve(bounds);
         assert!(approx_eq(x, 60.0)); // 50 + 10
         assert!(approx_eq(y, 120.0)); // 100 + 20
-    }
-
-    #[test]
-    fn test_is_center() {
-        assert!(Pivot::CENTER.is_center());
-        assert!(Pivot::default().is_center());
-        assert!(!Pivot::TOP_LEFT.is_center());
-        assert!(!Pivot::percent(50.0, 50.0).is_center());
     }
 
     #[test]

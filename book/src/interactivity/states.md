@@ -320,7 +320,7 @@ impl StateStyleBuilder {
     pub fn border(self, width: f32, color: Color) -> Self;
 
     // Other
-    pub fn corner_radius(self, radius: f32) -> Self;
+    pub fn corners<M>(self, corners: impl IntoSignal<Corners, M>) -> Self;
     // Every value is reactive here too, like the container's own
     pub fn translate<M>(self, translate: impl IntoSignal<Translate, M>) -> Self;
     pub fn rotate<M>(self, degrees: impl IntoSignal<f32, M>) -> Self;

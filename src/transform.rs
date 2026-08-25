@@ -152,6 +152,31 @@ crate::reactive::converting_signals!(
     [u32; 2] => Translate,
 );
 
+/// Said once per process, not once per frame: `compose` runs on every paint
+/// and every coalesced pointer move, so a value that stays NaN would otherwise
+/// fill the log at the frame rate and bury whatever came after it.
+fn warn_once(rotate_degrees: f32, scale: Scale, translate: Translate) {
+    #[cfg(debug_assertions)]
+    {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static SAID: AtomicBool = AtomicBool::new(false);
+        if !SAID.swap(true, Ordering::Relaxed) {
+            log::warn!(
+                "transform: a component is not a number and is being ignored \
+                 (rotate {rotate_degrees}, scale ({}, {}), translate ({}, {}))",
+                scale.x,
+                scale.y,
+                translate.x,
+                translate.y
+            );
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = (rotate_degrees, scale, translate);
+    }
+}
+
 /// A 2D affine transformation.
 ///
 /// Not part of the public vocabulary: an application says `translate`,
@@ -192,26 +217,27 @@ impl Transform {
     /// time, and because it is a translation it commutes with this one, so
     /// which side it lands on does not change the result.
     pub(crate) fn compose(translate: Translate, rotate_degrees: f32, scale: Scale) -> Self {
-        // A number that turns a widget has to be one. `rotate` takes whatever
-        // an application computes, and a division that went to zero arrives
-        // here as NaN — from which `sin_cos` makes a matrix of NaN, which
-        // `is_identity` does not catch, `inverse`'s `det.abs() < 1e-10` does
-        // not catch, and `world_aabb`'s min/max fold turns into an infinite
-        // rect that then sizes a damage region. Absorbed at the door, the way
-        // `elevation_to_shadow` absorbs its own.
-        //
-        // The zero case is not about correctness: this runs for every container
-        // on every paint and every pointer event, and almost none of them turn.
-        let (sin, cos) = if rotate_degrees == 0.0 || !rotate_degrees.is_finite() {
-            #[cfg(debug_assertions)]
-            if !rotate_degrees.is_finite() {
-                log::warn!("rotate: {rotate_degrees} is not an angle; not turning");
-            }
-            (0.0, 1.0)
-        } else {
-            rotate_degrees.to_radians().sin_cos()
-        };
+        // A number that sizes, turns or moves a widget has to be one. These
+        // take whatever an application computes, and a division by a measured
+        // zero arrives here as NaN — from which `sin_cos` makes a matrix of
+        // NaN, which `is_identity` does not catch, which `inverse`'s
+        // `det.abs() < 1e-10` does not catch, and which `world_aabb`'s min/max
+        // fold turns into an infinite rect that then sizes a damage region.
+        // Absorbed at the door, the way `elevation_to_shadow` absorbs its own.
+        let bad = !rotate_degrees.is_finite()
+            || !scale.x.is_finite()
+            || !scale.y.is_finite()
+            || !translate.x.is_finite()
+            || !translate.y.is_finite();
+        if bad {
+            warn_once(rotate_degrees, scale, translate);
+        }
 
+        let rotate_degrees = if rotate_degrees.is_finite() {
+            rotate_degrees
+        } else {
+            0.0
+        };
         let scale = Scale {
             x: if scale.x.is_finite() { scale.x } else { 1.0 },
             y: if scale.y.is_finite() { scale.y } else { 1.0 },
@@ -228,6 +254,15 @@ impl Transform {
                 0.0
             },
         };
+
+        // Not about correctness: this runs for every container on every paint
+        // and every pointer event, and almost none of them turn.
+        let (sin, cos) = if rotate_degrees == 0.0 {
+            (0.0, 1.0)
+        } else {
+            rotate_degrees.to_radians().sin_cos()
+        };
+
         Self {
             data: [
                 cos * scale.x,
