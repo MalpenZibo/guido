@@ -295,6 +295,37 @@ impl Renderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        self.render_to_view(
+            &view,
+            surface.width(),
+            surface.height(),
+            commands,
+            layers,
+            clear_color,
+        );
+
+        output.present();
+        true
+    }
+
+    /// Render flattened commands into a texture view the caller owns.
+    ///
+    /// This is everything `render` does once it holds a swapchain texture, with
+    /// the acquire and the present taken off both ends. A caller that has its
+    /// own target — an offscreen texture in a test, with no compositor and no
+    /// surface anywhere — gets the same pixels the screen would have shown.
+    ///
+    /// `width` and `height` are the target's size in physical pixels; the
+    /// backdrop targets are allocated against them.
+    pub fn render_to_view(
+        &mut self,
+        view: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+        commands: &[FlattenedCommand],
+        layers: &[CommandLayer],
+        clear_color: Color,
+    ) {
         // Update uniform buffer with current screen size (in logical pixels)
         let uniforms =
             ShaderUniforms::new(self.screen_width, self.screen_height, self.scale_factor);
@@ -309,11 +340,8 @@ impl Renderer {
         // swapchain and never allocate it.
         let uses_backdrop = layers.iter().any(|layer| !layer.backdrop.is_empty());
         if uses_backdrop {
-            self.backdrop.ensure_targets(
-                &self.device,
-                surface.width().max(1),
-                surface.height().max(1),
-            );
+            self.backdrop
+                .ensure_targets(&self.device, width.max(1), height.max(1));
         } else {
             self.backdrop.note_unused();
         }
@@ -336,7 +364,7 @@ impl Renderer {
             });
 
         let scene_view = uses_backdrop.then(|| self.backdrop.scene_view()).flatten();
-        let target = scene_view.unwrap_or(&view);
+        let target = scene_view.unwrap_or(view);
 
         let scale = self.scale_factor;
         {
@@ -419,12 +447,10 @@ impl Renderer {
         }
 
         if uses_backdrop {
-            self.backdrop.present(&self.device, &mut encoder, &view);
+            self.backdrop.present(&self.device, &mut encoder, view);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-        true
     }
 
     fn bind_shape_pipeline(&self, pass: &mut wgpu::RenderPass<'_>) {

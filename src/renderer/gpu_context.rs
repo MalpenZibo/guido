@@ -17,33 +17,55 @@ impl Default for GpuContext {
 
 impl GpuContext {
     pub fn new() -> Self {
+        Self::try_new().expect("no usable Vulkan adapter (see log for the reason)")
+    }
+
+    /// The same context, for a caller that has something better to do than die
+    /// when there is no GPU to be had: a test that skips itself, a tool that
+    /// reports. The reason is logged at error level either way.
+    pub fn try_new() -> Option<Self> {
         let instance = Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN,
             ..Default::default()
         });
 
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            compatible_surface: None,
-            force_fallback_adapter: false,
-        }))
-        .expect("Failed to find GPU adapter");
+        let adapter =
+            match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })) {
+                Ok(adapter) => adapter,
+                Err(e) => {
+                    log::error!("No Vulkan adapter: {e}");
+                    return None;
+                }
+            };
 
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("Guido Device"),
-            required_features: wgpu::Features::TEXTURE_FORMAT_16BIT_NORM,
-            required_limits: wgpu::Limits::default(),
-            memory_hints: wgpu::MemoryHints::default(),
-            experimental_features: wgpu::ExperimentalFeatures::default(),
-            trace: wgpu::Trace::Off,
-        }))
-        .expect("Failed to create device");
+        let (device, queue) =
+            match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("Guido Device"),
+                required_features: wgpu::Features::TEXTURE_FORMAT_16BIT_NORM,
+                required_limits: wgpu::Limits::default(),
+                memory_hints: wgpu::MemoryHints::default(),
+                experimental_features: wgpu::ExperimentalFeatures::default(),
+                trace: wgpu::Trace::Off,
+            })) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    log::error!(
+                        "Adapter {:?} cannot make a device: {e}",
+                        adapter.get_info().name
+                    );
+                    return None;
+                }
+            };
 
-        Self {
+        Some(Self {
             instance,
             device: Arc::new(device),
             queue: Arc::new(queue),
-        }
+        })
     }
 
     pub fn create_surface<W>(&self, window: W, width: u32, height: u32) -> SurfaceState
