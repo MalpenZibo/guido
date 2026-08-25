@@ -138,6 +138,10 @@ impl<T: Animatable> AnimationState<T> {
         // refuse it as well, or it asks for an Animation job on every paint
         // and wakes the loop just as forever by the other route.
         if !new_target.is_reachable() {
+            crate::transform::warn_unusable(format_args!(
+                "animation: a target is not a usable number; the property stays \
+                 where it is and stops following its signal"
+            ));
             return;
         }
 
@@ -521,6 +525,16 @@ impl<T: Animatable> AnimationState<T> {
         // Refusing it here leaves the animation where it was, which is a value
         // that can still be animated away from.
         if !value.is_reachable() {
+            // Seeded all the same, with whatever it already holds. This is the
+            // only thing that sets `initialized`, and a property that never
+            // gets it stays `is_initial()` for the life of the process — which
+            // also switches off its drift detection, so nothing would ever
+            // notice it had stopped following its signal.
+            self.initialized = true;
+            crate::transform::warn_unusable(format_args!(
+                "animation: a seeded value is not a usable number; the property \
+                 keeps what it had and stops following its signal"
+            ));
             return;
         }
         self.current = value;

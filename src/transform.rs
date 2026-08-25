@@ -152,8 +152,8 @@ crate::reactive::converting_signals!(
     [u32; 2] => Translate,
 );
 
-/// Say that a piece of geometry is not a usable number — a NaN or an infinity,
-/// since both reach a matrix the same way and neither can size anything.
+/// Say that a value is not a usable number — a NaN or an infinity, since
+/// neither can size, move or turn anything.
 /// Different again from [`is_degenerate`](Transform::is_degenerate), a
 /// determinant of zero, and the two guards are independent: neither covers the
 /// other.
@@ -169,10 +169,10 @@ crate::reactive::converting_signals!(
 /// not resized or not turning about where it was told to, and that is precisely
 /// when the line is worth having.
 ///
-/// Shared with [`Pivot::resolve`](crate::pivot::Pivot::resolve), which absorbs
-/// the fourth component the same way `compose` absorbs the other three: one
-/// budget between them, so two bad values cannot flood by taking turns.
-pub(crate) fn warn_unusable_geometry(what: std::fmt::Arguments<'_>) {
+/// One budget across every caller — `compose`, `Pivot::resolve` and the
+/// animation states, which absorb the same class of value at three different
+/// depths — so they cannot flood by taking turns.
+pub(crate) fn warn_unusable(what: std::fmt::Arguments<'_>) {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, Instant};
 
@@ -197,6 +197,10 @@ pub(crate) fn warn_unusable_geometry(what: std::fmt::Arguments<'_>) {
 
     log::warn!("{what}");
 }
+
+/// Below this a determinant is zero: the transform has collapsed the plane
+/// onto a line or a point, and cannot be undone.
+const DEGENERATE: f32 = 1e-10;
 
 /// A 2D affine transformation.
 ///
@@ -255,7 +259,7 @@ impl Transform {
         let (rotate_degrees, scale, translate) = if usable {
             (rotate_degrees, scale, translate)
         } else {
-            warn_unusable_geometry(format_args!(
+            warn_unusable(format_args!(
                 "transform: a component is not a usable number and is being \
                  ignored (rotate {rotate_degrees}, scale ({}, {}), translate \
                  ({}, {}))",
@@ -427,14 +431,12 @@ impl Transform {
     pub fn inverse(&self) -> Transform {
         let [a, b, tx, c, d, ty] = self.data;
 
-        // The same test the hit path asks before it gets here, and not a
-        // second copy of the constant: the guard in `Container::event` is only
-        // correct while the two agree about what degenerate means.
-        if self.is_degenerate() {
+        // Asked rather than spelled out again, so there is one threshold for
+        // what degenerate means and not two that have to agree.
+        let det = a * d - b * c;
+        if det.abs() < DEGENERATE {
             return Self::IDENTITY;
         }
-
-        let det = a * d - b * c;
 
         let inv_det = 1.0 / det;
 
@@ -536,18 +538,16 @@ impl Transform {
     ///
     /// A zero determinant means the shape has no area, so it draws nothing and
     /// it cannot be undone — which is why [`inverse`](Self::inverse) answers
-    /// the identity for one rather than infinities, and why it asks this
-    /// rather than carrying its own copy of the threshold.
+    /// the identity for one rather than infinities.
     ///
-    /// The identity it answers with is a lie the hit test then believes: the
-    /// point comes back unchanged and an invisible subtree answers for the
-    /// whole area it occupies when it is open. That is #227, and it is not
-    /// fixable from here — see the note on [`untransform_point`].
-    ///
-    /// [`untransform_point`]: crate::widgets::container::interaction
+    /// That identity is a lie the hit test then believes: the point comes back
+    /// unchanged and an invisible subtree answers for the whole area it
+    /// occupies when it is open. Fixing that needs the *event* to be able to
+    /// say it has no position, which is #227 and not something this predicate
+    /// can do on its own.
     #[inline]
     pub fn is_degenerate(&self) -> bool {
-        (self.a() * self.d() - self.b() * self.c()).abs() < 1e-10
+        (self.a() * self.d() - self.b() * self.c()).abs() < DEGENERATE
     }
 
     /// Check if this transform contains only translation (no rotation or scale).

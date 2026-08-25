@@ -140,9 +140,11 @@ impl Animatable for f32 {
         from + (to - from) * t
     }
 
-    /// The default builds a `Channels` to ask this; one number does not need
-    /// one, and this is the type behind `rotate`, `elevation`, `border_width`
-    /// and both sizes.
+    /// Every impl overrides this. The default builds a `Channels` to ask it,
+    /// and it is asked on every retarget and on every drift check — so the
+    /// types that would actually allocate are exactly the ones that must not
+    /// use it, and once they all override, the default is only there for a
+    /// type written later.
     fn is_reachable(&self) -> bool {
         self.is_finite()
     }
@@ -172,6 +174,10 @@ impl Animatable for Color {
         (to.a, to.luminance()) < (from.a, from.luminance())
     }
 
+    fn is_reachable(&self) -> bool {
+        self.r.is_finite() && self.g.is_finite() && self.b.is_finite() && self.a.is_finite()
+    }
+
     fn channels(&self) -> Channels {
         Channels::from_slice(&[self.r, self.g, self.b, self.a])
     }
@@ -193,6 +199,13 @@ impl Animatable for Padding {
         to_total < from_total
     }
 
+    fn is_reachable(&self) -> bool {
+        self.left.is_finite()
+            && self.right.is_finite()
+            && self.top.is_finite()
+            && self.bottom.is_finite()
+    }
+
     fn channels(&self) -> Channels {
         Channels::from_slice(&[self.left, self.right, self.top, self.bottom])
     }
@@ -211,6 +224,13 @@ impl Animatable for crate::renderer::CornerRadii {
     fn is_reverse(from: &Self, to: &Self) -> bool {
         let total = |r: &Self| r.top_left + r.top_right + r.bottom_right + r.bottom_left;
         total(to) < total(from)
+    }
+
+    fn is_reachable(&self) -> bool {
+        self.top_left.is_finite()
+            && self.top_right.is_finite()
+            && self.bottom_right.is_finite()
+            && self.bottom_left.is_finite()
     }
 
     fn channels(&self) -> Channels {

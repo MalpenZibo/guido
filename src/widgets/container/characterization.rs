@@ -216,6 +216,25 @@ fn borders(node: &RenderNode) -> Vec<(f32, Color)> {
 // Sizing — the box model matrix
 // ---------------------------------------------------------------------------
 
+/// A state layer that only scales must not make the container resolve a
+/// translate and a rotate nothing declares. The fast path is per component,
+/// and this is the layer that would have paid for it — it is on every button.
+#[test]
+fn a_scaling_state_layer_declares_only_a_scale() {
+    let c = container()
+        .when_hovered(|s| s.lighter(0.1))
+        .when_pressed(|s| s.scale(0.98));
+    let declared = c
+        .interaction
+        .as_ref()
+        .map(|ix| ix.declares_transform)
+        .unwrap_or_default();
+
+    assert!(declared.scale, "the pressed layer names a scale");
+    assert!(!declared.translate, "and nothing names a translate");
+    assert!(!declared.rotate, "or a rotate");
+}
+
 #[test]
 fn content_sizing_is_child_plus_padding() {
     let mut h = H::new(container().padding(8.0).child(box_of(40.0, 20.0)));

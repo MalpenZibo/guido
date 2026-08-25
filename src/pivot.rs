@@ -189,13 +189,30 @@ impl Pivot {
         };
 
         if x.is_finite() && y.is_finite() {
-            (x, y)
-        } else {
-            (
-                bounds.x + bounds.width / 2.0,
-                bounds.y + bounds.height / 2.0,
-            )
+            return (x, y);
         }
+
+        // The centre — of bounds that may themselves be the reason this
+        // failed, so it is checked too. A fallback computed from the same
+        // numbers that produced the bad value is not a fallback.
+        let (cx, cy) = (
+            bounds.x + bounds.width / 2.0,
+            bounds.y + bounds.height / 2.0,
+        );
+        let usable = if cx.is_finite() && cy.is_finite() {
+            (cx, cy)
+        } else {
+            (0.0, 0.0)
+        };
+
+        // Said, not swallowed. `Transform::compose` reports the three
+        // components it absorbs, and a pivot that quietly moved elsewhere
+        // would be the one piece of geometry that fails in silence.
+        crate::transform::warn_unusable(format_args!(
+            "pivot: {self:?} does not resolve to a usable point in {bounds:?}; \
+             turning about {usable:?} instead"
+        ));
+        usable
     }
 }
 

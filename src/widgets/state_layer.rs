@@ -123,6 +123,28 @@ pub struct StateStyle {
     pub ripple: Option<RippleConfig>,
 }
 
+/// Which transform components a set of state layers between them override.
+///
+/// Three answers and not one, because `animated_transform` resolves each
+/// component separately and a single "some layer moves something" would light
+/// all three — so `when_pressed(|s| s.scale(0.98))`, the commonest state layer
+/// there is, would pay two state-layer walks per paint and per coalesced
+/// pointer move for components nothing declares.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Moves {
+    pub(crate) translate: bool,
+    pub(crate) rotate: bool,
+    pub(crate) scale: bool,
+}
+
+impl Moves {
+    pub(crate) fn merge(&mut self, other: Moves) {
+        self.translate |= other.translate;
+        self.rotate |= other.rotate;
+        self.scale |= other.scale;
+    }
+}
+
 impl StateStyle {
     /// Whether this layer moves, turns or resizes what it styles.
     ///
@@ -131,8 +153,12 @@ impl StateStyle {
     /// caller that cached the answer somewhere else would go quietly stale.
     /// `Container` gates its identity fast path on it — see
     /// `InteractionState::declares_transform`.
-    pub(crate) fn moves_anything(&self) -> bool {
-        self.translate.is_some() || self.rotate.is_some() || self.scale.is_some()
+    pub(crate) fn moves_anything(&self) -> Moves {
+        Moves {
+            translate: self.translate.is_some(),
+            rotate: self.rotate.is_some(),
+            scale: self.scale.is_some(),
+        }
     }
 
     /// Create a new empty state style.

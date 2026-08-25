@@ -264,15 +264,17 @@ impl Container {
         let from_state = self
             .interaction
             .as_ref()
-            .is_some_and(|ix| ix.declares_transform);
-        let has_translate = from_state
+            .map(|ix| ix.declares_transform)
+            .unwrap_or_default();
+        let has_translate = from_state.translate
             || self.translate_signal().is_some()
             || anims.is_some_and(|a| a.translate.is_some());
-        let has_rotate = from_state
+        let has_rotate = from_state.rotate
             || self.rotate_signal().is_some()
             || anims.is_some_and(|a| a.rotate.is_some());
-        let has_scale =
-            from_state || self.scale_signal().is_some() || anims.is_some_and(|a| a.scale.is_some());
+        let has_scale = from_state.scale
+            || self.scale_signal().is_some()
+            || anims.is_some_and(|a| a.scale.is_some());
 
         // A plain layout box is none of the three, and most containers are one.
         if !(has_translate || has_rotate || has_scale) {

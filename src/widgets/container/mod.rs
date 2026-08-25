@@ -43,7 +43,9 @@ use super::paint_children::{ChildPaintOptions, paint_children};
 use super::scroll::{
     ScrollAxis, ScrollState, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibility,
 };
-use super::state_layer::{RippleConfig, StateStyle, StateWhen, Stateful, resolve_background};
+use super::state_layer::{
+    Moves, RippleConfig, StateStyle, StateWhen, Stateful, resolve_background,
+};
 use super::widget::{
     Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding, Rect,
     ScrollSource, Widget,
@@ -256,7 +258,8 @@ pub(super) struct InteractionState {
     /// property — CSS's rule at equal specificity, and the only one that lets
     /// a caller decide that an error outranks the focus.
     pub(super) states: Vec<(StateWhen, StateStyle)>,
-    /// Whether any declared layer overrides `translate`, `rotate` or `scale`.
+    /// Which of `translate`, `rotate` and `scale` the declared layers override
+    /// between them.
     ///
     /// Decided when the layer is pushed, because that is when it is knowable —
     /// a layer either names the property or it does not, and no signal is
@@ -264,7 +267,12 @@ pub(super) struct InteractionState {
     /// path in `animated_transform`, which runs on every paint and every
     /// coalesced pointer move: a button with hover, focus and pressed layers
     /// would otherwise walk three `StateStyle`s to be told nothing turns.
-    pub(super) declares_transform: bool,
+    ///
+    /// Three answers rather than one, because that fast path is per component:
+    /// `when_pressed(|s| s.scale(0.98))` is the commonest state layer there is,
+    /// and a single bit would have made it pay for a translate and a rotate
+    /// nothing declares.
+    pub(super) declares_transform: crate::widgets::state_layer::Moves,
     pub(super) ripple: RippleState,
 }
 
@@ -282,7 +290,7 @@ impl Default for InteractionState {
             on_mouse_up: None,
             flags: create_signal(InteractionFlags::empty()),
             states: Vec::new(),
-            declares_transform: false,
+            declares_transform: Moves::default(),
             ripple: RippleState::new(),
         }
     }
@@ -1212,7 +1220,7 @@ impl Stateful for Container {
     fn push_state_style(&mut self, when: StateWhen, style: StateStyle) {
         let moves = style.moves_anything();
         let ix = self.interact_mut();
-        ix.declares_transform |= moves;
+        ix.declares_transform.merge(moves);
         ix.states.push((when, style));
     }
 }
