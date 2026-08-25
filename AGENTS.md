@@ -80,6 +80,7 @@ at lavapipe. In that job a skip is a failure.
 | widget behaviour and public API | integration tests in `tests/` |
 | documented API | doc tests, and `cargo doc` with warnings denied |
 | the user documentation | `mdbook build book` in CI |
+| the APIs this file and the skills name | `tests/skill_references.rs` |
 | Wayland protocol behaviour, compositor integration | **nothing automated.** Run an example and say what you saw in the pull request |
 
 That last row is the hole in the harness. It is the one place where "I ran it
