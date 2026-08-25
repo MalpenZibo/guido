@@ -70,7 +70,6 @@ jobs:
     # the goldens were blessed against, because a hosted runner has no GPU and
     # because a golden is only reproducible against one rasterizer anyway.
     env:
-      VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
       # Without an adapter the tests skip themselves, which would report green
       # here for the one reason that matters. In CI a skip is a failure.
       GUIDO_GOLDEN_REQUIRED: "1"
@@ -83,6 +82,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwayland-dev libxkbcommon-dev \
             mesa-vulkan-drivers vulkan-tools
+      # The ICD's filename is not the same on every distribution, and the one
+      # that was assumed here did not exist on this runner: the loader found no
+      # driver, every scenario skipped, and only GUIDO_GOLDEN_REQUIRED kept that
+      # from being a green tick. So it is found, and when it cannot be found the
+      # job says what is there instead of failing mutely.
+      - name: Point the Vulkan loader at lavapipe
+        run: |
+          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json 2>/dev/null | head -n 1)
+          if [ -z "$icd" ]; then
+            icd=$(dpkg -L mesa-vulkan-drivers 2>/dev/null \
+              | grep -E 'icd\.d/.*\.json$' | grep -i lvp | head -n 1)
+          fi
+          if [ -z "$icd" ]; then
+            echo "::error::No lavapipe ICD found. What is installed:"
+            dpkg -L mesa-vulkan-drivers 2>/dev/null | grep -E '\.json$' || true
+            ls -la /usr/share/vulkan/icd.d/ 2>/dev/null || true
+            exit 1
+          fi
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+          echo "Using $icd"
       - name: Report the rasterizer
         run: vulkaninfo --summary | head -n 40
       - name: Run golden image tests

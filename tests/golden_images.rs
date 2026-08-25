@@ -256,8 +256,10 @@ fn diff_image(expected: &Pixels, actual: &Pixels) -> Pixels {
 
     let changed: Vec<bool> = expected
         .data
-        .chunks_exact(4)
-        .zip(actual.data.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(actual.data.as_chunks::<4>().0.iter())
         .map(|(e, a)| (0..4).any(|c| e[c].abs_diff(a[c]) > TOLERANCE))
         .collect();
 
@@ -349,8 +351,10 @@ fn assert_golden(name: &str, adapter: &str, actual: Pixels) {
     let mut first = Vec::new();
     for (index, (e, a)) in expected
         .data
-        .chunks_exact(4)
-        .zip(actual.data.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(actual.data.as_chunks::<4>().0.iter())
         .enumerate()
     {
         let delta = (0..4).map(|c| e[c].abs_diff(a[c])).max().unwrap_or(0);
