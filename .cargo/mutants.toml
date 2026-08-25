@@ -1,0 +1,28 @@
+# cargo-mutants changes the code in one small way and asks whether anything
+# notices. A mutant that survives is a line the suite does not actually watch,
+# whatever the coverage says: coverage asks whether a line ran, this asks
+# whether it mattered.
+#
+#   cargo mutants -f 'src/reactive/**/*.rs' -C --lib -j 8
+#
+# The whole crate takes hours; a module at a time is how it is used by hand.
+# CI runs it only over the lines a pull request touched — see the workflow.
+
+# Mutants that cannot be killed by any test worth writing.
+#
+# A Display or Debug impl formats for a person reading a log. Asserting on that
+# text would pin wording nobody promised, and it is the one thing here that is
+# genuinely not behaviour.
+#
+# Nothing else is excluded. The teardown helpers, the diagnostics counters and
+# the platform-fed thread-local state all survive today, and that is a fact
+# about the suite rather than a fact about them.
+exclude_re = [
+    "impl .*fmt::Display",
+    "impl .*fmt::Debug",
+]
+
+# A mutant that hangs is a mutant that broke a loop's exit condition, which is
+# a kill and not a reason to wait. Five times the unmutated run is generous.
+timeout_multiplier = 5.0
+minimum_test_timeout = 30.0
