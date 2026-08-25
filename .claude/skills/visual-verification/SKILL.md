@@ -35,8 +35,10 @@ Ubuntu. Two GPUs antialias an edge differently: the same scenarios on a desktop
 Radeon differ from lavapipe on 0.03%–0.08% of their pixels, all of them on
 corner tangent points. Blessing on anything else is refused by the test.
 
-Without a Vulkan adapter the tests skip themselves. CI sets
-`GUIDO_GOLDEN_REQUIRED=1`, where a skip is a failure.
+On any other adapter they skip themselves, which is why `cargo test` on a
+machine with a GPU does not drown in failures that are not regressions. Set
+`GUIDO_GOLDEN_ANY_ADAPTER=1` to run them anyway and look. CI sets
+`GUIDO_GOLDEN_REQUIRED=1` in the golden job, where a skip is a failure.
 
 ### Reading a failure
 

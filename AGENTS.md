@@ -65,8 +65,10 @@ cargo test --test golden_images
 ```
 
 Install it with `vulkan-swrast` on Arch, `mesa-vulkan-drivers` on Debian and
-Ubuntu. Without any Vulkan adapter those tests skip themselves; in CI a skip is
-a failure.
+Ubuntu. On any other adapter those tests skip themselves — a golden holds only
+against the rasterizer it was blessed on — so `cargo test --all-features` is
+green on a machine with a GPU and the pixels are checked by the job that points
+at lavapipe. In that job a skip is a failure.
 
 ## What proves what
 
