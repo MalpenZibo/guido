@@ -1,18 +1,20 @@
 //! The agent-facing documentation is checked against the code it describes.
 //!
-//! `AGENTS.md` and the skills under `.claude/skills/` are read by whoever —
-//! or whatever — is about to change this library, and they name APIs. A
+//! `AGENTS.md`, the skills, the commands and the reviewer's criteria are read
+//! by whoever — or whatever — is about to change this library, and they name
+//! APIs. A
 //! renamed function leaves them quietly wrong, and quietly wrong instructions
 //! are worse than none: they are followed.
 //!
-//! This is not a spell-checker for prose. It takes every identifier the skills
+//! This is not a spell-checker for prose. It takes every identifier they
 //! write in backticks, and asserts the crate still has something by that name.
 //! It cannot tell whether the sentence around it is true — only that the thing
 //! it points at exists, which is the failure mode that actually happens.
 //!
 //! When it fails, either the documentation is stale or the identifier is new
-//! and belongs in `NOT_CRATE_SYMBOLS` below, which is the list of words the
-//! skills deliberately write in backticks without the crate owning them.
+//! and belongs in `NOT_CRATE_SYMBOLS` below, which is the list of words this
+//! documentation deliberately writes in backticks without the crate owning
+//! them.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -103,17 +105,22 @@ fn scan_spans(text: &str, found: &mut BTreeSet<String>) {
 }
 
 #[test]
-fn every_identifier_the_skills_name_still_exists() {
+fn every_identifier_the_agent_documentation_names_still_exists() {
     let source = crate_source();
 
+    // Everything an agent is handed: the contract, the working knowledge, the
+    // commands that drive a change, and the reviewer's criteria. All of them
+    // name APIs, and all of them are followed.
     let mut docs = vec![repo().join("AGENTS.md")];
-    let mut skills = Vec::new();
-    read_dir_files(&repo().join(".claude/skills"), "md", &mut skills);
-    assert!(
-        !skills.is_empty(),
-        "no skills found under .claude/skills — this test is checking nothing"
-    );
-    docs.extend(skills);
+    for dir in [".claude/skills", ".claude/commands", ".claude/agents"] {
+        let mut found = Vec::new();
+        read_dir_files(&repo().join(dir), "md", &mut found);
+        assert!(
+            !found.is_empty(),
+            "no documentation found under {dir} — this test is checking nothing"
+        );
+        docs.extend(found);
+    }
 
     let mut stale = Vec::new();
     let mut checked = 0usize;

@@ -48,8 +48,8 @@ below them.
 
 ## Reporting
 
-Most important first. For each finding: what is wrong, where (`file:line`), and
-what would have to be true instead. Distinguish what you verified by reading or
+Most important first. For each finding: what is wrong, where — file and line —
+and what would have to be true instead. Distinguish what you verified by reading or
 running from what you suspect — say which.
 
 If the change is sound, say so in one line and stop. Do not manufacture

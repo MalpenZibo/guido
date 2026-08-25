@@ -22,7 +22,7 @@ agreed with the maintainer before it is written, not presented afterwards.
 git -C <repo> worktree add ../guido-$ARGUMENTS -b <kind>/<slug> origin/main
 ```
 
-`kind` is one of `fix`, `feat`, `perf`, `refactor`, `docs`. One issue, one
+The kind is one of fix, feat, perf, refactor or docs. One issue, one
 branch, one pull request; never two pieces of work in the same checkout.
 
 Load the skill for the area you are about to touch.

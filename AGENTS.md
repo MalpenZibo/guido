@@ -29,6 +29,12 @@ is a change nothing is watching: the missing scenario is part of the work, not a
 follow-up. If a change genuinely cannot be verified automatically, say so in the
 pull request in one sentence, and say what you did by hand instead.
 
+This rule covers *this file* and everything beside it. The skills, the commands
+and the reviewer's criteria name APIs, and they are followed rather than read
+sceptically — so being quietly wrong costs more there than in code.
+`tests/skill_references.rs` is what keeps them honest, and it runs before you
+stop.
+
 **Architectural changes are agreed before they are written.** A new core type or
 trait, a new cross-cutting mechanism, a new ownership or lifetime rule, a change
 to how a whole family of call sites is spelled: explain the problem as it stands
