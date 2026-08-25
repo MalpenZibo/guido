@@ -35,7 +35,7 @@ fn main() {
                         .main_alignment(MainAlignment::Center)
                         .cross_alignment(CrossAlignment::Center),
                 )
-                .transform(Transform::rotate_degrees(15.0))
+                .rotate(15.0)
                 .child(text("Rotated 15").font_size(14.0).color(Color::WHITE)),
             // With scale - should use texture
             container()
@@ -48,7 +48,7 @@ fn main() {
                         .main_alignment(MainAlignment::Center)
                         .cross_alignment(CrossAlignment::Center),
                 )
-                .transform(Transform::scale(1.2))
+                .scale(1.2)
                 .child(text("Scale 1.2").font_size(14.0).color(Color::WHITE)),
         ]);
 

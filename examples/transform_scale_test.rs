@@ -33,7 +33,7 @@ fn main() {
                             .padding(10.0)
                             .background(Color::rgb(0.3, 0.8, 0.3))
                             .corners(8.0)
-                            .transform(Transform::scale(1.5)),
+                            .scale(1.5),
                         // Scaled down box (should be smaller)
                         container()
                             .width(60.0)
@@ -41,7 +41,7 @@ fn main() {
                             .padding(10.0)
                             .background(Color::rgb(0.3, 0.3, 0.8))
                             .corners(8.0)
-                            .transform(Transform::scale(0.5)),
+                            .scale(0.5),
                     ])
             },
         );

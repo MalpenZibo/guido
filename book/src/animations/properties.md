@@ -49,7 +49,7 @@ Animate translation, rotation, and scale:
 ```rust
 container()
     .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
-    .when_pressed(|s| s.transform(Transform::scale(0.98)))
+    .when_pressed(|s| s.scale(0.98))
 ```
 
 Works with:
@@ -130,7 +130,7 @@ container()
         .elevation(6.0)
     )
     .when_pressed(|s| s
-        .transform(Transform::scale(0.98))
+        .scale(0.98)
         .elevation(1.0)
     )
 ```

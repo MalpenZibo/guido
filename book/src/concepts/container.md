@@ -128,9 +128,9 @@ Apply 2D transformations:
 
 ```rust
 container()
-    .transform(Transform::translate(10.0, 20.0))  // Move
-    .transform(Transform::rotate_degrees(45.0))           // Rotate degrees
-    .transform(Transform::scale(1.5))             // Scale
+    .translate((10.0, 20.0))  // Move
+    .rotate(45.0)           // Rotate degrees
+    .scale(1.5)             // Scale
     .pivot(Pivot::TOP_LEFT)
 ```
 
@@ -229,7 +229,7 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 
         // State layers
         .when_hovered(|s| s.lighter(0.1).border(2.0, Color::rgb(0.5, 0.7, 1.0)))
-        .when_pressed(|s| s.ripple().darker(0.05).transform(Transform::scale(0.98)))
+        .when_pressed(|s| s.ripple().darker(0.05).scale(0.98))
 
         // Event
         .on_click(on_click)

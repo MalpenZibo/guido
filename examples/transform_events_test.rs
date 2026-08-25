@@ -40,16 +40,16 @@ fn main() {
                                 make_box("None", Color::rgb(0.5, 0.5, 0.5), click_count),
                                 // Translation
                                 make_box("Translate", Color::rgb(0.3, 0.8, 0.3), click_count)
-                                    .transform(Transform::translate(20.0, 10.0)),
+                                    .translate((20.0, 10.0)),
                                 // Rotation
                                 make_box("Rotate", Color::rgb(0.3, 0.3, 0.8), click_count)
-                                    .transform(Transform::rotate_degrees(15.0)),
+                                    .rotate(15.0),
                                 // Scale up
                                 make_box("Scale+", Color::rgb(0.8, 0.3, 0.8), click_count)
-                                    .transform(Transform::scale(1.2)),
+                                    .scale(1.2),
                                 // Scale down
                                 make_box("Scale-", Color::rgb(0.8, 0.6, 0.3), click_count)
-                                    .transform(Transform::scale(0.7)),
+                                    .scale(0.7),
                             ]),
                         // Row 2: Nested transforms
                         container()
@@ -65,7 +65,7 @@ fn main() {
                                     .height(100.0)
                                     .background(Color::rgba(0.8, 0.3, 0.3, 0.3))
                                     .corners(8.0)
-                                    .transform(Transform::rotate_degrees(20.0))
+                                    .rotate(20.0)
                                     .layout(
                                         Flex::column()
                                             .main_alignment(MainAlignment::Center)
@@ -82,7 +82,7 @@ fn main() {
                                     .height(100.0)
                                     .background(Color::rgba(0.3, 0.8, 0.3, 0.3))
                                     .corners(8.0)
-                                    .transform(Transform::scale(1.3))
+                                    .scale(1.3)
                                     .layout(
                                         Flex::column()
                                             .main_alignment(MainAlignment::Center)
@@ -94,7 +94,7 @@ fn main() {
                                             Color::rgb(0.3, 0.8, 0.8),
                                             click_count,
                                         )
-                                        .transform(Transform::rotate_degrees(30.0)),
+                                        .rotate(30.0),
                                     ),
                             ]),
                         // Click counter display

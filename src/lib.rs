@@ -182,7 +182,7 @@ pub mod prelude {
         SurfaceExtent, SurfaceHandle, SurfaceId, content, spawn_popup, spawn_surface,
         surface_handle,
     };
-    pub use crate::transform::Transform;
+    pub use crate::transform::{Scale, Translate};
     pub use crate::widget_ref::{WidgetRef, create_widget_ref};
     pub use crate::widgets::{
         AnyWidget, Border, Color, Container, ContentFit, Control, CornerRadii, Corners, Event,
@@ -218,6 +218,10 @@ pub mod widget_prelude {
     pub use crate::layout::{Constraints, IntoF32, Layout};
     pub use crate::reactive::{JobType, OptionSignalExt, with_signal_tracking};
     pub use crate::renderer::{PaintContext, RenderNode};
+    /// The composed matrix. An application says `translate`, `rotate` and
+    /// `scale`; a widget written outside the crate positions what it paints,
+    /// and for that it needs the thing those three compose into.
+    pub use crate::transform::Transform;
     pub use crate::tree::{Tree, WidgetId};
     pub use crate::widgets::{LayoutHints, Widget};
 }

@@ -38,7 +38,7 @@ fn main() {
                             .height(60.0)
                             .background(Color::rgb(0.8, 0.3, 0.3))
                             .corners(8.0)
-                            .transform(Transform::rotate_degrees(45.0))
+                            .rotate(45.0)
                             .child(
                                 container()
                                     .layout(
@@ -54,8 +54,8 @@ fn main() {
                             .height(60.0)
                             .background(Color::rgb(0.3, 0.6, 0.8))
                             .corners(8.0)
-                            .transform(move || Transform::rotate_degrees(rotation.get()))
-                            .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
+                            .rotate(move || rotation.get())
+                            .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || {
@@ -78,8 +78,8 @@ fn main() {
                             .height(60.0)
                             .background(Color::rgb(0.3, 0.8, 0.4))
                             .corners(8.0)
-                            .transform(move || Transform::scale(scale_factor.get()))
-                            .animate_transform(Transition::spring(SpringConfig::BOUNCY))
+                            .scale(move || scale_factor.get())
+                            .animate_scale(Transition::spring(SpringConfig::BOUNCY))
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || {
@@ -104,7 +104,7 @@ fn main() {
                             .height(60.0)
                             .background(Color::rgb(0.6, 0.4, 0.8))
                             .corners(8.0)
-                            .transform(Transform::scale(0.7))
+                            .scale(0.7)
                             .child(
                                 container()
                                     .layout(
@@ -120,7 +120,8 @@ fn main() {
                             .height(60.0)
                             .background(Color::rgb(0.8, 0.6, 0.2))
                             .corners(8.0)
-                            .transform(Transform::rotate_degrees(30.0).then(&Transform::scale(0.8)))
+                            .rotate(30.0)
+                            .scale(0.8)
                             .child(
                                 container()
                                     .layout(
@@ -138,7 +139,7 @@ fn main() {
                             .height(60.0)
                             .background(Color::rgb(0.8, 0.5, 0.7))
                             .corners(8.0)
-                            .transform(Transform::rotate_degrees(45.0))
+                            .rotate(45.0)
                             .pivot(Pivot::TOP_LEFT)
                             .child(
                                 container()
@@ -155,7 +156,7 @@ fn main() {
                             .height(60.0)
                             .background(Color::rgb(0.5, 0.7, 0.8))
                             .corners(8.0)
-                            .transform(Transform::scale(0.8))
+                            .scale(0.8)
                             .pivot(Pivot::BOTTOM_RIGHT)
                             .child(
                                 container()
@@ -174,7 +175,7 @@ fn main() {
                                 .height(60.0)
                                 .background(Color::rgb(0.7, 0.8, 0.5))
                                 .corners(8.0)
-                                .transform(Transform::rotate_degrees(30.0))
+                                .rotate(30.0)
                                 .pivot(move || match origin_index.get() % 5 {
                                     0 => Pivot::CENTER,
                                     1 => Pivot::TOP_LEFT,

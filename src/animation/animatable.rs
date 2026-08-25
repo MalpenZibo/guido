@@ -1,11 +1,11 @@
 use smallvec::SmallVec;
 
-use crate::transform::Transform;
+use crate::transform::{Scale, Translate};
 use crate::widgets::{Color, Padding};
 
-/// The channels of one animatable value. Six is `Transform`, the widest there
+/// The channels of one animatable value. Four is `Color`, the widest there
 /// is, so nothing here allocates.
-pub type Channels = SmallVec<[f32; 6]>;
+pub type Channels = SmallVec<[f32; 4]>;
 
 /// Trait for types that can be animated by interpolating between values
 pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
@@ -17,7 +17,8 @@ pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
     /// Whether transitioning from `from` to `to` is a "reverse" direction.
     /// Used to select the `.reverse()` transition when configured.
     /// - `f32`: value decreasing
-    /// - `Transform`: scale decreasing
+    /// - `Translate`: distance from the origin decreasing
+    /// - `Scale`: area decreasing
     /// - `Color`: alpha decreasing, then luminance decreasing
     /// - `Padding`: total padding decreasing
     fn is_reverse(_from: &Self, _to: &Self) -> bool {
@@ -29,9 +30,9 @@ pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
     /// Only `carry_velocity` reads this, and only as a direction: a spring's
     /// momentum is a vector in this space, and what a new segment inherits is
     /// the part of it pointing along itself. The channels may be in different
-    /// units — `Transform` mixes pixels with unitless coefficients — and that
-    /// is fine precisely because they are never summed into a length that is
-    /// used on its own.
+    /// units — `Padding` is four independent edges — and that is fine
+    /// precisely because they are never summed into a length that is used on
+    /// its own.
     fn channels(&self) -> Channels;
 }
 
@@ -179,21 +180,37 @@ impl Animatable for crate::renderer::CornerRadii {
     }
 }
 
-impl Animatable for Transform {
+impl Animatable for Translate {
     fn lerp(from: &Self, to: &Self, t: f32) -> Self {
-        let mut data = [0.0f32; 6];
-        for (i, val) in data.iter_mut().enumerate() {
-            *val = from.data[i] + (to.data[i] - from.data[i]) * t;
+        Self {
+            x: from.x + (to.x - from.x) * t,
+            y: from.y + (to.y - from.y) * t,
         }
-        Transform { data }
     }
 
     fn is_reverse(from: &Self, to: &Self) -> bool {
-        to.extract_scale() < from.extract_scale()
+        to.x.hypot(to.y) < from.x.hypot(from.y)
     }
 
     fn channels(&self) -> Channels {
-        Channels::from_slice(&self.data)
+        Channels::from_slice(&[self.x, self.y])
+    }
+}
+
+impl Animatable for Scale {
+    fn lerp(from: &Self, to: &Self, t: f32) -> Self {
+        Self {
+            x: from.x + (to.x - from.x) * t,
+            y: from.y + (to.y - from.y) * t,
+        }
+    }
+
+    fn is_reverse(from: &Self, to: &Self) -> bool {
+        to.x * to.y < from.x * from.y
+    }
+
+    fn channels(&self) -> Channels {
+        Channels::from_slice(&[self.x, self.y])
     }
 }
 
@@ -235,7 +252,8 @@ mod tests {
     fn channels_are_the_numbers_the_lerp_moves() {
         assert_eq!(Color::WHITE.channels().len(), 4);
         assert_eq!(Padding::all(2.0).channels().len(), 4);
-        assert_eq!(Transform::IDENTITY.channels().len(), 6);
+        assert_eq!(Translate::new(1.0, 2.0).channels().len(), 2);
+        assert_eq!(Scale::uniform(2.0).channels().len(), 2);
         assert_eq!(3.0_f32.channels().as_slice(), &[3.0]);
     }
 
@@ -272,15 +290,14 @@ mod tests {
         );
     }
 
-    /// Directions that share no channel share no momentum.
+    /// Directions that share no channel share no momentum: a slide to the
+    /// right, retargeted straight down, starts from rest.
     #[test]
     fn orthogonal_directions_carry_nothing() {
-        let moved = Transform::translate(200.0, 0.0);
-        let mut scaled = moved;
-        scaled.data[0] += 0.05;
-        scaled.data[4] += 0.05;
+        let right = Translate::new(200.0, 0.0);
+        let down = Translate::new(200.0, 200.0);
 
-        let carried = carry_velocity(10.0, &Transform::IDENTITY, &moved, &moved, &scaled);
+        let carried = carry_velocity(10.0, &Translate::NONE, &right, &right, &down);
         assert_eq!(carried, 0.0);
     }
 

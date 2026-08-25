@@ -6,7 +6,7 @@ Animate transform changes with smooth transitions.
 
 ```rust
 container()
-    .transform(Transform::rotate_degrees(rotation_signal))
+    .rotate(rotation_signal)
     .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
 ```
 
@@ -19,7 +19,7 @@ Standard easing curve transitions:
 ```rust
 // Smooth ease-out rotation
 container()
-    .transform(Transform::rotate_degrees(rotation))
+    .rotate(rotation)
     .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
     .on_click(move || rotation.update(|r| *r += 45.0))
 ```
@@ -30,7 +30,7 @@ Physics simulation for bouncy, natural motion:
 
 ```rust
 container()
-    .transform(Transform::scale(scale_signal))
+    .scale(scale_signal)
     .animate_transform(Transition::spring(SpringConfig::BOUNCY))
 ```
 
@@ -51,7 +51,7 @@ container()
     .height(80.0)
     .background(Color::rgb(0.3, 0.6, 0.8))
     .corners(8.0)
-    .transform(Transform::rotate_degrees(rotation))
+    .rotate(rotation)
     .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
     .when_hovered(|s| s.lighter(0.1))
     .when_pressed(|s| s.ripple())
@@ -65,7 +65,7 @@ let scale_factor = create_signal(1.0f32);
 let is_scaled = create_signal(false);
 
 container()
-    .transform(Transform::scale(scale_factor))
+    .scale(scale_factor)
     .animate_transform(Transition::spring(SpringConfig::BOUNCY))
     .on_click(move || {
         is_scaled.update(|s| *s = !*s);
@@ -79,7 +79,7 @@ container()
 ```rust
 container()
     .animate_transform(Transition::spring(SpringConfig::SMOOTH))
-    .when_pressed(|s| s.transform(Transform::scale(0.98)))
+    .when_pressed(|s| s.scale(0.98))
 ```
 
 ### Smooth Translation
@@ -88,7 +88,7 @@ container()
 let offset_x = create_signal(0.0f32);
 
 container()
-    .transform(Transform::translate(offset_x, 0.0))
+    .translate((offset_x, 0.0))
     .animate_transform(Transition::new(400.0, TimingFunction::EaseInOut))
     .on_scroll(move |_, dy, _| {
         offset_x.update(|x| *x += dy * 10.0);
@@ -125,7 +125,7 @@ fn animated_transforms_demo() -> impl Widget {
                 .height(80.0)
                 .background(Color::rgb(0.3, 0.5, 0.8))
                 .corners(8.0)
-                .transform(Transform::rotate_degrees(rotation))
+                .rotate(rotation)
                 .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
                 .when_hovered(|s| s.lighter(0.1))
                 .when_pressed(|s| s.ripple())
@@ -139,7 +139,7 @@ fn animated_transforms_demo() -> impl Widget {
                 .height(80.0)
                 .background(Color::rgb(0.3, 0.8, 0.4))
                 .corners(8.0)
-                .transform(Transform::scale(scale))
+                .scale(scale)
                 .animate_transform(Transition::spring(SpringConfig::BOUNCY))
                 .when_hovered(|s| s.lighter(0.1))
                 .when_pressed(|s| s.ripple())

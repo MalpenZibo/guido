@@ -59,7 +59,7 @@ container()
 
 **Scale down (tactile feedback):**
 ```rust
-.when_pressed(|s| s.transform(Transform::scale(0.98)))
+.when_pressed(|s| s.scale(0.98))
 ```
 
 **Reduce elevation (press into surface):**
@@ -223,7 +223,7 @@ below only takes over the transform and leaves the hover's background alone:
 ```rust
 container()
     .when_hovered(|s| s.lighter(0.1))
-    .when_pressed(|s| s.transform(Transform::scale(0.98)))
+    .when_pressed(|s| s.scale(0.98))
 ```
 
 Keep in mind that a layer *replaces* the base rather than ranking against it. A
@@ -244,7 +244,7 @@ Each state can override multiple properties:
 .when_pressed(|s| s
     .ripple()
     .darker(0.05)
-    .transform(Transform::scale(0.98))
+    .scale(0.98)
     .elevation(2.0)
 )
 ```
@@ -260,7 +260,7 @@ container()
     .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
     .animate_transform(Transition::spring(SpringConfig::SMOOTH))
     .when_hovered(|s| s.lighter(0.1).border(2.0, Color::WHITE))
-    .when_pressed(|s| s.darker(0.1).transform(Transform::scale(0.98)))
+    .when_pressed(|s| s.darker(0.1).scale(0.98))
 ```
 
 ## Button Patterns

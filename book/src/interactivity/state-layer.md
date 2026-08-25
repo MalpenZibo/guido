@@ -45,7 +45,7 @@ State layers can override these properties:
 ### Transform
 
 ```rust
-.when_pressed(|s| s.transform(Transform::scale(0.98)))
+.when_pressed(|s| s.scale(0.98))
 ```
 
 ### Corner Radius
@@ -82,7 +82,7 @@ Chain multiple overrides in a single state:
 .when_pressed(|s| s
     .ripple()
     .darker(0.05)
-    .transform(Transform::scale(0.98))
+    .scale(0.98)
 )
 ```
 
@@ -121,7 +121,7 @@ fn interactive_button(label: &str) -> Container {
         .when_pressed(|s| s
             .ripple()
             .darker(0.05)
-            .transform(Transform::scale(0.98))
+            .scale(0.98)
         )
 
         .child(container().child(text(label).color(Color::WHITE)))

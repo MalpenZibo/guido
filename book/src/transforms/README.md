@@ -14,9 +14,9 @@ Guido provides a complete 2D transform system for translating, rotating, and sca
 
 ```rust
 container()
-    .transform(Transform::translate(20.0, 10.0))  // Move 20px right, 10px down
-    .transform(Transform::rotate_degrees(45.0))           // Rotate 45 degrees
-    .transform(Transform::scale(1.5))             // Scale to 150%
+    .translate((20.0, 10.0))  // Move 20px right, 10px down
+    .rotate(45.0)           // Rotate 45 degrees
+    .scale(1.5)             // Scale to 150%
 ```
 
 ## In This Section

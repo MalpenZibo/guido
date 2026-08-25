@@ -70,7 +70,7 @@ fn main() {
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.8, 0.5, 0.3))
                             .corners(6.0)
-                            .transform(Transform::rotate_degrees(15.0))
+                            .rotate(15.0)
                             .child(
                                 text_input(input2)
                                     .cursor_color(Color::rgb(0.4, 0.8, 1.0))
@@ -97,7 +97,7 @@ fn main() {
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.3, 0.5, 0.8))
                             .corners(6.0)
-                            .transform(Transform::scale(1.2))
+                            .scale(1.2)
                             .child(
                                 text_input(input3)
                                     .cursor_color(Color::rgb(0.4, 0.8, 1.0))
@@ -124,7 +124,7 @@ fn main() {
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.8, 0.8, 0.3))
                             .corners(6.0)
-                            .transform(Transform::translate(50.0, 10.0))
+                            .translate((50.0, 10.0))
                             .child(
                                 text_input(input4)
                                     .cursor_color(Color::rgb(0.4, 0.8, 1.0))
@@ -151,11 +151,9 @@ fn main() {
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.8, 0.3, 0.8))
                             .corners(6.0)
-                            .transform(
-                                Transform::translate(20.0, 5.0)
-                                    .then(&Transform::rotate_degrees(-10.0))
-                                    .then(&Transform::scale(0.9)),
-                            )
+                            .translate((20.0, 5.0))
+                            .rotate(-10.0)
+                            .scale(0.9)
                             .child(
                                 text_input(input5)
                                     .cursor_color(Color::rgb(0.4, 0.8, 1.0))

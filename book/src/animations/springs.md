@@ -83,7 +83,7 @@ let scale_factor = create_signal(1.0f32);
 let is_scaled = create_signal(false);
 
 container()
-    .transform(Transform::scale(scale_factor))
+    .scale(scale_factor)
     .animate_transform(Transition::spring(SpringConfig::BOUNCY))
     .on_click(move || {
         is_scaled.update(|s| *s = !*s);
@@ -109,7 +109,7 @@ container()
 let rotation = create_signal(0.0f32);
 
 container()
-    .transform(Transform::rotate_degrees(rotation))
+    .rotate(rotation)
     .animate_transform(Transition::spring(SpringConfig::DEFAULT))
     .on_click(move || rotation.update(|r| *r += 90.0))
 ```
@@ -139,7 +139,7 @@ fn spring_button() -> Container {
         .padding(20.0)
         .background(Color::rgb(0.3, 0.5, 0.8))
         .corners(12.0)
-        .transform(move || Transform::scale(if pressed.get() { 1.1 } else { 1.0 }))
+        .scale(move || if pressed.get() { 1.1 } else { 1.0 })
 
         // Spring for scale - bouncy feedback
         .animate_transform(Transition::spring(SpringConfig::BOUNCY))
@@ -172,7 +172,7 @@ so a button shakes itself:
 ```rust
 fn nudge(angle: RwSignal<f32>) -> Container {
     container()
-        .transform(move || Transform::rotate_degrees(angle.get()))
+        .rotate(move || angle.get())
         .animate_transform(Transition::spring(SpringConfig::BOUNCY))
         .on_mouse_down(move |_, _| angle.set(2.0))
         .on_mouse_up(move |_, _| angle.set(0.0))

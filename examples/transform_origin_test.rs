@@ -53,7 +53,7 @@ async fn main() {
                                     .height(80.0)
                                     .background(Color::rgba(0.3, 0.5, 0.8, 0.8))
                                     .corners(8.0)
-                                    .transform(Transform::rotate_degrees(20.0)),
+                                    .rotate(20.0),
                                 // Top-left origin
                                 container()
                                     .width(100.0)
@@ -61,7 +61,7 @@ async fn main() {
                                     .background(Color::rgba(0.8, 0.5, 0.3, 0.8))
                                     .corners(8.0)
                                     .pivot(Pivot::TOP_LEFT)
-                                    .transform(Transform::rotate_degrees(20.0)),
+                                    .rotate(20.0),
                                 // Top-right origin
                                 container()
                                     .width(100.0)
@@ -69,7 +69,7 @@ async fn main() {
                                     .background(Color::rgba(0.5, 0.8, 0.3, 0.8))
                                     .corners(8.0)
                                     .pivot(Pivot::TOP_RIGHT)
-                                    .transform(Transform::rotate_degrees(20.0)),
+                                    .rotate(20.0),
                                 // Bottom-left origin
                                 container()
                                     .width(100.0)
@@ -77,7 +77,7 @@ async fn main() {
                                     .background(Color::rgba(0.8, 0.3, 0.8, 0.8))
                                     .corners(8.0)
                                     .pivot(Pivot::BOTTOM_LEFT)
-                                    .transform(Transform::rotate_degrees(20.0)),
+                                    .rotate(20.0),
                                 // Bottom-right origin
                                 container()
                                     .width(100.0)
@@ -85,7 +85,7 @@ async fn main() {
                                     .background(Color::rgba(0.3, 0.8, 0.8, 0.8))
                                     .corners(8.0)
                                     .pivot(Pivot::BOTTOM_RIGHT)
-                                    .transform(Transform::rotate_degrees(20.0)),
+                                    .rotate(20.0),
                             ]),
                         // Row 2: Scale with different origins
                         container()
@@ -102,7 +102,7 @@ async fn main() {
                                     .height(60.0)
                                     .background(Color::rgba(0.6, 0.3, 0.3, 0.8))
                                     .corners(6.0)
-                                    .transform(Transform::scale(1.3)),
+                                    .scale(1.3),
                                 // Top-left origin - scale
                                 container()
                                     .width(80.0)
@@ -110,7 +110,7 @@ async fn main() {
                                     .background(Color::rgba(0.3, 0.6, 0.3, 0.8))
                                     .corners(6.0)
                                     .pivot(Pivot::TOP_LEFT)
-                                    .transform(Transform::scale(1.3)),
+                                    .scale(1.3),
                                 // Bottom-right origin - scale
                                 container()
                                     .width(80.0)
@@ -118,7 +118,7 @@ async fn main() {
                                     .background(Color::rgba(0.3, 0.3, 0.6, 0.8))
                                     .corners(6.0)
                                     .pivot(Pivot::BOTTOM_RIGHT)
-                                    .transform(Transform::scale(1.3)),
+                                    .scale(1.3),
                             ]),
                         // Row 3: Animated rotation with different origins
                         container()
@@ -135,7 +135,7 @@ async fn main() {
                                     .height(60.0)
                                     .background(Color::rgba(0.7, 0.5, 0.2, 0.8))
                                     .corners(6.0)
-                                    .transform(move || Transform::rotate_degrees(angle.get())),
+                                    .rotate(move || angle.get()),
                                 // Top-left origin - animated
                                 container()
                                     .width(80.0)
@@ -143,7 +143,7 @@ async fn main() {
                                     .background(Color::rgba(0.2, 0.5, 0.7, 0.8))
                                     .corners(6.0)
                                     .pivot(Pivot::TOP_LEFT)
-                                    .transform(move || Transform::rotate_degrees(angle.get())),
+                                    .rotate(move || angle.get()),
                                 // Custom origin (25%, 75%) - animated
                                 container()
                                     .width(80.0)
@@ -151,7 +151,7 @@ async fn main() {
                                     .background(Color::rgba(0.5, 0.7, 0.2, 0.8))
                                     .corners(6.0)
                                     .pivot(Pivot::percent(25.0, 75.0))
-                                    .transform(move || Transform::rotate_degrees(angle.get())),
+                                    .rotate(move || angle.get()),
                             ]),
                         // Row 4: Nested containers with different origins
                         container()
@@ -173,7 +173,7 @@ async fn main() {
                                             .main_alignment(MainAlignment::Center)
                                             .cross_alignment(CrossAlignment::Center),
                                     )
-                                    .transform(Transform::rotate_degrees(15.0))
+                                    .rotate(15.0)
                                     .child(
                                         container()
                                             .width(60.0)
@@ -193,7 +193,7 @@ async fn main() {
                                             .cross_alignment(CrossAlignment::Center),
                                     )
                                     .pivot(Pivot::TOP_LEFT)
-                                    .transform(Transform::rotate_degrees(15.0))
+                                    .rotate(15.0)
                                     .child(
                                         container()
                                             .width(60.0)

@@ -87,7 +87,7 @@ fn create_transform_button() -> Container {
         .background(Color::rgb(0.8, 0.3, 0.3))
         .corners(8.0)
         .when_hovered(|s| s.lighter(0.05))
-        .when_pressed(|s| s.darker(0.1).transform(Transform::scale(0.98)))
+        .when_pressed(|s| s.darker(0.1).scale(0.98))
         .child(text("Press me (scale down)").color(Color::WHITE))
 }
 
@@ -146,7 +146,7 @@ fn create_ripple_with_scale_button() -> Container {
         .background(Color::rgb(0.6, 0.3, 0.5))
         .corners(8.0)
         .when_hovered(|s| s.lighter(0.1))
-        .when_pressed(|s| s.ripple().transform(Transform::scale(0.98)))
+        .when_pressed(|s| s.ripple().scale(0.98))
         .child(text("Ripple + scale").color(Color::WHITE))
 }
 
@@ -156,7 +156,8 @@ fn create_rotated_ripple_button() -> Container {
         .padding(16.0)
         .background(Color::rgb(0.4, 0.6, 0.4))
         .corners(8.0)
-        .transform(Transform::rotate_degrees(5.0).then(&Transform::translate(10.0, 15.0)))
+        .translate((10.0, 15.0))
+        .rotate(5.0)
         .when_hovered(|s| s.lighter(0.1))
         .when_pressed(|s| s.ripple_with_color(Color::rgba(1.0, 1.0, 1.0, 0.5)))
         .child(text("Rotated + translated").color(Color::WHITE))

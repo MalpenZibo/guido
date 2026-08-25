@@ -91,8 +91,8 @@ fn turn_around() -> Container {
          should reverse without pausing at the point you left it.",
         track(
             dot(INK)
-                .transform(move || Transform::translate(if out.get() { 760.0 } else { 0.0 }, 0.0))
-                .animate_transform(Transition::spring(SpringConfig::GENTLE)),
+                .translate(move || (if out.get() { 760.0 } else { 0.0 }, 0.0))
+                .animate_translate(Transition::spring(SpringConfig::GENTLE)),
         )
         .control()
         .on_hover(move |hovered| out.set(hovered)),
@@ -110,8 +110,8 @@ fn past_the_overshoot() -> Container {
          on the way it was going, not lurch forward first.",
         track(
             dot(HOT)
-                .transform(move || Transform::translate(if out.get() { 700.0 } else { 0.0 }, 0.0))
-                .animate_transform(Transition::spring(SpringConfig::BOUNCY)),
+                .translate(move || (if out.get() { 700.0 } else { 0.0 }, 0.0))
+                .animate_translate(Transition::spring(SpringConfig::BOUNCY)),
         )
         .control()
         .on_hover(move |hovered| out.set(hovered)),
@@ -125,19 +125,14 @@ fn own_channel() -> Container {
     panel(
         "3 — Momentum stays in its own channel",
         "Hover to send it sliding, then press while it is still moving. The \
-         press only scales it: the slide's speed must not leak into the size \
-         and make it jump.",
+         press only scales it: the slide's speed cannot leak into the size, \
+         because the two are separate properties with a spring each.",
         track(
             dot(INK)
-                .transform(move || {
-                    let slide = Transform::translate(if out.get() { 700.0 } else { 0.0 }, 0.0);
-                    if big.get() {
-                        Transform::scale(1.6).then(&slide)
-                    } else {
-                        slide
-                    }
-                })
-                .animate_transform(Transition::spring(SpringConfig::GENTLE)),
+                .translate(move || Translate::new(if out.get() { 700.0 } else { 0.0 }, 0.0))
+                .animate_translate(Transition::spring(SpringConfig::GENTLE))
+                .scale(move || if big.get() { 1.6 } else { 1.0 })
+                .animate_scale(Transition::spring(SpringConfig::GENTLE)),
         )
         .control()
         .on_hover(move |hovered| out.set(hovered))
@@ -155,8 +150,8 @@ fn from_rest() -> Container {
          then leave. It should ease away, not start with a kick.",
         track(
             dot(INK)
-                .transform(move || Transform::translate(if out.get() { 760.0 } else { 0.0 }, 0.0))
-                .animate_transform(Transition::spring(SpringConfig::SNAPPY)),
+                .translate(move || (if out.get() { 760.0 } else { 0.0 }, 0.0))
+                .animate_translate(Transition::spring(SpringConfig::SNAPPY)),
         )
         .control()
         .on_hover(move |hovered| out.set(hovered)),
@@ -177,8 +172,8 @@ fn shake() -> Container {
             .background(HOT)
             .corners(8.0)
             .padding(10.0)
-            .transform(move || Transform::rotate_degrees(angle.get()))
-            .animate_transform(Transition::spring(SpringConfig::BOUNCY))
+            .rotate(move || angle.get())
+            .animate_rotate(Transition::spring(SpringConfig::BOUNCY))
             .on_mouse_down(move |_, _| angle.set(6.0))
             .on_mouse_up(move |_, _| angle.set(0.0))
             .child(

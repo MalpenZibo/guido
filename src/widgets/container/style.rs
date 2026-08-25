@@ -112,9 +112,19 @@ impl Container {
         self.resolve_state_value(id, base, |state| state.corners.map(|s| s.get()))
     }
 
-    pub(super) fn effective_transform_target(&self, id: WidgetId) -> Transform {
-        let base = self.transform.get_or(Transform::IDENTITY);
-        self.resolve_state_value(id, base, |state| state.transform.map(|s| s.get()))
+    pub(super) fn effective_translate_target(&self, id: WidgetId) -> Translate {
+        let base = self.translate.get_or(Translate::NONE);
+        self.resolve_state_value(id, base, |state| state.translate.map(|s| s.get()))
+    }
+
+    pub(super) fn effective_rotate_target(&self, id: WidgetId) -> f32 {
+        let base = self.rotate.get_or(0.0);
+        self.resolve_state_value(id, base, |state| state.rotate.map(|s| s.get()))
+    }
+
+    pub(super) fn effective_scale_target(&self, id: WidgetId) -> Scale {
+        let base = self.scale.get_or(Scale::NONE);
+        self.resolve_state_value(id, base, |state| state.scale.map(|s| s.get()))
     }
 
     /// The largest elevation this container can reach, and the number its damage
@@ -232,10 +242,24 @@ impl Container {
         }
     }
 
+    /// The three declared components, each at whatever its own animation has
+    /// reached, composed into the matrix the renderer and the hit test share.
+    ///
+    /// This is the only place the two forms meet. Everything above it says
+    /// `translate`, `rotate`, `scale`; everything below it takes a matrix and
+    /// never has to ask how the matrix was arrived at.
     pub(super) fn animated_transform(&self, id: WidgetId) -> Transform {
-        get_animated_value(
-            self.anims.as_ref().and_then(|a| a.transform.as_ref()),
-            || self.effective_transform_target(id),
+        let anims = self.anims.as_ref();
+        Transform::compose(
+            get_animated_value(anims.and_then(|a| a.translate.as_ref()), || {
+                self.effective_translate_target(id)
+            }),
+            get_animated_value(anims.and_then(|a| a.rotate.as_ref()), || {
+                self.effective_rotate_target(id)
+            }),
+            get_animated_value(anims.and_then(|a| a.scale.as_ref()), || {
+                self.effective_scale_target(id)
+            }),
         )
     }
 
@@ -255,7 +279,9 @@ impl Container {
                 || a.elevation.is_some()
                 || a.border_width.is_some()
                 || a.border_color.is_some()
-                || a.transform.is_some()
+                || a.translate.is_some()
+                || a.rotate.is_some()
+                || a.scale.is_some()
         })
     }
 
@@ -271,7 +297,9 @@ impl Container {
                 || a.corners.is_some()
                 || a.elevation.is_some()
                 || a.border_color.is_some()
-                || a.transform.is_some()
+                || a.translate.is_some()
+                || a.rotate.is_some()
+                || a.scale.is_some()
         })
     }
 }

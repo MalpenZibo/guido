@@ -1,4 +1,140 @@
+//! How a widget is moved, turned and resized, and the matrix that carries the
+//! result to the GPU.
+//!
+//! The three are separate values because that is the only form in which they
+//! can be animated. A matrix cannot say how far round a turn went: a rotation
+//! of 360° and no rotation at all are the same six numbers, so interpolating
+//! them is interpolating something that has already lost the answer. Kept
+//! apart, a rotation is an angle and an angle is a number.
+//!
+//! They compose in one order, always — translate, then rotate, then scale —
+//! which is the order CSS fixed for the same three properties, and for the
+//! same reason: with no declared order, two declarations that read the same
+//! would mean different things.
+
+/// How far a widget is displaced, in logical pixels.
+///
+/// Unaffected by [`Pivot`](crate::pivot::Pivot): moving a box is the same
+/// movement wherever the pivot sits.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Translate {
+    /// Rightward displacement.
+    pub x: f32,
+    /// Downward displacement.
+    pub y: f32,
+}
+
+impl Translate {
+    /// No displacement.
+    pub const NONE: Self = Self { x: 0.0, y: 0.0 };
+
+    /// A displacement of `(x, y)`.
+    pub const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+}
+
+/// How much a widget is resized, as a factor per axis.
+///
+/// A bare number scales both axes; a pair scales them apart.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Scale {
+    /// Horizontal factor. `1.0` is unscaled.
+    pub x: f32,
+    /// Vertical factor. `1.0` is unscaled.
+    pub y: f32,
+}
+
+impl Scale {
+    /// Unscaled.
+    pub const NONE: Self = Self { x: 1.0, y: 1.0 };
+
+    /// The same factor on both axes.
+    pub const fn uniform(factor: f32) -> Self {
+        Self {
+            x: factor,
+            y: factor,
+        }
+    }
+
+    /// A factor per axis.
+    pub const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+}
+
+impl Default for Scale {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+macro_rules! from_pairs {
+    ($t:ty $(, $n:ty)*) => {$(
+        impl From<($n, $n)> for $t {
+            fn from((x, y): ($n, $n)) -> Self {
+                Self { x: x as f32, y: y as f32 }
+            }
+        }
+        impl From<[$n; 2]> for $t {
+            fn from([x, y]: [$n; 2]) -> Self {
+                Self { x: x as f32, y: y as f32 }
+            }
+        }
+    )*};
+}
+from_pairs!(Translate, f32, f64, i32, u32);
+from_pairs!(Scale, f32, f64, i32, u32);
+
+macro_rules! scale_from_scalar {
+    ($($n:ty),*) => {$(
+        impl From<$n> for Scale {
+            fn from(factor: $n) -> Self {
+                Self::uniform(factor as f32)
+            }
+        }
+    )*};
+}
+scale_from_scalar!(f32, f64, i32, u32);
+
+// A closure has to accept whatever the constant form accepts, or the same
+// expression compiles in one position and not the other — the asymmetry
+// `IntoSignal` exists to remove. `From` covers the constants; these cover the
+// closures.
+macro_rules! into_val_pairs {
+    ($t:ty $(, $n:ty)*) => {$(
+        impl crate::reactive::IntoVal<$t> for ($n, $n) {
+            fn into_val(self) -> $t {
+                self.into()
+            }
+        }
+        impl crate::reactive::IntoVal<$t> for [$n; 2] {
+            fn into_val(self) -> $t {
+                self.into()
+            }
+        }
+    )*};
+}
+into_val_pairs!(Translate, f32, f64, i32, u32);
+into_val_pairs!(Scale, f32, f64, i32, u32);
+
+macro_rules! into_val_scalar {
+    ($($n:ty),*) => {$(
+        impl crate::reactive::IntoVal<Scale> for $n {
+            fn into_val(self) -> Scale {
+                Scale::uniform(self as f32)
+            }
+        }
+    )*};
+}
+into_val_scalar!(f32, f64, i32, u32);
+
 /// A 2D affine transformation.
+///
+/// Not part of the public vocabulary: an application says `translate`,
+/// `rotate` and `scale`, and this is what those compose into on the way to the
+/// renderer. It is reachable from [`widget_prelude`](crate::widget_prelude) so
+/// that a widget written outside the crate can position what it paints.
 ///
 /// Stored as 6 floats in the layout `[a, b, tx, c, d, ty]`, representing:
 ///
@@ -23,6 +159,28 @@ impl Transform {
     pub const IDENTITY: Self = Self {
         data: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
     };
+
+    /// The three declared components, composed: translate, then rotate, then
+    /// scale.
+    ///
+    /// Folded into the affine form directly rather than built by two `then`
+    /// calls, since two of the three are known to be sparse. The pivot is not
+    /// applied here — [`center_at`](Self::center_at) does that at flatten
+    /// time, and because it is a translation it commutes with this one, so
+    /// which side it lands on does not change the result.
+    pub(crate) fn compose(translate: Translate, rotate_degrees: f32, scale: Scale) -> Self {
+        let (sin, cos) = rotate_degrees.to_radians().sin_cos();
+        Self {
+            data: [
+                cos * scale.x,
+                -sin * scale.y,
+                translate.x,
+                sin * scale.x,
+                cos * scale.y,
+                translate.y,
+            ],
+        }
+    }
 
     /// Create a translation transform
     pub fn translate(x: f32, y: f32) -> Self {
@@ -407,6 +565,50 @@ mod tests {
         for (a, b) in direct.data.iter().zip(composed.data.iter()) {
             assert!(approx_eq(*a, *b), "{direct:?} != {composed:?}");
         }
+    }
+
+    /// `compose` is the fixed order written out: translate, then rotate, then
+    /// scale, which as matrices is `T * R * S`. Folding it by hand is only
+    /// worth doing if it agrees with composing it.
+    #[test]
+    fn compose_is_translate_then_rotate_then_scale() {
+        let (t, deg, s) = (Translate::new(7.0, -3.0), 30.0_f32, Scale::new(2.0, 0.5));
+
+        let folded = Transform::compose(t, deg, s);
+        let built = Transform::translate(t.x, t.y)
+            .then(&Transform::rotate_degrees(deg))
+            .then(&Transform::scale_xy(s.x, s.y));
+
+        for (a, b) in folded.data.iter().zip(built.data.iter()) {
+            assert!(approx_eq(*a, *b), "{folded:?} != {built:?}");
+        }
+    }
+
+    /// The three declared apart do what the one composed value did, so the
+    /// order is a rule and not an accident of which builder ran last.
+    #[test]
+    fn each_component_is_neutral_when_it_is_not_declared() {
+        assert_eq!(
+            Transform::compose(Translate::NONE, 0.0, Scale::NONE),
+            Transform::IDENTITY
+        );
+        assert_eq!(
+            Transform::compose(Translate::new(5.0, 6.0), 0.0, Scale::NONE),
+            Transform::translate(5.0, 6.0)
+        );
+        assert_eq!(
+            Transform::compose(Translate::NONE, 0.0, Scale::uniform(2.0)),
+            Transform::scale(2.0)
+        );
+    }
+
+    /// A rotation is stored as the number it was given, so a scale read back
+    /// from a full turn is still a scale of one — and, unlike a matrix, the
+    /// turn itself is still there to interpolate.
+    #[test]
+    fn a_full_turn_composes_to_the_size_it_started_at() {
+        let full = Transform::compose(Translate::NONE, 360.0, Scale::NONE);
+        assert!(approx_eq(full.extract_scale(), 1.0));
     }
 
     #[test]

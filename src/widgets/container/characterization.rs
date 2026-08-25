@@ -1006,15 +1006,10 @@ fn a_container_wakes_when_its_timeline_is_asked_to_play() {
     use crate::animation::Keyframes;
 
     let plays = create_signal(0u32);
-    let mut h = H::new(
-        box_of(50.0, 50.0).keyframes_transform(
-            Keyframes::new(200.0)
-                .at(0.0, Transform::IDENTITY)
-                .at(0.5, Transform::rotate_degrees(2.0))
-                .at(1.0, Transform::IDENTITY),
-            plays,
-        ),
-    );
+    let mut h = H::new(box_of(50.0, 50.0).keyframes_rotate(
+        Keyframes::new(200.0).at(0.0, 0.0).at(0.5, 2.0).at(1.0, 0.0),
+        plays,
+    ));
     h.fit(100.0, 100.0);
     h.paint();
 
@@ -1043,11 +1038,11 @@ fn a_played_sequence_actually_moves_the_transform() {
     let plays = create_signal(0u32);
     let mut h = H::new(
         container().layout(Flex::row()).child(
-            box_of(50.0, 50.0).keyframes_transform(
+            box_of(50.0, 50.0).keyframes_rotate(
                 Keyframes::new(200.0)
-                    .at(0.0, Transform::IDENTITY)
-                    .at(0.5, Transform::rotate_degrees(20.0))
-                    .at(1.0, Transform::IDENTITY),
+                    .at(0.0, 0.0)
+                    .at(0.5, 20.0)
+                    .at(1.0, 0.0),
                 plays,
             ),
         ),
@@ -1066,7 +1061,7 @@ fn a_played_sequence_actually_moves_the_transform() {
 
 /// And it survives the transition being declared after it.
 ///
-/// `animate_transform` builds a fresh `AnimationState`, so the sequence used
+/// `animate_rotate` builds a fresh `AnimationState`, so the sequence used
 /// to be thrown away by whichever builder came second — with the trigger
 /// still firing, the job still queued and nothing at all to show for it.
 #[test]
@@ -1077,15 +1072,15 @@ fn declaring_a_transition_after_a_sequence_does_not_lose_it() {
     let mut h = H::new(
         container().layout(Flex::row()).child(
             box_of(50.0, 50.0)
-                .keyframes_transform(
+                .keyframes_rotate(
                     Keyframes::new(200.0)
-                        .at(0.0, Transform::IDENTITY)
-                        .at(0.5, Transform::rotate_degrees(20.0))
-                        .at(1.0, Transform::IDENTITY),
+                        .at(0.0, 0.0)
+                        .at(0.5, 20.0)
+                        .at(1.0, 0.0),
                     plays,
                 )
                 // Written after, which used to decide the whole thing.
-                .animate_transform(Transition::new(100.0, TimingFunction::EaseOut)),
+                .animate_rotate(Transition::new(100.0, TimingFunction::EaseOut)),
         ),
     );
     h.fit(200.0, 200.0);
@@ -1342,7 +1337,7 @@ fn a_layer_silent_on_a_property_does_not_shadow_the_one_below_it() {
         box_of(50.0, 50.0)
             .background(Color::BLACK)
             .when_hovered(|s| s.background(Color::RED))
-            .when_pressed(|s| s.transform(Transform::scale(0.5))),
+            .when_pressed(|s| s.scale(0.5)),
     );
     h.fit(100.0, 100.0);
 
@@ -2267,10 +2262,10 @@ fn a_transformed_blur_publishes_the_shape_it_is_drawn_as() {
     let card = |c: Container| c.width(40.0).height(40.0).backdrop_blur(24.0);
 
     let plain = H::new(card(container())).frame(200.0, 200.0).blur;
-    let scaled = H::new(card(container()).transform(Transform::scale(2.0)))
+    let scaled = H::new(card(container()).scale(2.0))
         .frame(200.0, 200.0)
         .blur;
-    let turned = H::new(card(container()).transform(Transform::rotate_degrees(45.0)))
+    let turned = H::new(card(container()).rotate(45.0))
         .frame(200.0, 200.0)
         .blur;
 

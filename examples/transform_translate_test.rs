@@ -33,7 +33,7 @@ fn main() {
                             .padding(10.0)
                             .background(Color::rgb(0.3, 0.8, 0.3))
                             .corners(8.0)
-                            .transform(Transform::translate(100.0, 10.0)), // Move 10px right, 10px down
+                            .translate((100.0, 10.0)), // Move 10px right, 10px down
                     ])
             },
         );

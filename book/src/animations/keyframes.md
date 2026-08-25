@@ -63,7 +63,7 @@ So a card can hover and shake without the two arguing:
 
 ```rust
 container()
-    .when_hovered(|s| s.transform(Transform::scale(1.03)))
+    .when_hovered(|s| s.scale(1.03))
     .animate_transform(Transition::spring(SpringConfig::SNAPPY))
     .keyframes_transform(shake(), rejections)
 ```

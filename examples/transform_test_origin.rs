@@ -42,6 +42,6 @@ fn box_with_origin(color: Color, origin: Pivot) -> Container {
         .height(60.0)
         .background(color)
         .corners(8.0)
-        .transform(Transform::rotate_degrees(30.0))
+        .rotate(30.0)
         .pivot(origin)
 }
