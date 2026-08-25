@@ -288,10 +288,7 @@ impl Container {
 /// Returns whether an enter was begun, which is what needs a paint job.
 fn seed_or_enter<T: crate::animation::Animatable>(anim: &mut AnimationState<T>, target: T) -> bool {
     match anim.take_enter_from() {
-        Some(enter) => {
-            anim.begin_from(enter, target);
-            true
-        }
+        Some(enter) => anim.begin_from(enter, target),
         None => {
             anim.set_immediate(target);
             false

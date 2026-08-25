@@ -216,6 +216,57 @@ fn borders(node: &RenderNode) -> Vec<(f32, Color)> {
 // Sizing — the box model matrix
 // ---------------------------------------------------------------------------
 
+/// The other half of collapsing: an event that *clears* state has to get
+/// through. A button pressed when the menu closed stayed pressed for as long
+/// as it existed, because the guard refused every event and not just the ones
+/// asking where the pointer was.
+#[test]
+fn collapsing_does_not_strand_a_pressed_child() {
+    let open = create_signal(true);
+    let released = create_signal(0u32);
+
+    let mut h = H::new(
+        box_of(80.0, 40.0)
+            .scale(move || {
+                if open.get() {
+                    Scale::NONE
+                } else {
+                    Scale::new(1.0, 0.0)
+                }
+            })
+            .child(
+                box_of(80.0, 40.0)
+                    .when_pressed(|s| s.darker(0.1))
+                    .on_mouse_up(move |_, _| released.update(|r| *r += 1)),
+            ),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    h.send(Event::MouseDown {
+        x: 40.0,
+        y: 20.0,
+        button: MouseButton::Left,
+    });
+
+    // The menu closes under the pointer, and only then does the button come up.
+    open.set(false);
+    pump(&mut h);
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    h.send(Event::MouseUp {
+        x: 40.0,
+        y: 20.0,
+        button: MouseButton::Left,
+    });
+    assert_eq!(
+        released.get(),
+        1,
+        "the release has to reach the child, or it stays pressed forever"
+    );
+}
+
 /// A container collapsed to nothing by its scale draws nothing, so it must
 /// take nothing: the enter idiom in `animate_scale_from` builds exactly this,
 /// and a closed menu that still answered for its open-sized rect would swallow

@@ -170,6 +170,60 @@ impl Container {
     /// place its origin under the actual cursor. `local` is the same event with
     /// this container's transform undone, which is what everything else tests
     /// against.
+    /// Events for a subtree whose transform has collapsed it to nothing.
+    ///
+    /// Nothing in here can be pointed at, so an event that asks "is the
+    /// pointer on you" is refused outright: it cannot be answered, since a
+    /// degenerate transform has no inverse and the point would be tested
+    /// against the coordinates the subtree occupies when it is open.
+    ///
+    /// Everything else goes through untouched. An event without coordinates —
+    /// a key, a focus change, a leave — has no point to be wrong about, and
+    /// `MouseUp` has one but is not asking it: it ends a press wherever it
+    /// lands, and refusing it leaves a button pressed for as long as it exists.
+    ///
+    /// A pointer that was over something in here when it collapsed is told so
+    /// with a leave, rather than left hovering something that is no longer
+    /// drawn.
+    pub(super) fn dispatch_while_collapsed(
+        &mut self,
+        tree: &mut Tree,
+        id: WidgetId,
+        event: &Event,
+    ) -> EventResponse {
+        let asks_where_the_pointer_is = matches!(
+            event,
+            Event::MouseMove { .. }
+                | Event::MouseDown { .. }
+                | Event::MouseEnter { .. }
+                | Event::Scroll { .. }
+        );
+
+        let forwarded = if asks_where_the_pointer_is {
+            Cow::Owned(Event::MouseLeave)
+        } else {
+            Cow::Borrowed(event)
+        };
+
+        for &child_id in self.children_source.get() {
+            tree.with_widget_mut(child_id, |child, child_id, tree| {
+                child.event(tree, child_id, &forwarded)
+            });
+        }
+
+        let hit = HitContext {
+            bounds: tree.get_bounds(id).unwrap_or_default(),
+            corners: self.animated_corners(id),
+            transform: Transform::IDENTITY,
+            pivot: Pivot::CENTER,
+        };
+        self.handle_own_event(id, &hit, &forwarded, &forwarded);
+
+        // Nothing in here was pointed at, whatever the descendants did with
+        // the leave: a claim would stop the event reaching what is drawn.
+        EventResponse::Ignored
+    }
+
     pub(super) fn handle_own_event(
         &mut self,
         id: WidgetId,

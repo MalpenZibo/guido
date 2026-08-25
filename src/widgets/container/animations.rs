@@ -131,7 +131,15 @@ impl<T: Animatable> AnimationState<T> {
         // pass would read as a new target, begin a fresh segment, and ask for
         // another Animation job — a surface that never goes idle for a value
         // that was never going to arrive.
+        //
+        // Refusing it is not enough on its own. `resync_animation_targets`
+        // compares the stored target against the one the signals resolve to,
+        // and a stale finite target against a NaN reads as drift on every
+        // paint — so it would ask for an Animation job, and wake the loop,
+        // just as forever by the other route. `settle_at` records that this is
+        // where the property has stopped, so the comparison agrees.
         if !new_target.is_reachable() {
+            self.settle_at(self.current);
             return;
         }
 
@@ -484,7 +492,13 @@ impl<T: Animatable> AnimationState<T> {
 
     /// Begin animating from an explicit value (enter transitions): the
     /// widget appears mid-animation instead of snapping to its target.
-    pub(crate) fn begin_from(&mut self, from: T, target: T) {
+    /// Returns whether an animation actually began: `animate_to` refuses a
+    /// target that is not a number, and a caller that asked for a paint on the
+    /// strength of an enter it did not get would waste the frame.
+    pub(crate) fn begin_from(&mut self, from: T, target: T) -> bool {
+        if !from.is_reachable() {
+            return false;
+        }
         self.current = from;
         self.start = from;
         self.initialized = true;
@@ -493,15 +507,40 @@ impl<T: Animatable> AnimationState<T> {
         let t = target;
         self.target = from; // force the retarget below to fire
         self.animate_to(t);
+        self.is_animating()
     }
 
     /// Set value immediately without animation (for initialization)
     pub fn set_immediate(&mut self, value: T) {
+        // The seeding store, and the one that matters most: a value that is
+        // not a number lands in `current` and `start` as well as `target`, and
+        // from there it never leaves. `advance` computes `lerp(start, target,
+        // t)`, which is NaN for every `t` once `start` is, and only the spring
+        // branch assigns `target` outright at the end — so a later, perfectly
+        // finite target animates from NaN to NaN forever and the widget stays
+        // untransformed for the life of the process.
+        //
+        // Refusing it here leaves the animation where it was, which is a value
+        // that can still be animated away from.
+        if !value.is_reachable() {
+            return;
+        }
         self.current = value;
         self.target = value;
         self.start = value;
         self.progress = 1.0;
         self.initialized = true;
+    }
+
+    /// Stop here, and let the drift check agree that this is where it stopped.
+    ///
+    /// Unlike `set_immediate` this does not touch `initialized`: a property
+    /// that has never been seeded has not been seeded by giving up on a target.
+    fn settle_at(&mut self, value: T) {
+        self.current = value;
+        self.target = value;
+        self.start = value;
+        self.progress = 1.0;
     }
 
     /// Check if animation has never been initialized (first layout)
@@ -1105,6 +1144,42 @@ mod tests {
         // And a real target after it still works.
         anim.animate_to(10.0);
         assert!(anim.is_animating());
+    }
+
+    /// Refusing it also has to record where the property stopped, or the drift
+    /// check compares a stale finite target against the NaN, reads it as a
+    /// retarget on every paint, and wakes the loop just as forever.
+    #[test]
+    fn a_refused_target_leaves_nothing_to_drift_from() {
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
+        anim.set_immediate(3.0);
+        anim.animate_to(f32::NAN);
+
+        assert_eq!(
+            *anim.target(),
+            *anim.current(),
+            "the target has to be where it settled, not where it was sent"
+        );
+    }
+
+    /// And the seeding store is guarded too — it is the one that poisons for
+    /// good, because `advance` interpolates from `start` and only a spring
+    /// assigns the target outright at the end.
+    #[test]
+    fn seeding_an_unreachable_value_does_not_poison_the_property() {
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
+        anim.set_immediate(f32::NAN);
+        assert!(anim.current().is_finite(), "nothing to interpolate from");
+
+        // The signal comes back to its senses, and so does the property.
+        anim.set_immediate(1.0);
+        anim.animate_to(2.0);
+        at(&mut anim, 100);
+        assert!(
+            (*anim.current() - 2.0).abs() < 1e-3,
+            "got {}",
+            *anim.current()
+        );
     }
 
     /// A target that moves every frame — a field growing as it is typed into —

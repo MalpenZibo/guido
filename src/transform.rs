@@ -429,12 +429,14 @@ impl Transform {
     pub fn inverse(&self) -> Transform {
         let [a, b, tx, c, d, ty] = self.data;
 
-        let det = a * d - b * c;
-
-        // Handle degenerate case (zero determinant)
-        if det.abs() < 1e-10 {
+        // The same test the hit path asks before it gets here, and not a
+        // second copy of the constant: the guard in `Container::event` is only
+        // correct while the two agree about what degenerate means.
+        if self.is_degenerate() {
             return Self::IDENTITY;
         }
+
+        let det = a * d - b * c;
 
         let inv_det = 1.0 / det;
 
