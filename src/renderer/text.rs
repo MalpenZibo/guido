@@ -141,9 +141,15 @@ impl TextRenderState {
         let mut culled_indices = HashSet::new();
 
         for (idx, entry) in texts.iter().enumerate() {
-            // Skip text invisible due to zero scale — avoids all rendering work
+            // Text scaled to nothing is skipped before any work is done for
+            // it. The scale comes from the row norms, not from the diagonal:
+            // `a` and `d` are both `cos θ` for a rotation, so reading them as
+            // the scale calls a quarter turn a collapse and throws the text
+            // away at exactly 90° and 270° — and only there, which is why it
+            // survived so long. `extract_scale_components` is what the rest of
+            // the renderer already asks.
             if !entry.transform.is_identity() && !entry.transform.is_translation_only() {
-                let (sx, sy) = (entry.transform.a(), entry.transform.d());
+                let (sx, sy) = entry.transform.extract_scale_components();
                 if sx.abs() < 1e-3 || sy.abs() < 1e-3 {
                     culled_indices.insert(idx);
                     continue;
