@@ -130,6 +130,68 @@ where
     }
 }
 
+// 6. A signal whose value converts to the property's type.
+//
+// Without these a signal is the one form of `IntoSignal` that does not take
+// what the others take: `width(100.0)` and `width(move || w.get())` both
+// compile, and `width(w)` on a `Signal<f32>` did not, because `Length` is a
+// different type and so a different key. The rule these restore is that **a
+// signal accepts what a closure returning the same type accepts** — which is
+// exactly the `IntoVal` relation, so that is what they are written over.
+//
+// Written out per source type rather than as a blanket `S: IntoVal<T>`, which
+// cannot work: `IntoVal` is reflexive, so a blanket impl also covers
+// `Signal<Length> -> Length`, collides with the passthrough below, and leaves
+// the marker undecidable. Naming the source excludes the reflexive case by
+// construction, so a signal already holding the property's own type still
+// arrives by identity rather than through a derived signal.
+//
+// The cost of that is a list: a new conversion gets the value and closure
+// forms from one `IntoVal` impl and the signal form only if someone adds it
+// here too. See #226.
+macro_rules! converting_signals {
+    ($($from:ty => $to:ty),* $(,)?) => {$(
+        impl $crate::reactive::IntoSignal<$to, $crate::reactive::ConvertedSignalMarker>
+            for $crate::reactive::Signal<$from>
+        {
+            fn into_signal(self) -> $crate::reactive::Signal<$to> {
+                $crate::reactive::create_derived(move || {
+                    $crate::reactive::IntoVal::<$to>::into_val(self.get())
+                })
+            }
+        }
+        impl $crate::reactive::IntoSignal<$to, $crate::reactive::ConvertedSignalMarker>
+            for $crate::reactive::RwSignal<$from>
+        {
+            fn into_signal(self) -> $crate::reactive::Signal<$to> {
+                let read = self.read_only();
+                $crate::reactive::create_derived(move || {
+                    $crate::reactive::IntoVal::<$to>::into_val(read.get())
+                })
+            }
+        }
+    )*};
+}
+pub(crate) use converting_signals;
+
+// The optional case generalises where the others cannot. `IntoVal<Option<T>>
+// for T` already lets a closure return a bare value where an optional one is
+// expected; this is the same for a signal. No reflexive collision: reaching
+// `Option<X>` from `Signal<Option<X>>` is the passthrough, and this impl is
+// only ever selected for a `Signal<X>`.
+impl<T: Clone + 'static> IntoSignal<Option<T>, ConvertedSignalMarker> for Signal<T> {
+    fn into_signal(self) -> Signal<Option<T>> {
+        create_derived(move || Some(self.get()))
+    }
+}
+
+impl<T: Clone + 'static> IntoSignal<Option<T>, ConvertedSignalMarker> for RwSignal<T> {
+    fn into_signal(self) -> Signal<Option<T>> {
+        let read = self.read_only();
+        create_derived(move || Some(read.get()))
+    }
+}
+
 // 4. Signal<T> passthrough
 impl<T: Clone + 'static> IntoSignal<T, SignalMarker> for Signal<T> {
     fn into_signal(self) -> Signal<T> {

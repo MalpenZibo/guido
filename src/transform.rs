@@ -129,38 +129,15 @@ macro_rules! into_val_scalar {
 }
 into_val_scalar!(f32, f64, i32, u32);
 
-// A signal whose value converts. `IntoSignal` accepts a `Signal<T>` only for
-// the same `T`, so without these a signal is the one form that does not take
-// what the others do: `scale(1.5)` and `scale(move || f.get())` both go through
-// `From<f32> for Scale`, and `scale(f)` on a `Signal<f32>` did not.
-//
-// Written out per source type rather than as a blanket `T: Into<U>`, which does
-// not work: `Into` is reflexive, so such an impl also covers `Signal<Scale> ->
-// Scale` and collides with the passthrough, leaving the marker undecidable.
-// Naming the source excludes the reflexive case by construction.
-macro_rules! converting_signal {
-    ($($from:ty => $to:ty),* $(,)?) => {$(
-        impl crate::reactive::IntoSignal<$to, crate::reactive::ConvertedSignalMarker>
-            for crate::reactive::Signal<$from>
-        {
-            fn into_signal(self) -> crate::reactive::Signal<$to> {
-                crate::reactive::create_derived(move || self.get().into())
-            }
-        }
-        impl crate::reactive::IntoSignal<$to, crate::reactive::ConvertedSignalMarker>
-            for crate::reactive::RwSignal<$from>
-        {
-            fn into_signal(self) -> crate::reactive::Signal<$to> {
-                let read = self.read_only();
-                crate::reactive::create_derived(move || read.get().into())
-            }
-        }
-    )*};
-}
-converting_signal!(
+crate::reactive::converting_signals!(
     f32 => Scale,
+    f64 => Scale,
+    i32 => Scale,
+    u32 => Scale,
     (f32, f32) => Scale,
+    [f32; 2] => Scale,
     (f32, f32) => Translate,
+    [f32; 2] => Translate,
 );
 
 /// A 2D affine transformation.

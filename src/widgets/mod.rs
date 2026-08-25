@@ -123,3 +123,34 @@ impl IntoVal<Padding> for f64 {
         Padding::from(self as f32)
     }
 }
+
+// A signal accepts what a closure returning the same type accepts. The lists
+// mirror the `IntoVal` impls above one for one; see `reactive::into_signal`
+// for why they cannot be one blanket impl.
+crate::reactive::converting_signals!(
+    f32 => Corners,
+    f64 => Corners,
+    i32 => Corners,
+    u32 => Corners,
+    [f32; 2] => Corners,
+    [f32; 4] => Corners,
+    [i32; 2] => Corners,
+    [i32; 4] => Corners,
+
+    f32 => Padding,
+    f64 => Padding,
+    i32 => Padding,
+    u32 => Padding,
+    u16 => Padding,
+
+    f32 => crate::layout::Length,
+    f64 => crate::layout::Length,
+    i32 => crate::layout::Length,
+    u32 => crate::layout::Length,
+    u16 => crate::layout::Length,
+
+    f64 => f32,
+    i32 => f32,
+    u32 => f32,
+    u16 => f32,
+);
