@@ -106,13 +106,18 @@ jobs:
       # Re-blessing a golden is the one edit that makes a failing pixel test
       # pass without changing a pixel back. It stays possible, but it stops
       # being something that can happen quietly.
+      #
+      # Only a rewrite or a deletion, never an addition: a new scenario brings
+      # a new golden with it, and that is ordinary work. Asking for the label
+      # there too would put it on most pull requests, and a label everybody
+      # applies is a label nobody reads.
       - name: Refuse an unlabelled re-bless
         env:
           LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          changed=$(git diff --name-only "$BASE" "$HEAD" -- tests/golden/)
+          changed=$(git diff --name-only --diff-filter=MD "$BASE" "$HEAD" -- tests/golden/)
           if [ -z "$changed" ]; then
             echo "No goldens touched."
             exit 0
