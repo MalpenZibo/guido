@@ -981,7 +981,7 @@ impl Container {
         // decide whether it exists — silently, with the trigger still firing.
         let previous = self.anims_mut().translate.take();
         let mut anim = AnimationState::new(initial, transition);
-        anim.adopt_timeline_of(previous);
+        anim.adopt_declarations_of(previous);
         self.anims_mut().translate = Some(anim);
         self
     }
@@ -993,11 +993,18 @@ impl Container {
     /// round on the container's behalf: an angle that arrives already wrapped
     /// — from `atan2`, say — wraps the animation with it, and unwrapping it is
     /// the caller's to do because only the caller knows which way was meant.
+    ///
+    /// A declared `.reverse()` follows the *number*, not the turn, because the
+    /// angle is an `f32` and `f32::is_reverse` means decreasing. So a tilt from
+    /// `0.0` to `-8.0` takes the reverse curve going out and the forward one
+    /// coming home. Where that matters, declare the rest angle as the larger
+    /// number — `8.0` out and `0.0` home — or leave the reverse undeclared and
+    /// use one curve both ways.
     pub fn animate_rotate(mut self, transition: impl Into<TransitionConfig>) -> Self {
         let initial = self.rotate_signal().get_or_untracked(0.0);
         let previous = self.anims_mut().rotate.take();
         let mut anim = AnimationState::new(initial, transition);
-        anim.adopt_timeline_of(previous);
+        anim.adopt_declarations_of(previous);
         self.anims_mut().rotate = Some(anim);
         self
     }
@@ -1007,7 +1014,7 @@ impl Container {
         let initial = self.scale_signal().get_or_untracked(Scale::NONE);
         let previous = self.anims_mut().scale.take();
         let mut anim = AnimationState::new(initial, transition);
-        anim.adopt_timeline_of(previous);
+        anim.adopt_declarations_of(previous);
         self.anims_mut().scale = Some(anim);
         self
     }
@@ -1096,7 +1103,7 @@ impl Container {
         let initial = self.translate_signal().get_or_untracked(Translate::NONE);
         let previous = self.anims_mut().translate.take();
         let mut anim = AnimationState::new(initial, transition).with_enter_from(enter_from.into());
-        anim.adopt_timeline_of(previous);
+        anim.adopt_declarations_of(previous);
         self.anims_mut().translate = Some(anim);
         self
     }
@@ -1117,7 +1124,7 @@ impl Container {
         let initial = self.rotate_signal().get_or_untracked(0.0);
         let previous = self.anims_mut().rotate.take();
         let mut anim = AnimationState::new(initial, transition).with_enter_from(enter_from);
-        anim.adopt_timeline_of(previous);
+        anim.adopt_declarations_of(previous);
         self.anims_mut().rotate = Some(anim);
         self
     }
@@ -1137,7 +1144,7 @@ impl Container {
         let initial = self.scale_signal().get_or_untracked(Scale::NONE);
         let previous = self.anims_mut().scale.take();
         let mut anim = AnimationState::new(initial, transition).with_enter_from(enter_from.into());
-        anim.adopt_timeline_of(previous);
+        anim.adopt_declarations_of(previous);
         self.anims_mut().scale = Some(anim);
         self
     }
@@ -1557,6 +1564,21 @@ impl Widget for Container {
             transform: self.animated_transform(id),
             pivot: self.pivot_signal().get_or(Pivot::CENTER),
         };
+
+        // A subtree collapsed to a line or a point draws nothing, so nothing
+        // in it can be pointed at — including its children, which is the whole
+        // reason this sits here and not in `HitContext::contains`. The enter
+        // idiom `.scale(|| if open { NONE } else { Scale::new(1.0, 0.0) })`
+        // builds a menu out of buttons, and a guard on this container's own
+        // handlers would still have let every one of those buttons answer.
+        //
+        // They would answer in the wrong place as well: a degenerate transform
+        // cannot be undone, so `untransform_point` hands the point back
+        // unchanged and everything below hit-tests against the coordinates the
+        // subtree occupies when it is open.
+        if hit.transform.is_degenerate() {
+            return EventResponse::Ignored;
+        }
 
         // Undo our own transform before hit testing against the laid-out bounds
         let local_event: Cow<'_, Event> = match event.coords() {

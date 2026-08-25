@@ -152,6 +152,10 @@ crate::reactive::converting_signals!(
     [u32; 2] => Translate,
 );
 
+/// Not a number — which is a different failure from
+/// [`is_degenerate`](Transform::is_degenerate), a determinant of zero, and the
+/// two guards are independent: neither covers the other.
+///
 /// Rate-limited rather than said once: `compose` runs on every paint and every
 /// coalesced pointer move, so a value that stays NaN would fill the log at the
 /// frame rate — but a single latch would also mean a second container going
@@ -160,21 +164,28 @@ crate::reactive::converting_signals!(
 /// In release as well as in debug. A shipped application whose layout divides
 /// by a measured zero draws a widget that is silently not moved, not turned and
 /// not resized, and that is precisely when the line is worth having.
-fn warn_degenerate(rotate_degrees: f32, scale: Scale, translate: Translate) {
-    use std::sync::Mutex;
+fn warn_not_a_number(rotate_degrees: f32, scale: Scale, translate: Translate) {
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, Instant};
 
     /// Long enough that a per-frame source cannot flood, short enough that a
     /// second one later in the session is still reported.
     const QUIET: Duration = Duration::from_secs(5);
-    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
 
-    let Ok(mut last) = LAST.lock() else { return };
-    let now = Instant::now();
-    if last.is_some_and(|t| now.duration_since(t) < QUIET) {
+    // Milliseconds since the first call, in an atomic rather than behind a
+    // lock: a mutex here would turn a panic anywhere inside it — a custom
+    // `log` backend, say — into permanent silence for the one diagnostic this
+    // path has.
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    static LAST_MS: AtomicU64 = AtomicU64::new(u64::MAX);
+
+    let start = *START.get_or_init(Instant::now);
+    let now_ms = start.elapsed().as_millis() as u64;
+    let last = LAST_MS.load(Ordering::Relaxed);
+    if last != u64::MAX && now_ms.saturating_sub(last) < QUIET.as_millis() as u64 {
         return;
     }
-    *last = Some(now);
+    LAST_MS.store(now_ms, Ordering::Relaxed);
 
     log::warn!(
         "transform: a component is not a number and is being ignored \
@@ -227,7 +238,7 @@ impl Transform {
     /// the renderer, and `untransform_point` on the way back for a pointer
     /// event. Because it is a translation it commutes with this one, so which
     /// side it lands on does not change the result.
-    pub(crate) fn compose(translate: Translate, rotate_degrees: f32, scale: Scale) -> Self {
+    pub fn compose(translate: Translate, rotate_degrees: f32, scale: Scale) -> Self {
         // A number that sizes, turns or moves a widget has to be one. These
         // take whatever an application computes, and a division by a measured
         // zero arrives here as NaN — from which `sin_cos` makes a matrix of
@@ -241,7 +252,7 @@ impl Transform {
             || !translate.x.is_finite()
             || !translate.y.is_finite();
         if bad {
-            warn_degenerate(rotate_degrees, scale, translate);
+            warn_not_a_number(rotate_degrees, scale, translate);
         }
 
         let rotate_degrees = if rotate_degrees.is_finite() {

@@ -234,7 +234,9 @@ fn a_container_scaled_to_nothing_is_not_clickable() {
                     Scale::new(1.0, 0.0)
                 }
             })
-            .on_click(move || clicks.update(|c| *c += 1)),
+            // With a child, because a menu is a container of buttons and the
+            // collapsed case has to stop the events reaching them too.
+            .child(box_of(80.0, 40.0).on_click(move || clicks.update(|c| *c += 1))),
     );
     h.fit(100.0, 100.0);
     h.paint();
@@ -1095,6 +1097,31 @@ fn a_played_sequence_actually_moves_the_transform() {
         played,
         Transform::IDENTITY,
         "the sequence has to reach the paint, not only the job queue"
+    );
+}
+
+/// So does an enter, for the same reason and by the same route: whichever of
+/// the two builders is written second builds a fresh state, and one that took
+/// the sequence but not the enter left half the defect standing.
+#[test]
+fn declaring_a_transition_after_an_enter_does_not_lose_it() {
+    let entering = box_of(50.0, 50.0)
+        .scale(Scale::NONE)
+        .animate_scale_from(0.5, Transition::new(200.0, TimingFunction::EaseOut))
+        // Written after, which used to decide whether the enter existed.
+        .animate_scale(Transition::new(200.0, TimingFunction::EaseOut));
+
+    let mut h = H::new(container().layout(Flex::row()).child(entering));
+    h.fit(200.0, 200.0);
+    h.paint();
+    pump(&mut h);
+    h.fit(200.0, 200.0);
+    let painted = h.paint().children[0].local_transform;
+
+    assert_ne!(
+        painted,
+        Transform::IDENTITY,
+        "the enter has to start from the value it was given, not snap to the target"
     );
 }
 

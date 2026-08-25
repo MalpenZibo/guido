@@ -59,11 +59,16 @@ fn the_pair_and_array_forms_convert_in_every_numeric_type() {
     let ints = create_signal((10i32, 20i32));
     let arr = create_signal([8.0f32, 16.0f32]);
     let quad = create_signal([1.0f32, 2.0f32, 3.0f32, 4.0f32]);
+    // `CornerRadii` reaches `Corners` through a blanket `From`, which is easy
+    // to miss when mirroring the list by hand — and was.
+    let radii = create_signal(CornerRadii::from(4.0));
     let _ = container()
         .translate(ints)
         .scale(ints)
         .padding(arr)
-        .corners(quad);
+        .corners(quad)
+        .corners(radii)
+        .corners(move || CornerRadii::from(4.0));
 }
 
 /// And a signal already holding the property's own type still arrives by

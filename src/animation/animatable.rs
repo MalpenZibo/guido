@@ -58,6 +58,18 @@ pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
     /// curvature — and that is fine precisely because they are never summed
     /// into a length that is used on its own.
     fn channels(&self) -> Channels;
+
+    /// Whether every channel is a number.
+    ///
+    /// A target that is not one can never be reached, and `animate_to`'s
+    /// early-out is an equality test that NaN fails against itself — so a
+    /// property aimed at NaN starts a fresh segment on every pass, never
+    /// settles, and holds the frame callback armed at the compositor's rate
+    /// for as long as the application runs. `compose` sanitises what it draws;
+    /// this is the same question one level up, where the target is stored.
+    fn is_reachable(&self) -> bool {
+        self.channels().iter().all(|c| c.is_finite())
+    }
 }
 
 /// How fast the new segment should start, given the speed of the old one.

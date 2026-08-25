@@ -64,6 +64,12 @@ impl IntoVal<Corners> for i32 {
     }
 }
 
+impl IntoVal<Corners> for crate::renderer::CornerRadii {
+    fn into_val(self) -> Corners {
+        self.into()
+    }
+}
+
 impl IntoVal<Corners> for u16 {
     fn into_val(self) -> Corners {
         self.into()
@@ -174,6 +180,7 @@ crate::reactive::converting_signals!(
     [i32; 4] => Corners,
     u16 => Corners,
     (f32, f32, f32, f32) => Corners,
+    crate::renderer::CornerRadii => Corners,
 
     f32 => Padding,
     f64 => Padding,

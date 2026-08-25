@@ -31,14 +31,8 @@ pub(super) struct HitContext {
 impl HitContext {
     /// Whether a point falls inside the container's *shape* — its bounds
     /// narrowed by the corner radius, not the bounding box.
-    /// A transform that has collapsed the container to a line or a point
-    /// contains nothing at all. That is not an edge case in this library: it
-    /// is the enter-transition idiom, `.scale(|| if open { NONE } else {
-    /// Scale::new(1.0, 0.0) })`, so a closed menu would otherwise swallow
-    /// every click over the area it covers when open, and take hover and
-    /// press from whatever is drawn underneath it.
     pub(super) fn contains(&self, x: f32, y: f32) -> bool {
-        !self.transform.is_degenerate() && self.bounds.contains_shape(x, y, self.corners)
+        self.bounds.contains_shape(x, y, self.corners)
     }
 
     /// A surface-space point expressed relative to the container's own origin.

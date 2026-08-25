@@ -126,6 +126,15 @@ impl<T: Animatable> AnimationState<T> {
             return;
         }
 
+        // A target that is not a number is not one this can be aimed at, and
+        // the test above cannot refuse it: NaN is not equal to itself, so every
+        // pass would read as a new target, begin a fresh segment, and ask for
+        // another Animation job — a surface that never goes idle for a value
+        // that was never going to arrive.
+        if !new_target.is_reachable() {
+            return;
+        }
+
         // Detect direction and select transition
         self.using_reverse =
             self.reverse_transition.is_some() && T::is_reverse(&self.current, &new_target);
@@ -349,17 +358,28 @@ impl<T: Animatable> AnimationState<T> {
         }
     }
 
-    /// Carry a sequence over from the state this one replaces.
+    /// Carry what a caller declared over from the state this one replaces.
     ///
     /// The builders each construct a fresh `AnimationState`, so without this
-    /// the order `keyframes_*` and `animate_*` were written in would decide
-    /// whether the sequence survived at all — silently, since the trigger
-    /// would go on firing against a state that had nothing to play.
-    pub(crate) fn adopt_timeline_of(&mut self, previous: Option<Self>) {
-        if let Some(previous) = previous
-            && let Some(timeline) = previous.timeline
-        {
+    /// the order `keyframes_*`, `animate_*` and `animate_*_from` were written
+    /// in would decide what survived — silently, since a trigger would go on
+    /// firing against a state that had nothing to play and an enter would
+    /// simply never run.
+    ///
+    /// Both fields, not just the sequence. Carrying one and dropping the other
+    /// is the same defect this exists to fix, and it was open on `enter_from`
+    /// for as long as this took only the timeline: writing
+    /// `animate_scale_from(0.9, ..)` before `animate_scale(..)` lost the enter.
+    ///
+    /// An `enter_from` already on `self` wins — it came from the builder being
+    /// written now, and the later declaration is the one a caller means.
+    pub(crate) fn adopt_declarations_of(&mut self, previous: Option<Self>) {
+        let Some(previous) = previous else { return };
+        if let Some(timeline) = previous.timeline {
             self.timeline = Some(timeline);
+        }
+        if self.enter_from.is_none() {
+            self.enter_from = previous.enter_from;
         }
     }
 
@@ -1067,6 +1087,24 @@ mod tests {
             "a quarter of the way is a quarter of the angle, got {}",
             *anim.current()
         );
+    }
+
+    /// A target that is not a number cannot be reached, and must not be aimed
+    /// at: `animate_to`'s early-out is an equality test, NaN fails it against
+    /// itself, and the animation would begin a new segment on every pass and
+    /// hold the frame callback armed forever.
+    #[test]
+    fn an_unreachable_target_does_not_pin_the_frame_loop() {
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
+        anim.set_immediate(0.0);
+
+        anim.animate_to(f32::NAN);
+        assert!(!anim.is_animating(), "nothing to animate towards");
+        assert!(anim.current().is_finite(), "and nothing poisoned");
+
+        // And a real target after it still works.
+        anim.animate_to(10.0);
+        assert!(anim.is_animating());
     }
 
     /// A target that moves every frame — a field growing as it is typed into —
