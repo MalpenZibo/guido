@@ -406,6 +406,31 @@ change is intended, re-bless and **read the diff** — it is the review:
 UPDATE_SNAPSHOTS=1 cargo test --test render_snapshots
 ```
 
+**Golden images.** `tests/golden_images.rs` renders widget trees on a GPU with
+no compositor and diffs the pixels against PNGs in `tests/golden/`. It covers
+what the render-tree snapshots cannot reach: the SDF shaders, corner curvature,
+borders, shadows, gradients, clipping and HiDPI scaling. It needs lavapipe —
+Mesa's software Vulkan implementation, `vulkan-swrast` on Arch — because a
+golden is only reproducible against the rasterizer it was blessed on:
+
+```bash
+export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+cargo test --test golden_images
+```
+
+Without a Vulkan adapter the tests skip themselves; CI sets
+`GUIDO_GOLDEN_REQUIRED=1`, where a skip is a failure. On a mismatch the
+expected, actual and diff images are written to `target/golden-failures/` and
+uploaded as a CI artifact.
+
+**A golden is never re-blessed to make a test pass.** `UPDATE_GOLDEN=1` rewrites
+the PNGs, and a rewritten golden is a changed pixel on somebody's screen that
+nobody looked at. Changed pixels are a change to review: bless on lavapipe, put
+the images in the pull request, and label it `golden-update` — CI refuses a pull
+request that edits `tests/golden/` without that label. When the renderer changes
+on purpose and no scenario moved, the scenario that should have moved is
+missing: add it.
+
 **CRITICAL: Always run `cargo clippy` and `cargo fmt` before committing code changes.**
 - Fix all clippy errors (compilation will fail)
 - Address clippy warnings when reasonable
@@ -446,6 +471,8 @@ gh pr merge <pr-number> --squash --delete-branch
 ### Visual Changes
 
 When making visual changes to the renderer:
+- Add or extend a scenario in `tests/golden_images.rs` — a renderer change that
+  no golden notices is a renderer change nothing is watching
 - Always take screenshots to verify rendering results
 - Do not ask for permission when taking screenshots - just take them to check the result
 - Use `grim` for taking screenshots on Wayland

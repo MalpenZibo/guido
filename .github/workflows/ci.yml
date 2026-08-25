@@ -62,3 +62,92 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev
       - name: Build
         run: cargo build --all-features
+
+  golden:
+    name: Golden images
+    runs-on: ubuntu-latest
+    # lavapipe is Mesa's software Vulkan implementation. It is the rasterizer
+    # the goldens were blessed against, because a hosted runner has no GPU and
+    # because a golden is only reproducible against one rasterizer anyway.
+    env:
+      # Without an adapter the tests skip themselves, which would report green
+      # here for the one reason that matters. In CI a skip is a failure.
+      GUIDO_GOLDEN_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwayland-dev libxkbcommon-dev \
+            mesa-vulkan-drivers vulkan-tools
+      # The ICD's filename is not the same on every distribution, and the one
+      # that was assumed here did not exist on this runner: the loader found no
+      # driver, every scenario skipped, and only GUIDO_GOLDEN_REQUIRED kept that
+      # from being a green tick. So it is found, and when it cannot be found the
+      # job says what is there instead of failing mutely.
+      - name: Point the Vulkan loader at lavapipe
+        run: |
+          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json 2>/dev/null | head -n 1)
+          if [ -z "$icd" ]; then
+            icd=$(dpkg -L mesa-vulkan-drivers 2>/dev/null \
+              | grep -E 'icd\.d/.*\.json$' | grep -i lvp | head -n 1)
+          fi
+          if [ -z "$icd" ]; then
+            echo "::error::No lavapipe ICD found. What is installed:"
+            dpkg -L mesa-vulkan-drivers 2>/dev/null | grep -E '\.json$' || true
+            ls -la /usr/share/vulkan/icd.d/ 2>/dev/null || true
+            exit 1
+          fi
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+          echo "Using $icd"
+      - name: Report the rasterizer
+        run: vulkaninfo --summary | head -n 40
+      - name: Run golden image tests
+        run: cargo test --all-features --test golden_images
+      - name: Upload the pixels that moved
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-failures
+          path: target/golden-failures/
+          if-no-files-found: ignore
+
+  golden-guard:
+    name: Golden re-bless needs a label
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      # Re-blessing a golden is the one edit that makes a failing pixel test
+      # pass without changing a pixel back. It stays possible, but it stops
+      # being something that can happen quietly.
+      #
+      # Only a rewrite or a deletion, never an addition: a new scenario brings
+      # a new golden with it, and that is ordinary work. Asking for the label
+      # there too would put it on most pull requests, and a label everybody
+      # applies is a label nobody reads.
+      - name: Refuse an unlabelled re-bless
+        env:
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          changed=$(git diff --name-only --diff-filter=MD "$BASE" "$HEAD" -- tests/golden/)
+          if [ -z "$changed" ]; then
+            echo "No goldens touched."
+            exit 0
+          fi
+          echo "Goldens changed by this pull request:"
+          echo "$changed"
+          if echo "$LABELS" | grep -q '"golden-update"'; then
+            echo "Carries the golden-update label — the change is somebody's decision."
+            exit 0
+          fi
+          echo "::error::This pull request edits tests/golden/ without the \
+          golden-update label. A changed golden is a changed pixel on \
+          someone's screen: look at the diff, and add the label to say you did."
+          exit 1
