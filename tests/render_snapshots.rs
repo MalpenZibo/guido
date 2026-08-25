@@ -19,13 +19,16 @@
 //! container-level tests instead; the scenarios here stay on the geometry, which
 //! is where the layout logic lives anyway.
 //!
-//! To re-bless after an intended change:
+//! A scenario with no snapshot gets one with:
 //!
 //! ```sh
 //! UPDATE_SNAPSHOTS=1 cargo test --test render_snapshots
 //! ```
 //!
-//! Read the resulting diff before committing it — that diff *is* the review.
+//! It refuses to overwrite one that already exists. Rewriting after an intended
+//! change is `REBLESS_SNAPSHOTS=1`, which a hook refuses and which a pull
+//! request carries the `golden-update` label to authorise. Read the diff before
+//! rewriting it — that diff *is* the review.
 
 use std::fmt::Write as _;
 

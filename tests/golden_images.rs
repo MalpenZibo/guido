@@ -52,17 +52,21 @@
 //! `GUIDO_GOLDEN_REQUIRED=1` in the one job that must not skip, where a skip is
 //! a failure — a skipped test that reports green is worth less than no test.
 //!
-//! **Re-blessing is not a way to make a test pass.** A changed golden is a
-//! changed pixel on someone's screen, and the diff is the review:
+//! **Creating a reference is not rewriting one.** A scenario with no picture
+//! needs one, and making it is ordinary work:
 //!
 //! ```sh
 //! UPDATE_GOLDEN=1 cargo test --test golden_images
 //! ```
 //!
-//! CI refuses a pull request that edits `tests/golden/` unless it carries the
-//! `golden-update` label, so the re-blessing is always somebody's decision.
-//! On failure the three images (expected, actual, and a map of what moved)
-//! are written to `target/golden-failures/` and uploaded as a CI artifact.
+//! Pointed at a reference that already exists, it declines and lets the
+//! comparison run instead — because rewriting a picture that disagrees with the
+//! code makes a failing test pass without changing anything back. That is
+//! `REBLESS_GOLDEN=1`; a hook refuses it, and CI refuses a pull request that
+//! rewrites a reference without the `golden-update` label. So it is always
+//! somebody's decision, taken with the diff in front of them. On failure the
+//! three images (expected, actual, and a map of what moved) are written to
+//! `target/golden-failures/` and uploaded as a CI artifact.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;

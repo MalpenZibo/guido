@@ -66,13 +66,22 @@ stopped it* tests a clip; a ladder of values tests a property across its range;
 scale 2 tests what scale 1 cannot see. Then bless once, on lavapipe, and look at
 the PNG that comes out before committing it.
 
-### Never re-bless to make a test pass
+### Creating a reference, and rewriting one
 
-`UPDATE_GOLDEN=1` and `UPDATE_SNAPSHOTS=1` rewrite the thing that was supposed
-to fail. A hook blocks both, and CI refuses a pull request that edits
-`tests/golden/` without the `golden-update` label. When a change is intended:
-bless on lavapipe, put the before and after images in the pull request, add the
-label. The diff is the review.
+They are different acts and they have different words.
+
+`UPDATE_GOLDEN=1` creates a picture for a scenario that has none — that is how
+a new scenario starts, it is ordinary work, and nothing blocks it. Point it at
+a reference that already exists and it declines: the comparison runs instead,
+and if the pixels disagree you get the three images and the count.
+
+`REBLESS_GOLDEN=1` rewrites one that exists. That turns a failing test green
+without changing anything back, so a hook refuses it and CI refuses a pull
+request that rewrites a reference without the `golden-update` label. When the
+change is intended: look at the diff first, rewrite on lavapipe, put the before
+and after in the pull request, add the label. The diff is the review.
+
+`UPDATE_SNAPSHOTS` and `REBLESS_SNAPSHOTS` split the same way.
 
 ## 3. The screenshot
 

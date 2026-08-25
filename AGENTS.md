@@ -16,12 +16,15 @@ purpose. What is not negotiable is that a change can be *verified*.
 **Never commit to `main`.** Branch, open a pull request, merge it when CI is
 green.
 
-**Never re-bless a snapshot or a golden to make a test pass.** `UPDATE_SNAPSHOTS=1`
-and `UPDATE_GOLDEN=1` rewrite the thing that was supposed to fail. They are for a
-change somebody decided to make and then looked at. A hook blocks them, and CI
-refuses a pull request that edits `tests/golden/` without the `golden-update`
-label. That is deliberate, and asking for the hook to be lifted is the wrong
-move — read the diff instead.
+**Never rewrite a snapshot or a golden to make a test pass.** Creating one is
+ordinary: a new scenario needs a first picture, and `UPDATE_GOLDEN=1` and
+`UPDATE_SNAPSHOTS=1` make one for a reference that does not exist yet. They
+refuse to touch a reference that does, because rewriting it turns a failing test
+green without changing anything back. That takes `REBLESS_GOLDEN=1` or
+`REBLESS_SNAPSHOTS=1`, a hook refuses those, and CI refuses a pull request that
+rewrites a reference without the `golden-update` label. Asking for the hook to be
+lifted is the wrong move — read the diff instead, it is in
+`target/golden-failures/`.
 
 **Every change names the thing that proves it.** Before writing the fix, write
 the test that fails without it. A change to the renderer that no golden notices

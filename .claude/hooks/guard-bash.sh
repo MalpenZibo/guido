@@ -2,10 +2,12 @@
 # Two things that must not happen quietly, refused where they are typed rather
 # than asked for in prose.
 #
-#   1. Re-blessing a snapshot or a golden. Both rewrite the artifact that was
-#      supposed to fail, which turns a failing test green without changing
-#      anything back. Blessing is a decision, and a decision is the
-#      maintainer's to make with the diff in front of them.
+#   1. Rewriting a snapshot or a golden. It turns a failing test green without
+#      changing anything back, so it is a decision, and a decision is the
+#      maintainer's to make with the diff in front of them. Creating a
+#      reference that does not exist yet is not that: a new scenario needs a
+#      first picture, and the harness only lets UPDATE_GOLDEN and
+#      UPDATE_SNAPSHOTS make one — rewriting needs REBLESS_*, which is this.
 #   2. Committing on main. The project merges through pull requests.
 #
 # Both are decided by looking at the position a word occupies, not at whether
@@ -70,8 +72,8 @@ while IFS= read -r segment; do
   while [ $i -lt ${#tokens[@]} ]; do
     case "${tokens[$i]}" in
       env) i=$((i + 1)) ;;
-      UPDATE_GOLDEN=*|UPDATE_SNAPSHOTS=*)
-        deny "Re-blessing is blocked. A rewritten snapshot or golden makes a failing test pass without changing a pixel back — the failure is the finding, so read it: the golden diff images are in target/golden-failures/, and the snapshot diff is in the test output. If the change is intended, say so and the maintainer blesses it, with the golden-update label on the pull request."
+      REBLESS_GOLDEN=*|REBLESS_SNAPSHOTS=*)
+        deny "Rewriting a reference is blocked. It makes a failing test pass without changing a pixel back, so the failure is the finding: read it. The golden diff images are in target/golden-failures/, and the snapshot diff is in the test output. Creating a reference that does not exist yet is not this and is not blocked — UPDATE_GOLDEN and UPDATE_SNAPSHOTS do that. Rewriting one is the maintainer's decision, and the pull request carries the golden-update label to say they made it."
         ;;
       *=*) i=$((i + 1)) ;;
       *) break ;;
