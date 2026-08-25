@@ -40,6 +40,13 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+      # The guard that refuses a re-bless and a commit on main decides by the
+      # position a word occupies, not by whether it appears. Getting that wrong
+      # is how it came to refuse a sed expression and to read the branch of the
+      # wrong repository. The table says what it has to get right.
+      - name: Check the commit guard
+        run: .claude/hooks/guard-bash.test.sh
+
       # A broken intra-doc link is a broken promise in the published API
       # reference, and it costs one compile to find.
       - name: Build the API documentation
