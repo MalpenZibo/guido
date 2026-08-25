@@ -50,9 +50,12 @@ create_task(move |ctx| async move {
 
 - **Nothing updates.** The read happened outside a tracked context — a value
   captured once instead of a closure that reads each time.
-- **Everything updates.** A `Signal<T>` of a large struct where a field would
-  do: `signal.select(|s| &s.field)` derives a signal that only fires when that
-  field changes, and clones only then.
+- **Everything updates.** One `Signal<T>` holding a large struct notifies every
+  reader on every write. `#[derive(SignalFields)]` on the struct generates a
+  signal per field — `AppStateSignals::new(AppState { .. })` — so a widget
+  subscribes to `state.count` and not to the whole thing, and `.writers()` hands
+  the background side a `Send + Copy` set of write handles. See
+  `tests/signal_fields.rs`.
 - **An effect that writes what it reads** re-runs itself. Use a `Memo`.
 - **A write from a background thread appears a frame late.** That is the queue,
   and it is intentional.

@@ -14,12 +14,13 @@ Rendering is paced by the compositor's `wl_surface.frame` callbacks: an
 animating surface renders once per callback, an idle surface renders nothing.
 
 1. `flush_bg_writes()` — drain queued background-thread signal writes
-2. `take_frame_request()` — was a frame asked for
+2. `take_wake_request()` — was a frame asked for
 3. dispatch events (queued `MouseMove`s coalesce to the latest position)
 4. **frame-pacing gate** — if the previous callback has not fired, return before
    draining jobs; animation continuations stay queued, init and resizes bypass
-5. `drain_pending_jobs()` + `process_jobs()` — unregister, advance animations,
-   reconcile dynamic children, set dirty flags
+5. `distribute_jobs()` sorts pending work by surface, each surface takes its
+   own with `drain_surface_jobs()`, and `process_jobs()` applies them —
+   unregister, advance animations, reconcile dynamic children, set dirty flags
 6. partial layout from `layout_roots` — only dirty subtrees
 7. **skip the frame** if the root does not need paint
 8. `paint()` — build the render tree; clean children reuse `Rc`-shared cached
@@ -51,8 +52,8 @@ is invisible to any test that renders at scale 1.
 ## Text
 
 `glyphon` over `cosmic-text`. Measurement lives in `text_measurer.rs` and is
-cached. Fonts come from the system plus anything the application registered with
-`register_font`. Text metrics depend on the fonts installed on the machine —
+cached. Fonts come from the system plus anything the application handed to
+`load_font`. Text metrics depend on the fonts installed on the machine —
 which is why the render-tree snapshots exclude text, and why the goldens do not
 render any yet.
 

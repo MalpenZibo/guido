@@ -14,9 +14,9 @@ body:
       label: Observed
       description: What happens now, and where in the code it happens.
       placeholder: |
-        `Container::hit_test` returns the cached bounds even when height resolved to
-        0 (src/widgets/container/mod.rs:812), so a collapsed panel keeps swallowing
-        clicks meant for what is behind it.
+        <what happens>, at <file>:<line>. For example: a container whose height
+        resolves to 0 still answers for the area it covered when open, so clicks
+        meant for what is behind it are swallowed.
     validations:
       required: true
   - type: textarea

@@ -72,23 +72,37 @@ prelude — see `tests/external_widget.rs`.
 `Flex::column()`, `ZStack`. The `Layout` trait is public, so an application can
 write its own.
 
-Children: `.child()` and `.maybe_child()` for static ones, `.children()` for a
-list, `.children_dyn()` for keyed reconciliation that preserves widget state
-across reorders.
+Children: `.child()` and `.maybe_child()` for static ones. `.children()` takes
+whatever `IntoChildren` fits — an iterator of widgets is static, a closure is
+dynamic and re-runs when what it read changes, and `keyed(data, key, build)`
+reconciles by key so widget state survives a reorder:
+
+```rust
+container().children(keyed(
+    move || tabs.get(),
+    |tab| tab.title.clone(),
+    tab_button,
+))
+```
 
 ## State layers
 
-Hover and pressed are overrides, not separate widgets:
+Hover, press and focus are overrides, not separate widgets, and they come from
+the `Stateful` trait (`src/widgets/state_layer.rs`) — so anything implementing
+it takes them, text as well as containers:
 
 ```rust
 container()
     .background(Color::rgb(0.2, 0.2, 0.3))
     .when_hovered(|s| s.lighter(0.1))
     .when_pressed(|s| s.ripple())
+    .when_focused(|s| s.border(2.0, Color::WHITE))
     .on_click(move || count.update(|c| *c += 1))
 ```
 
-See [docs/STATE_LAYER.md](../../../docs/STATE_LAYER.md).
+The closure receives a default style and returns the overrides; only what it
+sets is overridden, and the rest is inherited. See
+[docs/STATE_LAYER.md](../../../docs/STATE_LAYER.md).
 
 ## Corners
 
