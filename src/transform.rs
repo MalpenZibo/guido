@@ -152,52 +152,6 @@ crate::reactive::converting_signals!(
     [u32; 2] => Translate,
 );
 
-/// Say that a value is not a usable number — a NaN or an infinity, since
-/// neither can size, move or turn anything.
-/// Different again from [`is_degenerate`](Transform::is_degenerate), a
-/// determinant of zero, and the two guards are independent: neither covers the
-/// other.
-///
-/// Rate-limited rather than said once. Every caller is on a path that runs for
-/// each container on each paint and each coalesced pointer move, so a value
-/// that stays bad would fill the log at the frame rate — but a single latch
-/// would also mean a second container going bad later in the session reports
-/// nothing at all.
-///
-/// In release as well as in debug. A shipped application whose layout divides
-/// by a measured zero draws a widget that is silently not moved, not turned,
-/// not resized or not turning about where it was told to, and that is precisely
-/// when the line is worth having.
-///
-/// One budget across every caller — `compose`, `Pivot::resolve` and the
-/// animation states, which absorb the same class of value at three different
-/// depths — so they cannot flood by taking turns.
-pub(crate) fn warn_unusable(what: std::fmt::Arguments<'_>) {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{Duration, Instant};
-
-    /// Long enough that a per-frame source cannot flood, short enough that a
-    /// second one later in the session is still reported.
-    const QUIET: Duration = Duration::from_secs(5);
-
-    // Milliseconds since the first call, in an atomic rather than behind a
-    // lock: a mutex here would turn a panic anywhere inside it — a custom
-    // `log` backend, say — into permanent silence for the one diagnostic these
-    // paths have.
-    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    static LAST_MS: AtomicU64 = AtomicU64::new(u64::MAX);
-
-    let start = *START.get_or_init(Instant::now);
-    let now_ms = start.elapsed().as_millis() as u64;
-    let last = LAST_MS.load(Ordering::Relaxed);
-    if last != u64::MAX && now_ms.saturating_sub(last) < QUIET.as_millis() as u64 {
-        return;
-    }
-    LAST_MS.store(now_ms, Ordering::Relaxed);
-
-    log::warn!("{what}");
-}
-
 /// Below this a determinant is zero: the transform has collapsed the plane
 /// onto a line or a point, and cannot be undone.
 const DEGENERATE: f32 = 1e-10;
@@ -244,41 +198,6 @@ impl Transform {
     /// event. Because it is a translation it commutes with this one, so which
     /// side it lands on does not change the result.
     pub fn compose(translate: Translate, rotate_degrees: f32, scale: Scale) -> Self {
-        // A number that sizes, turns or moves a widget has to be one. These
-        // take whatever an application computes, and a division by a measured
-        // zero arrives here as NaN — from which `sin_cos` makes a matrix of
-        // NaN, which `is_identity` does not catch, which `inverse`'s
-        // `det.abs() < 1e-10` does not catch, and which `world_aabb`'s min/max
-        // fold turns into an infinite rect that then sizes a damage region.
-        // Absorbed at the door, the way `elevation_to_shadow` absorbs its own.
-        let usable = rotate_degrees.is_finite()
-            && scale.x.is_finite()
-            && scale.y.is_finite()
-            && translate.x.is_finite()
-            && translate.y.is_finite();
-        let (rotate_degrees, scale, translate) = if usable {
-            (rotate_degrees, scale, translate)
-        } else {
-            warn_unusable(format_args!(
-                "transform: a component is not a usable number and is being \
-                 ignored (rotate {rotate_degrees}, scale ({}, {}), translate \
-                 ({}, {}))",
-                scale.x, scale.y, translate.x, translate.y
-            ));
-            let or = |v: f32, fallback: f32| if v.is_finite() { v } else { fallback };
-            (
-                or(rotate_degrees, 0.0),
-                Scale {
-                    x: or(scale.x, 1.0),
-                    y: or(scale.y, 1.0),
-                },
-                Translate {
-                    x: or(translate.x, 0.0),
-                    y: or(translate.y, 0.0),
-                },
-            )
-        };
-
         // Not about correctness: this runs for every container on every paint
         // and every pointer event, and almost none of them turn.
         let (sin, cos) = if rotate_degrees == 0.0 {
@@ -431,9 +350,11 @@ impl Transform {
     pub fn inverse(&self) -> Transform {
         let [a, b, tx, c, d, ty] = self.data;
 
-        // Asked rather than spelled out again, so there is one threshold for
-        // what degenerate means and not two that have to agree.
         let det = a * d - b * c;
+
+        // Degenerate: the transform has collapsed the plane onto a line or a
+        // point and cannot be undone, so the identity is the least wrong
+        // answer available. What that costs the hit test is #227.
         if det.abs() < DEGENERATE {
             return Self::IDENTITY;
         }
@@ -532,22 +453,6 @@ impl Transform {
     pub(crate) fn extract_scale(&self) -> f32 {
         let (sx, sy) = self.extract_scale_components();
         (sx * sy).sqrt()
-    }
-
-    /// Whether this transform has collapsed the plane onto a line or a point.
-    ///
-    /// A zero determinant means the shape has no area, so it draws nothing and
-    /// it cannot be undone — which is why [`inverse`](Self::inverse) answers
-    /// the identity for one rather than infinities.
-    ///
-    /// That identity is a lie the hit test then believes: the point comes back
-    /// unchanged and an invisible subtree answers for the whole area it
-    /// occupies when it is open. Fixing that needs the *event* to be able to
-    /// say it has no position, which is #227 and not something this predicate
-    /// can do on its own.
-    #[inline]
-    pub fn is_degenerate(&self) -> bool {
-        (self.a() * self.d() - self.b() * self.c()).abs() < DEGENERATE
     }
 
     /// Check if this transform contains only translation (no rotation or scale).
@@ -803,27 +708,6 @@ mod tests {
                 approx_eq(sx, 1.0) && approx_eq(sy, 1.0),
                 "at {deg}°: ({sx}, {sy})"
             );
-        }
-    }
-
-    /// A value that is not a number cannot turn, move or resize anything, and
-    /// must not be allowed to make a matrix that poisons everything downstream:
-    /// `is_identity` does not catch NaN, `inverse`'s determinant test does not
-    /// catch it, and the world AABB fold turns it into an infinite rect.
-    #[test]
-    fn a_component_that_is_not_a_number_is_ignored() {
-        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-            for t in [
-                Transform::compose(Translate::NONE, bad, Scale::NONE),
-                Transform::compose(Translate::NONE, 0.0, Scale::uniform(bad)),
-                Transform::compose(Translate::new(bad, 0.0), 0.0, Scale::NONE),
-            ] {
-                assert!(
-                    t.data.iter().all(|v| v.is_finite()),
-                    "{bad} produced {:?}",
-                    t.data
-                );
-            }
         }
     }
 

@@ -252,11 +252,11 @@ impl Container {
         let anims = self.anims.as_ref();
 
         // What could move each component: its own declaration, its own
-        // animation, or a state layer that overrides one. The flag does not say
-        // *which* component a layer names, so any of them lights all three —
-        // skipping on it alone would drop `when_pressed(|s| s.scale(0.98))` on
-        // a container with no scale of its own, which is the commonest state
-        // layer there is.
+        // animation, or a state layer that overrides it. Per component and not
+        // "does any layer move anything", because `when_pressed(|s|
+        // s.scale(0.98))` is on every button and one bit for all three would
+        // have made it resolve a translate and a rotate nothing declares,
+        // twice per pointer move.
         //
         // Computed once and shared with the early-out below, so the two cannot
         // disagree: a component wired into the gates and forgotten in the

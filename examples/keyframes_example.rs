@@ -6,12 +6,12 @@
 //! wants after a wrong password — and the right one takes the same trigger and
 //! nods, to show that what a timeline does is entirely in its stops.
 //!
-//! Both cards also declare a hover scale. That is the point of the rule that a
-//! playing timeline *replaces* the declared value: the hover is still there, it
-//! just does not argue with the sequence while it runs, and it has the property
-//! back the moment the sequence ends. Note that the shake is a timeline on
-//! `rotate` and the nod one on `translate` — a sequence belongs to the one
-//! component it moves, and the hover's `scale` is untouched by either.
+//! Both cards also declare a hover scale, and it stays drawn while they play:
+//! a sequence belongs to the one component it moves, the shake being a timeline
+//! on `rotate` and the nod one on `translate`, so neither meets the hover at
+//! all. The rule that a playing timeline *replaces* the declared value applies
+//! when the two are on the same component — the keyframes chapter of the book
+//! has that case.
 
 use guido::prelude::*;
 

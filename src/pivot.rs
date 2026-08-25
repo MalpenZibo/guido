@@ -164,13 +164,6 @@ impl Pivot {
     /// Resolve to absolute coordinates within the given bounds.
     ///
     /// Returns `(x, y)` coordinates in the same coordinate system as the bounds.
-    ///
-    /// A percentage or an offset that is not a usable number resolves to the
-    /// centre. `Transform::compose` absorbs the other three components for the
-    /// same reason and this is the fourth: a pivot reaches `center_at`, whose
-    /// translation column becomes NaN, and `world_aabb` folds that into a rect
-    /// of infinite width that then sizes a damage region. `is_identity`,
-    /// `is_degenerate` and `inverse`'s determinant test all pass it through.
     pub fn resolve(&self, bounds: Rect) -> (f32, f32) {
         let x = match self.horizontal {
             HorizontalAnchor::Left => bounds.x,
@@ -188,31 +181,7 @@ impl Pivot {
             VerticalAnchor::Px(px) => bounds.y + px,
         };
 
-        if x.is_finite() && y.is_finite() {
-            return (x, y);
-        }
-
-        // The centre — of bounds that may themselves be the reason this
-        // failed, so it is checked too. A fallback computed from the same
-        // numbers that produced the bad value is not a fallback.
-        let (cx, cy) = (
-            bounds.x + bounds.width / 2.0,
-            bounds.y + bounds.height / 2.0,
-        );
-        let usable = if cx.is_finite() && cy.is_finite() {
-            (cx, cy)
-        } else {
-            (0.0, 0.0)
-        };
-
-        // Said, not swallowed. `Transform::compose` reports the three
-        // components it absorbs, and a pivot that quietly moved elsewhere
-        // would be the one piece of geometry that fails in silence.
-        crate::transform::warn_unusable(format_args!(
-            "pivot: {self:?} does not resolve to a usable point in {bounds:?}; \
-             turning about {usable:?} instead"
-        ));
-        usable
+        (x, y)
     }
 }
 
@@ -312,23 +281,6 @@ mod tests {
         let (x, y) = origin.resolve(bounds);
         assert!(approx_eq(x, 60.0)); // 50 + 10
         assert!(approx_eq(y, 120.0)); // 100 + 20
-    }
-
-    /// A pivot that is not a usable number resolves to the centre rather than
-    /// carrying a NaN into `center_at`, where it becomes a matrix nothing
-    /// catches and a damage rect of infinite width.
-    #[test]
-    fn a_pivot_that_is_not_a_number_resolves_to_the_centre() {
-        let bounds = Rect::new(10.0, 20.0, 100.0, 200.0);
-        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-            for pivot in [Pivot::px(bad, 0.0), Pivot::percent(0.0, bad)] {
-                let (x, y) = pivot.resolve(bounds);
-                assert!(
-                    approx_eq(x, 60.0) && approx_eq(y, 120.0),
-                    "{bad}: ({x}, {y})"
-                );
-            }
-        }
     }
 
     #[test]

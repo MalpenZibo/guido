@@ -126,25 +126,6 @@ impl<T: Animatable> AnimationState<T> {
             return;
         }
 
-        // A target that is not a number is not one this can be aimed at, and
-        // the test above cannot refuse it: NaN is not equal to itself, so every
-        // pass would read as a new target, begin a fresh segment, and ask for
-        // another Animation job — a surface that never goes idle for a value
-        // that was never going to arrive.
-        //
-        // Refusing it here is only half: `resync_animation_targets` compares
-        // the stored target against the one the signals resolve to, and no
-        // stored value compares equal to a NaN — so the drift check has to
-        // refuse it as well, or it asks for an Animation job on every paint
-        // and wakes the loop just as forever by the other route.
-        if !new_target.is_reachable() {
-            crate::transform::warn_unusable(format_args!(
-                "animation: a target is not a usable number; the property stays \
-                 where it is and stops following its signal"
-            ));
-            return;
-        }
-
         // Detect direction and select transition
         self.using_reverse =
             self.reverse_transition.is_some() && T::is_reverse(&self.current, &new_target);
@@ -494,13 +475,7 @@ impl<T: Animatable> AnimationState<T> {
 
     /// Begin animating from an explicit value (enter transitions): the
     /// widget appears mid-animation instead of snapping to its target.
-    /// Returns whether an animation actually began: `animate_to` refuses a
-    /// target that is not a number, and a caller that asked for a paint on the
-    /// strength of an enter it did not get would waste the frame.
-    pub(crate) fn begin_from(&mut self, from: T, target: T) -> bool {
-        if !from.is_reachable() {
-            return false;
-        }
+    pub(crate) fn begin_from(&mut self, from: T, target: T) {
         self.current = from;
         self.start = from;
         self.initialized = true;
@@ -509,34 +484,10 @@ impl<T: Animatable> AnimationState<T> {
         let t = target;
         self.target = from; // force the retarget below to fire
         self.animate_to(t);
-        self.is_animating()
     }
 
     /// Set value immediately without animation (for initialization)
     pub fn set_immediate(&mut self, value: T) {
-        // The seeding store, and the one that matters most: a value that is
-        // not a number lands in `current` and `start` as well as `target`, and
-        // from there it never leaves. `advance` computes `lerp(start, target,
-        // t)`, which is NaN for every `t` once `start` is, and only the spring
-        // branch assigns `target` outright at the end — so a later, perfectly
-        // finite target animates from NaN to NaN forever and the widget stays
-        // untransformed for the life of the process.
-        //
-        // Refusing it here leaves the animation where it was, which is a value
-        // that can still be animated away from.
-        if !value.is_reachable() {
-            // Seeded all the same, with whatever it already holds. This is the
-            // only thing that sets `initialized`, and a property that never
-            // gets it stays `is_initial()` for the life of the process — which
-            // also switches off its drift detection, so nothing would ever
-            // notice it had stopped following its signal.
-            self.initialized = true;
-            crate::transform::warn_unusable(format_args!(
-                "animation: a seeded value is not a usable number; the property \
-                 keeps what it had and stops following its signal"
-            ));
-            return;
-        }
         self.current = value;
         self.target = value;
         self.start = value;
@@ -1125,56 +1076,6 @@ mod tests {
         assert!(
             (*anim.current() - 22.5).abs() < 1.0,
             "a quarter of the way is a quarter of the angle, got {}",
-            *anim.current()
-        );
-    }
-
-    /// A target that is not a number cannot be reached, and must not be aimed
-    /// at: `animate_to`'s early-out is an equality test, NaN fails it against
-    /// itself, and the animation would begin a new segment on every pass and
-    /// hold the frame callback armed forever.
-    #[test]
-    fn an_unreachable_target_does_not_pin_the_frame_loop() {
-        let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
-        anim.set_immediate(0.0);
-
-        anim.animate_to(f32::NAN);
-        assert!(!anim.is_animating(), "nothing to animate towards");
-        assert!(anim.current().is_finite(), "and nothing poisoned");
-
-        // And a real target after it still works.
-        anim.animate_to(10.0);
-        assert!(anim.is_animating());
-    }
-
-    /// A refused target leaves the property where it was, rather than half
-    /// aimed at something it will never reach.
-    #[test]
-    fn a_refused_target_leaves_the_property_where_it_was() {
-        let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
-        anim.set_immediate(3.0);
-        anim.animate_to(f32::NAN);
-
-        assert_eq!(*anim.current(), 3.0, "still where it settled");
-        assert!(!anim.is_animating(), "and not chasing anything");
-    }
-
-    /// And the seeding store is guarded too — it is the one that poisons for
-    /// good, because `advance` interpolates from `start` and only a spring
-    /// assigns the target outright at the end.
-    #[test]
-    fn seeding_an_unreachable_value_does_not_poison_the_property() {
-        let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
-        anim.set_immediate(f32::NAN);
-        assert!(anim.current().is_finite(), "nothing to interpolate from");
-
-        // The signal comes back to its senses, and so does the property.
-        anim.set_immediate(1.0);
-        anim.animate_to(2.0);
-        at(&mut anim, 100);
-        assert!(
-            (*anim.current() - 2.0).abs() < 1e-3,
-            "got {}",
             *anim.current()
         );
     }

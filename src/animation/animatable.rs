@@ -58,18 +58,6 @@ pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
     /// curvature — and that is fine precisely because they are never summed
     /// into a length that is used on its own.
     fn channels(&self) -> Channels;
-
-    /// Whether every channel is a number.
-    ///
-    /// A target that is not one can never be reached, and `animate_to`'s
-    /// early-out is an equality test that NaN fails against itself — so a
-    /// property aimed at NaN starts a fresh segment on every pass, never
-    /// settles, and holds the frame callback armed at the compositor's rate
-    /// for as long as the application runs. `compose` sanitises what it draws;
-    /// this is the same question one level up, where the target is stored.
-    fn is_reachable(&self) -> bool {
-        self.channels().iter().all(|c| c.is_finite())
-    }
 }
 
 /// How fast the new segment should start, given the speed of the old one.
@@ -140,15 +128,6 @@ impl Animatable for f32 {
         from + (to - from) * t
     }
 
-    /// Every impl overrides this. The default builds a `Channels` to ask it,
-    /// and it is asked on every retarget and on every drift check — so the
-    /// types that would actually allocate are exactly the ones that must not
-    /// use it, and once they all override, the default is only there for a
-    /// type written later.
-    fn is_reachable(&self) -> bool {
-        self.is_finite()
-    }
-
     fn is_reverse(from: &Self, to: &Self) -> bool {
         to < from
     }
@@ -174,10 +153,6 @@ impl Animatable for Color {
         (to.a, to.luminance()) < (from.a, from.luminance())
     }
 
-    fn is_reachable(&self) -> bool {
-        self.r.is_finite() && self.g.is_finite() && self.b.is_finite() && self.a.is_finite()
-    }
-
     fn channels(&self) -> Channels {
         Channels::from_slice(&[self.r, self.g, self.b, self.a])
     }
@@ -197,13 +172,6 @@ impl Animatable for Padding {
         let to_total = to.left + to.right + to.top + to.bottom;
         let from_total = from.left + from.right + from.top + from.bottom;
         to_total < from_total
-    }
-
-    fn is_reachable(&self) -> bool {
-        self.left.is_finite()
-            && self.right.is_finite()
-            && self.top.is_finite()
-            && self.bottom.is_finite()
     }
 
     fn channels(&self) -> Channels {
@@ -226,13 +194,6 @@ impl Animatable for crate::renderer::CornerRadii {
         total(to) < total(from)
     }
 
-    fn is_reachable(&self) -> bool {
-        self.top_left.is_finite()
-            && self.top_right.is_finite()
-            && self.bottom_right.is_finite()
-            && self.bottom_left.is_finite()
-    }
-
     fn channels(&self) -> Channels {
         Channels::from_slice(&[
             self.top_left,
@@ -249,10 +210,6 @@ impl Animatable for Translate {
             x: from.x + (to.x - from.x) * t,
             y: from.y + (to.y - from.y) * t,
         }
-    }
-
-    fn is_reachable(&self) -> bool {
-        self.x.is_finite() && self.y.is_finite()
     }
 
     /// Moving back towards where it started, measured as distance from the
@@ -277,10 +234,6 @@ impl Animatable for Scale {
             x: from.x + (to.x - from.x) * t,
             y: from.y + (to.y - from.y) * t,
         }
-    }
-
-    fn is_reachable(&self) -> bool {
-        self.x.is_finite() && self.y.is_finite()
     }
 
     /// Getting smaller, measured as the two factors added rather than
