@@ -250,6 +250,20 @@ impl Container {
     /// never has to ask how the matrix was arrived at.
     pub(super) fn animated_transform(&self, id: WidgetId) -> Transform {
         let anims = self.anims.as_ref();
+        // A container that declares none of the three, animates none of them,
+        // and has no interaction state to override them from, cannot be
+        // transformed — and a plain layout box is all three. `interaction` is
+        // the cheap half of that: no interaction means no state layer, so
+        // nothing can introduce a transform this test cannot see.
+        if self.translate.is_none()
+            && self.rotate.is_none()
+            && self.scale.is_none()
+            && self.interaction.is_none()
+            && !anims
+                .is_some_and(|a| a.translate.is_some() || a.rotate.is_some() || a.scale.is_some())
+        {
+            return Transform::IDENTITY;
+        }
         Transform::compose(
             get_animated_value(anims.and_then(|a| a.translate.as_ref()), || {
                 self.effective_translate_target(id)

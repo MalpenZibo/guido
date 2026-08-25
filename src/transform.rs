@@ -169,7 +169,14 @@ impl Transform {
     /// time, and because it is a translation it commutes with this one, so
     /// which side it lands on does not change the result.
     pub(crate) fn compose(translate: Translate, rotate_degrees: f32, scale: Scale) -> Self {
-        let (sin, cos) = rotate_degrees.to_radians().sin_cos();
+        // Called for every container on every paint and every pointer event,
+        // and almost none of them turn, so the trig is worth skipping rather
+        // than trusting to be cheap.
+        let (sin, cos) = if rotate_degrees == 0.0 {
+            (0.0, 1.0)
+        } else {
+            rotate_degrees.to_radians().sin_cos()
+        };
         Self {
             data: [
                 cos * scale.x,

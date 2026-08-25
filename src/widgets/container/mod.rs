@@ -1070,9 +1070,10 @@ impl Container {
     /// [`animate_translate_from`](Self::animate_translate_from).
     pub fn animate_rotate_from(
         mut self,
-        enter_from: f32,
+        enter_from: impl crate::layout::IntoF32,
         transition: impl Into<TransitionConfig>,
     ) -> Self {
+        let enter_from = enter_from.into_f32();
         let initial = self.rotate.get_or_untracked(0.0);
         let previous = self.anims_mut().rotate.take();
         let mut anim = AnimationState::new(initial, transition).with_enter_from(enter_from);
