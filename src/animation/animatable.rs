@@ -140,6 +140,13 @@ impl Animatable for f32 {
         from + (to - from) * t
     }
 
+    /// The default builds a `Channels` to ask this; one number does not need
+    /// one, and this is the type behind `rotate`, `elevation`, `border_width`
+    /// and both sizes.
+    fn is_reachable(&self) -> bool {
+        self.is_finite()
+    }
+
     fn is_reverse(from: &Self, to: &Self) -> bool {
         to < from
     }
@@ -224,6 +231,10 @@ impl Animatable for Translate {
         }
     }
 
+    fn is_reachable(&self) -> bool {
+        self.x.is_finite() && self.y.is_finite()
+    }
+
     /// Moving back towards where it started, measured as distance from the
     /// origin — so a slide out and a slide home are told apart, which the old
     /// `Transform` could not do at all: it compared `extract_scale()`, which a
@@ -246,6 +257,10 @@ impl Animatable for Scale {
             x: from.x + (to.x - from.x) * t,
             y: from.y + (to.y - from.y) * t,
         }
+    }
+
+    fn is_reachable(&self) -> bool {
+        self.x.is_finite() && self.y.is_finite()
     }
 
     /// Getting smaller, measured as the two factors added rather than

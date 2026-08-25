@@ -218,39 +218,39 @@ impl Container {
 
             if let Some(a) = &anims.padding {
                 let live = self.padding.get_or(Padding::default());
-                drift |= live.is_reachable() && moved(a.is_initial(), *a.target() == live);
+                drift |= moved(a.is_initial(), *a.target() == live) && live.is_reachable();
             }
             if let Some(a) = &anims.border_width {
                 let live = self.effective_border_width_target(id);
-                drift |= live.is_reachable() && moved(a.is_initial(), *a.target() == live);
+                drift |= moved(a.is_initial(), *a.target() == live) && live.is_reachable();
             }
             if let Some(a) = &anims.background {
                 let live = self.effective_background_target(id);
-                drift |= live.is_reachable() && moved(a.is_initial(), *a.target() == live);
+                drift |= moved(a.is_initial(), *a.target() == live) && live.is_reachable();
             }
             if let Some(a) = &anims.corners {
                 let live = self.effective_corners_target(id);
-                drift |= live.is_reachable() && moved(a.is_initial(), *a.target() == live);
+                drift |= moved(a.is_initial(), *a.target() == live) && live.is_reachable();
             }
             if let Some(a) = &anims.elevation {
                 let live = self.effective_elevation_target(id);
-                drift |= live.is_reachable() && moved(a.is_initial(), *a.target() == live);
+                drift |= moved(a.is_initial(), *a.target() == live) && live.is_reachable();
             }
             if let Some(a) = &anims.border_color {
                 let live = self.effective_border_color_target(id);
-                drift |= live.is_reachable() && moved(a.is_initial(), *a.target() == live);
+                drift |= moved(a.is_initial(), *a.target() == live) && live.is_reachable();
             }
             if let Some(a) = &anims.translate {
                 let live = self.effective_translate_target(id);
-                drift |= live.is_reachable() && moved(a.is_initial(), *a.target() == live);
+                drift |= moved(a.is_initial(), *a.target() == live) && live.is_reachable();
             }
             if let Some(a) = &anims.rotate {
                 let live = self.effective_rotate_target(id);
-                drift |= live.is_reachable() && moved(a.is_initial(), *a.target() == live);
+                drift |= moved(a.is_initial(), *a.target() == live) && live.is_reachable();
             }
             if let Some(a) = &anims.scale {
                 let live = self.effective_scale_target(id);
-                drift |= live.is_reachable() && moved(a.is_initial(), *a.target() == live);
+                drift |= moved(a.is_initial(), *a.target() == live) && live.is_reachable();
             }
             // The timeline's trigger, read here for the same reason as the
             // targets: reading it is the subscription, so a container that

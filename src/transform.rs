@@ -529,12 +529,17 @@ impl Transform {
 
     /// Whether this transform has collapsed the plane onto a line or a point.
     ///
-    /// A zero determinant means the shape has no area, so it draws nothing —
-    /// and it cannot be undone, which is why [`inverse`](Self::inverse) gives
-    /// the identity for one rather than infinities. Hit testing has to ask
-    /// before inverting: taking the identity back means the point is compared
-    /// against the *un*-collapsed bounds, and something invisible answers for
-    /// the whole area it would occupy.
+    /// A zero determinant means the shape has no area, so it draws nothing and
+    /// it cannot be undone — which is why [`inverse`](Self::inverse) answers
+    /// the identity for one rather than infinities, and why it asks this
+    /// rather than carrying its own copy of the threshold.
+    ///
+    /// The identity it answers with is a lie the hit test then believes: the
+    /// point comes back unchanged and an invisible subtree answers for the
+    /// whole area it occupies when it is open. That is #227, and it is not
+    /// fixable from here — see the note on [`untransform_point`].
+    ///
+    /// [`untransform_point`]: crate::widgets::container::interaction
     #[inline]
     pub fn is_degenerate(&self) -> bool {
         (self.a() * self.d() - self.b() * self.c()).abs() < 1e-10

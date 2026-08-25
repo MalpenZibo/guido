@@ -1272,10 +1272,25 @@ impl Widget for Container {
                     self.effective_border_color_target(id),
                     // Only where there is an animation to aim: each of these
                     // walks the state layers, and all three used to run for a
-                    // container that animates nothing but its background.
-                    has_translate.then(|| self.effective_translate_target(id)),
-                    has_rotate.then(|| self.effective_rotate_target(id)),
-                    has_scale.then(|| self.effective_scale_target(id)),
+                    // container that animates nothing but its background. The
+                    // neutral value where there is not, rather than an
+                    // `Option` the macro would have to unwrap against an
+                    // invariant stated only in prose.
+                    if has_translate {
+                        self.effective_translate_target(id)
+                    } else {
+                        Translate::NONE
+                    },
+                    if has_rotate {
+                        self.effective_rotate_target(id)
+                    } else {
+                        0.0
+                    },
+                    if has_scale {
+                        self.effective_scale_target(id)
+                    } else {
+                        Scale::NONE
+                    },
                 )
             });
             let anims = self.anims.as_mut().unwrap();
@@ -1322,33 +1337,9 @@ impl Widget for Container {
             start_timeline!(translate);
             start_timeline!(rotate);
             start_timeline!(scale);
-            // `unwrap_or_default` never fires: the macro evaluates the target
-            // inside `if let Some(anim)`, and the flag that produced the
-            // `Option` is that same `is_some`.
-            advance_anim!(
-                anims,
-                translate,
-                translate_target.unwrap_or_default(),
-                id,
-                any_animating,
-                paint
-            );
-            advance_anim!(
-                anims,
-                rotate,
-                rotate_target.unwrap_or_default(),
-                id,
-                any_animating,
-                paint
-            );
-            advance_anim!(
-                anims,
-                scale,
-                scale_target.unwrap_or_default(),
-                id,
-                any_animating,
-                paint
-            );
+            advance_anim!(anims, translate, translate_target, id, any_animating, paint);
+            advance_anim!(anims, rotate, rotate_target, id, any_animating, paint);
+            advance_anim!(anims, scale, scale_target, id, any_animating, paint);
         }
 
         // Advance ripple animation

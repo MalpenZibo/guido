@@ -35,20 +35,6 @@ impl HitContext {
         self.bounds.contains_shape(x, y, self.corners)
     }
 
-    /// Whether this is a real point, or the sentinel standing for "nowhere"
-    /// that [`untransform_point`] answers with when a transform has collapsed.
-    ///
-    /// The question is about the *point* and not about this container's own
-    /// transform, because the sentinel carries down: a child of a collapsed
-    /// parent has an identity transform of its own and is just as unpointable.
-    ///
-    /// `contains` already says no to it — the sentinel is outside every
-    /// rectangle — but a press keeps the pointer callbacks firing regardless of
-    /// containment, which is what makes dragging work, so those have to ask.
-    pub(super) fn has_position(&self, x: f32, y: f32) -> bool {
-        !is_off_surface(x, y)
-    }
-
     /// A surface-space point expressed relative to the container's own origin.
     pub(super) fn local(&self, x: f32, y: f32) -> (f32, f32) {
         local_point(&self.transform, self.pivot, self.bounds, x, y)
@@ -60,25 +46,6 @@ impl HitContext {
     }
 }
 
-/// Somewhere no surface reaches, and no arithmetic on the way down can bring
-/// back: every level subtracts its own origin and adds its own scroll offset,
-/// which are pixels, and this is thirty orders of magnitude of them.
-///
-/// Finite on purpose. A NaN would miss every bounds test just as well and then
-/// go on to reach `on_pointer_move`, a ripple centre and a damage rect, where
-/// it stops being a miss and starts being a poison.
-const OFF_SURFACE: f32 = -1e30;
-
-/// Far below any coordinate a surface produces and far above the sentinel, so
-/// the two cannot be confused however many origins and scroll offsets — all of
-/// them pixels — have been folded in on the way down.
-const OFF_SURFACE_LIMIT: f32 = -1e20;
-
-/// Whether a point is the sentinel rather than somewhere.
-pub(super) fn is_off_surface(x: f32, y: f32) -> bool {
-    x <= OFF_SURFACE_LIMIT || y <= OFF_SURFACE_LIMIT
-}
-
 /// Map a point from surface space into the container's untransformed space.
 ///
 /// A container's own transform is applied around its origin at paint time, so
@@ -86,18 +53,10 @@ pub(super) fn is_off_surface(x: f32, y: f32) -> bool {
 /// An identity transform returns the point unchanged.
 ///
 /// A transform that has collapsed the container onto a line or a point cannot
-/// be undone at all, and the honest answer is that the pointer is not on it:
-/// [`OFF_SURFACE`], which fails every containment test here and in everything
-/// below, because the coordinates carry down the tree.
-///
-/// That is the whole of the mechanism, and it is deliberately not a guard
-/// somewhere in dispatch. Events still flow: a `MouseUp` still reaches a
-/// pressed descendant and clears it, a `MouseMove` still reaches a hovered one
-/// and — missing — un-hovers it, a key or a focus change never had coordinates
-/// to be wrong about, and a scroll simply lands on nothing. Refusing the events
-/// instead stranded all of that, and refusing them in a second dispatch path
-/// lost the coordinate rebasing, the scroll offset, the clip test and the
-/// scrollbar with it.
+/// be undone, and the point comes back unchanged — so an invisible subtree
+/// answers for the whole area it occupies when it is open. That is #227, and
+/// it is older than the components API: it needs the *event* to be able to say
+/// it has no position, which no coordinate can say on its behalf.
 pub(super) fn untransform_point(
     transform: &Transform,
     origin: Pivot,
@@ -107,9 +66,6 @@ pub(super) fn untransform_point(
 ) -> (f32, f32) {
     if transform.is_identity() {
         return (x, y);
-    }
-    if transform.is_degenerate() {
-        return (OFF_SURFACE, OFF_SURFACE);
     }
     let (origin_x, origin_y) = origin.resolve(bounds);
     transform
@@ -179,7 +135,6 @@ impl Container {
                 // A pressed container keeps receiving moves that leave it —
                 // that implicit capture is what makes dragging work.
                 if let Some(ref callback) = ix.on_pointer_move
-                    && hit.has_position(*x, *y)
                     && (hit.contains(*x, *y) || ix.is_pressed())
                 {
                     let (lx, ly) = hit.rebase(*x, *y);
@@ -318,15 +273,8 @@ impl Container {
                     }
 
                     let mut handled = false;
-                    // The press is already cleared above, whatever happens
-                    // here: that is state, and it ends wherever the release
-                    // lands. The callback is a *position*, and one whose
-                    // container has collapsed does not have one — the same
-                    // rule `on_pointer_move` follows a few arms up, and the
-                    // reason both ask rather than only the one that streams.
                     if let Some(ref ix) = self.interaction
                         && let Some(ref callback) = ix.on_mouse_up
-                        && hit.has_position(*x, *y)
                     {
                         let (lx, ly) = hit.rebase(*x, *y);
                         callback(lx, ly);
