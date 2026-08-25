@@ -11,6 +11,7 @@ mod style;
 #[cfg(test)]
 mod characterization;
 
+use animations::instant_transition;
 pub(crate) use animations::with_measure_final;
 pub use animations::{AdvanceResult, AnimationState, get_animated_value};
 use interaction::{HitContext, untransform_point};
@@ -181,13 +182,6 @@ pub enum Overflow {
     Visible,
     /// Content is clipped to the container bounds
     Hidden,
-}
-
-/// A transition of no duration: a timeline speaks for its property while it
-/// plays, and outside it the declared value applies at once, exactly as it
-/// would with no animation at all.
-fn instant_transition() -> crate::animation::Transition {
-    crate::animation::Transition::new(0.0, crate::animation::TimingFunction::Linear)
 }
 
 /// Boxed animation states. Only allocated when `.transition()` or

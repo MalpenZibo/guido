@@ -269,16 +269,12 @@ impl Container {
             // targets: reading it is the subscription, so a container that
             // plays on a signal is woken by it. Asking and committing are the
             // same comparison in the same place — see `take_play`.
-            for wants in [
-                anims.translate.as_ref().map(|a| a.wants_play()),
-                anims.rotate.as_ref().map(|a| a.wants_play()),
-                anims.scale.as_ref().map(|a| a.wants_play()),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                drift |= wants;
-            }
+            // Three statements and not `||`, for the same reason the targets
+            // above are: reading is the subscription, so all three have to be
+            // read whatever the first one answers.
+            drift |= anims.translate.as_ref().is_some_and(|a| a.wants_play());
+            drift |= anims.rotate.as_ref().is_some_and(|a| a.wants_play());
+            drift |= anims.scale.as_ref().is_some_and(|a| a.wants_play());
             drift
         });
 

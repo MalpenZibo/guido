@@ -88,7 +88,7 @@ ctx.set_transform(Transform::translate(x, y));
 ctx.apply_transform(Transform::rotate_degrees(45.0));
 
 // Apply transform with origin
-ctx.apply_transform_with_origin(transform, Pivot::CENTER);
+ctx.apply_transform_with_pivot(transform, Pivot::CENTER);
 
 // Set transform origin only
 ctx.set_pivot(Pivot::TOP_LEFT);

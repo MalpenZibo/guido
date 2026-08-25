@@ -22,9 +22,9 @@
 //! use guido::animation::{TimingFunction, SpringConfig};
 //!
 //! container()
-//!     .transform(Transform::scale(1.0))
+//!     .scale(1.0)
 //!     .when_hovered(|s| s
-//!         .transform(Transform::scale(1.1))
+//!         .scale(1.1)
 //!         .timing(TimingFunction::Spring(SpringConfig::BOUNCY)))
 //! ```
 

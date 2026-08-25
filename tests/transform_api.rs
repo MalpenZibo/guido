@@ -38,9 +38,19 @@ fn every_spelling_the_documentation_promises_compiles() {
         .scale(move || sig.get())
         .translate(move || (1.0, 2.0))
         .translate(move || Translate::NONE)
-        // signals
+        // signals, where the signal already holds the property's own type
         .rotate(sig)
         .pivot(Pivot::TOP_LEFT);
+
+    // A signal of a *different* type does not convert: `IntoSignal` accepts a
+    // `Signal<T>` only for the same `T`, so `.scale(sig)` on a `Signal<f32>`
+    // does not compile and `.scale(move || sig.get())` is the spelling. This
+    // is library-wide rather than particular to these properties —
+    // `.corners(signal_of_f32)` is refused the same way — so it is recorded
+    // here rather than worked around, and the documentation says the closure.
+    let scale_sig = create_signal(Scale::uniform(1.2));
+    let offset_sig = create_signal(Translate::new(4.0, 0.0));
+    let _ = container().scale(scale_sig).translate(offset_sig);
 
     // state layer
     let _ = container().when_pressed(|s| s.scale(0.98).rotate(2.0).translate((1.0, 0.0)));

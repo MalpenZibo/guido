@@ -130,7 +130,7 @@ fn transform_demo() -> impl Widget {
                 .height(60.0)
                 .background(Color::rgb(0.3, 0.8, 0.4))
                 .corners(8.0)
-                .scale(scale_factor)
+                .scale(move || scale_factor.get())
                 .when_hovered(|s| s.lighter(0.1))
                 .on_click(move || {
                     let new = if scale_factor.get() > 1.0 { 1.0 } else { 1.3 };

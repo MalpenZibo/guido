@@ -83,7 +83,7 @@ let scale_factor = create_signal(1.0f32);
 let is_scaled = create_signal(false);
 
 container()
-    .scale(scale_factor)
+    .scale(move || scale_factor.get())
     .animate_scale(Transition::spring(SpringConfig::BOUNCY))
     .on_click(move || {
         is_scaled.update(|s| *s = !*s);

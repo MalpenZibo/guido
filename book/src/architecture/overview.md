@@ -106,7 +106,7 @@ Define rotation/scale pivot:
 ```rust
 Pivot::CENTER
 Pivot::TOP_LEFT
-Pivot::custom(0.25, 0.75)
+Pivot::percent(25.0, 75.0)
 ```
 
 ## Widget Trait

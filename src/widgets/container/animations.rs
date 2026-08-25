@@ -25,6 +25,13 @@ struct Timeline<T> {
     last_play: u32,
 }
 
+/// A transition of no duration: a timeline speaks for its property while it
+/// plays, and outside it the declared value applies at once, exactly as it
+/// would with no animation at all.
+pub(super) fn instant_transition() -> Transition {
+    Transition::new(0.0, crate::animation::TimingFunction::Linear)
+}
+
 /// Result of advancing an animation, indicating whether the value changed
 #[derive(Debug, Clone, PartialEq)]
 pub enum AdvanceResult<T> {

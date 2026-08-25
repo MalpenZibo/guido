@@ -82,7 +82,7 @@ Specify exact percentages:
 
 ```rust
 // 25% from left, 75% from top
-Pivot::custom(0.25, 0.75)
+Pivot::percent(25.0, 75.0)
 ```
 
 Values are percentages of the widget's size:
@@ -171,6 +171,7 @@ impl Pivot {
     pub const LEFT: Pivot;
     pub const RIGHT: Pivot;
 
-    pub fn custom(x: f32, y: f32) -> Pivot;
+    pub fn percent(x_percent: f32, y_percent: f32) -> Pivot;  // 0-100
+    pub fn px(x: f32, y: f32) -> Pivot;
 }
 ```

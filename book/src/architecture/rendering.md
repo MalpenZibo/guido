@@ -163,7 +163,7 @@ fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
 
     // Apply user transform (rotation, scale) if set
     if !self.user_transform.is_identity() {
-        ctx.apply_transform_with_origin(self.user_transform, self.pivot);
+        ctx.apply_transform_with_pivot(self.user_transform, self.pivot);
     }
 
     // Paint content in LOCAL coordinates (0,0 is widget origin)

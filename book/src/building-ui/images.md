@@ -121,7 +121,8 @@ container()
 
 // Combined transforms
 container()
-    .rotate((45.0).then_scale(2.0))
+    .rotate(45.0)
+    .scale(2.0)
     .child(image("./logo.svg"))
 ```
 

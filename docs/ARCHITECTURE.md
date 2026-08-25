@@ -254,7 +254,7 @@ Define rotation/scale pivot points:
 Pivot::CENTER       // Default
 Pivot::TOP_LEFT
 Pivot::BOTTOM_RIGHT
-Pivot::custom(0.25, 0.75)  // 25% from left, 75% from top
+Pivot::percent(25.0, 75.0)  // 25% from left, 75% from top
 ```
 
 ## Tree System
