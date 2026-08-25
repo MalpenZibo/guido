@@ -22,7 +22,7 @@ container()
 ## In This Section
 
 - [Transform Basics](basics.md) - Translate, rotate, and scale
-- [Transform Origins](origins.md) - Control pivot points
+- [Pivots](origins.md) - Control the point rotation and scale act about
 - [Animated Transforms](animated.md) - Smooth transform animations
 - [Nested Transforms](nested.md) - Parent-child transform composition
 

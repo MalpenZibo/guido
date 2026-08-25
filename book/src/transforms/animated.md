@@ -7,7 +7,7 @@ Animate transform changes with smooth transitions.
 ```rust
 container()
     .rotate(rotation_signal)
-    .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
+    .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
 ```
 
 When `rotation_signal` changes, the transform animates smoothly.
@@ -20,7 +20,7 @@ Standard easing curve transitions:
 // Smooth ease-out rotation
 container()
     .rotate(rotation)
-    .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
+    .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
     .on_click(move || rotation.update(|r| *r += 45.0))
 ```
 
@@ -31,7 +31,7 @@ Physics simulation for bouncy, natural motion:
 ```rust
 container()
     .scale(scale_signal)
-    .animate_transform(Transition::spring(SpringConfig::BOUNCY))
+    .animate_scale(Transition::spring(SpringConfig::BOUNCY))
 ```
 
 Spring presets:
@@ -52,7 +52,7 @@ container()
     .background(Color::rgb(0.3, 0.6, 0.8))
     .corners(8.0)
     .rotate(rotation)
-    .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
+    .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
     .when_hovered(|s| s.lighter(0.1))
     .when_pressed(|s| s.ripple())
     .on_click(move || rotation.update(|r| *r += 45.0))
@@ -66,7 +66,7 @@ let is_scaled = create_signal(false);
 
 container()
     .scale(scale_factor)
-    .animate_transform(Transition::spring(SpringConfig::BOUNCY))
+    .animate_scale(Transition::spring(SpringConfig::BOUNCY))
     .on_click(move || {
         is_scaled.update(|s| *s = !*s);
         let target = if is_scaled.get() { 1.3 } else { 1.0 };
@@ -78,7 +78,7 @@ container()
 
 ```rust
 container()
-    .animate_transform(Transition::spring(SpringConfig::SMOOTH))
+    .animate_scale(Transition::spring(SpringConfig::SMOOTH))
     .when_pressed(|s| s.scale(0.98))
 ```
 
@@ -89,7 +89,7 @@ let offset_x = create_signal(0.0f32);
 
 container()
     .translate((offset_x, 0.0))
-    .animate_transform(Transition::new(400.0, TimingFunction::EaseInOut))
+    .animate_translate(Transition::new(400.0, TimingFunction::EaseInOut))
     .on_scroll(move |_, dy, _| {
         offset_x.update(|x| *x += dy * 10.0);
     })
@@ -126,7 +126,7 @@ fn animated_transforms_demo() -> impl Widget {
                 .background(Color::rgb(0.3, 0.5, 0.8))
                 .corners(8.0)
                 .rotate(rotation)
-                .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
+                .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
                 .when_hovered(|s| s.lighter(0.1))
                 .when_pressed(|s| s.ripple())
                 .on_click(move || rotation.update(|r| *r += 45.0))
@@ -140,7 +140,7 @@ fn animated_transforms_demo() -> impl Widget {
                 .background(Color::rgb(0.3, 0.8, 0.4))
                 .corners(8.0)
                 .scale(scale)
-                .animate_transform(Transition::spring(SpringConfig::BOUNCY))
+                .animate_scale(Transition::spring(SpringConfig::BOUNCY))
                 .when_hovered(|s| s.lighter(0.1))
                 .when_pressed(|s| s.ripple())
                 .on_click(move || {
@@ -157,7 +157,14 @@ fn animated_transforms_demo() -> impl Widget {
 
 ```rust
 impl Container {
-    pub fn animate_transform(self, transition: Transition) -> Self;
+    pub fn animate_translate(self, transition: Transition) -> Self;
+    pub fn animate_rotate(self, transition: Transition) -> Self;
+    pub fn animate_scale(self, transition: Transition) -> Self;
+
+    // Each has an enter form, animating in from a value on first layout
+    pub fn animate_translate_from(self, from: impl Into<Translate>, t: Transition) -> Self;
+    pub fn animate_rotate_from(self, from: f32, t: Transition) -> Self;
+    pub fn animate_scale_from(self, from: impl Into<Scale>, t: Transition) -> Self;
 }
 
 // Duration-based

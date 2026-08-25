@@ -10,13 +10,13 @@ A timeline is the other shape. It has no target: it plays.
 
 ```rust
 container()
-    .keyframes_transform(
+    .keyframes_rotate(
         Keyframes::new(320.0)
-            .at(0.0, Transform::IDENTITY)
-            .at(0.15, Transform::rotate_degrees(2.0))
-            .at(0.40, Transform::rotate_degrees(-1.6))
-            .at(0.65, Transform::rotate_degrees(0.9))
-            .at(1.0, Transform::IDENTITY),
+            .at(0.0, 0.0)
+            .at(0.15, 2.0)
+            .at(0.40, -1.6)
+            .at(0.65, 0.9)
+            .at(1.0, 0.0),
         rejections,
     )
 ```
@@ -42,9 +42,9 @@ there, which is CSS's rule for a timing function written inside a keyframe:
 
 ```rust
 Keyframes::new(360.0)
-    .at_with(0.0, Transform::IDENTITY, TimingFunction::EaseIn)
-    .at_with(0.35, Transform::translate(0.0, 14.0), TimingFunction::EaseOut)
-    .at(1.0, Transform::IDENTITY)
+    .at_with(0.0, Translate::NONE, TimingFunction::EaseIn)
+    .at_with(0.35, Translate::new(0.0, 14.0), TimingFunction::EaseOut)
+    .at(1.0, Translate::NONE)
 ```
 
 Before the first stop and after the last one the nearest stop holds — a
@@ -64,8 +64,8 @@ So a card can hover and shake without the two arguing:
 ```rust
 container()
     .when_hovered(|s| s.scale(1.03))
-    .animate_transform(Transition::spring(SpringConfig::SNAPPY))
-    .keyframes_transform(shake(), rejections)
+    .animate_scale(Transition::spring(SpringConfig::SNAPPY))
+    .keyframes_rotate(shake(), rejections)
 ```
 
 The hover is still declared while the shake runs; it simply is not being drawn.
@@ -87,8 +87,8 @@ quietly playing the segment as a straight line.
 
 ```rust
 Keyframes::new(320.0)
-    .at_with(0.0, Transform::IDENTITY, TimingFunction::EaseOut)
-    .at(1.0, Transform::rotate_degrees(2.0))
+    .at_with(0.0, 0.0, TimingFunction::EaseOut)
+    .at(1.0, 2.0)
 ```
 
 ## When not to use them

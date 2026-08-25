@@ -92,9 +92,9 @@ Built-in: `Flex` for row/column layouts.
 2D affine transforms (6 floats, 24 bytes — exactly what the GPU shader consumes):
 
 ```rust
-Transform::translate(x, y)
-Transform::rotate_degrees(deg)
-Transform::scale(s)
+container().translate((x, y))
+container().rotate(deg)
+container().scale(s)
 t1.then(&t2)  // Composition
 t.inverse()   // Inversion
 ```

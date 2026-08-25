@@ -111,7 +111,7 @@ fn interactive_button(label: &str) -> Container {
         // Animations
         .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
         .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
-        .animate_transform(Transition::spring(SpringConfig::SMOOTH))
+        .animate_scale(Transition::spring(SpringConfig::SMOOTH))
 
         // State layers
         .when_hovered(|s| s

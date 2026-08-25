@@ -162,12 +162,12 @@ Deep nesting with many transforms is fine for typical UIs. The transform matrice
 // Group animation
 container()
     .rotate(group_rotation)
-    .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
+    .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
     .children([
         // Individual children can have their own animations
         container()
             .scale(child_scale)
-            .animate_transform(Transition::spring(SpringConfig::BOUNCY))
+            .animate_scale(Transition::spring(SpringConfig::BOUNCY))
             .child(...),
     ])
 ```

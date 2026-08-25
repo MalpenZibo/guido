@@ -112,7 +112,7 @@ container()
 
 ```rust
 container()
-    .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
+    .animate_scale(Transition::new(300.0, TimingFunction::EaseOut))
     .when_pressed(|s| s.scale(0.98))
 ```
 
@@ -122,7 +122,7 @@ For physical motion (bouncing, overshooting), use spring animations:
 
 ```rust
 // Spring for bouncy physical motion
-.animate_transform(Transition::spring(SpringConfig::BOUNCY))
+.animate_scale(Transition::spring(SpringConfig::BOUNCY))
 
 // Duration for smooth UI transitions
 .animate_background(Transition::new(200.0, TimingFunction::EaseOut))

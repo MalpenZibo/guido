@@ -49,7 +49,7 @@
 
 - [Transforms](transforms/README.md)
     - [Transform Basics](transforms/basics.md)
-    - [Transform Origins](transforms/origins.md)
+    - [Pivots](transforms/origins.md)
     - [Animated Transforms](transforms/animated.md)
     - [Nested Transforms](transforms/nested.md)
 

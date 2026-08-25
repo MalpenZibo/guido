@@ -84,7 +84,7 @@ let is_scaled = create_signal(false);
 
 container()
     .scale(scale_factor)
-    .animate_transform(Transition::spring(SpringConfig::BOUNCY))
+    .animate_scale(Transition::spring(SpringConfig::BOUNCY))
     .on_click(move || {
         is_scaled.update(|s| *s = !*s);
         let target = if is_scaled.get() { 1.3 } else { 1.0 };
@@ -110,7 +110,7 @@ let rotation = create_signal(0.0f32);
 
 container()
     .rotate(rotation)
-    .animate_transform(Transition::spring(SpringConfig::DEFAULT))
+    .animate_rotate(Transition::spring(SpringConfig::DEFAULT))
     .on_click(move || rotation.update(|r| *r += 90.0))
 ```
 
@@ -121,7 +121,7 @@ Use different transition types for different properties:
 ```rust
 container()
     // Spring for physical properties
-    .animate_transform(Transition::spring(SpringConfig::BOUNCY))
+    .animate_rotate(Transition::spring(SpringConfig::BOUNCY))
     .animate_width(Transition::spring(SpringConfig::SMOOTH))
 
     // Duration for color properties
@@ -142,7 +142,7 @@ fn spring_button() -> Container {
         .scale(move || if pressed.get() { 1.1 } else { 1.0 })
 
         // Spring for scale - bouncy feedback
-        .animate_transform(Transition::spring(SpringConfig::BOUNCY))
+        .animate_scale(Transition::spring(SpringConfig::BOUNCY))
 
         // Duration for color - smooth transition
         .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
@@ -173,7 +173,7 @@ so a button shakes itself:
 fn nudge(angle: RwSignal<f32>) -> Container {
     container()
         .rotate(move || angle.get())
-        .animate_transform(Transition::spring(SpringConfig::BOUNCY))
+        .animate_rotate(Transition::spring(SpringConfig::BOUNCY))
         .on_mouse_down(move |_, _| angle.set(2.0))
         .on_mouse_up(move |_, _| angle.set(0.0))
         .child(text("shake me"))

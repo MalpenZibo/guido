@@ -258,7 +258,7 @@ container()
     .background(Color::rgb(0.3, 0.5, 0.8))
     .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
     .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
-    .animate_transform(Transition::spring(SpringConfig::SMOOTH))
+    .animate_scale(Transition::spring(SpringConfig::SMOOTH))
     .when_hovered(|s| s.lighter(0.1).border(2.0, Color::WHITE))
     .when_pressed(|s| s.darker(0.1).scale(0.98))
 ```
@@ -321,7 +321,9 @@ impl StateStyleBuilder {
 
     // Other
     pub fn corner_radius(self, radius: f32) -> Self;
-    pub fn transform(self, transform: Transform) -> Self;
+    pub fn translate(self, translate: impl Into<Translate>) -> Self;
+    pub fn rotate(self, degrees: f32) -> Self;
+    pub fn scale(self, factor: impl Into<Scale>) -> Self;
     pub fn elevation(self, level: f32) -> Self;
 
     // Ripple

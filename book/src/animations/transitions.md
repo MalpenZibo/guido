@@ -36,7 +36,7 @@ container()
 
 ```rust
 container()
-    .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
+    .animate_scale(Transition::new(300.0, TimingFunction::EaseOut))
     .when_pressed(|s| s.scale(0.98))
 ```
 

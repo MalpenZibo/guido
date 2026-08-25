@@ -1,8 +1,13 @@
-# Transform Origins
+# Pivots
 
-By default, rotation and scale occur around the widget's center. Transform origins let you change this pivot point.
+By default, rotation and scale happen about the widget's centre. A pivot moves
+that point.
 
-## Setting Transform Origin
+One pivot serves both `rotate` and `scale`, as CSS gives one `transform-origin`
+to the whole group. `translate` ignores it: moving a box is the same movement
+wherever the pivot sits.
+
+## Setting a Pivot
 
 ```rust
 container()
@@ -12,9 +17,9 @@ container()
 
 Now the container rotates around its top-left corner instead of its center.
 
-## Built-in Origins
+## Built-in Pivots
 
-| Origin | Position |
+| Pivot | Position |
 |--------|----------|
 | `CENTER` | 50%, 50% (default) |
 | `TOP_LEFT` | 0%, 0% |
@@ -87,7 +92,7 @@ Values are percentages of the widget's size:
 
 ## Reactive Origins
 
-Transform origins can be reactive:
+Pivots can be reactive:
 
 ```rust
 let origin = create_signal(Pivot::CENTER);
@@ -137,7 +142,7 @@ fn create_rotating_box(origin: Pivot, label: &'static str) -> Container {
                 .corners(8.0)
                 .rotate(rotation)
                 .pivot(origin)
-                .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
+                .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
                 .when_hovered(|s| s.lighter(0.1))
                 .on_click(move || rotation.update(|r| *r += 45.0)),
             container().child(text(label).font_size(12.0).color(Color::WHITE)),
