@@ -152,20 +152,27 @@ crate::reactive::converting_signals!(
     [u32; 2] => Translate,
 );
 
-/// Not a usable number — a NaN or an infinity, since both reach the matrix the
-/// same way and neither can size anything. Different again from
-/// [`is_degenerate`](Transform::is_degenerate), a determinant of zero, and the
-/// two guards are independent: neither covers the other.
+/// Say that a piece of geometry is not a usable number — a NaN or an infinity,
+/// since both reach a matrix the same way and neither can size anything.
+/// Different again from [`is_degenerate`](Transform::is_degenerate), a
+/// determinant of zero, and the two guards are independent: neither covers the
+/// other.
 ///
-/// Rate-limited rather than said once: `compose` runs on every paint and every
-/// coalesced pointer move, so a value that stays NaN would fill the log at the
-/// frame rate — but a single latch would also mean a second container going
-/// bad later in the session reports nothing at all.
+/// Rate-limited rather than said once. Every caller is on a path that runs for
+/// each container on each paint and each coalesced pointer move, so a value
+/// that stays bad would fill the log at the frame rate — but a single latch
+/// would also mean a second container going bad later in the session reports
+/// nothing at all.
 ///
 /// In release as well as in debug. A shipped application whose layout divides
-/// by a measured zero draws a widget that is silently not moved, not turned and
-/// not resized, and that is precisely when the line is worth having.
-fn warn_unusable(rotate_degrees: f32, scale: Scale, translate: Translate) {
+/// by a measured zero draws a widget that is silently not moved, not turned,
+/// not resized or not turning about where it was told to, and that is precisely
+/// when the line is worth having.
+///
+/// Shared with [`Pivot::resolve`](crate::pivot::Pivot::resolve), which absorbs
+/// the fourth component the same way `compose` absorbs the other three: one
+/// budget between them, so two bad values cannot flood by taking turns.
+pub(crate) fn warn_unusable_geometry(what: std::fmt::Arguments<'_>) {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, Instant};
 
@@ -175,8 +182,8 @@ fn warn_unusable(rotate_degrees: f32, scale: Scale, translate: Translate) {
 
     // Milliseconds since the first call, in an atomic rather than behind a
     // lock: a mutex here would turn a panic anywhere inside it — a custom
-    // `log` backend, say — into permanent silence for the one diagnostic this
-    // path has.
+    // `log` backend, say — into permanent silence for the one diagnostic these
+    // paths have.
     static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     static LAST_MS: AtomicU64 = AtomicU64::new(u64::MAX);
 
@@ -188,14 +195,7 @@ fn warn_unusable(rotate_degrees: f32, scale: Scale, translate: Translate) {
     }
     LAST_MS.store(now_ms, Ordering::Relaxed);
 
-    log::warn!(
-        "transform: a component is not a usable number and is being ignored \
-         (rotate {rotate_degrees}, scale ({}, {}), translate ({}, {}))",
-        scale.x,
-        scale.y,
-        translate.x,
-        translate.y
-    );
+    log::warn!("{what}");
 }
 
 /// A 2D affine transformation.
@@ -255,7 +255,12 @@ impl Transform {
         let (rotate_degrees, scale, translate) = if usable {
             (rotate_degrees, scale, translate)
         } else {
-            warn_unusable(rotate_degrees, scale, translate);
+            warn_unusable_geometry(format_args!(
+                "transform: a component is not a usable number and is being \
+                 ignored (rotate {rotate_degrees}, scale ({}, {}), translate \
+                 ({}, {}))",
+                scale.x, scale.y, translate.x, translate.y
+            ));
             let or = |v: f32, fallback: f32| if v.is_finite() { v } else { fallback };
             (
                 or(rotate_degrees, 0.0),
