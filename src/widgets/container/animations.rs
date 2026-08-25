@@ -76,9 +76,9 @@ pub struct AnimationState<T: Animatable> {
     /// animation instead of snapping to the target
     enter_from: Option<T>,
     /// A sequence to play on demand, and what plays it. Boxed and absent by
-    /// default: `ContainerAnims` holds nine of these states and only one
-    /// property can carry a sequence, so the rest pay a pointer rather than
-    /// the struct.
+    /// default: `ContainerAnims` holds eleven of these states and only three
+    /// can carry a sequence — `keyframes_translate`, `keyframes_rotate` and
+    /// `keyframes_scale` — so the rest pay a pointer rather than the struct.
     timeline: Option<Box<Timeline<T>>>,
 }
 

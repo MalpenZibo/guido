@@ -192,13 +192,41 @@ impl Transform {
     /// time, and because it is a translation it commutes with this one, so
     /// which side it lands on does not change the result.
     pub(crate) fn compose(translate: Translate, rotate_degrees: f32, scale: Scale) -> Self {
-        // Called for every container on every paint and every pointer event,
-        // and almost none of them turn, so the trig is worth skipping rather
-        // than trusting to be cheap.
-        let (sin, cos) = if rotate_degrees == 0.0 {
+        // A number that turns a widget has to be one. `rotate` takes whatever
+        // an application computes, and a division that went to zero arrives
+        // here as NaN — from which `sin_cos` makes a matrix of NaN, which
+        // `is_identity` does not catch, `inverse`'s `det.abs() < 1e-10` does
+        // not catch, and `world_aabb`'s min/max fold turns into an infinite
+        // rect that then sizes a damage region. Absorbed at the door, the way
+        // `elevation_to_shadow` absorbs its own.
+        //
+        // The zero case is not about correctness: this runs for every container
+        // on every paint and every pointer event, and almost none of them turn.
+        let (sin, cos) = if rotate_degrees == 0.0 || !rotate_degrees.is_finite() {
+            #[cfg(debug_assertions)]
+            if !rotate_degrees.is_finite() {
+                log::warn!("rotate: {rotate_degrees} is not an angle; not turning");
+            }
             (0.0, 1.0)
         } else {
             rotate_degrees.to_radians().sin_cos()
+        };
+
+        let scale = Scale {
+            x: if scale.x.is_finite() { scale.x } else { 1.0 },
+            y: if scale.y.is_finite() { scale.y } else { 1.0 },
+        };
+        let translate = Translate {
+            x: if translate.x.is_finite() {
+                translate.x
+            } else {
+                0.0
+            },
+            y: if translate.y.is_finite() {
+                translate.y
+            } else {
+                0.0
+            },
         };
         Self {
             data: [
@@ -700,6 +728,27 @@ mod tests {
                 approx_eq(sx, 1.0) && approx_eq(sy, 1.0),
                 "at {deg}°: ({sx}, {sy})"
             );
+        }
+    }
+
+    /// A value that is not a number cannot turn, move or resize anything, and
+    /// must not be allowed to make a matrix that poisons everything downstream:
+    /// `is_identity` does not catch NaN, `inverse`'s determinant test does not
+    /// catch it, and the world AABB fold turns it into an infinite rect.
+    #[test]
+    fn a_component_that_is_not_a_number_is_ignored() {
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            for t in [
+                Transform::compose(Translate::NONE, bad, Scale::NONE),
+                Transform::compose(Translate::NONE, 0.0, Scale::uniform(bad)),
+                Transform::compose(Translate::new(bad, 0.0), 0.0, Scale::NONE),
+            ] {
+                assert!(
+                    t.data.iter().all(|v| v.is_finite()),
+                    "{bad} produced {:?}",
+                    t.data
+                );
+            }
         }
     }
 

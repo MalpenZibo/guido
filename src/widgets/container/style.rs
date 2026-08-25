@@ -262,7 +262,7 @@ impl Container {
             && !self
                 .interaction
                 .as_ref()
-                .is_some_and(|ix| ix.declares_transform())
+                .is_some_and(|ix| ix.declares_transform)
             && !anims
                 .is_some_and(|a| a.translate.is_some() || a.rotate.is_some() || a.scale.is_some())
         {

@@ -184,6 +184,14 @@ macro_rules! converting_signals {
 }
 pub(crate) use converting_signals;
 
+// The numeric widenings, beside the `IntoVal<f32>` impls they mirror.
+converting_signals!(
+    f64 => f32,
+    i32 => f32,
+    u32 => f32,
+    u16 => f32,
+);
+
 // The optional case generalises where the others cannot. `IntoVal<Option<T>>
 // for T` already lets a closure return a bare value where an optional one is
 // expected; this is the same for a signal. No reflexive collision: reaching

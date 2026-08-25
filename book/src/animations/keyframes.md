@@ -59,7 +59,8 @@ declared *now* — including a value that changed while it was playing. This is
 the rule CSS settled on, where an animation outranks a normal declaration for
 as long as it runs and hands the property back afterwards.
 
-So a card can hover and shake without the two arguing:
+A timeline belongs to the one component it moves, so a card can hover and shake
+at the same time without the two meeting at all:
 
 ```rust
 container()
@@ -68,12 +69,25 @@ container()
     .keyframes_rotate(shake(), rejections)
 ```
 
-The hover is still declared while the shake runs; it simply is not being drawn.
-When the sequence ends the property is handed back **through its declared
-transition**, from wherever the sequence left it — so a pointer that arrived
-mid-shake gets its spring, rather than the card jumping to the hovered size on
-the sequence's last frame. A callback on that transition fires as it normally
-would, for the same reason.
+The hover is on `scale` and the shake on `rotate`, so both are drawn throughout:
+the card grows under the pointer while it is still shaking its head.
+
+The replacing rule applies when a timeline and a declaration are on **the same**
+component:
+
+```rust
+container()
+    .when_hovered(|s| s.rotate(3.0))
+    .animate_rotate(Transition::spring(SpringConfig::SNAPPY))
+    .keyframes_rotate(shake(), rejections)
+```
+
+Here the hover tilt is still declared while the shake runs; it simply is not
+being drawn. When the sequence ends the property is handed back **through its
+declared transition**, from wherever the sequence left it — so a pointer that
+arrived mid-shake gets its spring, rather than the card jumping to the tilted
+angle on the sequence's last frame. A callback on that transition fires as it
+normally would, for the same reason.
 
 The builders do not care which order you write them in: declaring a transition
 after a sequence keeps the sequence, and the other way round too.

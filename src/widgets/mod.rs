@@ -185,14 +185,4 @@ crate::reactive::converting_signals!(
     [i32; 2] => Padding,
     [i32; 4] => Padding,
 
-    f32 => crate::layout::Length,
-    f64 => crate::layout::Length,
-    i32 => crate::layout::Length,
-    u32 => crate::layout::Length,
-    u16 => crate::layout::Length,
-
-    f64 => f32,
-    i32 => f32,
-    u32 => f32,
-    u16 => f32,
 );

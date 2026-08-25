@@ -240,6 +240,15 @@ pub(super) struct InteractionState {
     /// property — CSS's rule at equal specificity, and the only one that lets
     /// a caller decide that an error outranks the focus.
     pub(super) states: Vec<(StateWhen, StateStyle)>,
+    /// Whether any declared layer overrides `translate`, `rotate` or `scale`.
+    ///
+    /// Decided when the layer is pushed, because that is when it is knowable —
+    /// a layer either names the property or it does not, and no signal is
+    /// involved. Kept rather than rescanned because it gates the identity fast
+    /// path in `animated_transform`, which runs on every paint and every
+    /// coalesced pointer move: a button with hover, focus and pressed layers
+    /// would otherwise walk three `StateStyle`s to be told nothing turns.
+    pub(super) declares_transform: bool,
     pub(super) ripple: RippleState,
 }
 
@@ -257,6 +266,7 @@ impl Default for InteractionState {
             on_mouse_up: None,
             flags: create_signal(InteractionFlags::empty()),
             states: Vec::new(),
+            declares_transform: false,
             ripple: RippleState::new(),
         }
     }
@@ -292,19 +302,6 @@ impl InteractionState {
     /// every hover just because the flags became reactive.
     pub(super) fn has_any_state(&self) -> bool {
         !self.states.is_empty()
-    }
-
-    /// Whether any declared layer overrides one of the transform components.
-    ///
-    /// Structural, so no signal is read: a state layer either names the
-    /// property or it does not, and that is decided when the layer is built.
-    /// It is what lets an untransformed container skip composing an identity
-    /// matrix on every paint and every pointer event without having to assume
-    /// that "has interaction" means "might be transformed".
-    pub(super) fn declares_transform(&self) -> bool {
-        self.states
-            .iter()
-            .any(|(_, s)| s.translate.is_some() || s.rotate.is_some() || s.scale.is_some())
     }
 
     /// Whether a layer with this trigger is declared, without reading any
@@ -1170,7 +1167,10 @@ impl Stateful for Container {
     type Style = StateStyle;
 
     fn push_state_style(&mut self, when: StateWhen, style: StateStyle) {
-        self.interact_mut().states.push((when, style));
+        let moves = style.translate.is_some() || style.rotate.is_some() || style.scale.is_some();
+        let ix = self.interact_mut();
+        ix.declares_transform |= moves;
+        ix.states.push((when, style));
     }
 }
 
@@ -1200,6 +1200,11 @@ impl Widget for Container {
             // the debug diagnostic reports each of these reads as a value that
             // "will not update", which is the opposite of true and trains the
             // reader to ignore a warning that is usually right.
+            // Which of the three are actually animated, read before the
+            // mutable borrow below.
+            let has = self.anims.as_ref().map_or((false, false, false), |a| {
+                (a.translate.is_some(), a.rotate.is_some(), a.scale.is_some())
+            });
             let (
                 padding_target,
                 border_width_target,
@@ -1218,9 +1223,12 @@ impl Widget for Container {
                     self.effective_corners_target(id),
                     self.effective_elevation_target(id),
                     self.effective_border_color_target(id),
-                    self.effective_translate_target(id),
-                    self.effective_rotate_target(id),
-                    self.effective_scale_target(id),
+                    // Only where there is an animation to aim: each of these
+                    // walks the state layers, and all three used to run for a
+                    // container that animates nothing but its background.
+                    has.0.then(|| self.effective_translate_target(id)),
+                    has.1.then(|| self.effective_rotate_target(id)),
+                    has.2.then(|| self.effective_scale_target(id)),
                 )
             });
             let anims = self.anims.as_mut().unwrap();
@@ -1267,9 +1275,33 @@ impl Widget for Container {
             start_timeline!(translate);
             start_timeline!(rotate);
             start_timeline!(scale);
-            advance_anim!(anims, translate, translate_target, id, any_animating, paint);
-            advance_anim!(anims, rotate, rotate_target, id, any_animating, paint);
-            advance_anim!(anims, scale, scale_target, id, any_animating, paint);
+            // `unwrap_or_default` never fires: the macro evaluates the target
+            // inside `if let Some(anim)`, and the flag that produced the
+            // `Option` is that same `is_some`.
+            advance_anim!(
+                anims,
+                translate,
+                translate_target.unwrap_or_default(),
+                id,
+                any_animating,
+                paint
+            );
+            advance_anim!(
+                anims,
+                rotate,
+                rotate_target.unwrap_or_default(),
+                id,
+                any_animating,
+                paint
+            );
+            advance_anim!(
+                anims,
+                scale,
+                scale_target.unwrap_or_default(),
+                id,
+                any_animating,
+                paint
+            );
         }
 
         // Advance ripple animation

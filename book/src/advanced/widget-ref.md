@@ -56,14 +56,12 @@ let module = container()
 
 // The popup, centered under the module
 let popup = container()
-    .translate(
-        move || {
-            let r = module_ref.rect().get();
-            let midpoint = r.x + r.width / 2.0;
-            (midpoint - POPUP_WIDTH / 2.0).clamp(8.0, SCREEN_WIDTH - POPUP_WIDTH - 8.0)
-        },
-        BAR_HEIGHT,
-    )
+    .translate(move || {
+        let r = module_ref.rect().get();
+        let midpoint = r.x + r.width / 2.0;
+        let x = (midpoint - POPUP_WIDTH / 2.0).clamp(8.0, SCREEN_WIDTH - POPUP_WIDTH - 8.0);
+        (x, BAR_HEIGHT)
+    })
     .child(popup_content());
 ```
 

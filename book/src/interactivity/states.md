@@ -321,9 +321,10 @@ impl StateStyleBuilder {
 
     // Other
     pub fn corner_radius(self, radius: f32) -> Self;
-    pub fn translate(self, translate: impl Into<Translate>) -> Self;
-    pub fn rotate(self, degrees: f32) -> Self;
-    pub fn scale(self, factor: impl Into<Scale>) -> Self;
+    // Every value is reactive here too, like the container's own
+    pub fn translate<M>(self, translate: impl IntoSignal<Translate, M>) -> Self;
+    pub fn rotate<M>(self, degrees: impl IntoSignal<f32, M>) -> Self;
+    pub fn scale<M>(self, factor: impl IntoSignal<Scale, M>) -> Self;
     pub fn elevation(self, level: f32) -> Self;
 
     // Ripple
