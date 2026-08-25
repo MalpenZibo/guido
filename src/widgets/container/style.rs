@@ -268,17 +268,51 @@ impl Container {
         {
             return Transform::IDENTITY;
         }
-        Transform::compose(
+        // Per component, not just for the three together: a card that only
+        // rotates still walks its state layers for a translate and a scale
+        // nothing declares, and this runs once per paint and once per
+        // coalesced pointer move. `advance_animations` gates the same way.
+        //
+        // A state layer can override a component the container never declared,
+        // and the flag does not say which one — so when one is declared at all,
+        // all three are resolved. Skipping on the flag alone would silently
+        // drop `when_pressed(|s| s.scale(0.98))` on a container with no scale
+        // of its own, which is the commonest state layer there is.
+        let from_state = self
+            .interaction
+            .as_ref()
+            .is_some_and(|ix| ix.declares_transform);
+        let translate = if from_state
+            || self.translate_signal().is_some()
+            || anims.is_some_and(|a| a.translate.is_some())
+        {
             get_animated_value(anims.and_then(|a| a.translate.as_ref()), || {
                 self.effective_translate_target(id)
-            }),
+            })
+        } else {
+            Translate::NONE
+        };
+        let rotate = if from_state
+            || self.rotate_signal().is_some()
+            || anims.is_some_and(|a| a.rotate.is_some())
+        {
             get_animated_value(anims.and_then(|a| a.rotate.as_ref()), || {
                 self.effective_rotate_target(id)
-            }),
+            })
+        } else {
+            0.0
+        };
+        let scale = if from_state
+            || self.scale_signal().is_some()
+            || anims.is_some_and(|a| a.scale.is_some())
+        {
             get_animated_value(anims.and_then(|a| a.scale.as_ref()), || {
                 self.effective_scale_target(id)
-            }),
-        )
+            })
+        } else {
+            Scale::NONE
+        };
+        Transform::compose(translate, rotate, scale)
     }
 
     /// Whether a state-layer change can move an animated property — i.e.

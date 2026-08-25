@@ -134,9 +134,7 @@ impl StateStyle {
     pub(crate) fn moves_anything(&self) -> bool {
         self.translate.is_some() || self.rotate.is_some() || self.scale.is_some()
     }
-}
 
-impl StateStyle {
     /// Create a new empty state style.
     pub fn new() -> Self {
         Self::default()

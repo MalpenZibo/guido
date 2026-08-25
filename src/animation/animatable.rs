@@ -20,9 +20,31 @@ pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
     /// Used to select the `.reverse()` transition when configured.
     /// - `f32`: value decreasing
     /// - `Translate`: distance from the origin decreasing
-    /// - `Scale`: area decreasing
+    /// - `Scale`: the two factors, added and unsigned, decreasing
     /// - `Color`: alpha decreasing, then luminance decreasing
     /// - `Padding`: total padding decreasing
+    ///
+    /// # A value of more than one number has ties, and they are not reversals
+    ///
+    /// Every type here but `f32` answers by reducing itself to one number, and
+    /// no such reduction can order a plane: for each of them there is a family
+    /// of pairs that reduce to the same number, and every one of those reads as
+    /// forward in both directions. `(200, 0) -> (-200, 0)` for a `Translate`,
+    /// `(2, 0.5) -> (0.5, 2)` for a `Scale`, a `Color` that changes hue at
+    /// constant luminance.
+    ///
+    /// This is not a gap waiting to be closed by a better measure. A tie is a
+    /// change that is genuinely neither larger nor smaller, and `is_reverse`
+    /// answers a yes-or-no question about a partial order. Three different
+    /// measures have been tried on `Scale` — signed area, unsigned area,
+    /// unsigned sum — and each moved the tie to a different family rather than
+    /// removing it. What each type picks is which ties it prefers to have, and
+    /// the choice is stated in its own impl.
+    ///
+    /// The consequence to know: a declared `.reverse()` transition does not
+    /// fire for a tie, and the forward one plays both ways. Where that matters,
+    /// the direction is the application's to model — a signal saying which way
+    /// it is going, and two declarations.
     fn is_reverse(_from: &Self, _to: &Self) -> bool {
         false
     }
@@ -190,12 +212,13 @@ impl Animatable for Translate {
         }
     }
 
-    /// Moving back towards where it started.
+    /// Moving back towards where it started, measured as distance from the
+    /// origin — so a slide out and a slide home are told apart, which the old
+    /// `Transform` could not do at all: it compared `extract_scale()`, which a
+    /// translation does not move, so every slide read as forward.
     ///
-    /// A change from the old `Transform`, which compared `extract_scale()` and
-    /// so answered `false` for every pure translation: a container that slid
-    /// out and back played its forward transition both ways, whatever it had
-    /// declared for the reverse. A return leg is a reversal, and now says so.
+    /// It ties on a move that keeps its distance — `(200, 0) -> (-200, 0)`, or
+    /// anything sliding along a circle. See the trait's note on ties.
     fn is_reverse(from: &Self, to: &Self) -> bool {
         to.x.hypot(to.y) < from.x.hypot(from.y)
     }
@@ -220,10 +243,13 @@ impl Animatable for Scale {
     /// is growing: the signed product sent `(-1, 1) -> (-2, 1)` down the
     /// reverse transition while it got bigger.
     ///
-    /// Added rather than multiplied because the product is blind to a change
-    /// of aspect: every `(k, 1/k)` stretch has area one, so `(1, 1) -> (2, 0.5)`
-    /// and its return leg both read as forward and a declared `.reverse()`
-    /// could never fire. `Padding` totals its four edges for the same reason.
+    /// Added rather than multiplied because the product ties on every `(k, 1/k)`
+    /// — they all have area one — and shrinking a widget uniformly is the case
+    /// worth getting right, while a stretch that keeps its area is the case
+    /// worth ceding. The sum ties instead on transposes, `(2, 0.5)` against
+    /// `(0.5, 2)`, which is the rarer shape and a genuinely undecidable one:
+    /// neither of those is smaller than the other. See the trait's note on
+    /// ties. `Padding` totals its four edges for the same reason.
     fn is_reverse(from: &Self, to: &Self) -> bool {
         to.x.abs() + to.y.abs() < from.x.abs() + from.y.abs()
     }
@@ -255,6 +281,23 @@ mod tests {
         let large = Scale::new(-2.0, 1.0);
         assert!(!Scale::is_reverse(&small, &large));
         assert!(Scale::is_reverse(&large, &small));
+    }
+
+    /// The ties, written down so they are a decision and not a surprise. A
+    /// transposed scale and a slide that keeps its distance are neither larger
+    /// nor smaller, so both directions read as forward and a declared
+    /// `.reverse()` does not fire for them.
+    #[test]
+    fn a_tie_is_forward_in_both_directions() {
+        let wide = Scale::new(2.0, 0.5);
+        let tall = Scale::new(0.5, 2.0);
+        assert!(!Scale::is_reverse(&wide, &tall));
+        assert!(!Scale::is_reverse(&tall, &wide));
+
+        let right = Translate::new(200.0, 0.0);
+        let left = Translate::new(-200.0, 0.0);
+        assert!(!Translate::is_reverse(&right, &left));
+        assert!(!Translate::is_reverse(&left, &right));
     }
 
     /// A slide back is a reversal — which the old `Transform` could not say,

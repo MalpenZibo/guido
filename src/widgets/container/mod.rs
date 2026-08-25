@@ -26,7 +26,7 @@ use crate::advance_anim;
 use crate::animation::TransitionConfig;
 use crate::backdrop::BackdropBlur;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
-use crate::layout::{Constraints, Flex, Layout, Length, Size};
+use crate::layout::{Constraints, Flex, IntoF32, Layout, Length, Size};
 use crate::pivot::Pivot;
 use crate::reactive::{
     IntoSignal, OptionSignalExt, RwSignal, Signal, create_signal, focus_path, with_signal_tracking,
@@ -185,10 +185,13 @@ pub enum Overflow {
 }
 
 /// The three transform components and the point they act about. Boxed and
-/// absent by default, like `anims` and `interaction`: four `Option<Signal<_>>`
-/// is 24 bytes on every container in every tree, and the overwhelming majority
-/// declare none of them. A container that does pay one pointer plus the
-/// allocation, once, at build time.
+/// absent by default, like `anims` and `interaction`.
+///
+/// `Option<Signal<T>>` is 12 bytes — `Signal` is two `u32` plus a fieldless
+/// `SignalKind` whose niche the `Option` reuses — so four of them is 48 on
+/// every container in every tree, and the overwhelming majority declare none.
+/// Behind a pointer, `Container` measures 312 bytes against main's 328, which
+/// spent 24 here on the two fields this replaces.
 #[derive(Default)]
 pub(super) struct TransformProps {
     pub(super) translate: Option<Signal<Translate>>,
@@ -1100,9 +1103,14 @@ impl Container {
 
     /// Animate `rotate` with an ENTER transition. See
     /// [`animate_translate_from`](Self::animate_translate_from).
+    ///
+    /// `IntoF32` rather than `Into<f32>` so that `animate_rotate_from(45, ..)`
+    /// works, the way `animate_scale_from(2, ..)` does through `From<i32> for
+    /// Scale`: there is no `From<i32> for f32`, and an angle written as a bare
+    /// integer is the ordinary case.
     pub fn animate_rotate_from(
         mut self,
-        enter_from: impl crate::layout::IntoF32,
+        enter_from: impl IntoF32,
         transition: impl Into<TransitionConfig>,
     ) -> Self {
         let enter_from = enter_from.into_f32();

@@ -216,6 +216,45 @@ fn borders(node: &RenderNode) -> Vec<(f32, Color)> {
 // Sizing — the box model matrix
 // ---------------------------------------------------------------------------
 
+/// A container collapsed to nothing by its scale draws nothing, so it must
+/// take nothing: the enter idiom in `animate_scale_from` builds exactly this,
+/// and a closed menu that still answered for its open-sized rect would swallow
+/// every click over it and take hover from whatever is drawn underneath.
+#[test]
+fn a_container_scaled_to_nothing_is_not_clickable() {
+    let clicks = create_signal(0u32);
+    let open = create_signal(false);
+
+    let mut h = H::new(
+        box_of(80.0, 40.0)
+            .scale(move || {
+                if open.get() {
+                    Scale::NONE
+                } else {
+                    Scale::new(1.0, 0.0)
+                }
+            })
+            .on_click(move || clicks.update(|c| *c += 1)),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    for e in click_at(40.0, 20.0) {
+        h.send(e);
+    }
+    assert_eq!(clicks.get(), 0, "collapsed, so it takes nothing");
+
+    open.set(true);
+    pump(&mut h);
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    for e in click_at(40.0, 20.0) {
+        h.send(e);
+    }
+    assert_eq!(clicks.get(), 1, "and open again, it takes the click");
+}
+
 #[test]
 fn content_sizing_is_child_plus_padding() {
     let mut h = H::new(container().padding(8.0).child(box_of(40.0, 20.0)));

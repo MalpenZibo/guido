@@ -152,29 +152,38 @@ crate::reactive::converting_signals!(
     [u32; 2] => Translate,
 );
 
-/// Said once per process, not once per frame: `compose` runs on every paint
-/// and every coalesced pointer move, so a value that stays NaN would otherwise
-/// fill the log at the frame rate and bury whatever came after it.
-fn warn_once(rotate_degrees: f32, scale: Scale, translate: Translate) {
-    #[cfg(debug_assertions)]
-    {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        static SAID: AtomicBool = AtomicBool::new(false);
-        if !SAID.swap(true, Ordering::Relaxed) {
-            log::warn!(
-                "transform: a component is not a number and is being ignored \
-                 (rotate {rotate_degrees}, scale ({}, {}), translate ({}, {}))",
-                scale.x,
-                scale.y,
-                translate.x,
-                translate.y
-            );
-        }
+/// Rate-limited rather than said once: `compose` runs on every paint and every
+/// coalesced pointer move, so a value that stays NaN would fill the log at the
+/// frame rate — but a single latch would also mean a second container going
+/// bad later in the session reports nothing at all.
+///
+/// In release as well as in debug. A shipped application whose layout divides
+/// by a measured zero draws a widget that is silently not moved, not turned and
+/// not resized, and that is precisely when the line is worth having.
+fn warn_degenerate(rotate_degrees: f32, scale: Scale, translate: Translate) {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    /// Long enough that a per-frame source cannot flood, short enough that a
+    /// second one later in the session is still reported.
+    const QUIET: Duration = Duration::from_secs(5);
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+
+    let Ok(mut last) = LAST.lock() else { return };
+    let now = Instant::now();
+    if last.is_some_and(|t| now.duration_since(t) < QUIET) {
+        return;
     }
-    #[cfg(not(debug_assertions))]
-    {
-        let _ = (rotate_degrees, scale, translate);
-    }
+    *last = Some(now);
+
+    log::warn!(
+        "transform: a component is not a number and is being ignored \
+         (rotate {rotate_degrees}, scale ({}, {}), translate ({}, {}))",
+        scale.x,
+        scale.y,
+        translate.x,
+        translate.y
+    );
 }
 
 /// A 2D affine transformation.
@@ -213,9 +222,11 @@ impl Transform {
     ///
     /// Folded into the affine form directly rather than built by two `then`
     /// calls, since two of the three are known to be sparse. The pivot is not
-    /// applied here — [`center_at`](Self::center_at) does that at flatten
-    /// time, and because it is a translation it commutes with this one, so
-    /// which side it lands on does not change the result.
+    /// applied here — [`center_at`](Self::center_at) does that, from both of
+    /// the places that need the composed matrix: `flatten_node` on the way to
+    /// the renderer, and `untransform_point` on the way back for a pointer
+    /// event. Because it is a translation it commutes with this one, so which
+    /// side it lands on does not change the result.
     pub(crate) fn compose(translate: Translate, rotate_degrees: f32, scale: Scale) -> Self {
         // A number that sizes, turns or moves a widget has to be one. These
         // take whatever an application computes, and a division by a measured
@@ -230,7 +241,7 @@ impl Transform {
             || !translate.x.is_finite()
             || !translate.y.is_finite();
         if bad {
-            warn_once(rotate_degrees, scale, translate);
+            warn_degenerate(rotate_degrees, scale, translate);
         }
 
         let rotate_degrees = if rotate_degrees.is_finite() {
@@ -508,6 +519,19 @@ impl Transform {
     pub(crate) fn extract_scale(&self) -> f32 {
         let (sx, sy) = self.extract_scale_components();
         (sx * sy).sqrt()
+    }
+
+    /// Whether this transform has collapsed the plane onto a line or a point.
+    ///
+    /// A zero determinant means the shape has no area, so it draws nothing —
+    /// and it cannot be undone, which is why [`inverse`](Self::inverse) gives
+    /// the identity for one rather than infinities. Hit testing has to ask
+    /// before inverting: taking the identity back means the point is compared
+    /// against the *un*-collapsed bounds, and something invisible answers for
+    /// the whole area it would occupy.
+    #[inline]
+    pub fn is_degenerate(&self) -> bool {
+        (self.a() * self.d() - self.b() * self.c()).abs() < 1e-10
     }
 
     /// Check if this transform contains only translation (no rotation or scale).
