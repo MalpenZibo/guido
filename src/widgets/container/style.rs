@@ -250,62 +250,50 @@ impl Container {
     /// never has to ask how the matrix was arrived at.
     pub(super) fn animated_transform(&self, id: WidgetId) -> Transform {
         let anims = self.anims.as_ref();
-        // A container that declares none of the three, animates none of them,
-        // and has no state layer that overrides one cannot be transformed —
-        // and a plain layout box is all three, as is a button whose only state
-        // is a colour. Asking the interaction what it declares rather than
-        // whether it exists is what keeps every `on_click` out of the slow
-        // path: this runs on each paint and each coalesced pointer move.
-        if self.translate_signal().is_none()
-            && self.rotate_signal().is_none()
-            && self.scale_signal().is_none()
-            && !self
-                .interaction
-                .as_ref()
-                .is_some_and(|ix| ix.declares_transform)
-            && !anims
-                .is_some_and(|a| a.translate.is_some() || a.rotate.is_some() || a.scale.is_some())
-        {
-            return Transform::IDENTITY;
-        }
-        // Per component, not just for the three together: a card that only
-        // rotates still walks its state layers for a translate and a scale
-        // nothing declares, and this runs once per paint and once per
-        // coalesced pointer move. `advance_animations` gates the same way.
+
+        // What could move each component: its own declaration, its own
+        // animation, or a state layer that overrides one. The flag does not say
+        // *which* component a layer names, so any of them lights all three —
+        // skipping on it alone would drop `when_pressed(|s| s.scale(0.98))` on
+        // a container with no scale of its own, which is the commonest state
+        // layer there is.
         //
-        // A state layer can override a component the container never declared,
-        // and the flag does not say which one — so when one is declared at all,
-        // all three are resolved. Skipping on the flag alone would silently
-        // drop `when_pressed(|s| s.scale(0.98))` on a container with no scale
-        // of its own, which is the commonest state layer there is.
+        // Computed once and shared with the early-out below, so the two cannot
+        // disagree: a component wired into the gates and forgotten in the
+        // early-out would return IDENTITY and silently stop transforming.
         let from_state = self
             .interaction
             .as_ref()
             .is_some_and(|ix| ix.declares_transform);
-        let translate = if from_state
+        let has_translate = from_state
             || self.translate_signal().is_some()
-            || anims.is_some_and(|a| a.translate.is_some())
-        {
+            || anims.is_some_and(|a| a.translate.is_some());
+        let has_rotate = from_state
+            || self.rotate_signal().is_some()
+            || anims.is_some_and(|a| a.rotate.is_some());
+        let has_scale =
+            from_state || self.scale_signal().is_some() || anims.is_some_and(|a| a.scale.is_some());
+
+        // A plain layout box is none of the three, and most containers are one.
+        if !(has_translate || has_rotate || has_scale) {
+            return Transform::IDENTITY;
+        }
+
+        let translate = if has_translate {
             get_animated_value(anims.and_then(|a| a.translate.as_ref()), || {
                 self.effective_translate_target(id)
             })
         } else {
             Translate::NONE
         };
-        let rotate = if from_state
-            || self.rotate_signal().is_some()
-            || anims.is_some_and(|a| a.rotate.is_some())
-        {
+        let rotate = if has_rotate {
             get_animated_value(anims.and_then(|a| a.rotate.as_ref()), || {
                 self.effective_rotate_target(id)
             })
         } else {
             0.0
         };
-        let scale = if from_state
-            || self.scale_signal().is_some()
-            || anims.is_some_and(|a| a.scale.is_some())
-        {
+        let scale = if has_scale {
             get_animated_value(anims.and_then(|a| a.scale.as_ref()), || {
                 self.effective_scale_target(id)
             })

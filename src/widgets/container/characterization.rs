@@ -216,10 +216,140 @@ fn borders(node: &RenderNode) -> Vec<(f32, Color)> {
 // Sizing — the box model matrix
 // ---------------------------------------------------------------------------
 
-/// The other half of collapsing: an event that *clears* state has to get
-/// through. A button pressed when the menu closed stayed pressed for as long
-/// as it existed, because the guard refused every event and not just the ones
-/// asking where the pointer was.
+/// A collapsed subtree is not pointed at, wherever it sits. The container at
+/// the origin is the easy case; one placed by a layout is where a missing
+/// coordinate rebasing shows, which is why this one is offset.
+#[test]
+fn a_collapsed_subtree_is_not_pointed_at_wherever_it_sits() {
+    let clicks = create_signal(0u32);
+    let child_clicks = create_signal(0u32);
+
+    let mut h = H::new(
+        container().layout(Flex::row()).children([
+            box_of(100.0, 40.0),
+            box_of(80.0, 40.0)
+                .scale(Scale::new(1.0, 0.0))
+                .on_click(move || clicks.update(|c| *c += 1))
+                .child(box_of(80.0, 40.0).on_click(move || child_clicks.update(|c| *c += 1))),
+        ]),
+    );
+    h.fit(300.0, 100.0);
+    h.paint();
+
+    for e in click_at(140.0, 20.0) {
+        h.send(e);
+    }
+    assert_eq!(clicks.get(), 0, "the collapsed container takes nothing");
+    assert_eq!(child_clicks.get(), 0, "and neither does anything inside it");
+}
+
+/// Collapsing under a pointer that is already pressing must not leave the
+/// press behind, and must not turn it into a click either. The press is state
+/// and ends wherever the release lands; the callbacks are positions, and a
+/// collapsed container has none to give.
+#[test]
+fn collapsing_under_a_press_clears_it_without_activating() {
+    let open = create_signal(true);
+    let clicks = create_signal(0u32);
+    let releases = create_signal(0u32);
+
+    let mut h = H::new(
+        box_of(80.0, 40.0)
+            .scale(move || {
+                if open.get() {
+                    Scale::NONE
+                } else {
+                    Scale::new(1.0, 0.0)
+                }
+            })
+            .on_click(move || clicks.update(|c| *c += 1))
+            .on_mouse_up(move |_, _| releases.update(|r| *r += 1)),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    h.send(Event::MouseDown {
+        x: 40.0,
+        y: 20.0,
+        button: MouseButton::Left,
+    });
+
+    open.set(false);
+    pump(&mut h);
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    h.send(Event::MouseUp {
+        x: 40.0,
+        y: 20.0,
+        button: MouseButton::Left,
+    });
+    assert_eq!(clicks.get(), 0, "it landed on something that draws nothing");
+    assert_eq!(
+        releases.get(),
+        0,
+        "and there was nowhere to report the release at"
+    );
+
+    // What stranding meant is the press, and it is gone: reopened, the next
+    // click is a whole click and not the tail of the last one.
+    open.set(true);
+    pump(&mut h);
+    h.fit(100.0, 100.0);
+    h.paint();
+    for e in click_at(40.0, 20.0) {
+        h.send(e);
+    }
+    assert_eq!(clicks.get(), 1, "a clean press, not a stranded one");
+}
+
+/// A press keeps the pointer callbacks firing wherever the pointer goes —
+/// that implicit capture is what makes dragging work — so a container that
+/// collapses mid-drag has to stop reporting rather than report the sentinel
+/// that stands for "nowhere".
+#[test]
+fn a_collapsed_container_reports_no_pointer_position() {
+    let open = create_signal(true);
+    let seen = create_signal(0.0f32);
+
+    let mut h = H::new(
+        box_of(80.0, 40.0)
+            .scale(move || {
+                if open.get() {
+                    Scale::NONE
+                } else {
+                    Scale::new(1.0, 0.0)
+                }
+            })
+            .on_pointer_move(move |x, _| seen.set(x)),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    h.send(Event::MouseDown {
+        x: 40.0,
+        y: 20.0,
+        button: MouseButton::Left,
+    });
+    h.send(Event::MouseMove { x: 42.0, y: 20.0 });
+    assert_eq!(seen.get(), 42.0, "reporting normally while it is drawn");
+
+    open.set(false);
+    pump(&mut h);
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    h.send(Event::MouseMove { x: 44.0, y: 20.0 });
+    assert_eq!(
+        seen.get(),
+        42.0,
+        "and nothing after it collapsed — not a sentinel, not a stale point"
+    );
+}
+
+/// The other half of collapsing: the state a point set has to be cleared, even
+/// though no event can land. A button pressed when its menu closed stayed
+/// pressed for as long as it existed.
 #[test]
 fn collapsing_does_not_strand_a_pressed_child() {
     let open = create_signal(true);
@@ -262,9 +392,20 @@ fn collapsing_does_not_strand_a_pressed_child() {
     });
     assert_eq!(
         released.get(),
-        1,
-        "the release has to reach the child, or it stays pressed forever"
+        0,
+        "there is nowhere to report the release, so it is not reported"
     );
+
+    // But the press is gone, which is what stranding meant: reopened, the next
+    // click is a whole one.
+    open.set(true);
+    pump(&mut h);
+    h.fit(100.0, 100.0);
+    h.paint();
+    for e in click_at(40.0, 20.0) {
+        h.send(e);
+    }
+    assert_eq!(released.get(), 1, "a clean press, not the tail of the last");
 }
 
 /// A container collapsed to nothing by its scale draws nothing, so it must

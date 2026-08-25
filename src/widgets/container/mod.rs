@@ -1565,25 +1565,6 @@ impl Widget for Container {
             pivot: self.pivot_signal().get_or(Pivot::CENTER),
         };
 
-        // A subtree collapsed to a line or a point draws nothing, so nothing
-        // in it can be pointed at — including its children, which is why this
-        // is here and not in `HitContext::contains`. The enter idiom
-        // `.scale(|| if open { NONE } else { Scale::new(1.0, 0.0) })` builds a
-        // menu out of buttons, and a guard on this container's own handlers
-        // would still have let every one of those buttons answer. They would
-        // answer in the wrong place as well: a degenerate transform cannot be
-        // undone, so `untransform_point` hands the point back unchanged and
-        // everything below tests against the coordinates the subtree occupies
-        // when it is open.
-        //
-        // What must not be refused is the other half — the events that *clear*
-        // what a point set. Dropping every event left a button that was
-        // pressed when the menu closed still pressed when it reopened, and a
-        // text field inside a panel scaling through zero deaf to the keyboard.
-        if hit.transform.is_degenerate() {
-            return self.dispatch_while_collapsed(tree, id, event);
-        }
-
         // Undo our own transform before hit testing against the laid-out bounds
         let local_event: Cow<'_, Event> = match event.coords() {
             Some((x, y)) if !hit.transform.is_identity() => {

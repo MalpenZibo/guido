@@ -33,6 +33,8 @@
 //! [`resync_animation_targets`]: Container::resync_animation_targets
 //! [`update_size_targets`]: Container::update_size_targets
 
+use crate::animation::Animatable;
+
 use super::box_model::BoxLengths;
 use super::*;
 
@@ -207,63 +209,48 @@ impl Container {
         let drifted = with_signal_tracking(id, JobType::Animation, || {
             let anims = self.anims.as_ref().expect("checked by has_signal_*");
             // An animation still in its initial state has no target to drift
-            // from — seed_animations has not run for it yet.
+            // from — seed_animations has not run for it yet. And a target that
+            // is not a number is one `animate_to` will refuse, so reporting it
+            // as drift asks for an Animation job on every paint, for ever, for
+            // a value that is never adopted.
             let moved = |initial: bool, same: bool| !initial && !same;
             let mut drift = false;
 
             if let Some(a) = &anims.padding {
-                drift |= moved(
-                    a.is_initial(),
-                    *a.target() == self.padding.get_or(Padding::default()),
-                );
+                let live = self.padding.get_or(Padding::default());
+                drift |= live.is_reachable() && moved(a.is_initial(), *a.target() == live);
             }
             if let Some(a) = &anims.border_width {
-                drift |= moved(
-                    a.is_initial(),
-                    *a.target() == self.effective_border_width_target(id),
-                );
+                let live = self.effective_border_width_target(id);
+                drift |= live.is_reachable() && moved(a.is_initial(), *a.target() == live);
             }
             if let Some(a) = &anims.background {
-                drift |= moved(
-                    a.is_initial(),
-                    *a.target() == self.effective_background_target(id),
-                );
+                let live = self.effective_background_target(id);
+                drift |= live.is_reachable() && moved(a.is_initial(), *a.target() == live);
             }
             if let Some(a) = &anims.corners {
-                drift |= moved(
-                    a.is_initial(),
-                    *a.target() == self.effective_corners_target(id),
-                );
+                let live = self.effective_corners_target(id);
+                drift |= live.is_reachable() && moved(a.is_initial(), *a.target() == live);
             }
             if let Some(a) = &anims.elevation {
-                drift |= moved(
-                    a.is_initial(),
-                    *a.target() == self.effective_elevation_target(id),
-                );
+                let live = self.effective_elevation_target(id);
+                drift |= live.is_reachable() && moved(a.is_initial(), *a.target() == live);
             }
             if let Some(a) = &anims.border_color {
-                drift |= moved(
-                    a.is_initial(),
-                    *a.target() == self.effective_border_color_target(id),
-                );
+                let live = self.effective_border_color_target(id);
+                drift |= live.is_reachable() && moved(a.is_initial(), *a.target() == live);
             }
             if let Some(a) = &anims.translate {
-                drift |= moved(
-                    a.is_initial(),
-                    *a.target() == self.effective_translate_target(id),
-                );
+                let live = self.effective_translate_target(id);
+                drift |= live.is_reachable() && moved(a.is_initial(), *a.target() == live);
             }
             if let Some(a) = &anims.rotate {
-                drift |= moved(
-                    a.is_initial(),
-                    *a.target() == self.effective_rotate_target(id),
-                );
+                let live = self.effective_rotate_target(id);
+                drift |= live.is_reachable() && moved(a.is_initial(), *a.target() == live);
             }
             if let Some(a) = &anims.scale {
-                drift |= moved(
-                    a.is_initial(),
-                    *a.target() == self.effective_scale_target(id),
-                );
+                let live = self.effective_scale_target(id);
+                drift |= live.is_reachable() && moved(a.is_initial(), *a.target() == live);
             }
             // The timeline's trigger, read here for the same reason as the
             // targets: reading it is the subscription, so a container that
@@ -288,7 +275,16 @@ impl Container {
 /// Returns whether an enter was begun, which is what needs a paint job.
 fn seed_or_enter<T: crate::animation::Animatable>(anim: &mut AnimationState<T>, target: T) -> bool {
     match anim.take_enter_from() {
-        Some(enter) => anim.begin_from(enter, target),
+        // A refused enter still has to seed: `take_enter_from` has already
+        // consumed it, so returning here would leave the property both
+        // unseeded and stripped of the value it would have entered from, and
+        // the frame would paint the constructor default.
+        Some(enter) => {
+            anim.begin_from(enter, target) || {
+                anim.set_immediate(target);
+                false
+            }
+        }
         None => {
             anim.set_immediate(target);
             false

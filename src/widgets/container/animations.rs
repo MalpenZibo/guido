@@ -132,14 +132,12 @@ impl<T: Animatable> AnimationState<T> {
         // another Animation job — a surface that never goes idle for a value
         // that was never going to arrive.
         //
-        // Refusing it is not enough on its own. `resync_animation_targets`
-        // compares the stored target against the one the signals resolve to,
-        // and a stale finite target against a NaN reads as drift on every
-        // paint — so it would ask for an Animation job, and wake the loop,
-        // just as forever by the other route. `settle_at` records that this is
-        // where the property has stopped, so the comparison agrees.
+        // Refusing it here is only half: `resync_animation_targets` compares
+        // the stored target against the one the signals resolve to, and no
+        // stored value compares equal to a NaN — so the drift check has to
+        // refuse it as well, or it asks for an Animation job on every paint
+        // and wakes the loop just as forever by the other route.
         if !new_target.is_reachable() {
-            self.settle_at(self.current);
             return;
         }
 
@@ -530,17 +528,6 @@ impl<T: Animatable> AnimationState<T> {
         self.start = value;
         self.progress = 1.0;
         self.initialized = true;
-    }
-
-    /// Stop here, and let the drift check agree that this is where it stopped.
-    ///
-    /// Unlike `set_immediate` this does not touch `initialized`: a property
-    /// that has never been seeded has not been seeded by giving up on a target.
-    fn settle_at(&mut self, value: T) {
-        self.current = value;
-        self.target = value;
-        self.start = value;
-        self.progress = 1.0;
     }
 
     /// Check if animation has never been initialized (first layout)
@@ -1146,20 +1133,16 @@ mod tests {
         assert!(anim.is_animating());
     }
 
-    /// Refusing it also has to record where the property stopped, or the drift
-    /// check compares a stale finite target against the NaN, reads it as a
-    /// retarget on every paint, and wakes the loop just as forever.
+    /// A refused target leaves the property where it was, rather than half
+    /// aimed at something it will never reach.
     #[test]
-    fn a_refused_target_leaves_nothing_to_drift_from() {
+    fn a_refused_target_leaves_the_property_where_it_was() {
         let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
         anim.set_immediate(3.0);
         anim.animate_to(f32::NAN);
 
-        assert_eq!(
-            *anim.target(),
-            *anim.current(),
-            "the target has to be where it settled, not where it was sent"
-        );
+        assert_eq!(*anim.current(), 3.0, "still where it settled");
+        assert!(!anim.is_animating(), "and not chasing anything");
     }
 
     /// And the seeding store is guarded too — it is the one that poisons for

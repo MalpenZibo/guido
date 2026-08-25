@@ -152,7 +152,8 @@ crate::reactive::converting_signals!(
     [u32; 2] => Translate,
 );
 
-/// Not a number — which is a different failure from
+/// Not a usable number — a NaN or an infinity, since both reach the matrix the
+/// same way and neither can size anything. Different again from
 /// [`is_degenerate`](Transform::is_degenerate), a determinant of zero, and the
 /// two guards are independent: neither covers the other.
 ///
@@ -164,7 +165,7 @@ crate::reactive::converting_signals!(
 /// In release as well as in debug. A shipped application whose layout divides
 /// by a measured zero draws a widget that is silently not moved, not turned and
 /// not resized, and that is precisely when the line is worth having.
-fn warn_not_a_number(rotate_degrees: f32, scale: Scale, translate: Translate) {
+fn warn_unusable(rotate_degrees: f32, scale: Scale, translate: Translate) {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, Instant};
 
@@ -188,7 +189,7 @@ fn warn_not_a_number(rotate_degrees: f32, scale: Scale, translate: Translate) {
     LAST_MS.store(now_ms, Ordering::Relaxed);
 
     log::warn!(
-        "transform: a component is not a number and is being ignored \
+        "transform: a component is not a usable number and is being ignored \
          (rotate {rotate_degrees}, scale ({}, {}), translate ({}, {}))",
         scale.x,
         scale.y,
@@ -246,35 +247,27 @@ impl Transform {
         // `det.abs() < 1e-10` does not catch, and which `world_aabb`'s min/max
         // fold turns into an infinite rect that then sizes a damage region.
         // Absorbed at the door, the way `elevation_to_shadow` absorbs its own.
-        let bad = !rotate_degrees.is_finite()
-            || !scale.x.is_finite()
-            || !scale.y.is_finite()
-            || !translate.x.is_finite()
-            || !translate.y.is_finite();
-        if bad {
-            warn_not_a_number(rotate_degrees, scale, translate);
-        }
-
-        let rotate_degrees = if rotate_degrees.is_finite() {
-            rotate_degrees
+        let usable = rotate_degrees.is_finite()
+            && scale.x.is_finite()
+            && scale.y.is_finite()
+            && translate.x.is_finite()
+            && translate.y.is_finite();
+        let (rotate_degrees, scale, translate) = if usable {
+            (rotate_degrees, scale, translate)
         } else {
-            0.0
-        };
-        let scale = Scale {
-            x: if scale.x.is_finite() { scale.x } else { 1.0 },
-            y: if scale.y.is_finite() { scale.y } else { 1.0 },
-        };
-        let translate = Translate {
-            x: if translate.x.is_finite() {
-                translate.x
-            } else {
-                0.0
-            },
-            y: if translate.y.is_finite() {
-                translate.y
-            } else {
-                0.0
-            },
+            warn_unusable(rotate_degrees, scale, translate);
+            let or = |v: f32, fallback: f32| if v.is_finite() { v } else { fallback };
+            (
+                or(rotate_degrees, 0.0),
+                Scale {
+                    x: or(scale.x, 1.0),
+                    y: or(scale.y, 1.0),
+                },
+                Translate {
+                    x: or(translate.x, 0.0),
+                    y: or(translate.y, 0.0),
+                },
+            )
         };
 
         // Not about correctness: this runs for every container on every paint
