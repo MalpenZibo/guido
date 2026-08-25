@@ -3,9 +3,9 @@ use smallvec::SmallVec;
 use crate::transform::{Scale, Translate};
 use crate::widgets::{Color, Padding};
 
-/// The channels of one animatable value. Four is `Color`, the widest there
-/// is, so nothing here allocates.
-pub type Channels = SmallVec<[f32; 4]>;
+/// The channels of one animatable value. Five is `Corners` — four radii and a
+/// curvature — and it is the widest there is, so nothing here allocates.
+pub type Channels = SmallVec<[f32; 5]>;
 
 /// Trait for types that can be animated by interpolating between values
 pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
@@ -253,6 +253,13 @@ mod tests {
         assert_eq!(Color::WHITE.channels().len(), 4);
         assert_eq!(Padding::all(2.0).channels().len(), 4);
         assert_eq!(Translate::new(1.0, 2.0).channels().len(), 2);
+        // The widest, and so the one the inline capacity is sized from: four
+        // radii and a curvature. `carry_velocity` builds four of these per
+        // retarget, so a spilled one is four heap allocations per spring.
+        assert!(
+            crate::widgets::Corners::SQUARE.channels().len() <= Channels::new().inline_size(),
+            "Channels must hold the widest animatable value without spilling"
+        );
         assert_eq!(Scale::uniform(2.0).channels().len(), 2);
         assert_eq!(3.0_f32.channels().as_slice(), &[3.0]);
     }

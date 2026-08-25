@@ -372,11 +372,23 @@ impl Transform {
         self.data[5] = val;
     }
 
-    /// The X and Y scale components — `sqrt(a² + b²)` and `sqrt(c² + d²)`,
-    /// so a rotated transform still reports the scale it carries.
+    /// The X and Y scale components — the norms of the two *columns*,
+    /// `sqrt(a² + c²)` and `sqrt(b² + d²)`, so a rotated transform still
+    /// reports the scale it carries.
+    ///
+    /// Columns and not rows, which is the standard decomposition and also the
+    /// only one that is right for the order [`compose`](Self::compose) builds.
+    /// For `T·R·S` the matrix is `[cos·sx, -sin·sy, tx, sin·sx, cos·sy, ty]`:
+    /// a column holds one axis's scale times a unit vector, so its norm is that
+    /// scale, while a row mixes both axes and reports neither. Turning 45° with
+    /// `scale((2.0, 0.5))` reads as `(2.0, 0.5)` by columns and as
+    /// `(1.458, 1.458)` by rows.
+    ///
+    /// Rows were correct for `S·R`, which is the shape `scale_xy(..).then_rotate(..)`
+    /// used to build and which no longer has a public spelling.
     pub(crate) fn extract_scale_components(&self) -> (f32, f32) {
         let (a, b, c, d) = (self.a(), self.b(), self.c(), self.d());
-        ((a * a + b * b).sqrt(), (c * c + d * d).sqrt())
+        ((a * a + c * c).sqrt(), (b * b + d * d).sqrt())
     }
 
     /// One scale factor for a transform that may not have exactly one: the
@@ -564,6 +576,34 @@ mod tests {
 
         for (a, b) in direct.data.iter().zip(composed.data.iter()) {
             assert!(approx_eq(*a, *b), "{direct:?} != {composed:?}");
+        }
+    }
+
+    /// The scale a transform reports has to be the scale it was built with,
+    /// rotation included — it sizes the corner radii of the blur region a
+    /// container publishes to the compositor.
+    #[test]
+    fn a_rotated_transform_reports_the_scale_it_carries() {
+        for deg in [0.0f32, 30.0, 45.0, 90.0, 200.0] {
+            let t = Transform::compose(Translate::new(9.0, -4.0), deg, Scale::new(2.0, 0.5));
+            let (sx, sy) = t.extract_scale_components();
+            assert!(
+                approx_eq(sx, 2.0) && approx_eq(sy, 0.5),
+                "at {deg}° expected (2.0, 0.5), got ({sx}, {sy})"
+            );
+        }
+    }
+
+    /// And a uniform one reads the same on both axes at any angle.
+    #[test]
+    fn a_rotation_alone_reports_no_scaling() {
+        for deg in [0.0f32, 45.0, 180.0, 360.0] {
+            let t = Transform::compose(Translate::NONE, deg, Scale::NONE);
+            let (sx, sy) = t.extract_scale_components();
+            assert!(
+                approx_eq(sx, 1.0) && approx_eq(sy, 1.0),
+                "at {deg}°: ({sx}, {sy})"
+            );
         }
     }
 
