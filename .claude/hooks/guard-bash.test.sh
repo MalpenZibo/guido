@@ -20,8 +20,9 @@ trap 'rm -rf "$tmp"' EXIT
 
 # The variables the guard refuses, spelled so that this file does not contain
 # what it is testing for — otherwise writing it trips the guard.
-bless_golden="UPDATE_""GOLDEN=1"
-bless_snapshot="UPDATE_""SNAPSHOTS=1"
+create_golden="UPDATE_""GOLDEN=1"
+rewrite_golden="REBLESS_""GOLDEN=1"
+rewrite_snapshot="REBLESS_""SNAPSHOTS=1"
 
 # Two repositories: one sitting on main, one on a branch.
 for name in on-main on-branch; do
@@ -60,7 +61,7 @@ check allow "$tmp/on-main" "echo 'run git commit after branching'" \
 check allow "$tmp/on-main" "cargo test --test golden_images" \
   "an ordinary build command"
 check allow "$tmp/on-branch" "cat > notes.md <<'EOF'
-$bless_golden rewrites the reference
+$rewrite_golden rewrites the reference
 EOF" \
   "writing a file that mentions the blessing variable"
 
@@ -84,13 +85,18 @@ check allow "$tmp/on-main" "git -C $tmp/on-branch commit -m 'x'" \
 check allow "$tmp/on-main" "cd $tmp/on-branch && git commit -m 'x'" \
   "a commit on a branch reached by cd from main"
 
-# Re-blessing, wherever it is typed.
-check deny "$tmp/on-branch" "$bless_golden cargo test --test golden_images" \
-  "re-blessing a golden"
-check deny "$tmp/on-branch" "$bless_snapshot cargo test" \
-  "re-blessing a snapshot"
-check deny "$tmp/on-branch" "cargo test && $bless_golden cargo test" \
-  "re-blessing after something else on the same line"
+# Rewriting a reference, wherever it is typed.
+check deny "$tmp/on-branch" "$rewrite_golden cargo test --test golden_images" \
+  "rewriting a golden"
+check deny "$tmp/on-branch" "$rewrite_snapshot cargo test" \
+  "rewriting a snapshot"
+check deny "$tmp/on-branch" "cargo test && $rewrite_golden cargo test" \
+  "rewriting after something else on the same line"
+
+# Creating one is ordinary work: a new scenario has to get its first picture
+# somehow, and the harness refuses to overwrite an existing one anyway.
+check allow "$tmp/on-branch" "$create_golden cargo test --test golden_images" \
+  "creating a reference that does not exist yet"
 check allow "$tmp/on-branch" "cargo test --test render_snapshots" \
   "running the snapshots without blessing them"
 
