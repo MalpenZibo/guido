@@ -252,21 +252,43 @@ fn write_png(path: &Path, pixels: &Pixels) {
 /// Where the two images disagree, in magenta over a dimmed copy of what was
 /// rendered — so the map reads as "here, on this frame", not as noise.
 fn diff_image(expected: &Pixels, actual: &Pixels) -> Pixels {
-    let mut data = Vec::with_capacity(actual.data.len());
-    for (e, a) in expected
+    let (width, height) = (actual.width as i32, actual.height as i32);
+
+    let changed: Vec<bool> = expected
         .data
         .chunks_exact(4)
         .zip(actual.data.chunks_exact(4))
-    {
-        let changed = (0..4).any(|c| e[c].abs_diff(a[c]) > TOLERANCE);
-        if changed {
-            data.extend_from_slice(&[255, 0, 255, 255]);
-        } else {
-            let dim = (u16::from(a[0]) + u16::from(a[1]) + u16::from(a[2])) / 3 / 3 + 24;
-            let dim = dim as u8;
-            data.extend_from_slice(&[dim, dim, dim, 255]);
+        .map(|(e, a)| (0..4).any(|c| e[c].abs_diff(a[c]) > TOLERANCE))
+        .collect();
+
+    // Dilated by a pixel: thirty pixels moved on an antialiased edge are
+    // invisible at natural size, and a picture nobody can read is not a signal.
+    let near = |x: i32, y: i32| {
+        (-1..=1).any(|dy| {
+            (-1..=1).any(|dx| {
+                let (nx, ny) = (x + dx, y + dy);
+                nx >= 0
+                    && ny >= 0
+                    && nx < width
+                    && ny < height
+                    && changed[(ny * width + nx) as usize]
+            })
+        })
+    };
+
+    let mut data = Vec::with_capacity(actual.data.len());
+    for y in 0..height {
+        for x in 0..width {
+            if near(x, y) {
+                data.extend_from_slice(&[255, 0, 255, 255]);
+            } else {
+                let a = &actual.data[((y * width + x) * 4) as usize..][..4];
+                let dim = ((u16::from(a[0]) + u16::from(a[1]) + u16::from(a[2])) / 9 + 24) as u8;
+                data.extend_from_slice(&[dim, dim, dim, 255]);
+            }
         }
     }
+
     Pixels {
         width: actual.width,
         height: actual.height,
