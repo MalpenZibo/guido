@@ -282,7 +282,7 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 - `.when_pressed(|s| s...)` - Pressed overrides
 
 ### Transforms
-- `.translate(x, y)` - Move
+- `.translate((x, y))` - Move
 - `.rotate(degrees)` - Rotate
 - `.scale(factor)` - Scale
 - `.pivot(origin)` - Pivot point

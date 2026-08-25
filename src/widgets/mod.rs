@@ -64,6 +64,18 @@ impl IntoVal<Corners> for i32 {
     }
 }
 
+impl IntoVal<Corners> for u16 {
+    fn into_val(self) -> Corners {
+        self.into()
+    }
+}
+
+impl IntoVal<Corners> for (f32, f32, f32, f32) {
+    fn into_val(self) -> Corners {
+        self.into()
+    }
+}
+
 impl IntoVal<Corners> for u32 {
     fn into_val(self) -> Corners {
         Corners::from(self)
@@ -118,6 +130,30 @@ impl IntoVal<Padding> for f32 {
     }
 }
 
+impl IntoVal<Padding> for [f32; 2] {
+    fn into_val(self) -> Padding {
+        self.into()
+    }
+}
+
+impl IntoVal<Padding> for [f32; 4] {
+    fn into_val(self) -> Padding {
+        self.into()
+    }
+}
+
+impl IntoVal<Padding> for [i32; 2] {
+    fn into_val(self) -> Padding {
+        self.into()
+    }
+}
+
+impl IntoVal<Padding> for [i32; 4] {
+    fn into_val(self) -> Padding {
+        self.into()
+    }
+}
+
 impl IntoVal<Padding> for f64 {
     fn into_val(self) -> Padding {
         Padding::from(self as f32)
@@ -136,12 +172,18 @@ crate::reactive::converting_signals!(
     [f32; 4] => Corners,
     [i32; 2] => Corners,
     [i32; 4] => Corners,
+    u16 => Corners,
+    (f32, f32, f32, f32) => Corners,
 
     f32 => Padding,
     f64 => Padding,
     i32 => Padding,
     u32 => Padding,
     u16 => Padding,
+    [f32; 2] => Padding,
+    [f32; 4] => Padding,
+    [i32; 2] => Padding,
+    [i32; 4] => Padding,
 
     f32 => crate::layout::Length,
     f64 => crate::layout::Length,

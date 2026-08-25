@@ -135,9 +135,21 @@ crate::reactive::converting_signals!(
     i32 => Scale,
     u32 => Scale,
     (f32, f32) => Scale,
+    (f64, f64) => Scale,
+    (i32, i32) => Scale,
+    (u32, u32) => Scale,
     [f32; 2] => Scale,
+    [f64; 2] => Scale,
+    [i32; 2] => Scale,
+    [u32; 2] => Scale,
     (f32, f32) => Translate,
+    (f64, f64) => Translate,
+    (i32, i32) => Translate,
+    (u32, u32) => Translate,
     [f32; 2] => Translate,
+    [f64; 2] => Translate,
+    [i32; 2] => Translate,
+    [u32; 2] => Translate,
 );
 
 /// A 2D affine transformation.
@@ -390,23 +402,41 @@ impl Transform {
         self.data[5] = val;
     }
 
-    /// The X and Y scale components — the norms of the two *columns*,
-    /// `sqrt(a² + c²)` and `sqrt(b² + d²)`, so a rotated transform still
-    /// reports the scale it carries.
+    /// How much this transform stretches each axis.
     ///
-    /// Columns and not rows, which is the standard decomposition and also the
-    /// only one that is right for the order [`compose`](Self::compose) builds.
-    /// For `T·R·S` the matrix is `[cos·sx, -sin·sy, tx, sin·sx, cos·sy, ty]`:
-    /// a column holds one axis's scale times a unit vector, so its norm is that
-    /// scale, while a row mixes both axes and reports neither. Turning 45° with
-    /// `scale((2.0, 0.5))` reads as `(2.0, 0.5)` by columns and as
-    /// `(1.458, 1.458)` by rows.
+    /// Exact when the transform keeps the axes — no rotation anywhere in the
+    /// chain — which is the only case its caller's model is valid for anyway:
+    /// a world-space [`EllipticalRadii`](crate::renderer::EllipticalRadii) is
+    /// an axis-aligned pair, and a rounded rectangle that has been turned does
+    /// not have one. There `|a|` and `|d|` are the two factors, and nothing is
+    /// being estimated.
     ///
-    /// Rows were correct for `S·R`, which is the shape `scale_xy(..).then_rotate(..)`
-    /// used to build and which no longer has a public spelling.
+    /// Once a rotation is in the chain there is no per-axis answer to give.
+    /// Neither the row norms nor the column norms are it: rows are right for
+    /// `S·R` — an ancestor scaling a rotated descendant — and wrong for `T·R·S`,
+    /// columns are right for `T·R·S` and wrong for `S·R`, and each reports
+    /// `(1.458, 1.458)` for the other's case where the truth is `(2.0, 0.5)`.
+    /// The singular values are the true pair for both, so that is what the
+    /// rotated branch returns; which world axis each one belongs to is the
+    /// part that has no answer, and the larger is reported first.
+    ///
+    /// That inexactness is inside a case that is already wrong for a bigger
+    /// reason — see #198, where the region published for a rotated container is
+    /// its bounding box rather than its shape.
     pub(crate) fn extract_scale_components(&self) -> (f32, f32) {
         let (a, b, c, d) = (self.a(), self.b(), self.c(), self.d());
-        ((a * a + c * c).sqrt(), (b * b + d * d).sqrt())
+
+        // Axis-preserving: the off-diagonal is what a rotation or a shear puts
+        // there, so without it each axis is scaled by its own diagonal term.
+        if b.abs() < 1e-6 && c.abs() < 1e-6 {
+            return (a.abs(), d.abs());
+        }
+
+        // Singular values of [[a, b], [c, d]], closed form.
+        let (e, f) = ((a + d) * 0.5, (a - d) * 0.5);
+        let (g, h) = ((c + b) * 0.5, (c - b) * 0.5);
+        let (q, r) = (e.hypot(h), g.hypot(f));
+        (q + r, (q - r).abs())
     }
 
     /// One scale factor for a transform that may not have exactly one: the
@@ -610,6 +640,33 @@ mod tests {
                 "at {deg}° expected (2.0, 0.5), got ({sx}, {sy})"
             );
         }
+    }
+
+    /// And so does one whose scale came from an ancestor and whose rotation is
+    /// its own — `S·R` rather than `T·R·S`. This is the shape the row norms
+    /// were right about and the column norms are not, which is why it is
+    /// neither: a nested container is as ordinary as a lone one.
+    #[test]
+    fn a_scale_above_a_rotation_reports_it_too() {
+        for deg in [30.0f32, 45.0, 90.0] {
+            let world = Transform::compose(Translate::NONE, 0.0, Scale::new(2.0, 0.5))
+                .then(&Transform::rotate_degrees(deg));
+            let (sx, sy) = world.extract_scale_components();
+            assert!(
+                approx_eq(sx, 2.0) && approx_eq(sy, 0.5),
+                "at {deg}° expected (2.0, 0.5), got ({sx}, {sy})"
+            );
+        }
+    }
+
+    /// Without a rotation the axes are not in doubt, so the answer is exact and
+    /// keeps its order — a taller-than-wide scale must not come back widened.
+    #[test]
+    fn an_axis_preserving_scale_keeps_its_axes() {
+        let t = Transform::compose(Translate::new(3.0, 3.0), 0.0, Scale::new(0.5, 2.0));
+        let (sx, sy) = t.extract_scale_components();
+        assert!(approx_eq(sx, 0.5), "got sx = {sx}");
+        assert!(approx_eq(sy, 2.0), "got sy = {sy}");
     }
 
     /// And a uniform one reads the same on both axes at any angle.

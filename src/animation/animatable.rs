@@ -3,9 +3,11 @@ use smallvec::SmallVec;
 use crate::transform::{Scale, Translate};
 use crate::widgets::{Color, Padding};
 
-/// The channels of one animatable value. Five is `Corners` — four radii and a
-/// curvature — and it is the widest there is, so nothing here allocates.
-pub type Channels = SmallVec<[f32; 5]>;
+/// The channels of one animatable value. `Corners` is the widest at five —
+/// four radii and a curvature — and six costs the same 32 bytes as five, so
+/// the inline capacity is six: the headroom is free and a value that spills
+/// costs four heap allocations per spring retarget in `carry_velocity`.
+pub type Channels = SmallVec<[f32; 6]>;
 
 /// Trait for types that can be animated by interpolating between values
 pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
@@ -30,9 +32,9 @@ pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
     /// Only `carry_velocity` reads this, and only as a direction: a spring's
     /// momentum is a vector in this space, and what a new segment inherits is
     /// the part of it pointing along itself. The channels may be in different
-    /// units — `Padding` is four independent edges — and that is fine
-    /// precisely because they are never summed into a length that is used on
-    /// its own.
+    /// units — `Corners` carries four radii in pixels beside a unitless
+    /// curvature — and that is fine precisely because they are never summed
+    /// into a length that is used on its own.
     fn channels(&self) -> Channels;
 }
 
@@ -205,8 +207,11 @@ impl Animatable for Scale {
         }
     }
 
+    /// Area decreasing, taken unsigned: a negative factor is a mirror, and a
+    /// mirror that grows is growing. Comparing the signed product sent
+    /// `(-1, 1) -> (-2, 1)` down the reverse transition while it got bigger.
     fn is_reverse(from: &Self, to: &Self) -> bool {
-        to.x * to.y < from.x * from.y
+        (to.x * to.y).abs() < (from.x * from.y).abs()
     }
 
     fn channels(&self) -> Channels {

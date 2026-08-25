@@ -294,6 +294,19 @@ impl InteractionState {
         !self.states.is_empty()
     }
 
+    /// Whether any declared layer overrides one of the transform components.
+    ///
+    /// Structural, so no signal is read: a state layer either names the
+    /// property or it does not, and that is decided when the layer is built.
+    /// It is what lets an untransformed container skip composing an identity
+    /// matrix on every paint and every pointer event without having to assume
+    /// that "has interaction" means "might be transformed".
+    pub(super) fn declares_transform(&self) -> bool {
+        self.states
+            .iter()
+            .any(|(_, s)| s.translate.is_some() || s.rotate.is_some() || s.scale.is_some())
+    }
+
     /// Whether a layer with this trigger is declared, without reading any
     /// signal — the gate event handling uses before asking for a repaint.
     pub(super) fn declares(&self, when: impl Fn(&StateWhen) -> bool) -> bool {

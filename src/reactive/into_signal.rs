@@ -1,3 +1,4 @@
+use super::memo::Memo;
 use super::signal::{RwSignal, Signal, create_derived, create_stored};
 
 // ============================================================================
@@ -170,6 +171,15 @@ macro_rules! converting_signals {
                 })
             }
         }
+        impl $crate::reactive::IntoSignal<$to, $crate::reactive::ConvertedSignalMarker>
+            for $crate::reactive::Memo<$from>
+        {
+            fn into_signal(self) -> $crate::reactive::Signal<$to> {
+                $crate::reactive::create_derived(move || {
+                    $crate::reactive::IntoVal::<$to>::into_val(self.get())
+                })
+            }
+        }
     )*};
 }
 pub(crate) use converting_signals;
@@ -189,6 +199,14 @@ impl<T: Clone + 'static> IntoSignal<Option<T>, ConvertedSignalMarker> for RwSign
     fn into_signal(self) -> Signal<Option<T>> {
         let read = self.read_only();
         create_derived(move || Some(read.get()))
+    }
+}
+
+impl<T: Clone + PartialEq + Send + 'static> IntoSignal<Option<T>, ConvertedSignalMarker>
+    for Memo<T>
+{
+    fn into_signal(self) -> Signal<Option<T>> {
+        create_derived(move || Some(self.get()))
     }
 }
 

@@ -163,7 +163,7 @@ impl Container {
 
     // Each has an enter form, animating in from a value on first layout
     pub fn animate_translate_from(self, from: impl Into<Translate>, t: Transition) -> Self;
-    pub fn animate_rotate_from(self, from: f32, t: Transition) -> Self;
+    pub fn animate_rotate_from(self, from: impl IntoF32, t: Transition) -> Self;
     pub fn animate_scale_from(self, from: impl Into<Scale>, t: Transition) -> Self;
 }
 

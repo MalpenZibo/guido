@@ -102,12 +102,16 @@ container()
     .pivot(origin)
     .on_click(move || {
         // Cycle through origins
-        let next = match origin.get() {
-            Pivot::CENTER => Pivot::TOP_LEFT,
-            Pivot::TOP_LEFT => Pivot::BOTTOM_RIGHT,
-            _ => Pivot::CENTER,
-        };
-        origin.set(next);
+        // `Pivot` carries f32 anchors, so its constants are not patterns —
+        // compare, do not match.
+        let current = origin.get();
+        origin.set(if current == Pivot::CENTER {
+            Pivot::TOP_LEFT
+        } else if current == Pivot::TOP_LEFT {
+            Pivot::BOTTOM_RIGHT
+        } else {
+            Pivot::CENTER
+        });
     })
 ```
 

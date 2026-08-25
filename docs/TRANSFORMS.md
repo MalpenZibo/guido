@@ -45,16 +45,16 @@ container().scale(1.5)           // 150% size
 container().scale((2.0, 0.5))   // 200% width, 50% height
 ```
 
-## Transform Composition
-
-Combine multiple transforms using `.then()`:
+## Combining Them
 
 ```rust
-// Rotate then scale
 container().rotate(30.0).scale(0.8)
 ```
 
-**Order matters**: `a.then(&b)` applies `b` first, then `a`.
+**The order is fixed, not taken from the call site**: translate, then rotate,
+then scale, however they are written. Two containers declaring the same three
+values are the same shape. Same order, and same reason, as CSS's individual
+`translate` / `rotate` / `scale` properties.
 
 ## Transform Origin
 
@@ -159,6 +159,10 @@ Transforms are properly accounted for in hit testing. A rotated button will corr
 
 ### Transform Struct
 
+Not in `guido::prelude` — an application declares the three components. This
+is what they compose into, and a widget written outside the crate reaches it
+through `guido::widget_prelude`.
+
 ```rust
 impl Transform {
     // Creation
@@ -188,11 +192,9 @@ impl Transform {
 
 ```rust
 impl Container {
-    pub fn translate<M1, M2>(self, x: impl IntoSignal<f32, M1>, y: impl IntoSignal<f32, M2>) -> Self;
+    pub fn translate<M>(self, t: impl IntoSignal<Translate, M>) -> Self;
     pub fn rotate<M>(self, degrees: impl IntoSignal<f32, M>) -> Self;
-    pub fn scale<M>(self, factor: impl IntoSignal<f32, M>) -> Self;
-    pub fn scale_xy<M1, M2>(self, sx: impl IntoSignal<f32, M1>, sy: impl IntoSignal<f32, M2>) -> Self;
-    pub fn transform<M>(self, transform: impl IntoSignal<Transform, M>) -> Self;
+    pub fn scale<M>(self, factor: impl IntoSignal<Scale, M>) -> Self;
     pub fn pivot<M>(self, pivot: impl IntoSignal<Pivot, M>) -> Self;
     pub fn animate_translate(self, transition: impl Into<TransitionConfig>) -> Self;
     pub fn animate_rotate(self, transition: impl Into<TransitionConfig>) -> Self;

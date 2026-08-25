@@ -42,6 +42,30 @@ fn a_signal_of_a_value_reaches_an_optional_property() {
     let _ = container().gradient(g);
 }
 
+/// A memo is the fourth form `IntoSignal` accepts, and it converts too.
+#[test]
+fn a_memo_reaches_a_property_it_can_convert_into() {
+    let n = create_signal(4.0f32);
+    let doubled = create_memo(move || n.get() * 2.0);
+    let _ = container().width(doubled).scale(doubled).corners(doubled);
+}
+
+/// The pair and array forms, in every numeric type the value form takes. These
+/// are the ones the first list of `converting_signals!` left out — the drift
+/// the rule in CLAUDE.md exists to stop, committed in the same change that
+/// wrote the rule.
+#[test]
+fn the_pair_and_array_forms_convert_in_every_numeric_type() {
+    let ints = create_signal((10i32, 20i32));
+    let arr = create_signal([8.0f32, 16.0f32]);
+    let quad = create_signal([1.0f32, 2.0f32, 3.0f32, 4.0f32]);
+    let _ = container()
+        .translate(ints)
+        .scale(ints)
+        .padding(arr)
+        .corners(quad);
+}
+
 /// And a signal already holding the property's own type still arrives by
 /// identity, not through a derived signal — the two impls carry different
 /// markers, so nothing is ambiguous.

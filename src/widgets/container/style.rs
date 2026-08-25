@@ -251,14 +251,18 @@ impl Container {
     pub(super) fn animated_transform(&self, id: WidgetId) -> Transform {
         let anims = self.anims.as_ref();
         // A container that declares none of the three, animates none of them,
-        // and has no interaction state to override them from, cannot be
-        // transformed — and a plain layout box is all three. `interaction` is
-        // the cheap half of that: no interaction means no state layer, so
-        // nothing can introduce a transform this test cannot see.
+        // and has no state layer that overrides one cannot be transformed —
+        // and a plain layout box is all three, as is a button whose only state
+        // is a colour. Asking the interaction what it declares rather than
+        // whether it exists is what keeps every `on_click` out of the slow
+        // path: this runs on each paint and each coalesced pointer move.
         if self.translate.is_none()
             && self.rotate.is_none()
             && self.scale.is_none()
-            && self.interaction.is_none()
+            && !self
+                .interaction
+                .as_ref()
+                .is_some_and(|ix| ix.declares_transform())
             && !anims
                 .is_some_and(|a| a.translate.is_some() || a.rotate.is_some() || a.scale.is_some())
         {
