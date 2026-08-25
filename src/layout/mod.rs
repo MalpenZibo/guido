@@ -323,8 +323,8 @@ pub enum CrossAlignment {
 
 // A signal accepts what a closure returning the same type accepts; the list
 // mirrors the `IntoVal<Length>` impls above one for one. See
-// `reactive::into_signal` for why it cannot be one blanket impl, and CLAUDE.md
-// for the rule that keeps the two lists together.
+// `reactive::into_signal` for why it cannot be one blanket impl, and the
+// `widgets` skill for the rule that keeps the two lists together.
 crate::reactive::converting_signals!(
     f32 => Length,
     f64 => Length,

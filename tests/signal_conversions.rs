@@ -52,8 +52,8 @@ fn a_memo_reaches_a_property_it_can_convert_into() {
 
 /// The pair and array forms, in every numeric type the value form takes. These
 /// are the ones the first list of `converting_signals!` left out — the drift
-/// the rule in CLAUDE.md exists to stop, committed in the same change that
-/// wrote the rule.
+/// the rule in `.claude/skills/widgets` exists to stop, committed in the same
+/// change that wrote the rule.
 #[test]
 fn the_pair_and_array_forms_convert_in_every_numeric_type() {
     let ints = create_signal((10i32, 20i32));
