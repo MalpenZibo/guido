@@ -22,7 +22,13 @@ No text in these: text metrics depend on the fonts on the machine.
 `tests/golden_images.rs` renders scenarios into a texture the test owns, reads
 them back and compares against PNGs in `tests/golden/`. This is the only thing
 that covers the SDF shaders, corner curvature, borders, shadows, gradients,
-rounded clipping and HiDPI scaling.
+rounded clipping, HiDPI scaling, and text — both as glyphon draws it and as the
+textured-quad path draws it under a transform.
+
+The font is vendored under `tests/assets/` and registered per test thread, so a
+scenario drawing text names that family and never reaches a system font. Use the
+`label` helper rather than `text(..)` directly, or the golden becomes a record of
+which fonts the machine had.
 
 ```bash
 export VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)

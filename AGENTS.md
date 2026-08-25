@@ -81,7 +81,7 @@ at lavapipe. In that job a skip is a failure.
 | A change to | is proved by |
 | --- | --- |
 | layout geometry, what gets drawn and where | `tests/render_snapshots.rs` — the render tree, as text |
-| shaders, corners, borders, shadows, gradients, clipping, HiDPI | `tests/golden_images.rs` — the pixels, on lavapipe |
+| shaders, corners, borders, shadows, gradients, clipping, HiDPI, text | `tests/golden_images.rs` — the pixels, on lavapipe |
 | the reactive system | unit tests beside the code in `src/reactive/` |
 | widget behaviour and public API | integration tests in `tests/` |
 | documented API | doc tests, and `cargo doc` with warnings denied |
