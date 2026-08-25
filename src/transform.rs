@@ -195,8 +195,14 @@ impl Transform {
     /// applied here — [`center_at`](Self::center_at) does that, from both of
     /// the places that need the composed matrix: `flatten_node` on the way to
     /// the renderer, and `untransform_point` on the way back for a pointer
-    /// event. Because it is a translation it commutes with this one, so which
-    /// side it lands on does not change the result.
+    /// event.
+    ///
+    /// It very much changes the rotate and scale halves — turning about a
+    /// corner is not turning about the centre, and that is the whole point of
+    /// it. What survives it untouched is the *translate* component, because
+    /// `C·T·R·S·C⁻¹` is `T·(C·R·S·C⁻¹)`: a translation commutes past the
+    /// conjugating one. Which is why a `Pivot` moves what `rotate` and `scale`
+    /// do and does nothing at all to `translate`.
     pub fn compose(translate: Translate, rotate_degrees: f32, scale: Scale) -> Self {
         // Not about correctness: this runs for every container on every paint
         // and every pointer event, and almost none of them turn.

@@ -272,7 +272,7 @@ pub(super) struct InteractionState {
     /// `when_pressed(|s| s.scale(0.98))` is the commonest state layer there is,
     /// and a single bit would have made it pay for a translate and a rotate
     /// nothing declares.
-    pub(super) declares_transform: crate::widgets::state_layer::Moves,
+    pub(super) declares_transform: Moves,
     pub(super) ripple: RippleState,
 }
 
@@ -1254,8 +1254,12 @@ impl Widget for Container {
             // Which of the three are actually animated, read before the
             // mutable borrow below. `anims` is `Some` — the block is guarded
             // on it and unwraps it two statements down.
+            // *Animated*, which is a narrower question than the one
+            // `animated_transform` asks under three names that look the same:
+            // there a component counts if anything could move it, here only if
+            // there is an animation to aim.
             let declared = self.anims.as_ref().expect("guarded above");
-            let (has_translate, has_rotate, has_scale) = (
+            let (animates_translate, animates_rotate, animates_scale) = (
                 declared.translate.is_some(),
                 declared.rotate.is_some(),
                 declared.scale.is_some(),
@@ -1284,17 +1288,17 @@ impl Widget for Container {
                     // neutral value where there is not, rather than an
                     // `Option` the macro would have to unwrap against an
                     // invariant stated only in prose.
-                    if has_translate {
+                    if animates_translate {
                         self.effective_translate_target(id)
                     } else {
                         Translate::NONE
                     },
-                    if has_rotate {
+                    if animates_rotate {
                         self.effective_rotate_target(id)
                     } else {
                         0.0
                     },
-                    if has_scale {
+                    if animates_scale {
                         self.effective_scale_target(id)
                     } else {
                         Scale::NONE

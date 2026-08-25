@@ -21,7 +21,10 @@ use guido::widget_prelude::*;
 
 `widget_prelude` adds what the `Widget` and `Layout` signatures name — `Tree`,
 `WidgetId`, `Constraints`, `PaintContext`, `RenderNode`, `LayoutHints` — plus
-`with_signal_tracking` and `JobType`, which are explained below.
+`with_signal_tracking` and `JobType`, which are explained below, and
+`Transform`, which is what a widget positions what it paints with. An
+application never names `Transform`: it declares `translate`, `rotate` and
+`scale`, and those compose into one.
 
 ## A widget
 

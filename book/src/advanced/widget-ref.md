@@ -60,6 +60,8 @@ let popup = container()
         let r = module_ref.rect().get();
         let midpoint = r.x + r.width / 2.0;
         let x = (midpoint - POPUP_WIDTH / 2.0).clamp(8.0, SCREEN_WIDTH - POPUP_WIDTH - 8.0);
+        // Both halves of the pair are the same numeric type — `BAR_HEIGHT`
+        // here is an `f32`, as `x` is.
         (x, BAR_HEIGHT)
     })
     .child(popup_content());

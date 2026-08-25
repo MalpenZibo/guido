@@ -16,7 +16,7 @@ Quick-reference documentation for developers:
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System design, module structure, and code organization
 - **[docs/STATE_LAYER.md](docs/STATE_LAYER.md)** - Hover/pressed state overrides, ripple effects, animations
-- **[docs/TRANSFORMS.md](docs/TRANSFORMS.md)** - Translate, rotate, scale with transform origins and animations
+- **[docs/TRANSFORMS.md](docs/TRANSFORMS.md)** - Translate, rotate, scale with pivots and animations
 - **[docs/REACTIVE.md](docs/REACTIVE.md)** - Signals, computed values, effects, and reactive patterns
 - **[docs/STYLING.md](docs/STYLING.md)** - Colors, gradients, borders, corners, shadows, and layout
 
@@ -204,7 +204,7 @@ Containers provide callback builders (`.on_click()`, `.on_hover()`, `.on_scroll(
 ### Preludes
 
 - `guido::prelude` — applications
-- `guido::widget_prelude` — implementing `Widget` or `Layout` (`Tree`, `WidgetId`, `Constraints`, `PaintContext`, `RenderNode`, `LayoutHints`, `with_signal_tracking`, `JobType`). Import alongside the ordinary prelude; see `tests/external_widget.rs` and `book/src/advanced/custom-widgets.md`
+- `guido::widget_prelude` — implementing `Widget` or `Layout` (`Tree`, `WidgetId`, `Constraints`, `PaintContext`, `RenderNode`, `LayoutHints`, `with_signal_tracking`, `JobType`, `Transform`). Import alongside the ordinary prelude; see `tests/external_widget.rs` and `book/src/advanced/custom-widgets.md`
 
 ## Important Patterns
 

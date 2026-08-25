@@ -127,6 +127,8 @@ container()
     .padding(16.0)
     .background(Color::rgb(0.4, 0.6, 0.4))
     .corners(8.0)
+    // Fixed order: the offset is in the parent's frame, and the box turns
+    // where it has been moved to.
     .translate((10.0, 15.0))
     .rotate(5.0)
     .when_hovered(|s| s.lighter(0.1))

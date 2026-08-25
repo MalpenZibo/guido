@@ -126,7 +126,10 @@ container()
     .scale(1.5)
     .child(container().width(24.0).height(24.0).child(image("./icon.png")))
 
-// Combined transforms
+// Combined transforms. The three apply in one fixed order — translate, then
+// rotate, then scale — so the offset below is in the parent's frame, not the
+// turned and scaled one. Composing the other way round is a nested container;
+// see docs/TRANSFORMS.md.
 container()
     .translate((10.0, 5.0))
     .rotate(45.0)

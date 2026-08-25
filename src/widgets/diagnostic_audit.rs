@@ -135,7 +135,12 @@ fn a_fully_reactive_container_is_quiet() {
         .width(move || n.get() + 100.0)
         .height(move || n.get() + 100.0)
         .visible(move || !flag.get())
+        // All three, not just the one: each reaches its target through its
+        // own signal and its own converting derivation, so a tracking
+        // regression in `translate` or `scale` would leave this green.
         .rotate(move || n.get())
+        .translate(move || (n.get(), 0.0))
+        .scale(move || n.get())
         .gradient(move || {
             Some(LinearGradient::horizontal(
                 if flag.get() { Color::RED } else { Color::BLUE },

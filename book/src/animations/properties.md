@@ -56,7 +56,9 @@ Works with:
 - Rotate
 - Scale
 - Translate
-- Combined transforms
+
+Each on its own curve — there is no call that animates the three together, and
+declaring one says nothing about the other two.
 
 Spring animations are especially good for transforms:
 
