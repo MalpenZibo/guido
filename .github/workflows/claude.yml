@@ -1,0 +1,61 @@
+# Claude Code in CI. Off until somebody turns it on: set the repository
+# variable CLAUDE_ENABLED to "true" and add the ANTHROPIC_API_KEY secret, or run
+# `claude /install-github-app` from a checkout, which does both.
+#
+# It answers an @claude mention on an issue or a pull request, and picks up any
+# issue labelled `agent-ready` — which is the label to put on work whose
+# acceptance criterion is written down and whose design is settled. Everything
+# it opens is a pull request, and every pull request still has to go past the
+# same CI as anybody else's.
+name: Claude
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [labeled]
+
+jobs:
+  claude:
+    if: >-
+      vars.CLAUDE_ENABLED == 'true' &&
+      (contains(github.event.comment.body, '@claude') ||
+       github.event.label.name == 'agent-ready')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwayland-dev libxkbcommon-dev \
+            mesa-vulkan-drivers
+      - name: Point the Vulkan loader at lavapipe
+        run: echo "VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)" >> "$GITHUB_ENV"
+      - uses: anthropics/claude-code-action@v1
+        with:
+          prompt: |
+            Read AGENTS.md before anything else — it is the contract, and the
+            rules in it are not negotiable here either. In particular: the
+            failing test comes before the fix, and a snapshot or golden is
+            never re-blessed to make a test pass.
+
+            Run the harness before you finish:
+              cargo fmt --all
+              cargo clippy --all-targets --all-features -- -D warnings
+              cargo test --all-features
+              GUIDO_GOLDEN_REQUIRED=1 cargo test --test golden_images
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GUIDO_GOLDEN_REQUIRED: "1"

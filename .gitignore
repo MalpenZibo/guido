@@ -2,3 +2,6 @@ target
 
 # mdbook build output
 book/book/
+
+# Personal, per-machine Claude Code settings
+.claude/settings.local.json

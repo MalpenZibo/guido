@@ -25,10 +25,13 @@
 //! absorbs. If it ever moves further than that, the runner image is the thing
 //! to pin — not the tolerance to widen.
 //!
-//! Without any Vulkan adapter the tests skip rather than fail, so a
-//! contributor without a GPU is not blocked. CI sets `GUIDO_GOLDEN_REQUIRED=1`,
-//! which turns that skip back into a failure — a skipped test that reports
-//! green is worth less than no test at all.
+//! On any other adapter — no Vulkan at all, or a desktop GPU — these skip
+//! rather than fail. A golden holds only against the rasterizer it was blessed
+//! on, so running it elsewhere reports a few dozen moved pixels on every
+//! scenario, every time, and none of them is a regression. Skipping is what
+//! lets `cargo test` on a developer's machine still mean something. CI sets
+//! `GUIDO_GOLDEN_REQUIRED=1` in the one job that must not skip, where a skip is
+//! a failure — a skipped test that reports green is worth less than no test.
 //!
 //! **Re-blessing is not a way to make a test pass.** A changed golden is a
 //! changed pixel on someone's screen, and the diff is the review:
@@ -405,16 +408,37 @@ fn golden(
     clear: Color,
     widget: impl Widget + 'static,
 ) {
+    let required = std::env::var_os("GUIDO_GOLDEN_REQUIRED").is_some();
+
     let Some(ctx) = ctx() else {
         assert!(
-            std::env::var_os("GUIDO_GOLDEN_REQUIRED").is_none(),
+            !required,
             "`{name}` needs a Vulkan adapter and found none, and \
              GUIDO_GOLDEN_REQUIRED is set. In CI this means lavapipe is not \
-             installed or VK_ICD_FILENAMES does not point at it."
+             installed, or VK_ICD_FILENAMES does not point at it."
         );
         eprintln!("skipping golden `{name}`: no Vulkan adapter on this machine");
         return;
     };
+
+    // A golden holds only against the rasterizer it was blessed on, so running
+    // it on anything else produces a failure that is not a regression — a few
+    // dozen pixels on the corner tangents, every time, for every scenario. On
+    // another adapter it skips instead, which is what makes `cargo test` on a
+    // machine with a GPU mean something. The job that must not skip says so.
+    let adapter = adapter_name(ctx);
+    if !is_software_rasterizer(&adapter) && std::env::var_os("GUIDO_GOLDEN_ANY_ADAPTER").is_none() {
+        assert!(
+            !required,
+            "`{name}` ran on `{adapter}`, and GUIDO_GOLDEN_REQUIRED is set. The \
+             goldens are blessed against lavapipe; point VK_ICD_FILENAMES at it."
+        );
+        eprintln!(
+            "skipping golden `{name}`: `{adapter}` is not the rasterizer these \
+             were blessed on. Point VK_ICD_FILENAMES at lavapipe to run them."
+        );
+        return;
+    }
 
     // A renderer per test, and dropped before the test returns. It caches
     // with `Rc` — the library it belongs to draws from one thread — so it
@@ -422,7 +446,6 @@ fn golden(
     // `thread_local` drops it during TLS teardown, where the state its own
     // drop reaches has already been torn down. The device it draws with is
     // still the shared one, which is the part that costs.
-    let adapter = adapter_name(ctx);
     let mut renderer = Renderer::new(ctx.device.clone(), ctx.queue.clone(), FORMAT);
     let pixels = render_pixels(ctx, &mut renderer, widget, logical, scale, clear);
     drop(renderer);

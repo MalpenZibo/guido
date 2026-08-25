@@ -18,7 +18,7 @@
 //!
 //! The partiality earns its keep on state overrides, which *are* merged:
 //! `when_hovered(|s| s.color(..))` changes the colour of a hovered label and
-//! leaves its metrics alone. [`inherit_from`](TextStyle::inherit_from) is what
+//! leaves its metrics alone. `TextStyle::inherit_from` is what
 //! folds them, nearest declaration first.
 //!
 //! # The same style, many times
