@@ -118,17 +118,19 @@ Images inherit transforms from parent containers, following the same pattern as 
 ```rust
 // Rotated image
 container()
-    .transform(Transform::rotate_degrees(15.0))
+    .rotate(15.0)
     .child(container().width(32.0).height(32.0).child(image("./badge.svg")))
 
 // Scaled image
 container()
-    .transform(Transform::scale(1.5))
+    .scale(1.5)
     .child(container().width(24.0).height(24.0).child(image("./icon.png")))
 
 // Combined transforms
 container()
-    .transform(Transform::rotate_degrees(45.0).then_scale(2.0).then_translate(10.0, 5.0))
+    .translate((10.0, 5.0))
+    .rotate(45.0)
+    .scale(2.0)
     .child(image("./logo.svg"))
 ```
 

@@ -145,10 +145,10 @@ Note that a layer *replaces* the base value rather than ranking against it. A pr
 
 ```rust
 // Scale down on press for tactile feedback
-.when_pressed(|s| s.transform(Transform::scale(0.98)))
+.when_pressed(|s| s.scale(0.98))
 
 // Combine with other effects
-.when_pressed(|s| s.darker(0.1).transform(Transform::scale(0.98)))
+.when_pressed(|s| s.darker(0.1).scale(0.98))
 ```
 
 ### Corner Radius
@@ -194,7 +194,7 @@ is its own ripple and they overlap; up to four are alive at a time.
 ### Ripple with Other Effects
 
 ```rust
-.when_pressed(|s| s.ripple().transform(Transform::scale(0.98)))
+.when_pressed(|s| s.ripple().scale(0.98))
 ```
 
 ## Animations
@@ -213,7 +213,7 @@ Available animation methods:
 - `animate_background(Transition)` - Animate background color changes
 - `animate_border_width(Transition)` - Animate border width changes
 - `animate_border_color(Transition)` - Animate border color changes
-- `animate_transform(Transition)` - Animate transform changes
+- `animate_translate(Transition)` / `animate_rotate(..)` / `animate_scale(..)`
 
 ### Transition Types
 
@@ -244,7 +244,7 @@ fn create_button(label: &str) -> Container {
         .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
         // State overrides
         .when_hovered(|s| s.lighter(0.1).border(2.0, Color::rgb(0.5, 0.7, 1.0)))
-        .when_pressed(|s| s.ripple().darker(0.05).transform(Transform::scale(0.98)))
+        .when_pressed(|s| s.ripple().darker(0.05).scale(0.98))
         .child(text(label).color(Color::WHITE))
 }
 ```

@@ -10,25 +10,39 @@ Move a widget by offset values:
 
 ```rust
 container()
-    .transform(Transform::translate(20.0, 10.0))  // Move 20px right, 10px down
+    .translate((20.0, 10.0))  // Move 20px right, 10px down
 ```
 
 ### Rotation
 
-Rotate a widget around its center:
+Rotate a widget about its pivot, in degrees, clockwise:
 
 ```rust
 container()
-    .transform(Transform::rotate_degrees(45.0))  // Rotate 45 degrees clockwise
+    .rotate(45.0)  // Rotate 45 degrees clockwise
 ```
+
+**The angle is not normalised.** `360.0` is a full turn and not zero, `720.0` is
+two, and `370.0` is twenty degrees past a full turn rather than ten degrees from
+the start. This is what makes a rotation animatable at all: an angle folded into
+a matrix, or wrapped into `0..360`, has lost how far round it went, and
+interpolating it interpolates something that no longer holds the answer. See
+issue #212.
+
+It also means nothing takes a shorter way round on a caller's behalf. An angle
+that arrives already wrapped — from `atan2`, in a drag-to-rotate, where the
+value jumps from 179 to -179 — wraps the animation with it, and unwrapping it
+belongs to the caller, who is the only one who knows which way was meant. A
+declared shortest-path policy, as QML's `RotationAnimation.direction` has, is
+the shape that would answer it; there is no case for one yet.
 
 ### Scale
 
 Scale a widget uniformly or non-uniformly:
 
 ```rust
-container().transform(Transform::scale(1.5))           // 150% size
-container().transform(Transform::scale_xy(2.0, 0.5))   // 200% width, 50% height
+container().scale(1.5)           // 150% size
+container().scale((2.0, 0.5))   // 200% width, 50% height
 ```
 
 ## Transform Composition
@@ -37,11 +51,7 @@ Combine multiple transforms using `.then()`:
 
 ```rust
 // Rotate then scale
-Transform::rotate_degrees(30.0).then(&Transform::scale(0.8))
-
-// Or use the .transform() method with composed transform
-container()
-    .transform(Transform::rotate_degrees(30.0).then(&Transform::scale(0.8)))
+container().rotate(30.0).scale(0.8)
 ```
 
 **Order matters**: `a.then(&b)` applies `b` first, then `a`.
@@ -53,34 +63,34 @@ By default, rotation and scale occur around the widget's center. Use transform o
 ```rust
 // Rotate around top-left corner
 container()
-    .transform(Transform::rotate_degrees(45.0))
-    .transform_origin(TransformOrigin::TOP_LEFT)
+    .rotate(45.0)
+    .pivot(Pivot::TOP_LEFT)
 
 // Scale from bottom-right
 container()
-    .transform(Transform::scale(0.8))
-    .transform_origin(TransformOrigin::BOTTOM_RIGHT)
+    .scale(0.8)
+    .pivot(Pivot::BOTTOM_RIGHT)
 ```
 
 ### Built-in Origins
 
 ```rust
-TransformOrigin::CENTER        // 50%, 50% (default)
-TransformOrigin::TOP_LEFT      // 0%, 0%
-TransformOrigin::TOP_RIGHT     // 100%, 0%
-TransformOrigin::BOTTOM_LEFT   // 0%, 100%
-TransformOrigin::BOTTOM_RIGHT  // 100%, 100%
-TransformOrigin::TOP           // 50%, 0%
-TransformOrigin::BOTTOM        // 50%, 100%
-TransformOrigin::LEFT          // 0%, 50%
-TransformOrigin::RIGHT         // 100%, 50%
+Pivot::CENTER        // 50%, 50% (default)
+Pivot::TOP_LEFT      // 0%, 0%
+Pivot::TOP_RIGHT     // 100%, 0%
+Pivot::BOTTOM_LEFT   // 0%, 100%
+Pivot::BOTTOM_RIGHT  // 100%, 100%
+Pivot::TOP           // 50%, 0%
+Pivot::BOTTOM        // 50%, 100%
+Pivot::LEFT          // 0%, 50%
+Pivot::RIGHT         // 100%, 50%
 ```
 
 ### Custom Origin
 
 ```rust
 // 25% from left, 75% from top
-TransformOrigin::custom(0.25, 0.75)
+Pivot::percent(25.0, 75.0)
 ```
 
 ## Reactive Transforms
@@ -91,7 +101,7 @@ Transforms can be reactive using signals:
 let rotation = create_signal(0.0f32);
 
 container()
-    .transform(Transform::rotate_degrees(rotation))  // Updates when signal changes
+    .rotate(rotation)  // Updates when signal changes
     .on_click(move || rotation.update(|r| *r += 45.0))
 ```
 
@@ -103,8 +113,8 @@ Animate transform changes with transitions:
 let rotation = create_signal(0.0f32);
 
 container()
-    .transform(Transform::rotate_degrees(rotation))
-    .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
+    .rotate(rotation)
+    .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
     .on_click(move || rotation.update(|r| *r += 45.0))
 ```
 
@@ -114,8 +124,8 @@ For physics-based animation:
 
 ```rust
 container()
-    .transform(Transform::scale(scale_signal))
-    .animate_transform(Transition::spring(SpringConfig::BOUNCY))
+    .scale(scale_signal)
+    .animate_scale(Transition::spring(SpringConfig::BOUNCY))
 ```
 
 ## Nested Transforms
@@ -124,10 +134,10 @@ Transforms compose through the widget hierarchy. A child inherits its parent's t
 
 ```rust
 container()
-    .transform(Transform::rotate_degrees(20.0))  // Parent rotated
+    .rotate(20.0)  // Parent rotated
     .child(
         container()
-            .transform(Transform::scale(0.8))  // Child scaled within rotated parent
+            .scale(0.8)  // Child scaled within rotated parent
             .child(text("Nested transforms"))
     )
 ```
@@ -138,7 +148,7 @@ Apply transforms on interaction:
 
 ```rust
 container()
-    .when_pressed(|s| s.transform(Transform::scale(0.98)))
+    .when_pressed(|s| s.scale(0.98))
 ```
 
 ## Hit Testing
@@ -183,7 +193,9 @@ impl Container {
     pub fn scale<M>(self, factor: impl IntoSignal<f32, M>) -> Self;
     pub fn scale_xy<M1, M2>(self, sx: impl IntoSignal<f32, M1>, sy: impl IntoSignal<f32, M2>) -> Self;
     pub fn transform<M>(self, transform: impl IntoSignal<Transform, M>) -> Self;
-    pub fn transform_origin<M>(self, origin: impl IntoSignal<TransformOrigin, M>) -> Self;
-    pub fn animate_transform(self, transition: impl Into<TransitionConfig>) -> Self;
+    pub fn pivot<M>(self, pivot: impl IntoSignal<Pivot, M>) -> Self;
+    pub fn animate_translate(self, transition: impl Into<TransitionConfig>) -> Self;
+    pub fn animate_rotate(self, transition: impl Into<TransitionConfig>) -> Self;
+    pub fn animate_scale(self, transition: impl Into<TransitionConfig>) -> Self;
 }
 ```
