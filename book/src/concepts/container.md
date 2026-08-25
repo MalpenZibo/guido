@@ -128,10 +128,11 @@ Apply 2D transformations:
 
 ```rust
 container()
-    .transform(Transform::translate(10.0, 20.0))  // Move
-    .transform(Transform::rotate_degrees(45.0))           // Rotate degrees
-    .transform(Transform::scale(1.5))             // Scale
-    .transform_origin(TransformOrigin::TOP_LEFT)
+    // The three compose, in this order whatever order they are written in
+    .translate((10.0, 20.0))
+    .rotate(45.0)
+    .scale(1.5)
+    .pivot(Pivot::TOP_LEFT)
 ```
 
 See [Transforms](../transforms/README.md) for details.
@@ -143,7 +144,7 @@ Animate property changes:
 ```rust
 container()
     .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
-    .animate_transform(Transition::spring(SpringConfig::BOUNCY))
+    .animate_scale(Transition::spring(SpringConfig::BOUNCY))
 ```
 
 See [Animations](../animations/README.md) for timing and spring options.
@@ -229,7 +230,7 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 
         // State layers
         .when_hovered(|s| s.lighter(0.1).border(2.0, Color::rgb(0.5, 0.7, 1.0)))
-        .when_pressed(|s| s.ripple().darker(0.05).transform(Transform::scale(0.98)))
+        .when_pressed(|s| s.ripple().darker(0.05).scale(0.98))
 
         // Event
         .on_click(on_click)
@@ -282,14 +283,14 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 - `.when_pressed(|s| s...)` - Pressed overrides
 
 ### Transforms
-- `.translate(x, y)` - Move
+- `.translate((x, y))` - Move
 - `.rotate(degrees)` - Rotate
 - `.scale(factor)` - Scale
-- `.transform_origin(origin)` - Pivot point
+- `.pivot(origin)` - Pivot point
 
 ### Animations
 - `.animate_background(transition)` - Animate background
-- `.animate_transform(transition)` - Animate transform
+- `.animate_translate(transition)` / `.animate_rotate(..)` / `.animate_scale(..)`
 - `.animate_border_width(transition)` - Animate border width
 - `.animate_border_color(transition)` - Animate border color
 

@@ -115,3 +115,10 @@ impl crate::reactive::IntoVal<BackdropBlur> for i32 {
         BackdropBlur::new(self as f32)
     }
 }
+
+// A signal accepts what a closure returning the same type accepts.
+crate::reactive::converting_signals!(
+    f32 => BackdropBlur,
+    f64 => BackdropBlur,
+    i32 => BackdropBlur,
+);

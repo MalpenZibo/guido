@@ -13,16 +13,23 @@ Guido provides a complete 2D transform system for translating, rotating, and sca
 ## Quick Example
 
 ```rust
+// All three at once — they compose, in the order
+// translate, then rotate, then scale.
 container()
-    .transform(Transform::translate(20.0, 10.0))  // Move 20px right, 10px down
-    .transform(Transform::rotate_degrees(45.0))           // Rotate 45 degrees
-    .transform(Transform::scale(1.5))             // Scale to 150%
+    .translate((20.0, 10.0))
+    .rotate(45.0)
+    .scale(1.5)
+
+// Or one on its own.
+container().translate((20.0, 10.0))  // move 20px right, 10px down
+container().rotate(45.0)             // turn 45 degrees clockwise
+container().scale(1.5)               // 150% size
 ```
 
 ## In This Section
 
 - [Transform Basics](basics.md) - Translate, rotate, and scale
-- [Transform Origins](origins.md) - Control pivot points
+- [Pivots](origins.md) - Control the point rotation and scale act about
 - [Animated Transforms](animated.md) - Smooth transform animations
 - [Nested Transforms](nested.md) - Parent-child transform composition
 

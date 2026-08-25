@@ -92,21 +92,21 @@ Built-in: `Flex` for row/column layouts.
 2D affine transforms (6 floats, 24 bytes — exactly what the GPU shader consumes):
 
 ```rust
-Transform::translate(x, y)
-Transform::rotate_degrees(deg)
-Transform::scale(s)
+container().translate((x, y))
+container().rotate(deg)
+container().scale(s)
 t1.then(&t2)  // Composition
 t.inverse()   // Inversion
 ```
 
-### `transform_origin.rs` - Pivot Points
+### `pivot.rs` - Pivot Points
 
 Define rotation/scale pivot:
 
 ```rust
-TransformOrigin::CENTER
-TransformOrigin::TOP_LEFT
-TransformOrigin::custom(0.25, 0.75)
+Pivot::CENTER
+Pivot::TOP_LEFT
+Pivot::percent(25.0, 75.0)
 ```
 
 ## Widget Trait

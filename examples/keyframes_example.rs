@@ -6,38 +6,38 @@
 //! wants after a wrong password — and the right one takes the same trigger and
 //! nods, to show that what a timeline does is entirely in its stops.
 //!
-//! Both cards also declare a hover transform. That is the point of the rule
-//! that a playing timeline *replaces* the declared value: the hover is still
-//! there, it just does not argue with the sequence while it runs, and it has
-//! the property back the moment the sequence ends.
+//! Both cards also declare a hover scale, and it stays drawn while they play:
+//! a sequence belongs to the one component it moves, the shake being a timeline
+//! on `rotate` and the nod one on `translate`, so neither meets the hover at
+//! all. The rule that a playing timeline *replaces* the declared value applies
+//! when the two are on the same component — the keyframes chapter of the book
+//! has that case.
 
 use guido::prelude::*;
 
 /// Left, decaying: out, back past, out again, still.
-fn shake() -> Keyframes<Transform> {
+fn shake() -> Keyframes<f32> {
     Keyframes::new(320.0)
-        .at(0.0, Transform::IDENTITY)
-        .at(0.15, Transform::rotate_degrees(2.0))
-        .at(0.40, Transform::rotate_degrees(-1.6))
-        .at(0.65, Transform::rotate_degrees(0.9))
-        .at(0.85, Transform::rotate_degrees(-0.4))
-        .at(1.0, Transform::IDENTITY)
+        .at(0.0, 0.0)
+        .at(0.15, 2.0)
+        .at(0.40, -1.6)
+        .at(0.65, 0.9)
+        .at(0.85, -0.4)
+        .at(1.0, 0.0)
 }
 
 /// Right, one dip and a rebound, eased so the fall is quicker than the rise.
-fn nod() -> Keyframes<Transform> {
+fn nod() -> Keyframes<Translate> {
     Keyframes::new(360.0)
-        .at_with(0.0, Transform::IDENTITY, TimingFunction::EaseIn)
-        .at_with(
-            0.35,
-            Transform::translate(0.0, 14.0),
-            TimingFunction::EaseOut,
-        )
-        .at(0.7, Transform::translate(0.0, -4.0))
-        .at(1.0, Transform::IDENTITY)
+        .at_with(0.0, Translate::NONE, TimingFunction::EaseIn)
+        .at_with(0.35, Translate::new(0.0, 14.0), TimingFunction::EaseOut)
+        .at(0.7, Translate::new(0.0, -4.0))
+        .at(1.0, Translate::NONE)
 }
 
-fn card(label: &'static str, keyframes: Keyframes<Transform>, plays: RwSignal<u32>) -> Container {
+/// The card itself: the timeline is added by the caller, because a shake and a
+/// nod move different components and so are different types of sequence.
+fn card(label: &'static str, plays: RwSignal<u32>) -> Container {
     container()
         .width(220.0)
         .height(120.0)
@@ -50,9 +50,8 @@ fn card(label: &'static str, keyframes: Keyframes<Transform>, plays: RwSignal<u3
                 .cross_alignment(CrossAlignment::Center),
         )
         // Declared, animated, and quietly stood aside while a sequence runs.
-        .when_hovered(|s| s.transform(Transform::scale(1.03)))
-        .animate_transform(Transition::spring(SpringConfig::SNAPPY))
-        .keyframes_transform(keyframes, plays)
+        .when_hovered(|s| s.scale(1.03))
+        .animate_scale(Transition::spring(SpringConfig::SNAPPY))
         .on_click(move || plays.update(|p| *p += 1))
         .child(text(label).color(Color::WHITE).font_size(16.0))
 }
@@ -66,8 +65,8 @@ fn main() {
         let view = container()
             .padding(24.0)
             .layout(Flex::row().spacing(20.0))
-            .child(card("shake", shake(), plays))
-            .child(card("nod", nod(), plays));
+            .child(card("shake", plays).keyframes_rotate(shake(), plays))
+            .child(card("nod", plays).keyframes_translate(nod(), plays));
 
         app.add_surface(
             SurfaceConfig::new()

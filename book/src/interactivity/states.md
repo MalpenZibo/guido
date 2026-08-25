@@ -59,7 +59,7 @@ container()
 
 **Scale down (tactile feedback):**
 ```rust
-.when_pressed(|s| s.transform(Transform::scale(0.98)))
+.when_pressed(|s| s.scale(0.98))
 ```
 
 **Reduce elevation (press into surface):**
@@ -223,7 +223,7 @@ below only takes over the transform and leaves the hover's background alone:
 ```rust
 container()
     .when_hovered(|s| s.lighter(0.1))
-    .when_pressed(|s| s.transform(Transform::scale(0.98)))
+    .when_pressed(|s| s.scale(0.98))
 ```
 
 Keep in mind that a layer *replaces* the base rather than ranking against it. A
@@ -244,7 +244,7 @@ Each state can override multiple properties:
 .when_pressed(|s| s
     .ripple()
     .darker(0.05)
-    .transform(Transform::scale(0.98))
+    .scale(0.98)
     .elevation(2.0)
 )
 ```
@@ -258,9 +258,9 @@ container()
     .background(Color::rgb(0.3, 0.5, 0.8))
     .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
     .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
-    .animate_transform(Transition::spring(SpringConfig::SMOOTH))
+    .animate_scale(Transition::spring(SpringConfig::SMOOTH))
     .when_hovered(|s| s.lighter(0.1).border(2.0, Color::WHITE))
-    .when_pressed(|s| s.darker(0.1).transform(Transform::scale(0.98)))
+    .when_pressed(|s| s.darker(0.1).scale(0.98))
 ```
 
 ## Button Patterns
@@ -320,8 +320,11 @@ impl StateStyleBuilder {
     pub fn border(self, width: f32, color: Color) -> Self;
 
     // Other
-    pub fn corner_radius(self, radius: f32) -> Self;
-    pub fn transform(self, transform: Transform) -> Self;
+    pub fn corners<M>(self, corners: impl IntoSignal<Corners, M>) -> Self;
+    // Every value is reactive here too, like the container's own
+    pub fn translate<M>(self, translate: impl IntoSignal<Translate, M>) -> Self;
+    pub fn rotate<M>(self, degrees: impl IntoSignal<f32, M>) -> Self;
+    pub fn scale<M>(self, factor: impl IntoSignal<Scale, M>) -> Self;
     pub fn elevation(self, level: f32) -> Self;
 
     // Ripple

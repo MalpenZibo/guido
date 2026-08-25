@@ -135,7 +135,12 @@ fn a_fully_reactive_container_is_quiet() {
         .width(move || n.get() + 100.0)
         .height(move || n.get() + 100.0)
         .visible(move || !flag.get())
-        .transform(move || crate::transform::Transform::rotate_degrees(n.get()))
+        // All three, not just the one: each reaches its target through its
+        // own signal and its own converting derivation, so a tracking
+        // regression in `translate` or `scale` would leave this green.
+        .rotate(move || n.get())
+        .translate(move || (n.get(), 0.0))
+        .scale(move || n.get())
         .gradient(move || {
             Some(LinearGradient::horizontal(
                 if flag.get() { Color::RED } else { Color::BLUE },
@@ -158,7 +163,7 @@ fn a_fully_reactive_container_is_quiet() {
         .animate_padding(t())
         .animate_width(t())
         .animate_height(t())
-        .animate_transform(t())
+        .animate_rotate(t())
         .when_hovered(|s| s.lighter(0.1))
         .when_pressed(|s| s.ripple())
         .when_focused(|s| s.border(2.0, Color::WHITE))

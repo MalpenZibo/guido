@@ -543,7 +543,7 @@ fn flatten_node(
     out: &mut LayeredCommands,
 ) {
     // Compute this node's world transform
-    let (origin_x, origin_y) = node.transform_origin.resolve(node.bounds);
+    let (origin_x, origin_y) = node.pivot.resolve(node.bounds);
 
     // Compose transforms: parent first, then local centered at origin
     let local_centered = if node.local_transform.is_identity() {

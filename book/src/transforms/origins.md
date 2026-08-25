@@ -1,20 +1,25 @@
-# Transform Origins
+# Pivots
 
-By default, rotation and scale occur around the widget's center. Transform origins let you change this pivot point.
+By default, rotation and scale happen about the widget's centre. A pivot moves
+that point.
 
-## Setting Transform Origin
+One pivot serves both `rotate` and `scale`, as CSS gives one `transform-origin`
+to the whole group. `translate` ignores it: moving a box is the same movement
+wherever the pivot sits.
+
+## Setting a Pivot
 
 ```rust
 container()
-    .transform(Transform::rotate_degrees(45.0))
-    .transform_origin(TransformOrigin::TOP_LEFT)
+    .rotate(45.0)
+    .pivot(Pivot::TOP_LEFT)
 ```
 
 Now the container rotates around its top-left corner instead of its center.
 
-## Built-in Origins
+## Built-in Pivots
 
-| Origin | Position |
+| Pivot | Position |
 |--------|----------|
 | `CENTER` | 50%, 50% (default) |
 | `TOP_LEFT` | 0%, 0% |
@@ -51,24 +56,24 @@ container()
     .width(80.0)
     .height(80.0)
     .background(Color::rgb(0.3, 0.5, 0.8))
-    .transform(Transform::rotate_degrees(30.0))
-    .transform_origin(TransformOrigin::TOP_LEFT)
+    .rotate(30.0)
+    .pivot(Pivot::TOP_LEFT)
 ```
 
 ### Scale from Bottom-Right
 
 ```rust
 container()
-    .transform(Transform::scale(1.5))
-    .transform_origin(TransformOrigin::BOTTOM_RIGHT)
+    .scale(1.5)
+    .pivot(Pivot::BOTTOM_RIGHT)
 ```
 
 ### Pivot from Top Edge
 
 ```rust
 container()
-    .transform(Transform::rotate_degrees(15.0))
-    .transform_origin(TransformOrigin::TOP)
+    .rotate(15.0)
+    .pivot(Pivot::TOP)
 ```
 
 ## Custom Origin
@@ -77,7 +82,7 @@ Specify exact percentages:
 
 ```rust
 // 25% from left, 75% from top
-TransformOrigin::custom(0.25, 0.75)
+Pivot::percent(25.0, 75.0)
 ```
 
 Values are percentages of the widget's size:
@@ -87,22 +92,26 @@ Values are percentages of the widget's size:
 
 ## Reactive Origins
 
-Transform origins can be reactive:
+Pivots can be reactive:
 
 ```rust
-let origin = create_signal(TransformOrigin::CENTER);
+let origin = create_signal(Pivot::CENTER);
 
 container()
-    .transform(Transform::rotate_degrees(45.0))
-    .transform_origin(origin)
+    .rotate(45.0)
+    .pivot(origin)
     .on_click(move || {
         // Cycle through origins
-        let next = match origin.get() {
-            TransformOrigin::CENTER => TransformOrigin::TOP_LEFT,
-            TransformOrigin::TOP_LEFT => TransformOrigin::BOTTOM_RIGHT,
-            _ => TransformOrigin::CENTER,
-        };
-        origin.set(next);
+        // `Pivot` carries f32 anchors, so its constants are not patterns —
+        // compare, do not match.
+        let current = origin.get();
+        origin.set(if current == Pivot::CENTER {
+            Pivot::TOP_LEFT
+        } else if current == Pivot::TOP_LEFT {
+            Pivot::BOTTOM_RIGHT
+        } else {
+            Pivot::CENTER
+        });
     })
 ```
 
@@ -114,17 +123,17 @@ fn origin_demo() -> impl Widget {
         .layout(Flex::row().spacing(40.0))
         .children([
             // Rotate from center (default)
-            create_rotating_box(TransformOrigin::CENTER, "Center"),
+            create_rotating_box(Pivot::CENTER, "Center"),
 
             // Rotate from top-left
-            create_rotating_box(TransformOrigin::TOP_LEFT, "Top-Left"),
+            create_rotating_box(Pivot::TOP_LEFT, "Top-Left"),
 
             // Rotate from bottom-right
-            create_rotating_box(TransformOrigin::BOTTOM_RIGHT, "Bottom-Right"),
+            create_rotating_box(Pivot::BOTTOM_RIGHT, "Bottom-Right"),
         ])
 }
 
-fn create_rotating_box(origin: TransformOrigin, label: &'static str) -> Container {
+fn create_rotating_box(origin: Pivot, label: &'static str) -> Container {
     let rotation = create_signal(0.0f32);
 
     container()
@@ -135,9 +144,9 @@ fn create_rotating_box(origin: TransformOrigin, label: &'static str) -> Containe
                 .height(60.0)
                 .background(Color::rgb(0.3, 0.5, 0.8))
                 .corners(8.0)
-                .transform(Transform::rotate_degrees(rotation))
-                .transform_origin(origin)
-                .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
+                .rotate(rotation)
+                .pivot(origin)
+                .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
                 .when_hovered(|s| s.lighter(0.1))
                 .on_click(move || rotation.update(|r| *r += 45.0)),
             container().child(text(label).font_size(12.0).color(Color::WHITE)),
@@ -149,23 +158,24 @@ fn create_rotating_box(origin: TransformOrigin, label: &'static str) -> Containe
 
 ```rust
 impl Container {
-    pub fn transform_origin(
+    pub fn pivot(
         self,
-        origin: impl IntoSignal<TransformOrigin, M>
+        origin: impl IntoSignal<Pivot, M>
     ) -> Self;
 }
 
-impl TransformOrigin {
-    pub const CENTER: TransformOrigin;
-    pub const TOP_LEFT: TransformOrigin;
-    pub const TOP_RIGHT: TransformOrigin;
-    pub const BOTTOM_LEFT: TransformOrigin;
-    pub const BOTTOM_RIGHT: TransformOrigin;
-    pub const TOP: TransformOrigin;
-    pub const BOTTOM: TransformOrigin;
-    pub const LEFT: TransformOrigin;
-    pub const RIGHT: TransformOrigin;
+impl Pivot {
+    pub const CENTER: Pivot;
+    pub const TOP_LEFT: Pivot;
+    pub const TOP_RIGHT: Pivot;
+    pub const BOTTOM_LEFT: Pivot;
+    pub const BOTTOM_RIGHT: Pivot;
+    pub const TOP: Pivot;
+    pub const BOTTOM: Pivot;
+    pub const LEFT: Pivot;
+    pub const RIGHT: Pivot;
 
-    pub fn custom(x: f32, y: f32) -> TransformOrigin;
+    pub fn percent(x_percent: f32, y_percent: f32) -> Pivot;  // 0-100
+    pub fn px(x: f32, y: f32) -> Pivot;
 }
 ```

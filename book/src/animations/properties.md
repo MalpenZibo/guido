@@ -48,20 +48,22 @@ Animate translation, rotation, and scale:
 
 ```rust
 container()
-    .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
-    .when_pressed(|s| s.transform(Transform::scale(0.98)))
+    .animate_scale(Transition::new(300.0, TimingFunction::EaseOut))
+    .when_pressed(|s| s.scale(0.98))
 ```
 
 Works with:
 - Rotate
 - Scale
 - Translate
-- Combined transforms
+
+Each on its own curve — there is no call that animates the three together, and
+declaring one says nothing about the other two.
 
 Spring animations are especially good for transforms:
 
 ```rust
-.animate_transform(Transition::spring(SpringConfig::BOUNCY))
+.animate_scale(Transition::spring(SpringConfig::BOUNCY))
 ```
 
 ## Width
@@ -122,7 +124,7 @@ container()
     .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
     .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))
     .animate_elevation(Transition::new(250.0, TimingFunction::EaseOut))
-    .animate_transform(Transition::spring(SpringConfig::SMOOTH))
+    .animate_scale(Transition::spring(SpringConfig::SMOOTH))
 
     .when_hovered(|s| s
         .lighter(0.1)
@@ -130,7 +132,7 @@ container()
         .elevation(6.0)
     )
     .when_pressed(|s| s
-        .transform(Transform::scale(0.98))
+        .scale(0.98)
         .elevation(1.0)
     )
 ```
@@ -142,7 +144,9 @@ container()
 | Background | `animate_background()` | Duration, EaseOut |
 | Border Width | `animate_border_width()` | Duration, EaseOut |
 | Border Color | `animate_border_color()` | Duration, EaseOut |
-| Transform | `animate_transform()` | Spring or Duration |
+| Translate | `animate_translate()` | Spring or Duration |
+| Rotate | `animate_rotate()` | Spring or Duration |
+| Scale | `animate_scale()` | Spring or Duration |
 | Width | `animate_width()` | Spring |
 | Elevation | `animate_elevation()` | Duration, EaseOut |
 
@@ -161,7 +165,7 @@ container()
 ```rust
 // Spring for size/position changes
 .animate_width(Transition::spring(SpringConfig::DEFAULT))
-.animate_transform(Transition::spring(SpringConfig::BOUNCY))
+.animate_scale(Transition::spring(SpringConfig::BOUNCY))
 
 // Duration for visual changes
 .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
@@ -180,7 +184,9 @@ impl Container {
     pub fn animate_background(self, transition: Transition) -> Self;
     pub fn animate_border_width(self, transition: Transition) -> Self;
     pub fn animate_border_color(self, transition: Transition) -> Self;
-    pub fn animate_transform(self, transition: Transition) -> Self;
+    pub fn animate_translate(self, transition: Transition) -> Self;
+    pub fn animate_rotate(self, transition: Transition) -> Self;
+    pub fn animate_scale(self, transition: Transition) -> Self;
     pub fn animate_width(self, transition: Transition) -> Self;
     pub fn animate_elevation(self, transition: Transition) -> Self;
 }

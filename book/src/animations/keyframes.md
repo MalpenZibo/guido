@@ -10,13 +10,13 @@ A timeline is the other shape. It has no target: it plays.
 
 ```rust
 container()
-    .keyframes_transform(
+    .keyframes_rotate(
         Keyframes::new(320.0)
-            .at(0.0, Transform::IDENTITY)
-            .at(0.15, Transform::rotate_degrees(2.0))
-            .at(0.40, Transform::rotate_degrees(-1.6))
-            .at(0.65, Transform::rotate_degrees(0.9))
-            .at(1.0, Transform::IDENTITY),
+            .at(0.0, 0.0)
+            .at(0.15, 2.0)
+            .at(0.40, -1.6)
+            .at(0.65, 0.9)
+            .at(1.0, 0.0),
         rejections,
     )
 ```
@@ -42,9 +42,9 @@ there, which is CSS's rule for a timing function written inside a keyframe:
 
 ```rust
 Keyframes::new(360.0)
-    .at_with(0.0, Transform::IDENTITY, TimingFunction::EaseIn)
-    .at_with(0.35, Transform::translate(0.0, 14.0), TimingFunction::EaseOut)
-    .at(1.0, Transform::IDENTITY)
+    .at_with(0.0, Translate::NONE, TimingFunction::EaseIn)
+    .at_with(0.35, Translate::new(0.0, 14.0), TimingFunction::EaseOut)
+    .at(1.0, Translate::NONE)
 ```
 
 Before the first stop and after the last one the nearest stop holds — a
@@ -59,21 +59,35 @@ declared *now* — including a value that changed while it was playing. This is
 the rule CSS settled on, where an animation outranks a normal declaration for
 as long as it runs and hands the property back afterwards.
 
-So a card can hover and shake without the two arguing:
+A timeline belongs to the one component it moves, so a card can hover and shake
+at the same time without the two meeting at all:
 
 ```rust
 container()
-    .when_hovered(|s| s.transform(Transform::scale(1.03)))
-    .animate_transform(Transition::spring(SpringConfig::SNAPPY))
-    .keyframes_transform(shake(), rejections)
+    .when_hovered(|s| s.scale(1.03))
+    .animate_scale(Transition::spring(SpringConfig::SNAPPY))
+    .keyframes_rotate(shake(), rejections)
 ```
 
-The hover is still declared while the shake runs; it simply is not being drawn.
-When the sequence ends the property is handed back **through its declared
-transition**, from wherever the sequence left it — so a pointer that arrived
-mid-shake gets its spring, rather than the card jumping to the hovered size on
-the sequence's last frame. A callback on that transition fires as it normally
-would, for the same reason.
+The hover is on `scale` and the shake on `rotate`, so both are drawn throughout:
+the card grows under the pointer while it is still shaking its head.
+
+The replacing rule applies when a timeline and a declaration are on **the same**
+component:
+
+```rust
+container()
+    .when_hovered(|s| s.rotate(3.0))
+    .animate_rotate(Transition::spring(SpringConfig::SNAPPY))
+    .keyframes_rotate(shake(), rejections)
+```
+
+Here the hover tilt is still declared while the shake runs; it simply is not
+being drawn. When the sequence ends the property is handed back **through its
+declared transition**, from wherever the sequence left it — so a pointer that
+arrived mid-shake gets its spring, rather than the card jumping to the tilted
+angle on the sequence's last frame. A callback on that transition fires as it
+normally would, for the same reason.
 
 The builders do not care which order you write them in: declaring a transition
 after a sequence keeps the sequence, and the other way round too.
@@ -87,8 +101,8 @@ quietly playing the segment as a straight line.
 
 ```rust
 Keyframes::new(320.0)
-    .at_with(0.0, Transform::IDENTITY, TimingFunction::EaseOut)
-    .at(1.0, Transform::rotate_degrees(2.0))
+    .at_with(0.0, 0.0, TimingFunction::EaseOut)
+    .at(1.0, 2.0)
 ```
 
 ## When not to use them

@@ -1,10 +1,12 @@
 use smallvec::SmallVec;
 
-use crate::transform::Transform;
+use crate::transform::{Scale, Translate};
 use crate::widgets::{Color, Padding};
 
-/// The channels of one animatable value. Six is `Transform`, the widest there
-/// is, so nothing here allocates.
+/// The channels of one animatable value. `Corners` is the widest at five —
+/// four radii and a curvature — and six costs the same 32 bytes as five, so
+/// the inline capacity is six: the headroom is free and a value that spills
+/// costs four heap allocations per spring retarget in `carry_velocity`.
 pub type Channels = SmallVec<[f32; 6]>;
 
 /// Trait for types that can be animated by interpolating between values
@@ -17,9 +19,32 @@ pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
     /// Whether transitioning from `from` to `to` is a "reverse" direction.
     /// Used to select the `.reverse()` transition when configured.
     /// - `f32`: value decreasing
-    /// - `Transform`: scale decreasing
+    /// - `Translate`: distance from the origin decreasing
+    /// - `Scale`: the two factors, added and unsigned, decreasing
     /// - `Color`: alpha decreasing, then luminance decreasing
     /// - `Padding`: total padding decreasing
+    ///
+    /// # A value of more than one number has ties, and they are not reversals
+    ///
+    /// Every type here but `f32` answers by reducing itself to one number, and
+    /// no such reduction can order a plane: for each of them there is a family
+    /// of pairs that reduce to the same number, and every one of those reads as
+    /// forward in both directions. `(200, 0) -> (-200, 0)` for a `Translate`,
+    /// `(2, 0.5) -> (0.5, 2)` for a `Scale`, a `Color` that changes hue at
+    /// constant luminance.
+    ///
+    /// This is not a gap waiting to be closed by a better measure. A tie is a
+    /// change that is genuinely neither larger nor smaller, and `is_reverse`
+    /// answers a yes-or-no question about a partial order. Three different
+    /// measures have been tried on `Scale` — signed area, unsigned area,
+    /// unsigned sum — and each moved the tie to a different family rather than
+    /// removing it. What each type picks is which ties it prefers to have, and
+    /// the choice is stated in its own impl.
+    ///
+    /// The consequence to know: a declared `.reverse()` transition does not
+    /// fire for a tie, and the forward one plays both ways. Where that matters,
+    /// the direction is the application's to model — a signal saying which way
+    /// it is going, and two declarations.
     fn is_reverse(_from: &Self, _to: &Self) -> bool {
         false
     }
@@ -29,9 +54,9 @@ pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
     /// Only `carry_velocity` reads this, and only as a direction: a spring's
     /// momentum is a vector in this space, and what a new segment inherits is
     /// the part of it pointing along itself. The channels may be in different
-    /// units — `Transform` mixes pixels with unitless coefficients — and that
-    /// is fine precisely because they are never summed into a length that is
-    /// used on its own.
+    /// units — `Corners` carries four radii in pixels beside a unitless
+    /// curvature — and that is fine precisely because they are never summed
+    /// into a length that is used on its own.
     fn channels(&self) -> Channels;
 }
 
@@ -179,27 +204,111 @@ impl Animatable for crate::renderer::CornerRadii {
     }
 }
 
-impl Animatable for Transform {
+impl Animatable for Translate {
     fn lerp(from: &Self, to: &Self, t: f32) -> Self {
-        let mut data = [0.0f32; 6];
-        for (i, val) in data.iter_mut().enumerate() {
-            *val = from.data[i] + (to.data[i] - from.data[i]) * t;
+        Self {
+            x: from.x + (to.x - from.x) * t,
+            y: from.y + (to.y - from.y) * t,
         }
-        Transform { data }
     }
 
+    /// Moving back towards where it started, measured as distance from the
+    /// origin — so a slide out and a slide home are told apart, which the old
+    /// `Transform` could not do at all: it compared `extract_scale()`, which a
+    /// translation does not move, so every slide read as forward.
+    ///
+    /// It ties on a move that keeps its distance — `(200, 0) -> (-200, 0)`, or
+    /// anything sliding along a circle. See the trait's note on ties.
     fn is_reverse(from: &Self, to: &Self) -> bool {
-        to.extract_scale() < from.extract_scale()
+        to.x.hypot(to.y) < from.x.hypot(from.y)
     }
 
     fn channels(&self) -> Channels {
-        Channels::from_slice(&self.data)
+        Channels::from_slice(&[self.x, self.y])
+    }
+}
+
+impl Animatable for Scale {
+    fn lerp(from: &Self, to: &Self, t: f32) -> Self {
+        Self {
+            x: from.x + (to.x - from.x) * t,
+            y: from.y + (to.y - from.y) * t,
+        }
+    }
+
+    /// Getting smaller, measured as the two factors added rather than
+    /// multiplied, and unsigned.
+    ///
+    /// Unsigned because a negative factor is a mirror and a mirror that grows
+    /// is growing: the signed product sent `(-1, 1) -> (-2, 1)` down the
+    /// reverse transition while it got bigger.
+    ///
+    /// Added rather than multiplied because the product ties on every `(k, 1/k)`
+    /// — they all have area one — and shrinking a widget uniformly is the case
+    /// worth getting right, while a stretch that keeps its area is the case
+    /// worth ceding. The sum ties instead on transposes, `(2, 0.5)` against
+    /// `(0.5, 2)`, which is the rarer shape and a genuinely undecidable one:
+    /// neither of those is smaller than the other. See the trait's note on
+    /// ties. `Padding` totals its four edges for the same reason.
+    fn is_reverse(from: &Self, to: &Self) -> bool {
+        to.x.abs() + to.y.abs() < from.x.abs() + from.y.abs()
+    }
+
+    fn channels(&self) -> Channels {
+        Channels::from_slice(&[self.x, self.y])
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stretch that keeps its area still has a direction. The product does
+    /// not see it — every `(k, 1/k)` has area one — so the reverse transition
+    /// was unreachable for the whole family.
+    #[test]
+    fn a_change_of_aspect_has_a_direction() {
+        let square = Scale::NONE;
+        let wide = Scale::new(2.0, 0.5);
+        assert!(!Scale::is_reverse(&square, &wide), "going out is forward");
+        assert!(Scale::is_reverse(&wide, &square), "and coming back is not");
+    }
+
+    /// A mirror that grows is growing.
+    #[test]
+    fn a_mirror_is_measured_by_its_size_not_its_sign() {
+        let small = Scale::new(-1.0, 1.0);
+        let large = Scale::new(-2.0, 1.0);
+        assert!(!Scale::is_reverse(&small, &large));
+        assert!(Scale::is_reverse(&large, &small));
+    }
+
+    /// The ties, written down so they are a decision and not a surprise. A
+    /// transposed scale and a slide that keeps its distance are neither larger
+    /// nor smaller, so both directions read as forward and a declared
+    /// `.reverse()` does not fire for them.
+    #[test]
+    fn a_tie_is_forward_in_both_directions() {
+        let wide = Scale::new(2.0, 0.5);
+        let tall = Scale::new(0.5, 2.0);
+        assert!(!Scale::is_reverse(&wide, &tall));
+        assert!(!Scale::is_reverse(&tall, &wide));
+
+        let right = Translate::new(200.0, 0.0);
+        let left = Translate::new(-200.0, 0.0);
+        assert!(!Translate::is_reverse(&right, &left));
+        assert!(!Translate::is_reverse(&left, &right));
+    }
+
+    /// A slide back is a reversal — which the old `Transform` could not say,
+    /// because it compared scale and a translation does not change it.
+    #[test]
+    fn a_return_leg_is_a_reversal() {
+        let home = Translate::NONE;
+        let away = Translate::new(200.0, 0.0);
+        assert!(!Translate::is_reverse(&home, &away));
+        assert!(Translate::is_reverse(&away, &home));
+    }
 
     #[test]
     fn test_f32_lerp() {
@@ -235,7 +344,15 @@ mod tests {
     fn channels_are_the_numbers_the_lerp_moves() {
         assert_eq!(Color::WHITE.channels().len(), 4);
         assert_eq!(Padding::all(2.0).channels().len(), 4);
-        assert_eq!(Transform::IDENTITY.channels().len(), 6);
+        assert_eq!(Translate::new(1.0, 2.0).channels().len(), 2);
+        // The widest, and so the one the inline capacity is sized from: four
+        // radii and a curvature. `carry_velocity` builds four of these per
+        // retarget, so a spilled one is four heap allocations per spring.
+        assert!(
+            crate::widgets::Corners::SQUARE.channels().len() <= Channels::new().inline_size(),
+            "Channels must hold the widest animatable value without spilling"
+        );
+        assert_eq!(Scale::uniform(2.0).channels().len(), 2);
         assert_eq!(3.0_f32.channels().as_slice(), &[3.0]);
     }
 
@@ -272,15 +389,14 @@ mod tests {
         );
     }
 
-    /// Directions that share no channel share no momentum.
+    /// Directions that share no channel share no momentum: a slide to the
+    /// right, retargeted straight down, starts from rest.
     #[test]
     fn orthogonal_directions_carry_nothing() {
-        let moved = Transform::translate(200.0, 0.0);
-        let mut scaled = moved;
-        scaled.data[0] += 0.05;
-        scaled.data[4] += 0.05;
+        let right = Translate::new(200.0, 0.0);
+        let down = Translate::new(200.0, 200.0);
 
-        let carried = carry_velocity(10.0, &Transform::IDENTITY, &moved, &moved, &scaled);
+        let carried = carry_velocity(10.0, &Translate::NONE, &right, &right, &down);
         assert_eq!(carried, 0.0);
     }
 

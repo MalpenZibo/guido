@@ -44,7 +44,7 @@ Combine ripples with other pressed state changes:
 .when_pressed(|s| s
     .ripple()
     .darker(0.05)
-    .transform(Transform::scale(0.98))
+    .scale(0.98)
 )
 ```
 
@@ -127,7 +127,10 @@ container()
     .padding(16.0)
     .background(Color::rgb(0.4, 0.6, 0.4))
     .corners(8.0)
-    .transform(Transform::rotate_degrees(5.0).then(&Transform::translate(10.0, 15.0)))
+    // Fixed order: the offset is in the parent's frame, and the box turns
+    // where it has been moved to.
+    .translate((10.0, 15.0))
+    .rotate(5.0)
     .when_hovered(|s| s.lighter(0.1))
     .when_pressed(|s| s.ripple())
 ```
@@ -163,7 +166,7 @@ fn ripple_button(label: &str, color: Color) -> Container {
 
         // Subtle hover, ripple on press
         .when_hovered(|s| s.lighter(0.1))
-        .when_pressed(|s| s.ripple().transform(Transform::scale(0.98)))
+        .when_pressed(|s| s.ripple().scale(0.98))
 
         .on_click(|| println!("Clicked!"))
         .child(container().child(text(label).color(Color::WHITE)))

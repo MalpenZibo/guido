@@ -11,6 +11,7 @@ mod style;
 #[cfg(test)]
 mod characterization;
 
+use animations::instant_transition;
 pub(crate) use animations::with_measure_final;
 pub use animations::{AdvanceResult, AnimationState, get_animated_value};
 use interaction::{HitContext, untransform_point};
@@ -25,13 +26,13 @@ use crate::advance_anim;
 use crate::animation::TransitionConfig;
 use crate::backdrop::BackdropBlur;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
-use crate::layout::{Constraints, Flex, Layout, Length, Size};
+use crate::layout::{Constraints, Flex, IntoF32, Layout, Length, Size};
+use crate::pivot::Pivot;
 use crate::reactive::{
     IntoSignal, OptionSignalExt, RwSignal, Signal, create_signal, focus_path, with_signal_tracking,
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
-use crate::transform::Transform;
-use crate::transform_origin::TransformOrigin;
+use crate::transform::{Scale, Transform, Translate};
 use crate::tree::{Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
 
@@ -42,7 +43,9 @@ use super::paint_children::{ChildPaintOptions, paint_children};
 use super::scroll::{
     ScrollAxis, ScrollState, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibility,
 };
-use super::state_layer::{RippleConfig, StateStyle, StateWhen, Stateful, resolve_background};
+use super::state_layer::{
+    Moves, RippleConfig, StateStyle, StateWhen, Stateful, resolve_background,
+};
 use super::widget::{
     Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding, Rect,
     ScrollSource, Widget,
@@ -183,6 +186,22 @@ pub enum Overflow {
     Hidden,
 }
 
+/// The three transform components and the point they act about. Boxed and
+/// absent by default, like `anims` and `interaction`.
+///
+/// `Option<Signal<T>>` is 12 bytes — `Signal` is two `u32` plus a fieldless
+/// `SignalKind` whose niche the `Option` reuses — so four of them is 48 on
+/// every container in every tree, and the overwhelming majority declare none.
+/// Behind a pointer, `Container` measures 312 bytes against main's 328, which
+/// spent 24 here on the two fields this replaces.
+#[derive(Default)]
+pub(super) struct TransformProps {
+    pub(super) translate: Option<Signal<Translate>>,
+    pub(super) rotate: Option<Signal<f32>>,
+    pub(super) scale: Option<Signal<Scale>>,
+    pub(super) pivot: Option<Signal<Pivot>>,
+}
+
 /// Boxed animation states. Only allocated when `.transition()` or
 /// `.animate_*()` is called, saving ~400 bytes per non-animated Container.
 #[derive(Default)]
@@ -195,7 +214,9 @@ pub(super) struct ContainerAnims {
     pub(super) padding: Option<AnimationState<Padding>>,
     pub(super) border_width: Option<AnimationState<f32>>,
     pub(super) border_color: Option<AnimationState<Color>>,
-    pub(super) transform: Option<AnimationState<Transform>>,
+    pub(super) translate: Option<AnimationState<Translate>>,
+    pub(super) rotate: Option<AnimationState<f32>>,
+    pub(super) scale: Option<AnimationState<Scale>>,
 }
 
 bitflags::bitflags! {
@@ -237,6 +258,21 @@ pub(super) struct InteractionState {
     /// property — CSS's rule at equal specificity, and the only one that lets
     /// a caller decide that an error outranks the focus.
     pub(super) states: Vec<(StateWhen, StateStyle)>,
+    /// Which of `translate`, `rotate` and `scale` the declared layers override
+    /// between them.
+    ///
+    /// Decided when the layer is pushed, because that is when it is knowable —
+    /// a layer either names the property or it does not, and no signal is
+    /// involved. Kept rather than rescanned because it gates the identity fast
+    /// path in `animated_transform`, which runs on every paint and every
+    /// coalesced pointer move: a button with hover, focus and pressed layers
+    /// would otherwise walk three `StateStyle`s to be told nothing turns.
+    ///
+    /// Three answers rather than one, because that fast path is per component:
+    /// `when_pressed(|s| s.scale(0.98))` is the commonest state layer there is,
+    /// and a single bit would have made it pay for a translate and a rotate
+    /// nothing declares.
+    pub(super) declares_transform: Moves,
     pub(super) ripple: RippleState,
 }
 
@@ -254,6 +290,7 @@ impl Default for InteractionState {
             on_mouse_up: None,
             flags: create_signal(InteractionFlags::empty()),
             states: Vec::new(),
+            declares_transform: Moves::default(),
             ripple: RippleState::new(),
         }
     }
@@ -393,8 +430,7 @@ pub struct Container {
     /// animation went on running.
     pub(super) elevation_reach: Cell<f32>,
     pub(super) visible: Option<Signal<bool>>,
-    pub(super) transform: Option<Signal<Transform>>,
-    pub(super) transform_origin: Option<Signal<TransformOrigin>>,
+    pub(super) transform: Option<Box<TransformProps>>,
 
     // Interaction state (callbacks, hover/press, state styles, ripple)
     // Only allocated when interaction features are used
@@ -438,7 +474,6 @@ impl Container {
             elevation_reach: Cell::new(0.0),
             visible: None,
             transform: None,
-            transform_origin: None,
             interaction: None,
             widget_ref: None,
             backdrop_blur: None,
@@ -469,6 +504,27 @@ impl Container {
     /// Get or create animation states box
     fn anims_mut(&mut self) -> &mut ContainerAnims {
         self.anims.get_or_insert_with(Box::default)
+    }
+
+    /// Get or create the transform components.
+    fn transform_mut(&mut self) -> &mut TransformProps {
+        self.transform.get_or_insert_with(Box::default)
+    }
+
+    pub(super) fn translate_signal(&self) -> Option<Signal<Translate>> {
+        self.transform.as_deref().and_then(|t| t.translate)
+    }
+
+    pub(super) fn rotate_signal(&self) -> Option<Signal<f32>> {
+        self.transform.as_deref().and_then(|t| t.rotate)
+    }
+
+    pub(super) fn scale_signal(&self) -> Option<Signal<Scale>> {
+        self.transform.as_deref().and_then(|t| t.scale)
+    }
+
+    pub(super) fn pivot_signal(&self) -> Option<Signal<Pivot>> {
+        self.transform.as_deref().and_then(|t| t.pivot)
     }
 
     /// Get or create interaction state
@@ -782,15 +838,54 @@ impl Container {
         self
     }
 
-    /// Set the transform for this container
-    pub fn transform<M>(mut self, t: impl IntoSignal<Transform, M>) -> Self {
-        self.transform = Some(t.into_signal());
+    /// Displace this container from where it was laid out.
+    ///
+    /// Paint-only, like the other two: the space the layout gave it does not
+    /// move, so nothing around it shifts.
+    ///
+    /// ```ignore
+    /// container().translate((20.0, 10.0))
+    /// container().translate(move || Translate::new(offset.get(), 0.0))
+    /// ```
+    pub fn translate<M>(mut self, t: impl IntoSignal<Translate, M>) -> Self {
+        self.transform_mut().translate = Some(t.into_signal());
         self
     }
 
-    /// Set the transform origin (pivot point) for this container.
-    pub fn transform_origin<M>(mut self, origin: impl IntoSignal<TransformOrigin, M>) -> Self {
-        self.transform_origin = Some(origin.into_signal());
+    /// Turn this container, in degrees, clockwise, about its [`pivot`](Self::pivot).
+    ///
+    /// The angle is a number and is kept as one — 360 is a full turn, not
+    /// zero, and 720 is two. Nothing normalises it, so what
+    /// [`rotate`](Self::rotate) is given is what an animation interpolates and
+    /// what a read gives back.
+    ///
+    /// ```ignore
+    /// container().rotate(45.0)
+    /// container().rotate(move || heading.get())
+    /// ```
+    pub fn rotate<M>(mut self, degrees: impl IntoSignal<f32, M>) -> Self {
+        self.transform_mut().rotate = Some(degrees.into_signal());
+        self
+    }
+
+    /// Resize this container about its [`pivot`](Self::pivot), without
+    /// re-running layout.
+    ///
+    /// A bare factor scales both axes; a pair scales them apart.
+    ///
+    /// ```ignore
+    /// container().scale(1.5)
+    /// container().scale((2.0, 0.5))
+    /// ```
+    pub fn scale<M>(mut self, factor: impl IntoSignal<Scale, M>) -> Self {
+        self.transform_mut().scale = Some(factor.into_signal());
+        self
+    }
+
+    /// The point [`rotate`](Self::rotate) turns about and [`scale`](Self::scale)
+    /// grows from. The centre of the container by default.
+    pub fn pivot<M>(mut self, origin: impl IntoSignal<Pivot, M>) -> Self {
+        self.transform_mut().pivot = Some(origin.into_signal());
         self
     }
 
@@ -882,88 +977,183 @@ impl Container {
         self
     }
 
-    /// Enable animation for transform changes
-    pub fn animate_transform(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.transform.get_or_untracked(Transform::IDENTITY);
+    /// Ease `translate` changes instead of snapping to them.
+    ///
+    /// The three components animate independently: each has its own curve, so
+    /// a card can spring into place while its rotation eases. Declaring one
+    /// says nothing about the other two.
+    pub fn animate_translate(mut self, transition: impl Into<TransitionConfig>) -> Self {
+        let initial = self.translate_signal().get_or_untracked(Translate::NONE);
         // Whatever sequence is already here comes along: a fresh state would
         // throw it away, and the order the two builders were written in would
         // decide whether it exists — silently, with the trigger still firing.
-        let previous = self.anims_mut().transform.take();
+        let previous = self.anims_mut().translate.take();
         let mut anim = AnimationState::new(initial, transition);
-        anim.adopt_timeline_of(previous);
-        self.anims_mut().transform = Some(anim);
+        anim.adopt_declarations_of(previous);
+        self.anims_mut().translate = Some(anim);
         self
     }
 
-    /// Play a sequence of transforms whenever `plays` changes.
+    /// Ease `rotate` changes instead of snapping to them.
+    ///
+    /// The angle is interpolated as the number it is, so a turn to 360° is a
+    /// full revolution and a turn to 720° is two. Nothing takes a shorter way
+    /// round on the container's behalf: an angle that arrives already wrapped
+    /// — from `atan2`, say — wraps the animation with it, and unwrapping it is
+    /// the caller's to do because only the caller knows which way was meant.
+    ///
+    /// A declared `.reverse()` follows the *number*, not the turn, because the
+    /// angle is an `f32` and `f32::is_reverse` means decreasing. So a tilt from
+    /// `0.0` to `-8.0` takes the reverse curve going out and the forward one
+    /// coming home. Where that matters, declare the rest angle as the larger
+    /// number — `8.0` out and `0.0` home — or leave the reverse undeclared and
+    /// use one curve both ways.
+    pub fn animate_rotate(mut self, transition: impl Into<TransitionConfig>) -> Self {
+        let initial = self.rotate_signal().get_or_untracked(0.0);
+        let previous = self.anims_mut().rotate.take();
+        let mut anim = AnimationState::new(initial, transition);
+        anim.adopt_declarations_of(previous);
+        self.anims_mut().rotate = Some(anim);
+        self
+    }
+
+    /// Ease `scale` changes instead of snapping to them.
+    pub fn animate_scale(mut self, transition: impl Into<TransitionConfig>) -> Self {
+        let initial = self.scale_signal().get_or_untracked(Scale::NONE);
+        let previous = self.anims_mut().scale.take();
+        let mut anim = AnimationState::new(initial, transition);
+        anim.adopt_declarations_of(previous);
+        self.anims_mut().scale = Some(anim);
+        self
+    }
+
+    /// Play a sequence of displacements whenever `plays` changes.
     ///
     /// The other animations here move *towards* a value; this one has none. It
-    /// plays, and while it plays it replaces whatever `transform` declares,
+    /// plays, and while it plays it replaces whatever `translate` declares,
     /// handing the property back when it ends — the rule CSS gives an
     /// animation over a normal declaration.
-    ///
-    /// ```ignore
-    /// container()
-    ///     .keyframes_transform(
-    ///         Keyframes::new(320.0)
-    ///             .at(0.0, Transform::IDENTITY)
-    ///             .at(0.2, Transform::rotate_degrees(1.5))
-    ///             .at(0.5, Transform::rotate_degrees(-1.0))
-    ///             .at(1.0, Transform::IDENTITY),
-    ///         rejections,
-    ///     )
-    /// ```
     ///
     /// The trigger is a count and not a flag on purpose: a second refusal has
     /// to shake as loudly as the first, and a signal that stays equal notifies
     /// nobody. The count it starts at is whatever it holds when the container
     /// is built, so nothing plays on the first frame.
-    pub fn keyframes_transform<M>(
+    pub fn keyframes_translate<M>(
         mut self,
-        keyframes: crate::animation::Keyframes<Transform>,
+        keyframes: crate::animation::Keyframes<Translate>,
         plays: impl IntoSignal<u32, M>,
     ) -> Self {
-        let initial = self.transform.get_or_untracked(Transform::IDENTITY);
+        let initial = self.translate_signal().get_or_untracked(Translate::NONE);
         let anim = self
             .anims_mut()
-            .transform
-            // A transition of no duration: the timeline speaks for this
-            // property while it plays, and outside it the declared value
-            // applies at once, exactly as it would with no animation at all.
-            .get_or_insert_with(|| {
-                AnimationState::new(
-                    initial,
-                    crate::animation::Transition::new(
-                        0.0,
-                        crate::animation::TimingFunction::Linear,
-                    ),
-                )
-            });
+            .translate
+            .get_or_insert_with(|| AnimationState::new(initial, instant_transition()));
         anim.set_timeline(keyframes);
         anim.set_play_trigger(plays.into_signal());
         self
     }
 
-    /// Enable transform animation with an ENTER transition: on first
-    /// layout the transform animates from `enter_from` to its effective
-    /// value, so the widget appears mid-animation — no signal flip, no
-    /// timer. A menu that scales open declares it directly:
+    /// Play a sequence of angles whenever `plays` changes — a shake, a wobble,
+    /// a turn that comes back. See
+    /// [`keyframes_translate`](Self::keyframes_translate) for what a timeline
+    /// is and why the trigger counts.
     ///
     /// ```ignore
-    /// .transform(move || if open.get() { Transform::IDENTITY } else { collapsed })
-    /// .animate_transform_from(collapsed, Transition::spring(SpringConfig::SNAPPY))
-    /// // `open` can simply start true: the enter plays from `collapsed`
+    /// container().keyframes_rotate(
+    ///     Keyframes::new(320.0)
+    ///         .at(0.0, 0.0)
+    ///         .at(0.2, 1.5)
+    ///         .at(0.5, -1.0)
+    ///         .at(1.0, 0.0),
+    ///     rejections,
+    /// )
     /// ```
-    pub fn animate_transform_from(
+    pub fn keyframes_rotate<M>(
         mut self,
-        enter_from: Transform,
+        keyframes: crate::animation::Keyframes<f32>,
+        plays: impl IntoSignal<u32, M>,
+    ) -> Self {
+        let initial = self.rotate_signal().get_or_untracked(0.0);
+        let anim = self
+            .anims_mut()
+            .rotate
+            .get_or_insert_with(|| AnimationState::new(initial, instant_transition()));
+        anim.set_timeline(keyframes);
+        anim.set_play_trigger(plays.into_signal());
+        self
+    }
+
+    /// Play a sequence of scales whenever `plays` changes — a pulse, a bounce.
+    /// See [`keyframes_translate`](Self::keyframes_translate).
+    pub fn keyframes_scale<M>(
+        mut self,
+        keyframes: crate::animation::Keyframes<Scale>,
+        plays: impl IntoSignal<u32, M>,
+    ) -> Self {
+        let initial = self.scale_signal().get_or_untracked(Scale::NONE);
+        let anim = self
+            .anims_mut()
+            .scale
+            .get_or_insert_with(|| AnimationState::new(initial, instant_transition()));
+        anim.set_timeline(keyframes);
+        anim.set_play_trigger(plays.into_signal());
+        self
+    }
+
+    /// Animate `translate` with an ENTER transition: on first layout it
+    /// animates from `enter_from` to its effective value, so the widget
+    /// appears mid-animation — no signal flip, no timer.
+    pub fn animate_translate_from(
+        mut self,
+        enter_from: impl Into<Translate>,
         transition: impl Into<TransitionConfig>,
     ) -> Self {
-        let initial = self.transform.get_or_untracked(Transform::IDENTITY);
-        let previous = self.anims_mut().transform.take();
+        let initial = self.translate_signal().get_or_untracked(Translate::NONE);
+        let previous = self.anims_mut().translate.take();
+        let mut anim = AnimationState::new(initial, transition).with_enter_from(enter_from.into());
+        anim.adopt_declarations_of(previous);
+        self.anims_mut().translate = Some(anim);
+        self
+    }
+
+    /// Animate `rotate` with an ENTER transition. See
+    /// [`animate_translate_from`](Self::animate_translate_from).
+    ///
+    /// `IntoF32` rather than `Into<f32>` so that `animate_rotate_from(45, ..)`
+    /// works, the way `animate_scale_from(2, ..)` does through `From<i32> for
+    /// Scale`: there is no `From<i32> for f32`, and an angle written as a bare
+    /// integer is the ordinary case.
+    pub fn animate_rotate_from(
+        mut self,
+        enter_from: impl IntoF32,
+        transition: impl Into<TransitionConfig>,
+    ) -> Self {
+        let enter_from = enter_from.into_f32();
+        let initial = self.rotate_signal().get_or_untracked(0.0);
+        let previous = self.anims_mut().rotate.take();
         let mut anim = AnimationState::new(initial, transition).with_enter_from(enter_from);
-        anim.adopt_timeline_of(previous);
-        self.anims_mut().transform = Some(anim);
+        anim.adopt_declarations_of(previous);
+        self.anims_mut().rotate = Some(anim);
+        self
+    }
+
+    /// Animate `scale` with an ENTER transition: a menu that scales open
+    /// declares it directly, and `open` can simply start true.
+    ///
+    /// ```ignore
+    /// .scale(move || if open.get() { Scale::NONE } else { Scale::uniform(0.9) })
+    /// .animate_scale_from(0.9, Transition::spring(SpringConfig::SNAPPY))
+    /// ```
+    pub fn animate_scale_from(
+        mut self,
+        enter_from: impl Into<Scale>,
+        transition: impl Into<TransitionConfig>,
+    ) -> Self {
+        let initial = self.scale_signal().get_or_untracked(Scale::NONE);
+        let previous = self.anims_mut().scale.take();
+        let mut anim = AnimationState::new(initial, transition).with_enter_from(enter_from.into());
+        anim.adopt_declarations_of(previous);
+        self.anims_mut().scale = Some(anim);
         self
     }
 
@@ -1028,7 +1218,10 @@ impl Stateful for Container {
     type Style = StateStyle;
 
     fn push_state_style(&mut self, when: StateWhen, style: StateStyle) {
-        self.interact_mut().states.push((when, style));
+        let moves = style.moves_anything();
+        let ix = self.interact_mut();
+        ix.declares_transform.merge(moves);
+        ix.states.push((when, style));
     }
 }
 
@@ -1058,6 +1251,19 @@ impl Widget for Container {
             // the debug diagnostic reports each of these reads as a value that
             // "will not update", which is the opposite of true and trains the
             // reader to ignore a warning that is usually right.
+            // Which of the three are actually animated, read before the
+            // mutable borrow below. `anims` is `Some` — the block is guarded
+            // on it and unwraps it two statements down.
+            // *Animated*, which is a narrower question than the one
+            // `animated_transform` asks under three names that look the same:
+            // there a component counts if anything could move it, here only if
+            // there is an animation to aim.
+            let declared = self.anims.as_ref().expect("guarded above");
+            let (animates_translate, animates_rotate, animates_scale) = (
+                declared.translate.is_some(),
+                declared.rotate.is_some(),
+                declared.scale.is_some(),
+            );
             let (
                 padding_target,
                 border_width_target,
@@ -1065,7 +1271,9 @@ impl Widget for Container {
                 corners_target,
                 elevation_target,
                 border_color_target,
-                transform_target,
+                translate_target,
+                rotate_target,
+                scale_target,
             ) = crate::reactive::diagnostics::snapshot_zone(|| {
                 (
                     self.padding.get_or(Padding::default()),
@@ -1074,7 +1282,27 @@ impl Widget for Container {
                     self.effective_corners_target(id),
                     self.effective_elevation_target(id),
                     self.effective_border_color_target(id),
-                    self.effective_transform_target(id),
+                    // Only where there is an animation to aim: each of these
+                    // walks the state layers, and all three used to run for a
+                    // container that animates nothing but its background. The
+                    // neutral value where there is not, rather than an
+                    // `Option` the macro would have to unwrap against an
+                    // invariant stated only in prose.
+                    if animates_translate {
+                        self.effective_translate_target(id)
+                    } else {
+                        Translate::NONE
+                    },
+                    if animates_rotate {
+                        self.effective_rotate_target(id)
+                    } else {
+                        0.0
+                    },
+                    if animates_scale {
+                        self.effective_scale_target(id)
+                    } else {
+                        Scale::NONE
+                    },
                 )
             });
             let anims = self.anims.as_mut().unwrap();
@@ -1084,7 +1312,8 @@ impl Widget for Container {
             advance_anim!(anims, height, id, any_animating, layout);
             advance_anim!(anims, padding, padding_target, id, any_animating, layout);
 
-            // Paint-only animations: border_width, background, corners, border_color, transform
+            // Paint-only animations: border_width, background, corners,
+            // border_color, and the three transform components
             advance_anim!(
                 anims,
                 border_width,
@@ -1108,12 +1337,21 @@ impl Widget for Container {
             // that will show its first value. The read is a snapshot: the
             // subscription belongs to `resync_animation_targets`, which asks
             // the same question inside its tracking scope.
-            if let Some(anim) = anims.transform.as_mut()
-                && crate::reactive::diagnostics::snapshot_zone(|| anim.take_play())
-            {
-                anim.play();
+            macro_rules! start_timeline {
+                ($field:ident) => {
+                    if let Some(anim) = anims.$field.as_mut()
+                        && crate::reactive::diagnostics::snapshot_zone(|| anim.take_play())
+                    {
+                        anim.play();
+                    }
+                };
             }
-            advance_anim!(anims, transform, transform_target, id, any_animating, paint);
+            start_timeline!(translate);
+            start_timeline!(rotate);
+            start_timeline!(scale);
+            advance_anim!(anims, translate, translate_target, id, any_animating, paint);
+            advance_anim!(anims, rotate, rotate_target, id, any_animating, paint);
+            advance_anim!(anims, scale, scale_target, id, any_animating, paint);
         }
 
         // Advance ripple animation
@@ -1327,14 +1565,14 @@ impl Widget for Container {
             bounds: tree.get_bounds(id).unwrap_or_default(),
             corners: self.animated_corners(id),
             transform: self.animated_transform(id),
-            transform_origin: self.transform_origin.get_or(TransformOrigin::CENTER),
+            pivot: self.pivot_signal().get_or(Pivot::CENTER),
         };
 
         // Undo our own transform before hit testing against the laid-out bounds
         let local_event: Cow<'_, Event> = match event.coords() {
             Some((x, y)) if !hit.transform.is_identity() => {
                 let (local_x, local_y) =
-                    untransform_point(&hit.transform, hit.transform_origin, hit.bounds, x, y);
+                    untransform_point(&hit.transform, hit.pivot, hit.bounds, x, y);
                 Cow::Owned(event.with_coords(local_x, local_y))
             }
             _ => Cow::Borrowed(event),
@@ -1402,7 +1640,7 @@ impl Widget for Container {
             corners,
             elevation_level,
             user_transform,
-            transform_origin,
+            pivot,
             border_width,
             border_color,
             gradient,
@@ -1414,7 +1652,7 @@ impl Widget for Container {
                 self.animated_corners(id),
                 self.animated_elevation(id),
                 self.animated_transform(id),
-                self.transform_origin.get_or(TransformOrigin::CENTER),
+                self.pivot_signal().get_or(Pivot::CENTER),
                 self.animated_border_width(id),
                 self.animated_border_color(id),
                 self.gradient.as_ref().and_then(|g| g.get()),
@@ -1435,7 +1673,7 @@ impl Widget for Container {
 
         // Compose our own transform on top of the position the parent set.
         if !user_transform.is_identity() {
-            ctx.apply_transform_with_origin(user_transform, transform_origin);
+            ctx.apply_transform_with_pivot(user_transform, pivot);
         }
 
         // Before the decoration: the container paints over its own blurred
@@ -1637,14 +1875,14 @@ mod tests {
     fn write_between_first_layout_and_first_paint_starts_animation() {
         let open = create_signal(false);
         let widget = container()
-            .transform(move || {
+            .scale(move || {
                 if open.get() {
-                    Transform::IDENTITY
+                    Scale::NONE
                 } else {
-                    Transform::scale_xy(1.0, 0.0)
+                    Scale::new(1.0, 0.0)
                 }
             })
-            .animate_transform(Transition::new(200, TimingFunction::EaseOut));
+            .animate_scale(Transition::new(200, TimingFunction::EaseOut));
 
         let mut tree = Tree::new();
         let id = tree.register(Box::new(widget));
@@ -1691,13 +1929,13 @@ mod tests {
     fn enter_transition_starts_animating_at_first_layout() {
         use crate::animation::TimingFunction;
 
-        let collapsed = Transform::scale_xy(1.0, 0.0);
+        let collapsed = Scale::new(1.0, 0.0);
         let entering = container()
-            .transform(Transform::IDENTITY)
-            .animate_transform_from(collapsed, Transition::new(200, TimingFunction::EaseOut));
+            .scale(Scale::NONE)
+            .animate_scale_from(collapsed, Transition::new(200, TimingFunction::EaseOut));
         let plain = container()
-            .transform(Transform::IDENTITY)
-            .animate_transform(Transition::new(200, TimingFunction::EaseOut));
+            .scale(Scale::NONE)
+            .animate_scale(Transition::new(200, TimingFunction::EaseOut));
 
         let mut tree = Tree::new();
         let entering_id = tree.register(Box::new(entering));

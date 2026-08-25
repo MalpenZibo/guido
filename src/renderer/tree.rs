@@ -5,8 +5,8 @@ use std::rc::Rc;
 
 use smallvec::SmallVec;
 
+use crate::pivot::Pivot;
 use crate::transform::Transform;
-use crate::transform_origin::TransformOrigin;
 use crate::widgets::Rect;
 
 use super::commands::DrawCommand;
@@ -78,7 +78,7 @@ pub struct RenderNode {
     pub parent_position: Transform,
 
     /// Transform origin for local_transform
-    pub transform_origin: TransformOrigin,
+    pub pivot: Pivot,
 
     /// Bounds in local coordinates (for transform origin resolution)
     pub bounds: Rect,
@@ -134,7 +134,7 @@ impl RenderNode {
             id,
             local_transform: Transform::IDENTITY,
             parent_position: Transform::IDENTITY,
-            transform_origin: TransformOrigin::CENTER,
+            pivot: Pivot::CENTER,
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
             commands: SmallVec::new(),
             children: Vec::new(),
@@ -159,7 +159,7 @@ impl RenderNode {
     pub fn clear(&mut self) {
         self.local_transform = Transform::IDENTITY;
         self.parent_position = Transform::IDENTITY;
-        self.transform_origin = TransformOrigin::CENTER;
+        self.pivot = Pivot::CENTER;
         self.commands.clear();
         self.children.clear();
         self.overlay_commands.clear();

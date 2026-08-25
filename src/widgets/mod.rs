@@ -64,6 +64,24 @@ impl IntoVal<Corners> for i32 {
     }
 }
 
+impl IntoVal<Corners> for crate::renderer::CornerRadii {
+    fn into_val(self) -> Corners {
+        self.into()
+    }
+}
+
+impl IntoVal<Corners> for u16 {
+    fn into_val(self) -> Corners {
+        self.into()
+    }
+}
+
+impl IntoVal<Corners> for (f32, f32, f32, f32) {
+    fn into_val(self) -> Corners {
+        self.into()
+    }
+}
+
 impl IntoVal<Corners> for u32 {
     fn into_val(self) -> Corners {
         Corners::from(self)
@@ -118,8 +136,59 @@ impl IntoVal<Padding> for f32 {
     }
 }
 
+impl IntoVal<Padding> for [f32; 2] {
+    fn into_val(self) -> Padding {
+        self.into()
+    }
+}
+
+impl IntoVal<Padding> for [f32; 4] {
+    fn into_val(self) -> Padding {
+        self.into()
+    }
+}
+
+impl IntoVal<Padding> for [i32; 2] {
+    fn into_val(self) -> Padding {
+        self.into()
+    }
+}
+
+impl IntoVal<Padding> for [i32; 4] {
+    fn into_val(self) -> Padding {
+        self.into()
+    }
+}
+
 impl IntoVal<Padding> for f64 {
     fn into_val(self) -> Padding {
         Padding::from(self as f32)
     }
 }
+
+// A signal accepts what a closure returning the same type accepts. The lists
+// mirror the `IntoVal` impls above one for one; see `reactive::into_signal`
+// for why they cannot be one blanket impl.
+crate::reactive::converting_signals!(
+    f32 => Corners,
+    f64 => Corners,
+    i32 => Corners,
+    u32 => Corners,
+    [f32; 2] => Corners,
+    [f32; 4] => Corners,
+    [i32; 2] => Corners,
+    [i32; 4] => Corners,
+    u16 => Corners,
+    (f32, f32, f32, f32) => Corners,
+    crate::renderer::CornerRadii => Corners,
+
+    f32 => Padding,
+    f64 => Padding,
+    i32 => Padding,
+    u32 => Padding,
+    u16 => Padding,
+    [f32; 2] => Padding,
+    [f32; 4] => Padding,
+    [i32; 2] => Padding,
+    [i32; 4] => Padding,
+);

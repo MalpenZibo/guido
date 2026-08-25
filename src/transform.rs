@@ -1,4 +1,167 @@
+//! How a widget is moved, turned and resized, and the matrix that carries the
+//! result to the GPU.
+//!
+//! The three are separate values because that is the only form in which they
+//! can be animated. A matrix cannot say how far round a turn went: a rotation
+//! of 360° and no rotation at all are the same six numbers, so interpolating
+//! them is interpolating something that has already lost the answer. Kept
+//! apart, a rotation is an angle and an angle is a number.
+//!
+//! They compose in one order, always — translate, then rotate, then scale —
+//! which is the order CSS fixed for the same three properties, and for the
+//! same reason: with no declared order, two declarations that read the same
+//! would mean different things.
+
+/// How far a widget is displaced, in logical pixels.
+///
+/// Unaffected by [`Pivot`](crate::pivot::Pivot): moving a box is the same
+/// movement wherever the pivot sits.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Translate {
+    /// Rightward displacement.
+    pub x: f32,
+    /// Downward displacement.
+    pub y: f32,
+}
+
+impl Translate {
+    /// No displacement.
+    pub const NONE: Self = Self { x: 0.0, y: 0.0 };
+
+    /// A displacement of `(x, y)`.
+    pub const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+}
+
+/// How much a widget is resized, as a factor per axis.
+///
+/// A bare number scales both axes; a pair scales them apart.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Scale {
+    /// Horizontal factor. `1.0` is unscaled.
+    pub x: f32,
+    /// Vertical factor. `1.0` is unscaled.
+    pub y: f32,
+}
+
+impl Scale {
+    /// Unscaled.
+    pub const NONE: Self = Self { x: 1.0, y: 1.0 };
+
+    /// The same factor on both axes.
+    pub const fn uniform(factor: f32) -> Self {
+        Self {
+            x: factor,
+            y: factor,
+        }
+    }
+
+    /// A factor per axis.
+    pub const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+}
+
+impl Default for Scale {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+macro_rules! from_pairs {
+    ($t:ty $(, $n:ty)*) => {$(
+        impl From<($n, $n)> for $t {
+            fn from((x, y): ($n, $n)) -> Self {
+                Self { x: x as f32, y: y as f32 }
+            }
+        }
+        impl From<[$n; 2]> for $t {
+            fn from([x, y]: [$n; 2]) -> Self {
+                Self { x: x as f32, y: y as f32 }
+            }
+        }
+    )*};
+}
+from_pairs!(Translate, f32, f64, i32, u32);
+from_pairs!(Scale, f32, f64, i32, u32);
+
+macro_rules! scale_from_scalar {
+    ($($n:ty),*) => {$(
+        impl From<$n> for Scale {
+            fn from(factor: $n) -> Self {
+                Self::uniform(factor as f32)
+            }
+        }
+    )*};
+}
+scale_from_scalar!(f32, f64, i32, u32);
+
+// A closure has to accept whatever the constant form accepts, or the same
+// expression compiles in one position and not the other — the asymmetry
+// `IntoSignal` exists to remove. `From` covers the constants; these cover the
+// closures.
+macro_rules! into_val_pairs {
+    ($t:ty $(, $n:ty)*) => {$(
+        impl crate::reactive::IntoVal<$t> for ($n, $n) {
+            fn into_val(self) -> $t {
+                self.into()
+            }
+        }
+        impl crate::reactive::IntoVal<$t> for [$n; 2] {
+            fn into_val(self) -> $t {
+                self.into()
+            }
+        }
+    )*};
+}
+into_val_pairs!(Translate, f32, f64, i32, u32);
+into_val_pairs!(Scale, f32, f64, i32, u32);
+
+macro_rules! into_val_scalar {
+    ($($n:ty),*) => {$(
+        impl crate::reactive::IntoVal<Scale> for $n {
+            fn into_val(self) -> Scale {
+                Scale::uniform(self as f32)
+            }
+        }
+    )*};
+}
+into_val_scalar!(f32, f64, i32, u32);
+
+crate::reactive::converting_signals!(
+    f32 => Scale,
+    f64 => Scale,
+    i32 => Scale,
+    u32 => Scale,
+    (f32, f32) => Scale,
+    (f64, f64) => Scale,
+    (i32, i32) => Scale,
+    (u32, u32) => Scale,
+    [f32; 2] => Scale,
+    [f64; 2] => Scale,
+    [i32; 2] => Scale,
+    [u32; 2] => Scale,
+    (f32, f32) => Translate,
+    (f64, f64) => Translate,
+    (i32, i32) => Translate,
+    (u32, u32) => Translate,
+    [f32; 2] => Translate,
+    [f64; 2] => Translate,
+    [i32; 2] => Translate,
+    [u32; 2] => Translate,
+);
+
+/// Below this a determinant is zero: the transform has collapsed the plane
+/// onto a line or a point, and cannot be undone.
+const DEGENERATE: f32 = 1e-10;
+
 /// A 2D affine transformation.
+///
+/// Not part of the public vocabulary: an application says `translate`,
+/// `rotate` and `scale`, and this is what those compose into on the way to the
+/// renderer. It is reachable from [`widget_prelude`](crate::widget_prelude) so
+/// that a widget written outside the crate can position what it paints.
 ///
 /// Stored as 6 floats in the layout `[a, b, tx, c, d, ty]`, representing:
 ///
@@ -23,6 +186,43 @@ impl Transform {
     pub const IDENTITY: Self = Self {
         data: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
     };
+
+    /// The three declared components, composed: translate, then rotate, then
+    /// scale.
+    ///
+    /// Folded into the affine form directly rather than built by two `then`
+    /// calls, since two of the three are known to be sparse. The pivot is not
+    /// applied here — [`center_at`](Self::center_at) does that, from both of
+    /// the places that need the composed matrix: `flatten_node` on the way to
+    /// the renderer, and `untransform_point` on the way back for a pointer
+    /// event.
+    ///
+    /// It very much changes the rotate and scale halves — turning about a
+    /// corner is not turning about the centre, and that is the whole point of
+    /// it. What survives it untouched is the *translate* component, because
+    /// `C·T·R·S·C⁻¹` is `T·(C·R·S·C⁻¹)`: a translation commutes past the
+    /// conjugating one. Which is why a `Pivot` moves what `rotate` and `scale`
+    /// do and does nothing at all to `translate`.
+    pub fn compose(translate: Translate, rotate_degrees: f32, scale: Scale) -> Self {
+        // Not about correctness: this runs for every container on every paint
+        // and every pointer event, and almost none of them turn.
+        let (sin, cos) = if rotate_degrees == 0.0 {
+            (0.0, 1.0)
+        } else {
+            rotate_degrees.to_radians().sin_cos()
+        };
+
+        Self {
+            data: [
+                cos * scale.x,
+                -sin * scale.y,
+                translate.x,
+                sin * scale.x,
+                cos * scale.y,
+                translate.y,
+            ],
+        }
+    }
 
     /// Create a translation transform
     pub fn translate(x: f32, y: f32) -> Self {
@@ -158,8 +358,10 @@ impl Transform {
 
         let det = a * d - b * c;
 
-        // Handle degenerate case (zero determinant)
-        if det.abs() < 1e-10 {
+        // Degenerate: the transform has collapsed the plane onto a line or a
+        // point and cannot be undone, so the identity is the least wrong
+        // answer available. What that costs the hit test is #227.
+        if det.abs() < DEGENERATE {
             return Self::IDENTITY;
         }
 
@@ -214,8 +416,39 @@ impl Transform {
         self.data[5] = val;
     }
 
-    /// The X and Y scale components — `sqrt(a² + b²)` and `sqrt(c² + d²)`,
-    /// so a rotated transform still reports the scale it carries.
+    /// How far the image of a unit circle reaches horizontally and vertically
+    /// in world space — `sqrt(a² + b²)` and `sqrt(c² + d²)`, the norms of the
+    /// two **rows**.
+    ///
+    /// This is not "the scale the transform was built from", and reading it
+    /// that way is how it has been got wrong twice. Its caller pairs the result
+    /// with a world-space axis-aligned box: `EllipticalRadii::x` is a
+    /// *horizontal* semi-axis and `::y` a *vertical* one, so the question is how
+    /// wide and how tall a corner becomes, not how much each of the transform's
+    /// own axes was stretched. Under a rotation those are different numbers,
+    /// and only the first one has a caller.
+    ///
+    /// Rows answer it exactly, for any affine and any composition order,
+    /// because the image of the unit circle is
+    /// `{ (a·cosθ + b·sinθ, c·cosθ + d·sinθ) }` and the extreme of each
+    /// coordinate is the norm of its row, by Cauchy–Schwarz. Nothing here is
+    /// an approximation and nothing depends on how the matrix was arrived at.
+    ///
+    /// The two plausible alternatives are both wrong, measured against the
+    /// image of the circle for `rotate(45°)` with `scale((2.0, 0.5))`, where
+    /// the truth is `(1.458, 1.458)`:
+    ///
+    /// | | rot45 then scale | scale then rot45 | rot90 then scale |
+    /// |---|---|---|---|
+    /// | truth | (1.458, 1.458) | (2.0, 0.5) | (0.5, 2.0) |
+    /// | rows | **(1.458, 1.458)** | **(2.0, 0.5)** | **(0.5, 2.0)** |
+    /// | columns | (2.0, 0.5) | (1.458, 1.458) | (2.0, 0.5) |
+    /// | singular values | (2.0, 0.5) | (2.0, 0.5) | (2.0, 0.5) |
+    ///
+    /// The singular values are the ellipse's own semi-axes, which is a true
+    /// fact about the shape and the wrong question: they are ordered by size
+    /// rather than by axis, so they transpose the corner for a quarter turn and
+    /// for any scale with `sy > sx`.
     pub(crate) fn extract_scale_components(&self) -> (f32, f32) {
         let (a, b, c, d) = (self.a(), self.b(), self.c(), self.d());
         ((a * a + b * b).sqrt(), (c * c + d * d).sqrt())
@@ -407,6 +640,125 @@ mod tests {
         for (a, b) in direct.data.iter().zip(composed.data.iter()) {
             assert!(approx_eq(*a, *b), "{direct:?} != {composed:?}");
         }
+    }
+
+    /// The extents the function reports, checked against the extents the shape
+    /// actually has: the image of a unit circle, sampled.
+    ///
+    /// Written against the definition rather than against expected numbers on
+    /// purpose. The numbers are what got this wrong twice — it is easy to write
+    /// down what a transform "should" scale by and lock in an answer to a
+    /// question nobody asked.
+    fn true_extents(t: &Transform) -> (f32, f32) {
+        let (mut x, mut y) = (0.0f32, 0.0f32);
+        for i in 0..3600 {
+            let th = (i as f32) * std::f32::consts::TAU / 3600.0;
+            let (sin, cos) = th.sin_cos();
+            x = x.max((t.a() * cos + t.b() * sin).abs());
+            y = y.max((t.c() * cos + t.d() * sin).abs());
+        }
+        (x, y)
+    }
+
+    fn assert_reports_its_extents(t: Transform, what: &str) {
+        let (want_x, want_y) = true_extents(&t);
+        let (got_x, got_y) = t.extract_scale_components();
+        assert!(
+            (got_x - want_x).abs() < 1e-3 && (got_y - want_y).abs() < 1e-3,
+            "{what}: the shape reaches ({want_x:.4}, {want_y:.4}), \
+             the transform reports ({got_x:.4}, {got_y:.4})"
+        );
+    }
+
+    /// A container's own transform, at every angle. This is the case the
+    /// column norms and the singular values both get wrong.
+    #[test]
+    fn a_transform_reports_the_extents_its_shape_has() {
+        for deg in [0.0f32, 30.0, 45.0, 90.0, 180.0, 200.0, 270.0] {
+            for scale in [Scale::NONE, Scale::new(2.0, 0.5), Scale::new(0.5, 2.0)] {
+                assert_reports_its_extents(
+                    Transform::compose(Translate::new(9.0, -4.0), deg, scale),
+                    &format!("rotate {deg}° with scale ({}, {})", scale.x, scale.y),
+                );
+            }
+        }
+    }
+
+    /// And a world transform, which is a chain: an ancestor's scale over a
+    /// descendant's rotation, three deep, and a shear built from two of each.
+    #[test]
+    fn a_chain_reports_the_extents_its_shape_has() {
+        let scale_over_rotation =
+            Transform::scale_xy(2.0, 0.5).then(&Transform::rotate_degrees(45.0));
+        assert_reports_its_extents(scale_over_rotation, "scale above a rotation");
+
+        let three = Transform::scale_xy(2.0, 0.5)
+            .then(&Transform::rotate_degrees(30.0))
+            .then(&Transform::scale(1.5));
+        assert_reports_its_extents(three, "three levels");
+
+        let sheared = Transform::scale_xy(2.0, 0.5)
+            .then(&Transform::rotate_degrees(30.0))
+            .then(&Transform::scale_xy(0.5, 2.0))
+            .then(&Transform::rotate_degrees(20.0));
+        assert_reports_its_extents(sheared, "two rotations with two scales, a shear");
+    }
+
+    /// A rotation on its own changes nothing about how far a circle reaches.
+    #[test]
+    fn a_rotation_alone_reports_no_scaling() {
+        for deg in [0.0f32, 45.0, 180.0, 360.0] {
+            let t = Transform::compose(Translate::NONE, deg, Scale::NONE);
+            let (sx, sy) = t.extract_scale_components();
+            assert!(
+                approx_eq(sx, 1.0) && approx_eq(sy, 1.0),
+                "at {deg}°: ({sx}, {sy})"
+            );
+        }
+    }
+
+    /// `compose` is the fixed order written out: translate, then rotate, then
+    /// scale, which as matrices is `T * R * S`. Folding it by hand is only
+    /// worth doing if it agrees with composing it.
+    #[test]
+    fn compose_is_translate_then_rotate_then_scale() {
+        let (t, deg, s) = (Translate::new(7.0, -3.0), 30.0_f32, Scale::new(2.0, 0.5));
+
+        let folded = Transform::compose(t, deg, s);
+        let built = Transform::translate(t.x, t.y)
+            .then(&Transform::rotate_degrees(deg))
+            .then(&Transform::scale_xy(s.x, s.y));
+
+        for (a, b) in folded.data.iter().zip(built.data.iter()) {
+            assert!(approx_eq(*a, *b), "{folded:?} != {built:?}");
+        }
+    }
+
+    /// The three declared apart do what the one composed value did, so the
+    /// order is a rule and not an accident of which builder ran last.
+    #[test]
+    fn each_component_is_neutral_when_it_is_not_declared() {
+        assert_eq!(
+            Transform::compose(Translate::NONE, 0.0, Scale::NONE),
+            Transform::IDENTITY
+        );
+        assert_eq!(
+            Transform::compose(Translate::new(5.0, 6.0), 0.0, Scale::NONE),
+            Transform::translate(5.0, 6.0)
+        );
+        assert_eq!(
+            Transform::compose(Translate::NONE, 0.0, Scale::uniform(2.0)),
+            Transform::scale(2.0)
+        );
+    }
+
+    /// A rotation is stored as the number it was given, so a scale read back
+    /// from a full turn is still a scale of one — and, unlike a matrix, the
+    /// turn itself is still there to interpolate.
+    #[test]
+    fn a_full_turn_composes_to_the_size_it_started_at() {
+        let full = Transform::compose(Translate::NONE, 360.0, Scale::NONE);
+        assert!(approx_eq(full.extract_scale(), 1.0));
     }
 
     #[test]

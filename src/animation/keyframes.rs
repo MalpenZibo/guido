@@ -13,16 +13,20 @@
 //!
 //! ```ignore
 //! container()
-//!     .keyframes_transform(
+//!     .keyframes_rotate(
 //!         Keyframes::new(320.0)
-//!             .at(0.0, Transform::IDENTITY)
-//!             .at(0.2, Transform::rotate_degrees(1.5))
-//!             .at(0.5, Transform::rotate_degrees(-1.0))
-//!             .at(0.8, Transform::rotate_degrees(0.4))
-//!             .at(1.0, Transform::IDENTITY),
+//!             .at(0.0, 0.0)
+//!             .at(0.2, 1.5)
+//!             .at(0.5, -1.0)
+//!             .at(0.8, 0.4)
+//!             .at(1.0, 0.0),
 //!         rejections,
 //!     )
 //! ```
+//!
+//! A timeline belongs to the one component it moves: `keyframes_rotate` for a
+//! shake, `keyframes_translate` for a nod, `keyframes_scale` for a pulse. A
+//! hover that scales is untouched by a sequence that rotates.
 //!
 //! # What the offsets mean
 //!

@@ -112,9 +112,19 @@ impl Container {
         self.resolve_state_value(id, base, |state| state.corners.map(|s| s.get()))
     }
 
-    pub(super) fn effective_transform_target(&self, id: WidgetId) -> Transform {
-        let base = self.transform.get_or(Transform::IDENTITY);
-        self.resolve_state_value(id, base, |state| state.transform.map(|s| s.get()))
+    pub(super) fn effective_translate_target(&self, id: WidgetId) -> Translate {
+        let base = self.translate_signal().get_or(Translate::NONE);
+        self.resolve_state_value(id, base, |state| state.translate.map(|s| s.get()))
+    }
+
+    pub(super) fn effective_rotate_target(&self, id: WidgetId) -> f32 {
+        let base = self.rotate_signal().get_or(0.0);
+        self.resolve_state_value(id, base, |state| state.rotate.map(|s| s.get()))
+    }
+
+    pub(super) fn effective_scale_target(&self, id: WidgetId) -> Scale {
+        let base = self.scale_signal().get_or(Scale::NONE);
+        self.resolve_state_value(id, base, |state| state.scale.map(|s| s.get()))
     }
 
     /// The largest elevation this container can reach, and the number its damage
@@ -232,11 +242,67 @@ impl Container {
         }
     }
 
+    /// The three declared components, each at whatever its own animation has
+    /// reached, composed into the matrix the renderer and the hit test share.
+    ///
+    /// This is the only place the two forms meet. Everything above it says
+    /// `translate`, `rotate`, `scale`; everything below it takes a matrix and
+    /// never has to ask how the matrix was arrived at.
     pub(super) fn animated_transform(&self, id: WidgetId) -> Transform {
-        get_animated_value(
-            self.anims.as_ref().and_then(|a| a.transform.as_ref()),
-            || self.effective_transform_target(id),
-        )
+        let anims = self.anims.as_ref();
+
+        // What could move each component: its own declaration, its own
+        // animation, or a state layer that overrides it. Per component and not
+        // "does any layer move anything", because `when_pressed(|s|
+        // s.scale(0.98))` is on every button and one bit for all three would
+        // have made it resolve a translate and a rotate nothing declares,
+        // twice per pointer move.
+        //
+        // Computed once and shared with the early-out below, so the two cannot
+        // disagree: a component wired into the gates and forgotten in the
+        // early-out would return IDENTITY and silently stop transforming.
+        let from_state = self
+            .interaction
+            .as_ref()
+            .map(|ix| ix.declares_transform)
+            .unwrap_or_default();
+        let has_translate = from_state.translate
+            || self.translate_signal().is_some()
+            || anims.is_some_and(|a| a.translate.is_some());
+        let has_rotate = from_state.rotate
+            || self.rotate_signal().is_some()
+            || anims.is_some_and(|a| a.rotate.is_some());
+        let has_scale = from_state.scale
+            || self.scale_signal().is_some()
+            || anims.is_some_and(|a| a.scale.is_some());
+
+        // A plain layout box is none of the three, and most containers are one.
+        if !(has_translate || has_rotate || has_scale) {
+            return Transform::IDENTITY;
+        }
+
+        let translate = if has_translate {
+            get_animated_value(anims.and_then(|a| a.translate.as_ref()), || {
+                self.effective_translate_target(id)
+            })
+        } else {
+            Translate::NONE
+        };
+        let rotate = if has_rotate {
+            get_animated_value(anims.and_then(|a| a.rotate.as_ref()), || {
+                self.effective_rotate_target(id)
+            })
+        } else {
+            0.0
+        };
+        let scale = if has_scale {
+            get_animated_value(anims.and_then(|a| a.scale.as_ref()), || {
+                self.effective_scale_target(id)
+            })
+        } else {
+            Scale::NONE
+        };
+        Transform::compose(translate, rotate, scale)
     }
 
     /// Whether a state-layer change can move an animated property — i.e.
@@ -255,7 +321,9 @@ impl Container {
                 || a.elevation.is_some()
                 || a.border_width.is_some()
                 || a.border_color.is_some()
-                || a.transform.is_some()
+                || a.translate.is_some()
+                || a.rotate.is_some()
+                || a.scale.is_some()
         })
     }
 
@@ -271,7 +339,9 @@ impl Container {
                 || a.corners.is_some()
                 || a.elevation.is_some()
                 || a.border_color.is_some()
-                || a.transform.is_some()
+                || a.translate.is_some()
+                || a.rotate.is_some()
+                || a.scale.is_some()
         })
     }
 }

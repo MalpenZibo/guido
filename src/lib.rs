@@ -9,13 +9,13 @@ mod jobs;
 pub mod keyboard;
 pub mod layout;
 pub mod outputs;
+pub mod pivot;
 pub mod reactive;
 pub mod render_stats;
 pub mod session_lock;
 pub mod surface;
 mod surface_manager;
 pub mod transform;
-pub mod transform_origin;
 pub mod tree;
 pub mod widget_ref;
 pub mod widgets;
@@ -165,6 +165,7 @@ pub mod prelude {
         fraction,
     };
     pub use crate::outputs::{OutputId, OutputInfo, outputs, surface_output};
+    pub use crate::pivot::{HorizontalAnchor, Pivot, VerticalAnchor};
     pub use crate::platform::{Anchor, KeyboardInteractivity, Layer};
     pub use crate::reactive::{
         Callback, CursorIcon, IntoSignal, IntoVal, Memo, RwSignal, Service, Signal, Trigger,
@@ -181,8 +182,7 @@ pub mod prelude {
         SurfaceExtent, SurfaceHandle, SurfaceId, content, spawn_popup, spawn_surface,
         surface_handle,
     };
-    pub use crate::transform::Transform;
-    pub use crate::transform_origin::{HorizontalAnchor, TransformOrigin, VerticalAnchor};
+    pub use crate::transform::{Scale, Translate};
     pub use crate::widget_ref::{WidgetRef, create_widget_ref};
     pub use crate::widgets::{
         AnyWidget, Border, Color, Container, ContentFit, Control, CornerRadii, Corners, Event,
@@ -218,6 +218,10 @@ pub mod widget_prelude {
     pub use crate::layout::{Constraints, IntoF32, Layout};
     pub use crate::reactive::{JobType, OptionSignalExt, with_signal_tracking};
     pub use crate::renderer::{PaintContext, RenderNode};
+    /// The composed matrix. An application says `translate`, `rotate` and
+    /// `scale`; a widget written outside the crate positions what it paints,
+    /// and for that it needs the thing those three compose into.
+    pub use crate::transform::Transform;
     pub use crate::tree::{Tree, WidgetId};
     pub use crate::widgets::{LayoutHints, Widget};
 }

@@ -121,15 +121,26 @@ impl Container {
         let el_init = anims.is_some_and(|a| a.elevation.as_ref().is_some_and(|a| a.is_initial()));
         let bc_init =
             anims.is_some_and(|a| a.border_color.as_ref().is_some_and(|a| a.is_initial()));
-        let tf_init = anims.is_some_and(|a| a.transform.as_ref().is_some_and(|a| a.is_initial()));
+        let tr_init = anims.is_some_and(|a| a.translate.as_ref().is_some_and(|a| a.is_initial()));
+        let ro_init = anims.is_some_and(|a| a.rotate.as_ref().is_some_and(|a| a.is_initial()));
+        let sc_init = anims.is_some_and(|a| a.scale.as_ref().is_some_and(|a| a.is_initial()));
 
-        if !(pd_init || bw_init || bg_init || cr_init || el_init || bc_init || tf_init) {
+        if !(pd_init
+            || bw_init
+            || bg_init
+            || cr_init
+            || el_init
+            || bc_init
+            || tr_init
+            || ro_init
+            || sc_init)
+        {
             return;
         }
 
         // Targets are computed under `&self` first: the writes below need
         // `&mut self.anims`, and the effective_* readers need `&self`.
-        let (bg_target, cr_target, el_target, bc_target, tf_target) =
+        let (bg_target, cr_target, el_target, bc_target, tr_target, ro_target, sc_target) =
             with_signal_tracking(id, JobType::Animation, || {
                 // Read for the subscription even where the value is unused.
                 if pd_init {
@@ -143,7 +154,9 @@ impl Container {
                     cr_init.then(|| self.effective_corners_target(id)),
                     el_init.then(|| self.effective_elevation_target(id)),
                     bc_init.then(|| self.effective_border_color_target(id)),
-                    tf_init.then(|| self.effective_transform_target(id)),
+                    tr_init.then(|| self.effective_translate_target(id)),
+                    ro_init.then(|| self.effective_rotate_target(id)),
+                    sc_init.then(|| self.effective_scale_target(id)),
                 )
             });
 
@@ -162,15 +175,21 @@ impl Container {
         if let (Some(anim), Some(target)) = (&mut anims.border_color, bc_target) {
             anim.set_immediate(target);
         }
-        if let (Some(anim), Some(target)) = (&mut anims.transform, tf_target) {
-            // An enter transition animates in from the declared value instead
-            // of snapping to the target.
-            if let Some(enter) = anim.take_enter_from() {
-                anim.begin_from(enter, target);
-                request_job(id, JobRequest::Animation(RequiredJob::Paint));
-            } else {
-                anim.set_immediate(target);
-            }
+        // An enter transition animates in from the declared value instead of
+        // snapping to the target. Written three times rather than looped:
+        // each component animates a different type.
+        let mut entered = false;
+        if let (Some(anim), Some(target)) = (&mut anims.translate, tr_target) {
+            entered |= seed_or_enter(anim, target);
+        }
+        if let (Some(anim), Some(target)) = (&mut anims.rotate, ro_target) {
+            entered |= seed_or_enter(anim, target);
+        }
+        if let (Some(anim), Some(target)) = (&mut anims.scale, sc_target) {
+            entered |= seed_or_enter(anim, target);
+        }
+        if entered {
+            request_job(id, JobRequest::Animation(RequiredJob::Paint));
         }
     }
 
@@ -228,24 +247,54 @@ impl Container {
                     *a.target() == self.effective_border_color_target(id),
                 );
             }
-            if let Some(a) = &anims.transform {
+            if let Some(a) = &anims.translate {
                 drift |= moved(
                     a.is_initial(),
-                    *a.target() == self.effective_transform_target(id),
+                    *a.target() == self.effective_translate_target(id),
+                );
+            }
+            if let Some(a) = &anims.rotate {
+                drift |= moved(
+                    a.is_initial(),
+                    *a.target() == self.effective_rotate_target(id),
+                );
+            }
+            if let Some(a) = &anims.scale {
+                drift |= moved(
+                    a.is_initial(),
+                    *a.target() == self.effective_scale_target(id),
                 );
             }
             // The timeline's trigger, read here for the same reason as the
             // targets: reading it is the subscription, so a container that
             // plays on a signal is woken by it. Asking and committing are the
             // same comparison in the same place — see `take_play`.
-            if let Some(anim) = &anims.transform {
-                drift |= anim.wants_play();
-            }
+            // Three statements and not `||`, for the same reason the targets
+            // above are: reading is the subscription, so all three have to be
+            // read whatever the first one answers.
+            drift |= anims.translate.as_ref().is_some_and(|a| a.wants_play());
+            drift |= anims.rotate.as_ref().is_some_and(|a| a.wants_play());
+            drift |= anims.scale.as_ref().is_some_and(|a| a.wants_play());
             drift
         });
 
         if drifted {
             request_job(id, JobRequest::Animation(RequiredJob::None));
+        }
+    }
+}
+
+/// Start one component at its seeded target, or begin its enter transition.
+/// Returns whether an enter was begun, which is what needs a paint job.
+fn seed_or_enter<T: crate::animation::Animatable>(anim: &mut AnimationState<T>, target: T) -> bool {
+    match anim.take_enter_from() {
+        Some(enter) => {
+            anim.begin_from(enter, target);
+            true
+        }
+        None => {
+            anim.set_immediate(target);
+            false
         }
     }
 }

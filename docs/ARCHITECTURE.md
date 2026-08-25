@@ -238,23 +238,27 @@ exactly the layout the GPU shader consumes.
 
 **Operations:**
 ```rust
-Transform::translate(x, y)      // Move
-Transform::rotate_degrees(deg)  // Rotate
-Transform::scale(s)             // Uniform scale
-Transform::scale_xy(sx, sy)     // Non-uniform scale
+// What an application declares, on a Container:
+container().translate((x, y))   // Move
+container().rotate(deg)         // Rotate, in degrees
+container().scale(s)            // Uniform scale
+container().scale((sx, sy))     // Non-uniform scale
+
+// What they compose into. `Transform` is not in `guido::prelude`; a widget
+// written outside the crate reaches it through `guido::widget_prelude`:
 t1.then(&t2)                    // Compose transforms
 t.inverse()                     // Invert transform
 t.center_at(cx, cy)             // Apply around point
 ```
 
-### `transform_origin.rs` - Pivot Points
+### `pivot.rs` - Pivot Points
 
 Define rotation/scale pivot points:
 ```rust
-TransformOrigin::CENTER       // Default
-TransformOrigin::TOP_LEFT
-TransformOrigin::BOTTOM_RIGHT
-TransformOrigin::custom(0.25, 0.75)  // 25% from left, 75% from top
+Pivot::CENTER       // Default
+Pivot::TOP_LEFT
+Pivot::BOTTOM_RIGHT
+Pivot::percent(25.0, 75.0)  // 25% from left, 75% from top
 ```
 
 ## Tree System
@@ -477,7 +481,7 @@ Duration-based and spring-based animations:
 .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
 
 // Spring physics
-.animate_transform(Transition::spring(SpringConfig::BOUNCY))
+.animate_scale(Transition::spring(SpringConfig::BOUNCY))
 ```
 
 ## Performance Considerations

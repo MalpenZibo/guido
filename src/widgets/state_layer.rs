@@ -1,6 +1,6 @@
 //! State layer system for interaction-based style overrides.
 //!
-//! A state layer redefines properties — background, border, transform and the
+//! A state layer redefines properties — background, border, scale and the
 //! rest — while the container is in a given state. Every value is a
 //! [`Signal`], like the base properties they override: a state layer that
 //! could not follow the theme would be a second, quieter styling system.
@@ -10,12 +10,12 @@
 //! container()
 //!     .background(Color::rgb(0.2, 0.2, 0.3))
 //!     .when_hovered(|s| s.lighter(0.1))
-//!     .when_pressed(|s| s.darker(0.1).transform(Transform::scale(0.98)))
+//!     .when_pressed(|s| s.darker(0.1).scale(0.98))
 //!     .child(text("Interactive button"))
 //! ```
 
 use crate::reactive::{IntoSignal, Signal};
-use crate::transform::Transform;
+use crate::transform::{Scale, Translate};
 use crate::widgets::Color;
 
 /// Configuration for ripple effect animation.
@@ -109,8 +109,12 @@ pub struct StateStyle {
     pub border: Option<BorderOverride>,
     /// Corner radius override
     pub corners: Option<Signal<crate::widgets::Corners>>,
-    /// Transform override (e.g., scale on press)
-    pub transform: Option<Signal<Transform>>,
+    /// Displacement override
+    pub translate: Option<Signal<Translate>>,
+    /// Rotation override, in degrees
+    pub rotate: Option<Signal<f32>>,
+    /// Scale override (e.g., the shrink on press)
+    pub scale: Option<Signal<Scale>>,
     /// Elevation (shadow) override
     pub elevation: Option<Signal<f32>>,
     /// Override the background alpha channel (applied after background override)
@@ -119,7 +123,44 @@ pub struct StateStyle {
     pub ripple: Option<RippleConfig>,
 }
 
+/// Which transform components a set of state layers between them override.
+///
+/// Three answers and not one, because `animated_transform` resolves each
+/// component separately and a single "some layer moves something" would light
+/// all three — so `when_pressed(|s| s.scale(0.98))`, the commonest state layer
+/// there is, would pay two state-layer walks per paint and per coalesced
+/// pointer move for components nothing declares.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Moves {
+    pub(crate) translate: bool,
+    pub(crate) rotate: bool,
+    pub(crate) scale: bool,
+}
+
+impl Moves {
+    pub(crate) fn merge(&mut self, other: Moves) {
+        self.translate |= other.translate;
+        self.rotate |= other.rotate;
+        self.scale |= other.scale;
+    }
+}
+
 impl StateStyle {
+    /// Whether this layer moves, turns or resizes what it styles.
+    ///
+    /// Lives here, beside the fields, because that is where it stays true: a
+    /// component added to `StateStyle` is added a few lines above this, and a
+    /// caller that cached the answer somewhere else would go quietly stale.
+    /// `Container` gates its identity fast path on it — see
+    /// `InteractionState::declares_transform`.
+    pub(crate) fn moves_anything(&self) -> Moves {
+        Moves {
+            translate: self.translate.is_some(),
+            rotate: self.rotate.is_some(),
+            scale: self.scale.is_some(),
+        }
+    }
+
     /// Create a new empty state style.
     pub fn new() -> Self {
         Self::default()
@@ -190,17 +231,27 @@ impl StateStyle {
         self
     }
 
-    /// Set the transform for this state.
+    /// Displace the container while it is in this state.
+    pub fn translate<M>(mut self, translate: impl IntoSignal<Translate, M>) -> Self {
+        self.translate = Some(translate.into_signal());
+        self
+    }
+
+    /// Turn the container while it is in this state, in degrees.
+    pub fn rotate<M>(mut self, degrees: impl IntoSignal<f32, M>) -> Self {
+        self.rotate = Some(degrees.into_signal());
+        self
+    }
+
+    /// Resize the container while it is in this state.
     ///
-    /// Commonly used for press effects like scale-down.
+    /// The press effect, most of the time:
     ///
-    /// # Example
     /// ```ignore
-    /// container()
-    ///     .when_pressed(|s| s.transform(Transform::scale(0.98)))
+    /// container().when_pressed(|s| s.scale(0.98))
     /// ```
-    pub fn transform<M>(mut self, transform: impl IntoSignal<Transform, M>) -> Self {
-        self.transform = Some(transform.into_signal());
+    pub fn scale<M>(mut self, factor: impl IntoSignal<Scale, M>) -> Self {
+        self.scale = Some(factor.into_signal());
         self
     }
 

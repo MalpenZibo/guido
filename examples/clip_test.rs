@@ -92,7 +92,7 @@ fn rotated_clip_row() -> Container {
             .background(Color::rgb(0.2, 0.2, 0.3))
             .corners(8.0)
             .overflow(Overflow::Hidden)
-            .transform(Transform::rotate_degrees(15.0))
+            .rotate(15.0)
             .child(
                 container()
                     .width(100.0)
@@ -106,7 +106,7 @@ fn rotated_clip_row() -> Container {
             .background(Color::rgb(0.2, 0.2, 0.3))
             .corners(8.0)
             .overflow(Overflow::Hidden)
-            .transform(Transform::rotate_degrees(30.0))
+            .rotate(30.0)
             .child(
                 container()
                     .width(100.0)
@@ -120,7 +120,7 @@ fn rotated_clip_row() -> Container {
             .background(Color::rgb(0.2, 0.2, 0.3))
             .corners(8.0)
             .overflow(Overflow::Hidden)
-            .transform(Transform::rotate_degrees(45.0))
+            .rotate(45.0)
             .child(
                 container()
                     .width(100.0)
@@ -134,7 +134,7 @@ fn rotated_clip_row() -> Container {
             .background(Color::rgb(0.2, 0.2, 0.3))
             .corners(8.0)
             .overflow(Overflow::Hidden)
-            .transform(Transform::rotate_degrees(-30.0))
+            .rotate(-30.0)
             .child(
                 container()
                     .width(100.0)
@@ -154,7 +154,7 @@ fn scaled_clip_row() -> Container {
             .background(Color::rgb(0.2, 0.2, 0.3))
             .corners(8.0)
             .overflow(Overflow::Hidden)
-            .transform(Transform::scale(0.8))
+            .scale(0.8)
             .child(
                 container()
                     .width(100.0)
@@ -168,7 +168,7 @@ fn scaled_clip_row() -> Container {
             .background(Color::rgb(0.2, 0.2, 0.3))
             .corners(8.0)
             .overflow(Overflow::Hidden)
-            .transform(Transform::scale(1.2))
+            .scale(1.2)
             .child(
                 container()
                     .width(100.0)
@@ -182,7 +182,7 @@ fn scaled_clip_row() -> Container {
             .background(Color::rgb(0.2, 0.2, 0.3))
             .corners(8.0)
             .overflow(Overflow::Hidden)
-            .transform(Transform::scale_xy(1.5, 0.7))
+            .scale((1.5, 0.7))
             .child(
                 container()
                     .width(100.0)
@@ -201,7 +201,7 @@ fn nested_clip_row() -> Container {
             .height(80.0)
             .background(Color::rgb(0.15, 0.15, 0.2))
             .corners(4.0)
-            .transform(Transform::rotate_degrees(15.0))
+            .rotate(15.0)
             .child(
                 // Middle container with clip
                 container()
@@ -224,7 +224,7 @@ fn nested_clip_row() -> Container {
             .height(80.0)
             .background(Color::rgb(0.15, 0.15, 0.2))
             .corners(4.0)
-            .transform(Transform::scale(0.9))
+            .scale(0.9)
             .child(
                 container()
                     .width(60.0)
@@ -232,7 +232,7 @@ fn nested_clip_row() -> Container {
                     .background(Color::rgb(0.2, 0.2, 0.3))
                     .corners(8.0)
                     .overflow(Overflow::Hidden)
-                    .transform(Transform::rotate_degrees(20.0))
+                    .rotate(20.0)
                     .child(
                         container()
                             .width(80.0)
@@ -246,7 +246,7 @@ fn nested_clip_row() -> Container {
             .height(80.0)
             .background(Color::rgb(0.15, 0.15, 0.2))
             .corners(4.0)
-            .transform(Transform::rotate_degrees(-10.0))
+            .rotate(-10.0)
             .child(
                 container()
                     .width(60.0)
@@ -254,13 +254,13 @@ fn nested_clip_row() -> Container {
                     .background(Color::rgb(0.2, 0.2, 0.3))
                     .corners(8.0)
                     .overflow(Overflow::Hidden)
-                    .transform(Transform::scale(1.1))
+                    .scale(1.1)
                     .child(
                         container()
                             .width(50.0)
                             .height(50.0)
                             .background(Color::rgb(0.4, 0.2, 0.9))
-                            .transform(Transform::rotate_degrees(30.0)),
+                            .rotate(30.0),
                     ),
             ),
     ])

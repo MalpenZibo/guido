@@ -103,7 +103,7 @@ fn dump_node(node: &RenderNode, depth: usize, out: &mut String) {
     let origin = if t.is_identity() || t.is_translation_only() {
         String::new()
     } else {
-        let o = node.transform_origin;
+        let o = node.pivot;
         format!(" origin={:?}/{:?}", o.horizontal, o.vertical)
     };
     let clip = match &node.clip {
@@ -286,7 +286,7 @@ fn scrolling() {
             .children((0..n).map(|i| {
                 swatch(120.0, 24.0, Color::rgb(0.25, 0.25, 0.35))
                     .corners(4.0)
-                    .transform(Transform::translate(0.0, i as f32))
+                    .translate((0.0, i as f32))
             }))
     };
 
@@ -373,22 +373,16 @@ fn transforms_and_origins() {
     let view = container()
         .layout(Flex::column().spacing(12.0))
         .padding(20.0)
-        .child(card(Color::RED).transform(Transform::rotate_degrees(30.0)))
-        .child(
-            card(Color::GREEN)
-                .transform(Transform::rotate_degrees(30.0))
-                .transform_origin(TransformOrigin::TOP_LEFT),
-        )
-        .child(card(Color::BLUE).transform(Transform::scale(1.5)))
-        .child(card(Color::YELLOW).transform(Transform::scale_xy(2.0, 0.5)))
-        .child(card(Color::CYAN).transform(Transform::translate(15.0, -5.0)))
+        .child(card(Color::RED).rotate(30.0))
+        .child(card(Color::GREEN).rotate(30.0).pivot(Pivot::TOP_LEFT))
+        .child(card(Color::BLUE).scale(1.5))
+        .child(card(Color::YELLOW).scale((2.0, 0.5)))
+        .child(card(Color::CYAN).translate((15.0, -5.0)))
         .child(
             box_of(200.0, 80.0)
                 .background(Color::rgb(0.2, 0.2, 0.25))
-                .transform(Transform::rotate_degrees(10.0))
-                .child(
-                    card(Color::MAGENTA).transform(Transform::rotate_degrees(20.0).then_scale(0.8)),
-                ),
+                .rotate(10.0)
+                .child(card(Color::MAGENTA).rotate(20.0).scale(0.8)),
         );
 
     assert_snapshot("transforms_and_origins", render(view, 400.0, 600.0));
@@ -477,8 +471,8 @@ fn backdrop_blur_sources_and_geometry() {
         )
         // A radius of zero is "no blur", so this one emits no command at all.
         .child(frosted(0.0))
-        .child(frosted(24.0).transform(Transform::rotate_degrees(45.0)))
-        .child(frosted(24.0).transform(Transform::scale(2.0)));
+        .child(frosted(24.0).rotate(45.0))
+        .child(frosted(24.0).scale(2.0));
 
     assert_snapshot("backdrop_blur", render(view, 700.0, 200.0));
 }

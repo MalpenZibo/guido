@@ -118,28 +118,19 @@ fn main() {
                             .children([
                                 // A translated box is the same box somewhere
                                 // else, so its bounding box is itself.
-                                case(
-                                    "translated 30, 12",
-                                    card().transform(Transform::translate(30.0, 12.0)),
-                                ),
+                                case("translated 30, 12", card().translate((30.0, 12.0))),
                                 // A uniformly scaled one likewise — and its
                                 // corners grow with it, or the region cuts a
                                 // curve the card does not have.
-                                case("scaled 1.4x", card().transform(Transform::scale(1.4))),
+                                case("scaled 1.4x", card().scale(1.4)),
                                 // Unevenly scaled: still axis-aligned, so still
                                 // exact, but the corner is now an ellipse.
-                                case(
-                                    "scaled 1.6x / 0.8x",
-                                    card().transform(Transform::scale_xy(1.6, 0.8)),
-                                ),
+                                case("scaled 1.6x / 0.8x", card().scale((1.6, 0.8))),
                                 // A rotation is the one that does not keep the
                                 // axes: the bounding box gains the four corner
                                 // triangles, and the mask has no transform to
                                 // cut them back out with.
-                                case(
-                                    "rotated 20°",
-                                    card().transform(Transform::rotate_degrees(20.0)),
-                                ),
+                                case("rotated 20°", card().rotate(20.0)),
                             ])
                             .into_any(),
                     ])

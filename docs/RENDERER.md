@@ -24,7 +24,7 @@ pub struct RenderNode {
     pub bounds: Rect,                        // Local bounds for transform origin
     pub local_transform: Transform,          // Transform relative to parent
     pub parent_position: Transform,          // Position set by parent (for cache reuse)
-    pub transform_origin: TransformOrigin,   // Pivot point for transforms
+    pub pivot: Pivot,                        // What rotation and scale act about
     pub commands: SmallVec<[Rc<DrawCommand>; 2]>,        // Draw commands (shapes, text, images)
     pub children: Vec<Rc<RenderNode>>,       // Child nodes, Rc-shared with the paint cache
     pub overlay_commands: SmallVec<[Rc<DrawCommand>; 1]>, // Commands drawn after children
@@ -88,10 +88,10 @@ ctx.set_transform(Transform::translate(x, y));
 ctx.apply_transform(Transform::rotate_degrees(45.0));
 
 // Apply transform with origin
-ctx.apply_transform_with_origin(transform, TransformOrigin::CENTER);
+ctx.apply_transform_with_pivot(transform, Pivot::CENTER);
 
 // Set transform origin only
-ctx.set_transform_origin(TransformOrigin::TOP_LEFT);
+ctx.set_pivot(Pivot::TOP_LEFT);
 ```
 
 ### Clipping
@@ -356,7 +356,7 @@ fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
 
     // Apply user transform if set (parent already set position via set_transform)
     if !self.transform.is_identity() {
-        ctx.apply_transform_with_origin(self.transform, self.transform_origin);
+        ctx.apply_transform_with_pivot(self.transform, self.pivot);
     }
 
     // Draw background in LOCAL coordinates

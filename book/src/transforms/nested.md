@@ -8,10 +8,10 @@ When a parent has a transform, children are affected:
 
 ```rust
 container()
-    .transform(Transform::rotate_degrees(20.0))  // Parent rotated
+    .rotate(20.0)  // Parent rotated
     .child(
         container()
-            .transform(Transform::scale(0.8))  // Child scaled within rotated parent
+            .scale(0.8)  // Child scaled within rotated parent
             .child(text("Nested"))
     )
 ```
@@ -38,7 +38,7 @@ Final Position
 
 ```rust
 container()
-    .transform(Transform::rotate_degrees(15.0))  // Tilt the whole group
+    .rotate(15.0)  // Tilt the whole group
     .layout(Flex::row().spacing(10.0))
     .children([
         // Each card inherits the rotation
@@ -57,13 +57,13 @@ container()
     .width(100.0)
     .height(100.0)
     .background(Color::rgb(0.3, 0.3, 0.4))
-    .transform(Transform::rotate_degrees(30.0))
+    .rotate(30.0)
     .child(
         container()
             .width(50.0)
             .height(50.0)
             .background(Color::rgb(0.5, 0.7, 0.9))
-            .transform(Transform::scale(1.2))  // Child is 20% larger within rotated parent
+            .scale(1.2)  // Child is 20% larger within rotated parent
     )
 ```
 
@@ -73,10 +73,10 @@ Guido properly handles hit testing through nested transforms. A click on a neste
 
 ```rust
 container()
-    .transform(Transform::rotate_degrees(45.0))
+    .rotate(45.0)
     .child(
         container()
-            .transform(Transform::scale(0.8))
+            .scale(0.8)
             .on_click(|| println!("Clicked!"))  // Works correctly
     )
 ```
@@ -90,9 +90,9 @@ container()
     .layout(Flex::row().spacing(20.0))
     .children([
         // Each has independent transform
-        container().transform(Transform::rotate_degrees(15.0)).child(...),
-        container().transform(Transform::rotate_degrees(-15.0)).child(...),
-        container().transform(Transform::scale(0.9)).child(...),
+        container().rotate(15.0).child(...),
+        container().rotate(-15.0).child(...),
+        container().scale(0.9).child(...),
     ])
 ```
 
@@ -109,7 +109,7 @@ fn nested_transforms_demo() -> impl Widget {
                 .height(200.0)
                 .background(Color::rgb(0.2, 0.2, 0.3))
                 .corners(16.0)
-                .transform(Transform::rotate_degrees(10.0))
+                .rotate(10.0)
                 .layout(Flex::column().spacing(16.0).main_alignment(MainAlignment::Center).cross_alignment(CrossAlignment::Center))
                 .children([
                     container().child(text("Parent (rotated 10°)").font_size(12.0).color(Color::WHITE)),
@@ -120,7 +120,7 @@ fn nested_transforms_demo() -> impl Widget {
                         .height(80.0)
                         .background(Color::rgb(0.3, 0.5, 0.8))
                         .corners(8.0)
-                        .transform(Transform::scale(0.9))
+                        .scale(0.9)
                         .when_hovered(|s| s.lighter(0.1))
                         .when_pressed(|s| s.ripple())
                         .layout(Flex::column().main_alignment(MainAlignment::Center).cross_alignment(CrossAlignment::Center))
@@ -140,11 +140,11 @@ A child's transform origin is relative to its own bounds, not the parent's:
 
 ```rust
 container()
-    .transform(Transform::rotate_degrees(45.0))  // Rotates around its own center
+    .rotate(45.0)  // Rotates around its own center
     .child(
         container()
-            .transform(Transform::rotate_degrees(30.0))
-            .transform_origin(TransformOrigin::TOP_LEFT)  // Relative to child's top-left
+            .rotate(30.0)
+            .pivot(Pivot::TOP_LEFT)  // Relative to child's top-left
     )
 ```
 
@@ -161,13 +161,13 @@ Deep nesting with many transforms is fine for typical UIs. The transform matrice
 ```rust
 // Group animation
 container()
-    .transform(Transform::rotate_degrees(group_rotation))
-    .animate_transform(Transition::new(300.0, TimingFunction::EaseOut))
+    .rotate(group_rotation)
+    .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
     .children([
         // Individual children can have their own animations
         container()
-            .transform(Transform::scale(child_scale))
-            .animate_transform(Transition::spring(SpringConfig::BOUNCY))
+            .scale(child_scale)
+            .animate_scale(Transition::spring(SpringConfig::BOUNCY))
             .child(...),
     ])
 ```

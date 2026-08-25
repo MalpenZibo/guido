@@ -216,6 +216,25 @@ fn borders(node: &RenderNode) -> Vec<(f32, Color)> {
 // Sizing — the box model matrix
 // ---------------------------------------------------------------------------
 
+/// A state layer that only scales must not make the container resolve a
+/// translate and a rotate nothing declares. The fast path is per component,
+/// and this is the layer that would have paid for it — it is on every button.
+#[test]
+fn a_scaling_state_layer_declares_only_a_scale() {
+    let c = container()
+        .when_hovered(|s| s.lighter(0.1))
+        .when_pressed(|s| s.scale(0.98));
+    let declared = c
+        .interaction
+        .as_ref()
+        .map(|ix| ix.declares_transform)
+        .unwrap_or_default();
+
+    assert!(declared.scale, "the pressed layer names a scale");
+    assert!(!declared.translate, "and nothing names a translate");
+    assert!(!declared.rotate, "or a rotate");
+}
+
 #[test]
 fn content_sizing_is_child_plus_padding() {
     let mut h = H::new(container().padding(8.0).child(box_of(40.0, 20.0)));
@@ -1006,15 +1025,10 @@ fn a_container_wakes_when_its_timeline_is_asked_to_play() {
     use crate::animation::Keyframes;
 
     let plays = create_signal(0u32);
-    let mut h = H::new(
-        box_of(50.0, 50.0).keyframes_transform(
-            Keyframes::new(200.0)
-                .at(0.0, Transform::IDENTITY)
-                .at(0.5, Transform::rotate_degrees(2.0))
-                .at(1.0, Transform::IDENTITY),
-            plays,
-        ),
-    );
+    let mut h = H::new(box_of(50.0, 50.0).keyframes_rotate(
+        Keyframes::new(200.0).at(0.0, 0.0).at(0.5, 2.0).at(1.0, 0.0),
+        plays,
+    ));
     h.fit(100.0, 100.0);
     h.paint();
 
@@ -1043,11 +1057,11 @@ fn a_played_sequence_actually_moves_the_transform() {
     let plays = create_signal(0u32);
     let mut h = H::new(
         container().layout(Flex::row()).child(
-            box_of(50.0, 50.0).keyframes_transform(
+            box_of(50.0, 50.0).keyframes_rotate(
                 Keyframes::new(200.0)
-                    .at(0.0, Transform::IDENTITY)
-                    .at(0.5, Transform::rotate_degrees(20.0))
-                    .at(1.0, Transform::IDENTITY),
+                    .at(0.0, 0.0)
+                    .at(0.5, 20.0)
+                    .at(1.0, 0.0),
                 plays,
             ),
         ),
@@ -1064,9 +1078,34 @@ fn a_played_sequence_actually_moves_the_transform() {
     );
 }
 
+/// So does an enter, for the same reason and by the same route: whichever of
+/// the two builders is written second builds a fresh state, and one that took
+/// the sequence but not the enter left half the defect standing.
+#[test]
+fn declaring_a_transition_after_an_enter_does_not_lose_it() {
+    let entering = box_of(50.0, 50.0)
+        .scale(Scale::NONE)
+        .animate_scale_from(0.5, Transition::new(200.0, TimingFunction::EaseOut))
+        // Written after, which used to decide whether the enter existed.
+        .animate_scale(Transition::new(200.0, TimingFunction::EaseOut));
+
+    let mut h = H::new(container().layout(Flex::row()).child(entering));
+    h.fit(200.0, 200.0);
+    h.paint();
+    pump(&mut h);
+    h.fit(200.0, 200.0);
+    let painted = h.paint().children[0].local_transform;
+
+    assert_ne!(
+        painted,
+        Transform::IDENTITY,
+        "the enter has to start from the value it was given, not snap to the target"
+    );
+}
+
 /// And it survives the transition being declared after it.
 ///
-/// `animate_transform` builds a fresh `AnimationState`, so the sequence used
+/// `animate_rotate` builds a fresh `AnimationState`, so the sequence used
 /// to be thrown away by whichever builder came second — with the trigger
 /// still firing, the job still queued and nothing at all to show for it.
 #[test]
@@ -1077,15 +1116,15 @@ fn declaring_a_transition_after_a_sequence_does_not_lose_it() {
     let mut h = H::new(
         container().layout(Flex::row()).child(
             box_of(50.0, 50.0)
-                .keyframes_transform(
+                .keyframes_rotate(
                     Keyframes::new(200.0)
-                        .at(0.0, Transform::IDENTITY)
-                        .at(0.5, Transform::rotate_degrees(20.0))
-                        .at(1.0, Transform::IDENTITY),
+                        .at(0.0, 0.0)
+                        .at(0.5, 20.0)
+                        .at(1.0, 0.0),
                     plays,
                 )
                 // Written after, which used to decide the whole thing.
-                .animate_transform(Transition::new(100.0, TimingFunction::EaseOut)),
+                .animate_rotate(Transition::new(100.0, TimingFunction::EaseOut)),
         ),
     );
     h.fit(200.0, 200.0);
@@ -1342,7 +1381,7 @@ fn a_layer_silent_on_a_property_does_not_shadow_the_one_below_it() {
         box_of(50.0, 50.0)
             .background(Color::BLACK)
             .when_hovered(|s| s.background(Color::RED))
-            .when_pressed(|s| s.transform(Transform::scale(0.5))),
+            .when_pressed(|s| s.scale(0.5)),
     );
     h.fit(100.0, 100.0);
 
@@ -2267,10 +2306,10 @@ fn a_transformed_blur_publishes_the_shape_it_is_drawn_as() {
     let card = |c: Container| c.width(40.0).height(40.0).backdrop_blur(24.0);
 
     let plain = H::new(card(container())).frame(200.0, 200.0).blur;
-    let scaled = H::new(card(container()).transform(Transform::scale(2.0)))
+    let scaled = H::new(card(container()).scale(2.0))
         .frame(200.0, 200.0)
         .blur;
-    let turned = H::new(card(container()).transform(Transform::rotate_degrees(45.0)))
+    let turned = H::new(card(container()).rotate(45.0))
         .frame(200.0, 200.0)
         .blur;
 

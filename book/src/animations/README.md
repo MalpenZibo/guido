@@ -64,6 +64,6 @@ Good for:
 .animate_border_width(Transition::new(150.0, TimingFunction::EaseInOut))
 
 // Spring-based
-.animate_transform(Transition::spring(SpringConfig::BOUNCY))
+.animate_scale(Transition::spring(SpringConfig::BOUNCY))
 .animate_width(Transition::spring(SpringConfig::SMOOTH))
 ```

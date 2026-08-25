@@ -45,7 +45,7 @@ State layers can override these properties:
 ### Transform
 
 ```rust
-.when_pressed(|s| s.transform(Transform::scale(0.98)))
+.when_pressed(|s| s.scale(0.98))
 ```
 
 ### Corner Radius
@@ -82,7 +82,7 @@ Chain multiple overrides in a single state:
 .when_pressed(|s| s
     .ripple()
     .darker(0.05)
-    .transform(Transform::scale(0.98))
+    .scale(0.98)
 )
 ```
 
@@ -111,7 +111,7 @@ fn interactive_button(label: &str) -> Container {
         // Animations
         .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
         .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
-        .animate_transform(Transition::spring(SpringConfig::SMOOTH))
+        .animate_scale(Transition::spring(SpringConfig::SMOOTH))
 
         // State layers
         .when_hovered(|s| s
@@ -121,7 +121,7 @@ fn interactive_button(label: &str) -> Container {
         .when_pressed(|s| s
             .ripple()
             .darker(0.05)
-            .transform(Transform::scale(0.98))
+            .scale(0.98)
         )
 
         .child(container().child(text(label).color(Color::WHITE)))
@@ -137,8 +137,10 @@ pub struct StateStyle {
     pub background: Option<BackgroundOverride>,
     // Both halves or neither: half a border is no border.
     pub border: Option<BorderOverride>,
-    pub corner_radius: Option<Signal<f32>>,
-    pub transform: Option<Signal<Transform>>,
+    pub corners: Option<Signal<Corners>>,
+    pub translate: Option<Signal<Translate>>,
+    pub rotate: Option<Signal<f32>>,
+    pub scale: Option<Signal<Scale>>,
     pub elevation: Option<Signal<f32>>,
     pub text_color: Option<Signal<Color>>,
     pub alpha: Option<Signal<f32>>,

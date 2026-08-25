@@ -25,6 +25,13 @@ struct Timeline<T> {
     last_play: u32,
 }
 
+/// A transition of no duration: a timeline speaks for its property while it
+/// plays, and outside it the declared value applies at once, exactly as it
+/// would with no animation at all.
+pub(super) fn instant_transition() -> Transition {
+    Transition::new(0.0, crate::animation::TimingFunction::Linear)
+}
+
 /// Result of advancing an animation, indicating whether the value changed
 #[derive(Debug, Clone, PartialEq)]
 pub enum AdvanceResult<T> {
@@ -69,9 +76,9 @@ pub struct AnimationState<T: Animatable> {
     /// animation instead of snapping to the target
     enter_from: Option<T>,
     /// A sequence to play on demand, and what plays it. Boxed and absent by
-    /// default: `ContainerAnims` holds nine of these states and only one
-    /// property can carry a sequence, so the rest pay a pointer rather than
-    /// the struct.
+    /// default: `ContainerAnims` holds eleven of these states and only three
+    /// can carry a sequence — `keyframes_translate`, `keyframes_rotate` and
+    /// `keyframes_scale` — so the rest pay a pointer rather than the struct.
     timeline: Option<Box<Timeline<T>>>,
 }
 
@@ -342,17 +349,28 @@ impl<T: Animatable> AnimationState<T> {
         }
     }
 
-    /// Carry a sequence over from the state this one replaces.
+    /// Carry what a caller declared over from the state this one replaces.
     ///
     /// The builders each construct a fresh `AnimationState`, so without this
-    /// the order `keyframes_*` and `animate_*` were written in would decide
-    /// whether the sequence survived at all — silently, since the trigger
-    /// would go on firing against a state that had nothing to play.
-    pub(crate) fn adopt_timeline_of(&mut self, previous: Option<Self>) {
-        if let Some(previous) = previous
-            && let Some(timeline) = previous.timeline
-        {
+    /// the order `keyframes_*`, `animate_*` and `animate_*_from` were written
+    /// in would decide what survived — silently, since a trigger would go on
+    /// firing against a state that had nothing to play and an enter would
+    /// simply never run.
+    ///
+    /// Both fields, not just the sequence. Carrying one and dropping the other
+    /// is the same defect this exists to fix, and it was open on `enter_from`
+    /// for as long as this took only the timeline: writing
+    /// `animate_scale_from(0.9, ..)` before `animate_scale(..)` lost the enter.
+    ///
+    /// An `enter_from` already on `self` wins — it came from the builder being
+    /// written now, and the later declaration is the one a caller means.
+    pub(crate) fn adopt_declarations_of(&mut self, previous: Option<Self>) {
+        let Some(previous) = previous else { return };
+        if let Some(timeline) = previous.timeline {
             self.timeline = Some(timeline);
+        }
+        if self.enter_from.is_none() {
+            self.enter_from = previous.enter_from;
         }
     }
 
@@ -449,7 +467,7 @@ impl<T: Animatable> AnimationState<T> {
 
     /// Store an enter value: the first layout starts an animation from it
     /// to the effective target instead of snapping (see
-    /// `Container::animate_transform_from`).
+    /// `Container::animate_scale_from`).
     pub(crate) fn with_enter_from(mut self, from: T) -> Self {
         self.enter_from = Some(from);
         self
@@ -949,30 +967,116 @@ mod tests {
     }
 
     /// Momentum does not leak between channels that have nothing to do with
-    /// each other: a translation interrupted by a pure scale change projects
-    /// to nothing, because the two directions are orthogonal.
+    /// each other: a slide to the right, interrupted by a slide straight down,
+    /// starts the new segment from rest because the two directions are
+    /// orthogonal.
+    ///
+    /// Translation against scale no longer needs saying — they are separate
+    /// properties with separate states, so nothing could cross between them
+    /// even by mistake.
     #[test]
     fn momentum_does_not_cross_from_one_channel_to_another() {
         use crate::animation::SpringConfig;
-        use crate::transform::Transform;
+        use crate::transform::Translate;
 
-        let mut anim = AnimationState::new(Transform::IDENTITY, spring(SpringConfig::DEFAULT));
-        anim.set_immediate(Transform::IDENTITY);
-        anim.animate_to(Transform::translate(200.0, 0.0));
+        let mut anim = AnimationState::new(Translate::NONE, spring(SpringConfig::DEFAULT));
+        anim.set_immediate(Translate::NONE);
+        anim.animate_to(Translate::new(200.0, 0.0));
         at(&mut anim, 40);
         assert!(velocity_of(&anim) > 0.0, "it has to be moving first");
 
-        // A pure scale change from wherever the translation got to: the two
-        // scale terms move, the two translation terms do not.
-        let mut scaled = *anim.current();
-        scaled.data[0] += 0.05;
-        scaled.data[4] += 0.05;
-        anim.animate_to(scaled);
+        // Straight down from wherever the rightward slide got to: the y
+        // channel moves, the x channel does not.
+        let here = *anim.current();
+        anim.animate_to(Translate::new(here.x, here.y + 200.0));
 
         assert!(
             velocity_of(&anim).abs() < 0.5,
-            "a translation's momentum has no business driving a scale, got {}",
+            "a rightward slide has no business driving a downward one, got {}",
             velocity_of(&anim)
+        );
+    }
+
+    /// #212: a half turn used to annihilate the widget. Interpolating the six
+    /// matrix coefficients took the diagonal from 1 to -1, so at the midpoint
+    /// the matrix was all zeros and the widget shrank to a point and came
+    /// back. An angle has no midpoint that is not an angle.
+    #[test]
+    fn a_half_turn_does_not_collapse_the_widget() {
+        use crate::transform::{Scale, Transform, Translate};
+
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
+        anim.set_immediate(0.0);
+        anim.animate_to(180.0);
+
+        let mut smallest = f32::INFINITY;
+        for frame in 0..=25 {
+            at(&mut anim, frame * 4);
+            let composed = Transform::compose(Translate::NONE, *anim.current(), Scale::NONE);
+            smallest = smallest.min(composed.extract_scale());
+        }
+
+        assert!(
+            (smallest - 1.0).abs() < 1e-4,
+            "a rotation must not change the size it turns; smallest scale was {smallest}"
+        );
+    }
+
+    /// #212, the other half: 0 -> 360 is the same matrix at both ends, so a
+    /// matrix lerp was constant and the widget sat still. The angle is a
+    /// number, and 360 is not 0.
+    #[test]
+    fn a_full_turn_is_a_turn_and_not_a_no_op() {
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
+        anim.set_immediate(0.0);
+        anim.animate_to(360.0);
+
+        at(&mut anim, 50);
+        let halfway = *anim.current();
+        assert!(
+            (halfway - 180.0).abs() < 5.0,
+            "halfway through a full turn is half a turn, got {halfway}"
+        );
+
+        at(&mut anim, 100);
+        assert!(
+            (*anim.current() - 360.0).abs() < 1e-3,
+            "and it ends where it was sent, got {}",
+            *anim.current()
+        );
+    }
+
+    /// Nothing takes a shorter way round on the caller's behalf: 350 -> 370 is
+    /// twenty degrees forward, not three hundred and forty back. Only the
+    /// caller knows whether an angle that crossed the wrap meant to.
+    #[test]
+    fn an_angle_past_the_wrap_keeps_going_forward() {
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
+        anim.set_immediate(350.0);
+        anim.animate_to(370.0);
+
+        at(&mut anim, 50);
+        let halfway = *anim.current();
+        assert!(
+            (halfway - 360.0).abs() < 1.0,
+            "halfway from 350 to 370 is 360, got {halfway}"
+        );
+    }
+
+    /// And the angle moves at the rate the easing asks for. The matrix lerp
+    /// got the endpoints right and everything between them wrong: a quarter of
+    /// the way into a 0 -> 90 run it passed through 8.13 degrees, not 22.5.
+    #[test]
+    fn the_angle_moves_at_the_rate_the_easing_asks_for() {
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
+        anim.set_immediate(0.0);
+        anim.animate_to(90.0);
+
+        at(&mut anim, 25);
+        assert!(
+            (*anim.current() - 22.5).abs() < 1.0,
+            "a quarter of the way is a quarter of the angle, got {}",
+            *anim.current()
         );
     }
 
