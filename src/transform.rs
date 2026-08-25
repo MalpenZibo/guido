@@ -402,41 +402,42 @@ impl Transform {
         self.data[5] = val;
     }
 
-    /// How much this transform stretches each axis.
+    /// How far the image of a unit circle reaches horizontally and vertically
+    /// in world space — `sqrt(a² + b²)` and `sqrt(c² + d²)`, the norms of the
+    /// two **rows**.
     ///
-    /// Exact when the transform keeps the axes — no rotation anywhere in the
-    /// chain — which is the only case its caller's model is valid for anyway:
-    /// a world-space [`EllipticalRadii`](crate::renderer::EllipticalRadii) is
-    /// an axis-aligned pair, and a rounded rectangle that has been turned does
-    /// not have one. There `|a|` and `|d|` are the two factors, and nothing is
-    /// being estimated.
+    /// This is not "the scale the transform was built from", and reading it
+    /// that way is how it has been got wrong twice. Its caller pairs the result
+    /// with a world-space axis-aligned box: `EllipticalRadii::x` is a
+    /// *horizontal* semi-axis and `::y` a *vertical* one, so the question is how
+    /// wide and how tall a corner becomes, not how much each of the transform's
+    /// own axes was stretched. Under a rotation those are different numbers,
+    /// and only the first one has a caller.
     ///
-    /// Once a rotation is in the chain there is no per-axis answer to give.
-    /// Neither the row norms nor the column norms are it: rows are right for
-    /// `S·R` — an ancestor scaling a rotated descendant — and wrong for `T·R·S`,
-    /// columns are right for `T·R·S` and wrong for `S·R`, and each reports
-    /// `(1.458, 1.458)` for the other's case where the truth is `(2.0, 0.5)`.
-    /// The singular values are the true pair for both, so that is what the
-    /// rotated branch returns; which world axis each one belongs to is the
-    /// part that has no answer, and the larger is reported first.
+    /// Rows answer it exactly, for any affine and any composition order,
+    /// because the image of the unit circle is
+    /// `{ (a·cosθ + b·sinθ, c·cosθ + d·sinθ) }` and the extreme of each
+    /// coordinate is the norm of its row, by Cauchy–Schwarz. Nothing here is
+    /// an approximation and nothing depends on how the matrix was arrived at.
     ///
-    /// That inexactness is inside a case that is already wrong for a bigger
-    /// reason — see #198, where the region published for a rotated container is
-    /// its bounding box rather than its shape.
+    /// The two plausible alternatives are both wrong, measured against the
+    /// image of the circle for `rotate(45°)` with `scale((2.0, 0.5))`, where
+    /// the truth is `(1.458, 1.458)`:
+    ///
+    /// | | rot45 then scale | scale then rot45 | rot90 then scale |
+    /// |---|---|---|---|
+    /// | truth | (1.458, 1.458) | (2.0, 0.5) | (0.5, 2.0) |
+    /// | rows | **(1.458, 1.458)** | **(2.0, 0.5)** | **(0.5, 2.0)** |
+    /// | columns | (2.0, 0.5) | (1.458, 1.458) | (2.0, 0.5) |
+    /// | singular values | (2.0, 0.5) | (2.0, 0.5) | (2.0, 0.5) |
+    ///
+    /// The singular values are the ellipse's own semi-axes, which is a true
+    /// fact about the shape and the wrong question: they are ordered by size
+    /// rather than by axis, so they transpose the corner for a quarter turn and
+    /// for any scale with `sy > sx`.
     pub(crate) fn extract_scale_components(&self) -> (f32, f32) {
         let (a, b, c, d) = (self.a(), self.b(), self.c(), self.d());
-
-        // Axis-preserving: the off-diagonal is what a rotation or a shear puts
-        // there, so without it each axis is scaled by its own diagonal term.
-        if b.abs() < 1e-6 && c.abs() < 1e-6 {
-            return (a.abs(), d.abs());
-        }
-
-        // Singular values of [[a, b], [c, d]], closed form.
-        let (e, f) = ((a + d) * 0.5, (a - d) * 0.5);
-        let (g, h) = ((c + b) * 0.5, (c - b) * 0.5);
-        let (q, r) = (e.hypot(h), g.hypot(f));
-        (q + r, (q - r).abs())
+        ((a * a + b * b).sqrt(), (c * c + d * d).sqrt())
     }
 
     /// One scale factor for a transform that may not have exactly one: the
@@ -627,83 +628,69 @@ mod tests {
         }
     }
 
-    /// The scale a transform reports has to be the scale it was built with,
-    /// rotation included — it sizes the corner radii of the blur region a
-    /// container publishes to the compositor.
-    #[test]
-    fn a_rotated_transform_reports_the_scale_it_carries() {
-        for deg in [0.0f32, 30.0, 45.0, 90.0, 200.0] {
-            let t = Transform::compose(Translate::new(9.0, -4.0), deg, Scale::new(2.0, 0.5));
-            let (sx, sy) = t.extract_scale_components();
-            assert!(
-                approx_eq(sx, 2.0) && approx_eq(sy, 0.5),
-                "at {deg}° expected (2.0, 0.5), got ({sx}, {sy})"
-            );
+    /// The extents the function reports, checked against the extents the shape
+    /// actually has: the image of a unit circle, sampled.
+    ///
+    /// Written against the definition rather than against expected numbers on
+    /// purpose. The numbers are what got this wrong twice — it is easy to write
+    /// down what a transform "should" scale by and lock in an answer to a
+    /// question nobody asked.
+    fn true_extents(t: &Transform) -> (f32, f32) {
+        let (mut x, mut y) = (0.0f32, 0.0f32);
+        for i in 0..3600 {
+            let th = (i as f32) * std::f32::consts::TAU / 3600.0;
+            let (sin, cos) = th.sin_cos();
+            x = x.max((t.a() * cos + t.b() * sin).abs());
+            y = y.max((t.c() * cos + t.d() * sin).abs());
         }
+        (x, y)
     }
 
-    /// And so does one whose scale came from an ancestor and whose rotation is
-    /// its own — `S·R` rather than `T·R·S`. This is the shape the row norms
-    /// were right about and the column norms are not, which is why it is
-    /// neither: a nested container is as ordinary as a lone one.
-    #[test]
-    fn a_scale_above_a_rotation_reports_it_too() {
-        for deg in [30.0f32, 45.0, 90.0] {
-            let world = Transform::compose(Translate::NONE, 0.0, Scale::new(2.0, 0.5))
-                .then(&Transform::rotate_degrees(deg));
-            let (sx, sy) = world.extract_scale_components();
-            assert!(
-                approx_eq(sx, 2.0) && approx_eq(sy, 0.5),
-                "at {deg}° expected (2.0, 0.5), got ({sx}, {sy})"
-            );
-        }
-    }
-
-    /// A chain deeper than two, which is what a `world_transform` actually is:
-    /// an ancestor's non-uniform scale, a rotation below it, a uniform scale
-    /// below that.
-    #[test]
-    fn a_chain_of_three_reports_the_scale_it_accumulated() {
-        let world = Transform::scale_xy(2.0, 0.5)
-            .then(&Transform::rotate_degrees(30.0))
-            .then(&Transform::scale(1.5));
-
-        let (sx, sy) = world.extract_scale_components();
-        assert!(approx_eq(sx, 3.0), "got sx = {sx}");
-        assert!(approx_eq(sy, 0.75), "got sy = {sy}");
-    }
-
-    /// And where no per-axis answer exists at all — two rotations with two
-    /// non-uniform scales between them, which is a shear — the pair returned
-    /// is still the right pair: its product is the determinant, so the area it
-    /// claims is the area the transform actually covers.
-    #[test]
-    fn the_pair_is_coherent_even_where_the_axes_are_not() {
-        let world = Transform::scale_xy(2.0, 0.5)
-            .then(&Transform::rotate_degrees(30.0))
-            .then(&Transform::scale_xy(0.5, 2.0))
-            .then(&Transform::rotate_degrees(20.0));
-
-        let (sx, sy) = world.extract_scale_components();
-        let determinant = (world.a() * world.d() - world.b() * world.c()).abs();
+    fn assert_reports_its_extents(t: Transform, what: &str) {
+        let (want_x, want_y) = true_extents(&t);
+        let (got_x, got_y) = t.extract_scale_components();
         assert!(
-            approx_eq(sx * sy, determinant),
-            "({sx}, {sy}) claims an area of {} against {determinant}",
-            sx * sy
+            (got_x - want_x).abs() < 1e-3 && (got_y - want_y).abs() < 1e-3,
+            "{what}: the shape reaches ({want_x:.4}, {want_y:.4}), \
+             the transform reports ({got_x:.4}, {got_y:.4})"
         );
     }
 
-    /// Without a rotation the axes are not in doubt, so the answer is exact and
-    /// keeps its order — a taller-than-wide scale must not come back widened.
+    /// A container's own transform, at every angle. This is the case the
+    /// column norms and the singular values both get wrong.
     #[test]
-    fn an_axis_preserving_scale_keeps_its_axes() {
-        let t = Transform::compose(Translate::new(3.0, 3.0), 0.0, Scale::new(0.5, 2.0));
-        let (sx, sy) = t.extract_scale_components();
-        assert!(approx_eq(sx, 0.5), "got sx = {sx}");
-        assert!(approx_eq(sy, 2.0), "got sy = {sy}");
+    fn a_transform_reports_the_extents_its_shape_has() {
+        for deg in [0.0f32, 30.0, 45.0, 90.0, 180.0, 200.0, 270.0] {
+            for scale in [Scale::NONE, Scale::new(2.0, 0.5), Scale::new(0.5, 2.0)] {
+                assert_reports_its_extents(
+                    Transform::compose(Translate::new(9.0, -4.0), deg, scale),
+                    &format!("rotate {deg}° with scale ({}, {})", scale.x, scale.y),
+                );
+            }
+        }
     }
 
-    /// And a uniform one reads the same on both axes at any angle.
+    /// And a world transform, which is a chain: an ancestor's scale over a
+    /// descendant's rotation, three deep, and a shear built from two of each.
+    #[test]
+    fn a_chain_reports_the_extents_its_shape_has() {
+        let scale_over_rotation =
+            Transform::scale_xy(2.0, 0.5).then(&Transform::rotate_degrees(45.0));
+        assert_reports_its_extents(scale_over_rotation, "scale above a rotation");
+
+        let three = Transform::scale_xy(2.0, 0.5)
+            .then(&Transform::rotate_degrees(30.0))
+            .then(&Transform::scale(1.5));
+        assert_reports_its_extents(three, "three levels");
+
+        let sheared = Transform::scale_xy(2.0, 0.5)
+            .then(&Transform::rotate_degrees(30.0))
+            .then(&Transform::scale_xy(0.5, 2.0))
+            .then(&Transform::rotate_degrees(20.0));
+        assert_reports_its_extents(sheared, "two rotations with two scales, a shear");
+    }
+
+    /// A rotation on its own changes nothing about how far a circle reaches.
     #[test]
     fn a_rotation_alone_reports_no_scaling() {
         for deg in [0.0f32, 45.0, 180.0, 360.0] {
