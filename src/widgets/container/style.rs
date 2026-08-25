@@ -113,17 +113,17 @@ impl Container {
     }
 
     pub(super) fn effective_translate_target(&self, id: WidgetId) -> Translate {
-        let base = self.translate.get_or(Translate::NONE);
+        let base = self.translate_signal().get_or(Translate::NONE);
         self.resolve_state_value(id, base, |state| state.translate.map(|s| s.get()))
     }
 
     pub(super) fn effective_rotate_target(&self, id: WidgetId) -> f32 {
-        let base = self.rotate.get_or(0.0);
+        let base = self.rotate_signal().get_or(0.0);
         self.resolve_state_value(id, base, |state| state.rotate.map(|s| s.get()))
     }
 
     pub(super) fn effective_scale_target(&self, id: WidgetId) -> Scale {
-        let base = self.scale.get_or(Scale::NONE);
+        let base = self.scale_signal().get_or(Scale::NONE);
         self.resolve_state_value(id, base, |state| state.scale.map(|s| s.get()))
     }
 
@@ -256,9 +256,9 @@ impl Container {
         // is a colour. Asking the interaction what it declares rather than
         // whether it exists is what keeps every `on_click` out of the slow
         // path: this runs on each paint and each coalesced pointer move.
-        if self.translate.is_none()
-            && self.rotate.is_none()
-            && self.scale.is_none()
+        if self.translate_signal().is_none()
+            && self.rotate_signal().is_none()
+            && self.scale_signal().is_none()
             && !self
                 .interaction
                 .as_ref()
