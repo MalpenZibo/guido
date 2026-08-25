@@ -659,6 +659,40 @@ mod tests {
         }
     }
 
+    /// A chain deeper than two, which is what a `world_transform` actually is:
+    /// an ancestor's non-uniform scale, a rotation below it, a uniform scale
+    /// below that.
+    #[test]
+    fn a_chain_of_three_reports_the_scale_it_accumulated() {
+        let world = Transform::scale_xy(2.0, 0.5)
+            .then(&Transform::rotate_degrees(30.0))
+            .then(&Transform::scale(1.5));
+
+        let (sx, sy) = world.extract_scale_components();
+        assert!(approx_eq(sx, 3.0), "got sx = {sx}");
+        assert!(approx_eq(sy, 0.75), "got sy = {sy}");
+    }
+
+    /// And where no per-axis answer exists at all — two rotations with two
+    /// non-uniform scales between them, which is a shear — the pair returned
+    /// is still the right pair: its product is the determinant, so the area it
+    /// claims is the area the transform actually covers.
+    #[test]
+    fn the_pair_is_coherent_even_where_the_axes_are_not() {
+        let world = Transform::scale_xy(2.0, 0.5)
+            .then(&Transform::rotate_degrees(30.0))
+            .then(&Transform::scale_xy(0.5, 2.0))
+            .then(&Transform::rotate_degrees(20.0));
+
+        let (sx, sy) = world.extract_scale_components();
+        let determinant = (world.a() * world.d() - world.b() * world.c()).abs();
+        assert!(
+            approx_eq(sx * sy, determinant),
+            "({sx}, {sy}) claims an area of {} against {determinant}",
+            sx * sy
+        );
+    }
+
     /// Without a rotation the axes are not in doubt, so the answer is exact and
     /// keeps its order — a taller-than-wide scale must not come back widened.
     #[test]
