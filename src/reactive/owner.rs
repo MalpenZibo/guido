@@ -173,6 +173,12 @@ pub(crate) fn reset_owners() {
     CURRENT_OWNER.with(|c| *c.borrow_mut() = None);
     ROOT_OWNER.with(|root| root.set(None));
     OWNERS.with(|o| *o.borrow_mut() = OwnerArena::new());
+    // With them, anything queued against them. Owner ids restart from zero
+    // with the arena, so a disposal left over from the App that is going away
+    // names a live owner in the App that comes next — the same hazard
+    // `App::drop` already clears the tree for, where a late Unregister job
+    // would destroy a new widget that reused the id.
+    PENDING_DISPOSALS.with(|v| v.clear());
 }
 
 /// Run `f` under the root owner instead of whatever scope is current.
@@ -405,8 +411,8 @@ pub(crate) fn effect_has_owner(id: EffectId) -> bool {
 
 // Owners scheduled for deferred disposal (see `dispose_owner`).
 thread_local! {
-    static PENDING_DISPOSALS: std::cell::RefCell<Vec<OwnerId>> =
-        const { std::cell::RefCell::new(Vec::new()) };
+    static PENDING_DISPOSALS: crate::deferred::DeferredQueue<OwnerId> =
+        const { crate::deferred::DeferredQueue::new() };
 }
 
 /// Dispose an owner: all its signals, effects, and cleanup callbacks.
@@ -421,10 +427,10 @@ thread_local! {
 /// Disposing the same owner twice (or an already-disposed owner) is
 /// harmless.
 pub fn dispose_owner(id: OwnerId) {
-    PENDING_DISPOSALS.with(|v| v.borrow_mut().push(id));
-    // Wake the loop so a disposal requested in a quiet moment (compositor
-    // dismissal with no other activity) is not postponed indefinitely
-    crate::jobs::wake_loop();
+    // Pushing is what wakes the loop, so a disposal requested in a quiet
+    // moment — a compositor dismissal with nothing else going on — is not
+    // postponed indefinitely.
+    PENDING_DISPOSALS.with(|v| v.push(id));
 }
 
 /// Run every pending deferred disposal. Called by the main loop at a safe
@@ -433,7 +439,7 @@ pub(crate) fn flush_pending_disposals() {
     // split_off keeps draining safe even if a cleanup callback disposes
     // another owner while running (it lands in the next batch)
     loop {
-        let batch = PENDING_DISPOSALS.with(|v| v.borrow_mut().split_off(0));
+        let batch = PENDING_DISPOSALS.with(|v| v.drain());
         if batch.is_empty() {
             return;
         }
@@ -441,13 +447,6 @@ pub(crate) fn flush_pending_disposals() {
             dispose_owner_now(id);
         }
     }
-}
-
-/// Whether any owner is waiting to be disposed.
-///
-/// Part of the loop's wakeup check — see `queued_but_unwoken` in `lib.rs`.
-pub(crate) fn disposals_pending() -> bool {
-    PENDING_DISPOSALS.with(|v| !v.borrow().is_empty())
 }
 
 #[cfg(test)]

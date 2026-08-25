@@ -17,7 +17,6 @@ pub mod signal;
 pub mod storage;
 mod trigger;
 
-pub(crate) use clipboard::selection_change_pending;
 pub(crate) use clipboard::{
     clear_system_clipboard, set_system_clipboard, set_system_primary, take_clipboard_change,
     take_primary_change,
@@ -28,8 +27,8 @@ pub use clipboard::{
 pub use context::{
     expect_context, has_context, provide_context, provide_signal_context, use_context, with_context,
 };
+pub(crate) use cursor::take_cursor_change;
 pub use cursor::{CursorIcon, set_cursor};
-pub(crate) use cursor::{cursor_change_pending, take_cursor_change};
 pub use effect::create_effect;
 pub(crate) use focus::{
     focus_path, has_focus, release_focus, release_focus_if_within, request_focus,
@@ -62,7 +61,7 @@ pub mod __internal {
     pub use super::runtime::batch;
 }
 pub use callback::Callback;
-pub(crate) use runtime::{bg_writes_pending, flush_bg_writes};
+pub(crate) use runtime::flush_bg_writes;
 pub use service::{Service, ServiceContext, create_service, create_task};
 pub use signal::{
     OptionSignalExt, RwSignal, Signal, WriteSignal, create_derived, create_signal, create_stored,

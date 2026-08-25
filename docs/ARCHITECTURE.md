@@ -319,6 +319,14 @@ either carry their payload or act as doorbells for data queued elsewhere
 flush point). Never call `jobs::wake_loop()` directly from a background
 thread as the *only* wakeup for queued work.
 
+There are two ways in, and `ingress::sender` is private so there is no third.
+`notify()` sends in the same call that queued the work, for a producer whose
+payload is ready then and there. `IngressSender` is taken *before* the work
+starts and binds the send to the loop that was running at that moment — a
+selection read has three seconds to finish, and a result that arrives after a
+restart would otherwise land in a loop whose generation counters have started
+over. Both hand the wakeup to the ping if the receiver has gone.
+
 **Main thread → `jobs::wake_loop()`.**
 The frame-request ping is coalesced per loop iteration through a dedicated
 `PING_SENT` flag cleared once per wakeup (`mark_loop_awake`, right after
@@ -341,26 +349,53 @@ Work owed to a *clock* rather than to a frame — the blinking caret — is held
 asks `jobs::next_deadline()`, blocks exactly that long, and `promote_due_jobs()`
 turns whatever is due into an ordinary job at the top of the next iteration.
 
-This is why a scheduled job is not named in `queued_but_unwoken()`: nobody owes it
-a ping, because the loop is not late — it is waiting on purpose, with a bounded
+This is why a scheduled job owes no ping: the loop is not late — it is waiting on purpose, with a bounded
 timeout. The alternative is what the caret used to do: ask for an animation frame,
 which means "advance me every frame", pinning the loop at 60 fps for a square wave
 that changes twice a second and repainting the same pixels 113 frames out of 114.
 A focused input is the resting state of a lock screen, so that ran all night.
 
-**The contract is checked, not just written down.** Debug builds assert it at
-the one moment where breaking it is fatal: `queued_but_unwoken()` in
-`src/lib.rs` names every queue the loop drains, and nothing may be
-outstanding when the loop is about to block indefinitely. The reasoning is
-that each queue is drained unconditionally once per iteration, so anything
-still queued was produced *after* its own drain — and the only thing that
-brings the loop back is a frame request, which would have kept it from
-blocking. A non-empty queue there means nobody asked to be woken.
+**The contract is structural, not policed.** A deferred queue and its wakeup
+are one object (`src/deferred.rs`): `DeferredQueue::push` and
+`DeferredSlot::set` *are* the wakeup, the cell inside is private, and there is
+no way to reach it that does not ask for the pass that empties it. Disposals
+and surface commands are queues; the cursor, the clipboard and the primary
+selection are slots, where two values in one frame means the second is the
+answer.
 
-So a new queue needs one line in `queued_but_unwoken()` alongside its drain.
-Forget the wakeup and the next idle moment panics with the queue's name,
-instead of the app going quietly deaf until an unrelated compositor event
-happens along. Two of the bugs documented above were exactly that.
+That replaced a `debug_assert!` before the blocking dispatch which named every
+queue and panicked if one was non-empty. It was the wrong shape twice over. It
+fired on healthy states — the drains sit in the middle of the iteration and
+effects, event handlers and background threads all run after them, so work
+riding the next pass is what a working application looks like — and answering
+that properly meant tracking, from the outside, whether a wakeup existed:
+a coalescing flag for the ping and a count for messages in flight in the
+calloop channel. That is a lot of apparatus to verify at runtime a rule the
+type can make unbreakable.
+
+Three producers stay outside `deferred`, each for a reason worth knowing:
+
+- **background writes** wake through the ingress channel rather than the ping,
+  and there is exactly one of them (`queue_bg_write`), so the pairing is one
+  function rather than a pattern;
+- **widget jobs** carry their own machinery — dedup, ownership resolution,
+  per-surface lanes — and wake from inside `request_job`;
+- **a parked focus request** is the opposite invariant: it waits for a widget
+  that may not be laid out for many frames, so *still full* is its resting
+  state, not a failure. It is applied at the end of `layout_pass`, after the
+  tree has resolved and before the paint that shows it.
+
+The session lock's request is *in* `deferred`, as a `DeferredSlot<LockRequest>`:
+`lock_session` and `unlock_session` are two answers to one question, and the
+pair of independent booleans they used to set let both be true at once — the
+loop then started a lock and undid it three steps later in the same iteration.
+
+Everything in `deferred` is drained unconditionally, once per iteration, in
+the loop body. That is what makes "the loop will get to it on the next pass"
+true regardless of which surfaces exist or whether any of them had a frame to
+draw — the clipboard and the cursor used to be drained inside the per-surface
+pass, which meant an application with no surface configured yet could queue a
+copy that nothing would ever take.
 
 ## Widget Trait
 

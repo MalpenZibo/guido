@@ -187,9 +187,10 @@ pub fn queue_bg_write(epoch: u64, f: impl FnOnce() + Send + 'static) {
     if let Ok(mut q) = WRITE_QUEUE.lock() {
         q.push((epoch, Box::new(f)));
     }
-    // Wake the event loop so flush_bg_writes() runs on the next frame.
-    // Routed through the calloop ingress channel: its readiness guarantees
-    // the loop wakes no matter where in its iteration the write landed.
+    // Queueing and waking are one gesture here too — this is the cross-thread
+    // one, so the wakeup goes through the calloop ingress channel rather than
+    // the ping: its readiness guarantees the loop wakes no matter where in its
+    // iteration the write landed.
     crate::ingress::notify(crate::ingress::IngressMessage::BgWritesQueued);
 }
 
@@ -585,13 +586,6 @@ pub fn batch<R>(f: impl FnOnce() -> R) -> R {
         flush_pending_effects();
     }
     result
-}
-
-/// Whether a background thread has queued a signal write not yet flushed.
-///
-/// Part of the loop's wakeup check — see `queued_but_unwoken` in `lib.rs`.
-pub(crate) fn bg_writes_pending() -> bool {
-    WRITE_QUEUE.lock().map(|q| !q.is_empty()).unwrap_or(false)
 }
 
 #[cfg(test)]

@@ -56,12 +56,31 @@ struct LockData {
     factory: Option<LockWidgetFn>,
     /// Lock surface per output.
     surfaces: HashMap<OutputId, SurfaceId>,
-    lock_requested: bool,
-    unlock_requested: bool,
+}
+
+/// What the application last asked for, waiting for the state machine.
+enum LockRequest {
+    /// Lock, building each output's screen with this factory. The factory
+    /// travels with the request rather than being installed by the caller:
+    /// a request that is replaced takes its factory with it, and the one the
+    /// state machine acts on is the one it was handed.
+    Lock(LockWidgetFn),
+    Unlock,
 }
 
 thread_local! {
     static LOCK: RefCell<LockData> = RefCell::new(LockData::default());
+
+    /// A slot, not two flags: "lock" and "unlock" are two answers to one
+    /// question, and asking twice in a frame means the second answer is the
+    /// one meant. Two independent booleans let both be true at once, which
+    /// the loop then acted on in order — a lock sent to the compositor and
+    /// undone in the same iteration.
+    ///
+    /// Setting it is what wakes the loop, so the state machine cannot be
+    /// asked for something and left asleep — see `crate::deferred`.
+    static REQUEST: crate::deferred::DeferredSlot<LockRequest> =
+        const { crate::deferred::DeferredSlot::new() };
 }
 
 /// The lifecycle the application watches. Its own global rather than a field
@@ -102,32 +121,32 @@ where
     W: Widget + 'static,
     F: Fn(OutputInfo) -> W + 'static,
 {
-    LOCK.with(|lock| {
-        let mut lock = lock.borrow_mut();
-        // `Locking` counts: a second request while the first is in flight is
-        // granted here, then refused by the platform on the next iteration —
-        // and the refusal path clears the factory. The compositor's `Locked`
-        // then arrives with nothing to build the lock screen from, which is a
-        // locked session with no way to type a password into it.
-        if lock.lock_requested
-            || matches!(
-                STATE.get().get_untracked(),
-                LockState::Locked | LockState::Locking
-            )
-        {
-            log::warn!("lock_session() called while already locked or locking");
-            return;
-        }
-        lock.factory = Some(Box::new(move |info| Box::new(widget_fn(info))));
-        lock.lock_requested = true;
+    // `Locking` counts: a second request while the first is in flight is
+    // granted here, then refused by the platform on the next iteration — and
+    // the refusal path clears the factory. The compositor's `Locked` then
+    // arrives with nothing to build the lock screen from, which is a locked
+    // session with no way to type a password into it.
+    //
+    // A second request made before the state machine has seen the first needs
+    // no guard: it replaces it in the slot, so one request goes out either
+    // way, built from the factory the caller asked for last.
+    if matches!(
+        STATE.get().get_untracked(),
+        LockState::Locked | LockState::Locking
+    ) {
+        log::warn!("lock_session() called while already locked or locking");
+        return;
+    }
+    REQUEST.with(|request| {
+        request.set(LockRequest::Lock(Box::new(move |info| {
+            Box::new(widget_fn(info))
+        })))
     });
-    crate::jobs::wake_loop();
 }
 
 /// Unlock the session and drop all lock surfaces.
 pub fn unlock_session() {
-    LOCK.with(|lock| lock.borrow_mut().unlock_requested = true);
-    crate::jobs::wake_loop();
+    REQUEST.with(|request| request.set(LockRequest::Unlock));
 }
 
 /// Drive the session-lock state machine. Called once per main-loop
@@ -138,15 +157,23 @@ pub(crate) fn process_session_lock(
     qh: &QueueHandle<WaylandState>,
     tree: &mut Tree,
 ) {
-    // 1. Pending lock request
-    let lock_requested = LOCK.with(|l| std::mem::take(&mut l.borrow_mut().lock_requested));
-    if lock_requested {
-        if wayland_state.start_session_lock(qh) {
-            set_state(LockState::Locking);
-        } else {
-            LOCK.with(|l| l.borrow_mut().factory = None);
-            set_state(LockState::Unlocked);
+    // 1. Pending request. A lock goes out now; an unlock waits for step 3,
+    // after the compositor's events — a `Locked` arriving in the same
+    // iteration must land before the teardown, or the state ends up `Locked`
+    // with no surfaces under it.
+    let mut unlock_requested = false;
+    match REQUEST.with(|request| request.take()) {
+        Some(LockRequest::Lock(factory)) => {
+            LOCK.with(|l| l.borrow_mut().factory = Some(factory));
+            if wayland_state.start_session_lock(qh) {
+                set_state(LockState::Locking);
+            } else {
+                LOCK.with(|l| l.borrow_mut().factory = None);
+                set_state(LockState::Unlocked);
+            }
         }
+        Some(LockRequest::Unlock) => unlock_requested = true,
+        None => {}
     }
 
     // 2. Lock lifecycle events from the compositor
@@ -162,8 +189,7 @@ pub(crate) fn process_session_lock(
         }
     }
 
-    // 3. Pending unlock request
-    let unlock_requested = LOCK.with(|l| std::mem::take(&mut l.borrow_mut().unlock_requested));
+    // 3. Pending unlock request, taken above
     if unlock_requested && state_signal().get_untracked() != LockState::Unlocked {
         wayland_state.unlock_session();
         teardown_lock_surfaces(surface_manager, wayland_state, tree);
@@ -259,12 +285,40 @@ fn teardown_lock_surfaces(
 /// Called during `App::drop()`.
 pub(crate) fn reset_session_lock() {
     LOCK.with(|lock| *lock.borrow_mut() = LockData::default());
+    REQUEST.with(|request| request.clear());
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::reactive::owner::{create_root_owner, dispose_owner_now, with_owner};
+
+    /// Two answers in one frame, and the state machine acts on the second.
+    ///
+    /// The pair used to be two independent booleans, so both could be true at
+    /// once: the loop started a lock, sent it to the compositor, and undid it
+    /// three steps later in the same iteration — a lock screen that flashes up
+    /// and vanishes for an application that changed its mind.
+    #[test]
+    fn the_last_request_of_a_frame_is_the_one_that_counts() {
+        create_root_owner();
+        reset_session_lock();
+        set_state(LockState::Unlocked);
+
+        lock_session(|_| crate::widgets::container());
+        unlock_session();
+
+        assert!(
+            matches!(REQUEST.with(|r| r.take()), Some(LockRequest::Unlock)),
+            "the later request replaces the earlier one rather than joining it"
+        );
+        assert!(
+            REQUEST.with(|r| r.take()).is_none(),
+            "and there is only ever the one"
+        );
+
+        reset_session_lock();
+    }
 
     /// The lock state is process-wide and lives behind a thread-local built on
     /// first use, so *whoever reads it first* would otherwise decide its owner.

@@ -2,6 +2,7 @@ pub mod animation;
 pub mod backdrop;
 mod blur;
 pub mod compositor;
+mod deferred;
 pub mod image_metadata;
 mod ingress;
 mod jobs;
@@ -635,6 +636,16 @@ fn dispatch_events(
 /// Push anything the widgets changed back out to the compositor: the
 /// clipboard after a copy, the primary selection after a select-to-copy, the
 /// cursor shape after a hover.
+///
+/// Called once per iteration from the loop, not per surface. What it carries
+/// belongs to the seat rather than to any one surface, and running it inside
+/// the per-surface pass meant it only ran when a surface had a frame to give
+/// it: an application with no surface yet — one that spawns its bars from an
+/// event, a lock screen before its lock is granted — could copy or set a
+/// cursor and have it sit in the queue with no pass coming to drain it. The
+/// loop's pre-block check reads that queue and would have called it a lost
+/// wakeup, which it is not: the producer woke the loop, and the loop had
+/// nowhere to put the work.
 fn sync_platform_state(
     wayland_state: &mut platform::WaylandState,
     qh: &QueueHandle<platform::WaylandState>,
@@ -686,36 +697,6 @@ fn run_jobs(
         process_jobs(&followup, tree, layout_roots);
     }
     jobs::recycle_job_buffer(followup);
-}
-
-/// Deferred work that is queued and still waiting for the loop to drain it.
-///
-/// The wakeup contract says a producer that queues work must also guarantee a
-/// wakeup that survives until its consumer runs. This is that contract as a
-/// check instead of as prose — prose does not fail a test run.
-///
-/// Why an empty result is the only correct answer at the blocking point: each
-/// of these is drained unconditionally, once per iteration. Anything still
-/// queued was therefore produced *after* its own drain, and the only thing
-/// that can bring the loop back to drain it is a wake request — which would
-/// have kept it from blocking in the first place. So a non-empty queue here
-/// means nobody asked to be woken, and the app is about to go deaf until an
-/// unrelated compositor event happens along. That is precisely the shape of
-/// the lost-wakeup bug this contract exists to prevent.
-///
-/// Returns the name of the offender, because the point is the message.
-fn queued_but_unwoken() -> Option<&'static str> {
-    [
-        ("widget jobs", has_pending_jobs()),
-        ("a wake request", jobs::wake_request_pending()),
-        ("background signal writes", reactive::bg_writes_pending()),
-        ("owner disposals", reactive::owner::disposals_pending()),
-        ("surface commands", surface::surface_commands_pending()),
-        ("a selection change", reactive::selection_change_pending()),
-        ("a cursor change", reactive::cursor_change_pending()),
-    ]
-    .into_iter()
-    .find_map(|(name, pending)| pending.then_some(name))
 }
 
 /// What this surface tells us about itself, read once at the top of a frame.
@@ -953,8 +934,19 @@ fn layout_pass(
     // Update widget ref signals with current bounds after layout
     widget_ref::update_widget_refs(tree);
 
-    // A `WidgetRef::focus()` from application code lands here: after layout, so a
-    // handle attached this very frame has resolved to a widget.
+    // A `WidgetRef::focus()` from application code lands here: after layout, so
+    // a handle attached this very frame has resolved to a widget, and before
+    // `paint_and_present`, so the frame that resolves it is the frame that
+    // draws the caret. Applying it after the render pass instead reads
+    // tidier — one call per iteration rather than one per surface — and costs
+    // an autofocused field a frame of looking unfocused.
+    //
+    // Staying parked is this one's resting state, unlike the queues in
+    // `deferred`: a request for a widget that does not exist yet is the
+    // ordinary shape of `focus()` from a startup effect, and it waits as many
+    // frames as it takes. Which is also why it does not matter that a surface
+    // must exist for this to run — without one there is no tree to resolve
+    // against.
     reactive::focus::apply_pending_focus(tree);
 }
 
@@ -1226,7 +1218,6 @@ fn render_surface(
 
     let root = ctx.surface.widget_id;
     dispatch_events(&frame.events, root, ctx.tree, active_roots);
-    sync_platform_state(ctx.wayland_state, ctx.qh);
 
     let geometry = resolve_geometry(ctx, &frame);
 
@@ -1367,6 +1358,54 @@ impl App {
     /// });
     /// ```
     pub fn run(mut self, setup: impl FnOnce(&mut Self)) -> ExitReason {
+        // The loop is created before the connection because the keyboard is
+        // built during the first dispatch, and it needs the loop handle to arm
+        // its key-repeat timer.
+        let mut event_loop: EventLoop<platform::WaylandState> =
+            EventLoop::try_new().expect("Failed to create event loop");
+        let loop_handle = event_loop.handle();
+
+        // Both wakeup mechanisms are installed before anything can reach
+        // them, which means before `setup` runs: an app's very first act is
+        // often a `create_task` that writes a signal, and the compositor
+        // starts talking during `create_wayland_app`'s roundtrips and the
+        // configure loop. A producer that finds neither a channel nor a ping
+        // handle has nowhere to put its wakeup.
+        // Create ping mechanism for wakeup on signal changes
+        let (ping, ping_source) = make_ping().expect("Failed to create ping");
+        init_wakeup(ping);
+
+        // Insert ping source - this wakes the loop when signals change
+        loop_handle
+            .insert_source(ping_source, |_, _, _| {
+                // Ping received - a signal was updated, frame will be rendered
+            })
+            .expect("Failed to insert ping source");
+
+        // Cross-thread ingress channel: background threads send messages
+        // here instead of hand-rolling wakeups. calloop guarantees a send
+        // wakes the next dispatch — see the ingress module.
+        let (ingress_tx, ingress_channel) = calloop_channel::channel();
+        ingress::install_ingress(ingress_tx);
+        loop_handle
+            .insert_source(ingress_channel, |event, _, wayland_state| {
+                if let calloop_channel::Event::Msg(message) = event {
+                    match message {
+                        // Doorbell only: the write payloads live in the
+                        // reactive write queue, drained at the flush point
+                        // later this same iteration.
+                        ingress::IngressMessage::BgWritesQueued => {}
+                        // Prefetched selection content from a reader thread
+                        ingress::IngressMessage::ClipboardUpdate {
+                            kind,
+                            generation,
+                            content,
+                        } => wayland_state.apply_clipboard_update(kind, generation, content),
+                    }
+                }
+            })
+            .expect("Failed to insert ingress channel");
+
         // Create root owner scope — all signals/effects created in setup are owned
         self.root_owner_id = Some(reactive::create_root_owner());
         setup(&mut self);
@@ -1381,13 +1420,6 @@ impl App {
                  (spawn_surface, e.g. from an outputs() effect)"
             );
         }
-
-        // The loop is created before the connection because the keyboard is
-        // built during the first dispatch, and it needs the loop handle to arm
-        // its key-repeat timer.
-        let mut event_loop: EventLoop<platform::WaylandState> =
-            EventLoop::try_new().expect("Failed to create event loop");
-        let loop_handle = event_loop.handle();
 
         let (connection, mut event_queue, mut wayland_state, qh) =
             match create_wayland_app(loop_handle.clone()) {
@@ -1460,41 +1492,6 @@ impl App {
             surface_manager.add(managed);
         }
 
-        // Create ping mechanism for wakeup on signal changes
-        let (ping, ping_source) = make_ping().expect("Failed to create ping");
-        init_wakeup(ping);
-
-        // Insert ping source - this wakes the loop when signals change
-        loop_handle
-            .insert_source(ping_source, |_, _, _| {
-                // Ping received - a signal was updated, frame will be rendered
-            })
-            .expect("Failed to insert ping source");
-
-        // Cross-thread ingress channel: background threads send messages
-        // here instead of hand-rolling wakeups. calloop guarantees a send
-        // wakes the next dispatch — see the ingress module.
-        let (ingress_tx, ingress_channel) = calloop_channel::channel();
-        ingress::install_ingress(ingress_tx);
-        loop_handle
-            .insert_source(ingress_channel, |event, _, wayland_state| {
-                if let calloop_channel::Event::Msg(message) = event {
-                    match message {
-                        // Doorbell only: the write payloads live in the
-                        // reactive write queue, drained at the flush point
-                        // later this same iteration.
-                        ingress::IngressMessage::BgWritesQueued => {}
-                        // Prefetched selection content from a reader thread
-                        ingress::IngressMessage::ClipboardUpdate {
-                            kind,
-                            generation,
-                            content,
-                        } => wayland_state.apply_clipboard_update(kind, generation, content),
-                    }
-                }
-            })
-            .expect("Failed to insert ingress channel");
-
         // Insert Wayland source - this handles all Wayland protocol events
         WaylandSource::new(connection.clone(), event_queue)
             .insert(loop_handle.clone())
@@ -1522,24 +1519,17 @@ impl App {
             // - Otherwise block until event (Wayland or ping wakeup)
             let timeout = if needs_polling {
                 Some(std::time::Duration::from_millis(16)) // ~60fps for animations
-            } else if let Some(deadline) = jobs::next_deadline() {
-                // Not polling — waiting. A caret blinks twice a second, so this
-                // sleeps ~530 ms and wakes once, where treating the schedule as
-                // pending work would spin at 60 fps to repaint nothing 113 times
-                // out of 114.
-                Some(deadline.saturating_duration_since(std::time::Instant::now()))
             } else {
-                // About to block with nothing left to wake us but the
-                // compositor. Every queue must be empty by now — see
-                // `queued_but_unwoken`.
-                debug_assert!(
-                    queued_but_unwoken().is_none(),
-                    "the loop is about to block indefinitely with {} still queued — \
-                     whatever produced it owes a wakeup. See the Event Loop Wakeup \
-                     Contract in docs/ARCHITECTURE.md.",
-                    queued_but_unwoken().unwrap_or_default()
-                );
-                None // Block indefinitely until event
+                // Not polling — waiting. A deadline sleeps exactly that long: a
+                // caret blinks twice a second, so this wakes once where treating
+                // the schedule as pending work would spin at 60 fps to repaint
+                // nothing 113 frames out of 114.
+                //
+                // No deadline means blocking until the compositor or a ping.
+                // Nothing queued can be stranded by that: work and its wakeup
+                // are one gesture — see `deferred` and the ingress channel.
+                jobs::next_deadline()
+                    .map(|deadline| deadline.saturating_duration_since(std::time::Instant::now()))
             };
 
             if let Err(e) = event_loop.dispatch(timeout, &mut wayland_state) {
@@ -1662,6 +1652,12 @@ impl App {
                     render_surface(&mut ctx, layout_roots, woken, &active_roots);
                 }
             }
+
+            // Hand the seat what the widgets changed — after the render
+            // pass, so a copy or a cursor set by this iteration's event
+            // handling still goes out in this iteration, and outside it, so
+            // it goes out whether or not any surface had a frame to draw.
+            sync_platform_state(&mut wayland_state, &qh);
 
             // Flush the connection once for all surfaces
             if let Err(e) = connection.flush() {
@@ -1961,48 +1957,5 @@ mod font_registry_tests {
             after_second + 1,
             "a different font must still register"
         );
-    }
-}
-
-#[cfg(test)]
-mod wakeup_contract_coverage {
-    use super::*;
-
-    /// A probe that never reports anything would make the check in
-    /// `queued_but_unwoken` silently useless, so each one is pinned to the
-    /// drain it speaks for: queue, see it, drain, see it gone.
-    #[test]
-    fn each_probe_tracks_its_own_queue() {
-        // Clipboard and primary share one probe.
-        let _ = reactive::take_clipboard_change();
-        let _ = reactive::take_primary_change();
-        assert!(!reactive::selection_change_pending());
-
-        reactive::clipboard_copy("queued");
-        assert!(
-            reactive::selection_change_pending(),
-            "a copy must be visible to the wakeup check"
-        );
-        let _ = reactive::take_clipboard_change();
-        assert!(!reactive::selection_change_pending());
-
-        reactive::primary_copy("queued");
-        assert!(
-            reactive::selection_change_pending(),
-            "a primary-selection copy must be visible too"
-        );
-        let _ = reactive::take_primary_change();
-        assert!(!reactive::selection_change_pending());
-
-        // Cursor.
-        let _ = reactive::take_cursor_change();
-        assert!(!reactive::cursor_change_pending());
-        reactive::set_cursor(reactive::CursorIcon::Text);
-        assert!(
-            reactive::cursor_change_pending(),
-            "a cursor change must be visible to the wakeup check"
-        );
-        let _ = reactive::take_cursor_change();
-        assert!(!reactive::cursor_change_pending());
     }
 }

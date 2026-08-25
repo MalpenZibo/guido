@@ -224,7 +224,12 @@ impl WaylandState {
             return;
         };
 
-        let Some(sender) = crate::ingress::sender() else {
+        // Bound to the loop that is running now, because the read below has
+        // three seconds to finish and a loop that restarts in the meantime
+        // starts its generation counters over: a result delivered into the
+        // next session would pass the check in `apply_clipboard_update`
+        // against a matching generation that means something else.
+        let Some(sender) = crate::ingress::sender_handle() else {
             // No running event loop to deliver the result to.
             log::warn!("Selection prefetch skipped: no event loop running");
             return;
@@ -234,7 +239,7 @@ impl WaylandState {
             .name("guido-clipboard-read".into())
             .spawn(move || {
                 let content = read_pipe_with_deadline(pipe, Duration::from_secs(3));
-                let _ = sender.send(crate::ingress::IngressMessage::ClipboardUpdate {
+                sender.send(crate::ingress::IngressMessage::ClipboardUpdate {
                     kind,
                     generation,
                     content,

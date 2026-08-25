@@ -12,7 +12,8 @@ thread_local! {
     /// A copy waiting to be handed to the compositor. Being empty *is* the
     /// "nothing to sync" state — there is no separate dirty flag to keep in
     /// step with the value.
-    static OUTGOING_CLIPBOARD: RefCell<Option<String>> = const { RefCell::new(None) };
+    static OUTGOING_CLIPBOARD: crate::deferred::DeferredSlot<String> =
+        const { crate::deferred::DeferredSlot::new() };
 
     /// System clipboard contents (prefetched from the Wayland selection offer)
     static SYSTEM_CLIPBOARD: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -21,7 +22,8 @@ thread_local! {
     static PRIMARY: RefCell<Option<String>> = const { RefCell::new(None) };
 
     /// A select-to-copy waiting to be handed to the compositor.
-    static OUTGOING_PRIMARY: RefCell<Option<String>> = const { RefCell::new(None) };
+    static OUTGOING_PRIMARY: crate::deferred::DeferredSlot<String> =
+        const { crate::deferred::DeferredSlot::new() };
 
     /// System primary-selection contents (prefetched from other apps)
     static SYSTEM_PRIMARY: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -32,16 +34,13 @@ pub fn clipboard_copy(text: &str) {
     CLIPBOARD.with(|c| {
         *c.borrow_mut() = Some(text.to_string());
     });
-    OUTGOING_CLIPBOARD.with(|out| {
-        *out.borrow_mut() = Some(text.to_string());
-    });
-    // Queueing and waking are one gesture — see `jobs::wake_loop`.
-    crate::jobs::wake_loop();
+    // Setting the slot is what wakes the loop that hands the copy over.
+    OUTGOING_CLIPBOARD.with(|out| out.set(text.to_string()));
 }
 
 /// Take the copy waiting to go out to the compositor, if any.
 pub fn take_clipboard_change() -> Option<String> {
-    OUTGOING_CLIPBOARD.with(|out| out.borrow_mut().take())
+    OUTGOING_CLIPBOARD.with(|out| out.take())
 }
 
 /// Paste text from the clipboard
@@ -85,15 +84,12 @@ pub fn primary_copy(text: &str) {
     PRIMARY.with(|c| {
         *c.borrow_mut() = Some(text.to_string());
     });
-    OUTGOING_PRIMARY.with(|out| {
-        *out.borrow_mut() = Some(text.to_string());
-    });
-    crate::jobs::wake_loop();
+    OUTGOING_PRIMARY.with(|out| out.set(text.to_string()));
 }
 
 /// Take the select-to-copy waiting to go out to the compositor, if any.
 pub(crate) fn take_primary_change() -> Option<String> {
-    OUTGOING_PRIMARY.with(|out| out.borrow_mut().take())
+    OUTGOING_PRIMARY.with(|out| out.take())
 }
 
 /// Paste text from the primary selection (middle-click paste).
@@ -118,17 +114,9 @@ pub(crate) fn set_system_primary(text: Option<String>) {
 /// Called during `App::drop()` to wipe clipboard buffers.
 pub(crate) fn reset_clipboard() {
     CLIPBOARD.with(|c| *c.borrow_mut() = None);
-    OUTGOING_CLIPBOARD.with(|o| *o.borrow_mut() = None);
+    OUTGOING_CLIPBOARD.with(|o| o.clear());
     SYSTEM_CLIPBOARD.with(|c| *c.borrow_mut() = None);
     PRIMARY.with(|c| *c.borrow_mut() = None);
-    OUTGOING_PRIMARY.with(|o| *o.borrow_mut() = None);
+    OUTGOING_PRIMARY.with(|o| o.clear());
     SYSTEM_PRIMARY.with(|c| *c.borrow_mut() = None);
-}
-
-/// Whether a copy is queued for the compositor and not yet handed over.
-///
-/// Part of the loop's wakeup check — see `queued_but_unwoken` in `lib.rs`.
-pub(crate) fn selection_change_pending() -> bool {
-    OUTGOING_CLIPBOARD.with(|o| o.borrow().is_some())
-        || OUTGOING_PRIMARY.with(|o| o.borrow().is_some())
 }
