@@ -90,6 +90,7 @@ at lavapipe. In that job a skip is a failure.
 | documented API | doc tests, and `cargo doc` with warnings denied |
 | the user documentation | `mdbook build book` in CI |
 | the APIs this file and the skills name | `tests/skill_references.rs` |
+| what this file, `/implement` and the templates say about each other | `tests/agent_workflow.rs` |
 | Wayland protocol behaviour, compositor integration | **nothing automated.** Run an example and say what you saw in the pull request |
 
 That last row is the hole in the harness. It is the one place where "I ran it
@@ -149,10 +150,10 @@ themselves when the task touches them; you do not need to read them up front.
    test something.
 4. **Run the harness**, all of it, including the goldens.
 5. **Have it read by something that did not write it.** The `reviewer` subagent,
-   once the change is committed and before the pull request exists — its
-   criteria ask about the commits, so they need the commits. Whoever wrote a
-   change is the worst judge of whether it grew, and an architectural finding
-   here stops the work the same way a `needs-design` label stops it at step 1.
+   over the committed change and before the pull request exists — its criteria
+   ask about the commits, so they need the commits. Whoever wrote a change is
+   the worst judge of whether it grew, and an architectural finding here stops
+   the work: that decision belongs to the maintainer wherever it surfaces.
 6. **Open the pull request** with the template filled in: what moved, what
    proves it, what the review found, what you looked at by hand.
 

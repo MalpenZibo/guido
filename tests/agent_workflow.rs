@@ -1,14 +1,15 @@
 //! The workflow describes itself, and the description has to add up.
 //!
-//! `AGENTS.md`, `/implement` and the pull request template all count their own
-//! steps, and the counts are written out in prose next to lists that somebody
-//! edits. Inserting a step is exactly when they stop matching: the change that
-//! added a review step left the template saying "Four questions" above five of
-//! them, and the only reason anybody noticed is that a reviewer read it.
+//! `AGENTS.md`, `/implement` and the pull request template describe each other:
+//! they count their own steps in prose, next to lists somebody edits, and they
+//! point at files by name. Inserting a step is exactly when those stop
+//! matching, and a count in prose is the part a person is worst at checking.
 //!
-//! Nothing here reads the words. It counts headings and list markers, and
-//! compares them to the numbers the prose claims — which is the whole of what
-//! went wrong, and the part a person is worst at checking.
+//! Nothing here reads the words. It counts headings and list markers, compares
+//! them to the numbers the prose claims, checks that the files this
+//! documentation names exist, and checks the one ordering the workflow depends
+//! on — that the review comes after the commits, because its criteria ask about
+//! them.
 
 use std::path::{Path, PathBuf};
 
@@ -26,7 +27,15 @@ fn number_word(word: &str) -> Option<usize> {
     const WORDS: &[&str] = &[
         "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
     ];
+    let word = word.trim_matches(|c: char| !c.is_ascii_alphabetic());
+    let word = word.to_ascii_lowercase();
     WORDS.iter().position(|w| *w == word)
+}
+
+/// The first number word anywhere in a sentence, so that rewording the sentence
+/// does not fail the build for a reason nobody meant.
+fn number_in(sentence: &str) -> Option<usize> {
+    sentence.split_whitespace().find_map(number_word)
 }
 
 /// The numbers at the start of `## 3. Something` headings, in order.
@@ -77,7 +86,13 @@ fn agents_md_counts_the_steps_it_lists() {
     let start = text
         .find("## Working on a change")
         .expect("AGENTS.md has no `Working on a change` section");
-    let section = &text[start..];
+    // To the next heading, not to the end of the file: a numbered list further
+    // down the document is not this list.
+    let rest = &text[start..];
+    let section = match rest[3..].find("\n## ") {
+        Some(offset) => &rest[..offset + 3],
+        None => rest,
+    };
     let steps = numbered_items(section);
     assert_contiguous(&steps, "AGENTS.md");
 
@@ -111,12 +126,107 @@ fn the_pull_request_template_asks_as_many_questions_as_it_says() {
         .lines()
         .find(|line| line.contains(" questions"))
         .expect("the template never says how many questions it asks");
-    let word = claim.split_whitespace().next().unwrap_or_default();
-    let claimed = number_word(&word.to_ascii_lowercase())
-        .unwrap_or_else(|| panic!("`{word}` is not a number this test knows"));
+    let claimed =
+        number_in(claim).unwrap_or_else(|| panic!("no number this test knows in: {claim}"));
 
     assert_eq!(
         claimed, sections,
-        "the template has {sections} sections and says it asks {word} questions"
+        "the template has {sections} sections and says: {claim}"
+    );
+}
+
+/// Step 7 keeps no copy of the reviewer's criteria — it points at the file that
+/// holds them. A pointer nobody checks is how that file gets moved and the step
+/// quietly stops saying anything.
+///
+/// This checks every repository path the agent-facing documentation names, not
+/// only that one: a backticked span that looks like a path in this tree has to
+/// resolve to something.
+#[test]
+fn the_documentation_points_at_files_that_exist() {
+    let mut missing = Vec::new();
+
+    for doc in [
+        "AGENTS.md",
+        ".claude/commands/implement.md",
+        ".claude/commands/spec.md",
+        ".claude/commands/harness.md",
+        ".claude/agents/reviewer.md",
+    ] {
+        let text = read(doc);
+        for span in text.split('`').skip(1).step_by(2) {
+            let looks_like_a_path = span.contains('/')
+                && !span.contains(' ')
+                && (span.ends_with(".rs")
+                    || span.ends_with(".md")
+                    || span.ends_with(".toml")
+                    || span.ends_with(".yml")
+                    || span.ends_with('/'));
+            // `target/` is build output: the documentation points at things
+            // that appear there when a test fails, and they are supposed not
+            // to exist the rest of the time.
+            if !looks_like_a_path || span.starts_with("target/") {
+                continue;
+            }
+            let path = repo().join(span.trim_end_matches('/'));
+            if !path.exists() {
+                missing.push(format!("  {doc}: `{span}`"));
+            }
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "documentation names {} path(s) that do not exist:\n{}",
+        missing.len(),
+        missing.join("\n")
+    );
+}
+
+/// The review runs *after* the commits, because its criteria ask about them —
+/// whether they are atomic, whether their subjects say what is now true. Swap
+/// the two steps and the step still reads sensibly while asking questions
+/// nothing can answer, which is the state this whole change started from.
+#[test]
+fn the_review_comes_after_the_commits() {
+    let text = read(".claude/commands/implement.md");
+
+    let step = |needle: &str| -> usize {
+        text.lines()
+            .filter_map(|line| line.strip_prefix("## "))
+            .find(|heading| heading.contains(needle))
+            .and_then(|heading| heading.split('.').next()?.parse().ok())
+            .unwrap_or_else(|| panic!("/implement has no step about `{needle}`"))
+    };
+
+    let commit = step("Commit");
+    let review = step("read by somebody who did not write it");
+    assert!(
+        review > commit,
+        "the review is step {review} and the commits are step {commit}: its \
+         criteria ask about commits that would not exist yet"
+    );
+}
+
+/// `/implement` ends by saying how many lines to report back, and the template
+/// says how many questions it asks. They are the same list, so they are the
+/// same number — and a count in prose beside a list is the thing this file
+/// exists to watch.
+#[test]
+fn the_report_back_matches_the_template() {
+    let implement = read(".claude/commands/implement.md");
+    let template = read(".github/pull_request_template.md");
+
+    let claim = implement
+        .lines()
+        .find(|line| line.contains("report back, in "))
+        .expect("/implement never says how many lines to report back");
+    let claimed =
+        number_in(claim).unwrap_or_else(|| panic!("no number this test knows in: {claim}"));
+    let sections = template.lines().filter(|l| l.starts_with("## ")).count();
+
+    assert_eq!(
+        claimed, sections,
+        "the template asks {sections} questions and /implement says: {claim}"
     );
 }
