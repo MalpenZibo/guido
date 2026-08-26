@@ -317,6 +317,16 @@ fn the_review_step_still_says_what_it_is_for() {
          them is the whole of it — and it does not"
     );
     assert!(
+        step_seven.contains("One pass"),
+        "step 7 does not say it is one pass, and a review with no stopping rule \
+         is a review that runs until somebody gets tired"
+    );
+    assert!(
+        step_seven.contains("Blocks") && step_seven.contains("Note"),
+        "step 7 does not sort findings by what they cost, so every finding \
+         reads as equally urgent and the list becomes something to skim"
+    );
+    assert!(
         step_seven.contains("did not run"),
         "step 7 does not say what to do when the review does not run, and a \
          review that did not run looks exactly like one that found nothing"
