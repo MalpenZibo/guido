@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 /// else, and file names.
 const NOT_CRATE_SYMBOLS: &[&str] = &[
     "grim",
+    "reviewer",
     "mdbook",
     "lavapipe",
     "llvmpipe",
