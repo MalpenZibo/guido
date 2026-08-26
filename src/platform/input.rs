@@ -15,7 +15,8 @@ use smithay_client_toolkit::{
         Capability, SeatHandler, SeatState,
         keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers as WlModifiers, RawModifiers},
         pointer::{
-            PointerEvent, PointerEventKind, PointerHandler, cursor_shape::CursorShapeManager,
+            AxisScroll, PointerEvent, PointerEventKind, PointerHandler,
+            cursor_shape::CursorShapeManager,
         },
         touch::TouchHandler,
     },
@@ -472,74 +473,79 @@ impl PointerHandler for WaylandState {
                     source,
                     ..
                 } => {
-                    // Determine scroll source
-                    let scroll_source = match source {
-                        Some(wl_pointer::AxisSource::Wheel) => ScrollSource::Wheel,
-                        Some(wl_pointer::AxisSource::Finger) => ScrollSource::Finger,
-                        Some(wl_pointer::AxisSource::Continuous) => ScrollSource::Continuous,
-                        Some(wl_pointer::AxisSource::WheelTilt) => ScrollSource::Wheel,
-                        _ => ScrollSource::Wheel,
-                    };
-
-                    // Calculate delta in pixels.
-                    // Wheel steps by preference: value120 (wl_pointer v8+,
-                    // fractional steps from high-resolution wheels) then
-                    // legacy discrete. Touchpad/finger scroll has neither
-                    // and uses absolute (already in pixels).
-                    let wheel_steps =
-                        |scroll: &smithay_client_toolkit::seat::pointer::AxisScroll| {
-                            if scroll.value120 != 0 {
-                                scroll.value120 as f32 / 120.0
-                            } else {
-                                scroll.discrete as f32
-                            }
-                        };
-
-                    let steps_x = wheel_steps(&horizontal);
-                    let delta_x = if steps_x != 0.0 {
-                        steps_x * SCROLL_PIXELS_PER_LINE
-                    } else {
-                        horizontal.absolute as f32
-                    };
-
-                    let steps_y = wheel_steps(&vertical);
-                    let delta_y = if steps_y != 0.0 {
-                        steps_y * SCROLL_PIXELS_PER_LINE
-                    } else {
-                        vertical.absolute as f32
-                    };
-
-                    // An axis event says two things, and a guard on the delta
-                    // alone dropped the second. `axis_stop` is how the hardware
-                    // ends a continuous scroll, and it carries no delta —
-                    // because nothing moved — so it was filtered out one line
-                    // before anything could use it. It is the only unguessed
-                    // answer to when a gesture is over.
-                    let gesture_ended = horizontal.stop || vertical.stop;
-                    let scrolled = delta_x != 0.0 || delta_y != 0.0;
-
-                    if (scrolled || gesture_ended)
-                        && let Some(events) = target_events
-                    {
-                        if scrolled {
-                            events.push(Event::Scroll {
-                                x: self.input.pointer_x,
-                                y: self.input.pointer_y,
-                                delta_x,
-                                delta_y,
-                                source: scroll_source,
-                            });
-                        }
-                        if gesture_ended {
-                            events.push(Event::ScrollEnd {
-                                x: self.input.pointer_x,
-                                y: self.input.pointer_y,
-                            });
-                        }
+                    if let Some(events) = target_events {
+                        translate_axis(
+                            events,
+                            source,
+                            &horizontal,
+                            &vertical,
+                            self.input.pointer_x,
+                            self.input.pointer_y,
+                        );
                     }
                 }
             }
         }
+    }
+}
+
+/// What an axis message asks a widget to do, given where the pointer is.
+///
+/// Free rather than inline, for the same reason `keysym_to_key` is: a callback
+/// that needs a compositor to run is a callback nothing checks, and this is
+/// where the protocol's only statement about a gesture *ending* is read.
+fn translate_axis(
+    events: &mut Vec<Event>,
+    source: Option<wl_pointer::AxisSource>,
+    horizontal: &AxisScroll,
+    vertical: &AxisScroll,
+    x: f32,
+    y: f32,
+) {
+    let scroll_source = match source {
+        Some(wl_pointer::AxisSource::Wheel) => ScrollSource::Wheel,
+        Some(wl_pointer::AxisSource::Finger) => ScrollSource::Finger,
+        Some(wl_pointer::AxisSource::Continuous) => ScrollSource::Continuous,
+        Some(wl_pointer::AxisSource::WheelTilt) => ScrollSource::Wheel,
+        _ => ScrollSource::Wheel,
+    };
+
+    // Wheel steps by preference: value120 (wl_pointer v8+, fractional steps
+    // from high-resolution wheels) then legacy discrete. Touchpad and finger
+    // scroll have neither and report absolute pixels, which pass through —
+    // multiplying those by a line height scrolls a page for a fingertip.
+    let pixels = |scroll: &AxisScroll| {
+        let steps = if scroll.value120 != 0 {
+            scroll.value120 as f32 / 120.0
+        } else {
+            scroll.discrete as f32
+        };
+        if steps != 0.0 {
+            steps * SCROLL_PIXELS_PER_LINE
+        } else {
+            scroll.absolute as f32
+        }
+    };
+
+    let delta_x = pixels(horizontal);
+    let delta_y = pixels(vertical);
+
+    // An axis message says two things, and a guard on the delta alone dropped
+    // the second. `axis_stop` is how the hardware ends a continuous scroll, and
+    // it carries no delta — because nothing moved — so it was filtered out one
+    // line before anything could use it. It is the only unguessed answer to
+    // when a gesture is over.
+    if delta_x != 0.0 || delta_y != 0.0 {
+        events.push(Event::Scroll {
+            x,
+            y,
+            delta_x,
+            delta_y,
+            source: scroll_source,
+        });
+    }
+    if horizontal.stop || vertical.stop {
+        events.push(Event::ScrollEnd { x, y });
     }
 }
 
