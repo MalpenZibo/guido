@@ -85,6 +85,11 @@ What to do with what it says:
   silence; the next person will wonder the same thing.
 - **A clean report is one line and you move on.** Do not ask again hoping for a
   different answer.
+- **A review that did not run is not a review that found nothing.** The two look
+  identical from the outside and mean opposite things. If it failed, timed out,
+  or was skipped, run it again; if it still will not run, say so in the pull
+  request in those words. Writing "nothing found" for a review that never
+  happened is the same act as re-blessing a golden to make a test pass.
 
 ## 8. Open the pull request
 
