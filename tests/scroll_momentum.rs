@@ -60,6 +60,14 @@ impl H {
         }
     }
 
+    /// The finger lifted, as the compositor's `axis_stop` reaches the tree.
+    fn scroll_end(&mut self) {
+        let root = self.root;
+        let event = Event::ScrollEnd { x: 100.0, y: 100.0 };
+        self.tree
+            .with_widget_mut(root, |w, id, t| w.event(t, id, &event));
+    }
+
     fn offset(&mut self) -> f32 {
         let root = self.root;
         let mut node = RenderNode::new(root.as_u64());
@@ -116,5 +124,32 @@ fn a_gesture_that_never_ended_is_not_resumed_by_a_later_frame() {
         (offset - after_gesture).abs() < 0.01,
         "content drifted from {after_gesture} to {offset} on a later frame: \
          a momentum nobody advanced was waiting instead of being over"
+    );
+}
+
+/// And the other half: a gesture that does end carries on. The whole path,
+/// from the samples through the end-of-gesture event to the frames that run
+/// the momentum — which is what `wl_pointer.axis_stop` reaches.
+#[test]
+fn a_gesture_that_ended_carries_on_past_the_last_sample() {
+    let mut h = H::new();
+
+    for _ in 0..6 {
+        h.finger_scroll(10.0);
+        std::thread::sleep(std::time::Duration::from_millis(8));
+    }
+    let at_lift = h.offset();
+    assert!(
+        (at_lift - 60.0).abs() < 0.01,
+        "the gesture itself moved {at_lift}px, not the 60px dispatched"
+    );
+
+    h.scroll_end();
+    h.frames(60);
+
+    let coasted = h.offset() - at_lift;
+    assert!(
+        coasted > 10.0,
+        "the finger lifted after a 60px flick and the content coasted {coasted}px"
     );
 }

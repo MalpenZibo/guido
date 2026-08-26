@@ -367,7 +367,26 @@ impl Container {
                 }
             }
 
-            Event::ScrollEnd { .. } | Event::KeyUp { .. } | Event::FocusIn | Event::FocusOut => {}
+            // The finger lifted. Momentum starts here or not at all — and it
+            // starts now, on the event, rather than becoming due for whatever
+            // frame happens along next.
+            Event::ScrollEnd { x, y } => {
+                if self.scroll_axis != ScrollAxis::None && hit.contains(*x, *y) {
+                    let since_ms = self
+                        .scroll()
+                        .scroll_state
+                        .last_scroll_time
+                        .map(|t| t.elapsed().as_secs_f32() * 1000.0);
+                    let sd = self.scroll_mut();
+                    sd.scroll_state.end_gesture(since_ms);
+                    if sd.scroll_state.should_apply_momentum() {
+                        request_job(id, JobRequest::Animation(RequiredJob::Paint));
+                    }
+                    return EventResponse::Handled;
+                }
+            }
+
+            Event::KeyUp { .. } | Event::FocusIn | Event::FocusOut => {}
         }
 
         EventResponse::Ignored

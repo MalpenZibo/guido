@@ -10,7 +10,7 @@ Wayland → Platform → App → Widget Tree
                               ├─ MouseMove
                               ├─ MouseEnter/MouseLeave
                               ├─ MouseDown/MouseUp
-                              └─ Scroll
+                              └─ Scroll/ScrollEnd
 ```
 
 ## Event Types
@@ -37,12 +37,23 @@ Used for click detection and pressed states.
 ### Scrolling
 
 ```rust
-Event::Scroll { dx, dy, source }
+Event::Scroll { x, y, delta_x, delta_y, source }
+Event::ScrollEnd { x, y }
 ```
 
-- `dx` - Horizontal scroll amount
-- `dy` - Vertical scroll amount
-- `source` - Wheel or touchpad
+- `x`, `y` - Pointer position
+- `delta_x` - Horizontal scroll amount, in pixels
+- `delta_y` - Vertical scroll amount, in pixels
+- `source` - `Wheel`, `Finger` or `Continuous`
+
+`ScrollEnd` is the end of a continuous gesture — the finger lifting off a
+touchpad, which the compositor reports as `wl_pointer.axis_stop`. It carries no
+delta because nothing moved. A wheel never sends one: its steps are discrete,
+there is no finger to lift, and nothing carries on afterwards.
+
+It is what decides when momentum scrolling may begin. Without it the end of a
+gesture has to be guessed from a gap between samples, and a slow scroll is made
+of gaps.
 
 ## Event Propagation
 

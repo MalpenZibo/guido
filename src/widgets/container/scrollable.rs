@@ -931,17 +931,23 @@ impl Container {
             ScrollAxis::None => return false,
         }
 
-        if source == ScrollSource::Finger {
-            match axis {
-                ScrollAxis::Vertical => sd.scroll_state.velocity_y = delta_y,
-                ScrollAxis::Horizontal => sd.scroll_state.velocity_x = delta_x,
-                ScrollAxis::Both => {
-                    sd.scroll_state.velocity_x = delta_x;
-                    sd.scroll_state.velocity_y = delta_y;
-                }
-                ScrollAxis::None => {}
-            }
-            sd.scroll_state.last_scroll_time = Some(std::time::Instant::now());
+        // Only a continuous source has a gesture to measure. Both of them do,
+        // and both end with an `axis_stop`; a wheel has neither.
+        if source.is_continuous() {
+            let now = std::time::Instant::now();
+            let dt_ms = sd
+                .scroll_state
+                .last_scroll_time
+                .map(|t| now.duration_since(t).as_secs_f32() * 1000.0);
+            let (sample_x, sample_y) = match axis {
+                ScrollAxis::Vertical => (0.0, delta_y),
+                ScrollAxis::Horizontal => (delta_x, 0.0),
+                ScrollAxis::Both => (delta_x, delta_y),
+                ScrollAxis::None => (0.0, 0.0),
+            };
+            sd.scroll_state
+                .record_gesture_sample(sample_x, sample_y, dt_ms);
+            sd.scroll_state.last_scroll_time = Some(now);
         }
 
         old_x != sd.scroll_state.offset_x || old_y != sd.scroll_state.offset_y

@@ -436,6 +436,15 @@ pub enum ScrollSource {
     Continuous,
 }
 
+impl ScrollSource {
+    /// Whether this source scrolls continuously, and so has a gesture with an
+    /// end the compositor reports. A wheel does not: its steps are discrete,
+    /// there is no finger to lift, and nothing to carry on afterwards.
+    pub fn is_continuous(self) -> bool {
+        matches!(self, ScrollSource::Finger | ScrollSource::Continuous)
+    }
+}
+
 /// Keyboard modifier state
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Modifiers {
