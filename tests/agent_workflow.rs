@@ -17,9 +17,71 @@ fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
 }
 
+/// Everything an agent is handed, found rather than listed: a command added
+/// tomorrow is scanned tomorrow, which is the staleness this file exists to
+/// catch happening to this file.
+fn agent_facing_documents() -> Vec<PathBuf> {
+    let mut found = vec![repo().join("AGENTS.md")];
+    for dir in [".claude/commands", ".claude/agents", ".claude/skills"] {
+        let mut here = Vec::new();
+        collect_markdown(&repo().join(dir), &mut here);
+        assert!(
+            !here.is_empty(),
+            "no markdown under {dir}: scanning nothing"
+        );
+        found.extend(here);
+    }
+    found
+}
+
+fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_markdown(&path, out);
+        } else if path.extension().is_some_and(|e| e == "md") {
+            out.push(path);
+        }
+    }
+}
+
 fn read(relative: &str) -> String {
     std::fs::read_to_string(repo().join(relative))
         .unwrap_or_else(|e| panic!("cannot read {relative}: {e}"))
+}
+
+/// The backticked spans of a markdown file, with fenced blocks removed first.
+///
+/// Pairing backticks by parity over a whole file holds only as long as every
+/// fence contributes an even number of them. One apostrophe-free shell string
+/// with a stray backtick shifts the parity and every span after it is read as
+/// the gap between spans — so the scan finds nothing and the test passes for
+/// the worst possible reason. `skill_references.rs` already does this; this is
+/// the same fix.
+fn backticked(text: &str) -> Vec<String> {
+    let mut prose = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("```") {
+        prose.push_str(&rest[..start]);
+        let after = &rest[start + 3..];
+        match after.find("```") {
+            Some(end) => rest = &after[end + 3..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    prose.push_str(rest);
+    prose
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_string)
+        .collect()
 }
 
 /// "six" -> 6, for the counts that are written as words.
@@ -146,15 +208,15 @@ fn the_pull_request_template_asks_as_many_questions_as_it_says() {
 fn the_documentation_points_at_files_that_exist() {
     let mut missing = Vec::new();
 
-    for doc in [
-        "AGENTS.md",
-        ".claude/commands/implement.md",
-        ".claude/commands/spec.md",
-        ".claude/commands/harness.md",
-        ".claude/agents/reviewer.md",
-    ] {
-        let text = read(doc);
-        for span in text.split('`').skip(1).step_by(2) {
+    for doc in agent_facing_documents() {
+        let name = doc
+            .strip_prefix(repo())
+            .unwrap_or(&doc)
+            .display()
+            .to_string();
+        let text =
+            std::fs::read_to_string(&doc).unwrap_or_else(|e| panic!("cannot read {name}: {e}"));
+        for span in backticked(&text) {
             let looks_like_a_path = span.contains('/')
                 && !span.contains(' ')
                 && (span.ends_with(".rs")
@@ -170,7 +232,7 @@ fn the_documentation_points_at_files_that_exist() {
             }
             let path = repo().join(span.trim_end_matches('/'));
             if !path.exists() {
-                missing.push(format!("  {doc}: `{span}`"));
+                missing.push(format!("  {name}: `{span}`"));
             }
         }
     }
@@ -194,13 +256,16 @@ fn the_review_comes_after_the_commits() {
     let step = |needle: &str| -> usize {
         text.lines()
             .filter_map(|line| line.strip_prefix("## "))
-            .find(|heading| heading.contains(needle))
+            .find(|heading| heading.to_ascii_lowercase().contains(needle))
             .and_then(|heading| heading.split('.').next()?.parse().ok())
             .unwrap_or_else(|| panic!("/implement has no step about `{needle}`"))
     };
 
-    let commit = step("Commit");
-    let review = step("read by somebody who did not write it");
+    // Matched on the verb, not on the whole sentence: AGENTS.md spells this
+    // step "read by something that did not write it" and /implement spells it
+    // "somebody", and neither wording is the thing being asserted.
+    let commit = step("commit");
+    let review = step("read by");
     assert!(
         review > commit,
         "the review is step {review} and the commits are step {commit}: its \
@@ -228,5 +293,47 @@ fn the_report_back_matches_the_template() {
     assert_eq!(
         claimed, sections,
         "the template asks {sections} questions and /implement says: {claim}"
+    );
+}
+
+/// The three mutations the counting does not see: strip step 7 down to its
+/// heading, take the review section out of the template, or drop the review
+/// from AGENTS.md's list. Each leaves every count consistent and removes the
+/// change entirely.
+#[test]
+fn the_review_step_still_says_what_it_is_for() {
+    let implement = read(".claude/commands/implement.md");
+    let step_seven = implement
+        .split("## 7.")
+        .nth(1)
+        .expect("/implement has no step 7")
+        .split("\n## ")
+        .next()
+        .unwrap_or_default();
+
+    assert!(
+        step_seven.contains(".claude/agents/reviewer.md"),
+        "step 7 keeps no copy of the criteria, so naming the file that holds \
+         them is the whole of it — and it does not"
+    );
+    assert!(
+        step_seven.contains("did not run"),
+        "step 7 does not say what to do when the review does not run, and a \
+         review that did not run looks exactly like one that found nothing"
+    );
+
+    let template = read(".github/pull_request_template.md");
+    assert!(
+        template
+            .lines()
+            .any(|l| l.starts_with("## ") && l.contains("review")),
+        "the pull request template has no section asking what the review found"
+    );
+
+    let agents = read("AGENTS.md");
+    assert!(
+        agents.contains("`reviewer` subagent"),
+        "AGENTS.md's list of what a change goes through never mentions the \
+         reviewer, so the step exists only in the command"
     );
 }

@@ -90,7 +90,7 @@ at lavapipe. In that job a skip is a failure.
 | documented API | doc tests, and `cargo doc` with warnings denied |
 | the user documentation | `mdbook build book` in CI |
 | the APIs this file and the skills name | `tests/skill_references.rs` |
-| what this file, `/implement` and the templates say about each other | `tests/agent_workflow.rs` |
+| the workflow this file, `/implement` and the templates describe | `tests/agent_workflow.rs` |
 | Wayland protocol behaviour, compositor integration | **nothing automated.** Run an example and say what you saw in the pull request |
 
 That last row is the hole in the harness. It is the one place where "I ran it
