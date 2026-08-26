@@ -367,7 +367,7 @@ impl Container {
                 }
             }
 
-            Event::KeyUp { .. } | Event::FocusIn | Event::FocusOut => {}
+            Event::ScrollEnd { .. } | Event::KeyUp { .. } | Event::FocusIn | Event::FocusOut => {}
         }
 
         EventResponse::Ignored

@@ -506,6 +506,18 @@ pub enum Event {
         /// Source of the scroll event
         source: ScrollSource,
     },
+    /// A continuous scroll gesture ended: the finger lifted.
+    ///
+    /// Sent for the sources that have an end — a touchpad or a touchscreen say
+    /// so with `wl_pointer.axis_stop`, a wheel has nothing to say. It carries
+    /// no delta, because nothing moved; what it carries is the one unguessed
+    /// answer to when a momentum may begin.
+    ScrollEnd {
+        /// X position of the pointer
+        x: f32,
+        /// Y position of the pointer
+        y: f32,
+    },
     /// Key pressed
     KeyDown {
         /// The key that was pressed
@@ -541,6 +553,7 @@ impl Event {
             Event::MouseUp { x, y, .. } => Some((*x, *y)),
             Event::MouseEnter { x, y } => Some((*x, *y)),
             Event::Scroll { x, y, .. } => Some((*x, *y)),
+            Event::ScrollEnd { x, y } => Some((*x, *y)),
             Event::MouseLeave
             | Event::KeyDown { .. }
             | Event::KeyUp { .. }
@@ -576,6 +589,7 @@ impl Event {
                 delta_y: *delta_y,
                 source: *source,
             },
+            Event::ScrollEnd { .. } => Event::ScrollEnd { x: new_x, y: new_y },
             Event::MouseLeave => Event::MouseLeave,
             // Keyboard/focus events don't have coordinates
             Event::KeyDown { key, modifiers } => Event::KeyDown {
