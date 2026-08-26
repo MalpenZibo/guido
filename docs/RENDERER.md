@@ -50,7 +50,11 @@ to the same node that sits in the frame's render tree:
   been cached, and flatten writes `cached_flatten` through a `&RenderNode`.
 - `partial` propagates to ancestors during the cache walk: a subtree that
   embeds a partially-painted node (culled children) is never cached, so a
-  later cache reuse cannot resurrect an incomplete paint.
+  later cache reuse cannot resurrect an incomplete paint. It also invalidates:
+  `Tree::clear_cached_paint` drops whatever the last complete paint left, which
+  is a picture of the widget as it no longer is — a list that scrolls culls
+  from its first scrolled frame onward, so the newest complete entry is the
+  list at rest.
 
 Each surface owns a single root `RenderNode` (`ManagedSurface::root_node`),
 cleared and rebuilt from dirty widgets every rendered frame.

@@ -532,7 +532,10 @@ The paint system tracks which widgets need repainting:
   shared) with the position recomposed from the decomposed parent/user transforms.
 - **Partial propagation**: a node whose children were culled (`partial`) poisons its
   ancestors in the cache walk — incomplete paints are never cached, so reuse can never
-  resurrect a subtree with missing children.
+  resurrect a subtree with missing children. Refusing to cache is only half of it: a
+  partial paint also *drops* the entry the last complete one left, because the widget
+  painted this frame and painted something else. Keeping it as a picture of "how this
+  looks with nothing culled" is how a scrolled list came back at rest.
 - **Skip frame**: If the root widget doesn't need paint after job processing and layout,
   the entire paint→flatten→render cycle is skipped.
 - **Damage regions**: `mark_needs_paint()` accumulates surface-relative bounds into a

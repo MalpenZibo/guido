@@ -32,7 +32,8 @@ animating surface renders once per callback, an idle surface renders nothing.
 11. GPU: instanced SDF shapes, HiDPI scaling, per-group layer order. On a lost
     or outdated swapchain the dirty state is kept and a retry frame requested
 12. `cache_paint_results()` — `Rc`-share paint output, clear `needs_paint`.
-    Partial paints poison their ancestors and are never cached
+    Partial paints poison their ancestors, are never cached, and drop the
+    entry the last complete paint left
 
 ## Layers and ordering
 
