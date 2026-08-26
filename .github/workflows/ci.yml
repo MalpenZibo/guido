@@ -151,8 +151,25 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: git diff "$BASE"...HEAD > /tmp/pull-request.diff
+      # `--lib --tests` because a plain `cargo test` also builds all sixty
+      # examples, and each of the `-j N` build directories compiles the crate
+      # from scratch — nothing is shared, and `--copy-target` is off by default,
+      # so there is no incremental reuse to soften it. Four trees at 26 GB on a
+      # runner with a few tens of gigabytes. Nothing is lost — the examples are
+      # compiled by the Test job, once, and they carry no tests of their own.
+      # No debug info for the same reason
+      # and because it is most of what remains: what matters here is whether a
+      # test failed, not where. Measured on a clean tree: 26 GB and 84s becomes
+      # 1.4 GB and 47s.
+      #
+      # It costs the doc tests, which target selection excludes and which cargo
+      # refuses to combine with `--doc`. A mutant only a doc test would have
+      # killed now reports as missed.
       - name: Mutate what changed
-        run: cargo mutants --in-diff /tmp/pull-request.diff -j 4 --no-shuffle
+        env:
+          CARGO_PROFILE_DEV_DEBUG: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+        run: cargo mutants --in-diff /tmp/pull-request.diff -C --lib -C --tests -j 4 --no-shuffle
       - name: Upload what survived
         if: failure()
         uses: actions/upload-artifact@v4

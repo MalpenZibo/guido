@@ -118,7 +118,9 @@ pub struct RenderNode {
     /// Partial subtrees are not cached (see `cache_paint_results`, which
     /// propagates partial-ness to ancestors) because their paint is
     /// incomplete — reusing them later would permanently hide the culled
-    /// children.
+    /// children. Nor does the entry from the last complete paint survive: the
+    /// widget painted this frame and painted something else, so that entry is
+    /// a picture of it as it no longer is, and it is dropped.
     pub partial: bool,
 
     /// Cached flattened commands from a previous flatten pass, shared via Rc

@@ -11,7 +11,9 @@
 //!
 //! - A culled child makes the parent's paint **partial**, and a partial paint
 //!   is never cached — otherwise reusing it later would permanently hide the
-//!   children this pass skipped.
+//!   children this pass skipped. It also invalidates whatever the last
+//!   complete paint cached, so `reuse_cached` below cannot serve a picture
+//!   older than the widget's last paint; see `cache_paint_results`.
 //! - A cached node may be re-parented but never re-sized: its commands were
 //!   built for the size it was painted at. A child that changed size ran its
 //!   own layout and marked itself dirty, so it should not reach the reuse

@@ -788,6 +788,15 @@ impl Tree {
             .and_then(|idx| self.dense[idx].cached_paint.as_ref())
     }
 
+    /// Drop a widget's cached paint output, so the next frame paints it in
+    /// full. What a paint that could not be cached has to do with the entry
+    /// the last one left: it is a picture of this widget as it no longer is.
+    pub fn clear_cached_paint(&mut self, id: WidgetId) {
+        if let Some(idx) = self.get_dense_index(id) {
+            self.dense[idx].cached_paint = None;
+        }
+    }
+
     /// Clear all widgets and metadata.
     pub fn clear(&mut self) {
         self.dense.clear();

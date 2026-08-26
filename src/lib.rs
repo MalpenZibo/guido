@@ -567,20 +567,25 @@ fn measure_natural_size(
 
 /// Walk the render tree after painting and cache each node's output.
 ///
+/// The third phase of a frame, after [`renderer::flatten_root_into`] and in
+/// that order: flatten writes `cached_flatten` onto the nodes, and this walk
+/// is what makes them reusable next frame. Public for the same reason flatten
+/// is — a frame can be driven without a compositor, and the paint cache only
+/// exists across frames, so a test that never runs this one never reaches it.
+/// The loop calls it per child of the surface root, never on the root itself.
+///
 /// Caching is an `Rc::clone` of the node already sitting in the frame's
 /// render tree — O(1) per node instead of the previous deep subtree clone.
 ///
 /// Returns whether the subtree is partial (this node or any descendant had
 /// children culled by cull_rect). Partial-ness propagates UP: an ancestor
 /// whose subtree embeds an incomplete paint must not be cached either, or a
-/// later cache reuse would permanently hide the culled grandchildren.
+/// later cache reuse would permanently hide the culled grandchildren. It
+/// invalidates as well as refuses — see the body.
 ///
 /// Also clears needs_paint flags and the per-frame `repainted` marker for
 /// freshly painted widgets (skipping already-clean subtrees entirely).
-pub(crate) fn cache_paint_results(
-    tree: &mut Tree,
-    node: &std::rc::Rc<renderer::RenderNode>,
-) -> bool {
+pub fn cache_paint_results(tree: &mut Tree, node: &std::rc::Rc<renderer::RenderNode>) -> bool {
     if !node.repainted.get() {
         // Reused from cache: its subtree is by construction complete and its
         // cache entries are already valid — nothing to do below it.
@@ -594,14 +599,20 @@ pub(crate) fn cache_paint_results(
 
     let widget_id = WidgetId::from_u64(node.id);
     if tree.contains(widget_id) {
-        if !subtree_partial {
+        if subtree_partial {
+            // Partial subtree — this paint cannot be cached, and neither can
+            // the one before it stay: the widget painted this frame, and it
+            // painted something else. Keeping the last complete entry as a
+            // stand-in for "how it looks when nothing is culled" is how a
+            // scrolled list came back at the top — culling starts the moment
+            // it scrolls, so the newest complete entry is the list at rest,
+            // and `reuse_cached` serves it whole the next time some other
+            // widget asks for a frame.
+            tree.clear_cached_paint(widget_id);
+        } else {
             // Complete paint — safe to cache for future reuse.
             tree.cache_paint(widget_id, std::rc::Rc::clone(node));
         }
-        // else: partial subtree — don't cache. Keep the previous complete
-        // cache (if any) so it can be reused when the widget becomes fully
-        // visible. If there's no previous cache, the widget will get a full
-        // paint next frame anyway (cached_paint None → full paint).
         tree.clear_needs_paint(widget_id);
     }
     // Mark as cached/clean for the flattener and future walks. The cache

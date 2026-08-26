@@ -89,6 +89,7 @@ at lavapipe. In that job a skip is a failure.
 | shaders, corners, borders, shadows, gradients, clipping, HiDPI, text | `tests/golden_images.rs` — the pixels, on lavapipe |
 | the reactive system | unit tests beside the code in `src/reactive/` |
 | widget behaviour and public API | integration tests in `tests/` |
+| the paint cache and incremental flatten, which only exist across frames | `tests/paint_cache_across_frames.rs` — one retained root node, frame after frame |
 | documented API | doc tests, and `cargo doc` with warnings denied |
 | the user documentation | `mdbook build book` in CI |
 | API names written in *prose* — this file, the skills, `docs/`, the book, the README | `tests/documentation_references.rs` |
@@ -119,7 +120,9 @@ useful than the shape: the background-write queue, the whole of `clipboard`,
 Whole-crate runs take hours; a module at a time is how it is used by hand. On a
 pull request CI mutates only the lines the diff touched, which asks the one
 question worth asking of new code — if this were wrong, would anything have
-noticed. That job reports; it does not block, until somebody decides the
+noticed. That job builds the tests and not the sixty examples, which is what
+keeps it inside the runner's disk, and the price is the doc tests: a mutant only
+a doc test would have killed reports there as missed. That job reports; it does not block, until somebody decides the
 ratchet is worth the friction.
 
 ## Where the rest of it is
