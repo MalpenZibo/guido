@@ -567,6 +567,13 @@ fn measure_natural_size(
 
 /// Walk the render tree after painting and cache each node's output.
 ///
+/// The third phase of a frame, after [`renderer::flatten_root_into`] and in
+/// that order: flatten writes `cached_flatten` onto the nodes, and this walk
+/// is what makes them reusable next frame. Public for the same reason flatten
+/// is — a frame can be driven without a compositor, and the paint cache only
+/// exists across frames, so a test that never runs this one never reaches it.
+/// The loop calls it per child of the surface root, never on the root itself.
+///
 /// Caching is an `Rc::clone` of the node already sitting in the frame's
 /// render tree — O(1) per node instead of the previous deep subtree clone.
 ///
@@ -578,10 +585,7 @@ fn measure_natural_size(
 ///
 /// Also clears needs_paint flags and the per-frame `repainted` marker for
 /// freshly painted widgets (skipping already-clean subtrees entirely).
-pub(crate) fn cache_paint_results(
-    tree: &mut Tree,
-    node: &std::rc::Rc<renderer::RenderNode>,
-) -> bool {
+pub fn cache_paint_results(tree: &mut Tree, node: &std::rc::Rc<renderer::RenderNode>) -> bool {
     if !node.repainted.get() {
         // Reused from cache: its subtree is by construction complete and its
         // cache entries are already valid — nothing to do below it.
