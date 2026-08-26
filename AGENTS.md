@@ -120,7 +120,9 @@ useful than the shape: the background-write queue, the whole of `clipboard`,
 Whole-crate runs take hours; a module at a time is how it is used by hand. On a
 pull request CI mutates only the lines the diff touched, which asks the one
 question worth asking of new code — if this were wrong, would anything have
-noticed. That job reports; it does not block, until somebody decides the
+noticed. That job builds the tests and not the sixty examples, which is what
+keeps it inside the runner's disk, and the price is the doc tests: a mutant only
+a doc test would have killed reports there as missed. That job reports; it does not block, until somebody decides the
 ratchet is worth the friction.
 
 ## Where the rest of it is
