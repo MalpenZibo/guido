@@ -1381,8 +1381,9 @@ impl Widget for Container {
             }
         }
 
-        // Update scrollbar handle positions based on current scroll offset
-        // (scroll is paint-only, so layout may not run during scrolling)
+        // Keep the origin the Tree holds for the handle in step with the offset,
+        // for the events forwarded to the handle widget. What is *drawn* no
+        // longer depends on this pass having run — see `scrollbar_handle_origin`.
         if self.scroll_axis != ScrollAxis::None {
             self.update_scrollbar_handle_positions(tree, id);
         }

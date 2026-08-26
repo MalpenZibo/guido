@@ -298,9 +298,21 @@ impl Container {
         animating
     }
 
-    /// Update scrollbar handle positions based on current scroll offset.
-    /// Called from advance_animations to ensure handles are positioned correctly
-    /// even when layout doesn't run (scroll is paint-only).
+    /// Write the handle's origin into the `Tree` for the current scroll offset.
+    ///
+    /// Not for the paint, which derives the position itself
+    /// (`scrollbar_handle_origin`): this is for the handle *widget*, which is a
+    /// `Container` of its own and hit-tests the events forwarded to it —
+    /// `MouseDown` at the start of a drag, the synthetic `MouseEnter` — against
+    /// the bounds the `Tree` holds for it. Layout writes that origin too.
+    ///
+    /// It does not cover the paint-only paths, and does not claim to: the one
+    /// caller is `advance_animations`, which runs for a `JobType::Animation`
+    /// job alone, so after a wheel scroll or a click on the track this origin
+    /// is stale until something asks for an animation frame. Pressing the
+    /// handle still starts the drag — that is decided from the derived rect —
+    /// but the handle's own pressed and hover colours miss it until then.
+    /// One answer for both readers is #244.
     pub(super) fn update_scrollbar_handle_positions(&mut self, tree: &mut Tree, id: WidgetId) {
         if self.scroll_axis == ScrollAxis::None
             || self.scroll().scrollbar_visibility == ScrollbarVisibility::Hidden
@@ -349,6 +361,42 @@ impl Container {
         }
     }
 
+    /// Where the handle belongs for the offset the container holds right now.
+    ///
+    /// Layout gives the handle its size and writes an origin into the `Tree`;
+    /// the offset gives it its place, and the offset moves without layout —
+    /// scrolling is paint-only, so a wheel scroll and a click on the track ask
+    /// for a `Paint` and nothing repositions anything. Painting from that
+    /// stored origin drew the handle wherever the last layout or animation pass
+    /// happened to leave it. Every hit test already derives the rect instead —
+    /// `handle_scrollbar_click`, `handle_scrollbar_drag`,
+    /// `update_scrollbar_hover` — and deriving it here too is what stops the
+    /// paint and the hit test disagreeing about where the handle is.
+    fn scrollbar_handle_origin(
+        &self,
+        tree: &Tree,
+        id: WidgetId,
+        axis: ScrollbarAxis,
+    ) -> (f32, f32) {
+        let bounds = tree.get_bounds(id).unwrap_or_default();
+        // Local bounds, like every other scrollbar computation: the parent
+        // transform carries the container's own position.
+        let local_bounds = Rect::new(0.0, 0.0, bounds.width, bounds.height);
+
+        let sd = self.scroll();
+        let needs_other = match axis {
+            ScrollbarAxis::Vertical => sd.scroll_state.needs_horizontal_scrollbar(),
+            ScrollbarAxis::Horizontal => sd.scroll_state.needs_vertical_scrollbar(),
+        };
+        let rect = sd.scroll_state.scrollbar_handle_rect(
+            axis,
+            local_bounds,
+            &sd.scrollbar_config,
+            needs_other,
+        );
+        (rect.x, rect.y)
+    }
+
     /// Paint scrollbar container widgets.
     /// Scrollbar containers are registered in Tree with real WidgetIds.
     /// Scrollbar bounds are in local coordinates (relative to container origin 0,0).
@@ -356,7 +404,7 @@ impl Container {
     pub(super) fn paint_scrollbar_containers(
         &self,
         tree: &Tree,
-        _id: WidgetId,
+        id: WidgetId,
         ctx: &mut PaintContext,
     ) {
         use crate::transform::Transform;
@@ -414,7 +462,9 @@ impl Container {
 
                 let mut handle_ctx = ctx.add_child(handle_id.as_u64(), handle_local);
                 // Scale from right edge (transform origin at right center)
-                let position = Transform::translate(handle_bounds.x, handle_bounds.y);
+                let (handle_x, handle_y) =
+                    self.scrollbar_handle_origin(tree, id, ScrollbarAxis::Vertical);
+                let position = Transform::translate(handle_x, handle_y);
                 let scale_origin_x = handle_bounds.width;
                 let scale_origin_y = handle_bounds.height / 2.0;
                 let combined = position
@@ -459,7 +509,9 @@ impl Container {
 
                 let mut handle_ctx = ctx.add_child(handle_id.as_u64(), handle_local);
                 // Scale from bottom edge (transform origin at bottom center)
-                let position = Transform::translate(handle_bounds.x, handle_bounds.y);
+                let (handle_x, handle_y) =
+                    self.scrollbar_handle_origin(tree, id, ScrollbarAxis::Horizontal);
+                let position = Transform::translate(handle_x, handle_y);
                 let scale_origin_x = handle_bounds.width / 2.0;
                 let scale_origin_y = handle_bounds.height;
                 let combined = position
