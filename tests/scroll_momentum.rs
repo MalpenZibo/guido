@@ -39,16 +39,30 @@ impl H {
 
     /// One touchpad scroll sample, as a finger moving by `delta` pixels.
     fn finger_scroll(&mut self, delta: f32) {
+        self.scroll(delta, ScrollSource::Finger);
+    }
+
+    /// One scroll sample from any source.
+    fn scroll(&mut self, delta: f32, source: ScrollSource) {
         let root = self.root;
         let event = Event::Scroll {
             x: 100.0,
             y: 100.0,
             delta_x: 0.0,
             delta_y: delta,
-            source: ScrollSource::Finger,
+            source,
         };
         self.tree
             .with_widget_mut(root, |w, id, t| w.event(t, id, &event));
+    }
+
+    /// Play a flick of `samples` movements and lift, from `source`.
+    fn flick(&mut self, source: ScrollSource) {
+        for _ in 0..6 {
+            self.scroll(10.0, source);
+            std::thread::sleep(std::time::Duration::from_millis(8));
+        }
+        self.scroll_end();
     }
 
     /// Run `n` animation frames, as the loop does while anything is animating.
@@ -151,5 +165,34 @@ fn a_gesture_that_ended_carries_on_past_the_last_sample() {
     assert!(
         coasted > 10.0,
         "the finger lifted after a 60px flick and the content coasted {coasted}px"
+    );
+}
+
+/// A continuous source is a gesture: it is measured for a speed and it coasts.
+/// A wheel is not — its steps have no duration to divide by, and a stop, if one
+/// ever arrives, has nothing to release.
+///
+/// `is_continuous` is the line between them, and without this both sides of it
+/// are unwatched: spelling it `matches!(self, Finger)` leaves the suite green.
+#[test]
+fn a_continuous_gesture_coasts_and_a_wheel_does_not() {
+    let mut wheel = H::new();
+    wheel.flick(ScrollSource::Wheel);
+    let at_lift = wheel.offset();
+    wheel.frames(60);
+    let wheel_coast = wheel.offset() - at_lift;
+    assert!(
+        wheel_coast.abs() < 0.01,
+        "a wheel coasted {wheel_coast}px: it has no gesture to have a speed"
+    );
+
+    let mut continuous = H::new();
+    continuous.flick(ScrollSource::Continuous);
+    let at_lift = continuous.offset();
+    continuous.frames(60);
+    let continuous_coast = continuous.offset() - at_lift;
+    assert!(
+        continuous_coast > 10.0,
+        "a continuous gesture coasted {continuous_coast}px after a 60px flick"
     );
 }

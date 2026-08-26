@@ -437,9 +437,16 @@ pub enum ScrollSource {
 }
 
 impl ScrollSource {
-    /// Whether this source scrolls continuously, and so has a gesture with an
-    /// end the compositor reports. A wheel does not: its steps are discrete,
-    /// there is no finger to lift, and nothing to carry on afterwards.
+    /// Whether this source scrolls as a gesture that can be measured for a
+    /// speed, rather than in discrete steps. A wheel is not one: its steps have
+    /// no duration to divide by, and nothing to carry on afterwards.
+    ///
+    /// Being a gesture is not the same as having a reported end. The protocol
+    /// guarantees a `wl_pointer.axis_stop` only for
+    /// [`Finger`](ScrollSource::Finger); a sequence from
+    /// [`Continuous`](ScrollSource::Continuous) is to be treated as
+    /// unterminated by default. So a continuous source builds a velocity like a
+    /// touchpad and, on hardware that never terminates, simply never spends it.
     pub fn is_continuous(self) -> bool {
         matches!(self, ScrollSource::Finger | ScrollSource::Continuous)
     }

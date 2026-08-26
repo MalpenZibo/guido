@@ -338,14 +338,11 @@ impl Container {
                     if self.scroll_axis != ScrollAxis::None
                         && self.apply_scroll(*delta_x, *delta_y, *source)
                     {
-                        let sd = self.scroll();
-                        let has_velocity = sd.scroll_state.velocity_x.abs() > 0.5
-                            || sd.scroll_state.velocity_y.abs() > 0.5;
-                        if has_velocity {
-                            request_job(id, JobRequest::Animation(RequiredJob::Paint));
-                        } else {
-                            request_job(id, JobRequest::Paint);
-                        }
+                        // A paint, and only a paint. A sample means the finger
+                        // is still down, so there is no momentum for an
+                        // animation pass to advance — it begins on the
+                        // end-of-gesture, which asks for its own frames.
+                        request_job(id, JobRequest::Paint);
                         return EventResponse::Handled;
                     }
 

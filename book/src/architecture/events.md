@@ -46,14 +46,20 @@ Event::ScrollEnd { x, y }
 - `delta_y` - Vertical scroll amount, in pixels
 - `source` - `Wheel`, `Finger` or `Continuous`
 
-`ScrollEnd` is the end of a continuous gesture — the finger lifting off a
-touchpad, which the compositor reports as `wl_pointer.axis_stop`. It carries no
-delta because nothing moved. A wheel never sends one: its steps are discrete,
-there is no finger to lift, and nothing carries on afterwards.
+`ScrollEnd` is the end of a scroll gesture — the finger lifting off a touchpad,
+which the compositor reports as `wl_pointer.axis_stop`. It carries no delta
+because nothing moved.
+
+Only `Finger` is guaranteed to produce one. The protocol says a `wl_pointer`
+sequence from a `Wheel` or `Continuous` source *may or may not* be terminated,
+and that clients "should treat scroll sequences from these scroll sources as
+unterminated by default" — so a `Continuous` gesture may simply never end, and a
+wheel may occasionally send a stop even though nothing was held down.
 
 It is what decides when momentum scrolling may begin. Without it the end of a
 gesture has to be guessed from a gap between samples, and a slow scroll is made
-of gaps.
+of gaps. A source that never terminates therefore never gets momentum, which is
+the honest answer rather than a guess.
 
 ## Event Propagation
 
