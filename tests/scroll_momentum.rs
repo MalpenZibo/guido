@@ -196,3 +196,37 @@ fn a_continuous_gesture_coasts_and_a_wheel_does_not() {
         "a continuous gesture coasted {continuous_coast}px after a 60px flick"
     );
 }
+
+/// A momentum belongs to a moment as well as to a gesture. If the loop goes
+/// idle with velocity left — the pointer wandered off, nothing asked for a
+/// frame — that motion is over. The frame that eventually arrives, from
+/// whatever asked for it, must not carry on where it left off.
+///
+/// This is the same failure as #246 one gate further along: the gesture *did*
+/// end, so the flag that replaced the timeout is set, and stays set.
+#[test]
+fn a_momentum_left_half_run_is_not_carried_on_by_a_later_frame() {
+    let mut h = H::new();
+    h.flick(ScrollSource::Finger);
+
+    h.frames(5);
+    let interrupted_at = h.offset();
+    assert!(
+        interrupted_at > 60.0,
+        "the flick was coasting when it stopped"
+    );
+
+    // The loop goes idle mid-flight.
+    std::thread::sleep(std::time::Duration::from_millis(400));
+
+    // Re-entering the container starts the scrollbar's hover expansion, which
+    // asks for an animation frame.
+    h.frames(30);
+
+    let after = h.offset();
+    assert!(
+        (after - interrupted_at).abs() < 0.01,
+        "content carried on from {interrupted_at} to {after}: a momentum \
+         abandoned mid-flight was resumed instead of being over"
+    );
+}
