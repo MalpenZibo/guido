@@ -250,11 +250,23 @@ pub(crate) struct ScrollState {
     pub h_scrollbar_dragging: bool,
     pub h_scrollbar_drag_start_x: f32,
     pub h_scrollbar_drag_start_offset: f32,
-    /// Velocity for kinetic/momentum scrolling
+    /// Momentum velocity, in pixels per frame — the unit `advance_momentum`
+    /// adds. Built from a speed, not from the last delta.
     pub velocity_x: f32,
     pub velocity_y: f32,
-    /// Timestamp of last scroll event (for detecting when scrolling stops)
+    /// Timestamp of the last gesture sample, for the interval between samples
+    /// and for how old the gesture is when it ends.
     pub last_scroll_time: Option<std::time::Instant>,
+    /// The gesture that produced the velocity is over, so the momentum may run.
+    /// Set by an end-of-gesture, cleared by the next sample.
+    pub gesture_ended: bool,
+    /// When the momentum became due, refreshed by every step it takes. A
+    /// momentum that stops being advanced has been abandoned, and the field is
+    /// what says how long ago that was.
+    pub momentum_since: Option<std::time::Instant>,
+    /// Samples in the current gesture, so the first timed one seeds the
+    /// estimate instead of being smoothed against a velocity from before it.
+    pub gesture_samples: u32,
 }
 
 impl ScrollState {
@@ -284,21 +296,124 @@ impl ScrollState {
         self.offset_y = self.offset_y.clamp(0.0, self.max_scroll_y());
     }
 
-    /// Check if momentum scrolling should be active (user stopped scrolling but has velocity)
+    /// Record one sample of a continuous gesture: `delta` pixels moved,
+    /// `dt_ms` since the previous sample of the same gesture.
+    ///
+    /// The velocity is distance over time. Storing the raw delta made 3px in
+    /// 8ms and 3px in 60ms — speeds seven times apart — the same number, so
+    /// what the momentum continued with bore little relation to how fast the
+    /// finger was going.
+    ///
+    /// `dt_ms` is `None` for the first sample of a gesture: a distance with no
+    /// time is not a speed, and guessing one from a single sample is how the
+    /// old behaviour started. That sample moves the content and contributes no
+    /// momentum.
+    pub fn record_gesture_sample(&mut self, delta_x: f32, delta_y: f32, dt_ms: Option<f32>) {
+        /// Two events can arrive within the same millisecond; the speed that
+        /// implies is unbounded and meaningless.
+        const MIN_SAMPLE_MS: f32 = 1.0;
+        /// A momentum step is in pixels per frame, a gesture in pixels per
+        /// millisecond. This is what turns one into the other.
+        const NOMINAL_FRAME_MS: f32 = 1000.0 / 60.0;
+        /// Weight of the newest sample. Smoothed, because the last sample of a
+        /// gesture is the one most likely to be a stray.
+        const SMOOTHING: f32 = 0.6;
+        /// However fast the hardware claims the finger went.
+        const MAX_STEP: f32 = 120.0;
+
+        // A new sample means the finger is still down, whatever a previous
+        // end-of-gesture said.
+        self.gesture_ended = false;
+        self.momentum_since = None;
+
+        let Some(dt_ms) = dt_ms else {
+            self.velocity_x = 0.0;
+            self.velocity_y = 0.0;
+            self.gesture_samples = 1;
+            return;
+        };
+
+        let dt_ms = dt_ms.max(MIN_SAMPLE_MS);
+        let step = |delta: f32| ((delta / dt_ms) * NOMINAL_FRAME_MS).clamp(-MAX_STEP, MAX_STEP);
+        let (step_x, step_y) = (step(delta_x), step(delta_y));
+
+        if self.gesture_samples <= 1 {
+            self.velocity_x = step_x;
+            self.velocity_y = step_y;
+        } else {
+            self.velocity_x = self.velocity_x * (1.0 - SMOOTHING) + step_x * SMOOTHING;
+            self.velocity_y = self.velocity_y * (1.0 - SMOOTHING) + step_y * SMOOTHING;
+        }
+        self.gesture_samples = self.gesture_samples.saturating_add(1);
+    }
+
+    /// The gesture ended — the finger lifted.
+    ///
+    /// `since_last_sample_ms` is how long ago the gesture last moved. A
+    /// momentum belongs to the gesture that produced it: a finger resting
+    /// before it lifts is not throwing anything, so a velocity that old is
+    /// spent rather than released.
+    pub fn end_gesture(&mut self, since_last_sample_ms: Option<f32>) {
+        /// Longer than this between the last movement and the lift, and the
+        /// gesture had already stopped.
+        const GESTURE_STALE_MS: f32 = 100.0;
+
+        if since_last_sample_ms.is_none_or(|ms| ms > GESTURE_STALE_MS) {
+            self.velocity_x = 0.0;
+            self.velocity_y = 0.0;
+        }
+        self.gesture_ended = true;
+        self.gesture_samples = 0;
+        self.momentum_since = Some(std::time::Instant::now());
+    }
+
+    /// Discard a momentum that stopped being advanced `idle_ms` ago.
+    ///
+    /// A momentum belongs to a moment as well as to a gesture. Gating it on the
+    /// gesture having ended stopped a velocity being flung while the finger was
+    /// still down, but a flag that is set and stays set has the same fault the
+    /// timeout had: one that was left half-run — the loop went idle, nothing
+    /// asked for a frame — was still due, and the next animation frame from any
+    /// source picked it up where it stopped. Measured at 148px, then 304px
+    /// after a wait of 400ms.
+    ///
+    /// This is not a guess about the user, which is what the timeout was. It is
+    /// a statement about this loop: nothing has advanced this motion for long
+    /// enough that it is not the same motion any more.
+    pub fn expire_stale_momentum(&mut self, idle_ms: f32) {
+        /// Six dropped frames at 60fps. Long enough that an ordinary hitch does
+        /// not cut a fling short, short enough that nobody reads the resumption
+        /// as a continuation.
+        const MOMENTUM_STALE_MS: f32 = 200.0;
+
+        if idle_ms > MOMENTUM_STALE_MS {
+            self.velocity_x = 0.0;
+            self.velocity_y = 0.0;
+            self.gesture_ended = false;
+            self.momentum_since = None;
+        }
+    }
+
+    /// How long since the momentum was last advanced, if one is due.
+    pub fn momentum_idle_ms(&self) -> Option<f32> {
+        self.momentum_since
+            .map(|t| t.elapsed().as_secs_f32() * 1000.0)
+    }
+
+    /// Whether the momentum may run: the gesture is over and it left a speed.
+    ///
+    /// No clock. The end of a gesture used to be guessed from a 50ms gap since
+    /// the last sample, and a slow scroll is made of gaps longer than that — so
+    /// the guess fired *inside* the gesture and flung the list while the finger
+    /// was still down. It also meant a momentum could become due with nothing
+    /// scheduled to run it, and then be resumed by the next animation frame
+    /// from any source, however much later.
     pub fn should_apply_momentum(&self) -> bool {
         const VELOCITY_THRESHOLD: f32 = 0.5;
-        const SCROLL_TIMEOUT_MS: u128 = 50; // Wait 50ms after last scroll event
 
-        // Only apply momentum if we have velocity AND enough time has passed since last scroll
-        let has_velocity = self.velocity_x.abs() > VELOCITY_THRESHOLD
-            || self.velocity_y.abs() > VELOCITY_THRESHOLD;
-
-        let scroll_stopped = self
-            .last_scroll_time
-            .map(|t| t.elapsed().as_millis() > SCROLL_TIMEOUT_MS)
-            .unwrap_or(true);
-
-        has_velocity && scroll_stopped
+        self.gesture_ended
+            && (self.velocity_x.abs() > VELOCITY_THRESHOLD
+                || self.velocity_y.abs() > VELOCITY_THRESHOLD)
     }
 
     /// Advance kinetic scrolling animation, returns true if still animating
@@ -306,12 +421,20 @@ impl ScrollState {
         const FRICTION: f32 = 0.92;
         const VELOCITY_THRESHOLD: f32 = 0.5;
 
-        // Don't apply momentum while actively scrolling
-        if !self.should_apply_momentum() {
-            // Still animating if we have velocity (waiting for timeout)
-            return self.velocity_x.abs() > VELOCITY_THRESHOLD
-                || self.velocity_y.abs() > VELOCITY_THRESHOLD;
+        // A motion nobody has advanced for long enough is not this motion any
+        // more, whatever velocity is left of it.
+        if let Some(idle_ms) = self.momentum_idle_ms() {
+            self.expire_stale_momentum(idle_ms);
         }
+
+        // Nothing to run, and nothing to keep the loop awake for: a velocity
+        // whose gesture has not ended is not a momentum waiting its turn, it
+        // belongs to a finger that is still down.
+        if !self.should_apply_momentum() {
+            return false;
+        }
+
+        self.momentum_since = Some(std::time::Instant::now());
 
         let mut animating = false;
 
@@ -581,6 +704,147 @@ impl ScrollState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scroller with room to fling in.
+    fn scroller() -> ScrollState {
+        ScrollState {
+            content_height: 5000.0,
+            viewport_height: 400.0,
+            ..Default::default()
+        }
+    }
+
+    /// Play `samples` movements of `delta` pixels `dt_ms` apart, then lift.
+    fn gesture(state: &mut ScrollState, samples: u32, delta: f32, dt_ms: f32) {
+        for i in 0..samples {
+            let dt = (i > 0).then_some(dt_ms);
+            state.record_gesture_sample(0.0, delta, dt);
+        }
+        state.end_gesture(Some(dt_ms));
+    }
+
+    /// How far the momentum carries the content once the finger has lifted.
+    fn coast(state: &mut ScrollState) -> f32 {
+        let start = state.offset_y;
+        for _ in 0..600 {
+            if !state.advance_momentum() {
+                break;
+            }
+        }
+        state.offset_y - start
+    }
+
+    /// The point of measuring a speed instead of keeping the last delta: two
+    /// gestures covering the same distance in different times are different
+    /// speeds, and have to fling differently. Storing the raw delta made them
+    /// the same number.
+    #[test]
+    fn a_gesture_that_covered_its_distance_faster_flings_further() {
+        let mut quick = scroller();
+        gesture(&mut quick, 6, 10.0, 8.0);
+        let quick_coast = coast(&mut quick);
+
+        let mut slow = scroller();
+        gesture(&mut slow, 6, 10.0, 60.0);
+        let slow_coast = coast(&mut slow);
+
+        assert!(
+            quick_coast > slow_coast * 2.0,
+            "same 50px of gesture, {}x apart in time, coasted {quick_coast} and {slow_coast}",
+            60.0 / 8.0
+        );
+    }
+
+    /// A finger that has come to rest before it lifts is not throwing
+    /// anything. The velocity belongs to a gesture that had already stopped.
+    #[test]
+    fn a_finger_resting_before_it_lifts_does_not_fling() {
+        let mut state = scroller();
+        for i in 0..6 {
+            state.record_gesture_sample(0.0, 10.0, (i > 0).then_some(8.0));
+        }
+        assert!(state.velocity_y.abs() > 0.5, "the gesture built a speed");
+
+        // ... and then the finger sat still for a while before lifting.
+        state.end_gesture(Some(400.0));
+
+        assert!(!state.should_apply_momentum());
+        assert_eq!(coast(&mut state), 0.0);
+    }
+
+    /// While the finger is down there is no momentum to run, whatever speed
+    /// the samples have built up: the list goes where the finger puts it.
+    #[test]
+    fn a_gesture_in_progress_has_no_momentum_to_apply() {
+        let mut state = scroller();
+        for i in 0..6 {
+            state.record_gesture_sample(0.0, 10.0, (i > 0).then_some(8.0));
+        }
+
+        assert!(state.velocity_y.abs() > 0.5, "the gesture built a speed");
+        assert!(!state.should_apply_momentum(), "but it is not due");
+        assert!(
+            !state.advance_momentum(),
+            "and nothing is animating, so the loop is not kept awake for it"
+        );
+        assert_eq!(coast(&mut state), 0.0);
+    }
+
+    /// The unit behind the integration case: a motion that has not been
+    /// advanced for long enough is over, whatever velocity is left of it.
+    #[test]
+    fn a_momentum_abandoned_mid_flight_expires() {
+        let mut state = scroller();
+        gesture(&mut state, 6, 10.0, 8.0);
+        assert!(state.should_apply_momentum(), "the flick is due");
+
+        // A few frames run, and then nothing does.
+        state.advance_momentum();
+        assert!(state.should_apply_momentum(), "still due between frames");
+
+        state.expire_stale_momentum(400.0);
+
+        assert!(!state.should_apply_momentum());
+        assert_eq!(state.velocity_y, 0.0);
+        assert_eq!(coast(&mut state), 0.0);
+    }
+
+    /// An ordinary hitch is not an abandonment: a dropped frame or two must not
+    /// cut a fling short.
+    #[test]
+    fn a_dropped_frame_does_not_expire_a_momentum() {
+        let mut state = scroller();
+        gesture(&mut state, 6, 10.0, 8.0);
+
+        state.expire_stale_momentum(50.0);
+
+        assert!(state.should_apply_momentum());
+        assert!(coast(&mut state) > 0.0);
+    }
+
+    /// A sample landing after the gesture ended is the next gesture starting,
+    /// and it cancels the momentum rather than being flung along with it.
+    #[test]
+    fn a_new_sample_takes_the_gesture_back() {
+        let mut state = scroller();
+        gesture(&mut state, 6, 10.0, 8.0);
+        assert!(state.should_apply_momentum());
+
+        state.record_gesture_sample(0.0, 4.0, Some(8.0));
+        assert!(!state.should_apply_momentum());
+    }
+
+    /// One sample is a distance with no time. Guessing a speed from it is what
+    /// the old behaviour did, and it is what a slow gesture kept triggering.
+    #[test]
+    fn the_first_sample_of_a_gesture_is_not_a_speed() {
+        let mut state = scroller();
+        state.record_gesture_sample(0.0, 30.0, None);
+
+        assert_eq!(state.velocity_y, 0.0);
+        state.end_gesture(Some(8.0));
+        assert!(!state.should_apply_momentum());
+    }
 
     #[test]
     fn test_scroll_axis_allows_vertical() {

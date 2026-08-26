@@ -338,14 +338,11 @@ impl Container {
                     if self.scroll_axis != ScrollAxis::None
                         && self.apply_scroll(*delta_x, *delta_y, *source)
                     {
-                        let sd = self.scroll();
-                        let has_velocity = sd.scroll_state.velocity_x.abs() > 0.5
-                            || sd.scroll_state.velocity_y.abs() > 0.5;
-                        if has_velocity {
-                            request_job(id, JobRequest::Animation(RequiredJob::Paint));
-                        } else {
-                            request_job(id, JobRequest::Paint);
-                        }
+                        // A paint, and only a paint. A sample means the finger
+                        // is still down, so there is no momentum for an
+                        // animation pass to advance — it begins on the
+                        // end-of-gesture, which asks for its own frames.
+                        request_job(id, JobRequest::Paint);
                         return EventResponse::Handled;
                     }
 
@@ -363,6 +360,25 @@ impl Container {
                     && let Some(ref callback) = ix.on_key_down
                 {
                     callback(*key, *modifiers);
+                    return EventResponse::Handled;
+                }
+            }
+
+            // The finger lifted. Momentum starts here or not at all — and it
+            // starts now, on the event, rather than becoming due for whatever
+            // frame happens along next.
+            Event::ScrollEnd { x, y } => {
+                if self.scroll_axis != ScrollAxis::None && hit.contains(*x, *y) {
+                    let since_ms = self
+                        .scroll()
+                        .scroll_state
+                        .last_scroll_time
+                        .map(|t| t.elapsed().as_secs_f32() * 1000.0);
+                    let sd = self.scroll_mut();
+                    sd.scroll_state.end_gesture(since_ms);
+                    if sd.scroll_state.should_apply_momentum() {
+                        request_job(id, JobRequest::Animation(RequiredJob::Paint));
+                    }
                     return EventResponse::Handled;
                 }
             }

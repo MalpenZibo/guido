@@ -436,6 +436,22 @@ pub enum ScrollSource {
     Continuous,
 }
 
+impl ScrollSource {
+    /// Whether this source scrolls as a gesture that can be measured for a
+    /// speed, rather than in discrete steps. A wheel is not one: its steps have
+    /// no duration to divide by, and nothing to carry on afterwards.
+    ///
+    /// Being a gesture is not the same as having a reported end. The protocol
+    /// guarantees a `wl_pointer.axis_stop` only for
+    /// [`Finger`](ScrollSource::Finger); a sequence from
+    /// [`Continuous`](ScrollSource::Continuous) is to be treated as
+    /// unterminated by default. So a continuous source builds a velocity like a
+    /// touchpad and, on hardware that never terminates, simply never spends it.
+    pub fn is_continuous(self) -> bool {
+        matches!(self, ScrollSource::Finger | ScrollSource::Continuous)
+    }
+}
+
 /// Keyboard modifier state
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Modifiers {
@@ -506,6 +522,18 @@ pub enum Event {
         /// Source of the scroll event
         source: ScrollSource,
     },
+    /// A continuous scroll gesture ended: the finger lifted.
+    ///
+    /// Sent for the sources that have an end — a touchpad or a touchscreen say
+    /// so with `wl_pointer.axis_stop`, a wheel has nothing to say. It carries
+    /// no delta, because nothing moved; what it carries is the one unguessed
+    /// answer to when a momentum may begin.
+    ScrollEnd {
+        /// X position of the pointer
+        x: f32,
+        /// Y position of the pointer
+        y: f32,
+    },
     /// Key pressed
     KeyDown {
         /// The key that was pressed
@@ -541,6 +569,7 @@ impl Event {
             Event::MouseUp { x, y, .. } => Some((*x, *y)),
             Event::MouseEnter { x, y } => Some((*x, *y)),
             Event::Scroll { x, y, .. } => Some((*x, *y)),
+            Event::ScrollEnd { x, y } => Some((*x, *y)),
             Event::MouseLeave
             | Event::KeyDown { .. }
             | Event::KeyUp { .. }
@@ -576,6 +605,7 @@ impl Event {
                 delta_y: *delta_y,
                 source: *source,
             },
+            Event::ScrollEnd { .. } => Event::ScrollEnd { x: new_x, y: new_y },
             Event::MouseLeave => Event::MouseLeave,
             // Keyboard/focus events don't have coordinates
             Event::KeyDown { key, modifiers } => Event::KeyDown {

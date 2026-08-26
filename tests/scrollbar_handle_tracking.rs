@@ -181,9 +181,9 @@ fn near(actual: f32, expected: f32) -> bool {
     (actual - expected).abs() < 0.01
 }
 
-/// A mouse wheel never sets a velocity — `apply_scroll` gates that on
-/// `ScrollSource::Finger` — so it always takes the plain `Paint` arm. It is the
-/// ordinary way to scroll, and the handle has to follow it.
+/// A mouse wheel asks for a plain `Paint`: it is not a gesture, so there is no
+/// momentum to advance and no animation frame to carry the handle along. It is
+/// the ordinary way to scroll, and the handle has to follow it.
 #[test]
 fn a_wheel_scroll_moves_the_handle() {
     let mut h = H::vertical();

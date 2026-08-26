@@ -509,17 +509,33 @@ impl PointerHandler for WaylandState {
                         vertical.absolute as f32
                     };
 
-                    // Only emit scroll event if there's actual scroll delta
-                    if (delta_x != 0.0 || delta_y != 0.0)
+                    // An axis event says two things, and a guard on the delta
+                    // alone dropped the second. `axis_stop` is how the hardware
+                    // ends a continuous scroll, and it carries no delta —
+                    // because nothing moved — so it was filtered out one line
+                    // before anything could use it. It is the only unguessed
+                    // answer to when a gesture is over.
+                    let gesture_ended = horizontal.stop || vertical.stop;
+                    let scrolled = delta_x != 0.0 || delta_y != 0.0;
+
+                    if (scrolled || gesture_ended)
                         && let Some(events) = target_events
                     {
-                        events.push(Event::Scroll {
-                            x: self.input.pointer_x,
-                            y: self.input.pointer_y,
-                            delta_x,
-                            delta_y,
-                            source: scroll_source,
-                        });
+                        if scrolled {
+                            events.push(Event::Scroll {
+                                x: self.input.pointer_x,
+                                y: self.input.pointer_y,
+                                delta_x,
+                                delta_y,
+                                source: scroll_source,
+                            });
+                        }
+                        if gesture_ended {
+                            events.push(Event::ScrollEnd {
+                                x: self.input.pointer_x,
+                                y: self.input.pointer_y,
+                            });
+                        }
                     }
                 }
             }

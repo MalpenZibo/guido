@@ -452,8 +452,12 @@ Wayland → Platform → App → Widget Tree
                               │
                               ├─ MouseMove/Enter/Leave
                               ├─ MouseDown/MouseUp
-                              └─ Scroll
+                              └─ Scroll/ScrollEnd
 ```
+
+`ScrollEnd` is the end of a gesture, from `wl_pointer.axis_stop`. It carries no
+delta, and it is what decides when momentum scrolling may begin — guaranteed
+only for `ScrollSource::Finger`.
 
 Events propagate down the widget tree. Each widget can:
 - Handle the event (`EventResponse::Handled`)
