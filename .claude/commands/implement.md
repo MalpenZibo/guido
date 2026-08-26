@@ -73,23 +73,29 @@ Run it over the change. Its criteria live in `.claude/agents/reviewer.md` and ar
 not repeated here — a second copy is a second thing to keep true, and the copy
 is always the one that goes stale.
 
-What to do with what it says:
+**One pass.** Not until it comes back clean — that is not a state it reaches,
+because a reviewer asked to review returns a list and a list always has items.
 
-- **An architectural finding stops the work.** A new core type, a new trait, a
-  new cross-cutting mechanism, a new ownership rule, a family of call sites
-  respelled: that was the maintainer's decision to make before it was written,
-  and finding it here does not transfer the decision to whoever wrote it. Stop,
-  say what was found, and ask — the same verb as step 1.
-- **Everything else is yours to act on, or to disagree with in writing.** A
-  finding you did not act on is worth a sentence in the pull request rather than
-  silence; the next person will wonder the same thing.
-- **A clean report is one line and you move on.** Do not ask again hoping for a
-  different answer.
-- **A review that did not run is not a review that found nothing.** The two look
-  identical from the outside and mean opposite things. If it failed, timed out,
-  or was skipped, run it again; if it still will not run, say so in the pull
-  request in those words. Writing "nothing found" for a review that never
-  happened is the same act as re-blessing a golden to make a test pass.
+It sorts its findings into three levels and says how many block. What those
+levels mean is its business and is defined where it is defined; what you do with
+each is this:
+
+- **Blocks** — stop. If it is the architectural case, say what was found and
+  ask, which is the same verb as step 1: finding it late does not move the
+  decision to whoever wrote it.
+- **Worth answering** — act on it, or say in the pull request why you did not.
+  Silence is what is not allowed; disagreement is fine.
+- **Note** — into the pull request or an issue.
+
+**Zero blocking findings is the pass.** A review that comes back with only notes
+has said the change is sound; it does not become unsound because the notes
+exist, and clearing them is not what this step is for.
+
+A review that did not run is not a review that found nothing: the two look
+identical from the outside and mean opposite things. If it failed, timed out or
+was skipped, run it again; if it still will not run, say so in the pull request
+in those words. Writing "nothing found" for a review that never happened is the
+same act as re-blessing a golden to make a test pass.
 
 ## 8. Open the pull request
 

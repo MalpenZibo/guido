@@ -152,8 +152,10 @@ themselves when the task touches them; you do not need to read them up front.
 5. **Have it read by something that did not write it.** The `reviewer` subagent,
    over the committed change and before the pull request exists — its criteria
    ask about the commits, so they need the commits. Whoever wrote a change is
-   the worst judge of whether it grew, and an architectural finding here stops
-   the work: that decision belongs to the maintainer wherever it surfaces.
+   the worst judge of whether it grew. One pass, and its findings say what they
+   cost: **zero blocking findings is the pass**, notes are not something to
+   clear. An architectural finding stops the work — that decision belongs to the
+   maintainer wherever it surfaces.
 6. **Open the pull request** with the template filled in: what moved, what
    proves it, what the review found, what you looked at by hand.
 

@@ -317,6 +317,15 @@ fn the_review_step_still_says_what_it_is_for() {
          them is the whole of it — and it does not"
     );
     assert!(
+        step_seven.contains("One pass"),
+        "step 7 does not say it is one pass, and a review with no stopping rule \
+         is a review that runs until somebody gets tired"
+    );
+    assert!(
+        step_seven.contains("Blocks") && step_seven.contains("Note"),
+        "step 7 does not say what to do with each level of finding"
+    );
+    assert!(
         step_seven.contains("did not run"),
         "step 7 does not say what to do when the review does not run, and a \
          review that did not run looks exactly like one that found nothing"
@@ -335,5 +344,38 @@ fn the_review_step_still_says_what_it_is_for() {
         agents.contains("`reviewer` subagent"),
         "AGENTS.md's list of what a change goes through never mentions the \
          reviewer, so the step exists only in the command"
+    );
+}
+
+/// The levels live in the reviewer's own file; the command only says what to do
+/// with each. So the command is the copy, and a test that reads only the copy
+/// defends the wrong document: delete the levels from `reviewer.md` and the
+/// command goes on sorting findings into categories nothing produces.
+///
+/// This asserts they agree, which is the only thing that keeps two files
+/// describing one mechanism honest.
+#[test]
+fn the_reviewer_and_the_command_use_the_same_levels() {
+    const LEVELS: [&str; 3] = ["Blocks", "Worth answering", "Note"];
+
+    let reviewer = read(".claude/agents/reviewer.md");
+    let implement = read(".claude/commands/implement.md");
+
+    for level in LEVELS {
+        assert!(
+            reviewer.contains(level),
+            "the reviewer never defines `{level}`, so nothing it reports can \
+             carry that level and the command sorts into an empty box"
+        );
+        assert!(
+            implement.contains(level),
+            "/implement never says what to do with `{level}`"
+        );
+    }
+
+    assert!(
+        reviewer.contains("how many block"),
+        "the reviewer gives no verdict, so `zero blocking findings is the pass` \
+         has nothing to read"
     );
 }
