@@ -1,7 +1,8 @@
-//! The agent-facing documentation is checked against the code it describes.
+//! The documentation is checked against the code it describes.
 //!
 //! `AGENTS.md`, the skills, the commands and the reviewer's criteria are read
-//! by whoever — or whatever — is about to change this library, and they name
+//! by whoever — or whatever — is about to change this library. `docs/`, the
+//! book and the README are read by whoever is about to use it. All of them name
 //! APIs. A
 //! renamed function leaves them quietly wrong, and quietly wrong instructions
 //! are worse than none: they are followed.
@@ -19,12 +20,24 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+/// Below this, a name is more likely to be a word than an identifier, and the
+/// two tests have to agree on it — otherwise raising one is a way to make a
+/// failure go away.
+const SHORTEST_NAME: usize = 3;
+
 /// Backticked words that are not, and never were, symbols in this crate:
 /// external tools, protocols, environment variables belonging to something
 /// else, and file names.
 const NOT_CRATE_SYMBOLS: &[&str] = &[
     "grim",
     "reviewer",
+    // Names the crate does not contain because something else produces them:
+    // a macro builds them from the caller's own type or function, an example
+    // file is named after them, or they belong to the reader's code rather
+    // than the library's. Compiling the examples is what would check these,
+    // and until the book compiles nothing here can.
+    "Button",
+    "rotation_signal",
     "mdbook",
     "lavapipe",
     "llvmpipe",
@@ -57,11 +70,25 @@ fn crate_source() -> String {
     read_dir_files(&repo().join("src"), "rs", &mut files);
     read_dir_files(&repo().join("guido-macros/src"), "rs", &mut files);
     read_dir_files(&repo().join("tests"), "rs", &mut files);
-    files
+    let mut text = files
         .iter()
         .filter_map(|p| std::fs::read_to_string(p).ok())
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+
+    // The documentation names examples by their file name, and an example is
+    // as real as a function: `status_bar` should resolve because
+    // `examples/status_bar.rs` is there, and stop resolving when it is not.
+    if let Ok(entries) = std::fs::read_dir(repo().join("examples")) {
+        for entry in entries.flatten() {
+            if let Some(stem) = entry.path().file_stem() {
+                text.push('\n');
+                text.push_str(&stem.to_string_lossy());
+            }
+        }
+    }
+
+    text
 }
 
 /// The identifiers a markdown file writes in backticks.
@@ -105,6 +132,8 @@ fn scan_spans(text: &str, found: &mut BTreeSet<String>) {
     }
 }
 
+/// Everything an agent is handed: the contract, the working knowledge, the
+/// commands, the reviewer's criteria.
 #[test]
 fn every_identifier_the_agent_documentation_names_still_exists() {
     let source = crate_source();
@@ -135,7 +164,7 @@ fn every_identifier_the_agent_documentation_names_still_exists() {
             // A path is only as real as its last segment: `Signal::select` is
             // wrong when `select` does not exist, whatever `Signal` is.
             let leaf = identifier.rsplit("::").next().unwrap_or(&identifier);
-            if leaf.len() < 3 {
+            if leaf.len() < SHORTEST_NAME {
                 continue;
             }
             checked += 1;
@@ -180,4 +209,59 @@ fn contains_word(haystack: &str, word: &str) -> bool {
 
 fn is_word_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// And everything a user is handed: the developer reference under `docs/`, the
+/// book published to the project site, and the README.
+///
+/// This half went unwatched while the other half was being fixed. `mdbook build`
+/// asks whether the book renders, not whether it is true, and nothing asked
+/// anything of `docs/` at all — which is how six false claims accumulated in
+/// the agent-facing files before anybody looked, and there is no reason the
+/// user-facing ones would decay more slowly.
+#[test]
+fn every_identifier_the_user_documentation_names_still_exists() {
+    let source = crate_source();
+
+    let mut docs = vec![repo().join("README.md")];
+    for dir in ["docs", "book/src"] {
+        let mut found = Vec::new();
+        read_dir_files(&repo().join(dir), "md", &mut found);
+        assert!(
+            !found.is_empty(),
+            "no markdown under {dir}: checking nothing"
+        );
+        docs.extend(found);
+    }
+
+    let mut stale = Vec::new();
+    let mut checked = 0usize;
+
+    for doc in &docs {
+        let text = std::fs::read_to_string(doc).expect("read documentation");
+        for identifier in backticked_identifiers(&text) {
+            if NOT_CRATE_SYMBOLS.contains(&identifier.as_str()) {
+                continue;
+            }
+            let leaf = identifier.rsplit("::").next().unwrap_or(&identifier);
+            if leaf.len() < SHORTEST_NAME {
+                continue;
+            }
+            checked += 1;
+            if !contains_word(&source, leaf) {
+                let name = doc.strip_prefix(repo()).unwrap_or(doc).display();
+                stale.push(format!("  {name}: `{identifier}`"));
+            }
+        }
+    }
+
+    assert!(
+        stale.is_empty(),
+        "the user documentation names {} identifier(s) the crate does not \
+         have. Either it went stale when something was renamed, or the name \
+         belongs in NOT_CRATE_SYMBOLS in this file:\n{}\n\n({checked} \
+         identifiers checked)",
+        stale.len(),
+        stale.join("\n")
+    );
 }

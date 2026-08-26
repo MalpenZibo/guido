@@ -482,7 +482,7 @@ fn to_pascal_case(s: &str) -> String {
 /// // Creates per-field signals from initial values
 /// let state = AppStateSignals::new(AppState { count: 0, name: "foo".into() });
 ///
-/// // Get writer handles for background tasks (Send + Copy)
+/// // Get writer handles for background tasks (Send + Copy): an AppStateWriters
 /// let writers = state.writers();
 ///
 /// // Widgets subscribe to individual signals

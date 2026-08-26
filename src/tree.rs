@@ -501,6 +501,13 @@ impl Tree {
     /// Also accumulates the widget's surface-relative bounds into the
     /// damage region for Wayland damage reporting.
     pub fn mark_needs_paint(&mut self, widget_id: WidgetId) {
+        // The damage walk comes before the flag early-out below, and the order
+        // is load-bearing. `cache_layout` damages the rect a widget vacated and
+        // then delegates the *new* one here — so an early-out on an
+        // already-set flag would drop the new rect whenever a resize follows a
+        // paint mark, which is most resizes. Moving the early-out first looks
+        // like a free saving and is not.
+
         // Accumulate damage for the actual dirty widget (before propagation),
         // attributed to the widget's surface root
         if let Some((root, bounds)) = self.surface_relative_bounds_and_root(widget_id) {

@@ -36,7 +36,8 @@ container()
 
 Spring presets:
 - `SpringConfig::DEFAULT` - Balanced
-- `SpringConfig::SMOOTH` - Gentle, minimal overshoot
+- `SpringConfig::GENTLE` - Slower and smooth, minimal overshoot
+- `SpringConfig::SNAPPY` - Quickest response, subtle overshoot
 - `SpringConfig::BOUNCY` - Energetic with visible bounce
 
 ## Examples
@@ -78,7 +79,7 @@ container()
 
 ```rust
 container()
-    .animate_scale(Transition::spring(SpringConfig::SMOOTH))
+    .animate_scale(Transition::spring(SpringConfig::GENTLE))
     .when_pressed(|s| s.scale(0.98))
 ```
 

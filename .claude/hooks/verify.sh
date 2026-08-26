@@ -39,7 +39,7 @@ fi
 # Documentation that names something the crate does not have is documentation
 # that will be followed into a wall.
 if [ -n "$docs_changed" ] || [ -n "$rust_changed" ]; then
-  if ! refs_out=$(cargo test --test skill_references 2>&1); then
+  if ! refs_out=$(cargo test --test documentation_references 2>&1); then
     echo "The agent-facing documentation names an API this crate does not have:" >&2
     echo "$refs_out" | sed -n '/documentation names/,/identifiers checked/p' | head -n 30 >&2
     exit 2

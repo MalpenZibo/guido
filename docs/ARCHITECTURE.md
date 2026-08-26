@@ -150,7 +150,7 @@ Hardware-accelerated rendering using wgpu.
    jobs — including animation continuations — sit untouched in its own
    queue until the callback fires and wakes the loop. Init and resizes
    bypass the gate.
-5. `drain_pending_jobs()` + `process_jobs()` - Unregister → Animation (advance values) → Reconcile → Paint → Layout marking
+5. `distribute_jobs()` sorts the pending work by surface, `drain_surface_jobs()` takes each surface's own, and `process_jobs()` applies them - Unregister → Animation (advance values) → Reconcile → Paint → Layout marking
 6. Process follow-up jobs pushed by animation advances and reconciliation
 7. Partial layout from `layout_roots` - Only dirty subtrees re-layout
 8. Force full repaint on resize, scale change, or initialization
@@ -335,12 +335,12 @@ over. Both hand the wakeup to the ping if the receiver has gone.
 The frame-request ping is coalesced per loop iteration through a dedicated
 `PING_SENT` flag cleared once per wakeup (`mark_loop_awake`, right after
 dispatch returns). It is intentionally NOT coalesced via `WAKE_REQUESTED`:
-that flag is consumed mid-iteration by `take_frame_request()`, and gating
+that flag is consumed mid-iteration by `take_wake_request()`, and gating
 the ping on it once lost wakeups entirely (a request landing while the flag
 was set sent no ping and was then absorbed by the take — the loop blocked
 with work queued until an unrelated Wayland event arrived). Additionally,
 the loop refuses to block indefinitely while `WAKE_REQUESTED` is still set
-at iteration start (`frame_request_pending`).
+at iteration start (`wake_request_pending`).
 
 When adding a new deferred-work queue, either drain it in the loop after
 the flush point AND wake through one of the two mechanisms above, or make

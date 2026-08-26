@@ -32,11 +32,13 @@ is a change nothing is watching: the missing scenario is part of the work, not a
 follow-up. If a change genuinely cannot be verified automatically, say so in the
 pull request in one sentence, and say what you did by hand instead.
 
-This rule covers *this file* and everything beside it. The skills, the commands
-and the reviewer's criteria name APIs, and they are followed rather than read
+This rule covers *this file* and everything beside it, and `docs/`, the book and
+the README as well. Documentation that names an API is followed rather than read
 sceptically — so being quietly wrong costs more there than in code.
-`tests/skill_references.rs` is what keeps them honest, and it runs before you
-stop.
+`tests/documentation_references.rs` is what keeps the prose honest, and it runs
+before you stop. It reads what is written between backticks and skips fenced
+blocks, so the book's code samples — which is most of the book — are not
+covered by it or by anything else.
 
 **Architectural changes are agreed before they are written.** A new core type or
 trait, a new cross-cutting mechanism, a new ownership or lifetime rule, a change
@@ -89,7 +91,8 @@ at lavapipe. In that job a skip is a failure.
 | widget behaviour and public API | integration tests in `tests/` |
 | documented API | doc tests, and `cargo doc` with warnings denied |
 | the user documentation | `mdbook build book` in CI |
-| the APIs this file and the skills name | `tests/skill_references.rs` |
+| API names written in *prose* — this file, the skills, `docs/`, the book, the README | `tests/documentation_references.rs` |
+| API names written in the book's *code samples* | **nothing yet.** The book teaches almost entirely through samples, and until they compile a rename is invisible there |
 | the workflow this file, `/implement` and the templates describe | `tests/agent_workflow.rs` |
 | Wayland protocol behaviour, compositor integration | **nothing automated.** Run an example and say what you saw in the pull request |
 
