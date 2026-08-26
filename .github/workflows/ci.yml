@@ -128,6 +128,39 @@ jobs:
       - name: Build the book
         run: mdbook build book
 
+  mutants:
+    name: Mutation testing
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev
+      # Only the lines this pull request touched. Mutating the whole crate takes
+      # hours and would say the same thing every time; mutating the diff asks
+      # the one question worth asking of a change — if this new code were
+      # wrong, would anything have noticed.
+      - name: The diff this pull request makes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: git diff "$BASE"...HEAD > /tmp/pull-request.diff
+      - name: Mutate what changed
+        run: cargo mutants --in-diff /tmp/pull-request.diff -j 4 --no-shuffle
+      - name: Upload what survived
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-out
+          path: mutants.out/
+          if-no-files-found: ignore
+
   golden-guard:
     name: Golden re-bless needs a label
     if: github.event_name == 'pull_request'

@@ -96,6 +96,28 @@ That last row is the hole in the harness. It is the one place where "I ran it
 and it looked right" is still the standard, and the one place worth closing
 next.
 
+## What watches the harness
+
+Every row above is an opinion until something checks it. `cargo mutants` changes
+the code in one small way and asks whether any test notices: coverage asks
+whether a line ran, this asks whether it mattered.
+
+```bash
+cargo mutants -f 'src/reactive/**/*.rs' -C --lib -j 8
+```
+
+The reactive core stands at **168 caught, 84 survived — 67%** as of the run that
+introduced this. The survivors are not evenly spread and the number is less
+useful than the shape: the background-write queue, the whole of `clipboard`,
+`cursor` and most of `focus` are unwatched, and the numeric conversions in
+`into_signal` can return the wrong number without a test objecting.
+
+Whole-crate runs take hours; a module at a time is how it is used by hand. On a
+pull request CI mutates only the lines the diff touched, which asks the one
+question worth asking of new code — if this were wrong, would anything have
+noticed. That job reports; it does not block, until somebody decides the
+ratchet is worth the friction.
+
 ## Where the rest of it is
 
 `docs/` is the developer reference — read the relevant file before a

@@ -5,3 +5,7 @@ book/book/
 
 # Personal, per-machine Claude Code settings
 .claude/settings.local.json
+
+# cargo-mutants working directories
+mutants.out/
+mutants.out.old/
