@@ -1234,6 +1234,185 @@ fn declaring_a_transition_after_a_sequence_does_not_lose_it() {
     );
 }
 
+/// A translate that animates has to arrive where its signal points.
+///
+/// The one component with no such test until now, and four separate lists name
+/// it on the way: the target is only computed where `advance_animations` says
+/// the component is animated, and resolved only where `animated_transform`
+/// says something could move it.
+#[test]
+fn an_animated_translate_reaches_the_paint() {
+    let offset = create_signal(Translate::NONE);
+    let mut h = H::new(
+        container().layout(Flex::row()).child(
+            box_of(50.0, 50.0)
+                .translate(offset)
+                .animate_translate(Transition::new(600.0, TimingFunction::Linear)),
+        ),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+    assert_eq!(
+        h.paint().children[0].local_transform.tx(),
+        0.0,
+        "at rest it sits where it was laid out"
+    );
+
+    offset.set(Translate::new(40.0, 0.0));
+
+    // One frame in: moving, and not arrived. Without this the test passes with
+    // the animation deleted outright — `get_animated_value` falls back to the
+    // signal, and paint lands on 40 the first time it is asked.
+    pump(&mut h);
+    h.fit(200.0, 200.0);
+    let midway = h.paint().children[0].local_transform.tx();
+    assert!(
+        midway > 0.0 && midway < 39.0,
+        "it has to animate towards the target rather than snap to it, got {midway}"
+    );
+
+    settle(&mut h, 400);
+    let tx = h.paint().children[0].local_transform.tx();
+    assert!(
+        (tx - 40.0).abs() < 0.5,
+        "the animation has to arrive at what the signal named, got {tx}"
+    );
+}
+
+/// A target the widget could only have reached through a branch it was not
+/// subscribed to when it first laid out.
+///
+/// `seed_animations` subscribes once, to whatever the closure read at the first
+/// layout — here `armed` alone, because the other branch was not taken.
+/// `advance_animations` reads in a `snapshot_zone` and subscribes to nothing.
+/// So `resync_animation_targets` is the only pass that can ever pick up
+/// `offset`, and the write below is the one nothing else can see: flipping
+/// `armed` wakes the container by the subscription it already had, but the
+/// write *after* that has only the re-sync between it and a stale value.
+#[test]
+fn a_translate_target_behind_an_untaken_branch_is_picked_up_by_the_resync() {
+    let armed = create_signal(false);
+    let offset = create_signal(0.0f32);
+    let mut h = H::new(
+        container().layout(Flex::row()).child(
+            box_of(50.0, 50.0)
+                .translate(move || {
+                    if armed.get() {
+                        Translate::new(offset.get(), 0.0)
+                    } else {
+                        Translate::NONE
+                    }
+                })
+                .animate_translate(Transition::new(80.0, TimingFunction::Linear)),
+        ),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+
+    // The branch flips. This much the first subscription can see, and the
+    // paint it causes is the only chance anything has to notice `offset`.
+    armed.set(true);
+    settle(&mut h, 120);
+
+    offset.set(40.0);
+    settle(&mut h, 120);
+
+    let tx = h.paint().children[0].local_transform.tx();
+    assert!(
+        (tx - 40.0).abs() < 0.5,
+        "a target behind a branch nobody tracked still has to converge, got {tx}"
+    );
+}
+
+/// An enter animates in from the value it was handed instead of snapping to
+/// the target — for a translate, which `seed_animations` reaches through a
+/// third list, after the one that decides it is initial and the one that
+/// computes its target.
+#[test]
+fn an_entering_translate_starts_from_where_it_was_told() {
+    let entering = box_of(50.0, 50.0)
+        .translate(Translate::NONE)
+        .animate_translate_from(
+            Translate::new(0.0, -20.0),
+            Transition::new(200.0, TimingFunction::EaseOut),
+        );
+
+    let mut h = H::new(container().layout(Flex::row()).child(entering));
+    h.fit(200.0, 200.0);
+    h.paint();
+    pump(&mut h);
+    h.fit(200.0, 200.0);
+    let painted = h.paint().children[0].local_transform;
+
+    assert_eq!(
+        painted.tx(),
+        0.0,
+        "the enter was declared on one axis and has to stay on it"
+    );
+    assert!(
+        painted.ty() < -1.0,
+        "it has to start up where it was told, not snap to the target, got {}",
+        painted.ty()
+    );
+}
+
+/// The other two timelines, which `advance_animations` starts and
+/// `resync_animation_targets` wakes from lists that name each component once.
+/// Only `keyframes_rotate` was played by anything before this.
+///
+/// Neither sequence passes through the value that composes to the identity —
+/// the displacement stays out at 10 and the pulse never comes back below 1.1 —
+/// so neither assertion depends on how far the clock moved between `play` and
+/// the advance that reads it. A scale is the one that needs this: it
+/// interpolates *around* 1.0, and the first ~30ns of a linear ramp round to
+/// exactly `Scale::NONE`. Where the timeline never ran at all, the animation
+/// still holds the value it was built with, which is neutral, and that is what
+/// each assertion is against.
+#[test]
+fn a_translate_sequence_and_a_scale_sequence_move_the_transform() {
+    use crate::animation::Keyframes;
+
+    let plays = create_signal(0u32);
+    let mut h = H::new(
+        container().layout(Flex::row()).child(
+            box_of(50.0, 50.0).keyframes_translate(
+                Keyframes::new(200.0)
+                    .at(0.0, Translate::new(10.0, 0.0))
+                    .at(0.5, Translate::new(30.0, 0.0))
+                    .at(1.0, Translate::new(10.0, 0.0)),
+                plays,
+            ),
+        ),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+    plays.set(1);
+    let played = played_transform(&mut h).tx();
+    assert!(
+        played > 5.0,
+        "a displacement sequence has to reach the paint, not only the job \
+         queue, got {played}"
+    );
+
+    let plays = create_signal(0u32);
+    let mut h = H::new(
+        container().layout(Flex::row()).child(
+            box_of(50.0, 50.0).keyframes_scale(
+                Keyframes::new(200.0)
+                    .at(0.0, Scale::uniform(1.1))
+                    .at(0.5, Scale::uniform(1.4))
+                    .at(1.0, Scale::uniform(1.1)),
+                plays,
+            ),
+        ),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+    plays.set(1);
+    let played = played_transform(&mut h).a();
+    assert!(played > 1.05, "and so does a pulse, got {played}");
+}
+
 // ---------------------------------------------------------------------------
 // Focus, now that it is stored state
 // ---------------------------------------------------------------------------
