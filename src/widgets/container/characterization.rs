@@ -235,6 +235,32 @@ fn a_scaling_state_layer_declares_only_a_scale() {
     assert!(!declared.rotate, "or a rotate");
 }
 
+/// And the other two mirrors, because `moves_anything` answers for the three
+/// components in a list of its own: one that named the wrong field would put a
+/// container back on the slow path, or leave it on the fast one while a layer
+/// moved it.
+#[test]
+fn a_translating_or_rotating_layer_declares_only_its_own_component() {
+    let declares = |c: &Container| {
+        c.interaction
+            .as_ref()
+            .map(|ix| ix.declares_transform)
+            .unwrap_or_default()
+    };
+
+    let translating =
+        declares(&container().when_hovered(|s| s.translate(Translate::new(0.0, -2.0))));
+    assert!(translating.translate, "the hovered layer names a translate");
+    assert!(
+        !translating.rotate && !translating.scale,
+        "and nothing else"
+    );
+
+    let rotating = declares(&container().when_pressed(|s| s.rotate(2.0)));
+    assert!(rotating.rotate, "the pressed layer names a rotate");
+    assert!(!rotating.translate && !rotating.scale, "and nothing else");
+}
+
 #[test]
 fn content_sizing_is_child_plus_padding() {
     let mut h = H::new(container().padding(8.0).child(box_of(40.0, 20.0)));
@@ -851,6 +877,75 @@ fn a_border_width_animation_counts_as_movable_by_a_state_layer() {
     assert!(
         !plain.has_animated_state_properties(),
         "with nothing animated, a plain repaint is the whole job"
+    );
+}
+
+/// The same question for the three transform components, which answer it from
+/// a list of their own.
+#[test]
+fn a_state_layer_moving_an_animated_transform_counts_as_movable() {
+    let t = || Transition::new(80.0, TimingFunction::Linear);
+
+    assert!(
+        container()
+            .animate_translate(t())
+            .when_hovered(|s| s.translate(Translate::new(0.0, -2.0)))
+            .has_animated_state_properties(),
+        "hovering moves the translate, so it needs an Animation job"
+    );
+    assert!(
+        container()
+            .animate_rotate(t())
+            .when_hovered(|s| s.rotate(2.0))
+            .has_animated_state_properties(),
+        "and a rotate"
+    );
+    assert!(
+        container()
+            .animate_scale(t())
+            .when_pressed(|s| s.scale(0.98))
+            .has_animated_state_properties(),
+        "and a scale — the layer on every button there is"
+    );
+    assert!(
+        !container()
+            .when_pressed(|s| s.scale(0.98))
+            .has_animated_state_properties(),
+        "and with nothing animated, a plain repaint is the whole job"
+    );
+}
+
+/// Every animated transform component holds a copy of signal-derived state, so
+/// every one of them needs the paint-time target re-sync. Width does not: its
+/// target follows the measured content and is recomputed at each layout.
+///
+/// Asked of the predicate rather than through a moving container, for the
+/// reason the border-width test above gives and one more of its own.
+/// `seed_animations` subscribes to the *condition* of a branching closure at
+/// the first layout, so flipping that condition queues an Animation job by that
+/// route and the container converges even with the re-sync gone. The
+/// behavioural route cannot see this omission; the predicate can.
+#[test]
+fn each_animated_transform_component_is_a_signal_animated_prop() {
+    let t = || Transition::new(80.0, TimingFunction::Linear);
+
+    assert!(
+        container()
+            .animate_translate(t())
+            .has_signal_animated_props(),
+        "a translate animation mirrors a signal, so it re-syncs at paint"
+    );
+    assert!(
+        container().animate_rotate(t()).has_signal_animated_props(),
+        "and a rotate"
+    );
+    assert!(
+        container().animate_scale(t()).has_signal_animated_props(),
+        "and a scale"
+    );
+    assert!(
+        !container().animate_width(t()).has_signal_animated_props(),
+        "a width follows the content it measured, and is retargeted at layout"
     );
 }
 
