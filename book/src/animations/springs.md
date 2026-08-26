@@ -99,7 +99,7 @@ let expanded = create_signal(false);
 
 container()
     .width(move || at_least(if expanded.get() { 400.0 } else { 200.0 }))
-    .animate_width(Transition::spring(SpringConfig::SMOOTH))
+    .animate_width(Transition::spring(SpringConfig::GENTLE))
     .on_click(move || expanded.update(|e| *e = !*e))
 ```
 
@@ -122,7 +122,7 @@ Use different transition types for different properties:
 container()
     // Spring for physical properties
     .animate_rotate(Transition::spring(SpringConfig::BOUNCY))
-    .animate_width(Transition::spring(SpringConfig::SMOOTH))
+    .animate_width(Transition::spring(SpringConfig::GENTLE))
 
     // Duration for color properties
     .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
@@ -206,7 +206,8 @@ pub struct SpringConfig {
 
 impl SpringConfig {
     pub const DEFAULT: SpringConfig;
-    pub const SMOOTH: SpringConfig;
+    pub const GENTLE: SpringConfig;
+    pub const SNAPPY: SpringConfig;
     pub const BOUNCY: SpringConfig;
 }
 

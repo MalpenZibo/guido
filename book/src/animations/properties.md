@@ -124,7 +124,7 @@ container()
     .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
     .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))
     .animate_elevation(Transition::new(250.0, TimingFunction::EaseOut))
-    .animate_scale(Transition::spring(SpringConfig::SMOOTH))
+    .animate_scale(Transition::spring(SpringConfig::GENTLE))
 
     .when_hovered(|s| s
         .lighter(0.1)

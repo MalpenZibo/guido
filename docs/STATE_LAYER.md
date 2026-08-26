@@ -224,7 +224,7 @@ Transition::new(150.0, TimingFunction::EaseInOut)
 
 // Spring-based for physics-driven animation
 Transition::spring(SpringConfig::BOUNCY)
-Transition::spring(SpringConfig::SMOOTH)
+Transition::spring(SpringConfig::GENTLE)
 ```
 
 ## Complete Example

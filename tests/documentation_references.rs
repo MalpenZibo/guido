@@ -20,6 +20,11 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+/// Below this, a name is more likely to be a word than an identifier, and the
+/// two tests have to agree on it — otherwise raising one is a way to make a
+/// failure go away.
+const SHORTEST_NAME: usize = 3;
+
 /// Backticked words that are not, and never were, symbols in this crate:
 /// external tools, protocols, environment variables belonging to something
 /// else, and file names.
@@ -31,8 +36,6 @@ const NOT_CRATE_SYMBOLS: &[&str] = &[
     // file is named after them, or they belong to the reader's code rather
     // than the library's. Compiling the examples is what would check these,
     // and until the book compiles nothing here can.
-    "AppStateWriters",
-    "status_bar",
     "Button",
     "rotation_signal",
     "mdbook",
@@ -67,11 +70,25 @@ fn crate_source() -> String {
     read_dir_files(&repo().join("src"), "rs", &mut files);
     read_dir_files(&repo().join("guido-macros/src"), "rs", &mut files);
     read_dir_files(&repo().join("tests"), "rs", &mut files);
-    files
+    let mut text = files
         .iter()
         .filter_map(|p| std::fs::read_to_string(p).ok())
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+
+    // The documentation names examples by their file name, and an example is
+    // as real as a function: `status_bar` should resolve because
+    // `examples/status_bar.rs` is there, and stop resolving when it is not.
+    if let Ok(entries) = std::fs::read_dir(repo().join("examples")) {
+        for entry in entries.flatten() {
+            if let Some(stem) = entry.path().file_stem() {
+                text.push('\n');
+                text.push_str(&stem.to_string_lossy());
+            }
+        }
+    }
+
+    text
 }
 
 /// The identifiers a markdown file writes in backticks.
@@ -147,7 +164,7 @@ fn every_identifier_the_agent_documentation_names_still_exists() {
             // A path is only as real as its last segment: `Signal::select` is
             // wrong when `select` does not exist, whatever `Signal` is.
             let leaf = identifier.rsplit("::").next().unwrap_or(&identifier);
-            if leaf.len() < 3 {
+            if leaf.len() < SHORTEST_NAME {
                 continue;
             }
             checked += 1;
@@ -227,7 +244,7 @@ fn every_identifier_the_user_documentation_names_still_exists() {
                 continue;
             }
             let leaf = identifier.rsplit("::").next().unwrap_or(&identifier);
-            if leaf.len() < 4 {
+            if leaf.len() < SHORTEST_NAME {
                 continue;
             }
             checked += 1;

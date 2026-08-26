@@ -115,21 +115,15 @@ container()
     )
 ```
 
-It can be animated like any other container property:
+It cannot be animated. A container transitions `background`, `border_color`,
+`border_width`, `corners`, `elevation`, `width`, `height`, `padding`,
+`translate`, `rotate` and `scale`; text colour is not among them, so the
+override lands in one frame.
 
-```rust
-container()
-    
-    .control()   // the text below declares .when_hovered(|s| s.color(theme.text))
-    .animate_text_color(Transition::new(200.0, TimingFunction::EaseOut))
-    .child(text("Label").color(theme.text_weak))
-```
-
-A transition declared on two levels — an animated colour whose own base comes
-from an ancestor that is itself animating — currently retargets every frame,
-which gives a damped chase rather than a transition with its own curve. It
-converges either way; CSS instead starts the inner one once, towards the
-outer's final value.
+A transition declared on two levels — an animated value whose own base comes
+from an ancestor that is itself animating — retargets every frame, which gives
+a damped chase rather than a transition with its own curve. It converges either
+way; CSS instead starts the inner one once, towards the outer's final value.
 
 ## States Your App Owns
 
@@ -258,7 +252,7 @@ container()
     .background(Color::rgb(0.3, 0.5, 0.8))
     .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
     .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
-    .animate_scale(Transition::spring(SpringConfig::SMOOTH))
+    .animate_scale(Transition::spring(SpringConfig::GENTLE))
     .when_hovered(|s| s.lighter(0.1).border(2.0, Color::WHITE))
     .when_pressed(|s| s.darker(0.1).scale(0.98))
 ```

@@ -65,5 +65,5 @@ Good for:
 
 // Spring-based
 .animate_scale(Transition::spring(SpringConfig::BOUNCY))
-.animate_width(Transition::spring(SpringConfig::SMOOTH))
+.animate_width(Transition::spring(SpringConfig::GENTLE))
 ```

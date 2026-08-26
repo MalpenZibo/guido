@@ -4,7 +4,7 @@ Duration-based transitions animate properties over a fixed time with an easing c
 
 ## Creating Transitions
 
-```rust,ignore
+```rust
 Transition::new(duration_ms, timing)
 ```
 
