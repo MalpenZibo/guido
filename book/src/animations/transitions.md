@@ -4,12 +4,12 @@ Duration-based transitions animate properties over a fixed time with an easing c
 
 ## Creating Transitions
 
-```rust
-Transition::new(duration_ms, timing_function)
+```rust,ignore
+Transition::new(duration_ms, timing)
 ```
 
 - `duration_ms` - Animation duration in milliseconds
-- `timing_function` - Easing curve for the animation
+- `timing` - Easing curve for the animation
 
 ## Examples
 
