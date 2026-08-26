@@ -15,7 +15,8 @@ use smithay_client_toolkit::{
         Capability, SeatHandler, SeatState,
         keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers as WlModifiers, RawModifiers},
         pointer::{
-            PointerEvent, PointerEventKind, PointerHandler, cursor_shape::CursorShapeManager,
+            AxisScroll, PointerEvent, PointerEventKind, PointerHandler,
+            cursor_shape::CursorShapeManager,
         },
         touch::TouchHandler,
     },
@@ -472,74 +473,79 @@ impl PointerHandler for WaylandState {
                     source,
                     ..
                 } => {
-                    // Determine scroll source
-                    let scroll_source = match source {
-                        Some(wl_pointer::AxisSource::Wheel) => ScrollSource::Wheel,
-                        Some(wl_pointer::AxisSource::Finger) => ScrollSource::Finger,
-                        Some(wl_pointer::AxisSource::Continuous) => ScrollSource::Continuous,
-                        Some(wl_pointer::AxisSource::WheelTilt) => ScrollSource::Wheel,
-                        _ => ScrollSource::Wheel,
-                    };
-
-                    // Calculate delta in pixels.
-                    // Wheel steps by preference: value120 (wl_pointer v8+,
-                    // fractional steps from high-resolution wheels) then
-                    // legacy discrete. Touchpad/finger scroll has neither
-                    // and uses absolute (already in pixels).
-                    let wheel_steps =
-                        |scroll: &smithay_client_toolkit::seat::pointer::AxisScroll| {
-                            if scroll.value120 != 0 {
-                                scroll.value120 as f32 / 120.0
-                            } else {
-                                scroll.discrete as f32
-                            }
-                        };
-
-                    let steps_x = wheel_steps(&horizontal);
-                    let delta_x = if steps_x != 0.0 {
-                        steps_x * SCROLL_PIXELS_PER_LINE
-                    } else {
-                        horizontal.absolute as f32
-                    };
-
-                    let steps_y = wheel_steps(&vertical);
-                    let delta_y = if steps_y != 0.0 {
-                        steps_y * SCROLL_PIXELS_PER_LINE
-                    } else {
-                        vertical.absolute as f32
-                    };
-
-                    // An axis event says two things, and a guard on the delta
-                    // alone dropped the second. `axis_stop` is how the hardware
-                    // ends a continuous scroll, and it carries no delta —
-                    // because nothing moved — so it was filtered out one line
-                    // before anything could use it. It is the only unguessed
-                    // answer to when a gesture is over.
-                    let gesture_ended = horizontal.stop || vertical.stop;
-                    let scrolled = delta_x != 0.0 || delta_y != 0.0;
-
-                    if (scrolled || gesture_ended)
-                        && let Some(events) = target_events
-                    {
-                        if scrolled {
-                            events.push(Event::Scroll {
-                                x: self.input.pointer_x,
-                                y: self.input.pointer_y,
-                                delta_x,
-                                delta_y,
-                                source: scroll_source,
-                            });
-                        }
-                        if gesture_ended {
-                            events.push(Event::ScrollEnd {
-                                x: self.input.pointer_x,
-                                y: self.input.pointer_y,
-                            });
-                        }
+                    if let Some(events) = target_events {
+                        translate_axis(
+                            events,
+                            source,
+                            &horizontal,
+                            &vertical,
+                            self.input.pointer_x,
+                            self.input.pointer_y,
+                        );
                     }
                 }
             }
         }
+    }
+}
+
+/// What an axis message asks a widget to do, given where the pointer is.
+///
+/// Free rather than inline, for the same reason `keysym_to_key` is: a callback
+/// that needs a compositor to run is a callback nothing checks, and this is
+/// where the protocol's only statement about a gesture *ending* is read.
+fn translate_axis(
+    events: &mut Vec<Event>,
+    source: Option<wl_pointer::AxisSource>,
+    horizontal: &AxisScroll,
+    vertical: &AxisScroll,
+    x: f32,
+    y: f32,
+) {
+    let scroll_source = match source {
+        Some(wl_pointer::AxisSource::Wheel) => ScrollSource::Wheel,
+        Some(wl_pointer::AxisSource::Finger) => ScrollSource::Finger,
+        Some(wl_pointer::AxisSource::Continuous) => ScrollSource::Continuous,
+        Some(wl_pointer::AxisSource::WheelTilt) => ScrollSource::Wheel,
+        _ => ScrollSource::Wheel,
+    };
+
+    // Wheel steps by preference: value120 (wl_pointer v8+, fractional steps
+    // from high-resolution wheels) then legacy discrete. Touchpad and finger
+    // scroll have neither and report absolute pixels, which pass through —
+    // multiplying those by a line height scrolls a page for a fingertip.
+    let pixels = |scroll: &AxisScroll| {
+        let steps = if scroll.value120 != 0 {
+            scroll.value120 as f32 / 120.0
+        } else {
+            scroll.discrete as f32
+        };
+        if steps != 0.0 {
+            steps * SCROLL_PIXELS_PER_LINE
+        } else {
+            scroll.absolute as f32
+        }
+    };
+
+    let delta_x = pixels(horizontal);
+    let delta_y = pixels(vertical);
+
+    // An axis message says two things, and a guard on the delta alone dropped
+    // the second. `axis_stop` is how the hardware ends a continuous scroll, and
+    // it carries no delta — because nothing moved — so it was filtered out one
+    // line before anything could use it. It is the only unguessed answer to
+    // when a gesture is over.
+    if delta_x != 0.0 || delta_y != 0.0 {
+        events.push(Event::Scroll {
+            x,
+            y,
+            delta_x,
+            delta_y,
+            source: scroll_source,
+        });
+    }
+    if horizontal.stop || vertical.stop {
+        events.push(Event::ScrollEnd { x, y });
     }
 }
 
@@ -835,5 +841,214 @@ mod tests {
     fn plain_typing_uses_the_composed_text() {
         let e = Keysym::new(0x65); // 'e', composed into 'é'
         assert_eq!(keysym_to_key(e, Some("é"), true), Some(Key::Char('é')));
+    }
+
+    /// The pointer position the events carry, so a test can tell it apart
+    /// from a delta.
+    const PX: f32 = 10.0;
+    const PY: f32 = 20.0;
+
+    fn axis(
+        source: Option<wl_pointer::AxisSource>,
+        horizontal: AxisScroll,
+        vertical: AxisScroll,
+    ) -> Vec<Event> {
+        let mut events = Vec::new();
+        translate_axis(&mut events, source, &horizontal, &vertical, PX, PY);
+        events
+    }
+
+    fn nothing() -> AxisScroll {
+        AxisScroll::default()
+    }
+
+    fn wheel(value120: i32) -> AxisScroll {
+        AxisScroll {
+            value120,
+            ..Default::default()
+        }
+    }
+
+    fn finger(absolute: f64) -> AxisScroll {
+        AxisScroll {
+            absolute,
+            ..Default::default()
+        }
+    }
+
+    fn stopped() -> AxisScroll {
+        AxisScroll {
+            stop: true,
+            ..Default::default()
+        }
+    }
+
+    /// The case #205 rests on. `axis_stop` carries no delta — nothing moved —
+    /// so a guard on the delta alone swallows the only unguessed answer to
+    /// when a gesture is over.
+    #[test]
+    fn a_stop_with_no_delta_is_an_end_and_nothing_else() {
+        let events = axis(Some(wl_pointer::AxisSource::Finger), nothing(), stopped());
+        assert_eq!(events.len(), 1, "one event, got {events:?}");
+        let Event::ScrollEnd { x, y } = events[0] else {
+            panic!("a stop is a ScrollEnd, got {:?}", events[0]);
+        };
+        assert_eq!((x, y), (PX, PY), "and it carries the pointer, not a delta");
+
+        // Either axis alone says it: a vertical gesture ends on the vertical
+        // axis, a horizontal one on the horizontal.
+        let events = axis(Some(wl_pointer::AxisSource::Finger), stopped(), nothing());
+        assert!(
+            matches!(events.as_slice(), [Event::ScrollEnd { .. }]),
+            "the horizontal axis ends a gesture too, got {events:?}"
+        );
+    }
+
+    /// One logical step is one line, and a high-resolution wheel reports it in
+    /// hundred-and-twentieths so half a step is half a line.
+    #[test]
+    fn a_wheel_step_is_a_line_and_a_fraction_of_one_is_a_fraction_of_a_line() {
+        let events = axis(Some(wl_pointer::AxisSource::Wheel), nothing(), wheel(120));
+        let [
+            Event::Scroll {
+                delta_y, source, ..
+            },
+        ] = events.as_slice()
+        else {
+            panic!("a wheel step scrolls, got {events:?}");
+        };
+        assert_eq!(*delta_y, SCROLL_PIXELS_PER_LINE);
+        assert_eq!(*source, ScrollSource::Wheel);
+
+        let events = axis(Some(wl_pointer::AxisSource::Wheel), nothing(), wheel(60));
+        let [Event::Scroll { delta_y, .. }] = events.as_slice() else {
+            panic!("half a step scrolls, got {events:?}");
+        };
+        assert_eq!(*delta_y, SCROLL_PIXELS_PER_LINE / 2.0);
+    }
+
+    /// A compositor that sends both sends the legacy field for the benefit of
+    /// clients that cannot read the other one. Reading `discrete` in
+    /// preference would round a half step down to nothing.
+    #[test]
+    fn value120_answers_before_discrete() {
+        let both = AxisScroll {
+            value120: 60,
+            discrete: 1,
+            ..Default::default()
+        };
+        let events = axis(Some(wl_pointer::AxisSource::Wheel), nothing(), both);
+        let [Event::Scroll { delta_y, .. }] = events.as_slice() else {
+            panic!("expected one scroll, got {events:?}");
+        };
+        assert_eq!(
+            *delta_y,
+            SCROLL_PIXELS_PER_LINE / 2.0,
+            "the high-resolution field decides"
+        );
+    }
+
+    /// A touchpad has neither step field: it already speaks in pixels, and
+    /// multiplying those by a line height would scroll a page for a fingertip.
+    #[test]
+    fn a_touchpad_scrolls_the_pixels_it_reports() {
+        let events = axis(Some(wl_pointer::AxisSource::Finger), nothing(), finger(7.5));
+        let [
+            Event::Scroll {
+                x,
+                y,
+                delta_y,
+                source,
+                ..
+            },
+        ] = events.as_slice()
+        else {
+            panic!("expected one scroll, got {events:?}");
+        };
+        assert_eq!(*delta_y, 7.5, "pixels pass through");
+        assert_eq!(*source, ScrollSource::Finger);
+        // Where the scroll happened, not how far it went: `hit.contains(x, y)`
+        // in `interaction.rs` is what decides whose scroll this is.
+        assert_eq!((*x, *y), (PX, PY), "and it carries the pointer");
+    }
+
+    /// The last message of a flick carries both: the final movement and the
+    /// lifted finger. The movement has to arrive first, or the momentum is
+    /// computed from a sample the gesture had not yet made.
+    #[test]
+    fn a_gesture_that_moves_and_stops_says_both_in_that_order() {
+        let last = AxisScroll {
+            absolute: 12.0,
+            stop: true,
+            ..Default::default()
+        };
+        let events = axis(Some(wl_pointer::AxisSource::Finger), nothing(), last);
+        assert!(
+            matches!(
+                events.as_slice(),
+                [Event::Scroll { .. }, Event::ScrollEnd { .. }]
+            ),
+            "the movement, then the end, got {events:?}"
+        );
+    }
+
+    /// An axis message that says neither is a frame boundary, not an event.
+    /// Pushing for it would wake the surface for nothing.
+    #[test]
+    fn an_axis_message_with_neither_a_delta_nor_a_stop_says_nothing() {
+        let events = axis(Some(wl_pointer::AxisSource::Wheel), nothing(), nothing());
+        assert!(events.is_empty(), "got {events:?}");
+    }
+
+    /// A continuous source is neither of the others: it reports pixels like a
+    /// finger, and since #248 it coasts when the gesture ends where a wheel
+    /// does not. Folding it into either one changes what happens on release.
+    #[test]
+    fn a_continuous_source_stays_continuous() {
+        let events = axis(
+            Some(wl_pointer::AxisSource::Continuous),
+            nothing(),
+            finger(5.0),
+        );
+        let [
+            Event::Scroll {
+                delta_y, source, ..
+            },
+        ] = events.as_slice()
+        else {
+            panic!("expected one scroll, got {events:?}");
+        };
+        assert_eq!(*delta_y, 5.0);
+        assert_eq!(*source, ScrollSource::Continuous);
+    }
+
+    /// A tilted wheel is still a wheel — it steps — and a source the protocol
+    /// grows later is treated as one until somebody teaches it otherwise.
+    #[test]
+    fn a_tilted_wheel_is_a_wheel_and_so_is_an_unnamed_source() {
+        let events = axis(
+            Some(wl_pointer::AxisSource::WheelTilt),
+            wheel(120),
+            nothing(),
+        );
+        let [
+            Event::Scroll {
+                delta_x, source, ..
+            },
+        ] = events.as_slice()
+        else {
+            panic!("expected one scroll, got {events:?}");
+        };
+        assert_eq!(*source, ScrollSource::Wheel);
+        assert_eq!(
+            *delta_x, SCROLL_PIXELS_PER_LINE,
+            "and a tilt steps sideways by a line"
+        );
+
+        let events = axis(None, wheel(120), nothing());
+        let [Event::Scroll { source, .. }] = events.as_slice() else {
+            panic!("expected one scroll, got {events:?}");
+        };
+        assert_eq!(*source, ScrollSource::Wheel);
     }
 }
