@@ -51,7 +51,9 @@ jobs:
             failing test comes before the fix, and a snapshot or golden is
             never re-blessed to make a test pass.
 
-            Run the harness before you finish:
+            Have the diff read by the reviewer subagent once it is committed
+            and before the pull request exists, and run the harness before you
+            finish:
               cargo fmt --all
               cargo clippy --all-targets --all-features -- -D warnings
               cargo test --all-features

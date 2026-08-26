@@ -148,10 +148,15 @@ themselves when the task touches them; you do not need to read them up front.
 3. **The failing test, then the fix.** In that order, so the test is known to
    test something.
 4. **Run the harness**, all of it, including the goldens.
-5. **Open the pull request** with the template filled in: what moved, what
-   proves it, what you looked at by hand.
+5. **Have it read by something that did not write it.** The `reviewer` subagent,
+   once the change is committed and before the pull request exists — its
+   criteria ask about the commits, so they need the commits. Whoever wrote a
+   change is the worst judge of whether it grew, and an architectural finding
+   here stops the work the same way a `needs-design` label stops it at step 1.
+6. **Open the pull request** with the template filled in: what moved, what
+   proves it, what the review found, what you looked at by hand.
 
-`/implement <issue>` does all five.
+`/implement <issue>` does all six.
 
 ## Commits and pull requests
 
