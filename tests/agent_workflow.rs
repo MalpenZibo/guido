@@ -89,6 +89,30 @@ fn backticked(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// A file's prose with its line wrapping removed, so that a sentence pinned by
+/// this file can be re-wrapped by whoever edits the document. Pinning a literal
+/// against wrapped markdown fails the moment a word is added ahead of it, which
+/// is a build failure for a reason nobody meant.
+fn unwrapped(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// From `needle` to the next `until`, or to the end. Two sections here are found
+/// by where they start rather than by index: a `## ` heading runs to the next
+/// heading, a numbered item runs to the blank line after it.
+fn section_from<'a>(text: &'a str, needle: &str, until: &str) -> &'a str {
+    let start = text
+        .find(needle)
+        .unwrap_or_else(|| panic!("this document has no `{needle}`"));
+    let rest = &text[start..];
+    // Searched past the needle, so a delimiter the needle itself begins with
+    // cannot end the section on its own first character.
+    match rest[needle.len()..].find(until) {
+        Some(offset) => &rest[..needle.len() + offset],
+        None => rest,
+    }
+}
+
 /// "six" -> 6, for the counts that are written as words.
 fn number_word(word: &str) -> Option<usize> {
     const WORDS: &[&str] = &[
@@ -150,16 +174,9 @@ fn implement_numbers_its_steps_in_order() {
 #[test]
 fn agents_md_counts_the_steps_it_lists() {
     let text = read("AGENTS.md");
-    let start = text
-        .find("## Working on a change")
-        .expect("AGENTS.md has no `Working on a change` section");
     // To the next heading, not to the end of the file: a numbered list further
     // down the document is not this list.
-    let rest = &text[start..];
-    let section = match rest[3..].find("\n## ") {
-        Some(offset) => &rest[..offset + 3],
-        None => rest,
-    };
+    let section = section_from(&text, "## Working on a change", "\n## ");
     let steps = numbered_items(section);
     assert_contiguous(&steps, "AGENTS.md");
 
@@ -434,8 +451,8 @@ fn the_reviewer_and_the_command_use_the_same_levels() {
 /// contract asks for it and the issue has somewhere to put the answer.
 #[test]
 fn researching_a_design_decision_is_asked_for_where_the_alternatives_are_written() {
-    let agents = read("AGENTS.md");
-    let spec = read(".claude/commands/spec.md");
+    let agents = unwrapped(&read("AGENTS.md"));
+    let spec = unwrapped(&read(".claude/commands/spec.md"));
 
     const RULE: &str = "A design decision that is not obvious is researched before it is proposed.";
     assert!(
