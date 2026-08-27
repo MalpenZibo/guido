@@ -1410,7 +1410,7 @@ impl Widget for Container {
             let has_scroll_velocity =
                 sd.scroll_state.velocity_x.abs() > 0.5 || sd.scroll_state.velocity_y.abs() > 0.5;
             if has_scroll_velocity {
-                let scroll_animating = sd.scroll_state.advance_momentum();
+                let scroll_animating = sd.scroll_state.advance_momentum(now);
                 if scroll_animating {
                     // Kinetic scroll is paint-only, request animation continuation with paint
                     request_job(id, JobRequest::Animation(RequiredJob::Paint));
@@ -1621,7 +1621,8 @@ impl Widget for Container {
             return response;
         }
 
-        self.track_pointer(id, &hit, &local_event);
+        let at = tree.event_instant();
+        self.track_pointer(id, &hit, &local_event, at);
 
         // Children are positioned relative to our origin (and to the scroll
         // offset, when we scroll), so their events have to be too.
@@ -1659,7 +1660,7 @@ impl Widget for Container {
             }
         }
 
-        self.handle_own_event(id, &hit, event, &local_event)
+        self.handle_own_event(id, &hit, event, &local_event, at)
     }
 
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {

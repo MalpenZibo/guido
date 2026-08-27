@@ -353,7 +353,16 @@ impl ScrollState {
     /// momentum belongs to the gesture that produced it: a finger resting
     /// before it lifts is not throwing anything, so a velocity that old is
     /// spent rather than released.
-    pub fn end_gesture(&mut self, since_last_sample_ms: Option<f32>) {
+    /// The gesture is over.
+    ///
+    /// The gap since the last sample is computed here rather than passed in:
+    /// `last_scroll_time` is this state's own field, and a caller measuring it
+    /// with a second clock is how the sample path and the end path came to
+    /// disagree about what time it was inside one gesture.
+    pub fn end_gesture(&mut self, at: std::time::Instant) {
+        let since_last_sample_ms = self
+            .last_scroll_time
+            .map(|t| at.duration_since(t).as_secs_f32() * 1000.0);
         /// Longer than this between the last movement and the lift, and the
         /// gesture had already stopped.
         const GESTURE_STALE_MS: f32 = 100.0;
@@ -364,7 +373,7 @@ impl ScrollState {
         }
         self.gesture_ended = true;
         self.gesture_samples = 0;
-        self.momentum_since = Some(std::time::Instant::now());
+        self.momentum_since = Some(at);
     }
 
     /// Discard a momentum that stopped being advanced `idle_ms` ago.
@@ -395,9 +404,9 @@ impl ScrollState {
     }
 
     /// How long since the momentum was last advanced, if one is due.
-    pub fn momentum_idle_ms(&self) -> Option<f32> {
+    pub fn momentum_idle_ms(&self, now: std::time::Instant) -> Option<f32> {
         self.momentum_since
-            .map(|t| t.elapsed().as_secs_f32() * 1000.0)
+            .map(|t| now.duration_since(t).as_secs_f32() * 1000.0)
     }
 
     /// Whether the momentum may run: the gesture is over and it left a speed.
@@ -417,13 +426,13 @@ impl ScrollState {
     }
 
     /// Advance kinetic scrolling animation, returns true if still animating
-    pub fn advance_momentum(&mut self) -> bool {
+    pub fn advance_momentum(&mut self, now: std::time::Instant) -> bool {
         const FRICTION: f32 = 0.92;
         const VELOCITY_THRESHOLD: f32 = 0.5;
 
         // A motion nobody has advanced for long enough is not this motion any
         // more, whatever velocity is left of it.
-        if let Some(idle_ms) = self.momentum_idle_ms() {
+        if let Some(idle_ms) = self.momentum_idle_ms(now) {
             self.expire_stale_momentum(idle_ms);
         }
 
@@ -434,7 +443,7 @@ impl ScrollState {
             return false;
         }
 
-        self.momentum_since = Some(std::time::Instant::now());
+        self.momentum_since = Some(now);
 
         let mut animating = false;
 
@@ -703,6 +712,15 @@ impl ScrollState {
 
 #[cfg(test)]
 mod tests {
+
+    /// Lift the finger `gap_ms` after the last sample, which is what the
+    /// production path records in `last_scroll_time` before ending a gesture.
+    fn end_gesture_after(state: &mut ScrollState, gap_ms: f32) {
+        let at = std::time::Instant::now();
+        state.last_scroll_time =
+            Some(at - std::time::Duration::from_micros((gap_ms * 1000.0) as u64));
+        state.end_gesture(at);
+    }
     use super::*;
 
     /// A scroller with room to fling in.
@@ -720,14 +738,14 @@ mod tests {
             let dt = (i > 0).then_some(dt_ms);
             state.record_gesture_sample(0.0, delta, dt);
         }
-        state.end_gesture(Some(dt_ms));
+        end_gesture_after(state, dt_ms);
     }
 
     /// How far the momentum carries the content once the finger has lifted.
     fn coast(state: &mut ScrollState) -> f32 {
         let start = state.offset_y;
         for _ in 0..600 {
-            if !state.advance_momentum() {
+            if !state.advance_momentum(std::time::Instant::now()) {
                 break;
             }
         }
@@ -766,7 +784,7 @@ mod tests {
         assert!(state.velocity_y.abs() > 0.5, "the gesture built a speed");
 
         // ... and then the finger sat still for a while before lifting.
-        state.end_gesture(Some(400.0));
+        end_gesture_after(&mut state, 400.0);
 
         assert!(!state.should_apply_momentum());
         assert_eq!(coast(&mut state), 0.0);
@@ -784,7 +802,7 @@ mod tests {
         assert!(state.velocity_y.abs() > 0.5, "the gesture built a speed");
         assert!(!state.should_apply_momentum(), "but it is not due");
         assert!(
-            !state.advance_momentum(),
+            !state.advance_momentum(std::time::Instant::now()),
             "and nothing is animating, so the loop is not kept awake for it"
         );
         assert_eq!(coast(&mut state), 0.0);
@@ -799,7 +817,7 @@ mod tests {
         assert!(state.should_apply_momentum(), "the flick is due");
 
         // A few frames run, and then nothing does.
-        state.advance_momentum();
+        state.advance_momentum(std::time::Instant::now());
         assert!(state.should_apply_momentum(), "still due between frames");
 
         state.expire_stale_momentum(400.0);
@@ -842,7 +860,7 @@ mod tests {
         state.record_gesture_sample(0.0, 30.0, None);
 
         assert_eq!(state.velocity_y, 0.0);
-        state.end_gesture(Some(8.0));
+        end_gesture_after(&mut state, 8.0);
         assert!(!state.should_apply_momentum());
     }
 

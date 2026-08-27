@@ -913,6 +913,7 @@ impl Container {
         delta_x: f32,
         delta_y: f32,
         source: ScrollSource,
+        at: std::time::Instant,
     ) -> bool {
         let axis = self.scroll_axis;
         let sd = self.scroll_mut();
@@ -940,11 +941,10 @@ impl Container {
         // Only a continuous source has a gesture to measure. Both of them do,
         // and both end with an `axis_stop`; a wheel has neither.
         if source.is_continuous() {
-            let now = std::time::Instant::now();
             let dt_ms = sd
                 .scroll_state
                 .last_scroll_time
-                .map(|t| now.duration_since(t).as_secs_f32() * 1000.0);
+                .map(|t| at.duration_since(t).as_secs_f32() * 1000.0);
             let (sample_x, sample_y) = match axis {
                 ScrollAxis::Vertical => (0.0, delta_y),
                 ScrollAxis::Horizontal => (delta_x, 0.0),
@@ -953,7 +953,7 @@ impl Container {
             };
             sd.scroll_state
                 .record_gesture_sample(sample_x, sample_y, dt_ms);
-            sd.scroll_state.last_scroll_time = Some(now);
+            sd.scroll_state.last_scroll_time = Some(at);
         }
 
         old_x != sd.scroll_state.offset_x || old_y != sd.scroll_state.offset_y

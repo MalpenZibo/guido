@@ -98,7 +98,13 @@ pub struct WaylandSurfaceState {
     /// would outpace it. Cleared by the frame-done handler.
     pub frame_callback_pending: bool,
     /// Pending events for this surface
-    pub pending_events: Vec<Event>,
+    /// Events waiting for the next frame, each with when it happened.
+    ///
+    /// The instant travels with the event because the two are separated in
+    /// time: an event is queued when the compositor sends it and read when the
+    /// frame runs, and the gap between those is exactly what a handler reading
+    /// the clock for itself would mistake for the event's own time.
+    pub pending_events: Vec<(std::time::Instant, Event)>,
     /// Blur proxy for this surface, created lazily on first use (asking the
     /// manager twice for the same surface is a protocol error).
     pub(super) bg_effect_surface: Option<ExtBackgroundEffectSurfaceV1>,
@@ -143,7 +149,7 @@ impl WaylandSurfaceState {
     }
 
     /// Take all pending events (drains the queue)
-    pub fn take_events(&mut self) -> Vec<Event> {
+    pub fn take_events(&mut self) -> Vec<(std::time::Instant, Event)> {
         std::mem::take(&mut self.pending_events)
     }
 }

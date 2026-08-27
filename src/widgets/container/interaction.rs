@@ -106,7 +106,13 @@ impl Container {
     /// Update hover state and fire the pointer-move callback, before children
     /// get the event: a child that handles a `MouseMove` must not stop its
     /// ancestors from tracking their own hover.
-    pub(super) fn track_pointer(&mut self, id: WidgetId, hit: &HitContext, event: &Event) {
+    pub(super) fn track_pointer(
+        &mut self,
+        id: WidgetId,
+        hit: &HitContext,
+        event: &Event,
+        at: Instant,
+    ) {
         let has_animated = self.has_animated_state_properties();
         // Read before the mutable borrow: cancelling a ripple below needs it.
         let ripple_config = self.interaction.as_ref().and_then(|ix| ix.ripple_config());
@@ -153,7 +159,7 @@ impl Container {
                     && ix.ripple.is_active()
                     && let Some(ref config) = ripple_config
                 {
-                    ix.ripple.cancel(config, Instant::now());
+                    ix.ripple.cancel(config, at);
                     request_job(id, JobRequest::Animation(RequiredJob::Paint));
                 }
 
@@ -182,6 +188,7 @@ impl Container {
         hit: &HitContext,
         event: &Event,
         local: &Event,
+        at: Instant,
     ) -> EventResponse {
         match local {
             // Hover was tracked before the children ran. Returning Ignored
@@ -220,7 +227,7 @@ impl Container {
                     if has_ripple {
                         let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
                         let (local_x, local_y) = hit.local(screen_x, screen_y);
-                        ix.ripple.start(local_x, local_y, Instant::now());
+                        ix.ripple.start(local_x, local_y, at);
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
@@ -259,11 +266,10 @@ impl Container {
                     if ix.ripple.is_active()
                         && let Some(config) = ix.ripple_config()
                     {
-                        let now = Instant::now();
                         if hit.contains(*x, *y) {
-                            ix.ripple.release(&config, now);
+                            ix.ripple.release(&config, at);
                         } else {
-                            ix.ripple.cancel(&config, now);
+                            ix.ripple.cancel(&config, at);
                         }
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
@@ -313,7 +319,7 @@ impl Container {
                     if ix.ripple.is_active()
                         && let Some(config) = ix.ripple_config()
                     {
-                        ix.ripple.cancel(&config, Instant::now());
+                        ix.ripple.cancel(&config, at);
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
@@ -336,7 +342,7 @@ impl Container {
                     // Our own scrolling consumes the event first; the callback
                     // only sees what scrolling did not take.
                     if self.scroll_axis != ScrollAxis::None
-                        && self.apply_scroll(*delta_x, *delta_y, *source)
+                        && self.apply_scroll(*delta_x, *delta_y, *source, at)
                     {
                         // A paint, and only a paint. A sample means the finger
                         // is still down, so there is no momentum for an
@@ -369,13 +375,8 @@ impl Container {
             // frame happens along next.
             Event::ScrollEnd { x, y } => {
                 if self.scroll_axis != ScrollAxis::None && hit.contains(*x, *y) {
-                    let since_ms = self
-                        .scroll()
-                        .scroll_state
-                        .last_scroll_time
-                        .map(|t| t.elapsed().as_secs_f32() * 1000.0);
                     let sd = self.scroll_mut();
-                    sd.scroll_state.end_gesture(since_ms);
+                    sd.scroll_state.end_gesture(at);
                     if sd.scroll_state.should_apply_momentum() {
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }

@@ -632,18 +632,22 @@ pub fn cache_paint_results(tree: &mut Tree, node: &std::rc::Rc<renderer::RenderN
 /// the inbox, and distributing them here is what keeps hover from lagging a
 /// frame behind the pointer: the drain later in this same frame picks them up.
 fn dispatch_events(
-    events: &[widgets::Event],
+    events: &[(std::time::Instant, widgets::Event)],
     root: WidgetId,
     tree: &mut Tree,
     active_roots: &rustc_hash::FxHashSet<WidgetId>,
 ) {
-    for event in events {
+    for (at, event) in events {
+        // Declared per event, not per pass: they are delivered one at a time
+        // and each has its own moment.
+        tree.set_event_instant(Some(*at));
         reactive::diagnostics::snapshot_zone(|| {
             tree.with_widget_mut(root, |widget, id, tree| {
                 widget.event(tree, id, event);
             });
         });
     }
+    tree.set_event_instant(None);
 
     jobs::distribute_jobs(tree, active_roots);
 }
@@ -720,7 +724,8 @@ fn run_jobs(
 /// need mutably — and nothing the compositor sends can change it before this
 /// frame ends anyway.
 struct Frame {
-    events: Vec<widgets::Event>,
+    /// What arrived for this surface, each with when it happened.
+    events: Vec<(std::time::Instant, widgets::Event)>,
     scale_factor: f32,
     width: u32,
     height: u32,
