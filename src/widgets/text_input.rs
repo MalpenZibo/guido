@@ -83,7 +83,7 @@ enum EditType {
 
 /// Undo/redo history manager
 struct History {
-    /// Stack of past states (most recent edit.at end)
+    /// Stack of past states (most recent at end)
     undo_stack: VecDeque<HistoryEntry>,
     /// Stack of undone states for redo
     redo_stack: VecDeque<HistoryEntry>,
@@ -177,7 +177,7 @@ pub struct Selection {
 }
 
 impl Selection {
-    /// Create a new selection with cursor edit.at given position (no selection)
+    /// Create a new selection with cursor at given position (no selection)
     pub fn new(pos: usize) -> Self {
         Self {
             anchor: pos,
@@ -217,7 +217,7 @@ pub struct TextInput {
     // Measurement cache (avoid repeated text shaping in paint)
     /// Total width of display text
     cached_text_width: f32,
-    /// Cumulative width edit.at each character index (length = char_count + 1)
+    /// Cumulative width at each character index (length = char_count + 1)
     /// cached_glyph_positions[i] = width of text[0..i]
     cached_glyph_positions: Vec<f32>,
     /// Whether measurements need to be recalculated
@@ -233,7 +233,7 @@ pub struct TextInput {
     is_password: bool,
     mask_char: char,
 
-    /// Whether a caret is drawn edit.at all. Off costs nothing: no caret, no blink,
+    /// Whether a caret is drawn at all. Off costs nothing: no caret, no blink,
     /// nothing to wake the loop for.
     caret: bool,
 
@@ -398,7 +398,7 @@ impl TextInput {
 
     /// Text to show while the field is empty.
     ///
-    /// Drawn in the placeholder colour — this field's text colour edit.at reduced
+    /// Drawn in the placeholder colour — this field's text colour at reduced
     /// alpha unless it declares
     /// [`placeholder_color`](crate::widgets::InputStyled::placeholder_color) — and
     /// never masked, since it is a label rather than a value: a password field
@@ -414,12 +414,12 @@ impl TextInput {
     /// position, drag to select, the keyboard.
     ///
     /// For a field where the caret says nothing: a masked one, where every
-    /// character looks the same and you are always edit.at the end. swaylock draws no
+    /// character looks the same and you are always at the end. swaylock draws no
     /// caret for that reason.
     ///
     /// It is also the cheapest field there is. A blinking caret is the one thing
     /// a still screen redraws on its own, twice a second, forever; without it an
-    /// idle surface wakes the loop for nothing edit.at all.
+    /// idle surface wakes the loop for nothing at all.
     pub fn no_caret(mut self) -> Self {
         self.caret = false;
         self
@@ -432,7 +432,7 @@ impl TextInput {
     /// the wrong answer, and where there is no cursor to click *with* on a
     /// surface that has no pointer.
     ///
-    /// The offer is made once, edit.at the input's first layout, and only when no
+    /// The offer is made once, at the input's first layout, and only when no
     /// widget holds focus. Both halves matter:
     ///
     /// - *once*, so a relayout does not drag focus back from wherever the user
@@ -513,7 +513,7 @@ impl TextInput {
         self.measurements_dirty = false;
     }
 
-    /// Get cached width edit.at a character index (0 to char_count inclusive)
+    /// Get cached width at a character index (0 to char_count inclusive)
     fn cached_width_at_char(&self, char_index: usize) -> f32 {
         self.cached_glyph_positions
             .get(char_index)
@@ -587,10 +587,10 @@ impl TextInput {
 
     /// Advance the blink, and ask to be woken when it next changes.
     ///
-    /// Returns whether the caret is drawn edit.at all.
+    /// Returns whether the caret is drawn at all.
     ///
     /// The wake is *scheduled*, not animated. Asking for an animation frame —
-    /// which is what this did — pins the loop edit.at 60 fps for a square wave that
+    /// which is what this did — pins the loop at 60 fps for a square wave that
     /// changes twice a second, so 113 frames out of 114 repaint the same pixels.
     /// A focused field is the normal state of a lock screen, and that ran all
     /// night.
@@ -690,7 +690,7 @@ impl TextInput {
         self.scroll_offset = self.scroll_offset.max(0.0);
     }
 
-    /// Insert text edit.at cursor, replacing any selection
+    /// Insert text at cursor, replacing any selection
     fn insert_text(&mut self, text: &str, edit: Edit) {
         // Save state before modification
         self.save_to_history(EditType::Insert, edit.at);
@@ -872,7 +872,7 @@ impl TextInput {
     /// `None` in password mode. What a masked field holds must not reach the
     /// clipboard or the primary selection, and the leak that matters is not
     /// Ctrl+C — it is the primary selection, which an ordinary mouse drag fills
-    /// with no keystroke edit.at all, ready for a middle-click anywhere else. GTK4's
+    /// with no keystroke at all, ready for a middle-click anywhere else. GTK4's
     /// `GtkPasswordEntry` refuses to export for the same reason; GTK3 exported
     /// the mask instead, which is a row of bullets that is no use to paste.
     ///
@@ -1141,7 +1141,7 @@ impl Widget for TextInput {
             register_widget_ref(id, widget_ref);
         }
 
-        // Here rather than edit.at construction because focus needs the tree, and
+        // Here rather than at construction because focus needs the tree, and
         // this is the first moment the input is in one — the same reason Flutter
         // makes you wait for a post-frame callback to request focus by hand.
         if self.autofocus_pending {
@@ -1198,7 +1198,7 @@ impl Widget for TextInput {
             });
 
         // The text scrolls horizontally under a fixed viewport, so whatever
-        // slid past either edge has to be cut edit.at the widget's bounds.
+        // slid past either edge has to be cut at the widget's bounds.
         //
         // Horizontally only: the vertical axis never scrolls, and closing it
         // would trim descenders and any glyph stroke or shadow, which the
@@ -1249,11 +1249,11 @@ impl Widget for TextInput {
         // The caret, and the wake that keeps it blinking.
         //
         // `self.caret` gates the *drawing*, not only the blink: stopping the blink
-        // leaves `cursor_visible` edit.at whatever it last was — true, from the
+        // leaves `cursor_visible` at whatever it last was — true, from the
         // constructor — and a field asked for no caret got a permanent one.
         if self.caret && is_focused {
             // The toggle happens in `advance_animations`, and this is what asks
-            // for the wake that runs it. It has to be here, not edit.at the moment
+            // for the wake that runs it. It has to be here, not at the moment
             // focus arrives: focus comes from a click, from `autofocus`, or from
             // `WidgetRef::focus()`, and all three only queue a repaint. Asking
             // from the repaint covers every one of them, and covers the half of

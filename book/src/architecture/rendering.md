@@ -10,7 +10,9 @@ Main loop (once per iteration):
  2. take_frame_request()           → Check if a frame was requested
 
 Per-surface rendering:
- 3. Dispatch events                → Route input events (MouseMoves coalesced)
+ 3. Dispatch events                → Route input events (MouseMoves coalesced),
+                                     each one declaring when the compositor saw
+                                     it happen — not when this loop got to it
  4. Frame-pacing gate              → Return if the compositor hasn't shown the
                                      previous frame yet (jobs stay queued)
  5. set_frame_instant(now)         → What time it is, for this whole frame:

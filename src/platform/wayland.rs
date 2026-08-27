@@ -97,7 +97,6 @@ pub struct WaylandSurfaceState {
     /// compositor has not yet shown the last frame — rendering another one
     /// would outpace it. Cleared by the frame-done handler.
     pub frame_callback_pending: bool,
-    /// Pending events for this surface
     /// Events waiting for the next frame, each with when it happened.
     ///
     /// The instant travels with the event because the two are separated in

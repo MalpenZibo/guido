@@ -428,13 +428,20 @@ pub trait Widget {
 
 **Note:** Widget bounds and origins are stored in the `Tree`, not on individual widgets. Use `tree.get_bounds(id)` to retrieve a widget's bounds and `tree.set_origin(id, x, y)` to position widgets during layout.
 
-**Note:** So is what time it is. A widget that advances something over time asks
-`tree.frame_instant()` rather than the clock: a frame declares its instant once,
-around the jobs, the layout and the paint, so everything advancing in that frame
-is asked about the same moment. Reading the clock inside a widget makes one
-frame several instants, and makes the middle of an animation something no test
-can ask about — only sleep towards. `tree.set_frame_instant(Some(now))` is how a
-test names the moment it wants to ask about.
+**Note:** So is what time it is, and there are two answers because they are two
+questions. A widget **advancing** something over time asks `tree.frame_instant()`
+— a frame declares its instant once, around the jobs, the layout and the paint,
+so everything moving in that frame is asked about the same moment. A widget
+handling an **event** asks `tree.event_instant()`, which is when the compositor
+saw it happen, not when the handler ran: the two differ by however long the
+event sat in the queue, and that difference is what a velocity or a
+double-keystroke window would otherwise measure by mistake.
+
+Neither is `Instant::now()`. Reading the clock inside a widget makes one frame
+several instants, and makes the middle of an animation — or the gap between two
+keystrokes — something no test can ask about, only sleep towards.
+`set_frame_instant` and `set_event_instant` are how a test names the moment it
+is asking about.
 
 ### Widgets written outside the crate
 

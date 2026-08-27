@@ -349,15 +349,13 @@ impl ScrollState {
 
     /// The gesture ended — the finger lifted.
     ///
-    /// `since_last_sample_ms` is how long ago the gesture last moved. A
-    /// momentum belongs to the gesture that produced it: a finger resting
+    /// A momentum belongs to the gesture that produced it: a finger resting
     /// before it lifts is not throwing anything, so a velocity that old is
     /// spent rather than released.
-    /// The gesture is over.
     ///
-    /// The gap since the last sample is computed here rather than passed in:
-    /// `last_scroll_time` is this state's own field, and a caller measuring it
-    /// with a second clock is how the sample path and the end path came to
+    /// How long ago the gesture last moved is computed here rather than passed
+    /// in. `last_scroll_time` is this state's own field, and a caller measuring
+    /// it with a second clock is how the sample path and the end path came to
     /// disagree about what time it was inside one gesture.
     pub fn end_gesture(&mut self, at: std::time::Instant) {
         let since_last_sample_ms = self

@@ -38,25 +38,6 @@ use crate::widgets::{Event, Key, Modifiers, MouseButton, ScrollSource};
 /// Pixels per line for discrete scroll (mouse wheel)
 const SCROLL_PIXELS_PER_LINE: f32 = 40.0;
 
-/// The compositor's clock, expressed in this process's.
-///
-/// Every input event carries a `uint` of milliseconds — `wl_pointer.motion`,
-/// `.button` and `.axis`, `wl_touch.down`, and `KeyEvent::time` all do. The
-/// protocol promises only that those milliseconds increase; the epoch is the
-/// compositor's and there is no request that asks what it is. So the number
-/// means nothing on its own and a *difference* between two of them means
-/// everything, which is what an anchor turns into an `Instant`.
-///
-/// Reading the clock when the event is handled instead would be simpler and
-/// wrong in one specific way: a handler runs some time after the event
-/// happened, and that delay varies with how busy this process is. A velocity is
-/// a ratio of differences, so a *constant* delay cancels out — but a varying
-/// one does not, and an application too busy to draw is exactly when a gesture
-/// most needs its speed read correctly.
-///
-/// On Linux the two clocks are the same one: libinput timestamps in
-/// `CLOCK_MONOTONIC`, and so does `Instant`. The anchor is a change of origin
-/// rather than a change of clock, so it cannot drift.
 /// Queue a move, replacing the last one if it was also a move.
 ///
 /// Only the latest position matters for hover state, and every queued move
@@ -93,6 +74,28 @@ fn untimed() -> Instant {
     Instant::now()
 }
 
+/// The compositor's clock, expressed in this process's.
+///
+/// Every input event carries a `uint` of milliseconds — `wl_pointer.motion`,
+/// `.button` and `.axis`, `wl_touch.down`, and `KeyEvent::time` all do. The
+/// protocol promises only that those milliseconds increase; the epoch is the
+/// compositor's and there is no request that asks what it is. So the number
+/// means nothing on its own and a *difference* between two of them means
+/// everything, which is what an anchor turns into an `Instant`.
+///
+/// Reading the clock when the event is handled instead would be simpler and
+/// wrong in one specific way: a handler runs some time after the event
+/// happened, and that delay varies with how busy this process is. A velocity is
+/// a ratio of differences, so a *constant* delay cancels out — but a varying
+/// one does not, and an application too busy to draw is exactly when a gesture
+/// most needs its speed read correctly.
+///
+/// On Linux the two clocks are the same one: libinput timestamps in
+/// `CLOCK_MONOTONIC`, and so does `Instant`. The anchor is a change of origin
+/// rather than a change of clock, so it cannot drift. What it does carry for
+/// good is however late the *first* timestamped event was read: every instant
+/// it yields is offset by that, which cancels between two events and does not
+/// cancel against the frame clock.
 pub(super) struct EventClock {
     /// The compositor's milliseconds at the moment `anchor` was read.
     anchor_ms: u32,

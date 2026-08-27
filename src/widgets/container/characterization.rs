@@ -1221,7 +1221,10 @@ fn a_press_held_for_a_named_time_has_grown_by_a_named_amount() {
     );
     h.fit(400.0, 400.0);
 
-    let t0 = std::time::Instant::now();
+    // A minute ago, and that is the point: if the press took its moment from the
+    // clock instead of from the event, the disc would be a minute old by the
+    // first frame and there would be nothing left to draw.
+    let t0 = std::time::Instant::now() - std::time::Duration::from_secs(60);
     send_at(
         &mut h,
         t0,

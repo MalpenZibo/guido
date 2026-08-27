@@ -1991,3 +1991,71 @@ mod font_registry_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod dispatch_declares_the_moment {
+    use super::*;
+    use crate::layout::Size;
+    use crate::widgets::widget::{Event, EventResponse};
+
+    /// A widget that records what time the tree said it was when it was handed
+    /// an event.
+    struct Spy(std::rc::Rc<std::cell::Cell<Option<std::time::Instant>>>);
+
+    impl widgets::Widget for Spy {
+        fn layout(
+            &mut self,
+            tree: &mut Tree,
+            id: WidgetId,
+            constraints: crate::layout::Constraints,
+        ) -> Size {
+            let size = Size::new(constraints.max_width, constraints.max_height);
+            tree.cache_layout(id, constraints, size);
+            size
+        }
+
+        fn paint(&self, _tree: &Tree, _id: WidgetId, _ctx: &mut crate::renderer::PaintContext) {}
+
+        fn event(&mut self, tree: &mut Tree, _id: WidgetId, _event: &Event) -> EventResponse {
+            self.0.set(Some(tree.event_instant()));
+            EventResponse::Handled
+        }
+    }
+
+    /// The queue carries each event's moment and `dispatch_events` is what puts
+    /// it where a widget can read it. Without that one line every widget falls
+    /// back to the clock, which is what they all did before this existed — and
+    /// the tests of the widgets themselves cannot tell, because they declare
+    /// the instant by hand.
+    ///
+    /// So this one does not: it goes through the dispatcher, as the loop does.
+    #[test]
+    fn a_widget_is_told_when_the_event_it_is_handed_happened() {
+        let seen = std::rc::Rc::new(std::cell::Cell::new(None));
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(Spy(seen.clone())));
+        tree.set_origin(root, 0.0, 0.0);
+
+        // An hour ago: no clock this process could read would answer with it,
+        // so the widget can only have got it from the event.
+        let happened = std::time::Instant::now() - std::time::Duration::from_secs(3600);
+        let events = [(happened, Event::MouseMove { x: 10.0, y: 10.0 })];
+
+        dispatch_events(&events, root, &mut tree, &Default::default());
+
+        assert_eq!(
+            seen.get(),
+            Some(happened),
+            "the widget has to be told the moment the queue carried, not the \
+             moment the dispatch ran"
+        );
+        // And once the dispatch is over the moment is gone: what a later
+        // reader gets is the clock, not the last event's time.
+        let after = tree.event_instant();
+        assert!(
+            after > happened,
+            "the moment has to be cleared when the dispatch ends, got {after:?} \
+             for an event from an hour ago"
+        );
+    }
+}
