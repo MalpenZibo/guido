@@ -5,11 +5,16 @@
 //! point at files by name. Inserting a step is exactly when those stop
 //! matching, and a count in prose is the part a person is worst at checking.
 //!
-//! Nothing here reads the words. It counts headings and list markers, compares
-//! them to the numbers the prose claims, checks that the files this
+//! Mostly this does not read the words. It counts headings and list markers,
+//! compares them to the numbers the prose claims, checks that the files this
 //! documentation names exist, and checks the one ordering the workflow depends
 //! on — that the review comes after the commits, because its criteria ask about
 //! them.
+//!
+//! Where it does read them, it is for a sentence that has to appear in two
+//! documents at once: the review's three levels, and the rule about researching
+//! a design decision. Pinning a sentence is a poor test of whether a rule is
+//! followed and the only test there is of whether both copies still say it.
 
 use std::path::{Path, PathBuf};
 
@@ -377,5 +382,44 @@ fn the_reviewer_and_the_command_use_the_same_levels() {
         reviewer.contains("how many block"),
         "the reviewer gives no verdict, so `zero blocking findings is the pass` \
          has nothing to read"
+    );
+}
+
+/// The research rule lives in two places, and a rule that is only in the
+/// contract is a rule nothing invokes.
+///
+/// `AGENTS.md` states it; `/spec` is where it is acted on, because that is the
+/// command that writes alternatives down, and it names the section of the issue
+/// the sources go in. Deleting the rule from either leaves the other describing
+/// a step that does not happen; deleting the section leaves the rule asking for
+/// something the issue has no room for.
+///
+/// What this cannot say is whether the research was *done* — only that the
+/// contract asks for it and the issue has somewhere to put the answer.
+#[test]
+fn researching_a_design_decision_is_asked_for_where_the_alternatives_are_written() {
+    let agents = read("AGENTS.md");
+    let spec = read(".claude/commands/spec.md");
+
+    const RULE: &str = "A design decision that is not obvious is researched before it is proposed.";
+    assert!(
+        agents.contains(RULE),
+        "AGENTS.md does not carry the research rule, so nothing states it"
+    );
+    assert!(
+        spec.contains(RULE),
+        "/spec is the command that writes alternatives down and does not ask \
+         for the research behind them — the rule would exist only in the \
+         contract, where nothing invokes it"
+    );
+
+    // Where the answer goes. A rule asking for something the issue has no room
+    // for degrades to "mention it somewhere", so `/spec` names the section, and
+    // the body it enumerates has to contain it.
+    const SLOT: &str = "**Prior art**";
+    assert!(
+        spec.contains(SLOT),
+        "/spec asks for research and its issue body has no {SLOT} for the \
+         answer, so the sources have nowhere to go"
     );
 }
