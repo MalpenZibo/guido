@@ -1715,9 +1715,9 @@ impl App {
                 && let Some(ref wgpu_surface) = managed.wgpu_surface
             {
                 let r = Renderer::new(
-                    wgpu_surface.device.clone(),
-                    wgpu_surface.queue.clone(),
-                    wgpu_surface.config.format,
+                    wgpu_surface.device().clone(),
+                    wgpu_surface.queue().clone(),
+                    wgpu_surface.format(),
                 );
                 renderer = Some(r);
             }
@@ -1842,9 +1842,9 @@ fn iterate(
         && let Some(wgpu_surface) = surface_manager.first_gpu_surface()
     {
         *renderer = Some(Renderer::new(
-            wgpu_surface.device.clone(),
-            wgpu_surface.queue.clone(),
-            wgpu_surface.config.format,
+            wgpu_surface.device().clone(),
+            wgpu_surface.queue().clone(),
+            wgpu_surface.format(),
         ));
     }
 

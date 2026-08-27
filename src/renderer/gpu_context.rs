@@ -166,3 +166,168 @@ impl SurfaceState {
         self.config.height
     }
 }
+
+/// Where a drawn frame lands.
+///
+/// A swapchain is a compositor's: it hands out a texture, takes it back, and
+/// shows it. A texture is the caller's, and nobody shows it — which is the only
+/// difference, and the reason a frame can be inspected without a compositor at
+/// all. Everything upstream of here draws the same commands either way.
+pub enum RenderTarget {
+    /// The compositor's swapchain. Acquired per frame, presented after.
+    Swapchain(SurfaceState),
+    /// A texture the caller owns and can read back.
+    #[cfg(any(test, feature = "testing"))]
+    Offscreen(OffscreenTarget),
+}
+
+/// A texture a frame is drawn into, with the handles needed to read it back.
+///
+/// The texture is the only state: it already knows its size and its format, so
+/// storing either beside it would be a second copy of a fact that cannot drift
+/// while it is derived.
+#[cfg(any(test, feature = "testing"))]
+pub struct OffscreenTarget {
+    pub texture: wgpu::Texture,
+    pub device: Arc<Device>,
+    pub queue: Arc<Queue>,
+}
+
+#[cfg(any(test, feature = "testing"))]
+impl OffscreenTarget {
+    /// The colour at one pixel, in the texture's own format.
+    ///
+    /// Reading a target back is the whole reason to draw into one, so it lives
+    /// here rather than beside whoever asks: the row padding wgpu requires and
+    /// the map-then-poll order are the sort of thing that is written correctly
+    /// once and copied wrongly after.
+    pub fn read_pixel(&self, x: u32, y: u32) -> [u8; 4] {
+        let (width, height) = (self.texture.width(), self.texture.height());
+        let bytes_per_row = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("guido offscreen readback"),
+            size: (bytes_per_row * height) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            self.texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("readback never completed");
+        let data = buffer.slice(..).get_mapped_range();
+        let at = (y * bytes_per_row + x * 4) as usize;
+        [data[at], data[at + 1], data[at + 2], data[at + 3]]
+    }
+}
+
+impl RenderTarget {
+    /// A target of `width` by `height` physical pixels, drawn into and kept.
+    ///
+    /// `COPY_SRC` because a target nobody presents is only useful if it can be
+    /// read, and `Rgba8Unorm` because eight bits a channel makes an exact byte
+    /// a fair thing to assert.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn offscreen(gpu: &GpuContext, width: u32, height: u32) -> Self {
+        Self::Offscreen(OffscreenTarget {
+            texture: offscreen_texture(&gpu.device, width, height),
+            device: gpu.device.clone(),
+            queue: gpu.queue.clone(),
+        })
+    }
+
+    pub fn width(&self) -> u32 {
+        match self {
+            Self::Swapchain(s) => s.width(),
+            #[cfg(any(test, feature = "testing"))]
+            Self::Offscreen(o) => o.texture.width(),
+        }
+    }
+
+    pub fn height(&self) -> u32 {
+        match self {
+            Self::Swapchain(s) => s.height(),
+            #[cfg(any(test, feature = "testing"))]
+            Self::Offscreen(o) => o.texture.height(),
+        }
+    }
+
+    /// A swapchain is reconfigured; a texture is replaced.
+    ///
+    /// Not a no-op for the texture, however tempting: `resolve_geometry` asks
+    /// whether the target matches the frame and calls this when it does not, so
+    /// a target that quietly declined would report a resize every frame for
+    /// ever, repainting the whole tree each time and defeating the incremental
+    /// paint the rest of the pipeline is built around.
+    pub fn resize(&mut self, width: u32, height: u32) {
+        match self {
+            Self::Swapchain(s) => s.resize(width, height),
+            #[cfg(any(test, feature = "testing"))]
+            Self::Offscreen(o) => {
+                if width > 0 && height > 0 {
+                    o.texture = offscreen_texture(&o.device, width, height);
+                }
+            }
+        }
+    }
+
+    pub fn device(&self) -> &Arc<Device> {
+        match self {
+            Self::Swapchain(s) => &s.device,
+            #[cfg(any(test, feature = "testing"))]
+            Self::Offscreen(o) => &o.device,
+        }
+    }
+
+    pub fn queue(&self) -> &Arc<Queue> {
+        match self {
+            Self::Swapchain(s) => &s.queue,
+            #[cfg(any(test, feature = "testing"))]
+            Self::Offscreen(o) => &o.queue,
+        }
+    }
+
+    pub fn format(&self) -> wgpu::TextureFormat {
+        match self {
+            Self::Swapchain(s) => s.config.format,
+            #[cfg(any(test, feature = "testing"))]
+            Self::Offscreen(o) => o.texture.format(),
+        }
+    }
+}
+
+#[cfg(any(test, feature = "testing"))]
+fn offscreen_texture(device: &Device, width: u32, height: u32) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("guido offscreen target"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    })
+}

@@ -30,7 +30,9 @@ mod types;
 
 pub use commands::{Border, CornerRadii, DrawCommand, EllipticalRadii};
 pub use flatten::{CommandLayer, FlattenedCommand, flatten_root_into};
-pub use gpu_context::{GpuContext, SurfaceState};
+#[cfg(any(test, feature = "testing"))]
+pub use gpu_context::OffscreenTarget;
+pub use gpu_context::{GpuContext, RenderTarget, SurfaceState};
 pub use paint_context::PaintContext;
 pub use render::Renderer;
 pub use text_measurer::{

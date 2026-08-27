@@ -10,7 +10,7 @@ use smithay_client_toolkit::reexports::client::Connection;
 use crate::layout::Constraints;
 use crate::platform::{WaylandState, WaylandWindowWrapper};
 use crate::reactive::owner::{OwnerId, dispose_owner_now};
-use crate::renderer::{CommandLayer, FlattenedCommand, GpuContext, RenderNode, SurfaceState};
+use crate::renderer::{CommandLayer, FlattenedCommand, GpuContext, RenderNode, RenderTarget};
 use crate::surface::{SurfaceConfig, SurfaceId};
 use crate::tree::{Tree, WidgetId};
 use crate::widgets::Widget;
@@ -28,8 +28,8 @@ pub struct ManagedSurface {
     pub widget_id: WidgetId,
     /// Owner for reactive primitives created in the widget factory
     owner_id: OwnerId,
-    /// The wgpu surface state (None until GPU init)
-    pub wgpu_surface: Option<SurfaceState>,
+    /// Where this surface's frames land (None until GPU init).
+    pub wgpu_surface: Option<RenderTarget>,
     /// Previous scale factor for detecting changes
     pub previous_scale_factor: f32,
     /// Root render node (reused across frames to avoid allocation)
@@ -104,7 +104,7 @@ impl ManagedSurface {
 
         let wgpu_surface =
             gpu_context.create_surface(window_handle, physical_width, physical_height);
-        self.wgpu_surface = Some(wgpu_surface);
+        self.wgpu_surface = Some(RenderTarget::Swapchain(wgpu_surface));
         self.previous_scale_factor = scale_factor;
 
         // Perform initial layout
@@ -201,7 +201,7 @@ impl SurfaceManager {
     ///
     /// Used to create the shared `Renderer` lazily: apps may start with zero
     /// surfaces and spawn them dynamically (e.g. one bar per output).
-    pub fn first_gpu_surface(&self) -> Option<&SurfaceState> {
+    pub fn first_gpu_surface(&self) -> Option<&RenderTarget> {
         self.surfaces.values().find_map(|s| s.wgpu_surface.as_ref())
     }
 

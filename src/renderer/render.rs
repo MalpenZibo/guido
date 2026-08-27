@@ -14,7 +14,7 @@ use super::backdrop_pass::{BackdropRegion, BackdropRenderer};
 use super::commands::{CornerRadii, DrawCommand};
 use super::flatten::{CommandLayer, FlattenedCommand};
 use super::gpu::{QUAD_INDICES, QUAD_VERTICES, QuadVertex, ShaderUniforms, ShapeInstance};
-use super::gpu_context::SurfaceState;
+use super::gpu_context::RenderTarget;
 use super::image_quad::{ImageQuadRenderer, PreparedImageQuad};
 use super::text::TextRenderState;
 use super::text_mask::{MaskSpec, TextMaskRenderer};
@@ -262,19 +262,31 @@ impl Renderer {
         }
     }
 
-    /// Render flattened commands to a surface.
+    /// Draw into whatever this surface points at, and hand it over.
     ///
-    /// Returns `true` if a frame was actually presented. On `false` (lost/
-    /// outdated swapchain, out of memory) nothing reached the screen — the
-    /// caller must keep its dirty state so the content is repainted on the
-    /// next frame instead of showing stale pixels.
+    /// `false` means nothing reached the target and the frame should be drawn
+    /// again — a lost or outdated swapchain, which is common right after a
+    /// resize. A texture cannot fail that way: it is already there.
     pub fn render(
         &mut self,
-        surface: &mut SurfaceState,
+        target: &mut RenderTarget,
         commands: &[FlattenedCommand],
         layers: &[CommandLayer],
         clear_color: Color,
     ) -> bool {
+        let surface = match target {
+            #[cfg(any(test, feature = "testing"))]
+            RenderTarget::Offscreen(offscreen) => {
+                let view = offscreen
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+                let width = offscreen.texture.width();
+                let height = offscreen.texture.height();
+                self.render_to_view(&view, width, height, commands, layers, clear_color);
+                return true;
+            }
+            RenderTarget::Swapchain(surface) => surface,
+        };
         let output = match surface.surface.get_current_texture() {
             Ok(output) => output,
             Err(wgpu::SurfaceError::Lost) => {
