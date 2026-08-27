@@ -39,7 +39,23 @@ than none.
 Make it. Keep it inside the non-goals. Follow the patterns already in the file
 rather than importing new ones.
 
-## 5. Run the harness, all of it
+## 5. Clean it up, before the harness sees it again
+
+`/simplify` over the change — a built-in skill, not one of this repository's:
+four readings by four agents, none of which wrote the code, for reuse,
+simplification, efficiency and altitude. It is quality only; it does not hunt
+for correctness bugs, which is what step 8 is for.
+
+Here, and not later, for three reasons. It **applies** what it finds rather than
+reporting it, so the harness has to run after it — put it below step 6 and you
+commit code nothing has re-tested since it changed, and if it touched the test
+you wrote in step 3, the red you confirmed there is no longer the red that
+ships. Its edits land inside the commits instead of on top of them, and a
+tidy-up commit is exactly what the review's atomic-commits criterion exists to
+catch. And what it changed is then read by the review, because code that edits
+itself and ships unread is the one thing that step must not become.
+
+## 6. Run the harness, all of it
 
 ```bash
 cargo fmt --all
@@ -57,15 +73,16 @@ moved and why, and let the maintainer decide.
 If the change touched the renderer and *no* golden moved, the scenario that
 should have noticed is missing — add it.
 
-## 6. Commit, atomically
+## 7. Commit, atomically
 
 One focused change per commit, in the order the code was built: data structures,
 then behaviour, then the API that exposes it. Subject lines are sentences that
 say what is now true. No `Co-Authored-By`, no generated-with footer.
 
-## 7. Have it read by somebody who did not write it
+## 8. Have it read by somebody who did not write it
 
-Now the commits exist and the pull request does not, which is the moment the
+Now the commits exist, the cleanup is inside them, and the pull request does
+not — which is the moment the
 `reviewer` subagent is written for: it asks about atomic commits, about what the
 pull request will have to say, and about the diff as a whole.
 
@@ -97,7 +114,7 @@ was skipped, run it again; if it still will not run, say so in the pull request
 in those words. Writing "nothing found" for a review that never happened is the
 same act as re-blessing a golden to make a test pass.
 
-## 8. Open the pull request
+## 9. Open the pull request
 
 Push the branch, `gh pr create`, fill in the template. Link the issue with
 `Closes #$ARGUMENTS`.

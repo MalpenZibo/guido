@@ -174,18 +174,24 @@ themselves when the task touches them; you do not need to read them up front.
    pieces of work in the same checkout.
 3. **The failing test, then the fix.** In that order, so the test is known to
    test something.
-4. **Run the harness**, all of it, including the goldens.
-5. **Have it read by something that did not write it.** The `reviewer` subagent,
+4. **Clean it up before the harness runs.** `/simplify` — a built-in skill:
+   reuse, simplification, efficiency and altitude, read by four agents that did
+   not write the code. It applies what it finds rather than reporting it, which
+   is what fixes its place: the harness has to run after it, its edits belong
+   inside the commits rather than on top, and what it changed is read below like
+   everything else.
+5. **Run the harness**, all of it, including the goldens.
+6. **Have it read by something that did not write it.** The `reviewer` subagent,
    over the committed change and before the pull request exists — its criteria
    ask about the commits, so they need the commits. Whoever wrote a change is
    the worst judge of whether it grew. One pass, and its findings say what they
    cost: **zero blocking findings is the pass**, notes are not something to
    clear. An architectural finding stops the work — that decision belongs to the
    maintainer wherever it surfaces.
-6. **Open the pull request** with the template filled in: what moved, what
+7. **Open the pull request** with the template filled in: what moved, what
    proves it, what the review found, what you looked at by hand.
 
-`/implement <issue>` does all six.
+`/implement <issue>` does all seven.
 
 ## Commits and pull requests
 
