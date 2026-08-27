@@ -192,9 +192,10 @@ impl Container {
         };
 
         if let Some(anim) = scale_anim {
-            anim.animate_to(target_scale);
+            let now = tree.frame_instant();
+            anim.animate_to(target_scale, now);
             if anim.is_animating() {
-                let _ = anim.advance(); // Paint-only, ignore result
+                let _ = anim.advance(now); // Paint-only, ignore result
                 request_job(id, JobRequest::Animation(RequiredJob::Paint));
             }
         }
@@ -232,7 +233,11 @@ impl Container {
     /// Advance scrollbar scale animations and apply transforms.
     /// Called from advance_animations since scroll is paint-only and layout
     /// may not run during hover events.
-    pub(super) fn advance_scrollbar_scale_animations_internal(&mut self, id: WidgetId) -> bool {
+    pub(super) fn advance_scrollbar_scale_animations_internal(
+        &mut self,
+        id: WidgetId,
+        now: std::time::Instant,
+    ) -> bool {
         if self.scroll_axis == ScrollAxis::None
             || self.scroll().scrollbar_visibility == ScrollbarVisibility::Hidden
         {
@@ -248,13 +253,13 @@ impl Container {
         // Advance vertical scrollbar scale animation
         if self.scroll_axis.allows_vertical() && needs_vertical {
             any_animating |=
-                self.advance_scrollbar_scale_axis(ScrollbarAxis::Vertical, scale_factor, id);
+                self.advance_scrollbar_scale_axis(ScrollbarAxis::Vertical, scale_factor, id, now);
         }
 
         // Advance horizontal scrollbar scale animation
         if self.scroll_axis.allows_horizontal() && needs_horizontal {
             any_animating |=
-                self.advance_scrollbar_scale_axis(ScrollbarAxis::Horizontal, scale_factor, id);
+                self.advance_scrollbar_scale_axis(ScrollbarAxis::Horizontal, scale_factor, id, now);
         }
 
         any_animating
@@ -265,6 +270,7 @@ impl Container {
         axis: ScrollbarAxis,
         scale_factor: f32,
         id: WidgetId,
+        now: std::time::Instant,
     ) -> bool {
         // Determine target scale based on hover state
         let sd = self.scroll();
@@ -283,9 +289,9 @@ impl Container {
         // Scale transforms are applied during paint, not stored on widgets.
         let mut animating = false;
         if let Some(anim) = scale_anim {
-            anim.animate_to(target_scale);
+            anim.animate_to(target_scale, now);
             if anim.is_animating() {
-                let required = if anim.advance().is_changed() {
+                let required = if anim.advance(now).is_changed() {
                     RequiredJob::Paint
                 } else {
                     RequiredJob::None

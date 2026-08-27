@@ -428,6 +428,14 @@ pub trait Widget {
 
 **Note:** Widget bounds and origins are stored in the `Tree`, not on individual widgets. Use `tree.get_bounds(id)` to retrieve a widget's bounds and `tree.set_origin(id, x, y)` to position widgets during layout.
 
+**Note:** So is what time it is. A widget that advances something over time asks
+`tree.frame_instant()` rather than the clock: a frame declares its instant once,
+around the jobs, the layout and the paint, so everything advancing in that frame
+is asked about the same moment. Reading the clock inside a widget makes one
+frame several instants, and makes the middle of an animation something no test
+can ask about — only sleep towards. `tree.set_frame_instant(Some(now))` is how a
+test names the moment it wants to ask about.
+
 ### Widgets written outside the crate
 
 The trait is implementable from anywhere, and a leaf needs only `layout` and

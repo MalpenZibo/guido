@@ -1062,6 +1062,139 @@ fn pump(h: &mut H) -> bool {
     animating
 }
 
+/// A whole frame that declares what time it is: jobs, then layout, as the loop
+/// runs them.
+///
+/// `pump` asks the clock, so two frames are however far apart the machine
+/// happened to make them; this one names the instant, so a curve can be
+/// asserted at a value instead of inside a band.
+fn frame_at(h: &mut H, now: std::time::Instant, width: f32, height: f32) {
+    h.tree.set_frame_instant(Some(now));
+    pump(h);
+    h.fit(width, height);
+    h.tree.set_frame_instant(None);
+}
+
+/// Halfway through a linear hundred milliseconds is halfway to the target —
+/// exactly, on any machine, with nothing asleep.
+///
+/// The value of naming the instant is that this asserts the *curve*, which is
+/// the half of an animation nothing outside `animations.rs`, `keyframes.rs`
+/// and `timing.rs` can see. Every other test here watches where an animation
+/// lands, and an easing that is wrong, a delay that is ignored, a reverse
+/// transition used in place of the forward one and a property that skips the
+/// animation entirely all land in the same place.
+#[test]
+fn a_linear_animation_is_halfway_at_half_its_duration() {
+    let w = create_signal(0.0f32);
+    let mut h = H::new(
+        container()
+            .height(10.0)
+            .width(w)
+            .animate_width(Transition::new(100.0, TimingFunction::Linear)),
+    );
+    h.fit(400.0, 400.0);
+
+    let t0 = std::time::Instant::now();
+    w.set(100.0);
+    frame_at(&mut h, t0, 400.0, 400.0);
+    assert_eq!(
+        h.tree.cached_size(h.root).unwrap().width,
+        0.0,
+        "the segment begins where it was, not where it is going"
+    );
+
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(50),
+        400.0,
+        400.0,
+    );
+    assert_eq!(
+        h.tree.cached_size(h.root).unwrap().width,
+        50.0,
+        "half the duration of a linear curve is half the distance"
+    );
+}
+
+/// The radius of the ripple drawn by this frame, if one is drawn.
+fn painted_ripple_radius(h: &mut H) -> Option<f32> {
+    h.paint()
+        .overlay_commands
+        .iter()
+        .find_map(|cmd| match &**cmd {
+            DrawCommand::Circle { radius, .. } => Some(*radius),
+            _ => None,
+        })
+}
+
+/// One frame is one instant: the ripple and the declared transition in the
+/// same container are asked about the same moment.
+///
+/// They could not be before. The ripple already took an `Instant` and the
+/// caller handed it `Instant::now()`, freshly read, some microseconds after
+/// every animation beside it had read its own — so a frame was several
+/// instants, and none of them was one a test could name.
+#[test]
+fn a_ripple_and_a_transition_are_asked_about_the_same_moment() {
+    // Wide enough at rest to be clicked: the press has to land on the box.
+    let w = create_signal(20.0f32);
+    let mut h = H::new(
+        container()
+            .height(100.0)
+            .width(w)
+            .animate_width(Transition::new(100.0, TimingFunction::Linear))
+            .when_pressed(|s| s.ripple())
+            .on_click(|| {}),
+    );
+    h.fit(400.0, 400.0);
+
+    h.send(Event::MouseDown {
+        x: 10.0,
+        y: 50.0,
+        button: MouseButton::Left,
+    });
+    w.set(120.0);
+
+    // After the press, because a ripple begins at the instant its event
+    // arrived and that clock is the event's, not the frame's — a separate
+    // question, and not this one.
+    let t0 = std::time::Instant::now();
+
+    frame_at(&mut h, t0, 400.0, 400.0);
+    let started = painted_ripple_radius(&mut h).expect("the press starts a ripple");
+
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(50),
+        400.0,
+        400.0,
+    );
+    assert_eq!(
+        h.tree.cached_size(h.root).unwrap().width,
+        70.0,
+        "the transition is halfway: 20 plus half of the hundred it travels"
+    );
+    let grown = painted_ripple_radius(&mut h).expect("and the ripple is still drawn");
+    assert!(
+        grown > started,
+        "the ripple grew over the same 50ms, from {started} to {grown}"
+    );
+
+    // The same instant twice: nothing moves, because nothing has.
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(50),
+        400.0,
+        400.0,
+    );
+    assert_eq!(
+        painted_ripple_radius(&mut h),
+        Some(grown),
+        "asked about the same moment, a frame answers the same"
+    );
+}
+
 /// Lay out, run the queued jobs, paint, and report the first text colour.
 fn painted_text_color(h: &mut H) -> Color {
     pump(h);
@@ -1134,11 +1267,19 @@ fn a_container_wakes_when_its_timeline_is_asked_to_play() {
     );
 }
 
-/// The transform this container is painted with, once the queued jobs have
-/// run. A rotation shows up as a matrix that is no longer the identity.
+/// The transform a sequence has reached at the peak of its middle keyframe.
+/// A rotation shows up as a matrix that is no longer the identity.
+///
+/// Two frames, because they are two different things: the first sees the
+/// trigger move and starts the sequence, the second is 100ms later and is the
+/// one with something to show. They used to be the same frame, and what made
+/// that work was the few nanoseconds between `Instant::now()` in `play` and
+/// `Instant::now()` inside `advance` — a gap this test was reading and nobody
+/// had chosen.
 fn played_transform(h: &mut H) -> Transform {
-    pump(h);
-    h.fit(200.0, 200.0);
+    let t0 = std::time::Instant::now();
+    frame_at(h, t0, 200.0, 200.0);
+    frame_at(h, t0 + std::time::Duration::from_millis(100), 200.0, 200.0);
     h.paint().children[0].local_transform
 }
 
@@ -1260,15 +1401,26 @@ fn an_animated_translate_reaches_the_paint() {
 
     offset.set(Translate::new(40.0, 0.0));
 
-    // One frame in: moving, and not arrived. Without this the test passes with
-    // the animation deleted outright — `get_animated_value` falls back to the
-    // signal, and paint lands on 40 the first time it is asked.
-    pump(&mut h);
-    h.fit(200.0, 200.0);
+    // Moving, and not arrived. Without this the test passes with the animation
+    // deleted outright — `get_animated_value` falls back to the signal, and
+    // paint lands on 40 the first time it is asked.
+    //
+    // A tenth of the way through a linear six hundred milliseconds is a tenth
+    // of the distance, so this is a number rather than the band it used to be:
+    // the band existed because the only "midway" available was however far the
+    // clock had moved between two reads of it.
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 200.0, 200.0);
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(60),
+        200.0,
+        200.0,
+    );
     let midway = h.paint().children[0].local_transform.tx();
-    assert!(
-        midway > 0.0 && midway < 39.0,
-        "it has to animate towards the target rather than snap to it, got {midway}"
+    assert_eq!(
+        midway, 4.0,
+        "it has to animate towards the target rather than snap to it"
     );
 
     settle(&mut h, 400);

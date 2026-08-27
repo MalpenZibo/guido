@@ -153,6 +153,20 @@ pub struct Tree {
     /// surface's root widget. Per-surface so that one surface's render
     /// cannot consume (or misreport) damage accumulated by another.
     damage: std::collections::HashMap<WidgetId, DamageRegion>,
+    /// What time it is, for the pass currently running.
+    ///
+    /// A frame advances every animation in it, and asking the clock once per
+    /// animation makes one frame several instants a few microseconds apart.
+    /// More to the point, a widget that asks the clock cannot be asked about
+    /// the middle of an animation: a test can only sleep and assert a band
+    /// wide enough to survive a loaded machine, which is a band both a linear
+    /// and an eased curve fit inside.
+    ///
+    /// `render_surface` writes it, around the three passes a frame is made of:
+    /// the jobs advance the animations, layout measures what they produced,
+    /// paint draws it. `None` between frames, where nobody should be reading
+    /// it.
+    frame_instant: Option<std::time::Instant>,
 }
 
 impl Tree {
@@ -163,7 +177,28 @@ impl Tree {
             sparse: Vec::new(),
             free_indices: Vec::new(),
             damage: std::collections::HashMap::new(),
+            frame_instant: None,
         }
+    }
+
+    /// What time it is for the pass now running.
+    ///
+    /// Falls back to the clock for a call that arrives outside a pass — the
+    /// behaviour every caller had before there was a frame instant at all.
+    pub fn frame_instant(&self) -> std::time::Instant {
+        self.frame_instant.unwrap_or_else(std::time::Instant::now)
+    }
+
+    /// Declare the instant of the frame about to run, or `None` when it is
+    /// over.
+    ///
+    /// `render_surface` is the caller in the loop. The other one is a test —
+    /// including a test of a widget written outside this crate, which is why
+    /// this is public: a widget that can read the frame's instant is a widget
+    /// whose behaviour over time can be asked about, and that needs somebody
+    /// able to name the moment.
+    pub fn set_frame_instant(&mut self, now: Option<std::time::Instant>) {
+        self.frame_instant = now;
     }
 
     /// Register a widget in the tree and return its unique ID.

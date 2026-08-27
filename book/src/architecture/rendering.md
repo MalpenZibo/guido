@@ -13,17 +13,21 @@ Per-surface rendering:
  3. Dispatch events                → Route input events (MouseMoves coalesced)
  4. Frame-pacing gate              → Return if the compositor hasn't shown the
                                      previous frame yet (jobs stay queued)
- 5. drain_pending_jobs()           → Process jobs: unregister, advance
+ 5. set_frame_instant(now)         → What time it is, for this whole frame:
+                                     everything below is asked about this one
+                                     moment rather than reading a clock of its
+                                     own (cleared again after step 13)
+ 6. drain_pending_jobs()           → Process jobs: unregister, advance
     + process_jobs()                 animations, reconcile children, mark dirty
- 6. Partial layout                 → Only dirty subtrees re-layout
- 7. Skip-frame check               → Skip paint if root is clean
- 8. widget.paint(tree, ctx)        → Build render tree (Rc cache reuse for clean children)
- 9. flatten_root_into()            → Flatten to draw commands (incremental for clean subtrees)
-10. frame() + damage_buffer()      → Re-arm the frame callback and report damage,
+ 7. Partial layout                 → Only dirty subtrees re-layout
+ 8. Skip-frame check               → Skip paint if root is clean
+ 9. widget.paint(tree, ctx)        → Build render tree (Rc cache reuse for clean children)
+10. flatten_root_into()            → Flatten to draw commands (incremental for clean subtrees)
+11. frame() + damage_buffer()      → Re-arm the frame callback and report damage,
                                      both BEFORE presenting
-11. GPU rendering + present()      → Instanced SDF shapes with HiDPI scaling;
+12. GPU rendering + present()      → Instanced SDF shapes with HiDPI scaling;
                                      present() commits the surface
-12. cache_paint_results()          → Rc-share rendered nodes into the cache,
+13. cache_paint_results()          → Rc-share rendered nodes into the cache,
                                      clear needs_paint flags
 ```
 
