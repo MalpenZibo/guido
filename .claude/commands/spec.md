@@ -18,6 +18,19 @@ If two readings of the request would lead to materially different work, ask —
 once, with the two readings spelled out. Otherwise decide and state the
 assumption in the issue.
 
+**A design decision that is not obvious is researched before it is proposed.**
+If the specification turns on a choice this codebase has not settled — where a
+piece of state lives, which clock a value comes from, how a family of call sites
+is spelled — start with what `AGENTS.md` and the skills already decide, because
+a fork the rules have closed is not a fork. What survives that gets read up:
+what the protocol or the standard says, and what comparable libraries chose.
+Both go in the issue's **Prior art**, with links, before the alternatives are
+written down.
+
+Alternatives offered without that look like a choice and are a guess, and the
+maintainer has nothing to weigh them with. This is not most issues: a defect
+with one obvious fix has no design decision in it and needs none of this.
+
 ## 2. Write it as a specification
 
 The title is a sentence that states the defect or the truth that should hold —
@@ -37,6 +50,10 @@ The body, in this order:
 - **Non-goals** — the neighbouring things this change deliberately does not do,
   so the implementation does not grow into them.
 - **Where it lives** — the files and functions involved.
+- **Prior art** — only when the specification turns on a design decision this
+  codebase has not settled: what the protocol or the standard says, and what
+  comparable libraries chose. With links. Leave it out when there is no such
+  decision, which is most of the time.
 
 Consult the skill for the area (reactive, widgets, renderer, wayland) so the
 issue is written in the terms the codebase already uses.

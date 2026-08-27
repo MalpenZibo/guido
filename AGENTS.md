@@ -40,6 +40,26 @@ before you stop. It reads what is written between backticks and skips fenced
 blocks, so the book's code samples — which is most of the book — are not
 covered by it or by anything else.
 
+**A design decision that is not obvious is researched before it is proposed.**
+When a change turns on a choice with no settled answer here — where a piece of
+state lives, which clock a value comes from, how a family of call sites is
+spelled — find out what has already been decided, in this order: **this file and
+the skills**, because a fork the rules have closed is not a fork; then the
+existing code; then the protocol or the standard; then what comparable libraries
+chose. winit, SDL, Chromium, Flutter and GTK have met most of these already, and
+a question one of them has had open since 2019 is itself an answer about how
+settled it is. The sources and the trade-offs go under **Prior art** in the
+issue, or in the pull request, so the decision can be judged rather than taken
+on trust. When the answer is one of the architectural cases below, this research
+is what that case is made of.
+
+Alternatives offered without it are worse than no alternatives: they look like a
+choice and are a guess, and the maintainer has nothing to weigh them with.
+
+Ordinary work is not this — a defect with one obvious fix, a widget method, a
+pattern the codebase already uses. If nobody has to choose, there is nothing to
+research.
+
 **Architectural changes are agreed before they are written.** A new core type or
 trait, a new cross-cutting mechanism, a new ownership or lifetime rule, a change
 to how a whole family of call sites is spelled: explain the problem as it stands
