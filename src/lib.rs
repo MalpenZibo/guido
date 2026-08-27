@@ -1388,6 +1388,46 @@ struct FrameContext<'a, P: SurfaceHost> {
     tree: &'a mut Tree,
 }
 
+/// What the loop knows about waiting work when it decides how long to sleep.
+struct Pending {
+    /// A surface has nothing on screen yet, so it must not wait for input to
+    /// arrive before drawing.
+    force_render: bool,
+    /// Jobs queued by the previous frame — animation continuations, mostly.
+    jobs: bool,
+    /// A wake request that landed *after* this iteration consumed the flag.
+    /// Blocking on one already set would suppress every later ping, so it
+    /// counts as pending work rather than as a reason to sleep — see
+    /// [`jobs::wake_request_pending`].
+    wake_requested: bool,
+    /// When the next scheduled thing is due, if anything is scheduled.
+    deadline: Option<std::time::Instant>,
+}
+
+/// How long this iteration may sleep before it has to look again.
+///
+/// `None` blocks until the compositor or a ping. Nothing queued can be stranded
+/// by that: work and its wakeup are one gesture — see `deferred` and the
+/// ingress channel.
+///
+/// Waiting work polls at frame rate instead, and it outranks a deadline: the
+/// deadline is the longer sleep of the two, and the queued job would sit
+/// through it.
+///
+/// A deadline alone sleeps exactly that long. A caret blinks twice a second, so
+/// this wakes once, where treating a schedule as pending work would spin at 60
+/// fps to repaint nothing 113 frames out of 114.
+///
+/// `now` is passed rather than read so the decision can be asked about.
+fn wait_for(pending: &Pending, now: std::time::Instant) -> Option<std::time::Duration> {
+    if pending.jobs || pending.force_render || pending.wake_requested {
+        return Some(std::time::Duration::from_millis(16));
+    }
+    pending
+        .deadline
+        .map(|deadline| deadline.saturating_duration_since(now))
+}
+
 /// One surface, one frame, in the order the phases have to run.
 fn render_surface<P: SurfaceHost>(
     ctx: &mut FrameContext<P>,
@@ -1686,38 +1726,16 @@ impl App {
 
         // Main loop - event-driven, blocks until Wayland event or signal update
         loop {
-            // Check if all surfaces are fully initialized
-            let any_surface_needs_init = wayland_state.any_surface_needs_render();
-            let force_render = any_surface_needs_init;
-
             // Anything whose deadline has arrived becomes ordinary pending work.
             jobs::promote_due_jobs();
 
-            // Check if we need to actively poll: jobs pushed during the
-            // previous frame, or a wake request that landed after this
-            // iteration consumed the flag (blocking on a set flag would
-            // suppress all later pings — see wake_request_pending).
-            let has_pending = has_pending_jobs();
-            let needs_polling = has_pending || force_render || jobs::wake_request_pending();
-
-            // Dispatch events from calloop:
-            // - If polling needed (animations/callbacks/init), use timeout
-            // - If something is due later (a blinking caret), sleep until then
-            // - Otherwise block until event (Wayland or ping wakeup)
-            let timeout = if needs_polling {
-                Some(std::time::Duration::from_millis(16)) // ~60fps for animations
-            } else {
-                // Not polling — waiting. A deadline sleeps exactly that long: a
-                // caret blinks twice a second, so this wakes once where treating
-                // the schedule as pending work would spin at 60 fps to repaint
-                // nothing 113 frames out of 114.
-                //
-                // No deadline means blocking until the compositor or a ping.
-                // Nothing queued can be stranded by that: work and its wakeup
-                // are one gesture — see `deferred` and the ingress channel.
-                jobs::next_deadline()
-                    .map(|deadline| deadline.saturating_duration_since(std::time::Instant::now()))
+            let pending = Pending {
+                force_render: wayland_state.any_surface_needs_render(),
+                jobs: has_pending_jobs(),
+                wake_requested: jobs::wake_request_pending(),
+                deadline: jobs::next_deadline(),
             };
+            let timeout = wait_for(&pending, std::time::Instant::now());
 
             if let Err(e) = event_loop.dispatch(timeout, &mut wayland_state) {
                 // The connection died (compositor exited, protocol error).
@@ -2342,5 +2360,92 @@ mod a_second_host_can_answer_for_a_compositor {
         let mut host = Recorder::default();
         resync_exclusive_zone(id, &bar().exclusive_zone(48u32), &mut host, None);
         assert!(host.exclusive_zones.is_empty());
+    }
+}
+
+/// How long an iteration is allowed to sleep is a decision, and it was four
+/// conditions inline in `App::run` — reachable only by running a compositor.
+#[cfg(test)]
+mod what_the_loop_waits_for {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    const FRAME: Duration = Duration::from_millis(16);
+
+    fn idle() -> Pending {
+        Pending {
+            force_render: false,
+            jobs: false,
+            wake_requested: false,
+            deadline: None,
+        }
+    }
+
+    /// Nothing queued and nothing scheduled: sleep until the compositor or a
+    /// ping says otherwise. Anything else would spin.
+    #[test]
+    fn an_idle_loop_blocks() {
+        assert_eq!(wait_for(&idle(), Instant::now()), None);
+    }
+
+    /// Each on its own, because any one of them means work is waiting and a
+    /// block would strand it. `wake_requested` is the subtle one: it lands
+    /// *after* the iteration consumed the flag, and blocking on it would
+    /// suppress every later ping.
+    #[test]
+    fn any_pending_work_polls_at_frame_rate() {
+        for pending in [
+            Pending {
+                jobs: true,
+                ..idle()
+            },
+            Pending {
+                force_render: true,
+                ..idle()
+            },
+            Pending {
+                wake_requested: true,
+                ..idle()
+            },
+        ] {
+            assert_eq!(wait_for(&pending, Instant::now()), Some(FRAME));
+        }
+    }
+
+    /// A caret blinks twice a second. Sleeping exactly that long wakes once,
+    /// where treating a schedule as pending work would repaint nothing 113
+    /// frames out of 114.
+    #[test]
+    fn a_deadline_is_slept_to_exactly() {
+        let now = Instant::now();
+        let pending = Pending {
+            deadline: Some(now + Duration::from_millis(500)),
+            ..idle()
+        };
+        assert_eq!(wait_for(&pending, now), Some(Duration::from_millis(500)));
+    }
+
+    /// A deadline already gone is not a negative sleep.
+    #[test]
+    fn a_deadline_in_the_past_does_not_wait() {
+        let now = Instant::now();
+        let pending = Pending {
+            deadline: Some(now - Duration::from_secs(1)),
+            ..idle()
+        };
+        assert_eq!(wait_for(&pending, now), Some(Duration::ZERO));
+    }
+
+    /// Pending work outranks a deadline: the deadline would be the longer
+    /// sleep, and the queued job would sit through it.
+    #[test]
+    fn pending_work_outranks_a_later_deadline() {
+        let now = Instant::now();
+        let pending = Pending {
+            jobs: true,
+            deadline: Some(now + Duration::from_secs(10)),
+            ..idle()
+        };
+        assert_eq!(wait_for(&pending, now), Some(FRAME));
     }
 }
