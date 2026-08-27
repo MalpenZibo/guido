@@ -1267,9 +1267,8 @@ fn a_container_wakes_when_its_timeline_is_asked_to_play() {
     );
 }
 
-/// The transform this container is painted with, once the queued jobs have
-/// run. A rotation shows up as a matrix that is no longer the identity.
 /// The transform a sequence has reached at the peak of its middle keyframe.
+/// A rotation shows up as a matrix that is no longer the identity.
 ///
 /// Two frames, because they are two different things: the first sees the
 /// trigger move and starts the sequence, the second is 100ms later and is the

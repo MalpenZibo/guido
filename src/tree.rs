@@ -162,8 +162,10 @@ pub struct Tree {
     /// wide enough to survive a loaded machine, which is a band both a linear
     /// and an eased curve fit inside.
     ///
-    /// `process_jobs` writes it, because a pass is what a frame is made of.
-    /// `None` between passes, where nobody should be reading it.
+    /// `render_surface` writes it, around the three passes a frame is made of:
+    /// the jobs advance the animations, layout measures what they produced,
+    /// paint draws it. `None` between frames, where nobody should be reading
+    /// it.
     frame_instant: Option<std::time::Instant>,
 }
 
@@ -187,9 +189,15 @@ impl Tree {
         self.frame_instant.unwrap_or_else(std::time::Instant::now)
     }
 
-    /// Declare the instant of the pass about to run. `process_jobs` is the
-    /// caller; a test that wants to name a moment is the other one.
-    pub(crate) fn set_frame_instant(&mut self, now: Option<std::time::Instant>) {
+    /// Declare the instant of the frame about to run, or `None` when it is
+    /// over.
+    ///
+    /// `render_surface` is the caller in the loop. The other one is a test —
+    /// including a test of a widget written outside this crate, which is why
+    /// this is public: a widget that can read the frame's instant is a widget
+    /// whose behaviour over time can be asked about, and that needs somebody
+    /// able to name the moment.
+    pub fn set_frame_instant(&mut self, now: Option<std::time::Instant>) {
         self.frame_instant = now;
     }
 

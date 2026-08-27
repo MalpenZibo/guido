@@ -821,13 +821,14 @@ mod tests {
 
     /// Step an animation to `ms` after its segment began.
     ///
-    /// The instant is an argument now, so the helper *reads* when the segment
+    /// The instant is an argument now, so the helper reads when the segment
     /// began and asks about `ms` after it, where it used to rewrite that start
-    /// behind the animation's back. Sleeping
-    /// instead would make the interruption point depend on how loaded the
-    /// machine is — and the interesting half of a spring's phase space is on
-    /// the far side of its overshoot, which a stretched sleep wanders into by
-    /// accident.
+    /// behind the animation's back.
+    ///
+    /// Sleeping instead would make the interruption point depend on how loaded
+    /// the machine is — and the interesting half of a spring's phase space is
+    /// on the far side of its overshoot, which a stretched sleep wanders into
+    /// by accident.
     fn at<T: Animatable>(anim: &mut AnimationState<T>, ms: u64) {
         let started = anim.start_time.expect("a segment has begun");
         anim.advance(started + std::time::Duration::from_millis(ms));
