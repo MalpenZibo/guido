@@ -966,6 +966,42 @@ mod tests {
         assert_eq!(keysym_to_key(e, Some("é"), true), Some(Key::Char('é')));
     }
 
+    /// A timestamp equal to the anchor's is the anchor's instant, and one after
+    /// it is that far after. Nothing else about the compositor's epoch matters:
+    /// the protocol says only that its milliseconds increase, so a difference
+    /// is the only thing that can be read out of them.
+    #[test]
+    fn an_events_time_is_read_as_a_distance_from_the_anchor() {
+        let t0 = Instant::now();
+        let clock = EventClock::anchored(1_000, t0);
+
+        assert_eq!(clock.instant(1_000), t0, "the anchor is where it says");
+        assert_eq!(
+            clock.instant(1_250),
+            t0 + Duration::from_millis(250),
+            "and a quarter second later is a quarter second later"
+        );
+    }
+
+    /// The compositor's clock is a `u32` of milliseconds, so it wraps roughly
+    /// every 49 days and a client that has been running across one sees the
+    /// number fall. Subtracting it the ordinary way makes 16ms after the wrap
+    /// look like 49 days before it — a scroll gesture that ended in the far
+    /// past, a caret that never blinks again.
+    #[test]
+    fn a_clock_that_has_wrapped_still_moves_forwards() {
+        let t0 = Instant::now();
+        let clock = EventClock::anchored(u32::MAX - 4, t0);
+
+        // Five milliseconds later the counter has gone round: MAX-4 → MAX → 0
+        // → 11 is sixteen milliseconds of real time.
+        assert_eq!(
+            clock.instant(11),
+            t0 + Duration::from_millis(16),
+            "the wrap is sixteen milliseconds forwards, not forty-nine days back"
+        );
+    }
+
     /// The pointer position the events carry, so a test can tell it apart
     /// from a delta.
     const PX: f32 = 10.0;

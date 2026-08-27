@@ -42,6 +42,20 @@ impl H {
         self.scroll(delta, ScrollSource::Finger);
     }
 
+    /// One scroll sample from any source, at a named moment.
+    fn scroll_at(&mut self, delta: f32, source: ScrollSource, at: std::time::Instant) {
+        self.tree.set_event_instant(Some(at));
+        self.scroll(delta, source);
+        self.tree.set_event_instant(None);
+    }
+
+    /// The finger lifted at a named moment.
+    fn scroll_end_at(&mut self, at: std::time::Instant) {
+        self.tree.set_event_instant(Some(at));
+        self.scroll_end();
+        self.tree.set_event_instant(None);
+    }
+
     /// One scroll sample from any source.
     fn scroll(&mut self, delta: f32, source: ScrollSource) {
         let root = self.root;
@@ -228,5 +242,47 @@ fn a_momentum_left_half_run_is_not_carried_on_by_a_later_frame() {
         (after - interrupted_at).abs() < 0.01,
         "content carried on from {interrupted_at} to {after}: a momentum \
          abandoned mid-flight was resumed instead of being over"
+    );
+}
+
+/// The same gesture, twice as fast, coasts further — and by how much is a
+/// number, on any machine, with nothing asleep.
+///
+/// This could not be written before. A velocity is distance over time, and the
+/// only time available was whatever had elapsed between two `sleep`s, so the
+/// suite could ask that the content moved and never how fast. `Event::Scroll`
+/// now arrives with the moment the compositor saw it, and a test can say what
+/// that moment is.
+#[test]
+fn the_speed_of_a_flick_is_the_distance_over_the_time_it_took() {
+    // Sixty pixels of finger, in six samples. The only difference between the
+    // two gestures is how long they took.
+    fn coast(sample_gap_ms: u64) -> f32 {
+        let mut h = H::new();
+        let t0 = std::time::Instant::now();
+        for i in 1..=6u64 {
+            h.scroll_at(
+                10.0,
+                ScrollSource::Finger,
+                t0 + std::time::Duration::from_millis(i * sample_gap_ms),
+            );
+        }
+        let lifted = h.offset();
+        h.scroll_end_at(t0 + std::time::Duration::from_millis(6 * sample_gap_ms));
+        h.frames(60);
+        h.offset() - lifted
+    }
+
+    let slow = coast(16);
+    let fast = coast(8);
+
+    assert!(
+        slow > 0.0,
+        "a flick has to coast at all before its speed can be compared, got {slow}"
+    );
+    assert!(
+        fast > slow,
+        "the same sixty pixels in half the time is twice the speed and has to \
+         coast further: 8ms samples gave {fast}, 16ms samples {slow}"
     );
 }

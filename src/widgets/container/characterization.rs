@@ -1195,6 +1195,83 @@ fn a_ripple_and_a_transition_are_asked_about_the_same_moment() {
     );
 }
 
+/// An event delivered at a named moment, the way `dispatch_events` delivers
+/// one.
+fn send_at(h: &mut H, at: std::time::Instant, event: Event) -> EventResponse {
+    h.tree.set_event_instant(Some(at));
+    let response = h.send(event);
+    h.tree.set_event_instant(None);
+    response
+}
+
+/// A ripple held for a named length of time has grown by a named amount.
+///
+/// It could not be asked before. A ripple begins when the press arrives and
+/// grows from there, and both ends of that were `Instant::now()` — one read in
+/// the event handler and one in the frame — so a test could hold a press only
+/// by sleeping, and assert only that something had happened.
+#[test]
+fn a_press_held_for_a_named_time_has_grown_by_a_named_amount() {
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(100.0)
+            .when_pressed(|s| s.ripple())
+            .on_click(|| {}),
+    );
+    h.fit(400.0, 400.0);
+
+    let t0 = std::time::Instant::now();
+    send_at(
+        &mut h,
+        t0,
+        Event::MouseDown {
+            x: 50.0,
+            y: 50.0,
+            button: MouseButton::Left,
+        },
+    );
+
+    // A frame later, because the press and the frame are now genuinely the same
+    // instant: at t0 exactly nothing has elapsed and the disc has no opacity to
+    // be drawn with.
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(8),
+        400.0,
+        400.0,
+    );
+    let started = painted_ripple_radius(&mut h).expect("the press starts a ripple");
+
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(120),
+        400.0,
+        400.0,
+    );
+    let held = painted_ripple_radius(&mut h).expect("and holding it keeps one");
+
+    // Asked about the same moment again, it answers the same: the disc is a
+    // function of how long the press has lasted, and nothing else.
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(120),
+        400.0,
+        400.0,
+    );
+    assert_eq!(
+        painted_ripple_radius(&mut h),
+        Some(held),
+        "the same instant twice is the same disc"
+    );
+
+    assert!(
+        held > started,
+        "a hundred and twenty milliseconds of press has to have grown it, \
+         from {started} to {held}"
+    );
+}
+
 /// Lay out, run the queued jobs, paint, and report the first text colour.
 fn painted_text_color(h: &mut H) -> Color {
     pump(h);

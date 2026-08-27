@@ -1395,6 +1395,52 @@ mod tests {
     use crate::layout::Constraints;
     use crate::reactive::create_signal;
 
+    /// Two keystrokes inside the window are one undo, and two outside it are
+    /// two — which is what `HISTORY_COALESCE_MS` promises and nothing could
+    /// ask before.
+    ///
+    /// The window is half a second. A test that wanted to stand on either side
+    /// of it had to sleep for real, so the far side cost five seconds of wall
+    /// clock and the near side was a race against how long the assertions took.
+    /// Both moments are named now.
+    #[test]
+    fn the_coalescing_window_has_two_sides_and_they_can_both_be_asked_about() {
+        let entry = |text: &str| HistoryEntry {
+            text: text.to_string(),
+            cursor: text.chars().count(),
+            anchor: text.chars().count(),
+        };
+
+        let inside = {
+            let t0 = Instant::now();
+            let mut history = History::new();
+            history.push(entry("a"), EditType::Insert, t0);
+            history.push(
+                entry("ab"),
+                EditType::Insert,
+                t0 + Duration::from_millis(50),
+            );
+            history.undo_stack.len()
+        };
+        assert_eq!(
+            inside, 1,
+            "two keystrokes fifty milliseconds apart are one thing to undo"
+        );
+
+        let outside = {
+            let t0 = Instant::now();
+            let mut history = History::new();
+            history.push(entry("a"), EditType::Insert, t0);
+            history.push(entry("ab"), EditType::Insert, t0 + Duration::from_secs(5));
+            history.undo_stack.len()
+        };
+        assert_eq!(
+            outside, 2,
+            "and five seconds apart they are two, because the sentence in \
+             between was a different thought"
+        );
+    }
+
     /// A laid-out input, focused unless told otherwise.
     fn field(input: TextInput, focused: bool) -> (Tree, WidgetId) {
         clear_pending_jobs();
