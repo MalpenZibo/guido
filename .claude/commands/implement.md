@@ -119,5 +119,9 @@ same act as re-blessing a golden to make a test pass.
 Push the branch, `gh pr create`, fill in the template. Link the issue with
 `Closes #$ARGUMENTS`.
 
+Whatever goes under **Left undone** that has to outlive this change gets an
+issue in the same act, and the template gets its number. `AGENTS.md` says why.
+
 Then report back, in five lines: what changed, what proves it, what the review
-found, what you looked at by hand, and anything you left undone and why.
+found, what you looked at by hand, and anything you left undone, why, and
+its issue number.

@@ -189,7 +189,10 @@ themselves when the task touches them; you do not need to read them up front.
    clear. An architectural finding stops the work — that decision belongs to the
    maintainer wherever it surfaces.
 7. **Open the pull request** with the template filled in: what moved, what
-   proves it, what the review found, what you looked at by hand.
+   proves it, what the review found, what you looked at by hand, and what is
+   left undone. Whatever of that last one has to outlive the change gets an
+   issue in the same act — nobody opens a merged pull request's body again, and
+   a follow-up recorded only there is written down and lost in one motion.
 
 `/implement <issue>` does all seven.
 

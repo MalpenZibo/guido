@@ -46,6 +46,8 @@ time. Which example, which compositor, what you saw. Screenshots welcome.
 ## Left undone
 
 <!--
-Anything deliberately out of scope, and why. A follow-up issue number if there
-is one. "Nothing" is a fine answer.
+Anything deliberately out of scope, and why. "Nothing" is a fine answer.
+
+Whatever has to outlive this change gets an issue in the same act; put its
+number here.
 -->

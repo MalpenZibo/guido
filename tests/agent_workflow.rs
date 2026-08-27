@@ -89,6 +89,42 @@ fn backticked(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// A file's prose with its line wrapping removed, so that a sentence pinned by
+/// this file can be re-wrapped by whoever edits the document. Pinning a literal
+/// against wrapped markdown fails the moment a word is added ahead of it, which
+/// is a build failure for a reason nobody meant.
+fn unwrapped(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// From `needle` to the next `until`, or to the end. Two sections here are found
+/// by where they start rather than by index: a `## ` heading runs to the next
+/// heading, a numbered item runs to the blank line after it.
+fn section_from<'a>(text: &'a str, needle: &str, until: &str) -> &'a str {
+    let start = text
+        .find(needle)
+        .unwrap_or_else(|| panic!("this document has no `{needle}`"));
+    let rest = &text[start..];
+    // Searched past the needle, so a delimiter the needle itself begins with
+    // cannot end the section on its own first character.
+    match rest[needle.len()..].find(until) {
+        Some(offset) => &rest[..needle.len() + offset],
+        None => rest,
+    }
+}
+
+/// The `## N. Title` section whose heading mentions `about`, to the next
+/// heading. Found by the heading's words rather than its number, because
+/// inserting a step renumbers it — which is what this file exists to survive.
+fn step_about<'a>(text: &'a str, about: &str) -> &'a str {
+    let heading = text
+        .lines()
+        .filter(|line| line.starts_with("## "))
+        .find(|line| line.to_ascii_lowercase().contains(about))
+        .unwrap_or_else(|| panic!("no step about `{about}`"));
+    section_from(text, heading, "\n## ")
+}
+
 /// "six" -> 6, for the counts that are written as words.
 fn number_word(word: &str) -> Option<usize> {
     const WORDS: &[&str] = &[
@@ -150,16 +186,9 @@ fn implement_numbers_its_steps_in_order() {
 #[test]
 fn agents_md_counts_the_steps_it_lists() {
     let text = read("AGENTS.md");
-    let start = text
-        .find("## Working on a change")
-        .expect("AGENTS.md has no `Working on a change` section");
     // To the next heading, not to the end of the file: a numbered list further
     // down the document is not this list.
-    let rest = &text[start..];
-    let section = match rest[3..].find("\n## ") {
-        Some(offset) => &rest[..offset + 3],
-        None => rest,
-    };
+    let section = section_from(&text, "## Working on a change", "\n## ");
     let steps = numbered_items(section);
     assert_contiguous(&steps, "AGENTS.md");
 
@@ -434,8 +463,8 @@ fn the_reviewer_and_the_command_use_the_same_levels() {
 /// contract asks for it and the issue has somewhere to put the answer.
 #[test]
 fn researching_a_design_decision_is_asked_for_where_the_alternatives_are_written() {
-    let agents = read("AGENTS.md");
-    let spec = read(".claude/commands/spec.md");
+    let agents = unwrapped(&read("AGENTS.md"));
+    let spec = unwrapped(&read(".claude/commands/spec.md"));
 
     const RULE: &str = "A design decision that is not obvious is researched before it is proposed.";
     assert!(
@@ -457,5 +486,64 @@ fn researching_a_design_decision_is_asked_for_where_the_alternatives_are_written
         spec.contains(SLOT),
         "/spec asks for research and its issue body has no {SLOT} for the \
          answer, so the sources have nowhere to go"
+    );
+}
+
+/// Four of the template's five questions are answered by the change and die
+/// with it. **Left undone** is the one that points forward, and the place it is
+/// written is a merged pull request's body — which nobody opens again. So the
+/// answer needs a home outside the pull request, made in the same act as the
+/// sentence, or the sentence is where the work goes to be forgotten.
+///
+/// `AGENTS.md` owns the rule and the reason for it; `/implement` and the
+/// template carry the instruction and point back. So all three name it and only
+/// one explains it — and all three are pinned here, the contract included,
+/// because the document that would be reworded first is the one that reads
+/// least like a checklist.
+///
+/// Pinning a sentence says nothing about whether an issue was ever filed. It
+/// says the ask survives an edit to any one of the three, which is the failure
+/// that actually happened.
+#[test]
+fn what_is_left_undone_is_given_a_home_outside_the_pull_request() {
+    const RULE: &str = "gets an issue in the same act";
+
+    // Where each document says it, not merely that it does somewhere. The
+    // template's comment is read while the body is being filled in; a sentence
+    // that drifts into another section is a sentence nobody sees at the moment
+    // it applies, and a whole-file search cannot tell that from a rule that is
+    // still in place.
+    let agents = read("AGENTS.md");
+    let implement = read(".claude/commands/implement.md");
+    let template = read(".github/pull_request_template.md");
+    let step_seven = section_from(&agents, "**Open the pull request**", "\n\n");
+
+    for (name, section) in [
+        ("AGENTS.md's step 7", step_seven),
+        (
+            "/implement's step about the pull request",
+            step_about(&implement, "pull request"),
+        ),
+        (
+            "the template's `Left undone`",
+            section_from(&template, "## Left undone", "\n## "),
+        ),
+    ] {
+        assert!(
+            unwrapped(section).contains(RULE),
+            "{name} does not say that what is left undone `{RULE}`, so it is \
+             recorded only where a merged pull request keeps it"
+        );
+    }
+
+    // And the contract's own enumeration of what the template asks. Stopping at
+    // four of five is how the question that outlives the pull request ends up
+    // absent from the document that introduces the step.
+    assert!(
+        unwrapped(step_seven)
+            .to_ascii_lowercase()
+            .contains("left undone"),
+        "AGENTS.md's step 7 lists what the template asks and leaves out the one \
+         question whose answer points past this change"
     );
 }
