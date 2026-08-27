@@ -754,7 +754,6 @@ fn paced_out(frame: &Frame, geometry: &Geometry) -> bool {
         && !geometry.scale_changed
 }
 
-/// The physical size, and what about it changed since the last frame.
 /// What a frame asks of whatever is showing it.
 ///
 /// Every request the per-frame path makes of a compositor. The seat and the
@@ -944,6 +943,7 @@ impl SurfaceHost for platform::WaylandState {
     }
 }
 
+/// The physical size, and what about it changed since the last frame.
 struct Geometry {
     physical_width: u32,
     physical_height: u32,
@@ -2265,5 +2265,82 @@ mod a_frame_is_a_description_not_a_connection {
     #[test]
     fn no_callback_in_flight_paces_nothing_out() {
         assert!(!paced_out(&frame(false, false), &geometry(false, false)));
+    }
+}
+
+/// The frame path asks a compositor for things, and this is the asking written
+/// down. `WaylandState` is one answer to it; a recorder that keeps what it was
+/// asked is another, and having two is the whole point — one implementation is
+/// a rename, two is a seam.
+#[cfg(test)]
+mod a_second_host_can_answer_for_a_compositor {
+    use super::*;
+    use crate::platform::Anchor;
+    use crate::surface::{ExclusiveZone, Margin, SurfaceConfig};
+
+    /// Answers nothing and remembers what it was asked. Overrides the three
+    /// methods these tests read and inherits the rest, which is the point of
+    /// the defaults: a host writes down what it wants to watch.
+    #[derive(Default)]
+    struct Recorder {
+        configured: Option<(u32, u32)>,
+        exclusive_zones: Vec<(SurfaceId, i32)>,
+    }
+
+    impl SurfaceHost for Recorder {
+        fn open_frame(&mut self, _id: SurfaceId) -> Option<Frame> {
+            None
+        }
+
+        fn configured_size(&self, _id: SurfaceId) -> Option<(u32, u32)> {
+            self.configured
+        }
+
+        fn set_surface_exclusive_zone(&mut self, id: SurfaceId, zone: i32) {
+            self.exclusive_zones.push((id, zone));
+        }
+    }
+
+    fn bar() -> SurfaceConfig {
+        SurfaceConfig::new()
+            .height(32)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+            .exclusive_zone(ExclusiveZone::Auto)
+    }
+
+    /// The first thing anything has ever asserted about what a surface *asks
+    /// the compositor for*, rather than about what it draws.
+    #[test]
+    fn a_bar_reserving_automatically_asks_for_the_height_it_declared() {
+        let id = SurfaceId::next();
+        let mut host = Recorder {
+            configured: Some((800, 32)),
+            ..Default::default()
+        };
+        resync_exclusive_zone(id, &bar(), &mut host, None);
+        assert_eq!(host.exclusive_zones, vec![(id, 32)]);
+    }
+
+    /// The margin on the anchored edge is part of the reservation: a bar held
+    /// eight pixels off the top edge occupies forty.
+    #[test]
+    fn a_margin_on_the_anchored_edge_is_reserved_too() {
+        let id = SurfaceId::next();
+        let mut host = Recorder {
+            configured: Some((800, 32)),
+            ..Default::default()
+        };
+        resync_exclusive_zone(id, &bar().margin(Margin::all(8)), &mut host, None);
+        assert_eq!(host.exclusive_zones, vec![(id, 40)]);
+    }
+
+    /// A policy that is not `Auto` sends nothing from here — it was sent once,
+    /// when the surface was configured.
+    #[test]
+    fn a_fixed_reservation_is_not_republished_every_frame() {
+        let id = SurfaceId::next();
+        let mut host = Recorder::default();
+        resync_exclusive_zone(id, &bar().exclusive_zone(48u32), &mut host, None);
+        assert!(host.exclusive_zones.is_empty());
     }
 }
