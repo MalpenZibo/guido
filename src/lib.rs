@@ -1434,6 +1434,7 @@ fn render_surface<P: SurfaceHost>(
     layout_roots: &mut Vec<WidgetId>,
     woken: bool,
     active_roots: &rustc_hash::FxHashSet<WidgetId>,
+    at: std::time::Instant,
 ) {
     let Some(frame) = open_frame(ctx) else {
         return;
@@ -1459,7 +1460,11 @@ fn render_surface<P: SurfaceHost>(
     // they produced, paint draws it. Asking the clock inside each of them made
     // one frame several instants, and made the middle of an animation something
     // no test could ask about — only sleep towards.
-    ctx.tree.set_frame_instant(Some(std::time::Instant::now()));
+    //
+    // Handed in rather than read, and sampled once for the pass rather than
+    // once per surface: two bars drawn together are the same moment, and a
+    // driver that wants to say when a frame happened has somewhere to say it.
+    ctx.tree.set_frame_instant(Some(at));
 
     run_jobs(root, ctx.tree, layout_roots, active_roots);
 
@@ -1812,6 +1817,10 @@ impl App {
             // Take the wake request once for all surfaces (not per-surface)
             let woken = take_wake_request();
 
+            // One instant for every surface this pass draws, taken where the
+            // frame is so it dates the frame and not the work ahead of it.
+            let frame_at = std::time::Instant::now();
+
             // Render each surface (no renderer yet means no surface has a
             // GPU state — nothing can be rendered this iteration)
             if let Some(renderer) = renderer.as_mut() {
@@ -1853,7 +1862,7 @@ impl App {
                         renderer,
                         tree: &mut self.tree,
                     };
-                    render_surface(&mut ctx, layout_roots, woken, &active_roots);
+                    render_surface(&mut ctx, layout_roots, woken, &active_roots, frame_at);
                 }
             }
 
