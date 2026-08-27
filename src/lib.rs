@@ -269,10 +269,10 @@ fn close_surface_now(
 /// and log a line saying so, on every resize and every margin change.
 /// `measured` is for the one caller that knows a size the compositor has not
 /// been told about yet: the content-measure pass, which has just computed it.
-fn resync_exclusive_zone(
+fn resync_exclusive_zone<P: SurfaceHost>(
     id: SurfaceId,
     config: &SurfaceConfig,
-    wayland_state: &mut platform::WaylandState,
+    wayland_state: &mut P,
     measured: Option<(u32, u32)>,
 ) {
     if config.exclusive_zone == surface::ExclusiveZone::Auto {
@@ -295,10 +295,10 @@ fn resync_exclusive_zone(
 /// `Auto` reservation follows is always one we own — `follow_axis` gives up on
 /// an axis anchored to both edges, the only kind the compositor sizes — so the
 /// value we asked for is the value that will take effect.
-fn publish_exclusive_zone(
+fn publish_exclusive_zone<P: SurfaceHost>(
     id: SurfaceId,
     config: &SurfaceConfig,
-    wayland_state: &mut platform::WaylandState,
+    wayland_state: &mut P,
     measured: Option<(u32, u32)>,
 ) {
     // A content axis waiting to be measured has no size to reserve for, and the
@@ -320,7 +320,7 @@ fn publish_exclusive_zone(
         return;
     }
 
-    let known = measured.or_else(|| configured_size(wayland_state, id));
+    let known = measured.or_else(|| wayland_state.configured_size(id));
     let width = surface::requested_extent(config.width, known.map(|(w, _)| w));
     let height = surface::requested_extent(config.height, known.map(|(_, h)| h));
     let zone = config
@@ -754,6 +754,195 @@ fn paced_out(frame: &Frame, geometry: &Geometry) -> bool {
         && !geometry.scale_changed
 }
 
+/// What a frame asks of whatever is showing it.
+///
+/// Every request the per-frame path makes of a compositor. The seat and the
+/// session lock are not here, and a later step decides whether they join.
+///
+/// Not *only* the frame path, though it is close: `configured_size` is here for
+/// `send_size`, which belongs to the surface-command path, because both paths
+/// share `publish_exclusive_zone` and a generic caller cannot reach an inherent
+/// method. That leak goes when the surface-command path follows.
+///
+/// `WaylandState` is one implementation. The reason this is a trait and not
+/// that type is that a second one — a recorder, keeping what it was asked
+/// instead of asking — is the only way a test can watch this layer at all,
+/// which is what #264 is about.
+///
+/// **One required method.** `open_frame` has no default because a host that
+/// cannot say what a frame is has nothing to host; every other request defaults
+/// to doing nothing and knowing nothing, which is the honest answer for a host
+/// that does not have that protocol. So the second implementation writes down
+/// what it wants to watch and stays silent about the rest.
+///
+/// What that cannot catch is a method added here and forgotten in
+/// `WaylandState`: it would silently do nothing against a real compositor
+/// rather than fail to build. The defaults are for a host that *cannot* do the
+/// thing, never for one that merely has not been taught to.
+pub(crate) trait SurfaceHost {
+    /// The facts a frame is built from, or `None` if this surface has no size
+    /// to draw at yet. Takes the queued input with it, so calling it twice for
+    /// one frame loses events.
+    fn open_frame(&mut self, id: SurfaceId) -> Option<Frame>;
+
+    /// The size the compositor has confirmed, if it has confirmed one.
+    ///
+    /// Not the size that was *requested*: `WaylandSurfaceState` is created
+    /// holding that, which for a content axis is the 1px placeholder — so
+    /// reading it unconditionally would report a number nobody agreed on as
+    /// though it were live, and make `requested_extent`'s "no size yet" branch
+    /// unreachable while the case it describes was still happening.
+    fn configured_size(&self, id: SurfaceId) -> Option<(u32, u32)> {
+        let _ = id;
+        None
+    }
+
+    /// The width an auto-width popup should be measured against.
+    fn popup_auto_width(&self, id: SurfaceId) -> Option<u32> {
+        let _ = id;
+        None
+    }
+
+    /// Tell the compositor an auto-height popup's content changed height.
+    fn reposition_popup_if_changed(&mut self, id: SurfaceId, new_height: u32) {
+        let _ = (id, new_height);
+    }
+
+    /// Ask for a size. A request: the answer arrives as a configure.
+    fn set_surface_size(&mut self, id: SurfaceId, width: u32, height: u32) {
+        let _ = (id, width, height);
+    }
+
+    /// Publish the screen space this surface reserves.
+    fn set_surface_exclusive_zone(&mut self, id: SurfaceId, zone: i32) {
+        let _ = (id, zone);
+    }
+
+    /// Run `f` and let its requests reach the compositor as one commit, so a
+    /// group of them never shows an intermediate surface on the way.
+    fn batch_layer_requests<F: FnOnce(&mut Self)>(&mut self, id: SurfaceId, f: F) {
+        let _ = id;
+        f(self);
+    }
+
+    /// Whether backdrop blur regions can be published at all.
+    fn supports_blur_region(&self) -> bool {
+        false
+    }
+
+    /// Whether this surface has a region published that would have to be
+    /// withdrawn.
+    fn has_published_blur(&self, id: SurfaceId) -> bool {
+        let _ = id;
+        false
+    }
+
+    /// Whether the last published region was dropped and owes republishing.
+    fn take_blur_resync(&mut self, id: SurfaceId) -> bool {
+        let _ = id;
+        false
+    }
+
+    /// Publish the region to blur behind this surface.
+    fn sync_blur_region(&mut self, id: SurfaceId, rects: Vec<blur::BlurRect>, commit: bool) {
+        let _ = (id, rects, commit);
+    }
+
+    /// Ask to be told when this surface's last frame has been shown.
+    fn request_frame_callback(&mut self, id: SurfaceId) {
+        let _ = id;
+    }
+
+    /// Report damaged buffer pixels, in buffer coordinates. Why it has to
+    /// happen before presenting is on the implementation.
+    fn damage_surface(&mut self, id: SurfaceId, x: i32, y: i32, width: i32, height: i32) {
+        let _ = (id, x, y, width, height);
+    }
+
+    /// Record that the callback asked for is now committed.
+    fn mark_frame_callback_pending(&mut self, id: SurfaceId) {
+        let _ = id;
+    }
+}
+
+impl SurfaceHost for platform::WaylandState {
+    fn open_frame(&mut self, id: SurfaceId) -> Option<Frame> {
+        let surface = self.get_surface_mut(id)?;
+        if !surface.configured {
+            return None;
+        }
+        // Taken before the caller's GPU check, not after: a surface still
+        // building its GPU state drops this frame *and* the input queued for
+        // it. Holding the input instead would deliver a burst of stale events —
+        // a pointer position from several frames ago among them — on the first
+        // frame that renders.
+        let events = surface.take_events();
+        let fully_initialized = surface.first_frame_presented && surface.scale_factor_received;
+        Some(Frame {
+            events,
+            scale_factor: surface.scale_factor,
+            width: surface.width,
+            height: surface.height,
+            frame_callback_pending: surface.frame_callback_pending,
+            force_render_surface: !fully_initialized,
+        })
+    }
+
+    fn configured_size(&self, id: SurfaceId) -> Option<(u32, u32)> {
+        self.get_surface(id)
+            .filter(|s| s.configured)
+            .map(|s| (s.width, s.height))
+    }
+
+    fn popup_auto_width(&self, id: SurfaceId) -> Option<u32> {
+        self.popup_auto_width(id)
+    }
+
+    fn reposition_popup_if_changed(&mut self, id: SurfaceId, new_height: u32) {
+        self.reposition_popup_if_changed(id, new_height)
+    }
+
+    fn set_surface_size(&mut self, id: SurfaceId, width: u32, height: u32) {
+        self.set_surface_size(id, width, height)
+    }
+
+    fn set_surface_exclusive_zone(&mut self, id: SurfaceId, zone: i32) {
+        self.set_surface_exclusive_zone(id, zone)
+    }
+
+    fn batch_layer_requests<F: FnOnce(&mut Self)>(&mut self, id: SurfaceId, f: F) {
+        self.batch_layer_requests(id, f)
+    }
+
+    fn supports_blur_region(&self) -> bool {
+        self.supports_blur_region()
+    }
+
+    fn has_published_blur(&self, id: SurfaceId) -> bool {
+        self.has_published_blur(id)
+    }
+
+    fn take_blur_resync(&mut self, id: SurfaceId) -> bool {
+        self.take_blur_resync(id)
+    }
+
+    fn sync_blur_region(&mut self, id: SurfaceId, rects: Vec<blur::BlurRect>, commit: bool) {
+        self.sync_blur_region(id, rects, commit)
+    }
+
+    fn request_frame_callback(&mut self, id: SurfaceId) {
+        self.request_frame_callback(id)
+    }
+
+    fn damage_surface(&mut self, id: SurfaceId, x: i32, y: i32, width: i32, height: i32) {
+        self.damage_surface(id, x, y, width, height)
+    }
+
+    fn mark_frame_callback_pending(&mut self, id: SurfaceId) {
+        self.mark_frame_callback_pending(id)
+    }
+}
+
 /// The physical size, and what about it changed since the last frame.
 struct Geometry {
     physical_width: u32,
@@ -765,30 +954,11 @@ struct Geometry {
 /// Read the surface's state and take its queued input, or give up on this
 /// frame: an unconfigured surface has no size to render at, and one whose GPU
 /// state has not been built yet gets it on the next iteration.
-fn open_frame(ctx: &mut FrameContext) -> Option<Frame> {
-    let surface = &*ctx.surface;
-    let wayland_surface = ctx.wayland_state.get_surface_mut(ctx.id)?;
-    if !wayland_surface.configured {
-        return None;
-    }
-
-    // Taken before the GPU check, not after: a surface still building its GPU
-    // state drops this frame *and* the input queued for it. Holding the input
-    // instead would deliver a burst of stale events — a pointer position from
-    // several frames ago among them — on the first frame that renders.
-    let events = wayland_surface.take_events();
-    let fully_initialized =
-        wayland_surface.first_frame_presented && wayland_surface.scale_factor_received;
-    let frame = Frame {
-        events,
-        scale_factor: wayland_surface.scale_factor,
-        width: wayland_surface.width,
-        height: wayland_surface.height,
-        frame_callback_pending: wayland_surface.frame_callback_pending,
-        force_render_surface: !fully_initialized,
-    };
-
-    surface.is_gpu_ready().then_some(frame)
+fn open_frame<P: SurfaceHost>(ctx: &mut FrameContext<P>) -> Option<Frame> {
+    // The host answers for the compositor; the GPU readiness is ours, and a
+    // surface still building its swapchain has nowhere to draw.
+    let frame = ctx.wayland_state.open_frame(ctx.id)?;
+    ctx.surface.is_gpu_ready().then_some(frame)
 }
 
 /// Resolve the physical size and bring the swapchain in line with it.
@@ -796,7 +966,7 @@ fn open_frame(ctx: &mut FrameContext) -> Option<Frame> {
 /// Runs after input rather than with the rest of the snapshot: dispatching
 /// events cannot change the surface size, but resizing the swapchain before
 /// the widgets have been told anything would reorder the frame for no gain.
-fn resolve_geometry(ctx: &mut FrameContext, frame: &Frame) -> Geometry {
+fn resolve_geometry<P: SurfaceHost>(ctx: &mut FrameContext<P>, frame: &Frame) -> Geometry {
     let id = ctx.id;
     let surface = &mut *ctx.surface;
     let scale = frame.scale_factor as u32;
@@ -844,8 +1014,8 @@ fn resolve_geometry(ctx: &mut FrameContext, frame: &Frame) -> Geometry {
 /// themselves re-run, from their relayout boundaries. A full layout from the
 /// root happens only on a resize, because that is the one change no widget
 /// can have noticed on its own.
-fn layout_pass(
-    ctx: &mut FrameContext,
+fn layout_pass<P: SurfaceHost>(
+    ctx: &mut FrameContext<P>,
     frame: &Frame,
     geometry: &Geometry,
     has_pending_layouts: bool,
@@ -983,20 +1153,6 @@ fn layout_pass(
     reactive::focus::apply_pending_focus(tree);
 }
 
-/// The size the compositor has confirmed, if it has confirmed one.
-///
-/// `WaylandSurfaceState` is created holding the size that was *requested*, which
-/// for a content axis is the 1px placeholder — so reading it unconditionally
-/// would report a number nobody agreed on as though it were live, and make
-/// `requested_extent`'s "no size yet" branch unreachable while the case it
-/// describes was still happening.
-fn configured_size(wayland_state: &platform::WaylandState, id: SurfaceId) -> Option<(u32, u32)> {
-    wayland_state
-        .get_surface(id)
-        .filter(|s| s.configured)
-        .map(|s| (s.width, s.height))
-}
-
 /// Send the size the surface is currently asking for, and report whether the
 /// content-measure pass has to run before that answer is right.
 ///
@@ -1025,7 +1181,7 @@ fn send_size(
     surface: &ManagedSurface,
     wayland_state: &mut platform::WaylandState,
 ) -> (bool, WidgetId) {
-    let live = configured_size(wayland_state, id);
+    let live = wayland_state.configured_size(id);
     let (ask_w, ask_h, needs_measure) = surface::resize_request(&surface.config, live);
     wayland_state.set_surface_size(id, ask_w, ask_h);
     (needs_measure, surface.widget_id)
@@ -1065,7 +1221,11 @@ fn reconfigure<R>(
 /// are both requested BEFORE presenting, because presenting is what commits
 /// the surface. Anything set afterwards would ride an empty second commit
 /// the compositor cannot use.
-fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry) {
+fn paint_and_present<P: SurfaceHost>(
+    ctx: &mut FrameContext<P>,
+    frame: &Frame,
+    geometry: &Geometry,
+) {
     let id = ctx.id;
     let surface = &mut *ctx.surface;
     let wayland_state = &mut *ctx.wayland_state;
@@ -1220,17 +1380,17 @@ fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry)
 /// and it spares every phase below the parameter list that had already grown
 /// past what anyone reads. Each phase reborrows what it uses, so its body
 /// reads as if it still owned the arguments.
-struct FrameContext<'a> {
+struct FrameContext<'a, P: SurfaceHost> {
     id: SurfaceId,
     surface: &'a mut surface_manager::ManagedSurface,
-    wayland_state: &'a mut platform::WaylandState,
+    wayland_state: &'a mut P,
     renderer: &'a mut Renderer,
     tree: &'a mut Tree,
 }
 
 /// One surface, one frame, in the order the phases have to run.
-fn render_surface(
-    ctx: &mut FrameContext,
+fn render_surface<P: SurfaceHost>(
+    ctx: &mut FrameContext<P>,
     layout_roots: &mut Vec<WidgetId>,
     woken: bool,
     active_roots: &rustc_hash::FxHashSet<WidgetId>,
@@ -2105,5 +2265,82 @@ mod a_frame_is_a_description_not_a_connection {
     #[test]
     fn no_callback_in_flight_paces_nothing_out() {
         assert!(!paced_out(&frame(false, false), &geometry(false, false)));
+    }
+}
+
+/// The frame path asks a compositor for things, and this is the asking written
+/// down. `WaylandState` is one answer to it; a recorder that keeps what it was
+/// asked is another, and having two is the whole point — one implementation is
+/// a rename, two is a seam.
+#[cfg(test)]
+mod a_second_host_can_answer_for_a_compositor {
+    use super::*;
+    use crate::platform::Anchor;
+    use crate::surface::{ExclusiveZone, Margin, SurfaceConfig};
+
+    /// Answers nothing and remembers what it was asked. Overrides the three
+    /// methods these tests read and inherits the rest, which is the point of
+    /// the defaults: a host writes down what it wants to watch.
+    #[derive(Default)]
+    struct Recorder {
+        configured: Option<(u32, u32)>,
+        exclusive_zones: Vec<(SurfaceId, i32)>,
+    }
+
+    impl SurfaceHost for Recorder {
+        fn open_frame(&mut self, _id: SurfaceId) -> Option<Frame> {
+            None
+        }
+
+        fn configured_size(&self, _id: SurfaceId) -> Option<(u32, u32)> {
+            self.configured
+        }
+
+        fn set_surface_exclusive_zone(&mut self, id: SurfaceId, zone: i32) {
+            self.exclusive_zones.push((id, zone));
+        }
+    }
+
+    fn bar() -> SurfaceConfig {
+        SurfaceConfig::new()
+            .height(32)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+            .exclusive_zone(ExclusiveZone::Auto)
+    }
+
+    /// The first thing anything has ever asserted about what a surface *asks
+    /// the compositor for*, rather than about what it draws.
+    #[test]
+    fn a_bar_reserving_automatically_asks_for_the_height_it_declared() {
+        let id = SurfaceId::next();
+        let mut host = Recorder {
+            configured: Some((800, 32)),
+            ..Default::default()
+        };
+        resync_exclusive_zone(id, &bar(), &mut host, None);
+        assert_eq!(host.exclusive_zones, vec![(id, 32)]);
+    }
+
+    /// The margin on the anchored edge is part of the reservation: a bar held
+    /// eight pixels off the top edge occupies forty.
+    #[test]
+    fn a_margin_on_the_anchored_edge_is_reserved_too() {
+        let id = SurfaceId::next();
+        let mut host = Recorder {
+            configured: Some((800, 32)),
+            ..Default::default()
+        };
+        resync_exclusive_zone(id, &bar().margin(Margin::all(8)), &mut host, None);
+        assert_eq!(host.exclusive_zones, vec![(id, 40)]);
+    }
+
+    /// A policy that is not `Auto` sends nothing from here — it was sent once,
+    /// when the surface was configured.
+    #[test]
+    fn a_fixed_reservation_is_not_republished_every_frame() {
+        let id = SurfaceId::next();
+        let mut host = Recorder::default();
+        resync_exclusive_zone(id, &bar().exclusive_zone(48u32), &mut host, None);
+        assert!(host.exclusive_zones.is_empty());
     }
 }
