@@ -1388,12 +1388,53 @@ struct FrameContext<'a, P: SurfaceHost> {
     tree: &'a mut Tree,
 }
 
+/// What the loop knows about waiting work when it decides how long to sleep.
+struct Pending {
+    /// A surface has nothing on screen yet, so it must not wait for input to
+    /// arrive before drawing.
+    force_render: bool,
+    /// Jobs queued by the previous frame — animation continuations, mostly.
+    jobs: bool,
+    /// A wake request that landed *after* this iteration consumed the flag.
+    /// Blocking on one already set would suppress every later ping, so it
+    /// counts as pending work rather than as a reason to sleep — see
+    /// [`jobs::wake_request_pending`].
+    wake_requested: bool,
+    /// When the next scheduled thing is due, if anything is scheduled.
+    deadline: Option<std::time::Instant>,
+}
+
+/// How long this iteration may sleep before it has to look again.
+///
+/// `None` blocks until the compositor or a ping. Nothing queued can be stranded
+/// by that: work and its wakeup are one gesture — see `deferred` and the
+/// ingress channel.
+///
+/// Waiting work polls at frame rate instead, and it outranks a deadline: the
+/// deadline is the longer sleep of the two, and the queued job would sit
+/// through it.
+///
+/// A deadline alone sleeps exactly that long. A caret blinks twice a second, so
+/// this wakes once, where treating a schedule as pending work would spin at 60
+/// fps to repaint nothing 113 frames out of 114.
+///
+/// `now` is passed rather than read so the decision can be asked about.
+fn wait_for(pending: &Pending, now: std::time::Instant) -> Option<std::time::Duration> {
+    if pending.jobs || pending.force_render || pending.wake_requested {
+        return Some(std::time::Duration::from_millis(16));
+    }
+    pending
+        .deadline
+        .map(|deadline| deadline.saturating_duration_since(now))
+}
+
 /// One surface, one frame, in the order the phases have to run.
 fn render_surface<P: SurfaceHost>(
     ctx: &mut FrameContext<P>,
     layout_roots: &mut Vec<WidgetId>,
     woken: bool,
     active_roots: &rustc_hash::FxHashSet<WidgetId>,
+    at: std::time::Instant,
 ) {
     let Some(frame) = open_frame(ctx) else {
         return;
@@ -1419,7 +1460,12 @@ fn render_surface<P: SurfaceHost>(
     // they produced, paint draws it. Asking the clock inside each of them made
     // one frame several instants, and made the middle of an animation something
     // no test could ask about — only sleep towards.
-    ctx.tree.set_frame_instant(Some(std::time::Instant::now()));
+    //
+    // Handed in rather than read, and sampled once per iteration rather than
+    // once per surface: two bars drawn in the same pass are the same moment,
+    // and a driver that wants to say when a frame happened has somewhere to
+    // say it.
+    ctx.tree.set_frame_instant(Some(at));
 
     run_jobs(root, ctx.tree, layout_roots, active_roots);
 
@@ -1686,38 +1732,16 @@ impl App {
 
         // Main loop - event-driven, blocks until Wayland event or signal update
         loop {
-            // Check if all surfaces are fully initialized
-            let any_surface_needs_init = wayland_state.any_surface_needs_render();
-            let force_render = any_surface_needs_init;
-
             // Anything whose deadline has arrived becomes ordinary pending work.
             jobs::promote_due_jobs();
 
-            // Check if we need to actively poll: jobs pushed during the
-            // previous frame, or a wake request that landed after this
-            // iteration consumed the flag (blocking on a set flag would
-            // suppress all later pings — see wake_request_pending).
-            let has_pending = has_pending_jobs();
-            let needs_polling = has_pending || force_render || jobs::wake_request_pending();
-
-            // Dispatch events from calloop:
-            // - If polling needed (animations/callbacks/init), use timeout
-            // - If something is due later (a blinking caret), sleep until then
-            // - Otherwise block until event (Wayland or ping wakeup)
-            let timeout = if needs_polling {
-                Some(std::time::Duration::from_millis(16)) // ~60fps for animations
-            } else {
-                // Not polling — waiting. A deadline sleeps exactly that long: a
-                // caret blinks twice a second, so this wakes once where treating
-                // the schedule as pending work would spin at 60 fps to repaint
-                // nothing 113 frames out of 114.
-                //
-                // No deadline means blocking until the compositor or a ping.
-                // Nothing queued can be stranded by that: work and its wakeup
-                // are one gesture — see `deferred` and the ingress channel.
-                jobs::next_deadline()
-                    .map(|deadline| deadline.saturating_duration_since(std::time::Instant::now()))
+            let pending = Pending {
+                force_render: wayland_state.any_surface_needs_render(),
+                jobs: has_pending_jobs(),
+                wake_requested: jobs::wake_request_pending(),
+                deadline: jobs::next_deadline(),
             };
+            let timeout = wait_for(&pending, std::time::Instant::now());
 
             if let Err(e) = event_loop.dispatch(timeout, &mut wayland_state) {
                 // The connection died (compositor exited, protocol error).
@@ -1726,134 +1750,173 @@ impl App {
                 return ExitReason::Error(platform::PlatformError::ConnectionLost);
             }
 
-            // Reset ping coalescing: the first wake_loop from here on
-            // sends a fresh ping so the next dispatch can't block on
-            // work queued during this iteration.
-            jobs::mark_loop_awake();
-
-            // Check for programmatic exit/restart requests
-            match get_exit_request() {
-                jobs::ExitRequest::Quit => break,
-                jobs::ExitRequest::Restart => return ExitReason::Restart,
-                jobs::ExitRequest::Running => {}
-            }
-
-            if wayland_state.exit {
-                break;
-            }
-
-            // Drive the session-lock state machine (lock/unlock requests,
-            // grant/denial events, per-output lock surfaces)
-            session_lock::process_session_lock(
-                &mut surface_manager,
-                &mut wayland_state,
-                &qh,
-                &mut self.tree,
-            );
-
-            // Run deferred owner disposals (public dispose_owner). Safe
-            // here: no user closure is on the stack.
-            reactive::owner::flush_pending_disposals();
-
-            // Process dynamic surface commands
-            if !process_surface_commands(
-                &mut surface_manager,
-                &mut wayland_state,
-                &qh,
-                &mut self.tree,
-            ) {
-                break;
-            }
-
-            // Initialize GPU for any pending surfaces (newly created dynamic surfaces)
-            surface_manager.init_pending_gpu(
-                &gpu_context,
-                &connection,
-                &wayland_state,
-                &mut self.tree,
-            );
-
-            // Lazily create the shared renderer once the first surface has a
-            // GPU state (apps may start with zero surfaces and spawn them
-            // dynamically, e.g. one bar per output).
-            if renderer.is_none()
-                && let Some(wgpu_surface) = surface_manager.first_gpu_surface()
-            {
-                renderer = Some(Renderer::new(
-                    wgpu_surface.device.clone(),
-                    wgpu_surface.queue.clone(),
-                    wgpu_surface.config.format,
-                ));
-            }
-
-            // Flush background-thread signal writes once per frame (queued via WriteSignal).
-            // Must run before take_wake_request() so that signal changes from bg writes
-            // are processed into jobs before we check the wake request.
-            reactive::flush_bg_writes();
-
-            // Take the wake request once for all surfaces (not per-surface)
-            let woken = take_wake_request();
-
-            // Render each surface (no renderer yet means no surface has a
-            // GPU state — nothing can be rendered this iteration)
-            if let Some(renderer) = renderer.as_mut() {
-                let surface_ids: Vec<SurfaceId> = surface_manager.ids().collect();
-
-                // Live surface roots: the ownership domain for job
-                // scheduling. Computed after surface commands/session-lock
-                // processing so closed surfaces are already gone.
-                let active_roots: rustc_hash::FxHashSet<WidgetId> = surface_ids
-                    .iter()
-                    .filter_map(|sid| surface_manager.get(*sid).map(|s| s.widget_id))
-                    .collect();
-
-                // Resolve job ownership, then run the orphan lane: jobs
-                // whose widget has no live surface (deferred Unregister
-                // cleanup from closed surfaces, mostly) must not wait for
-                // a render pass that will never come.
-                jobs::distribute_jobs(&self.tree, &active_roots);
-                let orphans = jobs::drain_orphan_jobs();
-                if !orphans.is_empty() {
-                    let mut scratch_layout_roots = Vec::new();
-                    process_jobs(&orphans, &mut self.tree, &mut scratch_layout_roots);
-                }
-                jobs::recycle_job_buffer(orphans);
-
-                // Drop layout roots of surfaces that no longer exist.
-                self.layout_roots
-                    .retain(|root, _| active_roots.contains(root));
-
-                for id in surface_ids {
-                    let Some(surface) = surface_manager.get_mut(id) else {
-                        continue;
-                    };
-                    let layout_roots = self.layout_roots.entry(surface.widget_id).or_default();
-                    let mut ctx = FrameContext {
-                        id,
-                        surface,
-                        wayland_state: &mut wayland_state,
-                        renderer,
-                        tree: &mut self.tree,
-                    };
-                    render_surface(&mut ctx, layout_roots, woken, &active_roots);
-                }
-            }
-
-            // Hand the seat what the widgets changed — after the render
-            // pass, so a copy or a cursor set by this iteration's event
-            // handling still goes out in this iteration, and outside it, so
-            // it goes out whether or not any surface had a frame to draw.
-            sync_platform_state(&mut wayland_state, &qh);
-
-            // Flush the connection once for all surfaces
-            if let Err(e) = connection.flush() {
-                log::error!("Wayland connection flush failed: {e}");
-                return ExitReason::Error(platform::PlatformError::ConnectionLost);
+            let ctx = LoopContext {
+                connection: &connection,
+                qh: &qh,
+                wayland_state: &mut wayland_state,
+                surface_manager: &mut surface_manager,
+                gpu_context: &gpu_context,
+                renderer: &mut renderer,
+            };
+            if let Some(reason) = iterate(ctx, &mut self.tree, &mut self.layout_roots, None) {
+                return reason;
             }
         }
-
-        ExitReason::Quit
     }
+}
+
+/// Every handle one iteration needs, in one place.
+struct LoopContext<'a> {
+    connection: &'a smithay_client_toolkit::reexports::client::Connection,
+    qh: &'a QueueHandle<platform::WaylandState>,
+    wayland_state: &'a mut platform::WaylandState,
+    surface_manager: &'a mut SurfaceManager,
+    gpu_context: &'a GpuContext,
+    renderer: &'a mut Option<Renderer>,
+}
+
+/// Everything one iteration does once it has finished waiting.
+///
+/// Split from the waiting because the waiting is calloop's and this is
+/// guido's: a driver that wants to step the application forward wants this
+/// half and not the other. `run` calls it after every dispatch; #264 step 5
+/// is where something else does.
+///
+/// `frame_at` names the moment every surface drawn this pass is drawn at, for a
+/// driver that wants to. `None` takes it at the render pass, which is what the
+/// loop passes: sampling before this function would date the frame from before
+/// the session lock, the surface commands and — on the iteration that builds
+/// one — the whole of `Renderer::new`.
+///
+/// `Some` ends the loop with that reason.
+fn iterate(
+    ctx: LoopContext<'_>,
+    tree: &mut Tree,
+    layout_roots: &mut rustc_hash::FxHashMap<WidgetId, Vec<WidgetId>>,
+    frame_at: Option<std::time::Instant>,
+) -> Option<ExitReason> {
+    let LoopContext {
+        connection,
+        qh,
+        gpu_context,
+        wayland_state,
+        surface_manager,
+        renderer,
+    } = ctx;
+    // Reset ping coalescing first: the first wake_loop from here on sends a
+    // fresh ping, so the next dispatch cannot block on work queued during
+    // this iteration.
+    jobs::mark_loop_awake();
+
+    // Check for programmatic exit/restart requests
+    match get_exit_request() {
+        jobs::ExitRequest::Quit => return Some(ExitReason::Quit),
+        jobs::ExitRequest::Restart => return Some(ExitReason::Restart),
+        jobs::ExitRequest::Running => {}
+    }
+
+    if wayland_state.exit {
+        return Some(ExitReason::Quit);
+    }
+
+    // Drive the session-lock state machine (lock/unlock requests,
+    // grant/denial events, per-output lock surfaces)
+    session_lock::process_session_lock(surface_manager, wayland_state, qh, tree);
+
+    // Run deferred owner disposals (public dispose_owner). Safe
+    // here: no user closure is on the stack.
+    reactive::owner::flush_pending_disposals();
+
+    // Process dynamic surface commands
+    if !process_surface_commands(surface_manager, wayland_state, qh, tree) {
+        return Some(ExitReason::Quit);
+    }
+
+    // Initialize GPU for any pending surfaces (newly created dynamic surfaces)
+    surface_manager.init_pending_gpu(gpu_context, connection, wayland_state, tree);
+
+    // Lazily create the shared renderer once the first surface has a
+    // GPU state (apps may start with zero surfaces and spawn them
+    // dynamically, e.g. one bar per output).
+    if renderer.is_none()
+        && let Some(wgpu_surface) = surface_manager.first_gpu_surface()
+    {
+        *renderer = Some(Renderer::new(
+            wgpu_surface.device.clone(),
+            wgpu_surface.queue.clone(),
+            wgpu_surface.config.format,
+        ));
+    }
+
+    // Flush background-thread signal writes once per frame (queued via WriteSignal).
+    // Must run before take_wake_request() so that signal changes from bg writes
+    // are processed into jobs before we check the wake request.
+    reactive::flush_bg_writes();
+
+    // Take the wake request once for all surfaces (not per-surface)
+    let woken = take_wake_request();
+
+    // One instant for every surface this pass draws, taken here rather than at
+    // the top of the iteration so it dates the frame and not the work ahead of
+    // it. A driver that named one is obeyed.
+    let frame_at = frame_at.unwrap_or_else(std::time::Instant::now);
+
+    // Render each surface (no renderer yet means no surface has a
+    // GPU state — nothing can be rendered this iteration)
+    if let Some(renderer) = renderer.as_mut() {
+        let surface_ids: Vec<SurfaceId> = surface_manager.ids().collect();
+
+        // Live surface roots: the ownership domain for job
+        // scheduling. Computed after surface commands/session-lock
+        // processing so closed surfaces are already gone.
+        let active_roots: rustc_hash::FxHashSet<WidgetId> = surface_ids
+            .iter()
+            .filter_map(|sid| surface_manager.get(*sid).map(|s| s.widget_id))
+            .collect();
+
+        // Resolve job ownership, then run the orphan lane: jobs
+        // whose widget has no live surface (deferred Unregister
+        // cleanup from closed surfaces, mostly) must not wait for
+        // a render pass that will never come.
+        jobs::distribute_jobs(tree, &active_roots);
+        let orphans = jobs::drain_orphan_jobs();
+        if !orphans.is_empty() {
+            let mut scratch_layout_roots = Vec::new();
+            process_jobs(&orphans, tree, &mut scratch_layout_roots);
+        }
+        jobs::recycle_job_buffer(orphans);
+
+        // Drop layout roots of surfaces that no longer exist.
+        layout_roots.retain(|root, _| active_roots.contains(root));
+
+        for id in surface_ids {
+            let Some(surface) = surface_manager.get_mut(id) else {
+                continue;
+            };
+            let layout_roots = layout_roots.entry(surface.widget_id).or_default();
+            let mut ctx = FrameContext {
+                id,
+                surface,
+                wayland_state,
+                renderer,
+                tree,
+            };
+            render_surface(&mut ctx, layout_roots, woken, &active_roots, frame_at);
+        }
+    }
+
+    // Hand the seat what the widgets changed — after the render
+    // pass, so a copy or a cursor set by this iteration's event
+    // handling still goes out in this iteration, and outside it, so
+    // it goes out whether or not any surface had a frame to draw.
+    sync_platform_state(wayland_state, qh);
+
+    // Flush the connection once for all surfaces
+    if let Err(e) = connection.flush() {
+        log::error!("Wayland connection flush failed: {e}");
+        return Some(ExitReason::Error(platform::PlatformError::ConnectionLost));
+    }
+    None
 }
 
 impl Drop for App {
@@ -2342,5 +2405,92 @@ mod a_second_host_can_answer_for_a_compositor {
         let mut host = Recorder::default();
         resync_exclusive_zone(id, &bar().exclusive_zone(48u32), &mut host, None);
         assert!(host.exclusive_zones.is_empty());
+    }
+}
+
+/// How long an iteration is allowed to sleep is a decision, and it was four
+/// conditions inline in `App::run` — reachable only by running a compositor.
+#[cfg(test)]
+mod what_the_loop_waits_for {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    const FRAME: Duration = Duration::from_millis(16);
+
+    fn idle() -> Pending {
+        Pending {
+            force_render: false,
+            jobs: false,
+            wake_requested: false,
+            deadline: None,
+        }
+    }
+
+    /// Nothing queued and nothing scheduled: sleep until the compositor or a
+    /// ping says otherwise. Anything else would spin.
+    #[test]
+    fn an_idle_loop_blocks() {
+        assert_eq!(wait_for(&idle(), Instant::now()), None);
+    }
+
+    /// Each on its own, because any one of them means work is waiting and a
+    /// block would strand it. `wake_requested` is the subtle one: it lands
+    /// *after* the iteration consumed the flag, and blocking on it would
+    /// suppress every later ping.
+    #[test]
+    fn any_pending_work_polls_at_frame_rate() {
+        for pending in [
+            Pending {
+                jobs: true,
+                ..idle()
+            },
+            Pending {
+                force_render: true,
+                ..idle()
+            },
+            Pending {
+                wake_requested: true,
+                ..idle()
+            },
+        ] {
+            assert_eq!(wait_for(&pending, Instant::now()), Some(FRAME));
+        }
+    }
+
+    /// A caret blinks twice a second. Sleeping exactly that long wakes once,
+    /// where treating a schedule as pending work would repaint nothing 113
+    /// frames out of 114.
+    #[test]
+    fn a_deadline_is_slept_to_exactly() {
+        let now = Instant::now();
+        let pending = Pending {
+            deadline: Some(now + Duration::from_millis(500)),
+            ..idle()
+        };
+        assert_eq!(wait_for(&pending, now), Some(Duration::from_millis(500)));
+    }
+
+    /// A deadline already gone is not a negative sleep.
+    #[test]
+    fn a_deadline_in_the_past_does_not_wait() {
+        let now = Instant::now();
+        let pending = Pending {
+            deadline: Some(now - Duration::from_secs(1)),
+            ..idle()
+        };
+        assert_eq!(wait_for(&pending, now), Some(Duration::ZERO));
+    }
+
+    /// Pending work outranks a deadline: the deadline would be the longer
+    /// sleep, and the queued job would sit through it.
+    #[test]
+    fn pending_work_outranks_a_later_deadline() {
+        let now = Instant::now();
+        let pending = Pending {
+            jobs: true,
+            deadline: Some(now + Duration::from_secs(10)),
+            ..idle()
+        };
+        assert_eq!(wait_for(&pending, now), Some(FRAME));
     }
 }
