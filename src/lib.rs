@@ -227,7 +227,6 @@ pub mod widget_prelude {
 }
 
 use smithay_client_toolkit::reexports::client::QueueHandle;
-use smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface;
 
 use crate::{
     jobs::{get_exit_request, has_pending_jobs, init_wakeup, process_jobs, take_wake_request},
@@ -736,7 +735,23 @@ struct Frame {
     /// pacing gate and repaints in full — it has nothing on screen to pace
     /// against.
     force_render_surface: bool,
-    wl_surface: WlSurface,
+}
+
+/// Whether this frame would only queue behind one the compositor has not shown.
+///
+/// The three that open the gate anyway — the fields say why each is what it is
+/// — are a surface with nothing on screen yet, a resize, and a scale change:
+/// all three have something to tell the compositor that cannot wait for a
+/// callback.
+///
+/// A function rather than the condition inline, because it is the one decision
+/// in the frame path that can be taken from a `Frame` and a `Geometry` alone,
+/// and so the one a test could reach first.
+fn paced_out(frame: &Frame, geometry: &Geometry) -> bool {
+    frame.frame_callback_pending
+        && !frame.force_render_surface
+        && !geometry.needs_resize
+        && !geometry.scale_changed
 }
 
 /// The physical size, and what about it changed since the last frame.
@@ -771,7 +786,6 @@ fn open_frame(ctx: &mut FrameContext) -> Option<Frame> {
         height: wayland_surface.height,
         frame_callback_pending: wayland_surface.frame_callback_pending,
         force_render_surface: !fully_initialized,
-        wl_surface: wayland_surface.wl_surface.clone(),
     };
 
     surface.is_gpu_ready().then_some(frame)
@@ -842,7 +856,6 @@ fn layout_pass(
     let wayland_state = &mut *ctx.wayland_state;
     let renderer = &mut *ctx.renderer;
     let tree = &mut *ctx.tree;
-    let qh = ctx.qh;
 
     // Update renderer for this surface
     renderer.set_screen_size(
@@ -891,7 +904,7 @@ fn layout_pass(
         tree.with_widget_mut(surface.widget_id, |widget, wid, tree| {
             widget.layout(tree, wid, constraints);
         });
-        wayland_state.reposition_popup_if_changed(id, natural, qh);
+        wayland_state.reposition_popup_if_changed(id, natural);
     } else if (has_pending_layouts || frame.force_render_surface)
         && surface::needs_content_measure(&surface.config)
     {
@@ -1058,7 +1071,6 @@ fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry)
     let wayland_state = &mut *ctx.wayland_state;
     let renderer = &mut *ctx.renderer;
     let tree = &mut *ctx.tree;
-    let qh = ctx.qh;
 
     // Force full repaint on resize, scale change, or during initialization
     if frame.force_render_surface || geometry.needs_resize || geometry.scale_changed {
@@ -1076,7 +1088,7 @@ fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry)
         // drops its regions, and that says so.
         if wayland_state.take_blur_resync(id) {
             let blur_rects = blur::regions_from_commands(&surface.flattened_commands);
-            wayland_state.sync_blur_region(id, blur_rects, qh, true);
+            wayland_state.sync_blur_region(id, blur_rects, true);
         }
         render_stats::record_frame_skipped();
         render_stats::end_frame(&DamageRegion::None);
@@ -1122,27 +1134,21 @@ fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry)
         && (compositor_blur || wayland_state.has_published_blur(id))
     {
         let blur_rects = blur::regions_from_commands(&surface.flattened_commands);
-        wayland_state.sync_blur_region(id, blur_rects, qh, false);
+        wayland_state.sync_blur_region(id, blur_rects, false);
     }
 
-    // Re-arm the frame callback BEFORE presenting so the request rides
-    // the same commit as the buffer (present() commits internally). The
-    // callback's arrival is the signal that this surface may render its
-    // next frame. Previously the callback was requested exactly once at
-    // startup and never again — the only pacing was the event loop
+    // Here, above `present`, because both of these have to ride its commit —
+    // why is on the two methods. Previously the callback was requested exactly
+    // once at startup and never again, and the only pacing was the event loop
     // blocking inside the Fifo swapchain.
-    frame.wl_surface.frame(qh, frame.wl_surface.clone());
+    wayland_state.request_frame_callback(id);
 
-    // Report damage BEFORE presenting: presenting attaches the buffer and
-    // commits the frame.wl_surface (inside wgpu/the driver's Wayland path), so
-    // pending damage set now is part of that commit. The previous code
-    // damaged + committed AFTER present, attaching the damage to an empty
-    // second commit the compositor could not use.
     let damage = tree.take_damage(surface.widget_id);
     match damage {
         DamageRegion::None => {
             // Shouldn't happen since we're rendering, but report full damage to be safe
-            frame.wl_surface.damage_buffer(
+            wayland_state.damage_surface(
+                id,
                 0,
                 0,
                 geometry.physical_width as i32,
@@ -1151,7 +1157,8 @@ fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry)
         }
         DamageRegion::Partial(rect) => {
             let scale = frame.scale_factor;
-            frame.wl_surface.damage_buffer(
+            wayland_state.damage_surface(
+                id,
                 (rect.x * scale) as i32,
                 (rect.y * scale) as i32,
                 (rect.width * scale).ceil() as i32,
@@ -1159,7 +1166,8 @@ fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry)
             );
         }
         DamageRegion::Full => {
-            frame.wl_surface.damage_buffer(
+            wayland_state.damage_surface(
+                id,
                 0,
                 0,
                 geometry.physical_width as i32,
@@ -1203,11 +1211,7 @@ fn paint_and_present(ctx: &mut FrameContext, frame: &Frame, geometry: &Geometry)
     render_stats::record_frame_painted();
     render_stats::end_frame(&damage);
 
-    // The frame callback requested before present is now committed;
-    // rendering for this surface is gated until it fires.
-    if let Some(ws) = wayland_state.get_surface_mut(id) {
-        ws.frame_callback_pending = true;
-    }
+    wayland_state.mark_frame_callback_pending(id);
 }
 
 /// The borrows a frame needs from start to finish, in one place.
@@ -1222,7 +1226,6 @@ struct FrameContext<'a> {
     wayland_state: &'a mut platform::WaylandState,
     renderer: &'a mut Renderer,
     tree: &'a mut Tree,
-    qh: &'a QueueHandle<platform::WaylandState>,
 }
 
 /// One surface, one frame, in the order the phases have to run.
@@ -1241,20 +1244,12 @@ fn render_surface(
 
     let geometry = resolve_geometry(ctx, &frame);
 
-    // Frame pacing: while a `wl_surface.frame` callback is in flight the
-    // compositor has not shown the previous frame, so another one would only
-    // queue behind it.
-    //
     // This returns BEFORE draining jobs, and that is the whole point:
     // animation continuations have to stay queued. Advancing them on every
     // loop iteration would re-ping the wakeup each time and spin the loop
     // flat out between frame callbacks. Input was dispatched above, so it is
     // never delayed by the gate; initialisation and resizes bypass it.
-    if frame.frame_callback_pending
-        && !frame.force_render_surface
-        && !geometry.needs_resize
-        && !geometry.scale_changed
-    {
+    if paced_out(&frame, &geometry) {
         render_stats::record_frame_skipped();
         return;
     }
@@ -1679,7 +1674,6 @@ impl App {
                         wayland_state: &mut wayland_state,
                         renderer,
                         tree: &mut self.tree,
-                        qh: &qh,
                     };
                     render_surface(&mut ctx, layout_roots, woken, &active_roots);
                 }
@@ -2057,5 +2051,59 @@ mod dispatch_declares_the_moment {
             "the moment has to be cleared when the dispatch ends, got {after:?} \
              for an event from an hour ago"
         );
+    }
+}
+
+/// A frame is a description of what the compositor said, and the pacing gate is
+/// a decision taken from that description. Neither needs a compositor to exist,
+/// and until the Wayland types came out of the frame path neither could be
+/// named here: `Frame` held a live `WlSurface`, and a test has no display to
+/// get one from.
+#[cfg(test)]
+mod a_frame_is_a_description_not_a_connection {
+    use super::*;
+
+    fn frame(callback_pending: bool, force: bool) -> Frame {
+        Frame {
+            events: Vec::new(),
+            scale_factor: 1.0,
+            width: 200,
+            height: 50,
+            frame_callback_pending: callback_pending,
+            force_render_surface: force,
+        }
+    }
+
+    fn geometry(needs_resize: bool, scale_changed: bool) -> Geometry {
+        Geometry {
+            physical_width: 200,
+            physical_height: 50,
+            needs_resize,
+            scale_changed,
+        }
+    }
+
+    #[test]
+    fn a_frame_can_be_described_without_a_display() {
+        let f = frame(false, false);
+        assert_eq!((f.width, f.height), (200, 50));
+    }
+
+    #[test]
+    fn a_callback_still_in_flight_paces_a_frame_out() {
+        assert!(paced_out(&frame(true, false), &geometry(false, false)));
+    }
+
+    /// Each on its own, because any one of them alone has to open the gate.
+    #[test]
+    fn a_first_frame_a_resize_and_a_scale_change_each_bypass_the_gate() {
+        assert!(!paced_out(&frame(true, true), &geometry(false, false)));
+        assert!(!paced_out(&frame(true, false), &geometry(true, false)));
+        assert!(!paced_out(&frame(true, false), &geometry(false, true)));
+    }
+
+    #[test]
+    fn no_callback_in_flight_paces_nothing_out() {
+        assert!(!paced_out(&frame(false, false), &geometry(false, false)));
     }
 }

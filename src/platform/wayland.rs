@@ -191,6 +191,15 @@ fn batching<R>(id: SurfaceId, f: impl FnOnce() -> R) -> (bool, R) {
 }
 
 pub struct WaylandState {
+    /// The queue every protocol request made from here goes onto.
+    ///
+    /// Held rather than passed: the frame path used to thread a
+    /// `&QueueHandle<WaylandState>` through `layout_pass` and
+    /// `paint_and_present` for the two or three calls that needed one, which
+    /// made every function between here and there name a Wayland type it had
+    /// no other use for. The handle is `Clone` and refers to the queue, not to
+    /// this state, so owning one costs nothing and closes that seam.
+    pub(crate) qh: QueueHandle<WaylandState>,
     pub registry_state: RegistryState,
     pub compositor_state: CompositorState,
     pub output_state: OutputState,
@@ -332,6 +341,7 @@ pub fn create_wayland_app(
     }
 
     let state = WaylandState {
+        qh: qh.clone(),
         registry_state: RegistryState::new(&globals),
         compositor_state,
         output_state,
@@ -354,6 +364,38 @@ pub fn create_wayland_app(
 }
 
 impl WaylandState {
+    /// Ask for a `wl_surface.frame` callback on this surface.
+    ///
+    /// Requested before presenting so it rides the same commit as the buffer.
+    /// The callback's arrival is what lets this surface render its next frame.
+    pub fn request_frame_callback(&mut self, id: SurfaceId) {
+        if let Some(surface) = self.surfaces.get(&id) {
+            surface
+                .wl_surface
+                .frame(&self.qh, surface.wl_surface.clone());
+        }
+    }
+
+    /// Report damaged buffer pixels, in buffer coordinates.
+    ///
+    /// Set before presenting: `present` attaches the buffer and commits the
+    /// surface inside wgpu's Wayland path, so damage pending now is part of
+    /// that commit. Damaging afterwards attaches it to an empty second commit
+    /// the compositor cannot use.
+    pub fn damage_surface(&mut self, id: SurfaceId, x: i32, y: i32, width: i32, height: i32) {
+        if let Some(surface) = self.surfaces.get(&id) {
+            surface.wl_surface.damage_buffer(x, y, width, height);
+        }
+    }
+
+    /// The frame callback asked for before present is now committed, and this
+    /// surface is gated until it fires.
+    pub fn mark_frame_callback_pending(&mut self, id: SurfaceId) {
+        if let Some(surface) = self.surfaces.get_mut(&id) {
+            surface.frame_callback_pending = true;
+        }
+    }
+
     /// Build a wl_region from logical-coordinate rects, rounded outward so a
     /// fractional widget bound never loses its edge pixels.
     fn build_region(&self, rects: &[Rect]) -> Option<Region> {
