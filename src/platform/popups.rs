@@ -254,13 +254,7 @@ impl WaylandState {
 
     /// Reposition an auto-height popup when its content height changed.
     /// The compositor answers with a new configure carrying the final size.
-    pub(crate) fn reposition_popup_if_changed(
-        &mut self,
-        id: SurfaceId,
-        new_height: u32,
-        qh: &QueueHandle<Self>,
-    ) {
-        let _ = qh;
+    pub(crate) fn reposition_popup_if_changed(&mut self, id: SurfaceId, new_height: u32) {
         let Some(ref xdg_shell) = self.popups.xdg_shell else {
             return;
         };

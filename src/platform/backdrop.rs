@@ -91,13 +91,7 @@ impl WaylandState {
     /// an *empty* region, never NULL: NULL only withdraws our opinion and
     /// lets such a rule blur the whole surface, where an empty region says
     /// "blur exactly nothing".
-    pub(crate) fn sync_blur_region(
-        &mut self,
-        id: SurfaceId,
-        rects: Vec<BlurRect>,
-        qh: &QueueHandle<Self>,
-        commit: bool,
-    ) {
+    pub(crate) fn sync_blur_region(&mut self, id: SurfaceId, rects: Vec<BlurRect>, commit: bool) {
         if !self.backdrop.bg_effect_supports_blur {
             return;
         }
@@ -123,7 +117,7 @@ impl WaylandState {
 
         // Asking the manager twice for the same surface is a protocol error.
         let effect = surface_state.bg_effect_surface.get_or_insert_with(|| {
-            manager.get_background_effect(&surface_state.wl_surface, qh, ())
+            manager.get_background_effect(&surface_state.wl_surface, &self.qh, ())
         });
 
         let Ok(region) = Region::new(&self.compositor_state) else {
