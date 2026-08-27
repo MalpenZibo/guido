@@ -106,6 +106,15 @@ jobs:
         run: vulkaninfo --summary | head -n 40
       - name: Run golden image tests
         run: cargo test --all-features --test golden_images
+      # The unit tests that need an adapter live in the lib, and the `test` job
+      # has no ICD — so they skip there and report green. This is the job that
+      # has one. `--lib` runs the whole set, which is cheap, and
+      # `GUIDO_GPU_REQUIRED` makes a skip a failure here for the same reason
+      # `GUIDO_GOLDEN_REQUIRED` does above it.
+      - name: Run the unit tests that need a GPU
+        env:
+          GUIDO_GPU_REQUIRED: 1
+        run: cargo test --all-features --lib
       - name: Upload the pixels that moved
         if: failure()
         uses: actions/upload-artifact@v4

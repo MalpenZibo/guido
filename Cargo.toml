@@ -30,6 +30,11 @@ license.workspace = true
 [features]
 default = ["svg", "webp"]
 render-stats = []
+# The apparatus #264 needs to drive a frame with no compositor: an offscreen
+# render target and the readback that makes one worth drawing into. On by
+# nothing, so a normal build ships no render-to-texture API it did not ask for;
+# in-crate tests get it from `cfg(test)` without the feature at all.
+testing = []
 # SVG rendering via resvg (pulls a second text-shaping stack + software
 # rasterizer). Without it, ImageSource::Svg* sources fail to decode with a
 # warning instead of failing to compile.
