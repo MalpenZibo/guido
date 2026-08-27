@@ -1075,6 +1075,126 @@ fn frame_at(h: &mut H, now: std::time::Instant, width: f32, height: f32) {
     h.tree.set_frame_instant(None);
 }
 
+/// Halfway through a linear hundred milliseconds is halfway to the target —
+/// exactly, on any machine, with nothing asleep.
+///
+/// The value of naming the instant is that this asserts the *curve*, which is
+/// the half of an animation nothing outside `animations.rs`, `keyframes.rs`
+/// and `timing.rs` can see. Every other test here watches where an animation
+/// lands, and an easing that is wrong, a delay that is ignored, a reverse
+/// transition used in place of the forward one and a property that skips the
+/// animation entirely all land in the same place.
+#[test]
+fn a_linear_animation_is_halfway_at_half_its_duration() {
+    let w = create_signal(0.0f32);
+    let mut h = H::new(
+        container()
+            .height(10.0)
+            .width(w)
+            .animate_width(Transition::new(100.0, TimingFunction::Linear)),
+    );
+    h.fit(400.0, 400.0);
+
+    let t0 = std::time::Instant::now();
+    w.set(100.0);
+    frame_at(&mut h, t0, 400.0, 400.0);
+    assert_eq!(
+        h.tree.cached_size(h.root).unwrap().width,
+        0.0,
+        "the segment begins where it was, not where it is going"
+    );
+
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(50),
+        400.0,
+        400.0,
+    );
+    assert_eq!(
+        h.tree.cached_size(h.root).unwrap().width,
+        50.0,
+        "half the duration of a linear curve is half the distance"
+    );
+}
+
+/// The radius of the ripple drawn by this frame, if one is drawn.
+fn painted_ripple_radius(h: &mut H) -> Option<f32> {
+    h.paint()
+        .overlay_commands
+        .iter()
+        .find_map(|cmd| match &**cmd {
+            DrawCommand::Circle { radius, .. } => Some(*radius),
+            _ => None,
+        })
+}
+
+/// One frame is one instant: the ripple and the declared transition in the
+/// same container are asked about the same moment.
+///
+/// They could not be before. The ripple already took an `Instant` and the
+/// caller handed it `Instant::now()`, freshly read, some microseconds after
+/// every animation beside it had read its own — so a frame was several
+/// instants, and none of them was one a test could name.
+#[test]
+fn a_ripple_and_a_transition_are_asked_about_the_same_moment() {
+    // Wide enough at rest to be clicked: the press has to land on the box.
+    let w = create_signal(20.0f32);
+    let mut h = H::new(
+        container()
+            .height(100.0)
+            .width(w)
+            .animate_width(Transition::new(100.0, TimingFunction::Linear))
+            .when_pressed(|s| s.ripple())
+            .on_click(|| {}),
+    );
+    h.fit(400.0, 400.0);
+
+    h.send(Event::MouseDown {
+        x: 10.0,
+        y: 50.0,
+        button: MouseButton::Left,
+    });
+    w.set(120.0);
+
+    // After the press, because a ripple begins at the instant its event
+    // arrived and that clock is the event's, not the frame's — a separate
+    // question, and not this one.
+    let t0 = std::time::Instant::now();
+
+    frame_at(&mut h, t0, 400.0, 400.0);
+    let started = painted_ripple_radius(&mut h).expect("the press starts a ripple");
+
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(50),
+        400.0,
+        400.0,
+    );
+    assert_eq!(
+        h.tree.cached_size(h.root).unwrap().width,
+        70.0,
+        "the transition is halfway: 20 plus half of the hundred it travels"
+    );
+    let grown = painted_ripple_radius(&mut h).expect("and the ripple is still drawn");
+    assert!(
+        grown > started,
+        "the ripple grew over the same 50ms, from {started} to {grown}"
+    );
+
+    // The same instant twice: nothing moves, because nothing has.
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(50),
+        400.0,
+        400.0,
+    );
+    assert_eq!(
+        painted_ripple_radius(&mut h),
+        Some(grown),
+        "asked about the same moment, a frame answers the same"
+    );
+}
+
 /// Lay out, run the queued jobs, paint, and report the first text colour.
 fn painted_text_color(h: &mut H) -> Color {
     pump(h);
