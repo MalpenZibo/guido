@@ -1461,9 +1461,10 @@ fn render_surface<P: SurfaceHost>(
     // one frame several instants, and made the middle of an animation something
     // no test could ask about — only sleep towards.
     //
-    // Handed in rather than read, and sampled once for the pass rather than
-    // once per surface: two bars drawn together are the same moment, and a
-    // driver that wants to say when a frame happened has somewhere to say it.
+    // Handed in rather than read, and sampled once per iteration rather than
+    // once per surface: two bars drawn in the same pass are the same moment,
+    // and a driver that wants to say when a frame happened has somewhere to
+    // say it.
     ctx.tree.set_frame_instant(Some(at));
 
     run_jobs(root, ctx.tree, layout_roots, active_roots);
@@ -1749,138 +1750,173 @@ impl App {
                 return ExitReason::Error(platform::PlatformError::ConnectionLost);
             }
 
-            // Reset ping coalescing: the first wake_loop from here on
-            // sends a fresh ping so the next dispatch can't block on
-            // work queued during this iteration.
-            jobs::mark_loop_awake();
-
-            // Check for programmatic exit/restart requests
-            match get_exit_request() {
-                jobs::ExitRequest::Quit => break,
-                jobs::ExitRequest::Restart => return ExitReason::Restart,
-                jobs::ExitRequest::Running => {}
-            }
-
-            if wayland_state.exit {
-                break;
-            }
-
-            // Drive the session-lock state machine (lock/unlock requests,
-            // grant/denial events, per-output lock surfaces)
-            session_lock::process_session_lock(
-                &mut surface_manager,
-                &mut wayland_state,
-                &qh,
-                &mut self.tree,
-            );
-
-            // Run deferred owner disposals (public dispose_owner). Safe
-            // here: no user closure is on the stack.
-            reactive::owner::flush_pending_disposals();
-
-            // Process dynamic surface commands
-            if !process_surface_commands(
-                &mut surface_manager,
-                &mut wayland_state,
-                &qh,
-                &mut self.tree,
-            ) {
-                break;
-            }
-
-            // Initialize GPU for any pending surfaces (newly created dynamic surfaces)
-            surface_manager.init_pending_gpu(
-                &gpu_context,
-                &connection,
-                &wayland_state,
-                &mut self.tree,
-            );
-
-            // Lazily create the shared renderer once the first surface has a
-            // GPU state (apps may start with zero surfaces and spawn them
-            // dynamically, e.g. one bar per output).
-            if renderer.is_none()
-                && let Some(wgpu_surface) = surface_manager.first_gpu_surface()
-            {
-                renderer = Some(Renderer::new(
-                    wgpu_surface.device.clone(),
-                    wgpu_surface.queue.clone(),
-                    wgpu_surface.config.format,
-                ));
-            }
-
-            // Flush background-thread signal writes once per frame (queued via WriteSignal).
-            // Must run before take_wake_request() so that signal changes from bg writes
-            // are processed into jobs before we check the wake request.
-            reactive::flush_bg_writes();
-
-            // Take the wake request once for all surfaces (not per-surface)
-            let woken = take_wake_request();
-
-            // One instant for every surface this pass draws, taken where the
-            // frame is so it dates the frame and not the work ahead of it.
-            let frame_at = std::time::Instant::now();
-
-            // Render each surface (no renderer yet means no surface has a
-            // GPU state — nothing can be rendered this iteration)
-            if let Some(renderer) = renderer.as_mut() {
-                let surface_ids: Vec<SurfaceId> = surface_manager.ids().collect();
-
-                // Live surface roots: the ownership domain for job
-                // scheduling. Computed after surface commands/session-lock
-                // processing so closed surfaces are already gone.
-                let active_roots: rustc_hash::FxHashSet<WidgetId> = surface_ids
-                    .iter()
-                    .filter_map(|sid| surface_manager.get(*sid).map(|s| s.widget_id))
-                    .collect();
-
-                // Resolve job ownership, then run the orphan lane: jobs
-                // whose widget has no live surface (deferred Unregister
-                // cleanup from closed surfaces, mostly) must not wait for
-                // a render pass that will never come.
-                jobs::distribute_jobs(&self.tree, &active_roots);
-                let orphans = jobs::drain_orphan_jobs();
-                if !orphans.is_empty() {
-                    let mut scratch_layout_roots = Vec::new();
-                    process_jobs(&orphans, &mut self.tree, &mut scratch_layout_roots);
-                }
-                jobs::recycle_job_buffer(orphans);
-
-                // Drop layout roots of surfaces that no longer exist.
-                self.layout_roots
-                    .retain(|root, _| active_roots.contains(root));
-
-                for id in surface_ids {
-                    let Some(surface) = surface_manager.get_mut(id) else {
-                        continue;
-                    };
-                    let layout_roots = self.layout_roots.entry(surface.widget_id).or_default();
-                    let mut ctx = FrameContext {
-                        id,
-                        surface,
-                        wayland_state: &mut wayland_state,
-                        renderer,
-                        tree: &mut self.tree,
-                    };
-                    render_surface(&mut ctx, layout_roots, woken, &active_roots, frame_at);
-                }
-            }
-
-            // Hand the seat what the widgets changed — after the render
-            // pass, so a copy or a cursor set by this iteration's event
-            // handling still goes out in this iteration, and outside it, so
-            // it goes out whether or not any surface had a frame to draw.
-            sync_platform_state(&mut wayland_state, &qh);
-
-            // Flush the connection once for all surfaces
-            if let Err(e) = connection.flush() {
-                log::error!("Wayland connection flush failed: {e}");
-                return ExitReason::Error(platform::PlatformError::ConnectionLost);
+            let ctx = LoopContext {
+                connection: &connection,
+                qh: &qh,
+                wayland_state: &mut wayland_state,
+                surface_manager: &mut surface_manager,
+                gpu_context: &gpu_context,
+                renderer: &mut renderer,
+            };
+            if let Some(reason) = iterate(ctx, &mut self.tree, &mut self.layout_roots, None) {
+                return reason;
             }
         }
-
-        ExitReason::Quit
     }
+}
+
+/// Every handle one iteration needs, in one place.
+struct LoopContext<'a> {
+    connection: &'a smithay_client_toolkit::reexports::client::Connection,
+    qh: &'a QueueHandle<platform::WaylandState>,
+    wayland_state: &'a mut platform::WaylandState,
+    surface_manager: &'a mut SurfaceManager,
+    gpu_context: &'a GpuContext,
+    renderer: &'a mut Option<Renderer>,
+}
+
+/// Everything one iteration does once it has finished waiting.
+///
+/// Split from the waiting because the waiting is calloop's and this is
+/// guido's: a driver that wants to step the application forward wants this
+/// half and not the other. `run` calls it after every dispatch; #264 step 5
+/// is where something else does.
+///
+/// `frame_at` names the moment every surface drawn this pass is drawn at, for a
+/// driver that wants to. `None` takes it at the render pass, which is what the
+/// loop passes: sampling before this function would date the frame from before
+/// the session lock, the surface commands and — on the iteration that builds
+/// one — the whole of `Renderer::new`.
+///
+/// `Some` ends the loop with that reason.
+fn iterate(
+    ctx: LoopContext<'_>,
+    tree: &mut Tree,
+    layout_roots: &mut rustc_hash::FxHashMap<WidgetId, Vec<WidgetId>>,
+    frame_at: Option<std::time::Instant>,
+) -> Option<ExitReason> {
+    let LoopContext {
+        connection,
+        qh,
+        gpu_context,
+        wayland_state,
+        surface_manager,
+        renderer,
+    } = ctx;
+    // Reset ping coalescing first: the first wake_loop from here on sends a
+    // fresh ping, so the next dispatch cannot block on work queued during
+    // this iteration.
+    jobs::mark_loop_awake();
+
+    // Check for programmatic exit/restart requests
+    match get_exit_request() {
+        jobs::ExitRequest::Quit => return Some(ExitReason::Quit),
+        jobs::ExitRequest::Restart => return Some(ExitReason::Restart),
+        jobs::ExitRequest::Running => {}
+    }
+
+    if wayland_state.exit {
+        return Some(ExitReason::Quit);
+    }
+
+    // Drive the session-lock state machine (lock/unlock requests,
+    // grant/denial events, per-output lock surfaces)
+    session_lock::process_session_lock(surface_manager, wayland_state, qh, tree);
+
+    // Run deferred owner disposals (public dispose_owner). Safe
+    // here: no user closure is on the stack.
+    reactive::owner::flush_pending_disposals();
+
+    // Process dynamic surface commands
+    if !process_surface_commands(surface_manager, wayland_state, qh, tree) {
+        return Some(ExitReason::Quit);
+    }
+
+    // Initialize GPU for any pending surfaces (newly created dynamic surfaces)
+    surface_manager.init_pending_gpu(gpu_context, connection, wayland_state, tree);
+
+    // Lazily create the shared renderer once the first surface has a
+    // GPU state (apps may start with zero surfaces and spawn them
+    // dynamically, e.g. one bar per output).
+    if renderer.is_none()
+        && let Some(wgpu_surface) = surface_manager.first_gpu_surface()
+    {
+        *renderer = Some(Renderer::new(
+            wgpu_surface.device.clone(),
+            wgpu_surface.queue.clone(),
+            wgpu_surface.config.format,
+        ));
+    }
+
+    // Flush background-thread signal writes once per frame (queued via WriteSignal).
+    // Must run before take_wake_request() so that signal changes from bg writes
+    // are processed into jobs before we check the wake request.
+    reactive::flush_bg_writes();
+
+    // Take the wake request once for all surfaces (not per-surface)
+    let woken = take_wake_request();
+
+    // One instant for every surface this pass draws, taken here rather than at
+    // the top of the iteration so it dates the frame and not the work ahead of
+    // it. A driver that named one is obeyed.
+    let frame_at = frame_at.unwrap_or_else(std::time::Instant::now);
+
+    // Render each surface (no renderer yet means no surface has a
+    // GPU state — nothing can be rendered this iteration)
+    if let Some(renderer) = renderer.as_mut() {
+        let surface_ids: Vec<SurfaceId> = surface_manager.ids().collect();
+
+        // Live surface roots: the ownership domain for job
+        // scheduling. Computed after surface commands/session-lock
+        // processing so closed surfaces are already gone.
+        let active_roots: rustc_hash::FxHashSet<WidgetId> = surface_ids
+            .iter()
+            .filter_map(|sid| surface_manager.get(*sid).map(|s| s.widget_id))
+            .collect();
+
+        // Resolve job ownership, then run the orphan lane: jobs
+        // whose widget has no live surface (deferred Unregister
+        // cleanup from closed surfaces, mostly) must not wait for
+        // a render pass that will never come.
+        jobs::distribute_jobs(tree, &active_roots);
+        let orphans = jobs::drain_orphan_jobs();
+        if !orphans.is_empty() {
+            let mut scratch_layout_roots = Vec::new();
+            process_jobs(&orphans, tree, &mut scratch_layout_roots);
+        }
+        jobs::recycle_job_buffer(orphans);
+
+        // Drop layout roots of surfaces that no longer exist.
+        layout_roots.retain(|root, _| active_roots.contains(root));
+
+        for id in surface_ids {
+            let Some(surface) = surface_manager.get_mut(id) else {
+                continue;
+            };
+            let layout_roots = layout_roots.entry(surface.widget_id).or_default();
+            let mut ctx = FrameContext {
+                id,
+                surface,
+                wayland_state,
+                renderer,
+                tree,
+            };
+            render_surface(&mut ctx, layout_roots, woken, &active_roots, frame_at);
+        }
+    }
+
+    // Hand the seat what the widgets changed — after the render
+    // pass, so a copy or a cursor set by this iteration's event
+    // handling still goes out in this iteration, and outside it, so
+    // it goes out whether or not any surface had a frame to draw.
+    sync_platform_state(wayland_state, qh);
+
+    // Flush the connection once for all surfaces
+    if let Err(e) = connection.flush() {
+        log::error!("Wayland connection flush failed: {e}");
+        return Some(ExitReason::Error(platform::PlatformError::ConnectionLost));
+    }
+    None
 }
 
 impl Drop for App {
