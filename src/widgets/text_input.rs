@@ -47,6 +47,19 @@ const SCROLL_PADDING: f32 = 2.0;
 /// Time window for coalescing similar edits (in milliseconds)
 const HISTORY_COALESCE_MS: u64 = 500;
 
+/// The ambient facts of one edit: the width the caret has to stay inside, and
+/// when the event that caused it happened.
+///
+/// Built once in `event` and carried down, the way `Container` carries a
+/// `HitContext`. They travelled as two positional parameters through thirteen
+/// private methods, of which two actually read the instant — and the next
+/// ambient fact would have been a fourteenth.
+#[derive(Clone, Copy)]
+struct Edit {
+    width: f32,
+    at: Instant,
+}
+
 /// Type alias for text input callbacks
 type TextCallback = Box<dyn Fn(&str)>;
 
@@ -92,9 +105,8 @@ impl History {
 
     /// Push a new state to history (clears redo stack)
     /// Uses coalescing to merge similar edits within a time window
-    fn push(&mut self, entry: HistoryEntry, edit_type: EditType) {
-        let now = Instant::now();
-        let since_last = now.duration_since(self.last_edit_time);
+    fn push(&mut self, entry: HistoryEntry, edit_type: EditType, at: Instant) {
+        let since_last = at.duration_since(self.last_edit_time);
 
         // Don't push if it's the same as the last entry
         if let Some(last) = self.undo_stack.back()
@@ -125,7 +137,7 @@ impl History {
             }
         }
 
-        self.last_edit_time = now;
+        self.last_edit_time = at;
         self.last_edit_type = Some(edit_type);
     }
 
@@ -595,9 +607,9 @@ impl TextInput {
     }
 
     /// Reset cursor to visible (called on input)
-    fn reset_cursor_blink(&mut self) {
+    fn reset_cursor_blink(&mut self, at: Instant) {
         self.cursor_visible = true;
-        self.last_cursor_toggle = Instant::now();
+        self.last_cursor_toggle = at;
     }
 
     /// Get character index from x coordinate relative to text start.
@@ -654,12 +666,12 @@ impl TextInput {
     }
 
     /// Ensure the cursor is visible by adjusting scroll offset
-    fn ensure_cursor_visible(&mut self, bounds_width: f32) {
+    fn ensure_cursor_visible(&mut self, width: f32) {
         // Ensure measurements are up to date
         self.update_measurements();
 
         let cursor_x = self.cached_width_at_char(self.selection.cursor);
-        let visible_width = bounds_width - SCROLL_PADDING * 2.0;
+        let visible_width = width - SCROLL_PADDING * 2.0;
 
         if visible_width <= 0.0 {
             return;
@@ -679,9 +691,9 @@ impl TextInput {
     }
 
     /// Insert text at cursor, replacing any selection
-    fn insert_text(&mut self, text: &str, bounds_width: f32) {
+    fn insert_text(&mut self, text: &str, edit: Edit) {
         // Save state before modification
-        self.save_to_history(EditType::Insert);
+        self.save_to_history(EditType::Insert, edit.at);
 
         let (start, end) = self.selection.range();
         let (byte_start, byte_end) = self.char_range_to_byte_range(start, end);
@@ -701,12 +713,12 @@ impl TextInput {
         self.selection = Selection::new(start + inserted_char_count);
 
         self.notify_change();
-        self.reset_cursor_blink();
-        self.ensure_cursor_visible(bounds_width);
+        self.reset_cursor_blink(edit.at);
+        self.ensure_cursor_visible(edit.width);
     }
 
     /// Delete selected text or character before/after cursor
-    fn delete(&mut self, forward: bool, bounds_width: f32) {
+    fn delete(&mut self, forward: bool, edit: Edit) {
         // Check if there's anything to delete
         let has_content_to_delete = if self.selection.has_selection() {
             true
@@ -718,7 +730,7 @@ impl TextInput {
 
         // Save state before modification (only if we'll actually delete something)
         if has_content_to_delete {
-            self.save_to_history(EditType::Delete);
+            self.save_to_history(EditType::Delete, edit.at);
         }
 
         if self.selection.has_selection() {
@@ -738,8 +750,8 @@ impl TextInput {
                 self.selection = Selection::new(self.selection.cursor - 1);
             }
         }
-        self.reset_cursor_blink();
-        self.ensure_cursor_visible(bounds_width);
+        self.reset_cursor_blink(edit.at);
+        self.ensure_cursor_visible(edit.width);
     }
 
     /// Delete a range of characters
@@ -758,13 +770,7 @@ impl TextInput {
     }
 
     /// Move cursor left/right, optionally extending selection
-    fn move_cursor(
-        &mut self,
-        direction: i32,
-        extend_selection: bool,
-        word: bool,
-        bounds_width: f32,
-    ) {
+    fn move_cursor(&mut self, direction: i32, extend_selection: bool, word: bool, edit: Edit) {
         let new_pos = if word {
             self.find_word_boundary(self.selection.cursor, direction)
         } else if direction < 0 {
@@ -777,8 +783,8 @@ impl TextInput {
         if !extend_selection {
             self.selection.collapse();
         }
-        self.reset_cursor_blink();
-        self.ensure_cursor_visible(bounds_width);
+        self.reset_cursor_blink(edit.at);
+        self.ensure_cursor_visible(edit.width);
     }
 
     /// Find word boundary in given direction
@@ -833,21 +839,21 @@ impl TextInput {
     }
 
     /// Move cursor to start/end
-    fn move_to_edge(&mut self, to_start: bool, extend_selection: bool, bounds_width: f32) {
+    fn move_to_edge(&mut self, to_start: bool, extend_selection: bool, edit: Edit) {
         self.selection.cursor = if to_start { 0 } else { self.cached_char_count };
         if !extend_selection {
             self.selection.collapse();
         }
-        self.reset_cursor_blink();
-        self.ensure_cursor_visible(bounds_width);
+        self.reset_cursor_blink(edit.at);
+        self.ensure_cursor_visible(edit.width);
     }
 
     /// Select all text
-    fn select_all(&mut self, bounds_width: f32) {
+    fn select_all(&mut self, edit: Edit) {
         self.selection.anchor = 0;
         self.selection.cursor = self.cached_char_count;
-        self.reset_cursor_blink();
-        self.ensure_cursor_visible(bounds_width);
+        self.reset_cursor_blink(edit.at);
+        self.ensure_cursor_visible(edit.width);
     }
 
     /// Get selected text
@@ -888,7 +894,7 @@ impl TextInput {
     }
 
     /// Cut selected text (copy and delete)
-    fn cut_selection(&mut self, bounds_width: f32) {
+    fn cut_selection(&mut self, edit: Edit) {
         // A cut that cannot copy is not a cut. Refusing the gesture outright is
         // what GtkPasswordEntry does, and it keeps Ctrl+X from quietly becoming
         // a delete while the user believes the clipboard was filled.
@@ -897,19 +903,19 @@ impl TextInput {
         }
         if self.selection.has_selection() {
             self.copy_selection();
-            self.delete(false, bounds_width); // Delete the selection
+            self.delete(false, edit); // Delete the selection
         }
     }
 
     /// Paste text from clipboard
-    fn paste(&mut self, bounds_width: f32) {
+    fn paste(&mut self, edit: Edit) {
         if let Some(text) = clipboard_paste() {
-            self.insert_text(&text, bounds_width);
+            self.insert_text(&text, edit);
         }
     }
 
     /// Save current state to history (call before making changes)
-    fn save_to_history(&mut self, edit_type: EditType) {
+    fn save_to_history(&mut self, edit_type: EditType, at: Instant) {
         self.history.push(
             HistoryEntry {
                 text: self.cached_value.clone(),
@@ -917,6 +923,7 @@ impl TextInput {
                 anchor: self.selection.anchor,
             },
             edit_type,
+            at,
         );
     }
 
@@ -930,7 +937,7 @@ impl TextInput {
     }
 
     /// Undo the last change
-    fn undo(&mut self, bounds_width: f32) {
+    fn undo(&mut self, edit: Edit) {
         let current = self.current_history_entry();
         if let Some(previous) = self.history.undo(current) {
             self.cached_value = previous.text;
@@ -941,13 +948,13 @@ impl TextInput {
             self.selection.anchor = previous.anchor;
             self.history.reset_coalescing();
             self.notify_change();
-            self.reset_cursor_blink();
-            self.ensure_cursor_visible(bounds_width);
+            self.reset_cursor_blink(edit.at);
+            self.ensure_cursor_visible(edit.width);
         }
     }
 
     /// Redo the last undone change
-    fn redo(&mut self, bounds_width: f32) {
+    fn redo(&mut self, edit: Edit) {
         let current = self.current_history_entry();
         if let Some(next) = self.history.redo(current) {
             self.cached_value = next.text;
@@ -958,8 +965,8 @@ impl TextInput {
             self.selection.anchor = next.anchor;
             self.history.reset_coalescing();
             self.notify_change();
-            self.reset_cursor_blink();
-            self.ensure_cursor_visible(bounds_width);
+            self.reset_cursor_blink(edit.at);
+            self.ensure_cursor_visible(edit.width);
         }
     }
 
@@ -974,20 +981,14 @@ impl TextInput {
     }
 
     /// Handle key down event
-    fn handle_key(
-        &mut self,
-        key: &Key,
-        ctrl: bool,
-        shift: bool,
-        bounds_width: f32,
-    ) -> EventResponse {
+    fn handle_key(&mut self, key: &Key, ctrl: bool, shift: bool, edit: Edit) -> EventResponse {
         match key {
             Key::Backspace => {
-                self.delete(false, bounds_width);
+                self.delete(false, edit);
                 EventResponse::Handled
             }
             Key::Delete => {
-                self.delete(true, bounds_width);
+                self.delete(true, edit);
                 EventResponse::Handled
             }
             Key::Enter => {
@@ -1001,9 +1002,9 @@ impl TextInput {
                     // Collapse to start of selection
                     let (start, _) = self.selection.range();
                     self.selection = Selection::new(start);
-                    self.reset_cursor_blink();
+                    self.reset_cursor_blink(edit.at);
                 } else {
-                    self.move_cursor(-1, shift, ctrl, bounds_width);
+                    self.move_cursor(-1, shift, ctrl, edit);
                 }
                 EventResponse::Handled
             }
@@ -1012,25 +1013,25 @@ impl TextInput {
                     // Collapse to end of selection
                     let (_, end) = self.selection.range();
                     self.selection = Selection::new(end);
-                    self.reset_cursor_blink();
+                    self.reset_cursor_blink(edit.at);
                 } else {
-                    self.move_cursor(1, shift, ctrl, bounds_width);
+                    self.move_cursor(1, shift, ctrl, edit);
                 }
                 EventResponse::Handled
             }
             Key::Home => {
-                self.move_to_edge(true, shift, bounds_width);
+                self.move_to_edge(true, shift, edit);
                 EventResponse::Handled
             }
             Key::End => {
-                self.move_to_edge(false, shift, bounds_width);
+                self.move_to_edge(false, shift, edit);
                 EventResponse::Handled
             }
             Key::Char(c) => {
                 if ctrl {
                     match c.to_ascii_lowercase() {
                         'a' => {
-                            self.select_all(bounds_width);
+                            self.select_all(edit);
                             EventResponse::Handled
                         }
                         'c' => {
@@ -1038,31 +1039,31 @@ impl TextInput {
                             EventResponse::Handled
                         }
                         'x' => {
-                            self.cut_selection(bounds_width);
+                            self.cut_selection(edit);
                             EventResponse::Handled
                         }
                         'v' => {
-                            self.paste(bounds_width);
+                            self.paste(edit);
                             EventResponse::Handled
                         }
                         'z' => {
                             // Ctrl+Shift+Z = redo, Ctrl+Z = undo
                             if shift {
-                                self.redo(bounds_width);
+                                self.redo(edit);
                             } else {
-                                self.undo(bounds_width);
+                                self.undo(edit);
                             }
                             EventResponse::Handled
                         }
                         'y' => {
                             // Ctrl+Y = redo
-                            self.redo(bounds_width);
+                            self.redo(edit);
                             EventResponse::Handled
                         }
                         _ => EventResponse::Ignored,
                     }
                 } else if !c.is_control() {
-                    self.insert_text(&c.to_string(), bounds_width);
+                    self.insert_text(&c.to_string(), edit);
                     EventResponse::Handled
                 } else {
                     EventResponse::Ignored
@@ -1278,6 +1279,12 @@ impl Widget for TextInput {
     }
 
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
+        // When this event happened, which every edit below is timed against —
+        // the undo-coalescing window and the caret restarting on input.
+        let edit = Edit {
+            width: tree.get_bounds(id).unwrap_or_default().width,
+            at: tree.event_instant(),
+        };
         // Get bounds from Tree for hit testing
         let bounds = tree.get_bounds(id).unwrap_or_default();
 
@@ -1294,7 +1301,7 @@ impl Widget for TextInput {
                 let char_index = self.char_index_at_x(*x, bounds);
                 self.selection = Selection::new(char_index);
                 self.is_dragging = true;
-                self.reset_cursor_blink();
+                self.reset_cursor_blink(edit.at);
                 self.ensure_cursor_visible(bounds.width);
 
                 return EventResponse::Handled;
@@ -1339,14 +1346,14 @@ impl Widget for TextInput {
                 let char_index = self.char_index_at_x(*x, bounds);
                 self.selection = Selection::new(char_index);
                 if let Some(text) = primary_paste() {
-                    self.insert_text(&text, bounds.width);
+                    self.insert_text(&text, edit);
                 }
-                self.reset_cursor_blink();
+                self.reset_cursor_blink(edit.at);
                 request_job(id, JobRequest::Paint);
                 return EventResponse::Handled;
             }
             Event::KeyDown { key, modifiers } if has_focus(id) => {
-                let response = self.handle_key(key, modifiers.ctrl, modifiers.shift, bounds.width);
+                let response = self.handle_key(key, modifiers.ctrl, modifiers.shift, edit);
                 if response == EventResponse::Handled {
                     request_job(id, JobRequest::Paint);
                 }
@@ -1387,6 +1394,52 @@ mod tests {
     use crate::jobs::{clear_pending_jobs, clear_scheduled_jobs, next_deadline, queued_job_types};
     use crate::layout::Constraints;
     use crate::reactive::create_signal;
+
+    /// Two keystrokes inside the window are one undo, and two outside it are
+    /// two — which is what `HISTORY_COALESCE_MS` promises and nothing could
+    /// ask before.
+    ///
+    /// The window is half a second. A test that wanted to stand on either side
+    /// of it had to sleep for real, so the far side cost five seconds of wall
+    /// clock and the near side was a race against how long the assertions took.
+    /// Both moments are named now.
+    #[test]
+    fn the_coalescing_window_has_two_sides_and_they_can_both_be_asked_about() {
+        let entry = |text: &str| HistoryEntry {
+            text: text.to_string(),
+            cursor: text.chars().count(),
+            anchor: text.chars().count(),
+        };
+
+        let inside = {
+            let t0 = Instant::now();
+            let mut history = History::new();
+            history.push(entry("a"), EditType::Insert, t0);
+            history.push(
+                entry("ab"),
+                EditType::Insert,
+                t0 + Duration::from_millis(50),
+            );
+            history.undo_stack.len()
+        };
+        assert_eq!(
+            inside, 1,
+            "two keystrokes fifty milliseconds apart are one thing to undo"
+        );
+
+        let outside = {
+            let t0 = Instant::now();
+            let mut history = History::new();
+            history.push(entry("a"), EditType::Insert, t0);
+            history.push(entry("ab"), EditType::Insert, t0 + Duration::from_secs(5));
+            history.undo_stack.len()
+        };
+        assert_eq!(
+            outside, 2,
+            "and five seconds apart they are two, because the sentence in \
+             between was a different thought"
+        );
+    }
 
     /// A laid-out input, focused unless told otherwise.
     fn field(input: TextInput, focused: bool) -> (Tree, WidgetId) {

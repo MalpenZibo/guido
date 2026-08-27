@@ -8,6 +8,7 @@
 //! pipeline: the first finger down drives it, and a tap becomes a click.
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use smithay_client_toolkit::{
     delegate_keyboard, delegate_pointer, delegate_seat, delegate_touch,
@@ -37,6 +38,106 @@ use crate::widgets::{Event, Key, Modifiers, MouseButton, ScrollSource};
 /// Pixels per line for discrete scroll (mouse wheel)
 const SCROLL_PIXELS_PER_LINE: f32 = 40.0;
 
+/// Queue a move, replacing the last one if it was also a move.
+///
+/// Only the latest position matters for hover state, and every queued move
+/// costs a full event-dispatch walk of the widget tree. The coalesced one keeps
+/// the newest instant: it stands for where the pointer is now, not for where it
+/// was when the run began.
+fn push_move(events: &mut Vec<(Instant, Event)>, at: Instant, x: f32, y: f32) {
+    if let Some(last @ (_, Event::MouseMove { .. })) = events.last_mut() {
+        *last = (at, Event::MouseMove { x, y });
+    } else {
+        events.push((at, Event::MouseMove { x, y }));
+    }
+}
+
+/// The finger is gone: release the synthesized press, and clear hover, because
+/// unlike a real pointer nothing hovers after a lift.
+fn push_release(events: &mut Vec<(Instant, Event)>, at: Instant, x: f32, y: f32) {
+    events.push((
+        at,
+        Event::MouseUp {
+            x,
+            y,
+            button: MouseButton::Left,
+        },
+    ));
+    events.push((at, Event::MouseLeave));
+}
+
+/// For the events the protocol gives no timestamp: `wl_pointer.enter` and
+/// `.leave` carry a serial and nothing else, and `wl_touch.cancel` carries
+/// neither. Now is the best available answer, and it is the answer everything
+/// used before this existed.
+fn untimed() -> Instant {
+    Instant::now()
+}
+
+/// The compositor's clock, expressed in this process's.
+///
+/// Every input event carries a `uint` of milliseconds — `wl_pointer.motion`,
+/// `.button` and `.axis`, `wl_touch.down`, and `KeyEvent::time` all do. The
+/// protocol promises only that those milliseconds increase; the epoch is the
+/// compositor's and there is no request that asks what it is. So the number
+/// means nothing on its own and a *difference* between two of them means
+/// everything, which is what an anchor turns into an `Instant`.
+///
+/// Reading the clock when the event is handled instead would be simpler and
+/// wrong in one specific way: a handler runs some time after the event
+/// happened, and that delay varies with how busy this process is. A velocity is
+/// a ratio of differences, so a *constant* delay cancels out — but a varying
+/// one does not, and an application too busy to draw is exactly when a gesture
+/// most needs its speed read correctly.
+///
+/// On Linux the two clocks are the same one: libinput timestamps in
+/// `CLOCK_MONOTONIC`, and so does `Instant`. The anchor is a change of origin
+/// rather than a change of clock, so it cannot drift. What it does carry for
+/// good is however late the *first* timestamped event was read: every instant
+/// it yields is offset by that, which cancels between two events and does not
+/// cancel against the frame clock.
+pub(super) struct EventClock {
+    /// The compositor's milliseconds at the moment `anchor` was read.
+    anchor_ms: u32,
+    anchor: Instant,
+}
+
+impl InputState {
+    /// When an event carrying `ms` happened, anchoring the clock if this is the
+    /// first one.
+    ///
+    /// The anchor is read here rather than at construction because the seat
+    /// exists long before anything is pressed, and an anchor taken then would
+    /// pair a compositor timestamp with an `Instant` from minutes earlier.
+    pub(super) fn at(&mut self, ms: u32) -> Instant {
+        self.event_clock
+            .get_or_insert_with(|| EventClock::anchored(ms, Instant::now()))
+            .instant(ms)
+    }
+}
+
+impl EventClock {
+    /// Anchor on the first event to arrive, whose timestamp is as close to
+    /// `Instant::now()` as this process can observe.
+    fn anchored(ms: u32, now: Instant) -> Self {
+        Self {
+            anchor_ms: ms,
+            anchor: now,
+        }
+    }
+
+    /// When an event carrying `ms` happened.
+    ///
+    /// `wrapping_sub` because the counter is a `u32` and goes round about every
+    /// forty-nine days: subtracting it the ordinary way turns the first event
+    /// after a wrap into one from seven weeks ago. The difference is correct as
+    /// long as two events are less than that far apart, which is the same thing
+    /// the protocol's own monotonicity promises.
+    fn instant(&self, ms: u32) -> Instant {
+        self.anchor + Duration::from_millis(ms.wrapping_sub(self.anchor_ms) as u64)
+    }
+}
+
 /// The seat's three devices and the state that tracks them.
 pub struct InputState {
     // Pointer
@@ -54,6 +155,11 @@ pub struct InputState {
     /// only understand pointer events, so the primary finger synthesizes
     /// MouseMove/MouseDown/MouseUp — a tap becomes a click.
     pub(super) primary_finger: Option<i32>,
+
+    /// The compositor's clock expressed in ours, anchored on the first event
+    /// that carries a timestamp. `None` until one does — which is why every
+    /// reader goes through `at`.
+    pub(super) event_clock: Option<EventClock>,
 
     // Cursor shape
     pub(super) cursor_shape_manager: Option<CursorShapeManager>,
@@ -88,6 +194,7 @@ impl InputState {
             touch: None,
             touch_fingers: HashMap::new(),
             primary_finger: None,
+            event_clock: None,
             cursor_shape_manager,
             keyboard: None,
             modifiers: Modifiers::default(),
@@ -243,7 +350,7 @@ impl TouchHandler for WaylandState {
         _qh: &QueueHandle<Self>,
         _touch: &wl_touch::WlTouch,
         serial: u32,
-        _time: u32,
+        time: u32,
         surface: wl_surface::WlSurface,
         id: i32,
         position: (f64, f64),
@@ -252,6 +359,7 @@ impl TouchHandler for WaylandState {
         let Some(surface_id) = self.surface_lookup.get(&surface.id()).copied() else {
             return;
         };
+        let at = self.input.at(time);
         let (x, y) = (position.0 as f32, position.1 as f32);
         self.input.touch_fingers.insert(id, (surface_id, x, y));
 
@@ -260,12 +368,17 @@ impl TouchHandler for WaylandState {
         if self.input.primary_finger.is_none() {
             self.input.primary_finger = Some(id);
             if let Some(surface_state) = self.surfaces.get_mut(&surface_id) {
-                surface_state.pending_events.push(Event::MouseMove { x, y });
-                surface_state.pending_events.push(Event::MouseDown {
-                    x,
-                    y,
-                    button: MouseButton::Left,
-                });
+                surface_state
+                    .pending_events
+                    .push((at, Event::MouseMove { x, y }));
+                surface_state.pending_events.push((
+                    at,
+                    Event::MouseDown {
+                        x,
+                        y,
+                        button: MouseButton::Left,
+                    },
+                ));
             }
         }
     }
@@ -276,23 +389,17 @@ impl TouchHandler for WaylandState {
         _qh: &QueueHandle<Self>,
         _touch: &wl_touch::WlTouch,
         _serial: u32,
-        _time: u32,
+        time: u32,
         id: i32,
     ) {
         let Some((surface_id, x, y)) = self.input.touch_fingers.remove(&id) else {
             return;
         };
+        let at = self.input.at(time);
         if self.input.primary_finger == Some(id) {
             self.input.primary_finger = None;
             if let Some(surface_state) = self.surfaces.get_mut(&surface_id) {
-                surface_state.pending_events.push(Event::MouseUp {
-                    x,
-                    y,
-                    button: MouseButton::Left,
-                });
-                // Unlike a real pointer, nothing hovers after lifting the
-                // finger — clear hover state.
-                surface_state.pending_events.push(Event::MouseLeave);
+                push_release(&mut surface_state.pending_events, at, x, y);
             }
         }
     }
@@ -302,7 +409,7 @@ impl TouchHandler for WaylandState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _touch: &wl_touch::WlTouch,
-        _time: u32,
+        time: u32,
         id: i32,
         position: (f64, f64),
     ) {
@@ -313,17 +420,12 @@ impl TouchHandler for WaylandState {
         finger.1 = x;
         finger.2 = y;
         let surface_id = finger.0;
+        let at = self.input.at(time);
 
         if self.input.primary_finger == Some(id)
             && let Some(surface_state) = self.surfaces.get_mut(&surface_id)
         {
-            // Coalesce runs of MouseMove like the pointer path does.
-            let events = &mut surface_state.pending_events;
-            if let Some(last @ Event::MouseMove { .. }) = events.last_mut() {
-                *last = Event::MouseMove { x, y };
-            } else {
-                events.push(Event::MouseMove { x, y });
-            }
+            push_move(&mut surface_state.pending_events, at, x, y);
         }
     }
 
@@ -355,12 +457,9 @@ impl TouchHandler for WaylandState {
             && let Some((surface_id, x, y)) = self.input.touch_fingers.get(&id).copied()
             && let Some(surface_state) = self.surfaces.get_mut(&surface_id)
         {
-            surface_state.pending_events.push(Event::MouseUp {
-                x,
-                y,
-                button: MouseButton::Left,
-            });
-            surface_state.pending_events.push(Event::MouseLeave);
+            // The compositor is telling us the gesture is not ours any more.
+            let at = untimed();
+            push_release(&mut surface_state.pending_events, at, x, y);
         }
         self.input.touch_fingers.clear();
     }
@@ -378,8 +477,19 @@ impl PointerHandler for WaylandState {
             // Try to find the surface ID for this event's wl_surface
             let surface_id = self.surface_lookup.get(&event.surface.id()).copied();
 
+            // When this one happened. `enter` and `leave` carry a serial and no
+            // timestamp, so they get now — which is what everything got before
+            // the clock existed.
+            let at = match event.kind {
+                PointerEventKind::Motion { time }
+                | PointerEventKind::Press { time, .. }
+                | PointerEventKind::Release { time, .. }
+                | PointerEventKind::Axis { time, .. } => self.input.at(time),
+                PointerEventKind::Enter { .. } | PointerEventKind::Leave { .. } => untimed(),
+            };
+
             // Get the target event queue for this surface
-            let target_events: Option<&mut Vec<Event>> = if let Some(id) = surface_id {
+            let target_events: Option<&mut Vec<(Instant, Event)>> = if let Some(id) = surface_id {
                 self.surfaces.get_mut(&id).map(|s| &mut s.pending_events)
             } else if !matches!(event.kind, PointerEventKind::Leave { .. }) {
                 // Not our surface and not a leave event, skip
@@ -400,14 +510,20 @@ impl PointerHandler for WaylandState {
                     self.current_pointer_surface = surface_id;
 
                     if let Some(events) = target_events {
-                        events.push(Event::MouseEnter {
-                            x: self.input.pointer_x,
-                            y: self.input.pointer_y,
-                        });
-                        events.push(Event::MouseMove {
-                            x: self.input.pointer_x,
-                            y: self.input.pointer_y,
-                        });
+                        events.push((
+                            at,
+                            Event::MouseEnter {
+                                x: self.input.pointer_x,
+                                y: self.input.pointer_y,
+                            },
+                        ));
+                        events.push((
+                            at,
+                            Event::MouseMove {
+                                x: self.input.pointer_x,
+                                y: self.input.pointer_y,
+                            },
+                        ));
                     }
                 }
                 PointerEventKind::Leave { .. } => {
@@ -418,7 +534,7 @@ impl PointerHandler for WaylandState {
                         if let Some(id) = self.current_pointer_surface
                             && let Some(surface_state) = self.surfaces.get_mut(&id)
                         {
-                            surface_state.pending_events.push(Event::MouseLeave);
+                            surface_state.pending_events.push((at, Event::MouseLeave));
                         }
 
                         self.current_pointer_surface = None;
@@ -428,20 +544,7 @@ impl PointerHandler for WaylandState {
                     self.input.pointer_x = event.position.0 as f32;
                     self.input.pointer_y = event.position.1 as f32;
                     if let Some(events) = target_events {
-                        // Coalesce runs of MouseMove: only the latest position
-                        // matters for hover state, and every queued move costs
-                        // a full event-dispatch walk of the widget tree.
-                        if let Some(last @ Event::MouseMove { .. }) = events.last_mut() {
-                            *last = Event::MouseMove {
-                                x: self.input.pointer_x,
-                                y: self.input.pointer_y,
-                            };
-                        } else {
-                            events.push(Event::MouseMove {
-                                x: self.input.pointer_x,
-                                y: self.input.pointer_y,
-                            });
-                        }
+                        push_move(events, at, self.input.pointer_x, self.input.pointer_y);
                     }
                 }
                 PointerEventKind::Press { button, serial, .. } => {
@@ -449,22 +552,28 @@ impl PointerHandler for WaylandState {
                     if let Some(mouse_button) = wayland_button_to_mouse_button(button)
                         && let Some(events) = target_events
                     {
-                        events.push(Event::MouseDown {
-                            x: self.input.pointer_x,
-                            y: self.input.pointer_y,
-                            button: mouse_button,
-                        });
+                        events.push((
+                            at,
+                            Event::MouseDown {
+                                x: self.input.pointer_x,
+                                y: self.input.pointer_y,
+                                button: mouse_button,
+                            },
+                        ));
                     }
                 }
                 PointerEventKind::Release { button, .. } => {
                     if let Some(mouse_button) = wayland_button_to_mouse_button(button)
                         && let Some(events) = target_events
                     {
-                        events.push(Event::MouseUp {
-                            x: self.input.pointer_x,
-                            y: self.input.pointer_y,
-                            button: mouse_button,
-                        });
+                        events.push((
+                            at,
+                            Event::MouseUp {
+                                x: self.input.pointer_x,
+                                y: self.input.pointer_y,
+                                button: mouse_button,
+                            },
+                        ));
                     }
                 }
                 PointerEventKind::Axis {
@@ -476,6 +585,7 @@ impl PointerHandler for WaylandState {
                     if let Some(events) = target_events {
                         translate_axis(
                             events,
+                            at,
                             source,
                             &horizontal,
                             &vertical,
@@ -495,7 +605,8 @@ impl PointerHandler for WaylandState {
 /// that needs a compositor to run is a callback nothing checks, and this is
 /// where the protocol's only statement about a gesture *ending* is read.
 fn translate_axis(
-    events: &mut Vec<Event>,
+    events: &mut Vec<(Instant, Event)>,
+    at: Instant,
     source: Option<wl_pointer::AxisSource>,
     horizontal: &AxisScroll,
     vertical: &AxisScroll,
@@ -536,16 +647,19 @@ fn translate_axis(
     // line before anything could use it. It is the only unguessed answer to
     // when a gesture is over.
     if delta_x != 0.0 || delta_y != 0.0 {
-        events.push(Event::Scroll {
-            x,
-            y,
-            delta_x,
-            delta_y,
-            source: scroll_source,
-        });
+        events.push((
+            at,
+            Event::Scroll {
+                x,
+                y,
+                delta_x,
+                delta_y,
+                source: scroll_source,
+            },
+        ));
     }
     if horizontal.stop || vertical.stop {
-        events.push(Event::ScrollEnd { x, y });
+        events.push((at, Event::ScrollEnd { x, y }));
     }
 }
 
@@ -585,7 +699,9 @@ impl KeyboardHandler for WaylandState {
         if let Some(id) = surface_id
             && let Some(surface_state) = self.surfaces.get_mut(&id)
         {
-            surface_state.pending_events.push(Event::FocusIn);
+            surface_state
+                .pending_events
+                .push((untimed(), Event::FocusIn));
         }
     }
 
@@ -604,7 +720,9 @@ impl KeyboardHandler for WaylandState {
         if let Some(id) = surface_id
             && let Some(surface_state) = self.surfaces.get_mut(&id)
         {
-            surface_state.pending_events.push(Event::FocusOut);
+            surface_state
+                .pending_events
+                .push((untimed(), Event::FocusOut));
         }
 
         self.current_keyboard_surface = None;
@@ -627,6 +745,7 @@ impl KeyboardHandler for WaylandState {
             // (e.g., composed 'é' instead of raw 'e' after a compose sequence)
             self.input.pressed_keys.insert(event.raw_code, key);
 
+            let at = self.input.at(event.time);
             let key_event = Event::KeyDown {
                 key,
                 modifiers: self.input.modifiers,
@@ -636,7 +755,7 @@ impl KeyboardHandler for WaylandState {
             if let Some(id) = self.current_keyboard_surface
                 && let Some(surface_state) = self.surfaces.get_mut(&id)
             {
-                surface_state.pending_events.push(key_event);
+                surface_state.pending_events.push((at, key_event));
             }
         }
     }
@@ -658,6 +777,7 @@ impl KeyboardHandler for WaylandState {
             .or_else(|| keysym_to_key(event.keysym, event.utf8.as_deref(), false));
 
         if let Some(key) = key {
+            let at = self.input.at(event.time);
             let key_event = Event::KeyUp {
                 key,
                 modifiers: self.input.modifiers,
@@ -667,7 +787,7 @@ impl KeyboardHandler for WaylandState {
             if let Some(id) = self.current_keyboard_surface
                 && let Some(surface_state) = self.surfaces.get_mut(&id)
             {
-                surface_state.pending_events.push(key_event);
+                surface_state.pending_events.push((at, key_event));
             }
         }
     }
@@ -718,6 +838,12 @@ impl WaylandState {
         let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref(), true) else {
             return;
         };
+        // A repeat's `time` is the original press advanced by the repeat gap
+        // rather than something the compositor observed — sctk's timer computes
+        // it. It is still in the compositor's clock and still increases, which
+        // is all the conversion needs, and a held key spaced by the compositor's
+        // own repeat rate is a truer account than the moment a timer fired here.
+        let at = self.input.at(event.time);
         let key_event = Event::KeyDown {
             key,
             modifiers: self.input.modifiers,
@@ -727,7 +853,7 @@ impl WaylandState {
         if let Some(id) = self.current_keyboard_surface
             && let Some(surface_state) = self.surfaces.get_mut(&id)
         {
-            surface_state.pending_events.push(key_event);
+            surface_state.pending_events.push((at, key_event));
         }
     }
 }
@@ -843,6 +969,42 @@ mod tests {
         assert_eq!(keysym_to_key(e, Some("é"), true), Some(Key::Char('é')));
     }
 
+    /// A timestamp equal to the anchor's is the anchor's instant, and one after
+    /// it is that far after. Nothing else about the compositor's epoch matters:
+    /// the protocol says only that its milliseconds increase, so a difference
+    /// is the only thing that can be read out of them.
+    #[test]
+    fn an_events_time_is_read_as_a_distance_from_the_anchor() {
+        let t0 = Instant::now();
+        let clock = EventClock::anchored(1_000, t0);
+
+        assert_eq!(clock.instant(1_000), t0, "the anchor is where it says");
+        assert_eq!(
+            clock.instant(1_250),
+            t0 + Duration::from_millis(250),
+            "and a quarter second later is a quarter second later"
+        );
+    }
+
+    /// The compositor's clock is a `u32` of milliseconds, so it wraps roughly
+    /// every 49 days and a client that has been running across one sees the
+    /// number fall. Subtracting it the ordinary way makes 16ms after the wrap
+    /// look like 49 days before it — a scroll gesture that ended in the far
+    /// past, a caret that never blinks again.
+    #[test]
+    fn a_clock_that_has_wrapped_still_moves_forwards() {
+        let t0 = Instant::now();
+        let clock = EventClock::anchored(u32::MAX - 4, t0);
+
+        // Five milliseconds later the counter has gone round: MAX-4 → MAX → 0
+        // → 11 is sixteen milliseconds of real time.
+        assert_eq!(
+            clock.instant(11),
+            t0 + Duration::from_millis(16),
+            "the wrap is sixteen milliseconds forwards, not forty-nine days back"
+        );
+    }
+
     /// The pointer position the events carry, so a test can tell it apart
     /// from a delta.
     const PX: f32 = 10.0;
@@ -854,8 +1016,16 @@ mod tests {
         vertical: AxisScroll,
     ) -> Vec<Event> {
         let mut events = Vec::new();
-        translate_axis(&mut events, source, &horizontal, &vertical, PX, PY);
-        events
+        translate_axis(
+            &mut events,
+            Instant::now(),
+            source,
+            &horizontal,
+            &vertical,
+            PX,
+            PY,
+        );
+        events.into_iter().map(|(_, event)| event).collect()
     }
 
     fn nothing() -> AxisScroll {

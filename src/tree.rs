@@ -167,6 +167,16 @@ pub struct Tree {
     /// paint draws it. `None` between frames, where nobody should be reading
     /// it.
     frame_instant: Option<std::time::Instant>,
+    /// When the event now being dispatched happened.
+    ///
+    /// Not the same question as `frame_instant`: a frame advances what is
+    /// already moving, an event says something started. They are different
+    /// moments, and an event's is the older of the two — it was queued when the
+    /// compositor sent it and is read when the frame runs.
+    ///
+    /// `dispatch_events` writes it, once per event, because it delivers them one
+    /// at a time. `None` outside a dispatch, where nobody should be reading it.
+    event_instant: Option<std::time::Instant>,
 }
 
 impl Tree {
@@ -178,6 +188,7 @@ impl Tree {
             free_indices: Vec::new(),
             damage: std::collections::HashMap::new(),
             frame_instant: None,
+            event_instant: None,
         }
     }
 
@@ -187,6 +198,23 @@ impl Tree {
     /// behaviour every caller had before there was a frame instant at all.
     pub fn frame_instant(&self) -> std::time::Instant {
         self.frame_instant.unwrap_or_else(std::time::Instant::now)
+    }
+
+    /// When the event being dispatched happened.
+    ///
+    /// Falls back to the clock outside a dispatch — the behaviour every caller
+    /// had before an event carried its own time.
+    pub fn event_instant(&self) -> std::time::Instant {
+        self.event_instant.unwrap_or_else(std::time::Instant::now)
+    }
+
+    /// Declare when the event about to be dispatched happened, or `None` when
+    /// the dispatch is over.
+    ///
+    /// `dispatch_events` is the caller in the loop; a test that wants to place
+    /// an event in time is the other one.
+    pub fn set_event_instant(&mut self, at: Option<std::time::Instant>) {
+        self.event_instant = at;
     }
 
     /// Declare the instant of the frame about to run, or `None` when it is
