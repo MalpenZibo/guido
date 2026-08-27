@@ -1062,6 +1062,19 @@ fn pump(h: &mut H) -> bool {
     animating
 }
 
+/// A whole frame that declares what time it is: jobs, then layout, as the loop
+/// runs them.
+///
+/// `pump` asks the clock, so two frames are however far apart the machine
+/// happened to make them; this one names the instant, so a curve can be
+/// asserted at a value instead of inside a band.
+fn frame_at(h: &mut H, now: std::time::Instant, width: f32, height: f32) {
+    h.tree.set_frame_instant(Some(now));
+    pump(h);
+    h.fit(width, height);
+    h.tree.set_frame_instant(None);
+}
+
 /// Lay out, run the queued jobs, paint, and report the first text colour.
 fn painted_text_color(h: &mut H) -> Color {
     pump(h);
@@ -1136,9 +1149,18 @@ fn a_container_wakes_when_its_timeline_is_asked_to_play() {
 
 /// The transform this container is painted with, once the queued jobs have
 /// run. A rotation shows up as a matrix that is no longer the identity.
+/// The transform a sequence has reached at the peak of its middle keyframe.
+///
+/// Two frames, because they are two different things: the first sees the
+/// trigger move and starts the sequence, the second is 100ms later and is the
+/// one with something to show. They used to be the same frame, and what made
+/// that work was the few nanoseconds between `Instant::now()` in `play` and
+/// `Instant::now()` inside `advance` — a gap this test was reading and nobody
+/// had chosen.
 fn played_transform(h: &mut H) -> Transform {
-    pump(h);
-    h.fit(200.0, 200.0);
+    let t0 = std::time::Instant::now();
+    frame_at(h, t0, 200.0, 200.0);
+    frame_at(h, t0 + std::time::Duration::from_millis(100), 200.0, 200.0);
     h.paint().children[0].local_transform
 }
 
@@ -1260,15 +1282,26 @@ fn an_animated_translate_reaches_the_paint() {
 
     offset.set(Translate::new(40.0, 0.0));
 
-    // One frame in: moving, and not arrived. Without this the test passes with
-    // the animation deleted outright — `get_animated_value` falls back to the
-    // signal, and paint lands on 40 the first time it is asked.
-    pump(&mut h);
-    h.fit(200.0, 200.0);
+    // Moving, and not arrived. Without this the test passes with the animation
+    // deleted outright — `get_animated_value` falls back to the signal, and
+    // paint lands on 40 the first time it is asked.
+    //
+    // A tenth of the way through a linear six hundred milliseconds is a tenth
+    // of the distance, so this is a number rather than the band it used to be:
+    // the band existed because the only "midway" available was however far the
+    // clock had moved between two reads of it.
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 200.0, 200.0);
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(60),
+        200.0,
+        200.0,
+    );
     let midway = h.paint().children[0].local_transform.tx();
-    assert!(
-        midway > 0.0 && midway < 39.0,
-        "it has to animate towards the target rather than snap to it, got {midway}"
+    assert_eq!(
+        midway, 4.0,
+        "it has to animate towards the target rather than snap to it"
     );
 
     settle(&mut h, 400);

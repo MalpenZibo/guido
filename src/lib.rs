@@ -1254,6 +1254,13 @@ fn render_surface(
         return;
     }
 
+    // What time it is, for this whole frame. Declared once here because a
+    // frame is these three passes: the animations advance, layout measures what
+    // they produced, paint draws it. Asking the clock inside each of them made
+    // one frame several instants, and made the middle of an animation something
+    // no test could ask about — only sleep towards.
+    ctx.tree.set_frame_instant(Some(std::time::Instant::now()));
+
     run_jobs(root, ctx.tree, layout_roots, active_roots);
 
     // Nothing moved and nothing is starting up: there is no frame to draw.
@@ -1265,11 +1272,16 @@ fn render_surface(
         || geometry.scale_changed
         || ctx.tree.needs_paint(root))
     {
+        ctx.tree.set_frame_instant(None);
         return;
     }
 
     layout_pass(ctx, &frame, &geometry, has_pending_layouts, layout_roots);
     paint_and_present(ctx, &frame, &geometry);
+    // The frame is over, and so is its instant. Leaving it set would let a
+    // later call read a time that has nothing to do with it, silently — the
+    // failure a stale clock always has.
+    ctx.tree.set_frame_instant(None);
 }
 
 pub struct App {

@@ -153,6 +153,18 @@ pub struct Tree {
     /// surface's root widget. Per-surface so that one surface's render
     /// cannot consume (or misreport) damage accumulated by another.
     damage: std::collections::HashMap<WidgetId, DamageRegion>,
+    /// What time it is, for the pass currently running.
+    ///
+    /// A frame advances every animation in it, and asking the clock once per
+    /// animation makes one frame several instants a few microseconds apart.
+    /// More to the point, a widget that asks the clock cannot be asked about
+    /// the middle of an animation: a test can only sleep and assert a band
+    /// wide enough to survive a loaded machine, which is a band both a linear
+    /// and an eased curve fit inside.
+    ///
+    /// `process_jobs` writes it, because a pass is what a frame is made of.
+    /// `None` between passes, where nobody should be reading it.
+    frame_instant: Option<std::time::Instant>,
 }
 
 impl Tree {
@@ -163,7 +175,22 @@ impl Tree {
             sparse: Vec::new(),
             free_indices: Vec::new(),
             damage: std::collections::HashMap::new(),
+            frame_instant: None,
         }
+    }
+
+    /// What time it is for the pass now running.
+    ///
+    /// Falls back to the clock for a call that arrives outside a pass — the
+    /// behaviour every caller had before there was a frame instant at all.
+    pub fn frame_instant(&self) -> std::time::Instant {
+        self.frame_instant.unwrap_or_else(std::time::Instant::now)
+    }
+
+    /// Declare the instant of the pass about to run. `process_jobs` is the
+    /// caller; a test that wants to name a moment is the other one.
+    pub(crate) fn set_frame_instant(&mut self, now: Option<std::time::Instant>) {
+        self.frame_instant = now;
     }
 
     /// Register a widget in the tree and return its unique ID.

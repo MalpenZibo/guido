@@ -91,7 +91,7 @@ impl Container {
                 // later changes animate instead of snapping.
                 anim.set_immediate(target);
             } else if (target - *anim.target()).abs() > 0.001 {
-                anim.animate_to(target);
+                anim.animate_to(target, tree.frame_instant());
                 retargeted = true;
             }
         }
@@ -109,7 +109,7 @@ impl Container {
     /// value its signal actually holds, not the one captured at construction.
     ///
     /// See the module docs for why this cannot wait for the first paint.
-    pub(super) fn seed_animations(&mut self, id: WidgetId) {
+    pub(super) fn seed_animations(&mut self, id: WidgetId, now: std::time::Instant) {
         // Written out one by one: each property animates a different type, so
         // there is no single accessor to loop over.
         let anims = self.anims.as_ref();
@@ -180,13 +180,13 @@ impl Container {
         // each component animates a different type.
         let mut entered = false;
         if let (Some(anim), Some(target)) = (&mut anims.translate, tr_target) {
-            entered |= seed_or_enter(anim, target);
+            entered |= seed_or_enter(anim, target, now);
         }
         if let (Some(anim), Some(target)) = (&mut anims.rotate, ro_target) {
-            entered |= seed_or_enter(anim, target);
+            entered |= seed_or_enter(anim, target, now);
         }
         if let (Some(anim), Some(target)) = (&mut anims.scale, sc_target) {
-            entered |= seed_or_enter(anim, target);
+            entered |= seed_or_enter(anim, target, now);
         }
         if entered {
             request_job(id, JobRequest::Animation(RequiredJob::Paint));
@@ -286,10 +286,14 @@ impl Container {
 
 /// Start one component at its seeded target, or begin its enter transition.
 /// Returns whether an enter was begun, which is what needs a paint job.
-fn seed_or_enter<T: crate::animation::Animatable>(anim: &mut AnimationState<T>, target: T) -> bool {
+fn seed_or_enter<T: crate::animation::Animatable>(
+    anim: &mut AnimationState<T>,
+    target: T,
+    now: std::time::Instant,
+) -> bool {
     match anim.take_enter_from() {
         Some(enter) => {
-            anim.begin_from(enter, target);
+            anim.begin_from(enter, target, now);
             true
         }
         None => {

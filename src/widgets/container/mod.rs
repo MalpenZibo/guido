@@ -1235,6 +1235,10 @@ impl Widget for Container {
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         // Use advance_animations_self for this widget's animations
         let mut any_animating = false;
+        // One frame, one instant. Every animation below is asked about the
+        // same moment — the ripple included, which used to read a clock of its
+        // own a few microseconds later than the rest.
+        let now = tree.frame_instant();
 
         #[allow(clippy::unnecessary_unwrap)]
         // Intentional: compute targets with &self before &mut borrow
@@ -1308,9 +1312,17 @@ impl Widget for Container {
             let anims = self.anims.as_mut().unwrap();
 
             // Layout-affecting animations: width, height, padding
-            advance_anim!(anims, width, id, any_animating, layout);
-            advance_anim!(anims, height, id, any_animating, layout);
-            advance_anim!(anims, padding, padding_target, id, any_animating, layout);
+            advance_anim!(anims, width, id, any_animating, now, layout);
+            advance_anim!(anims, height, id, any_animating, now, layout);
+            advance_anim!(
+                anims,
+                padding,
+                padding_target,
+                id,
+                any_animating,
+                now,
+                layout
+            );
 
             // Paint-only animations: border_width, background, corners,
             // border_color, and the three transform components
@@ -1320,17 +1332,35 @@ impl Widget for Container {
                 border_width_target,
                 id,
                 any_animating,
+                now,
                 paint
             );
-            advance_anim!(anims, background, bg_target, id, any_animating, paint);
-            advance_anim!(anims, corners, corners_target, id, any_animating, paint);
-            advance_anim!(anims, elevation, elevation_target, id, any_animating, paint);
+            advance_anim!(anims, background, bg_target, id, any_animating, now, paint);
+            advance_anim!(
+                anims,
+                corners,
+                corners_target,
+                id,
+                any_animating,
+                now,
+                paint
+            );
+            advance_anim!(
+                anims,
+                elevation,
+                elevation_target,
+                id,
+                any_animating,
+                now,
+                paint
+            );
             advance_anim!(
                 anims,
                 border_color,
                 border_color_target,
                 id,
                 any_animating,
+                now,
                 paint
             );
             // A trigger that has moved starts the sequence, before the frame
@@ -1342,16 +1372,24 @@ impl Widget for Container {
                     if let Some(anim) = anims.$field.as_mut()
                         && crate::reactive::diagnostics::snapshot_zone(|| anim.take_play())
                     {
-                        anim.play();
+                        anim.play(now);
                     }
                 };
             }
             start_timeline!(translate);
             start_timeline!(rotate);
             start_timeline!(scale);
-            advance_anim!(anims, translate, translate_target, id, any_animating, paint);
-            advance_anim!(anims, rotate, rotate_target, id, any_animating, paint);
-            advance_anim!(anims, scale, scale_target, id, any_animating, paint);
+            advance_anim!(
+                anims,
+                translate,
+                translate_target,
+                id,
+                any_animating,
+                now,
+                paint
+            );
+            advance_anim!(anims, rotate, rotate_target, id, any_animating, now, paint);
+            advance_anim!(anims, scale, scale_target, id, any_animating, now, paint);
         }
 
         // Advance ripple animation
@@ -1359,7 +1397,7 @@ impl Widget for Container {
             && ix.ripple.is_active()
             && let Some(config) = ix.ripple_config()
         {
-            let ripple_animating = ix.ripple.advance(&config, std::time::Instant::now());
+            let ripple_animating = ix.ripple.advance(&config, now);
             if ripple_animating {
                 // Ripple is paint-only, request animation continuation with paint
                 request_job(id, JobRequest::Animation(RequiredJob::Paint));
@@ -1390,7 +1428,7 @@ impl Widget for Container {
 
         // Advance scrollbar scale animations (for hover expansion effect)
         // Must be done here since scroll/hover is paint-only and layout may not run
-        if self.advance_scrollbar_scale_animations_internal(id) {
+        if self.advance_scrollbar_scale_animations_internal(id, now) {
             any_animating = true;
         }
 
@@ -1521,7 +1559,7 @@ impl Widget for Container {
         }
 
         self.update_size_targets(tree, id, &lengths, content_size);
-        self.seed_animations(id);
+        self.seed_animations(id, tree.frame_instant());
 
         let size = self.resolve_size(&lengths, constraints, content_size);
 

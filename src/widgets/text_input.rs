@@ -582,12 +582,11 @@ impl TextInput {
     /// changes twice a second, so 113 frames out of 114 repaint the same pixels.
     /// A focused field is the normal state of a lock screen, and that ran all
     /// night.
-    fn update_cursor_blink(&mut self, id: WidgetId) -> bool {
+    fn update_cursor_blink(&mut self, id: WidgetId, now: Instant) -> bool {
         if !self.caret || !has_focus(id) {
             return false;
         }
         let period = Duration::from_millis(CURSOR_BLINK_MS);
-        let now = Instant::now();
         if now.duration_since(self.last_cursor_toggle) >= period {
             self.cursor_visible = !self.cursor_visible;
             self.last_cursor_toggle = now;
@@ -1095,8 +1094,8 @@ impl InputStyled for TextInput {
 }
 
 impl Widget for TextInput {
-    fn advance_animations(&mut self, _tree: &mut Tree, id: WidgetId) -> bool {
-        self.update_cursor_blink(id)
+    fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
+        self.update_cursor_blink(id, tree.frame_instant())
     }
 
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
