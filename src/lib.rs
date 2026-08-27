@@ -737,6 +737,23 @@ struct Frame {
     force_render_surface: bool,
 }
 
+/// Whether this frame would only queue behind one the compositor has not shown.
+///
+/// The three that open the gate anyway — the fields say why each is what it is
+/// — are a surface with nothing on screen yet, a resize, and a scale change:
+/// all three have something to tell the compositor that cannot wait for a
+/// callback.
+///
+/// A function rather than the condition inline, because it is the one decision
+/// in the frame path that can be taken from a `Frame` and a `Geometry` alone,
+/// and so the one a test could reach first.
+fn paced_out(frame: &Frame, geometry: &Geometry) -> bool {
+    frame.frame_callback_pending
+        && !frame.force_render_surface
+        && !geometry.needs_resize
+        && !geometry.scale_changed
+}
+
 /// The physical size, and what about it changed since the last frame.
 struct Geometry {
     physical_width: u32,
@@ -1232,11 +1249,7 @@ fn render_surface(
     // loop iteration would re-ping the wakeup each time and spin the loop
     // flat out between frame callbacks. Input was dispatched above, so it is
     // never delayed by the gate; initialisation and resizes bypass it.
-    if frame.frame_callback_pending
-        && !frame.force_render_surface
-        && !geometry.needs_resize
-        && !geometry.scale_changed
-    {
+    if paced_out(&frame, &geometry) {
         render_stats::record_frame_skipped();
         return;
     }
@@ -2038,5 +2051,59 @@ mod dispatch_declares_the_moment {
             "the moment has to be cleared when the dispatch ends, got {after:?} \
              for an event from an hour ago"
         );
+    }
+}
+
+/// A frame is a description of what the compositor said, and the pacing gate is
+/// a decision taken from that description. Neither needs a compositor to exist,
+/// and until the Wayland types came out of the frame path neither could be
+/// named here: `Frame` held a live `WlSurface`, and a test has no display to
+/// get one from.
+#[cfg(test)]
+mod a_frame_is_a_description_not_a_connection {
+    use super::*;
+
+    fn frame(callback_pending: bool, force: bool) -> Frame {
+        Frame {
+            events: Vec::new(),
+            scale_factor: 1.0,
+            width: 200,
+            height: 50,
+            frame_callback_pending: callback_pending,
+            force_render_surface: force,
+        }
+    }
+
+    fn geometry(needs_resize: bool, scale_changed: bool) -> Geometry {
+        Geometry {
+            physical_width: 200,
+            physical_height: 50,
+            needs_resize,
+            scale_changed,
+        }
+    }
+
+    #[test]
+    fn a_frame_can_be_described_without_a_display() {
+        let f = frame(false, false);
+        assert_eq!((f.width, f.height), (200, 50));
+    }
+
+    #[test]
+    fn a_callback_still_in_flight_paces_a_frame_out() {
+        assert!(paced_out(&frame(true, false), &geometry(false, false)));
+    }
+
+    /// Each on its own, because any one of them alone has to open the gate.
+    #[test]
+    fn a_first_frame_a_resize_and_a_scale_change_each_bypass_the_gate() {
+        assert!(!paced_out(&frame(true, true), &geometry(false, false)));
+        assert!(!paced_out(&frame(true, false), &geometry(true, false)));
+        assert!(!paced_out(&frame(true, false), &geometry(false, true)));
+    }
+
+    #[test]
+    fn no_callback_in_flight_paces_nothing_out() {
+        assert!(!paced_out(&frame(false, false), &geometry(false, false)));
     }
 }
