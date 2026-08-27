@@ -2494,3 +2494,169 @@ mod what_the_loop_waits_for {
         assert_eq!(wait_for(&pending, now), Some(FRAME));
     }
 }
+
+/// A frame drawn by the application, landing somewhere a test can read.
+///
+/// `tests/golden_images.rs` already renders without a compositor, but it builds
+/// its own target and calls the renderer itself — so it proves the shaders and
+/// nothing above them. This goes through `render_surface`: opening the frame,
+/// resolving the geometry, the pacing gate, layout, paint, flatten, damage and
+/// present. What it reads back is what the compositor would have been handed.
+#[cfg(test)]
+mod a_frame_lands_where_the_surface_points {
+    use super::*;
+    use crate::renderer::{GpuContext, RenderTarget};
+    use crate::surface::SurfaceConfig;
+    use crate::widgets::{Color, container};
+
+    const W: u32 = 100;
+    const H: u32 = 32;
+    const BG: Color = Color::rgb(0.25, 0.5, 0.75);
+
+    /// A host with one surface and nothing else. Every other request the frame
+    /// path makes is answered by the trait's defaults.
+    struct OneSurface {
+        width: u32,
+        height: u32,
+    }
+
+    impl SurfaceHost for OneSurface {
+        fn open_frame(&mut self, _id: SurfaceId) -> Option<Frame> {
+            Some(Frame {
+                events: Vec::new(),
+                scale_factor: 1.0,
+                width: self.width,
+                height: self.height,
+                frame_callback_pending: false,
+                force_render_surface: true,
+            })
+        }
+    }
+
+    /// A surface pointing at a texture, and the pieces the frame path wants.
+    fn surface_on_a_texture(
+        gpu: &GpuContext,
+        tree: &mut Tree,
+        texture: (u32, u32),
+    ) -> surface_manager::ManagedSurface {
+        let (widget, owner) = reactive::with_owner(|| Box::new(container()) as Box<dyn Widget>);
+        let mut surface = surface_manager::ManagedSurface::new(
+            SurfaceId::next(),
+            SurfaceConfig::new().background_color(BG),
+            widget,
+            owner,
+            tree,
+        );
+        surface.wgpu_surface = Some(RenderTarget::offscreen(gpu, texture.0, texture.1));
+        surface
+    }
+
+    /// `None` where there is no adapter at all, unless the caller says a skip is
+    /// a failure. CI's job with a rasterizer sets `GUIDO_GPU_REQUIRED=1`: a
+    /// skipped test that reports green is worth less than no test.
+    fn gpu() -> Option<GpuContext> {
+        match GpuContext::try_new() {
+            Some(gpu) => Some(gpu),
+            None if std::env::var_os("GUIDO_GPU_REQUIRED").is_some() => {
+                panic!("GUIDO_GPU_REQUIRED is set and no GPU adapter was found")
+            }
+            None => {
+                eprintln!("no GPU adapter; skipping");
+                None
+            }
+        }
+    }
+
+    /// The surface's own background reaches the target: the clear colour is what
+    /// the compositor sees where nothing is drawn over it.
+    ///
+    /// The width is chosen so the row padding is load-bearing: 100 pixels is
+    /// 400 bytes, which pads to 512, and a stride computed any other way lands
+    /// somewhere else. Under 64 pixels every arithmetic mistake rounds up to the
+    /// same 256 and the assertion proves nothing.
+    #[test]
+    fn a_surface_background_reaches_the_texture_it_points_at() {
+        let Some(gpu) = gpu() else { return };
+
+        let mut tree = Tree::new();
+        let mut surface = surface_on_a_texture(&gpu, &mut tree, (W, H));
+        let root = surface.widget_id;
+        let mut renderer = Renderer::new(
+            gpu.device.clone(),
+            gpu.queue.clone(),
+            wgpu::TextureFormat::Rgba8Unorm,
+        );
+        let mut host = OneSurface {
+            width: W,
+            height: H,
+        };
+        let id = surface.id;
+        let mut ctx = FrameContext {
+            id,
+            surface: &mut surface,
+            wayland_state: &mut host,
+            renderer: &mut renderer,
+            tree: &mut tree,
+        };
+        render_surface(
+            &mut ctx,
+            &mut Vec::new(),
+            true,
+            &std::iter::once(root).collect(),
+            std::time::Instant::now(),
+        );
+
+        let RenderTarget::Offscreen(target) = surface.wgpu_surface.as_ref().unwrap() else {
+            panic!("the target was replaced");
+        };
+        // Two pixels, in different rows and columns, so neither the stride nor
+        // the offset can be wrong and still land on the right bytes.
+        assert_eq!(target.read_pixel(1, 1), [64, 128, 191, 255]);
+        assert_eq!(target.read_pixel(W - 2, H - 2), [64, 128, 191, 255]);
+    }
+
+    /// A target smaller than its frame is made to fit, and then reports that it
+    /// fits.
+    ///
+    /// The second half is the whole of it: a target that quietly declined would
+    /// pass the first assertion of every frame and report a resize on all of
+    /// them, repainting the entire tree for ever.
+    #[test]
+    fn a_target_the_wrong_size_is_resized_once_and_not_again() {
+        let Some(gpu) = gpu() else { return };
+
+        let mut tree = Tree::new();
+        let mut surface = surface_on_a_texture(&gpu, &mut tree, (8, 8));
+        let mut renderer = Renderer::new(
+            gpu.device.clone(),
+            gpu.queue.clone(),
+            wgpu::TextureFormat::Rgba8Unorm,
+        );
+        let mut host = OneSurface {
+            width: W,
+            height: H,
+        };
+        let id = surface.id;
+        let mut ctx = FrameContext {
+            id,
+            surface: &mut surface,
+            wayland_state: &mut host,
+            renderer: &mut renderer,
+            tree: &mut tree,
+        };
+        let frame = ctx.wayland_state.open_frame(id).unwrap();
+
+        let first = resolve_geometry(&mut ctx, &frame);
+        assert!(first.needs_resize, "an 8x8 target for a 100x32 frame");
+        assert_eq!(
+            (
+                ctx.surface.wgpu_surface.as_ref().unwrap().width(),
+                ctx.surface.wgpu_surface.as_ref().unwrap().height()
+            ),
+            (W, H)
+        );
+
+        let again = resolve_geometry(&mut ctx, &frame);
+        assert!(!again.needs_resize, "the target already fits");
+    }
+}
