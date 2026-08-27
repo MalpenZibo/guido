@@ -7,9 +7,9 @@
 //!
 //! Mostly this does not read the words. It counts headings and list markers,
 //! compares them to the numbers the prose claims, checks that the files this
-//! documentation names exist, and checks the one ordering the workflow depends
-//! on — that the review comes after the commits, because its criteria ask about
-//! them.
+//! documentation names exist, and checks the two orderings the workflow depends
+//! on: the review comes after the commits, because its criteria ask about them,
+//! and the pass that edits the code comes before every pass that checks it.
 //!
 //! Where it does read them, it is for a sentence that has to appear in two
 //! documents at once: the review's three levels, and the rule about researching
@@ -202,8 +202,8 @@ fn the_pull_request_template_asks_as_many_questions_as_it_says() {
     );
 }
 
-/// Step 7 keeps no copy of the reviewer's criteria — it points at the file that
-/// holds them. A pointer nobody checks is how that file gets moved and the step
+/// The review step keeps no copy of the reviewer's criteria — it points at the
+/// file that holds them. A pointer nobody checks is how that file gets moved and the step
 /// quietly stops saying anything.
 ///
 /// This checks every repository path the agent-facing documentation names, not
@@ -276,6 +276,35 @@ fn the_review_comes_after_the_commits() {
         "the review is step {review} and the commits are step {commit}: its \
          criteria ask about commits that would not exist yet"
     );
+
+    // The cleanup applies what it finds instead of reporting it, so where it
+    // sits decides whether anything checks its work. Before the harness, it is
+    // re-tested; before the commits, its edits land inside them; before the
+    // review, they are read like everything else. Below any of the three and
+    // something ships that nothing looked at.
+    let cleanup = step("clean it up");
+    // "run the harness", not "harness": the cleanup's own heading says it runs
+    // before the harness sees the change again, and a needle that matches both
+    // finds the first one.
+    let harness = step("run the harness");
+
+    // A heading in the right position always survives a renumber, so the
+    // ordering alone would let the step be emptied in one file and dropped
+    // from the other. Both documents have to name the tool that does it.
+    for (doc, name) in [(&text, "/implement"), (&read("AGENTS.md"), "AGENTS.md")] {
+        assert!(
+            doc.contains("`/simplify`"),
+            "{name} never names `/simplify`, so the cleanup is a heading with \
+             nothing behind it"
+        );
+    }
+
+    assert!(
+        cleanup < harness && cleanup < commit && cleanup < review,
+        "the cleanup is step {cleanup}, the harness {harness}, the commits \
+         {commit} and the review {review}: a pass that edits the code has to \
+         run before every pass that checks it"
+    );
 }
 
 /// `/implement` ends by saying how many lines to report back, and the template
@@ -301,39 +330,46 @@ fn the_report_back_matches_the_template() {
     );
 }
 
-/// The three mutations the counting does not see: strip step 7 down to its
-/// heading, take the review section out of the template, or drop the review
+/// The three mutations the counting does not see: strip the review step down to
+/// its heading, take the review section out of the template, or drop the review
 /// from AGENTS.md's list. Each leaves every count consistent and removes the
 /// change entirely.
+///
+/// Found by its heading rather than its number, because inserting a step ahead
+/// of it renumbers it — which is exactly what this file exists to survive.
 #[test]
 fn the_review_step_still_says_what_it_is_for() {
     let implement = read(".claude/commands/implement.md");
-    let step_seven = implement
-        .split("## 7.")
-        .nth(1)
-        .expect("/implement has no step 7")
+    let review_step = implement
         .split("\n## ")
-        .next()
-        .unwrap_or_default();
+        .find(|section| {
+            // The heading, not the body: a neighbouring step that mentions the
+            // review in its prose is not the review.
+            section
+                .lines()
+                .next()
+                .is_some_and(|heading| heading.to_ascii_lowercase().contains("read by"))
+        })
+        .expect("/implement has no step about having the change read");
 
     assert!(
-        step_seven.contains(".claude/agents/reviewer.md"),
-        "step 7 keeps no copy of the criteria, so naming the file that holds \
-         them is the whole of it — and it does not"
+        review_step.contains(".claude/agents/reviewer.md"),
+        "the review step keeps no copy of the criteria, so naming the file that \
+         holds them is the whole of it — and it does not"
     );
     assert!(
-        step_seven.contains("One pass"),
-        "step 7 does not say it is one pass, and a review with no stopping rule \
-         is a review that runs until somebody gets tired"
+        review_step.contains("One pass"),
+        "the review step does not say it is one pass, and a review with no \
+         stopping rule is a review that runs until somebody gets tired"
     );
     assert!(
-        step_seven.contains("Blocks") && step_seven.contains("Note"),
-        "step 7 does not say what to do with each level of finding"
+        review_step.contains("Blocks") && review_step.contains("Note"),
+        "the review step does not say what to do with each level of finding"
     );
     assert!(
-        step_seven.contains("did not run"),
-        "step 7 does not say what to do when the review does not run, and a \
-         review that did not run looks exactly like one that found nothing"
+        review_step.contains("did not run"),
+        "the review step does not say what to do when the review does not run, \
+         and a review that did not run looks exactly like one that found nothing"
     );
 
     let template = read(".github/pull_request_template.md");
