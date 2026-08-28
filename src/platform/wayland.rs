@@ -172,25 +172,12 @@ thread_local! {
     static BATCHING: Cell<Option<SurfaceId>> = const { Cell::new(None) };
 }
 
-/// Run `f` inside a batching scope for `id`, and report whether it opened it.
-///
-/// Restored on the way out however that happens, which is the whole point. A
-/// group nested inside one on *another* surface opens its own, because the
-/// commit it owes is not the one the outer group will make.
-fn batching<R>(id: SurfaceId, f: impl FnOnce() -> R) -> (bool, R) {
-    struct Restore(Option<SurfaceId>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            BATCHING.with(|b| b.set(self.0));
-        }
-    }
-
-    let outer = BATCHING.with(|b| b.replace(Some(id)));
-    let _restore = Restore(outer);
-    (outer != Some(id), f())
-}
-
 pub struct WaylandState {
+    /// The connection every surface is built on. Held for the same reason as
+    /// the queue below it: a target is made from a window handle, and a window
+    /// handle is made from this — so a loop that did not hold one could not ask
+    /// for a surface without being handed the connection as well.
+    pub(crate) connection: Connection,
     /// The queue every protocol request made from here goes onto.
     ///
     /// Held rather than passed: the frame path used to thread a
@@ -275,18 +262,9 @@ impl std::fmt::Display for PlatformError {
 
 impl std::error::Error for PlatformError {}
 
-#[allow(clippy::type_complexity)]
 pub fn create_wayland_app(
     loop_handle: LoopHandle<'static, WaylandState>,
-) -> Result<
-    (
-        Connection,
-        EventQueue<WaylandState>,
-        WaylandState,
-        QueueHandle<WaylandState>,
-    ),
-    PlatformError,
-> {
+) -> Result<(Connection, EventQueue<WaylandState>, WaylandState), PlatformError> {
     let connection = Connection::connect_to_env().map_err(|e| {
         log::error!("Failed to connect to Wayland: {e}");
         PlatformError::Connect
@@ -341,6 +319,7 @@ pub fn create_wayland_app(
     }
 
     let state = WaylandState {
+        connection: connection.clone(),
         qh: qh.clone(),
         registry_state: RegistryState::new(&globals),
         compositor_state,
@@ -360,7 +339,46 @@ pub fn create_wayland_app(
         selections: Selections::new(data_device_manager, primary_selection_manager),
     };
 
-    Ok((connection, event_queue, state, qh))
+    Ok((connection, event_queue, state))
+}
+
+/// An open group of layer-shell requests, held for as long as the group lasts.
+///
+/// A scope a panic can leave open is not a scope: left open, every later
+/// layer-shell request holds its commit for a group that ended and the surface
+/// stops answering its handle, in silence. So closing is `Drop`'s, and the
+/// commit — which a panicking group has not earned — is
+/// [`close_layer_batch`](WaylandState::close_layer_batch)'s.
+pub(crate) struct LayerBatch {
+    /// The surface this group is for. Held so a caller cannot close one group
+    /// while committing another's.
+    id: SurfaceId,
+    /// What was open before, put back on the way out. Setting `None` instead
+    /// would let a nested group close the one containing it, and every request
+    /// after it would commit on its own.
+    previous: Option<SurfaceId>,
+    outermost: bool,
+}
+
+impl LayerBatch {
+    pub(crate) fn open(id: SurfaceId) -> Self {
+        let previous = BATCHING.with(|b| b.replace(Some(id)));
+        Self {
+            id,
+            previous,
+            outermost: previous != Some(id),
+        }
+    }
+
+    pub(crate) fn is_outermost(&self) -> bool {
+        self.outermost
+    }
+}
+
+impl Drop for LayerBatch {
+    fn drop(&mut self) {
+        BATCHING.with(|b| b.set(self.previous));
+    }
 }
 
 impl WaylandState {
@@ -448,10 +466,10 @@ impl WaylandState {
     /// Create a layer surface with a specific SurfaceId.
     pub fn create_surface_with_id(
         &mut self,
-        qh: &QueueHandle<Self>,
         id: SurfaceId,
         config: &crate::surface::SurfaceConfig,
     ) {
+        let qh = &self.qh;
         // Resolve the requested output; fall back to letting the compositor
         // choose if it was disconnected in the meantime.
         let target_output = config.output.and_then(|oid| {
@@ -482,26 +500,12 @@ impl WaylandState {
         // that dimension: set it to 0 so it stretches. Content sizing on
         // such an axis can never take effect — warn loudly.
         crate::surface::warn_content_on_stretched_axis(id, config);
-        // The same rule the runtime resize uses, so creation and re-anchoring
-        // cannot disagree about which axes are the compositor's.
-        let (use_width, use_height, _) = crate::surface::resize_request(config, None);
-        // Before the honouring: the size the surface believes it has, and the
-        // one a reservation resolves against. Through the same helper as the
-        // request, not `SurfaceExtent::initial()`, which happens to agree today
-        // only because `requested_extent` with no configure falls back to it.
-        let initial_width = crate::surface::requested_extent(config.width, None);
-        let initial_height = crate::surface::requested_extent(config.height, None);
+        let declared = crate::surface::initial_declaration(config);
+        let (initial_width, initial_height) = declared.believed;
 
-        layer_surface.set_size(use_width, use_height);
+        layer_surface.set_size(declared.asked.0, declared.asked.1);
         layer_surface.set_keyboard_interactivity(config.keyboard_interactivity);
-
-        let zone = config.exclusive_zone.resolve(
-            config.anchor,
-            config.margin,
-            initial_width,
-            initial_height,
-        );
-        layer_surface.set_exclusive_zone(zone);
+        layer_surface.set_exclusive_zone(declared.exclusive_zone);
 
         let margin = config.margin;
         if !margin.is_zero() {
@@ -580,8 +584,20 @@ impl WaylandState {
     /// session-lock or popup surface applies nothing. Committing anyway would
     /// send a bare commit to exactly the roles the per-request path refuses to
     /// touch.
-    pub fn batch_layer_requests(&mut self, id: SurfaceId, f: impl FnOnce(&mut Self)) {
-        let (outermost, ()) = batching(id, || f(self));
+    /// Start grouping this surface's layer requests.
+    ///
+    /// Split from [`batch_layer_requests`](Self::batch_layer_requests) so a
+    /// caller that already holds a borrow of this state — the per-surface
+    /// handle the frame path uses — can group without handing the whole state
+    /// to a closure it cannot produce.
+    pub(crate) fn open_layer_batch(&mut self, id: SurfaceId) -> LayerBatch {
+        LayerBatch::open(id)
+    }
+
+    /// End the group, and commit if this was the outermost one.
+    pub(crate) fn close_layer_batch(&mut self, batch: LayerBatch) {
+        let (id, outermost) = (batch.id, batch.is_outermost());
+        drop(batch);
         if outermost
             && let Some(state) = self.surfaces.get(&id)
             && matches!(state.role, SurfaceRole::Layer(_))
@@ -892,7 +908,14 @@ delegate_registry!(WaylandState);
 
 #[cfg(test)]
 mod batching_tests {
-    use super::{BATCHING, SurfaceId, batching};
+    use super::{BATCHING, LayerBatch, SurfaceId};
+
+    /// The guard alone, without a state to commit on.
+    fn batching<R>(id: SurfaceId, f: impl FnOnce() -> R) -> (bool, R) {
+        let batch = LayerBatch::open(id);
+        let outermost = batch.is_outermost();
+        (outermost, f())
+    }
 
     /// Distinct ids; the counter is global and the numbers do not matter.
     fn surface() -> SurfaceId {
@@ -912,6 +935,26 @@ mod batching_tests {
             BATCHING.with(|b| b.get()).is_none(),
             "and the scope closed on its way out"
         );
+    }
+
+    /// A nested group ends without ending the one containing it. Setting the
+    /// scope to `None` on the way out instead reads the same from inside the
+    /// outer group and lets every request after the inner one commit on its
+    /// own — which is the state the grouping exists to prevent.
+    #[test]
+    fn an_inner_batch_leaves_the_outer_one_open() {
+        let (a, b) = (surface(), surface());
+        let outer = LayerBatch::open(a);
+        {
+            let _inner = LayerBatch::open(b);
+        }
+        assert_eq!(
+            BATCHING.with(|s| s.get()),
+            Some(a),
+            "the outer group is still the one open"
+        );
+        drop(outer);
+        assert!(BATCHING.with(|s| s.get()).is_none(), "and then nothing is");
     }
 
     /// Only the outermost group commits, or a nested batch would commit halfway

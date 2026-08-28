@@ -40,9 +40,24 @@ Multiple surfaces share one reactive state and one renderer.
 
 ## The thing to know before changing it
 
-**None of this is covered by an automated test.** There is no headless
-compositor in the harness, so protocol behaviour is verified by running an
-example on a real compositor and looking. When you change this layer:
+**Half of this is covered now, and half is not.**
+
+`tests/headless_app.rs` drives the real loop — `iterate`, the function
+`App::run` calls — with a `guido::testing::Headless` standing where the
+compositor would be: a recorder implementing `Platform` and `Surface` that
+answers for one surface and keeps what it was asked. So a surface configuring, a
+frame opening, input routing, layout, paint, and *what the surface asks the
+compositor for* all have a sensor. It needs the `testing` feature and a GPU
+adapter.
+
+What has none: what goes out on the wire, and what a compositor does with it.
+The recorder proves guido asks for an exclusive zone of 50; it cannot prove niri
+reserves 50. And it drives one static surface, so **dynamic spawn and close,
+popups, the session lock and output hotplug are still verified by running an
+example and looking** — they type-check against the same trait and nothing
+exercises them.
+
+When you change this layer:
 
 - run at least one example that exercises it (`cargo run --example status_bar`,
   `text_input_example`, and the popup and lock examples where relevant)
@@ -50,5 +65,7 @@ example on a real compositor and looking. When you change this layer:
 - `WAYLAND_DEBUG=1` prints the protocol traffic; `RUST_LOG=guido=debug` prints
   the library's own view of it
 
-Closing this hole — a headless compositor, or an event-injection harness that
-drives `ingress` directly — is the next thing worth building in the harness.
+The second of those two — an application driven with no compositor — is built,
+in `src/testing.rs`. What would close the rest is a headless compositor, which
+would answer a different question: not whether guido asks correctly, but whether
+the other end of the socket agrees.

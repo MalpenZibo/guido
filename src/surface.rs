@@ -309,6 +309,43 @@ pub(crate) fn resize_request(config: &SurfaceConfig, live: Option<(u32, u32)>) -
     (width, height, needs_content_measure(config))
 }
 
+/// What a surface declares the moment it is created.
+///
+/// One function because there are two callers and they must not disagree — the
+/// layer surface being built for a compositor, and a surface being driven
+/// without one.
+pub(crate) struct InitialDeclaration {
+    /// The size to ask for, with the axes the compositor owns zeroed. Through
+    /// the same rule a runtime resize uses, so creation and re-anchoring cannot
+    /// differ about which axes those are.
+    pub asked: (u32, u32),
+    /// The size the surface believes it has before any configure has arrived,
+    /// which is what a reservation resolves against. Through `requested_extent`
+    /// rather than `SurfaceExtent::initial()`, which agrees today only because
+    /// the former falls back to it.
+    pub believed: (u32, u32),
+    /// The screen space to reserve, resolved against `believed`.
+    pub exclusive_zone: i32,
+}
+
+pub(crate) fn initial_declaration(config: &SurfaceConfig) -> InitialDeclaration {
+    let (ask_w, ask_h, _) = resize_request(config, None);
+    let believed = (
+        requested_extent(config.width, None),
+        requested_extent(config.height, None),
+    );
+    InitialDeclaration {
+        asked: (ask_w, ask_h),
+        believed,
+        exclusive_zone: config.exclusive_zone.resolve(
+            config.anchor,
+            config.margin,
+            believed.0,
+            believed.1,
+        ),
+    }
+}
+
 /// Whether this surface has a `content()` axis worth measuring.
 ///
 /// A content axis the compositor owns is not one: the measure runs, and
