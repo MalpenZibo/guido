@@ -2626,6 +2626,16 @@ mod a_second_host_can_answer_for_a_compositor {
         }
     }
 
+    /// A surface the compositor has already sized. Every test here needs one or
+    /// deliberately does not, and the distinction is easier to read as a name
+    /// than as a struct-update literal.
+    fn confirmed(width: u32, height: u32) -> Recorder {
+        Recorder {
+            configured: Some((width, height)),
+            ..Default::default()
+        }
+    }
+
     fn bar() -> SurfaceConfig {
         SurfaceConfig::new()
             .height(32)
@@ -2637,10 +2647,7 @@ mod a_second_host_can_answer_for_a_compositor {
     /// the compositor for*, rather than about what it draws.
     #[test]
     fn a_bar_reserving_automatically_asks_for_the_height_it_declared() {
-        let mut surface = Recorder {
-            configured: Some((800, 32)),
-            ..Default::default()
-        };
+        let mut surface = confirmed(800, 32);
         resync_exclusive_zone(&mut surface, &bar(), None);
         assert_eq!(surface.exclusive_zones, vec![32]);
     }
@@ -2649,10 +2656,7 @@ mod a_second_host_can_answer_for_a_compositor {
     /// eight pixels off the top edge occupies forty.
     #[test]
     fn a_margin_on_the_anchored_edge_is_reserved_too() {
-        let mut surface = Recorder {
-            configured: Some((800, 32)),
-            ..Default::default()
-        };
+        let mut surface = confirmed(800, 32);
         resync_exclusive_zone(&mut surface, &bar().margin(Margin::all(8)), None);
         assert_eq!(surface.exclusive_zones, vec![40]);
     }
@@ -2664,6 +2668,63 @@ mod a_second_host_can_answer_for_a_compositor {
         let mut surface = Recorder::default();
         resync_exclusive_zone(&mut surface, &bar().exclusive_zone(48u32), None);
         assert!(surface.exclusive_zones.is_empty());
+    }
+
+    /// A dock down the left edge, as wide as whatever it holds. Its reservation
+    /// follows the width, and the width is the one axis it owns — `TOP | BOTTOM`
+    /// hands the height to the compositor, `LEFT` alone leaves the width to the
+    /// surface.
+    ///
+    /// The anchor is what makes this a dock rather than a corner: `follow_axis`
+    /// gives up on a surface pinned to one edge of each axis, so `TOP | LEFT`
+    /// would reserve nothing whatever the width, and every assertion below would
+    /// hold for the wrong reason.
+    fn side_dock() -> SurfaceConfig {
+        SurfaceConfig::new()
+            .width(surface::content())
+            .anchor(Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM)
+            .exclusive_zone(ExclusiveZone::Auto)
+    }
+
+    /// An unmeasured content axis publishes nothing and waits for the measure.
+    /// This is the case the guard in `publish_exclusive_zone` exists for, and
+    /// its comment says what 1920 would cost; here it is only the number the
+    /// guard has to refuse.
+    #[test]
+    fn a_dock_whose_width_is_unmeasured_reserves_nothing_rather_than_the_whole_output() {
+        let mut surface = confirmed(1920, 1080);
+        resync_exclusive_zone(&mut surface, &side_dock(), None);
+        assert!(
+            surface.exclusive_zones.is_empty(),
+            "reserved {:?} against a width the compositor imposed",
+            surface.exclusive_zones
+        );
+    }
+
+    /// The deferral lasts until the measure lands, not for ever. The measured
+    /// width is what is reserved, and it is not the confirmed one: the surface
+    /// is still 1920 wide as far as the compositor knows.
+    #[test]
+    fn the_dock_reserves_the_measured_width_not_the_confirmed_one() {
+        let mut surface = confirmed(1920, 1080);
+        resync_exclusive_zone(&mut surface, &side_dock(), Some((240, 1080)));
+        assert_eq!(surface.exclusive_zones, vec![240]);
+    }
+
+    /// A constant on the same unmeasured surface goes out at once: the guard is
+    /// `Auto`-only, and `publish_exclusive_zone` says what deferring one would
+    /// cost.
+    ///
+    /// This is the one test here that calls `publish_exclusive_zone` rather than
+    /// `resync_exclusive_zone`, because `resync` drops everything that is not
+    /// `Auto` before the guard ever sees it — the layer above is proved by
+    /// `a_fixed_reservation_is_not_republished_every_frame`, and going through it
+    /// would assert nothing about the guard.
+    #[test]
+    fn a_constant_reservation_on_an_unmeasured_dock_is_not_deferred() {
+        let mut surface = Recorder::default();
+        publish_exclusive_zone(&mut surface, &side_dock().exclusive_zone(48u32), None);
+        assert_eq!(surface.exclusive_zones, vec![48]);
     }
 }
 

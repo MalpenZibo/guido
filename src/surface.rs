@@ -1193,6 +1193,33 @@ mod tests {
         assert_eq!(left, 48 + 20);
     }
 
+    /// A corner anchor names one edge of each axis, so neither axis is the one
+    /// the reservation follows and `Auto` reserves nothing — the layer-shell
+    /// spec has no answer for it either.
+    ///
+    /// It is worth pinning because it is a premise elsewhere: the dock fixtures
+    /// that watch the deferral guard in `publish_exclusive_zone` are anchored
+    /// `LEFT | TOP | BOTTOM` rather than `TOP | LEFT` precisely so that their
+    /// assertions do not hold for this reason instead of the intended one.
+    #[test]
+    fn a_corner_or_full_anchor_has_no_axis_to_follow_and_reserves_nothing() {
+        let margin = Margin::all(10);
+        assert_eq!(
+            ExclusiveZone::Auto.resolve(Anchor::TOP | Anchor::LEFT, margin, 48, 600),
+            0
+        );
+        assert_eq!(
+            ExclusiveZone::Auto.resolve(
+                Anchor::TOP | Anchor::LEFT | Anchor::RIGHT | Anchor::BOTTOM,
+                margin,
+                48,
+                600
+            ),
+            0,
+            "and so does a surface pinned to all four"
+        );
+    }
+
     /// The other policies are numbers, and never consult anything.
     #[test]
     fn the_other_zone_policies_ignore_the_surface() {
