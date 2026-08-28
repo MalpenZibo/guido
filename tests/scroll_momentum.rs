@@ -5,6 +5,8 @@
 //! that a frame in the middle of a gesture, or a frame long after one, does not
 //! move the content: only the deltas the user actually produced do.
 
+use std::time::{Duration, Instant};
+
 use guido::layout::{Constraints, Flex};
 use guido::prelude::*;
 use guido::renderer::{PaintContext, RenderNode};
@@ -37,11 +39,6 @@ impl H {
         Self { tree, root }
     }
 
-    /// One touchpad scroll sample, as a finger moving by `delta` pixels.
-    fn finger_scroll(&mut self, delta: f32) {
-        self.scroll(delta, ScrollSource::Finger);
-    }
-
     /// One scroll sample from any source, at a named moment.
     fn scroll_at(&mut self, delta: f32, source: ScrollSource, at: std::time::Instant) {
         self.tree.set_event_instant(Some(at));
@@ -70,22 +67,38 @@ impl H {
             .with_widget_mut(root, |w, id, t| w.event(t, id, &event));
     }
 
-    /// Play a flick of `samples` movements and lift, from `source`.
-    fn flick(&mut self, source: ScrollSource) {
+    /// Play a flick of six samples eight milliseconds apart, and lift.
+    ///
+    /// The instants are named rather than slept through: a flick's velocity is
+    /// the distance over the gap between samples, so a test that sleeps is
+    /// measuring the scheduler as much as the gesture — and on a loaded machine
+    /// it measures something else again.
+    ///
+    /// Returns the moment of the lift, which is where whatever comes next
+    /// starts counting from.
+    fn flick_from(&mut self, source: ScrollSource, start: Instant) -> Instant {
+        let mut at = start;
         for _ in 0..6 {
-            self.scroll(10.0, source);
-            std::thread::sleep(std::time::Duration::from_millis(8));
+            self.scroll_at(10.0, source, at);
+            at += Duration::from_millis(8);
         }
-        self.scroll_end();
+        self.scroll_end_at(at);
+        at
     }
 
-    /// Run `n` animation frames, as the loop does while anything is animating.
-    fn frames(&mut self, n: usize) {
+    /// Run `n` animation frames at sixty a second from `start`, as the loop does
+    /// while anything is animating, and return the moment of the last one.
+    fn frames_from(&mut self, n: usize, start: Instant) -> Instant {
         let root = self.root;
+        let mut at = start;
         for _ in 0..n {
+            at += Duration::from_millis(16);
+            self.tree.set_frame_instant(Some(at));
             self.tree
                 .with_widget_mut(root, |w, id, t| w.advance_animations(t, id));
         }
+        self.tree.set_frame_instant(None);
+        at
     }
 
     /// The finger lifted, as the compositor's `axis_stop` reaches the tree.
@@ -114,13 +127,12 @@ impl H {
 fn a_gap_inside_a_gesture_does_not_start_the_momentum() {
     let mut h = H::new();
 
-    h.finger_scroll(30.0);
-    std::thread::sleep(std::time::Duration::from_millis(60));
-    h.frames(10);
+    let t0 = Instant::now();
+    h.scroll_at(30.0, ScrollSource::Finger, t0);
+    let after = h.frames_from(10, t0 + Duration::from_millis(60));
 
-    h.finger_scroll(30.0);
-    std::thread::sleep(std::time::Duration::from_millis(60));
-    h.frames(10);
+    h.scroll_at(30.0, ScrollSource::Finger, after);
+    h.frames_from(10, after + Duration::from_millis(60));
 
     let offset = h.offset();
     assert!(
@@ -137,15 +149,16 @@ fn a_gap_inside_a_gesture_does_not_start_the_momentum() {
 fn a_gesture_that_never_ended_is_not_resumed_by_a_later_frame() {
     let mut h = H::new();
 
-    h.finger_scroll(30.0);
+    let t0 = Instant::now();
+    h.scroll_at(30.0, ScrollSource::Finger, t0);
     let after_gesture = h.offset();
 
-    // The surface goes idle: nothing advances for a while.
-    std::thread::sleep(std::time::Duration::from_millis(120));
-
-    // Something unrelated asks for an animation frame — re-entering the
+    // The surface goes idle: nothing advances for a while. Named rather than
+    // slept, so "a while" is a number and the test costs nothing.
+    //
+    // Something unrelated then asks for an animation frame — re-entering the
     // container starts the scrollbar's hover expansion, which does exactly this.
-    h.frames(10);
+    h.frames_from(10, t0 + Duration::from_millis(120));
 
     let offset = h.offset();
     assert!(
@@ -162,9 +175,11 @@ fn a_gesture_that_never_ended_is_not_resumed_by_a_later_frame() {
 fn a_gesture_that_ended_carries_on_past_the_last_sample() {
     let mut h = H::new();
 
+    let t0 = Instant::now();
+    let mut at = t0;
     for _ in 0..6 {
-        h.finger_scroll(10.0);
-        std::thread::sleep(std::time::Duration::from_millis(8));
+        h.scroll_at(10.0, ScrollSource::Finger, at);
+        at += Duration::from_millis(8);
     }
     let at_lift = h.offset();
     assert!(
@@ -172,8 +187,8 @@ fn a_gesture_that_ended_carries_on_past_the_last_sample() {
         "the gesture itself moved {at_lift}px, not the 60px dispatched"
     );
 
-    h.scroll_end();
-    h.frames(60);
+    h.scroll_end_at(at);
+    h.frames_from(60, at);
 
     let coasted = h.offset() - at_lift;
     assert!(
@@ -191,9 +206,9 @@ fn a_gesture_that_ended_carries_on_past_the_last_sample() {
 #[test]
 fn a_continuous_gesture_coasts_and_a_wheel_does_not() {
     let mut wheel = H::new();
-    wheel.flick(ScrollSource::Wheel);
+    let lifted = wheel.flick_from(ScrollSource::Wheel, Instant::now());
     let at_lift = wheel.offset();
-    wheel.frames(60);
+    wheel.frames_from(60, lifted);
     let wheel_coast = wheel.offset() - at_lift;
     assert!(
         wheel_coast.abs() < 0.01,
@@ -201,9 +216,9 @@ fn a_continuous_gesture_coasts_and_a_wheel_does_not() {
     );
 
     let mut continuous = H::new();
-    continuous.flick(ScrollSource::Continuous);
+    let lifted = continuous.flick_from(ScrollSource::Continuous, Instant::now());
     let at_lift = continuous.offset();
-    continuous.frames(60);
+    continuous.frames_from(60, lifted);
     let continuous_coast = continuous.offset() - at_lift;
     assert!(
         continuous_coast > 10.0,
@@ -221,21 +236,19 @@ fn a_continuous_gesture_coasts_and_a_wheel_does_not() {
 #[test]
 fn a_momentum_left_half_run_is_not_carried_on_by_a_later_frame() {
     let mut h = H::new();
-    h.flick(ScrollSource::Finger);
+    let lifted = h.flick_from(ScrollSource::Finger, Instant::now());
 
-    h.frames(5);
+    let stopped = h.frames_from(5, lifted);
     let interrupted_at = h.offset();
     assert!(
         interrupted_at > 60.0,
         "the flick was coasting when it stopped"
     );
 
-    // The loop goes idle mid-flight.
-    std::thread::sleep(std::time::Duration::from_millis(400));
-
-    // Re-entering the container starts the scrollbar's hover expansion, which
-    // asks for an animation frame.
-    h.frames(30);
+    // The loop goes idle mid-flight, and then something unrelated asks for an
+    // animation frame — re-entering the container starts the scrollbar's hover
+    // expansion, which does exactly this.
+    h.frames_from(30, stopped + Duration::from_millis(400));
 
     let after = h.offset();
     assert!(
@@ -259,17 +272,18 @@ fn the_speed_of_a_flick_is_the_distance_over_the_time_it_took() {
     // two gestures is how long they took.
     fn coast(sample_gap_ms: u64) -> f32 {
         let mut h = H::new();
-        let t0 = std::time::Instant::now();
+        let t0 = Instant::now();
         for i in 1..=6u64 {
             h.scroll_at(
                 10.0,
                 ScrollSource::Finger,
-                t0 + std::time::Duration::from_millis(i * sample_gap_ms),
+                t0 + Duration::from_millis(i * sample_gap_ms),
             );
         }
         let lifted = h.offset();
-        h.scroll_end_at(t0 + std::time::Duration::from_millis(6 * sample_gap_ms));
-        h.frames(60);
+        let at = t0 + Duration::from_millis(6 * sample_gap_ms);
+        h.scroll_end_at(at);
+        h.frames_from(60, at);
         h.offset() - lifted
     }
 
