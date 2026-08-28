@@ -15,6 +15,8 @@ pub mod render_stats;
 pub mod session_lock;
 pub mod surface;
 mod surface_manager;
+#[cfg(feature = "testing")]
+pub mod testing;
 pub mod transform;
 pub mod tree;
 pub mod widget_ref;

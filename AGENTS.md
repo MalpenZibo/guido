@@ -115,11 +115,20 @@ at lavapipe. In that job a skip is a failure.
 | API names written in *prose* — this file, the skills, `docs/`, the book, the README | `tests/documentation_references.rs` |
 | API names written in the book's *code samples* | **nothing yet.** The book teaches almost entirely through samples, and until they compile a rename is invisible there |
 | the workflow this file, `/implement` and the templates describe | `tests/agent_workflow.rs` |
-| Wayland protocol behaviour, compositor integration | **nothing automated.** Run an example and say what you saw in the pull request |
+| the application above the compositor — a surface configuring, a frame opening, input routing, what a surface asks for in return | `tests/headless_app.rs` — the real loop, with a recorder where the compositor is |
+| Wayland protocol behaviour: what actually goes out on the wire, and what a compositor does with it | **nothing automated.** Run an example and say what you saw in the pull request |
 
-That last row is the hole in the harness. It is the one place where "I ran it
-and it looked right" is still the standard, and the one place worth closing
-next.
+That last row is what is left of the hole. Until #264 it was the whole of it:
+nothing could construct an application, so everything it does with what the
+compositor says was watched by a person running an example. `Headless` closes
+that half — it drives `iterate`, the same function `App::run` drives, against a
+recorder that answers for one surface and keeps what it was asked.
+
+What it cannot close is the half below it. The recorder is not a compositor: it
+proves guido asks for an exclusive zone of 50, never that niri does the right
+thing with one. And it answers for one static surface, so dynamic spawn and
+close, popups and the session lock are still watched by a person, even though
+they type-check against the same trait.
 
 ## What watches the harness
 
