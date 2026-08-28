@@ -2593,6 +2593,20 @@ mod a_frame_is_a_description_not_a_connection {
     }
 }
 
+/// A surface the manager owns, for the tests that need one rather than a
+/// recorder alone — `send_size` reads its config, and a frame needs somewhere to
+/// land.
+///
+/// The widget is the smallest there is: none of these lay anything out, it only
+/// has to be registered so the tree can name it. The tree is the caller's
+/// because [`ManagedSurface::new`] registers into it and some callers go on to
+/// use it.
+#[cfg(test)]
+fn managed_surface(config: SurfaceConfig, tree: &mut Tree) -> ManagedSurface {
+    let (widget, owner) = with_owner(|| Box::new(widgets::container()) as Box<dyn Widget>);
+    ManagedSurface::new(SurfaceId::next(), config, widget, owner, tree)
+}
+
 /// The frame path asks a compositor for things, and this is the asking written
 /// down. `WaylandState` is one answer to it; a recorder that keeps what it was
 /// asked is another, and having two is the whole point — one implementation is
@@ -2826,7 +2840,6 @@ mod a_frame_lands_where_the_surface_points {
     use super::*;
     use crate::renderer::{GpuContext, RenderTarget};
     use crate::surface::SurfaceConfig;
-    use crate::widgets::container;
 
     const W: u32 = 100;
     const H: u32 = 32;
@@ -2895,14 +2908,7 @@ mod a_frame_lands_where_the_surface_points {
         let Some(gpu) = gpu() else { return };
 
         let mut tree = Tree::new();
-        let (widget, owner) = reactive::with_owner(|| Box::new(container()) as Box<dyn Widget>);
-        let mut surface = surface_manager::ManagedSurface::new(
-            SurfaceId::next(),
-            SurfaceConfig::new(),
-            widget,
-            owner,
-            &mut tree,
-        );
+        let mut surface = managed_surface(SurfaceConfig::new(), &mut tree);
         surface.wgpu_surface = Some(RenderTarget::offscreen(&gpu, 8, 8));
         let mut renderer = Renderer::new(
             gpu.device.clone(),
