@@ -23,10 +23,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use smithay_client_toolkit::reexports::client::QueueHandle;
-
 use crate::outputs::{self, OutputId, OutputInfo};
-use crate::platform::{LockEvent, WaylandState};
+use crate::platform::LockEvent;
 use crate::reactive::global::GlobalSignal;
 use crate::reactive::owner::with_owner;
 use crate::reactive::{RwSignal, Signal};
@@ -151,10 +149,9 @@ pub fn unlock_session() {
 
 /// Drive the session-lock state machine. Called once per main-loop
 /// iteration, before surface commands are processed.
-pub(crate) fn process_session_lock(
+pub(crate) fn process_session_lock<P: crate::Platform>(
     surface_manager: &mut SurfaceManager,
-    wayland_state: &mut WaylandState,
-    qh: &QueueHandle<WaylandState>,
+    wayland_state: &mut P,
     tree: &mut Tree,
 ) {
     // 1. Pending request. A lock goes out now; an unlock waits for step 3,
@@ -165,7 +162,7 @@ pub(crate) fn process_session_lock(
     match REQUEST.with(|request| request.take()) {
         Some(LockRequest::Lock(factory)) => {
             LOCK.with(|l| l.borrow_mut().factory = Some(factory));
-            if wayland_state.start_session_lock(qh) {
+            if wayland_state.start_session_lock() {
                 set_state(LockState::Locking);
             } else {
                 LOCK.with(|l| l.borrow_mut().factory = None);
@@ -231,7 +228,7 @@ pub(crate) fn process_session_lock(
             }
 
             let id = SurfaceId::next();
-            if !wayland_state.create_lock_surface_with_id(qh, id, info.id) {
+            if !wayland_state.create_lock_surface(id, info.id) {
                 continue;
             }
 
@@ -258,9 +255,9 @@ pub(crate) fn process_session_lock(
     }
 }
 
-fn teardown_lock_surfaces(
+fn teardown_lock_surfaces<P: crate::Platform>(
     surface_manager: &mut SurfaceManager,
-    wayland_state: &mut WaylandState,
+    wayland_state: &mut P,
     tree: &mut crate::tree::Tree,
 ) {
     let surfaces: Vec<SurfaceId> = LOCK.with(|l| {

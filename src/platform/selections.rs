@@ -116,7 +116,8 @@ impl Selections {
 
 impl WaylandState {
     /// Set clipboard content (copy)
-    pub fn set_clipboard(&mut self, text: String, qh: &QueueHandle<Self>) {
+    pub fn set_clipboard(&mut self, text: String) {
+        let qh = &self.qh;
         if let Some(ref manager) = self.selections.data_device_manager {
             // Create a data source for the clipboard
             let source = manager.create_copy_paste_source(
@@ -142,7 +143,8 @@ impl WaylandState {
     }
 
     /// Set the primary selection content (select-to-copy).
-    pub fn set_primary(&mut self, text: String, qh: &QueueHandle<Self>) {
+    pub fn set_primary(&mut self, text: String) {
+        let qh = &self.qh;
         let Some(ref manager) = self.selections.primary_selection_manager else {
             return;
         };

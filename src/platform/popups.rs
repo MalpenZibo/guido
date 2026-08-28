@@ -82,12 +82,12 @@ impl WaylandState {
     /// parent can't host popups.
     pub fn create_popup_surface_with_id(
         &mut self,
-        qh: &QueueHandle<Self>,
         id: SurfaceId,
         parent: SurfaceId,
         config: &crate::surface::PopupConfig,
         size: (u32, u32),
     ) -> bool {
+        let qh = &self.qh;
         let Some(ref xdg_shell) = self.popups.xdg_shell else {
             log::error!("Cannot create popup: compositor lacks xdg_wm_base");
             return false;

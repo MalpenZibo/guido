@@ -56,7 +56,8 @@ impl WaylandState {
     /// Returns false when a lock is already active or the compositor lacks
     /// ext-session-lock-v1. The grant (or denial) arrives asynchronously as
     /// a [`LockEvent`].
-    pub fn start_session_lock(&mut self, qh: &QueueHandle<Self>) -> bool {
+    pub fn start_session_lock(&mut self) -> bool {
+        let qh = &self.qh;
         if self.lock.active_lock.is_some() {
             log::warn!("Session lock requested while a lock is already active");
             return false;
@@ -95,12 +96,8 @@ impl WaylandState {
     /// The surface starts at 0×0 — its real size arrives with the first
     /// lock-surface configure. Returns false without an active lock or when
     /// the output disconnected.
-    pub fn create_lock_surface_with_id(
-        &mut self,
-        qh: &QueueHandle<Self>,
-        id: SurfaceId,
-        output: OutputId,
-    ) -> bool {
+    pub fn create_lock_surface_with_id(&mut self, id: SurfaceId, output: OutputId) -> bool {
+        let qh = &self.qh;
         let Some(lock) = self.lock.active_lock.clone() else {
             log::warn!("Cannot create lock surface without an active session lock");
             return false;

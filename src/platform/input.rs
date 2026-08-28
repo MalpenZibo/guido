@@ -208,7 +208,8 @@ impl InputState {
 
 impl WaylandState {
     /// Set the cursor shape
-    pub fn set_cursor(&self, cursor: CursorIcon, qh: &QueueHandle<Self>) {
+    pub fn set_cursor(&self, cursor: CursorIcon) {
+        let qh = &self.qh;
         let Some(ref manager) = self.input.cursor_shape_manager else {
             return;
         };

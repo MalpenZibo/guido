@@ -5,15 +5,13 @@
 
 use std::collections::HashMap;
 
-use smithay_client_toolkit::reexports::client::Connection;
-
 use crate::layout::Constraints;
-use crate::platform::{WaylandState, WaylandWindowWrapper};
 use crate::reactive::owner::{OwnerId, dispose_owner_now};
 use crate::renderer::{CommandLayer, FlattenedCommand, GpuContext, RenderNode, RenderTarget};
 use crate::surface::{SurfaceConfig, SurfaceId};
 use crate::tree::{Tree, WidgetId};
 use crate::widgets::Widget;
+use crate::{Platform, Surface};
 
 /// A surface with unified GPU lifecycle management.
 ///
@@ -72,12 +70,10 @@ impl ManagedSurface {
     }
 
     /// Initialize GPU surface. Returns true if successful.
-    #[allow(clippy::too_many_arguments)]
-    pub fn init_gpu(
+    pub fn init_gpu<P: Platform>(
         &mut self,
         gpu_context: &GpuContext,
-        connection: &Connection,
-        wl_surface: &smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface,
+        platform: &P,
         width: u32,
         height: u32,
         scale_factor: f32,
@@ -87,13 +83,12 @@ impl ManagedSurface {
             return true; // Already initialized
         }
 
-        let window_handle = WaylandWindowWrapper::new(connection, wl_surface);
         let initial_scale = scale_factor.max(1.0) as u32;
         let physical_width = width * initial_scale;
         let physical_height = height * initial_scale;
 
         log::info!(
-            "Creating wgpu surface for {:?}: logical {}x{}, physical {}x{}, scale {}",
+            "Creating render target for {:?}: logical {}x{}, physical {}x{}, scale {}",
             self.id,
             width,
             height,
@@ -102,9 +97,12 @@ impl ManagedSurface {
             initial_scale
         );
 
-        let wgpu_surface =
-            gpu_context.create_surface(window_handle, physical_width, physical_height);
-        self.wgpu_surface = Some(RenderTarget::Swapchain(wgpu_surface));
+        let Some(target) =
+            platform.create_render_target(self.id, gpu_context, (physical_width, physical_height))
+        else {
+            return false;
+        };
+        self.wgpu_surface = Some(target);
         self.previous_scale_factor = scale_factor;
 
         // Perform initial layout
@@ -209,11 +207,10 @@ impl SurfaceManager {
     ///
     /// This iterates over all surfaces and initializes GPU for any
     /// that are configured in Wayland but don't yet have a wgpu surface.
-    pub fn init_pending_gpu(
+    pub fn init_pending_gpu<P: Platform>(
         &mut self,
         gpu_context: &GpuContext,
-        connection: &Connection,
-        wayland_state: &WaylandState,
+        wayland_state: &mut P,
         tree: &mut Tree,
     ) {
         for (id, surface) in self.surfaces.iter_mut() {
@@ -221,25 +218,16 @@ impl SurfaceManager {
                 continue;
             }
 
-            // Get wayland surface state
-            let Some(wayland_surface) = wayland_state.get_surface(*id) else {
+            // A surface with no confirmed size has nothing to build a target
+            // at, and one with no confirmed scale would build it at the wrong
+            // one.
+            let facts = wayland_state
+                .surface(*id)
+                .and_then(|s| Some((s.configured_size()?, s.scale_factor()?)));
+            let Some(((width, height), scale)) = facts else {
                 continue;
             };
-
-            // Skip if not configured yet
-            if !wayland_surface.configured {
-                continue;
-            }
-
-            surface.init_gpu(
-                gpu_context,
-                connection,
-                &wayland_surface.wl_surface,
-                wayland_surface.width,
-                wayland_surface.height,
-                wayland_surface.scale_factor,
-                tree,
-            );
+            surface.init_gpu(gpu_context, wayland_state, width, height, scale, tree);
         }
     }
 }
