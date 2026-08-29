@@ -1,5 +1,7 @@
 //! Scrollable container functionality.
 
+use std::borrow::Cow;
+
 use crate::animation::{SpringConfig, Transition};
 use crate::jobs::{JobRequest, RequiredJob, request_job};
 use crate::layout::Constraints;
@@ -10,6 +12,9 @@ use crate::widgets::widget::{Event, EventResponse, MouseButton, Rect, ScrollSour
 
 use super::Container;
 use super::animations::AnimationState;
+use super::interaction::{HitContext, untransform_point};
+use crate::pivot::Pivot;
+use crate::transform::Transform;
 use crate::widgets::state_layer::Stateful;
 
 impl Container {
@@ -413,8 +418,6 @@ impl Container {
         id: WidgetId,
         ctx: &mut PaintContext,
     ) {
-        use crate::transform::Transform;
-
         let sd = self.scroll();
 
         if sd.scrollbar_visibility == ScrollbarVisibility::Hidden {
@@ -437,9 +440,6 @@ impl Container {
 
         // Vertical scrollbar
         if self.scroll_axis.allows_vertical() && sd.scroll_state.needs_vertical_scrollbar() {
-            // Vertical scrollbar scales horizontally (expands width on hover)
-            let scale_transform = Transform::scale_xy(v_scale, 1.0);
-
             if let Some(track_id) = sd.v_scrollbar_track_id
                 && let Some(track_bounds) = tree.get_bounds(track_id)
             {
@@ -447,16 +447,12 @@ impl Container {
                 let track_local = Rect::new(0.0, 0.0, track_bounds.width, track_bounds.height);
 
                 let mut track_ctx = ctx.add_child(track_id.as_u64(), track_local);
-                // Scale from right edge (transform origin at right center)
-                // First translate to position, then apply scale centered at right edge
-                let position = Transform::translate(track_bounds.x, track_bounds.y);
-                let scale_origin_x = track_bounds.width;
-                let scale_origin_y = track_bounds.height / 2.0;
-                let combined = position
-                    .then(&Transform::translate(scale_origin_x, scale_origin_y))
-                    .then(&scale_transform)
-                    .then(&Transform::translate(-scale_origin_x, -scale_origin_y));
-                track_ctx.set_transform(combined);
+                track_ctx.set_transform(scrollbar_paint_transform(
+                    ScrollbarAxis::Vertical,
+                    v_scale,
+                    (track_bounds.x, track_bounds.y),
+                    track_local,
+                ));
                 tree.with_widget(track_id, |widget| {
                     widget.paint(tree, track_id, &mut track_ctx);
                 });
@@ -467,17 +463,12 @@ impl Container {
                 let handle_local = Rect::new(0.0, 0.0, handle_bounds.width, handle_bounds.height);
 
                 let mut handle_ctx = ctx.add_child(handle_id.as_u64(), handle_local);
-                // Scale from right edge (transform origin at right center)
-                let (handle_x, handle_y) =
-                    self.scrollbar_handle_origin(tree, id, ScrollbarAxis::Vertical);
-                let position = Transform::translate(handle_x, handle_y);
-                let scale_origin_x = handle_bounds.width;
-                let scale_origin_y = handle_bounds.height / 2.0;
-                let combined = position
-                    .then(&Transform::translate(scale_origin_x, scale_origin_y))
-                    .then(&scale_transform)
-                    .then(&Transform::translate(-scale_origin_x, -scale_origin_y));
-                handle_ctx.set_transform(combined);
+                handle_ctx.set_transform(scrollbar_paint_transform(
+                    ScrollbarAxis::Vertical,
+                    v_scale,
+                    self.scrollbar_handle_origin(tree, id, ScrollbarAxis::Vertical),
+                    handle_local,
+                ));
                 tree.with_widget(handle_id, |widget| {
                     widget.paint(tree, handle_id, &mut handle_ctx);
                 });
@@ -486,24 +477,18 @@ impl Container {
 
         // Horizontal scrollbar
         if self.scroll_axis.allows_horizontal() && sd.scroll_state.needs_horizontal_scrollbar() {
-            // Horizontal scrollbar scales vertically (expands height on hover)
-            let scale_transform = Transform::scale_xy(1.0, h_scale);
-
             if let Some(track_id) = sd.h_scrollbar_track_id
                 && let Some(track_bounds) = tree.get_bounds(track_id)
             {
                 let track_local = Rect::new(0.0, 0.0, track_bounds.width, track_bounds.height);
 
                 let mut track_ctx = ctx.add_child(track_id.as_u64(), track_local);
-                // Scale from bottom edge (transform origin at bottom center)
-                let position = Transform::translate(track_bounds.x, track_bounds.y);
-                let scale_origin_x = track_bounds.width / 2.0;
-                let scale_origin_y = track_bounds.height;
-                let combined = position
-                    .then(&Transform::translate(scale_origin_x, scale_origin_y))
-                    .then(&scale_transform)
-                    .then(&Transform::translate(-scale_origin_x, -scale_origin_y));
-                track_ctx.set_transform(combined);
+                track_ctx.set_transform(scrollbar_paint_transform(
+                    ScrollbarAxis::Horizontal,
+                    h_scale,
+                    (track_bounds.x, track_bounds.y),
+                    track_local,
+                ));
                 tree.with_widget(track_id, |widget| {
                     widget.paint(tree, track_id, &mut track_ctx);
                 });
@@ -514,17 +499,12 @@ impl Container {
                 let handle_local = Rect::new(0.0, 0.0, handle_bounds.width, handle_bounds.height);
 
                 let mut handle_ctx = ctx.add_child(handle_id.as_u64(), handle_local);
-                // Scale from bottom edge (transform origin at bottom center)
-                let (handle_x, handle_y) =
-                    self.scrollbar_handle_origin(tree, id, ScrollbarAxis::Horizontal);
-                let position = Transform::translate(handle_x, handle_y);
-                let scale_origin_x = handle_bounds.width / 2.0;
-                let scale_origin_y = handle_bounds.height;
-                let combined = position
-                    .then(&Transform::translate(scale_origin_x, scale_origin_y))
-                    .then(&scale_transform)
-                    .then(&Transform::translate(-scale_origin_x, -scale_origin_y));
-                handle_ctx.set_transform(combined);
+                handle_ctx.set_transform(scrollbar_paint_transform(
+                    ScrollbarAxis::Horizontal,
+                    h_scale,
+                    self.scrollbar_handle_origin(tree, id, ScrollbarAxis::Horizontal),
+                    handle_local,
+                ));
                 tree.with_widget(handle_id, |widget| {
                     widget.paint(tree, handle_id, &mut handle_ctx);
                 });
@@ -532,12 +512,70 @@ impl Container {
         }
     }
 
-    /// Handle scrollbar-related events, returns EventResponse if handled
+    /// Hand an event to the handle widget of `axis`, in the space that widget
+    /// hit-tests in.
+    ///
+    /// Two things stand between the event and the handle. The event has already
+    /// been rebased into the scroller's space by `handle_scrollbar_event`, which
+    /// is the space the handle's own bounds are in. What is left is the
+    /// widening: the handle is drawn scaled about its outer edge by *this*
+    /// container's paint (`scrollbar_paint_transform`) rather than by a scale
+    /// declared on the handle, so its bounds stay the resting strip however wide
+    /// it appears. Undoing that scale here is what `Container::event` does with
+    /// its own transform before hit testing — and without it the width a hover
+    /// adds is drawn and answers nothing: no pressed colour, and no ripple.
+    fn forward_to_handle(&self, tree: &mut Tree, axis: ScrollbarAxis, event: &Event) {
+        let sd = self.scroll();
+        let handle_id = match axis {
+            ScrollbarAxis::Vertical => sd.v_scrollbar_handle_id,
+            ScrollbarAxis::Horizontal => sd.h_scrollbar_handle_id,
+        };
+        let Some(handle_id) = handle_id else {
+            return;
+        };
+
+        let scale = match axis {
+            ScrollbarAxis::Vertical => sd.v_scrollbar_scale_anim.as_ref(),
+            ScrollbarAxis::Horizontal => sd.h_scrollbar_scale_anim.as_ref(),
+        }
+        .map(|anim| *anim.current())
+        .unwrap_or(1.0);
+
+        let unscaled: Cow<'_, Event> = match (event.coords(), tree.get_bounds(handle_id)) {
+            (Some((x, y)), Some(bounds)) => {
+                let (local_x, local_y) = untransform_point(
+                    &scrollbar_scale_transform(axis, scale),
+                    scrollbar_scale_pivot(axis),
+                    bounds,
+                    x,
+                    y,
+                );
+                Cow::Owned(event.with_coords(local_x, local_y))
+            }
+            _ => Cow::Borrowed(event),
+        };
+
+        tree.with_widget_mut(handle_id, |handle, id, tree| {
+            handle.event(tree, id, &unscaled);
+        });
+    }
+
+    /// Handle scrollbar-related events, returns EventResponse if handled.
+    ///
+    /// Everything below works in the scroller's own space, because that is the
+    /// space the scrollbars live in: their rects are derived from local bounds
+    /// (see `layout_scrollbar_containers`), and the origins the `Tree` holds
+    /// for the track and handle widgets are written from the same derivation.
+    /// The event arrives in the scroller's *parent's* space, like `hit.bounds`,
+    /// so it is rebased once here rather than at each of the places that
+    /// forwards it on — which is how a handle came to answer for a strip beside
+    /// itself, and to ripple that far from the finger, on every scroller not
+    /// sitting at its parent's origin.
     pub(super) fn handle_scrollbar_event(
         &mut self,
         tree: &mut Tree,
         id: WidgetId,
-        bounds: Rect,
+        hit: &HitContext,
         event: &Event,
     ) -> Option<EventResponse> {
         if self.scroll_axis == ScrollAxis::None
@@ -545,6 +583,16 @@ impl Container {
         {
             return None;
         }
+
+        let local: Cow<'_, Event> = match event.coords() {
+            Some((x, y)) => {
+                let (local_x, local_y) = hit.rebase(x, y);
+                Cow::Owned(event.with_coords(local_x, local_y))
+            }
+            None => Cow::Borrowed(event),
+        };
+        let event = local.as_ref();
+        let bounds = Rect::new(0.0, 0.0, hit.bounds.width, hit.bounds.height);
 
         match event {
             Event::MouseDown { x, y, button } if *button == MouseButton::Left => {
@@ -639,21 +687,13 @@ impl Container {
             Event::MouseUp { button, .. } if *button == MouseButton::Left => {
                 if self.scroll().scroll_state.scrollbar_dragging {
                     self.scroll_mut().scroll_state.scrollbar_dragging = false;
-                    if let Some(handle_id) = self.scroll().v_scrollbar_handle_id {
-                        tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
-                            widget.event(tree, widget_id, event);
-                        });
-                    }
+                    self.forward_to_handle(tree, ScrollbarAxis::Vertical, event);
                     request_job(id, JobRequest::Paint);
                     return Some(EventResponse::Handled);
                 }
                 if self.scroll().scroll_state.h_scrollbar_dragging {
                     self.scroll_mut().scroll_state.h_scrollbar_dragging = false;
-                    if let Some(handle_id) = self.scroll().h_scrollbar_handle_id {
-                        tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
-                            widget.event(tree, widget_id, event);
-                        });
-                    }
+                    self.forward_to_handle(tree, ScrollbarAxis::Horizontal, event);
                     request_job(id, JobRequest::Paint);
                     return Some(EventResponse::Handled);
                 }
@@ -670,20 +710,10 @@ impl Container {
                 sd.scroll_state.h_scrollbar_hovered = false;
                 sd.scroll_state.scrollbar_dragging = false;
                 sd.scroll_state.h_scrollbar_dragging = false;
-                let v_handle = sd.v_scrollbar_handle_id;
-                let h_handle = sd.h_scrollbar_handle_id;
 
                 if had_hover {
-                    if let Some(handle_id) = v_handle {
-                        tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
-                            widget.event(tree, widget_id, event);
-                        });
-                    }
-                    if let Some(handle_id) = h_handle {
-                        tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
-                            widget.event(tree, widget_id, event);
-                        });
-                    }
+                    self.forward_to_handle(tree, ScrollbarAxis::Vertical, event);
+                    self.forward_to_handle(tree, ScrollbarAxis::Horizontal, event);
                 }
                 if had_hover || had_drag {
                     request_job(id, JobRequest::Paint);
@@ -733,15 +763,7 @@ impl Container {
             sd.scroll_state.set_drag_start(axis, pos, offset);
 
             // Forward event to handle container for pressed state
-            let handle_id = match axis {
-                ScrollbarAxis::Vertical => sd.v_scrollbar_handle_id,
-                ScrollbarAxis::Horizontal => sd.h_scrollbar_handle_id,
-            };
-            if let Some(handle_id) = handle_id {
-                tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
-                    widget.event(tree, widget_id, event);
-                });
-            }
+            self.forward_to_handle(tree, axis, event);
 
             request_job(id, JobRequest::Paint);
             return Some(EventResponse::Handled);
@@ -874,34 +896,20 @@ impl Container {
             needs_repaint = true;
         }
 
-        // Send synthetic MouseEnter/MouseLeave events to handle container when hover state changes.
-        // We can't forward raw MouseMove events because the Container's bounds check would fail
-        // (coordinates are in parent space, not local to the handle widget).
-        let handle_id = match axis {
-            ScrollbarAxis::Vertical => sd.v_scrollbar_handle_id,
-            ScrollbarAxis::Horizontal => sd.h_scrollbar_handle_id,
-        };
-        if let Some(handle_id) = handle_id {
-            if is_hovered && !was_hovered {
-                // Transitioning to hovered state - send coordinates at handle center
-                let center_x = handle_rect.x + handle_rect.width / 2.0;
-                let center_y = handle_rect.y + handle_rect.height / 2.0;
-                tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
-                    widget.event(
-                        tree,
-                        widget_id,
-                        &Event::MouseEnter {
-                            x: center_x,
-                            y: center_y,
-                        },
-                    );
-                });
-            } else if !is_hovered && was_hovered {
-                // Transitioning away from hovered state
-                tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
-                    widget.event(tree, widget_id, &Event::MouseLeave);
-                });
-            }
+        // A synthetic enter and leave rather than the move itself: hover is
+        // decided above against the widened hit area, and the handle deciding
+        // it again against its own narrow rect would disagree with the
+        // scrollbar that just widened for the pointer.
+        if is_hovered && !was_hovered {
+            // The centre of the handle: a point it holds whatever part of the
+            // widened area the pointer is actually over.
+            let enter = Event::MouseEnter {
+                x: handle_rect.x + handle_rect.width / 2.0,
+                y: handle_rect.y + handle_rect.height / 2.0,
+            };
+            self.forward_to_handle(tree, axis, &enter);
+        } else if !is_hovered && was_hovered {
+            self.forward_to_handle(tree, axis, &Event::MouseLeave);
         }
 
         needs_repaint
@@ -958,6 +966,43 @@ impl Container {
 
         old_x != sd.scroll_state.offset_x || old_y != sd.scroll_state.offset_y
     }
+}
+
+/// Where a scrollbar's hover widening turns about: a vertical bar grows
+/// leftwards from its right edge, a horizontal one upwards from its bottom.
+fn scrollbar_scale_pivot(axis: ScrollbarAxis) -> Pivot {
+    match axis {
+        ScrollbarAxis::Vertical => Pivot::RIGHT,
+        ScrollbarAxis::Horizontal => Pivot::BOTTOM,
+    }
+}
+
+/// The widening itself: across the axis the bar runs along, never along it.
+fn scrollbar_scale_transform(axis: ScrollbarAxis, scale: f32) -> Transform {
+    match axis {
+        ScrollbarAxis::Vertical => Transform::scale_xy(scale, 1.0),
+        ScrollbarAxis::Horizontal => Transform::scale_xy(1.0, scale),
+    }
+}
+
+/// The transform a scrollbar container is painted with: where it sits, and the
+/// widening turned about its outer edge.
+///
+/// The scale is applied here rather than declared on the track and handle, so
+/// their own bounds stay the resting strip however wide they are drawn. What
+/// undoes it is `Container::forward_to_handle`, about the same point — which is
+/// the only reason the width a hover adds can answer a press at all.
+fn scrollbar_paint_transform(
+    axis: ScrollbarAxis,
+    scale: f32,
+    position: (f32, f32),
+    local: Rect,
+) -> Transform {
+    let (pivot_x, pivot_y) = scrollbar_scale_pivot(axis).resolve(local);
+    Transform::translate(position.0, position.1)
+        .then(&Transform::translate(pivot_x, pivot_y))
+        .then(&scrollbar_scale_transform(axis, scale))
+        .then(&Transform::translate(-pivot_x, -pivot_y))
 }
 
 /// The handle's interactive rect: its extent along the scroll axis, widened
