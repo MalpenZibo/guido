@@ -5,7 +5,12 @@ The Text widget renders text content with support for reactive updates.
 ## Basic Text
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 text("Hello, World!")
+# ;
+# }
 ```
 
 ## Styling
@@ -13,7 +18,16 @@ text("Hello, World!")
 A text declares how it looks:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# #[derive(Clone, Copy)]
+# struct Theme { text: Color, text_weak: Color, weak: Color, strong: Color, line: Color, accent: Color, error: Color, danger: Color, surface: Color }
+# impl Default for Theme { fn default() -> Self { let c = Color::WHITE; Self { text: c, text_weak: c, weak: c, strong: c, line: c, accent: c, error: c, danger: c, surface: c } } }
+# fn main() {
+# let theme = Theme::default();
 text("Hello").font_size(24.0).color(theme.text)
+# ;
+# }
 ```
 
 The methods come from the `TextStyled` trait — `color`, `font_size`,
@@ -27,11 +41,20 @@ widget that draws the glyphs is the one that says how they look. For "the same
 kind of label, many times", write a function:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# #[derive(Clone, Copy)]
+# struct Theme { text: Color, text_weak: Color, weak: Color, strong: Color, line: Color, accent: Color, error: Color, danger: Color, surface: Color }
+# impl Default for Theme { fn default() -> Self { let c = Color::WHITE; Self { text: c, text_weak: c, weak: c, strong: c, line: c, accent: c, error: c, danger: c, surface: c } } }
+# fn main() {
+# let theme = Theme::default();
 let label = |s: &str| text(s).color(theme.weak).font_size(12.0);
 
 container()
     .layout(Flex::row().spacing(8.0))
     .children([label("one"), label("two"), label("three")])
+# ;
+# }
 ```
 
 The style keeps a name, stays next to the widget that draws it, and costs no
@@ -47,6 +70,13 @@ each where it happens, and let `control()` join them — the text resolves its
 own states from the nearest control above it:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# #[derive(Clone, Copy)]
+# struct Theme { text: Color, text_weak: Color, weak: Color, strong: Color, line: Color, accent: Color, error: Color, danger: Color, surface: Color }
+# impl Default for Theme { fn default() -> Self { let c = Color::WHITE; Self { text: c, text_weak: c, weak: c, strong: c, line: c, accent: c, error: c, danger: c, surface: c } } }
+# fn main() {
+# let theme = Theme::default();
 container()
     .padding(8.0)
     .control()
@@ -56,6 +86,8 @@ container()
             .color(theme.weak)
             .when_hovered(|s| s.color(theme.strong)),
     )
+# ;
+# }
 ```
 
 ## Legibility over an image
@@ -65,6 +97,9 @@ some places and dark in others. Two declarations separate the glyphs from
 whatever is behind them:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     
     // A contour around the glyphs. CSS spells this `-webkit-text-stroke`;
@@ -73,6 +108,8 @@ container()
     // As CSS `text-shadow`: offset x, offset y, blur, colour.
     
     .child(text("09:41").text_shadow(TextShadow::new(0.0, 2.0, 10.0, Color::rgba(0.0, 0.0, 0.0, 0.75))).text_stroke(TextStroke::new(1.5, Color::BLACK)).color(Color::WHITE))
+# ;
+# }
 ```
 
 The shadow is usually the more effective of the two: it darkens the whole
@@ -101,11 +138,16 @@ The third way to sit a text on a picture is to make the letters a window onto
 it, blurred:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 text("09:41")
     .font_size(76.0)
     // The tint over the glass; without one the glyphs are the blur alone.
     .color(Color::rgba(1.0, 1.0, 1.0, 0.35))
     .backdrop_blur(16.0)
+# ;
+# }
 ```
 
 This is the same effect a container gets from
@@ -138,12 +180,17 @@ Three things to know before reaching for it:
   sitting beside its own letters would be worse than none.
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 text("09:41")
     .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
     .backdrop_blur(16.0)
     // A contour, because this text is glass. Elsewhere the same declaration is
     // the cheap approximation, and under an opaque fill the two look alike.
     .text_stroke(TextStroke::new(2.0, Color::BLACK))
+# ;
+# }
 ```
 
 `cargo run --example frosted_text` puts all of it beside a control.
@@ -153,15 +200,25 @@ text("09:41")
 ### Font Size
 
 ```rust
-container().child(text("Large text").font_size(24.0))
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container().child(text("Large text").font_size(24.0));
 container().child(text("Small text").font_size(12.0))
+# ;
+# }
 ```
 
 ### Color
 
 ```rust
-container().child(text("Colored text").color(Color::rgb(0.9, 0.3, 0.3)))
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container().child(text("Colored text").color(Color::rgb(0.9, 0.3, 0.3)));
 container().child(text("White text").color(Color::WHITE))
+# ;
+# }
 ```
 
 ### Font Family
@@ -169,16 +226,21 @@ container().child(text("White text").color(Color::WHITE))
 Set the font family using predefined families or custom font names:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // Predefined font families
-container().child(text("Sans-serif text").font_family(FontFamily::SansSerif))
-container().child(text("Serif text").font_family(FontFamily::Serif))
-container().child(text("Monospace text").font_family(FontFamily::Monospace))
+container().child(text("Sans-serif text").font_family(FontFamily::SansSerif));
+container().child(text("Serif text").font_family(FontFamily::Serif));
+container().child(text("Monospace text").font_family(FontFamily::Monospace));
 
 // Shorthand for monospace
-container().child(text("Code example"))
+container().child(text("Code example"));
 
 // Custom font by name (if available on system)
 container().child(text("Custom font").font_family(FontFamily::Name("Inter".into())))
+# ;
+# }
 ```
 
 Available font families:
@@ -194,20 +256,25 @@ Available font families:
 Set the font weight using predefined constants or numeric values (100-900):
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // Using constants
-container().child(text("Thin text").font_weight(FontWeight::THIN))
-container().child(text("Light text").font_weight(FontWeight::LIGHT))
-container().child(text("Normal text").font_weight(FontWeight::NORMAL))
-container().child(text("Medium text").font_weight(FontWeight::MEDIUM))
-container().child(text("Semi-bold text").font_weight(FontWeight::SEMI_BOLD))
-container().child(text("Bold text").font_weight(FontWeight::BOLD))
-container().child(text("Black text").font_weight(FontWeight::BLACK))
+container().child(text("Thin text").font_weight(FontWeight::THIN));
+container().child(text("Light text").font_weight(FontWeight::LIGHT));
+container().child(text("Normal text").font_weight(FontWeight::NORMAL));
+container().child(text("Medium text").font_weight(FontWeight::MEDIUM));
+container().child(text("Semi-bold text").font_weight(FontWeight::SEMI_BOLD));
+container().child(text("Bold text").font_weight(FontWeight::BOLD));
+container().child(text("Black text").font_weight(FontWeight::BLACK));
 
 // Shorthand for bold
-container().child(text("Bold text"))
+container().child(text("Bold text"));
 
 // Custom numeric weight
 container().child(text("Custom weight").font_weight(FontWeight(550)))
+# ;
+# }
 ```
 
 Available weight constants:
@@ -226,7 +293,12 @@ Available weight constants:
 By default, text wraps to fit the available width. Disable wrapping for single-line text:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 text("This text will not wrap").nowrap()
+# ;
+# }
 ```
 
 ## Reactive Text
@@ -234,17 +306,27 @@ text("This text will not wrap").nowrap()
 Text content can update based on signals:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let message = create_signal("Hello".to_string());
 
 text(move || message.get())
+# ;
+# }
 ```
 
 ### Formatted Reactive Text
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let count = create_signal(0);
 
 text(move || format!("Count: {}", count.get()))
+# ;
+# }
 ```
 
 ## Combining Styles
@@ -252,7 +334,12 @@ text(move || format!("Count: {}", count.get()))
 Chain style methods:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container().child(text("Styled Text").font_family(FontFamily::Serif).font_size(18.0).color(Color::WHITE).nowrap())
+# ;
+# }
 ```
 
 ## Text in Containers
@@ -260,6 +347,9 @@ container().child(text("Styled Text").font_family(FontFamily::Serif).font_size(1
 Text is typically placed inside containers for padding and backgrounds:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .padding(12.0)
     .background(Color::rgb(0.2, 0.2, 0.3))
@@ -267,6 +357,8 @@ container()
     .child(
         container().child(text("Button Label").font_size(14.0).color(Color::WHITE))
     )
+# ;
+# }
 ```
 
 ## Typography Patterns
@@ -274,50 +366,82 @@ container()
 ### Headings
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container().child(text("Page Title").font_size(24.0).color(Color::WHITE))
+# ;
+# }
 ```
 
 ### Body Text
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container().child(text("Regular content text").font_size(14.0).color(Color::rgb(0.8, 0.8, 0.85)))
+# ;
+# }
 ```
 
 ### Secondary Text
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container().child(text("Subtitle or caption").font_size(12.0).color(Color::rgb(0.6, 0.6, 0.65)))
+# ;
+# }
 ```
 
 ### Code/Monospace Text
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container().child(text("let x = 42;").font_size(13.0).color(Color::rgb(0.6, 0.9, 0.6)))
+# ;
+# }
 ```
 
 ### Labels
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container().child(text("LABEL").font_size(11.0).color(Color::rgb(0.5, 0.5, 0.55)))
+# ;
+# }
 ```
 
 ## App-Level Default Font
 
 Set a default font family for the entire application:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn view() -> Container { container() }
+# fn main() {
+# let config = SurfaceConfig::new();
 App::new()
     .default_font_family(FontFamily::Name("Inter".into()))
     .run(|app| {
         app.add_surface(config, || view);
     });
+# ;
+# }
 ```
 
 All text widgets will use this font family unless they explicitly override it.
 
 ## Complete Example
 
-```rust
+```rust,ignore
 fn article_card(title: &str, author: &str, preview: &str) -> Container {
     container()
         .padding(16.0)
@@ -343,7 +467,7 @@ fn article_card(title: &str, author: &str, preview: &str) -> Container {
 
 All properties accept static values, signals, or closures.
 
-```rust
+```rust,ignore
 text(content: impl IntoSignal<String, M>) -> Text
 
 impl Text {

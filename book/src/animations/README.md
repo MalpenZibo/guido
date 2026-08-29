@@ -12,10 +12,15 @@ Animations in Guido work by:
 3. Letting the framework interpolate between values
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .background(Color::rgb(0.3, 0.5, 0.8))
     .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
     .when_hovered(|s| s.lighter(0.15))
+# ;
+# }
 ```
 
 When the hover state changes, the background animates smoothly over 200ms.
@@ -34,7 +39,12 @@ When the hover state changes, the background animates smoothly over 200ms.
 Fixed duration with easing curve:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 Transition::new(200.0, TimingFunction::EaseOut)
+# ;
+# }
 ```
 
 Good for:
@@ -47,7 +57,12 @@ Good for:
 Physics simulation for natural motion:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 Transition::spring(SpringConfig::BOUNCY)
+# ;
+# }
 ```
 
 Good for:
@@ -59,6 +74,10 @@ Good for:
 ## Quick Reference
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# container()
 // Duration-based
 .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
 .animate_border_width(Transition::new(150.0, TimingFunction::EaseInOut))
@@ -66,4 +85,6 @@ Good for:
 // Spring-based
 .animate_scale(Transition::spring(SpringConfig::BOUNCY))
 .animate_width(Transition::spring(SpringConfig::GENTLE))
+# ;
+# }
 ```

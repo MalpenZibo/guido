@@ -7,6 +7,8 @@ Guido applications can programmatically quit or restart. `App::run()` returns an
 Call `quit_app()` to request a clean shutdown:
 
 ```rust
+# extern crate guido;
+# fn main() {
 use guido::prelude::*;
 
 container()
@@ -15,6 +17,8 @@ container()
     .when_hovered(|s| s.lighter(0.1))
     .on_click(|| quit_app())
     .child(text("Quit"))
+# ;
+# }
 ```
 
 The current `App::run()` loop exits and returns `ExitReason::Quit`.
@@ -24,16 +28,23 @@ The current `App::run()` loop exits and returns `ExitReason::Quit`.
 Call `restart_app()` to request a restart. The loop exits and returns `ExitReason::Restart`, letting the caller re-create the app:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .on_click(|| restart_app())
     .child(text("Restart"))
+# ;
+# }
 ```
 
 ### Restart Loop
 
 Use a loop in `main()` to support restart:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# fn build_ui() -> Container { container() }
 use guido::prelude::*;
 
 fn main() {
@@ -64,7 +75,10 @@ This is useful for reloading configuration, switching themes, or resetting appli
 
 Both `quit_app()` and `restart_app()` are `Send` — they work from any thread, including background services:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 create_task(move |ctx| async move {
     loop {
         tokio::select! {
@@ -79,13 +93,15 @@ create_task(move |ctx| async move {
         }
     }
 });
+# ;
+# }
 ```
 
 ## API Reference
 
 ### ExitReason
 
-```rust
+```rust,ignore
 pub enum ExitReason {
     /// Normal exit (compositor closed, all surfaces destroyed, etc.)
     Quit,
@@ -96,7 +112,7 @@ pub enum ExitReason {
 
 ### Functions
 
-```rust
+```rust,ignore
 /// Request a clean application quit.
 /// App::run() will return ExitReason::Quit.
 pub fn quit_app();
@@ -109,7 +125,7 @@ pub fn restart_app();
 
 ### App::run
 
-```rust
+```rust,ignore
 impl App {
     /// Run the application. Returns the reason the loop exited.
     pub fn run(self, setup: impl FnOnce(&mut Self)) -> ExitReason;

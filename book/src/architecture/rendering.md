@@ -4,7 +4,7 @@ This page explains how Guido renders widgets to the screen.
 
 ## Pipeline Overview
 
-```
+```text
 Main loop (once per iteration):
  1. flush_bg_writes()              → Drain queued background-thread signal writes
  2. take_frame_request()           → Check if a frame was requested
@@ -42,7 +42,10 @@ idle surface renders nothing and the loop sleeps.
 
 The main loop calls layout with screen constraints:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let constraints = Constraints {
     min_width: 0.0,
     max_width: screen_width,
@@ -51,6 +54,8 @@ let constraints = Constraints {
 };
 
 widget.layout(constraints);
+# ;
+# }
 ```
 
 Each widget:
@@ -62,7 +67,7 @@ Each widget:
 
 After layout, widgets paint to the `PaintContext`:
 
-```rust
+```rust,ignore
 fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
     // Bounds come from the Tree — the single source of truth — and paint
     // happens in LOCAL coordinates, the parent having placed the node.
@@ -89,9 +94,14 @@ fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
 
 The renderer converts logical coordinates to physical pixels:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let physical_x = logical_x * scale_factor;
 let physical_y = logical_y * scale_factor;
+# ;
+# }
 ```
 
 Widgets work in logical coordinates; scaling is automatic.
@@ -125,7 +135,7 @@ This ensures ripples appear on top of text.
 
 ### Rounded Rectangle
 
-```rust
+```rust,ignore
 struct RoundedRect {
     bounds: Rect,
     color: Color,
@@ -136,7 +146,7 @@ struct RoundedRect {
 
 ### Gradient
 
-```rust
+```rust,ignore
 struct GradientRect {
     bounds: Rect,
     start_color: Color,
@@ -149,7 +159,7 @@ struct GradientRect {
 
 Rendered as SDF outline:
 
-```rust
+```rust,ignore
 struct Border {
     bounds: Rect,
     width: f32,
@@ -162,7 +172,7 @@ struct Border {
 
 The render tree handles transforms hierarchically:
 
-```rust
+```rust,ignore
 fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
     // Get bounds from Tree (single source of truth)
     let bounds = tree.get_bounds(id).unwrap_or_default();
@@ -205,12 +215,19 @@ Text uses the glyphon library:
 
 Containers set a clip region for their content:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let bounds = tree.get_bounds(id).unwrap_or_default();
+# let local_bounds = Rect::new(0.0, 0.0, bounds.width, bounds.height);
 // Set clip for this node and all children (in local coordinates)
 ctx.set_clip(local_bounds, self.corner_radius, self.corner_curvature);
 
 // For overlay-only clipping (e.g., ripple effects)
 ctx.set_overlay_clip(local_bounds, self.corner_radius, self.corner_curvature);
+# ;
+# }
 ```
 
 Clipping respects corner radius and curvature for proper rounded container clipping. Clip regions are inherited through the render tree and transformed along with their parent nodes.
@@ -233,9 +250,14 @@ this mechanism to drive cursor blinking.
 
 PaintContext reuses buffers between frames:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 self.vertices.clear();  // Reuse allocation
 self.indices.clear();   // Reuse allocation
+# ;
+# }
 ```
 
 ### Batching

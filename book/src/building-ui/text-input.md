@@ -5,9 +5,14 @@ The TextInput widget provides single-line text editing with support for selectio
 ## Basic Usage
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let username = create_signal(String::new());
 
 text_input(username)
+# ;
+# }
 ```
 
 TextInput uses **two-way binding** with signals:
@@ -21,50 +26,86 @@ No manual synchronization is needed - just pass a `Signal<String>` and the bindi
 ### Text Color
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let value = create_signal(String::new());
 container().child(text_input(value).color(Color::WHITE))
+# ;
+# }
 ```
 
 ### Cursor Color
 
 ```rust
-text_input(value)
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let value = create_signal(String::new());
+text_input(value);
 // or, for every input below one container:
 container().child(text_input(value).cursor_color(Color::rgb(0.4, 0.8, 1.0)).cursor_color(Color::rgb(0.4, 0.8, 1.0)))
+# ;
+# }
 ```
 
 ### Selection Color
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let value = create_signal(String::new());
 text_input(value).selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
+# ;
+# }
 ```
 
 ### Font Size
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let value = create_signal(String::new());
 container().child(text_input(value).font_size(16.0))
+# ;
+# }
 ```
 
 ### Font Family
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let value = create_signal(String::new());
 // Predefined families
-container().child(text_input(value).font_family(FontFamily::Monospace))
+container().child(text_input(value).font_family(FontFamily::Monospace));
 
 // Shorthand for monospace
-container().child(text_input(value))
+container().child(text_input(value));
 
 // Custom font
 container().child(text_input(value).font_family(FontFamily::Name("JetBrains Mono".into())))
+# ;
+# }
 ```
 
 ### Font Weight
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let value = create_signal(String::new());
 // Using constants
-container().child(text_input(value).font_weight(FontWeight::BOLD))
+container().child(text_input(value).font_weight(FontWeight::BOLD));
 
 // Shorthand for bold
 container().child(text_input(value))
+# ;
+# }
 ```
 
 ## Password Mode
@@ -72,16 +113,28 @@ container().child(text_input(value))
 Hide text input for sensitive data like passwords:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let password = create_signal(String::new());
 text_input(password)
     .password(true)
+# ;
+# }
 ```
 
 By default, characters are masked with `•`. Customize the mask character:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let password = create_signal(String::new());
 text_input(password)
     .password(true)
     .mask_char('*')
+# ;
+# }
 ```
 
 ## Initial Focus
@@ -90,9 +143,15 @@ A screen that exists to be typed into should not make the user click first — a
 on a surface with no pointer there may be nothing to click *with*:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let password = create_signal(String::new());
 text_input(password)
     .password(true)
     .autofocus()
+# ;
+# }
 ```
 
 The input takes the keyboard at its first layout, and only if no widget already
@@ -110,9 +169,15 @@ change cannot drag focus back from wherever the user has since put it.
 What the field says while it is empty:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let password = create_signal(String::new());
 text_input(password)
     .password(true)
     .placeholder("Password")
+# ;
+# }
 ```
 
 It is a **label, not a value**: never masked, so a password field shows the word
@@ -122,7 +187,14 @@ it — there is nothing to overlap, because it is only drawn when the value is e
 Reactive, so a prompt that changes changes the empty field with it:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let answer = create_signal(String::new());
+# let prompt = create_signal(String::from("Type here"));
 text_input(answer).placeholder(move || prompt.get())
+# ;
+# }
 ```
 
 The colour is the field's own text colour at reduced alpha — a placeholder is the
@@ -130,18 +202,34 @@ same text, quieter. Declare `placeholder_color` on the field, or on a
 container to cover every field below it:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# #[derive(Clone, Copy)]
+# struct Theme { text: Color, text_weak: Color, weak: Color, strong: Color, line: Color, accent: Color, error: Color, danger: Color, surface: Color }
+# impl Default for Theme { fn default() -> Self { let c = Color::WHITE; Self { text: c, text_weak: c, weak: c, strong: c, line: c, accent: c, error: c, danger: c, surface: c } } }
+# fn main() {
+# let theme = Theme::default();
+# let value = create_signal(String::new());
 container()
     
     
     .child(text_input(value).placeholder_color(theme.text_weak).color(theme.text).placeholder("Search"))
+# ;
+# }
 ```
 
 ## No Caret
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let password = create_signal(String::new());
 text_input(password)
     .password(true)
     .no_caret()
+# ;
+# }
 ```
 
 Keeps the focus and everything it carries — click to position, drag to select, the
@@ -160,10 +248,16 @@ one an idle surface asks the loop for nothing at all.
 Called whenever the text content changes:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let value = create_signal(String::new());
 text_input(value)
     .on_change(|new_text| {
         println!("Text changed: {}", new_text);
     })
+# ;
+# }
 ```
 
 ### On Submit
@@ -171,10 +265,16 @@ text_input(value)
 Called when the user presses Enter:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let value = create_signal(String::new());
 text_input(value)
     .on_submit(|text| {
         println!("Submitted: {}", text);
     })
+# ;
+# }
 ```
 
 ## Keyboard Shortcuts
@@ -201,6 +301,10 @@ The TextInput widget supports standard text editing shortcuts:
 TextInput handles text editing but not visual styling like backgrounds and borders. Wrap it in a Container for full styling:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let value = create_signal(String::new());
 container()
     .padding([8.0, 12.0])
     .background(Color::rgb(0.15, 0.15, 0.2))
@@ -209,6 +313,8 @@ container()
     .child(
         container().child(text_input(value).font_size(14.0).color(Color::WHITE))
     )
+# ;
+# }
 ```
 
 ### With Focus State
@@ -216,6 +322,10 @@ container()
 Add visual feedback when the input is focused:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let value = create_signal(String::new());
 container()
     .padding([8.0, 12.0])
     .background(Color::rgb(0.15, 0.15, 0.2))
@@ -225,13 +335,15 @@ container()
     .child(
         container().child(text_input(value).color(Color::WHITE))
     )
+# ;
+# }
 ```
 
 ## Complete Example
 
 A login form with username and password fields:
 
-```rust
+```rust,ignore
 fn login_form() -> Container {
     let username = create_signal(String::new());
     let password = create_signal(String::new());
@@ -310,7 +422,7 @@ fn login_form() -> Container {
 
 ## API Reference
 
-```rust
+```rust,ignore
 text_input(signal: Signal<String>) -> TextInput
 
 impl TextInput {

@@ -47,10 +47,10 @@ container().background(Color::rgb(0.2, 0.2, 0.3))
 container().gradient(LinearGradient::horizontal(Color::RED, Color::BLUE))
 
 // Vertical gradient (top to bottom)
-container().gradient_vertical(Color::RED, Color::BLUE)
+container().gradient(LinearGradient::vertical(Color::RED, Color::BLUE))
 
 // Diagonal gradient
-container().gradient_diagonal(Color::RED, Color::BLUE)
+container().gradient(LinearGradient::diagonal(Color::RED, Color::BLUE))
 ```
 
 ## Borders

@@ -9,6 +9,10 @@ started.
 A timeline is the other shape. It has no target: it plays.
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let rejections = create_signal(0);
 container()
     .keyframes_rotate(
         Keyframes::new(320.0)
@@ -19,6 +23,8 @@ container()
             .at(1.0, 0.0),
         rejections,
     )
+# ;
+# }
 ```
 
 ## What plays it
@@ -41,10 +47,15 @@ one run takes. The easing declared at a stop governs the segment that *starts*
 there, which is CSS's rule for a timing function written inside a keyframe:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 Keyframes::new(360.0)
     .at_with(0.0, Translate::NONE, TimingFunction::EaseIn)
     .at_with(0.35, Translate::new(0.0, 14.0), TimingFunction::EaseOut)
     .at(1.0, Translate::NONE)
+# ;
+# }
 ```
 
 Before the first stop and after the last one the nearest stop holds — a
@@ -62,11 +73,18 @@ as long as it runs and hands the property back afterwards.
 A timeline belongs to the one component it moves, so a card can hover and shake
 at the same time without the two meeting at all:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let rejections = create_signal(0);
+# let shake = move || {};
 container()
     .when_hovered(|s| s.scale(1.03))
     .animate_scale(Transition::spring(SpringConfig::SNAPPY))
     .keyframes_rotate(shake(), rejections)
+# ;
+# }
 ```
 
 The hover is on `scale` and the shake on `rotate`, so both are drawn throughout:
@@ -75,11 +93,18 @@ the card grows under the pointer while it is still shaking its head.
 The replacing rule applies when a timeline and a declaration are on **the same**
 component:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let rejections = create_signal(0);
+# let shake = move || {};
 container()
     .when_hovered(|s| s.rotate(3.0))
     .animate_rotate(Transition::spring(SpringConfig::SNAPPY))
     .keyframes_rotate(shake(), rejections)
+# ;
+# }
 ```
 
 Here the hover tilt is still declared while the shake runs; it simply is not
@@ -100,9 +125,14 @@ exactly what a spring has not got — it settles when it settles. Passing one to
 quietly playing the segment as a straight line.
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 Keyframes::new(320.0)
     .at_with(0.0, 0.0, TimingFunction::EaseOut)
     .at(1.0, 2.0)
+# ;
+# }
 ```
 
 ## When not to use them

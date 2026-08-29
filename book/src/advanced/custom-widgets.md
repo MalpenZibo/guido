@@ -15,8 +15,12 @@ are extension points, and both are reachable from outside the crate.
 needs a second one:
 
 ```rust
+# extern crate guido;
+# fn main() {
 use guido::prelude::*;
 use guido::widget_prelude::*;
+# ;
+# }
 ```
 
 `widget_prelude` adds what the `Widget` and `Layout` signatures name — `Tree`,
@@ -32,7 +36,7 @@ application never names `Transform`: it declares `translate`, `rotate` and
 `advance_animations`, `reconcile_children`, `layout_hints`,
 `register_children` — has a default.
 
-```rust
+```rust,ignore
 struct Bar {
     extent: Signal<f32>,
     measured: f32,
@@ -82,7 +86,7 @@ the size and `JobType::Paint` for reads that only change the drawing.
 `Layout` has one method: given the children and the constraints, place them and
 report the size the parent should use.
 
-```rust
+```rust,ignore
 struct Stagger {
     step: f32,
 }
@@ -115,11 +119,17 @@ impl Layout for Stagger {
 
 It plugs into any container:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn card(_label: &str) -> Container { container() }
+# fn main() {
 container()
     .layout(Stagger { step: 8.0 })
     .child(card("one"))
     .child(card("two"))
+# ;
+# }
 ```
 
 The absence of a built-in grid is not a gap — this is where a grid goes.

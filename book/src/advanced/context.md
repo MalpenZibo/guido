@@ -17,7 +17,14 @@ For state that only a few nearby widgets share, passing signals directly is simp
 
 Call `provide_context` in your `App::run()` setup to make a value available everywhere:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# fn build_ui() -> Container { container() }
+# #[derive(Clone, Default)]
+# struct Config;
+# impl Config { fn load() -> Self { Self } }
+# fn main() {
+# let config = SurfaceConfig::new();
 use guido::prelude::*;
 
 App::new().run(|app| {
@@ -25,6 +32,8 @@ App::new().run(|app| {
 
     app.add_surface(config, || build_ui());
 });
+# ;
+# }
 ```
 
 ## Retrieving Context
@@ -33,36 +42,67 @@ App::new().run(|app| {
 
 Returns `Option<T>` — useful when the context is optional:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# #[derive(Clone, Default)]
+# struct Config;
+# impl Config { fn load() -> Self { Self } }
+# fn main() {
 if let Some(cfg) = use_context::<Config>() {
     println!("threshold: {}", cfg.warn_threshold);
 }
+# ;
+# }
 ```
 
 ### expect_context (infallible)
 
 Panics with a helpful message if the context was not provided:
 
-```rust
+```rust,no_run
+# extern crate guido;
+# use guido::prelude::*;
+# #[derive(Clone, Default)]
+# struct Config;
+# impl Config { fn load() -> Self { Self } }
+# fn main() {
 let cfg = expect_context::<Config>();
+# ;
+# }
 ```
 
 ### with_context (zero-clone)
 
 Borrows the value without cloning — ideal for large structs when you only need one field:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# #[derive(Clone, Default)]
+# struct Config;
+# impl Config { fn load() -> Self { Self } }
+# fn main() {
 let threshold = with_context::<Config, _>(|cfg| cfg.cpu.warn_threshold);
+# ;
+# }
 ```
 
 ### has_context (existence check)
 
 Check if a context has been provided without retrieving it:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# #[derive(Clone, Default)]
+# struct Logger;
+# fn main() {
 if has_context::<Logger>() {
     expect_context::<Logger>().info("ready");
 }
+# ;
+# }
 ```
 
 ## Reactive Context
@@ -73,18 +113,25 @@ For mutable shared state, store a `Signal<T>` as context. This is the most power
 
 Creates an `RwSignal` and provides it as context in one step:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn build_ui() -> Container { container() }
+# fn main() {
+# let config = SurfaceConfig::new();
 App::new().run(|app| {
     // Creates RwSignal<Theme> and stores it as context
     let theme = provide_signal_context(Theme::default());
 
     app.add_surface(config, || build_ui());
 });
+# ;
+# }
 ```
 
 ### Reading a signal context
 
-```rust
+```rust,ignore
 fn themed_box() -> Container {
     let theme = expect_context::<RwSignal<Theme>>();
 
@@ -100,7 +147,7 @@ When the signal is updated anywhere, all widgets reading it automatically repain
 
 For config structs with many fields, use `#[derive(SignalFields)]` with context so each widget only repaints when the specific field it reads changes:
 
-```rust
+```rust,ignore
 #[derive(Clone, PartialEq, SignalFields)]
 pub struct AppConfig {
     pub cpu_warn: f64,
@@ -146,7 +193,7 @@ Since `Signal<T>` is `Copy`, passing them directly is zero-cost. Context adds a 
 
 ## API Reference
 
-```rust
+```rust,ignore
 // Store a value (one per type, replaces if exists)
 pub fn provide_context<T: 'static>(value: T);
 

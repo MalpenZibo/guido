@@ -25,7 +25,8 @@ Guido is a GPU-accelerated GUI library built with Rust and wgpu, designed specif
 
 ## Quick Example
 
-```rust
+```rust,no_run
+# extern crate guido;
 use guido::prelude::*;
 
 fn main() {

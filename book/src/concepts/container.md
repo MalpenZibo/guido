@@ -5,9 +5,13 @@ The Container is Guido's primary building block. Nearly everything you build use
 ## Creating Containers
 
 ```rust
+# extern crate guido;
+# fn main() {
 use guido::prelude::*;
 
 let view = container();
+# ;
+# }
 ```
 
 ## Adding Children
@@ -15,28 +19,43 @@ let view = container();
 ### Single Child
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container().child(text("Hello"))
+# ;
+# }
 ```
 
 ### Multiple Children
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container().children([
     text("First"),
     text("Second"),
     text("Third"),
 ])
+# ;
+# }
 ```
 
 ### Conditional Children
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let show_extra = create_signal(false);
 
 container().children([
     text("Always shown"),
     container().maybe_child(show_extra, || text("Sometimes shown")),
 ])
+# ;
+# }
 ```
 
 ## Styling
@@ -44,6 +63,9 @@ container().children([
 Containers support extensive styling options:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     // Background
     .background(Color::rgb(0.2, 0.2, 0.3))
@@ -61,6 +83,8 @@ container()
     // Size
     .width(200.0)
     .height(100.0)
+# ;
+# }
 ```
 
 See [Building UI](../building-ui/README.md) for complete styling reference.
@@ -73,10 +97,15 @@ below it. Pair it with a translucent background so the result shows
 through:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .background(Color::rgba(0.12, 0.12, 0.18, 0.55)) // translucent
     .corners(16.0)
     .backdrop_blur(32.0)
+# ;
+# }
 ```
 
 See [Wayland Layer Shell — Backdrop Blur](../advanced/wayland.md#backdrop-blur).
@@ -85,7 +114,10 @@ See [Wayland Layer Shell — Backdrop Blur](../advanced/wayland.md#backdrop-blur
 
 Control how children are arranged:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .layout(
         Flex::row()
@@ -94,6 +126,8 @@ container()
             .cross_alignment(CrossAlignment::Center)
     )
     .children([...])
+# ;
+# }
 ```
 
 See [Layout](layout.md) for details on flex layouts.
@@ -103,10 +137,15 @@ See [Layout](layout.md) for details on flex layouts.
 Respond to user interactions:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .on_click(|| println!("Clicked!"))
     .on_hover(|hovered| println!("Hover: {}", hovered))
     .on_scroll(|dx, dy, source| println!("Scroll: {}, {}", dx, dy))
+# ;
+# }
 ```
 
 ## State Layers
@@ -114,10 +153,15 @@ container()
 Add hover and pressed visual feedback:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .background(Color::rgb(0.2, 0.2, 0.3))
     .when_hovered(|s| s.lighter(0.1))
     .when_pressed(|s| s.ripple())
+# ;
+# }
 ```
 
 See [Interactivity](../interactivity/README.md) for the full state layer API.
@@ -127,12 +171,17 @@ See [Interactivity](../interactivity/README.md) for the full state layer API.
 Apply 2D transformations:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     // The three compose, in this order whatever order they are written in
     .translate((10.0, 20.0))
     .rotate(45.0)
     .scale(1.5)
     .pivot(Pivot::TOP_LEFT)
+# ;
+# }
 ```
 
 See [Transforms](../transforms/README.md) for details.
@@ -142,9 +191,14 @@ See [Transforms](../transforms/README.md) for details.
 Animate property changes:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
     .animate_scale(Transition::spring(SpringConfig::BOUNCY))
+# ;
+# }
 ```
 
 See [Animations](../animations/README.md) for timing and spring options.
@@ -154,15 +208,21 @@ See [Animations](../animations/README.md) for timing and spring options.
 Control whether a container is visible. When hidden, it takes up no space in layout, does not paint, and ignores all events.
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let tab = create_signal(String::from("settings"));
 // Static
-container().visible(false)
+container().visible(false);
 
 // Reactive signal
 let show = create_signal(true);
-container().visible(show)
+container().visible(show);
 
 // Reactive closure
 container().visible(move || tab.get() == "settings")
+# ;
+# }
 ```
 
 Unlike `.maybe_child()` which adds or removes a child from the tree, `.visible()` keeps the widget in the tree but hides it completely. This is useful when you want to toggle visibility without recreating the widget and its state.
@@ -172,11 +232,17 @@ Unlike `.maybe_child()` which adds or removes a child from the tree, `.visible()
 Make containers scrollable when content overflows:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn large_content() -> Container { container() }
+# fn main() {
 container()
     .width(200.0)
     .height(200.0)
     .scrollable(ScrollAxis::Vertical)
     .child(large_content())
+# ;
+# }
 ```
 
 ### Scroll Axes
@@ -191,6 +257,9 @@ container()
 ### Custom Scrollbars
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .scrollable(ScrollAxis::Vertical)
     .scrollbar(|sb| {
@@ -199,21 +268,28 @@ container()
           .handle_hover_color(Color::rgb(0.5, 0.7, 1.0))
           .handle_corner_radius(3.0)
     })
+# ;
+# }
 ```
 
 ### Hidden Scrollbars
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .scrollable(ScrollAxis::Vertical)
     .scrollbar_visibility(ScrollbarVisibility::Hidden)
+# ;
+# }
 ```
 
 ## Complete Example
 
 Here's a fully-styled interactive button:
 
-```rust
+```rust,ignore
 fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
     container()
         // Layout
@@ -252,7 +328,7 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 ### Styling
 - `.background(color)` - Solid background
 - `.gradient(LinearGradient::horizontal(start, end))` - Horizontal gradient
-- `.gradient_vertical(start, end)` / `.gradient_diagonal(start, end)`
+- `.gradient(LinearGradient::vertical(start, end))` / `.gradient(LinearGradient::diagonal(start, end))`
 - `.corners(8.0)` / `.corners([16.0, 0.0])` - Rounded corners: one, two or four values
 - `.corners(Corners::squircle(12.0))` / `Corners::bevel(..)` / `Corners::scoop(..)` -
   the shape of the corner

@@ -5,10 +5,15 @@ Containers can respond to mouse events for user interaction.
 ## Click Events
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .on_click(|| {
         println!("Clicked!");
     })
+# ;
+# }
 ```
 
 Click events fire when the mouse button is pressed and released within the container bounds.
@@ -16,6 +21,9 @@ Click events fire when the mouse button is pressed and released within the conta
 ### With Signal Updates
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let count = create_signal(0);
 
 container()
@@ -23,11 +31,16 @@ container()
         count.update(|c| *c += 1);
     })
     .child(text(move || format!("Clicks: {}", count.get())))
+# ;
+# }
 ```
 
 ## Hover Events
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .on_hover(|hovered| {
         if hovered {
@@ -36,6 +49,8 @@ container()
             println!("Mouse left");
         }
     })
+# ;
+# }
 ```
 
 The callback receives a boolean indicating hover state.
@@ -44,19 +59,28 @@ The callback receives a boolean indicating hover state.
 
 For visual hover effects, use `when_hovered` instead:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // Preferred for visual effects
-container().when_hovered(|s| s.lighter(0.1))
+container().when_hovered(|s| s.lighter(0.1));
 
 // Use on_hover for side effects only
 container().on_hover(|hovered| {
     log::info!("Hover changed: {}", hovered);
 })
+# ;
+# }
 ```
 
 ## Other Buttons and Keys
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let close = move || {};
 container()
     .on_click(|| println!("left"))
     .on_right_click(|| println!("right"))
@@ -66,6 +90,8 @@ container()
             close();
         }
     })
+# ;
+# }
 ```
 
 `on_key_down` fires while the surface has keyboard focus — a layer surface
@@ -84,12 +110,17 @@ update *after* the key that toggled it, so the press of caps lock reports the
 state it had before. Read the signal instead:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container().child(move || {
     keyboard_modifiers()
         .get()
         .caps_lock
         .then(|| text("Caps lock is on"))
 })
+# ;
+# }
 ```
 
 Everything is false until the compositor sends the first update, which it does
@@ -98,10 +129,15 @@ when a surface takes keyboard focus.
 ## Scroll Events
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .on_scroll(|dx, dy, source| {
         println!("Scroll: dx={}, dy={}", dx, dy);
     })
+# ;
+# }
 ```
 
 Parameters:
@@ -112,6 +148,9 @@ Parameters:
 ### Scroll with Signal
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let offset = create_signal(0.0f32);
 
 container()
@@ -119,6 +158,8 @@ container()
         offset.update(|o| *o += dy);
     })
     .child(text(move || format!("Offset: {:.0}", offset.get())))
+# ;
+# }
 ```
 
 ## Touch Input
@@ -134,6 +175,9 @@ are needed.
 A container can have multiple event handlers:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let count = create_signal(0);
 let hovered = create_signal(false);
 
@@ -142,6 +186,8 @@ container()
     .on_hover(move |h| hovered.set(h))
     .when_hovered(|s| s.lighter(0.1))
     .when_pressed(|s| s.ripple())
+# ;
+# }
 ```
 
 ## Event Propagation
@@ -149,6 +195,9 @@ container()
 Events flow through the widget tree from children to parents. A child receives events first; if it handles the event, the parent won't receive it.
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // Inner container handles clicks, outer doesn't receive them
 container()
     .on_click(|| println!("Outer - won't fire for inner clicks"))
@@ -157,6 +206,8 @@ container()
             .on_click(|| println!("Inner - handles click"))
             .child(text("Click me"))
     )
+# ;
+# }
 ```
 
 ## Hit Testing
@@ -169,7 +220,7 @@ Events only fire when the click is within the container's bounds. Guido properly
 
 ## Complete Example
 
-```rust
+```rust,ignore
 fn interactive_counter() -> impl Widget {
     let count = create_signal(0);
     let scroll_offset = create_signal(0.0f32);
@@ -208,7 +259,7 @@ fn interactive_counter() -> impl Widget {
 
 ## API Reference
 
-```rust
+```rust,ignore
 impl Container {
     /// Handle click events
     pub fn on_click(self, handler: impl Fn() + 'static) -> Self;

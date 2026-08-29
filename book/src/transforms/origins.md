@@ -10,9 +10,14 @@ wherever the pivot sits.
 ## Setting a Pivot
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .rotate(45.0)
     .pivot(Pivot::TOP_LEFT)
+# ;
+# }
 ```
 
 Now the container rotates around its top-left corner instead of its center.
@@ -35,7 +40,7 @@ Now the container rotates around its top-left corner instead of its center.
 
 ### Rotation from Different Origins
 
-```
+```text
 CENTER (default):        TOP_LEFT:
     ┌───┐                ┌───┐
     │ ↻ │                ↻
@@ -52,28 +57,43 @@ BOTTOM_RIGHT:
 ### Rotate from Top-Left
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .width(80.0)
     .height(80.0)
     .background(Color::rgb(0.3, 0.5, 0.8))
     .rotate(30.0)
     .pivot(Pivot::TOP_LEFT)
+# ;
+# }
 ```
 
 ### Scale from Bottom-Right
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .scale(1.5)
     .pivot(Pivot::BOTTOM_RIGHT)
+# ;
+# }
 ```
 
 ### Pivot from Top Edge
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .rotate(15.0)
     .pivot(Pivot::TOP)
+# ;
+# }
 ```
 
 ## Custom Origin
@@ -81,8 +101,13 @@ container()
 Specify exact percentages:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // 25% from left, 75% from top
 Pivot::percent(25.0, 75.0)
+# ;
+# }
 ```
 
 Values are percentages of the widget's size:
@@ -95,6 +120,9 @@ Values are percentages of the widget's size:
 Pivots can be reactive:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let origin = create_signal(Pivot::CENTER);
 
 container()
@@ -113,11 +141,13 @@ container()
             Pivot::CENTER
         });
     })
+# ;
+# }
 ```
 
 ## Complete Example
 
-```rust
+```rust,ignore
 fn origin_demo() -> impl Widget {
     container()
         .layout(Flex::row().spacing(40.0))
@@ -156,7 +186,7 @@ fn create_rotating_box(origin: Pivot, label: &'static str) -> Container {
 
 ## API Reference
 
-```rust
+```rust,ignore
 impl Container {
     pub fn pivot(
         self,

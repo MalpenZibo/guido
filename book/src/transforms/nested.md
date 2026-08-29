@@ -7,6 +7,9 @@ Transforms compose through the widget hierarchy. A child inherits and builds upo
 When a parent has a transform, children are affected:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .rotate(20.0)  // Parent rotated
     .child(
@@ -14,6 +17,8 @@ container()
             .scale(0.8)  // Child scaled within rotated parent
             .child(text("Nested"))
     )
+# ;
+# }
 ```
 
 The child appears both rotated (from parent) and scaled (its own).
@@ -22,7 +27,7 @@ The child appears both rotated (from parent) and scaled (its own).
 
 Parent transforms apply first, then child transforms:
 
-```
+```text
 World Space
     ↓
 Parent Transform (rotate 20°)
@@ -37,6 +42,10 @@ Final Position
 ## Example: Rotated Cards
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn card(_label: &str) -> Container { container() }
+# fn main() {
 container()
     .rotate(15.0)  // Tilt the whole group
     .layout(Flex::row().spacing(10.0))
@@ -46,6 +55,8 @@ container()
         card("Two"),
         card("Three"),
     ])
+# ;
+# }
 ```
 
 All cards appear tilted by 15°.
@@ -53,6 +64,9 @@ All cards appear tilted by 15°.
 ## Example: Scaled Child with Rotation
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .width(100.0)
     .height(100.0)
@@ -65,6 +79,8 @@ container()
             .background(Color::rgb(0.5, 0.7, 0.9))
             .scale(1.2)  // Child is 20% larger within rotated parent
     )
+# ;
+# }
 ```
 
 ## Hit Testing with Nested Transforms
@@ -72,6 +88,9 @@ container()
 Guido properly handles hit testing through nested transforms. A click on a nested, transformed element correctly detects the widget.
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .rotate(45.0)
     .child(
@@ -79,13 +98,18 @@ container()
             .scale(0.8)
             .on_click(|| println!("Clicked!"))  // Works correctly
     )
+# ;
+# }
 ```
 
 ## Transform Independence
 
 Each container has its own transform that doesn't affect siblings:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .layout(Flex::row().spacing(20.0))
     .children([
@@ -94,11 +118,13 @@ container()
         container().rotate(-15.0).child(...),
         container().scale(0.9).child(...),
     ])
+# ;
+# }
 ```
 
 ## Complete Example
 
-```rust
+```rust,ignore
 fn nested_transforms_demo() -> impl Widget {
     container()
         .padding(40.0)
@@ -139,6 +165,9 @@ fn nested_transforms_demo() -> impl Widget {
 A child's transform origin is relative to its own bounds, not the parent's:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .rotate(45.0)  // Rotates around its own center
     .child(
@@ -146,6 +175,8 @@ container()
             .rotate(30.0)
             .pivot(Pivot::TOP_LEFT)  // Relative to child's top-left
     )
+# ;
+# }
 ```
 
 ### Performance
@@ -158,7 +189,10 @@ Deep nesting with many transforms is fine for typical UIs. The transform matrice
 2. **Use for grouping** - Apply a transform to a parent to affect all children
 3. **Independent animations** - Each level can have its own animated transform
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // Group animation
 container()
     .rotate(group_rotation)
@@ -170,4 +204,6 @@ container()
             .animate_scale(Transition::spring(SpringConfig::BOUNCY))
             .child(...),
     ])
+# ;
+# }
 ```

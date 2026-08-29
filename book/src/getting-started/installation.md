@@ -65,7 +65,8 @@ cargo add guido
 
 Create a minimal test application to verify everything works:
 
-```rust
+```rust,no_run
+# extern crate guido;
 // src/main.rs
 use guido::prelude::*;
 

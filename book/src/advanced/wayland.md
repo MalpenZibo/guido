@@ -6,7 +6,11 @@ Guido uses the Wayland layer shell protocol for positioning widgets on the deskt
 
 Each surface is configured using `SurfaceConfig`:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn view() -> Container { container() }
+# fn main() {
 App::new().run(|app| {
     let _surface_id = app.add_surface(
         SurfaceConfig::new()
@@ -20,6 +24,8 @@ App::new().run(|app| {
         || view,
     );
 });
+# ;
+# }
 ```
 
 Note: `run()` takes a setup closure where you add surfaces. `add_surface()` returns a `SurfaceId` that can be used to get a `SurfaceHandle` for dynamic property modification.
@@ -29,7 +35,12 @@ Note: `run()` takes a setup closure where you add surfaces. `add_surface()` retu
 Control where your surface appears in the stacking order:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 SurfaceConfig::new().layer(Layer::Top)
+# ;
+# }
 ```
 
 | Layer | Description |
@@ -51,7 +62,12 @@ SurfaceConfig::new().layer(Layer::Top)
 Control how the surface receives keyboard focus:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 SurfaceConfig::new().keyboard_interactivity(KeyboardInteractivity::OnDemand)
+# ;
+# }
 ```
 
 | Mode | Description |
@@ -71,7 +87,12 @@ SurfaceConfig::new().keyboard_interactivity(KeyboardInteractivity::OnDemand)
 Control which screen edges the surface attaches to:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 SurfaceConfig::new().anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+# ;
+# }
 ```
 
 | Anchor | Effect |
@@ -85,39 +106,64 @@ SurfaceConfig::new().anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
 
 **Top status bar (full width):**
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 SurfaceConfig::new()
     .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
     .height(32)
+# ;
+# }
 ```
 
 **Bottom dock (full width):**
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 SurfaceConfig::new()
     .anchor(Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT)
     .height(48)
+# ;
+# }
 ```
 
 **Left sidebar (full height):**
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 SurfaceConfig::new()
     .anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT)
     .width(64)
+# ;
+# }
 ```
 
 **Corner widget (top-right):**
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 SurfaceConfig::new()
     .anchor(Anchor::TOP | Anchor::RIGHT)
     .width(200)
     .height(100)
+# ;
+# }
 ```
 
 **Centered floating (no anchors):**
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // No anchor = centered on screen
 SurfaceConfig::new()
     .width(400)
     .height(300)
+# ;
+# }
 ```
 
 ## Size Behavior
@@ -128,10 +174,13 @@ Size depends on anchoring:
 - **Unanchored dimension**: Uses specified size
 - **No anchors**: Uses exact size, centered on screen
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // Width fills screen, height is 32px
 SurfaceConfig::new()
-    .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+    .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT);
     .height(32)
 
 // Both dimensions specified, widget is 200x100
@@ -139,6 +188,8 @@ SurfaceConfig::new()
     .anchor(Anchor::TOP | Anchor::RIGHT)
     .width(200)
     .height(100)
+# ;
+# }
 ```
 
 ## Namespace
@@ -146,7 +197,12 @@ SurfaceConfig::new()
 Identify your surface to the compositor:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 SurfaceConfig::new().namespace("my-app-name")
+# ;
+# }
 ```
 
 Some compositors use this for:
@@ -159,10 +215,15 @@ Some compositors use this for:
 Reserve screen space (windows won't overlap):
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 SurfaceConfig::new()
     .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
     .height(32)
     .exclusive_zone(32)  // Reserve 32px at top
+# ;
+# }
 ```
 
 Without exclusive zone, windows can cover the surface.
@@ -175,7 +236,9 @@ Guido supports creating multiple surfaces within a single application. All surfa
 
 Define multiple surfaces at startup:
 
-```rust
+```rust,no_run
+# extern crate guido;
+# use guido::prelude::*;
 fn main() {
     App::new().run(|app| {
         // Shared reactive state
@@ -245,7 +308,9 @@ fn main() {
 
 Create and destroy surfaces at runtime using `spawn_surface()`:
 
-```rust
+```rust,no_run
+# extern crate guido;
+# use guido::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -302,7 +367,7 @@ fn main() {
 
 The `SurfaceHandle` allows controlling a surface after creation:
 
-```rust
+```rust,ignore
 impl SurfaceHandle {
     /// Close and destroy the surface
     pub fn close(&self);
@@ -335,7 +400,11 @@ impl SurfaceHandle {
 
 Use `surface_handle()` to get a handle for any surface by its ID:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let config = SurfaceConfig::new();
 App::new().run(|app| {
     // Store the ID when adding the surface
     let status_bar_id = app.add_surface(config, move || {
@@ -349,6 +418,8 @@ App::new().run(|app| {
             .child(text("Click to promote to overlay"))
     });
 });
+# ;
+# }
 ```
 
 ## Multiple Outputs (Monitors)
@@ -359,6 +430,8 @@ re-runs the closure when monitors are plugged in, unplugged, or
 reconfigured:
 
 ```rust
+# extern crate guido;
+# fn main() {
 use guido::prelude::*;
 
 create_effect(move || {
@@ -369,6 +442,8 @@ create_effect(move || {
         );
     }
 });
+# ;
+# }
 ```
 
 Each `OutputInfo` carries a stable `OutputId` plus the connector name
@@ -381,7 +456,11 @@ reused: a monitor that is unplugged and reconnected gets a fresh id.
 By default the compositor picks the output a surface appears on. Pass an
 `OutputId` to pin it:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn bar_widget() -> Container { container() }
+# fn main() {
 spawn_surface(
     SurfaceConfig::new()
         .height(32)
@@ -389,6 +468,8 @@ spawn_surface(
         .output(info.id),
     move || bar_widget(),
 );
+# ;
+# }
 ```
 
 The output cannot be changed after creation — a layer surface is bound to
@@ -401,7 +482,11 @@ An app can start with **zero surfaces** and spawn one per output from an
 effect — the classic multi-monitor status bar. See
 `examples/multi_output.rs` for the full version:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn bar_widget() -> Container { container() }
+# fn main() {
 App::new().run(|_app| {
     let bars: Rc<RefCell<HashMap<OutputId, SurfaceHandle>>> =
         Rc::new(RefCell::new(HashMap::new()));
@@ -431,6 +516,8 @@ App::new().run(|_app| {
         }
     });
 });
+# ;
+# }
 ```
 
 When the compositor closes the surfaces of an unplugged monitor, the
@@ -444,11 +531,16 @@ app.
 shown on (`None` until the compositor maps it). It is a tracked read —
 reactive inside any tracked closure:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 text(move || match surface_output(my_surface_id) {
     Some(out) => format!("shown on output {}", out.raw()),
     None => "not mapped yet".to_string(),
 })
+# ;
+# }
 ```
 
 For a surface spanning multiple outputs, this reports the one entered
@@ -461,29 +553,42 @@ region limits input to a set of rectangles (logical surface
 coordinates) — everything outside them lets clicks pass through to the
 windows below. This is how transparent overlays avoid stealing clicks:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // Only the given rectangle is clickable:
 SurfaceConfig::new()
-    .background_color(Color::TRANSPARENT)
+    .background_color(Color::TRANSPARENT);
     .input_region([Rect::new(16.0, 20.0, 200.0, 40.0)])
 
 // Fully click-through (e.g. a HUD or wallpaper widget):
 SurfaceConfig::new().click_through()
+# ;
+# }
 ```
 
 At runtime, use the handle — `None` restores full-surface input, an
 empty list is fully click-through:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 surface_handle(id).set_input_region(Some(vec![rect]));
 surface_handle(id).set_input_region(None);
+# ;
+# }
 ```
 
 The idiomatic pattern glues the region to a widget's bounds with a
 `WidgetRef`, so it follows layout changes automatically (full version
 in `examples/input_region.rs`):
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let pill_ref = create_widget_ref();
 // ...build the surface with .click_through() and .widget_ref(pill_ref)...
 
@@ -493,6 +598,8 @@ create_effect(move || {
         surface_handle(id).set_input_region(Some(vec![rect]));
     }
 });
+# ;
+# }
 ```
 
 Note: keyboard focus is unaffected — use `keyboard_interactivity` for
@@ -510,11 +617,16 @@ are filtered:
   `ext-background-effect-v1`, wherever the surface is translucent.
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .background(Color::rgba(0.12, 0.12, 0.18, 0.55))
     .corners(16.0)
     .backdrop_blur(32.0)
     .child(text("Frosted glass"))
+# ;
+# }
 ```
 
 Filtering both is not a compromise between mechanisms. Blur is a linear
@@ -532,10 +644,15 @@ could only be right for some of them.
 Restrict it when only one side should soften:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // Desktop behind the panel softens; the panel's own islands stay crisp.
 container().backdrop_blur(
     BackdropBlur::new(24.0).sources(BackdropSources::COMPOSITOR),
 )
+# ;
+# }
 ```
 
 ### What each side costs
@@ -583,7 +700,11 @@ screen (flipping/sliding at screen edges), and — with `.grab()` —
 dismisses it when the user clicks outside. Real menu semantics, no
 fullscreen overlay:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn menu_widget() -> Container { container() }
+# fn main() {
 let popup = spawn_popup(
     bar_id,
     PopupConfig::new(250)                      // width; height sizes to content
@@ -593,17 +714,25 @@ let popup = spawn_popup(
         .grab(),                               // dismiss on outside click
     move || menu_widget(),
 );
+# ;
+# }
 ```
 
 Dismissal is reactive — reset your open/closed state when the
 compositor closes the popup:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let menu_open = create_signal(false);
 create_effect(move || {
     if popup.dismissed() {
         menu_open.set(false);
     }
 });
+# ;
+# }
 ```
 
 `popup.close()` closes it programmatically. Popups render their own
@@ -625,7 +754,10 @@ per output using your widget factory — the compositor blanks every
 output, shows the lock surfaces, and routes all input to them, so a
 `text_input` password field works out of the box:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 lock_session(|output: OutputInfo| {
     let attempt = create_signal(String::new());
     container()
@@ -640,11 +772,13 @@ lock_session(|output: OutputInfo| {
             }
         }))
 });
+# ;
+# }
 ```
 
 The lifecycle is reactive:
 
-```rust
+```text
 text(move || format!("{:?}", lock_state().get()))
 // Unlocked → Locking → Locked, back to Unlocked on unlock/denial
 ```
@@ -670,7 +804,12 @@ session (it has a 30-second auto-unlock safety net; the password is
 
 ### Status Bar
 
-```rust
+```rust,no_run
+# extern crate guido;
+# use guido::prelude::*;
+# fn center_section() -> Container { container() }
+# fn left_section() -> Container { container() }
+# fn right_section() -> Container { container() }
 fn main() {
     App::new().run(|app| {
         app.add_surface(
@@ -702,7 +841,10 @@ fn main() {
 
 ### Dock
 
-```rust
+```rust,no_run
+# extern crate guido;
+# use guido::prelude::*;
+# fn dock_icon(_name: &str) -> Container { container() }
 fn main() {
     App::new().run(|app| {
         app.add_surface(
@@ -735,7 +877,9 @@ fn main() {
 
 ### Floating Overlay with Keyboard Focus
 
-```rust
+```rust,no_run
+# extern crate guido;
+# use guido::prelude::*;
 fn main() {
     App::new().run(|app| {
         app.add_surface(
@@ -763,7 +907,7 @@ fn main() {
 
 ### SurfaceConfig
 
-```rust
+```rust,ignore
 impl SurfaceConfig {
     pub fn new() -> Self;
     pub fn width(self, width: impl Into<SurfaceExtent>) -> Self;
@@ -783,7 +927,7 @@ impl SurfaceConfig {
 
 ### Outputs
 
-```rust
+```rust,ignore
 /// Reactive list of connected outputs, sorted by id
 pub fn outputs() -> Signal<Vec<OutputInfo>>;
 
@@ -804,7 +948,7 @@ pub struct OutputInfo {
 
 ### App
 
-```rust
+```rust,ignore
 impl App {
     pub fn new() -> Self;
     pub fn run(self, setup: impl FnOnce(&mut Self)) -> ExitReason;
@@ -817,7 +961,7 @@ impl App {
 
 ### Dynamic Surface Creation
 
-```rust
+```rust,ignore
 /// Spawn a new surface at runtime
 pub fn spawn_surface<W, F>(config: SurfaceConfig, widget_fn: F) -> SurfaceHandle
 where
@@ -830,7 +974,7 @@ pub fn surface_handle(id: SurfaceId) -> SurfaceHandle;
 
 ### SurfaceHandle
 
-```rust
+```rust,ignore
 impl SurfaceHandle {
     pub fn id(&self) -> SurfaceId;
     pub fn close(&self);

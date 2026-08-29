@@ -9,6 +9,9 @@ Guido uses a flexbox-style layout system for arranging widgets. The `Flex` layou
 ### Row (Horizontal)
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .layout(Flex::row())
     .children([
@@ -16,11 +19,16 @@ container()
         text("Center"),
         text("Right"),
     ])
+# ;
+# }
 ```
 
 ### Column (Vertical)
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .layout(Flex::column())
     .children([
@@ -28,16 +36,23 @@ container()
         text("Middle"),
         text("Bottom"),
     ])
+# ;
+# }
 ```
 
 ## Spacing
 
 Add space between children:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .layout(Flex::row().spacing(8.0))
     .children([...])
+# ;
+# }
 ```
 
 ## Main Axis Alignment
@@ -45,7 +60,12 @@ container()
 Control distribution along the layout direction:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 Flex::row().main_alignment(MainAlignment::Center)
+# ;
+# }
 ```
 
 ### Options
@@ -61,7 +81,7 @@ Flex::row().main_alignment(MainAlignment::Center)
 
 ### Visual Examples
 
-```
+```text
 Start:        [A][B][C]
 Center:          [A][B][C]
 End:                      [A][B][C]
@@ -75,7 +95,12 @@ SpaceEvenly:    [A]   [B]   [C]
 Control alignment perpendicular to the layout direction:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 Flex::row().cross_alignment(CrossAlignment::Center)
+# ;
+# }
 ```
 
 ### Options
@@ -95,12 +120,17 @@ aligned — a 24px label and a 12px one float at unrelated heights. `Baseline`
 puts them on the line they are written on:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .layout(Flex::row().spacing(8.0).cross_alignment(CrossAlignment::Baseline))
     .children([
         container().child(text("28").font_size(24.0)),
         container().child(text("°C").font_size(12.0)),
     ])
+# ;
+# }
 ```
 
 A box reports no baseline of its own, so it is aligned by its bottom edge,
@@ -110,7 +140,7 @@ column there is no shared line to sit on, and `Baseline` behaves as `Start`.
 
 ### Visual Example (Row)
 
-```
+```text
 Start:    ┌───┐┌─┐┌──┐
           │ A ││B││ C│
           └───┘│ │└──┘
@@ -137,6 +167,9 @@ Stretch:  ┌───┐┌─┐┌──┐
 ## Complete Example
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .layout(
         Flex::row()
@@ -155,6 +188,8 @@ container()
             ]),
         container().child(text("Right").font_size(24.0)),
     ])
+# ;
+# }
 ```
 
 ## Nested Layouts
@@ -162,6 +197,11 @@ container()
 Combine rows and columns for complex layouts:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main_content() -> Container { container() }
+# fn sidebar() -> Container { container() }
+# fn main() {
 container()
     .layout(Flex::column().spacing(16.0))
     .children([
@@ -184,6 +224,8 @@ container()
             .layout(Flex::row().main_alignment(MainAlignment::Center))
             .child(text("Footer")),
     ])
+# ;
+# }
 ```
 
 ## Size Constraints
@@ -193,15 +235,25 @@ Control how children size within layouts:
 ### Fixed Size
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .width(200.0)
     .height(100.0)
+# ;
+# }
 ```
 
 ### Minimum/Maximum
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container().width(at_least(100.0).at_most(300.0))
+# ;
+# }
 ```
 
 ### At Least
@@ -209,8 +261,13 @@ container().width(at_least(100.0).at_most(300.0))
 Request at least a certain size:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .width(at_least(200.0))  // At least 200px, can grow
+# ;
+# }
 ```
 
 ### Fill Available Space
@@ -218,14 +275,22 @@ container()
 Make a container expand to fill all available space:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .height(fill())  // Fills available height
     .width(fill())   // Fills available width
+# ;
+# }
 ```
 
 This is particularly useful for root containers that should fill their surface, or for creating layouts where children are centered within the full available space:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .height(fill())
     .layout(
@@ -234,6 +299,8 @@ container()
             .cross_alignment(CrossAlignment::Center)
     )
     .child(text("Centered in available space"))
+# ;
+# }
 ```
 
 ## Layout Without Explicit Flex
@@ -241,12 +308,17 @@ container()
 Containers without `.layout()` use `Flex::column()`:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // Same as .layout(Flex::column())
 container()
     .children([
         text("first"),
         text("second"),
     ])
+# ;
+# }
 ```
 
 ## Stacking Children (ZStack)
@@ -254,11 +326,17 @@ container()
 `ZStack` places every child at the same position, stacked along the Z axis —
 later children paint on top:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let background = Color::rgb(0.1, 0.1, 0.15);
 container()
     .layout(ZStack::new())
     .child(background())
     .child(content())   // drawn on top
+# ;
+# }
 ```
 
 ### Leaders and Followers
@@ -271,6 +349,10 @@ established.
 That is how a decoration is sized to its sibling without measuring anything:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn card_content() -> Container { container() }
+# fn main() {
 container()
     .layout(ZStack::new())
     // Follower: exactly as wide and tall as the card below it
@@ -282,6 +364,8 @@ container()
     )
     // Leader: the stack is as big as this card
     .child(card_content())
+# ;
+# }
 ```
 
 Without this rule the background would expand to all the available space,
@@ -293,6 +377,11 @@ case work: a child with only `.height(fill())` fills the bar height and still
 leads the width.
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn now_playing() -> Container { container() }
+# fn visualizer() -> Container { container() }
+# fn main() {
 container()
     .height(fill())
     .layout(ZStack::new())
@@ -300,6 +389,8 @@ container()
     .child(container().width(fill()).height(fill()).child(visualizer()))
     // Fills the bar height, leads the width
     .child(container().height(fill()).child(now_playing()))
+# ;
+# }
 ```
 
 When *every* child fills an axis there is no size to follow, and the stack
@@ -311,6 +402,10 @@ Every child sits at the stack's origin. To place a follower elsewhere, let it
 fill both axes and use its own layout:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn icon_widget() -> Container { container() }
+# fn main() {
 container()
     .layout(ZStack::new())
     .child(icon_widget())
@@ -328,14 +423,16 @@ container()
                     .background(Color::RED)
             )
     )
+# ;
+# }
 ```
 
 ## API Reference
 
 ### Flex Builder
 
-```rust
-Flex::row() -> Flex                    // Horizontal layout
+```text
+Flex::row() -> Flex;                    // Horizontal layout
 Flex::column() -> Flex                 // Vertical layout
 .spacing(f32) -> Flex                  // Space between children
 .main_alignment(MainAlignment) -> Flex
@@ -345,25 +442,40 @@ Flex::column() -> Flex                 // Vertical layout
 ### MainAlignment
 
 ```rust
-MainAlignment::Start
-MainAlignment::Center
-MainAlignment::End
-MainAlignment::SpaceBetween
-MainAlignment::SpaceAround
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+MainAlignment::Start;
+MainAlignment::Center;
+MainAlignment::End;
+MainAlignment::SpaceBetween;
+MainAlignment::SpaceAround;
 MainAlignment::SpaceEvenly
+# ;
+# }
 ```
 
 ### CrossAlignment
 
 ```rust
-CrossAlignment::Start
-CrossAlignment::Center
-CrossAlignment::End
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+CrossAlignment::Start;
+CrossAlignment::Center;
+CrossAlignment::End;
 CrossAlignment::Stretch
+# ;
+# }
 ```
 
 ### ZStack
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 ZStack::new() -> ZStack                // Children stacked at the same origin
+# ;
+# }
 ```
