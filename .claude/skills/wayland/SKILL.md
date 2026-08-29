@@ -45,17 +45,25 @@ Multiple surfaces share one reactive state and one renderer.
 `tests/headless_app.rs` drives the real loop — `iterate`, the function
 `App::run` calls — with a `guido::testing::Headless` standing where the
 compositor would be: a recorder implementing `Platform` and `Surface` that
-answers for one surface and keeps what it was asked. So a surface configuring, a
-frame opening, input routing, layout, paint, and *what the surface asks the
-compositor for* all have a sensor. It needs the `testing` feature and a GPU
-adapter.
+answers for as many surfaces as the loop will carry and keeps what each was
+asked. So a surface configuring, a frame opening, input routing, layout, paint,
+*what the surface asks the compositor for*, a second surface, `spawn_surface`
+and `close` at runtime, and the order a popup chain is torn down in all have a
+sensor. It needs the `testing` feature and a GPU adapter.
 
 What has none: what goes out on the wire, and what a compositor does with it.
 The recorder proves guido asks for an exclusive zone of 50; it cannot prove niri
-reserves 50. And it drives one static surface, so **dynamic spawn and close,
-popups, the session lock and output hotplug are still verified by running an
-example and looking** — they type-check against the same trait and nothing
-exercises them.
+reserves 50. And it is the recorder's own answer to
+`popup_descendants_bottom_up` that the teardown test walks — what is proved is
+that the *loop* asks in that order, not that `src/platform/popups.rs` computes
+it right.
+
+Still verified by running an example and looking: **the session lock, output
+hotplug, and grab conflicts between popups**. They type-check against the same
+trait and need no redesign, but each needs something built: the recorder leaves
+`Platform`'s four lock methods at their defaults, `outputs::sync_outputs` is
+`pub(crate)`, and the recorder discards the `PopupConfig` that says which popups
+hold a grab.
 
 When you change this layer:
 
