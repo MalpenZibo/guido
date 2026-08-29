@@ -74,9 +74,12 @@ jobs:
     name: Golden images
     runs-on: ubuntu-latest
     env:
-      # Without an adapter the golden tests skip themselves, which would report
-      # green here for the one reason that matters. In CI a skip is a failure.
+      # Without an adapter every test that needs one skips itself, which would
+      # report green here for the one reason that matters. In CI a skip is a
+      # failure. Two names for the one idea, because the goldens got theirs
+      # first and the rest of the suite got another later — see #286.
       GUIDO_GOLDEN_REQUIRED: "1"
+      GUIDO_GPU_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -108,17 +111,19 @@ jobs:
           echo "Using $icd"
       - name: Report the rasterizer
         run: vulkaninfo --summary | head -n 40
-      - name: Run golden image tests
-        run: cargo test --all-features --test golden_images
-      # The unit tests that need an adapter live in the lib, and the `test` job
-      # has no ICD — so they skip there and report green. This is the job that
-      # has one. `--lib` runs the whole set, which is cheap, and
-      # `GUIDO_GPU_REQUIRED` makes a skip a failure here for the same reason
-      # `GUIDO_GOLDEN_REQUIRED` does above it.
-      - name: Run the unit tests that need a GPU
-        env:
-          GUIDO_GPU_REQUIRED: 1
-        run: cargo test --all-features --lib
+      # Everything, rather than the targets somebody remembered. This job used
+      # to name them one at a time — the goldens, then the lib — and two test
+      # files that need an adapter were never in the list: `headless_app`, which
+      # is the entire application harness, and `text_at_angles`. Both skipped
+      # themselves in every run since they were written, and reported green.
+      #
+      # `--tests` is the lib's unit tests and every integration target, and not
+      # the sixty examples: a plain `cargo test` builds those too, which is the
+      # 18 GB the mutants job below documents avoiding. Nothing has to be added
+      # here when a target is added, which is the property the old list did not
+      # have.
+      - name: Run every test, against a rasterizer
+        run: cargo test --all-features --tests
       - name: Upload the pixels that moved
         if: failure()
         uses: actions/upload-artifact@v4
