@@ -2593,6 +2593,27 @@ mod a_frame_is_a_description_not_a_connection {
     }
 }
 
+/// What a missing GPU adapter means to a test: skip, unless
+/// `GUIDO_GPU_REQUIRED` says a skip is a failure.
+///
+/// A test that needs an adapter and silently passes without one reports green
+/// for the single reason that matters, so the job pointed at lavapipe sets that
+/// variable and a skip becomes a failure there. Written once because the
+/// variable's name and the message are the contract that job depends on.
+#[cfg(test)]
+fn or_skip<T>(made: Option<T>) -> Option<T> {
+    match made {
+        Some(made) => Some(made),
+        None if std::env::var_os("GUIDO_GPU_REQUIRED").is_some() => {
+            panic!("GUIDO_GPU_REQUIRED is set and no GPU adapter was found")
+        }
+        None => {
+            eprintln!("no GPU adapter; skipping");
+            None
+        }
+    }
+}
+
 /// A surface the manager owns, for the tests that need one rather than a
 /// recorder alone — `send_size` reads its config, and a frame needs somewhere to
 /// land.
@@ -2926,19 +2947,6 @@ mod a_frame_lands_where_the_surface_points {
         }
     }
 
-    fn gpu() -> Option<GpuContext> {
-        match GpuContext::try_new() {
-            Some(gpu) => Some(gpu),
-            None if std::env::var_os("GUIDO_GPU_REQUIRED").is_some() => {
-                panic!("GUIDO_GPU_REQUIRED is set and no GPU adapter was found")
-            }
-            None => {
-                eprintln!("no GPU adapter; skipping");
-                None
-            }
-        }
-    }
-
     /// A target smaller than its frame is made to fit, and then reports that it
     /// fits.
     ///
@@ -2947,7 +2955,9 @@ mod a_frame_lands_where_the_surface_points {
     /// them, repainting the entire tree for ever.
     #[test]
     fn a_target_the_wrong_size_is_resized_once_and_not_again() {
-        let Some(gpu) = gpu() else { return };
+        let Some(gpu) = or_skip(GpuContext::try_new()) else {
+            return;
+        };
 
         let mut tree = Tree::new();
         let mut surface = managed_surface(SurfaceConfig::new(), &mut tree);
