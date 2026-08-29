@@ -8,9 +8,16 @@
 //!
 //! [`Headless`] is the other caller. It holds the same tree, the same renderer
 //! and the same frame path, with a recorder where the compositor was: it answers
-//! for one surface, keeps what it was asked, and never talks to anything. A test
-//! says what the compositor said and then reads both halves — what the widgets
-//! became, and what the surface asked for.
+//! for as many surfaces as the loop will carry, keeps what each was asked, and
+//! never talks to anything. A test says what the compositor said and then reads
+//! both halves — what the widgets became, and what each surface asked for.
+//!
+//! Surfaces declared before the loop runs come from [`Headless::surface`], the
+//! way `App::add_surface` declares them. After it is running they come from
+//! guido's own `spawn_surface` and go away through `surface_handle(id).close()`,
+//! and [`Headless::step`] is what drains the command either one queues — so a
+//! test spawns a surface the way an application does, not the way a harness
+//! would let it.
 //!
 //! It is not a compositor and cannot be. What it proves is guido's half; what
 //! niri does with an exclusive zone of 50 is still a question no test here can
@@ -18,7 +25,7 @@
 
 use std::time::Instant;
 
-use crate::reactive::{self, OwnerId};
+use crate::reactive;
 use crate::renderer::{GpuContext, RenderTarget, Renderer};
 use crate::surface::{SurfaceConfig, SurfaceId};
 use crate::surface_manager::{ManagedSurface, SurfaceManager};
@@ -26,10 +33,14 @@ use crate::tree::{Tree, WidgetId};
 use crate::widgets::{Event, MouseButton, Widget};
 use crate::{Frame, LoopContext, Platform, Surface, iterate};
 
-/// The compositor's half of one surface: what it has said, and what it has been
-/// asked for.
+/// The compositor's half of one surface: what it has said, and what it has
+/// been asked for.
 #[derive(Default)]
-struct Recorder {
+struct RecordedSurface {
+    /// The surface this one hangs from, for a popup. On the surface rather than
+    /// in a map beside it, so a parent link cannot outlive its surface — which
+    /// is also where `WaylandState` keeps it.
+    parent: Option<SurfaceId>,
     width: u32,
     height: u32,
     scale: f32,
@@ -41,68 +52,138 @@ struct Recorder {
     frame_callbacks: u32,
 }
 
-/// The one surface a `Headless` has, borrowed for a frame.
-struct RecordedSurface<'a>(&'a mut Recorder);
+/// The compositor's half of a *connection*: every surface it holds, and the
+/// order it was told to build and tear them down in.
+///
+/// Lists rather than counts, because the order is what is asserted.
+#[derive(Default)]
+struct Recorder {
+    surfaces: rustc_hash::FxHashMap<SurfaceId, RecordedSurface>,
+    created: Vec<SurfaceId>,
+    destroyed: Vec<SurfaceId>,
+}
 
-impl Surface for RecordedSurface<'_> {
+impl Recorder {
+    fn get(&self, id: SurfaceId) -> &RecordedSurface {
+        self.surfaces.get(&id).unwrap_or_else(|| missing(id))
+    }
+
+    fn get_mut(&mut self, id: SurfaceId) -> &mut RecordedSurface {
+        self.surfaces.get_mut(&id).unwrap_or_else(|| missing(id))
+    }
+}
+
+/// The two ways to name a surface that is not there, said once.
+fn missing(id: SurfaceId) -> ! {
+    panic!("surface {id:?} was never declared, or has been closed")
+}
+
+impl Surface for &mut RecordedSurface {
     fn open_frame(&mut self) -> Option<Frame> {
-        if !self.0.configured {
+        if !self.configured {
             return None;
         }
         Some(Frame {
-            events: std::mem::take(&mut self.0.events),
-            scale_factor: self.0.scale,
-            width: self.0.width,
-            height: self.0.height,
+            events: std::mem::take(&mut self.events),
+            scale_factor: self.scale,
+            width: self.width,
+            height: self.height,
             // Never pending: a driver that had to wait for a callback nobody
             // sends would step once and stop.
             frame_callback_pending: false,
-            force_render_surface: !self.0.first_frame_presented,
+            force_render_surface: !self.first_frame_presented,
         })
     }
 
     fn configured_size(&self) -> Option<(u32, u32)> {
-        self.0.configured.then_some((self.0.width, self.0.height))
+        self.configured.then_some((self.width, self.height))
     }
 
     fn scale_factor(&self) -> Option<f32> {
-        self.0.configured.then_some(self.0.scale)
+        self.configured.then_some(self.scale)
     }
 
     fn set_size(&mut self, width: u32, height: u32) {
-        self.0.sizes_asked.push((width, height));
+        self.sizes_asked.push((width, height));
     }
 
     fn set_exclusive_zone(&mut self, zone: i32) {
-        self.0.exclusive_zones.push(zone);
+        self.exclusive_zones.push(zone);
     }
 
     fn request_frame_callback(&mut self) {
-        self.0.frame_callbacks += 1;
+        self.frame_callbacks += 1;
     }
 
     fn mark_frame_callback_pending(&mut self) {
-        self.0.first_frame_presented = true;
+        self.first_frame_presented = true;
     }
 }
 
 impl Platform for Recorder {
-    type Surface<'a> = RecordedSurface<'a>;
+    type Surface<'a> = &'a mut RecordedSurface;
 
-    fn surface(&mut self, _id: SurfaceId) -> Option<RecordedSurface<'_>> {
-        Some(RecordedSurface(self))
+    fn surface(&mut self, id: SurfaceId) -> Option<&mut RecordedSurface> {
+        self.surfaces.get_mut(&id)
     }
 
-    /// A texture, where a compositor would hand out a swapchain. The one place
-    /// the two implementations differ by doing rather than by recording — and
-    /// the reason a surface can be *born* without a compositor rather than only
-    /// driven after somebody else built it one.
-    fn create_surface(&mut self, _id: SurfaceId, config: &crate::surface::SurfaceConfig) {
+    fn create_surface(&mut self, id: SurfaceId, config: &crate::surface::SurfaceConfig) {
         // The same function the layer-shell path uses, so what a surface says
         // at birth cannot differ between the two.
         let declared = crate::surface::initial_declaration(config);
-        self.sizes_asked.push(declared.asked);
-        self.exclusive_zones.push(declared.exclusive_zone);
+        self.created.push(id);
+        self.surfaces.insert(
+            id,
+            RecordedSurface {
+                scale: 1.0,
+                sizes_asked: vec![declared.asked],
+                exclusive_zones: vec![declared.exclusive_zone],
+                ..Default::default()
+            },
+        );
+    }
+
+    /// A popup is a surface that knows what it hangs from. The size is the
+    /// compositor's answer, so it arrives configured — a real one would wait a
+    /// round trip, and nothing here is waiting for anything.
+    fn create_popup(
+        &mut self,
+        id: SurfaceId,
+        parent: SurfaceId,
+        _config: &crate::surface::PopupConfig,
+        size: (u32, u32),
+    ) -> bool {
+        self.created.push(id);
+        self.surfaces.insert(
+            id,
+            RecordedSurface {
+                parent: Some(parent),
+                width: size.0,
+                height: size.1,
+                scale: 1.0,
+                configured: true,
+                ..Default::default()
+            },
+        );
+        true
+    }
+
+    fn destroy_surface(&mut self, id: SurfaceId) {
+        self.destroyed.push(id);
+        self.surfaces.remove(&id);
+    }
+
+    /// Deepest first, which is the order the protocol demands and the order the
+    /// loop is supposed to close them in.
+    fn popup_descendants_bottom_up(&self, root: SurfaceId) -> Vec<SurfaceId> {
+        let mut out = Vec::new();
+        for (&child, surface) in &self.surfaces {
+            if surface.parent == Some(root) {
+                out.extend(self.popup_descendants_bottom_up(child));
+                out.push(child);
+            }
+        }
+        out
     }
 
     fn create_render_target(
@@ -117,15 +198,13 @@ impl Platform for Recorder {
     }
 }
 
-/// One application, one surface, stepped by hand.
+/// One application and its surfaces, stepped by hand.
 pub struct Headless {
     gpu: &'static GpuContext,
     tree: Tree,
     renderer: Option<Renderer>,
     surfaces: SurfaceManager,
-    id: Option<SurfaceId>,
     host: Recorder,
-    owner: Option<OwnerId>,
     layout_roots: rustc_hash::FxHashMap<WidgetId, Vec<WidgetId>>,
 }
 
@@ -157,27 +236,22 @@ impl Headless {
             tree: Tree::new(),
             renderer: None,
             surfaces: SurfaceManager::new(),
-            id: None,
-            host: Recorder {
-                scale: 1.0,
-                ..Default::default()
-            },
-            owner: None,
+            host: Recorder::default(),
             layout_roots: rustc_hash::FxHashMap::default(),
         })
     }
 
-    /// Declare the surface, as `App::add_surface` does. One only, for now.
-    pub fn surface<W, F>(&mut self, config: SurfaceConfig, widget_fn: F)
+    /// Declare a surface before the loop runs, as `App::add_surface` does.
+    ///
+    /// The id it returns is what `spawn_popup` wants for a parent, and what
+    /// every accessor here is asked about.
+    pub fn surface<W, F>(&mut self, config: SurfaceConfig, widget_fn: F) -> SurfaceId
     where
         W: Widget + 'static,
         F: FnOnce() -> W,
     {
         let (widget, owner) = reactive::with_owner(|| Box::new(widget_fn()) as Box<dyn Widget>);
-        self.owner = Some(owner);
-
         let id = SurfaceId::next();
-        self.id = Some(id);
 
         // Through the trait, not beside it: a fixed-size bar declares its
         // reservation once, at birth, and if the driver wrote that number down
@@ -190,31 +264,35 @@ impl Headless {
             owner,
             &mut self.tree,
         ));
+        id
     }
 
-    /// Say what the compositor confirmed. Until this is called there is no size
-    /// to draw at, and [`step`](Self::step) does nothing — which is what an
-    /// unconfigured surface does in the real loop.
-    pub fn configure(&mut self, width: u32, height: u32, scale: f32) {
-        self.host.width = width;
-        self.host.height = height;
-        self.host.scale = scale;
-        self.host.configured = true;
+    /// Say what the compositor confirmed for one surface. Until this is called
+    /// there is no size to draw at and [`step`](Self::step) does nothing for it
+    /// — which is what an unconfigured surface does in the real loop.
+    pub fn configure(&mut self, id: SurfaceId, width: u32, height: u32, scale: f32) {
+        let surface = self.host.get_mut(id);
+        surface.width = width;
+        surface.height = height;
+        surface.scale = scale;
+        surface.configured = true;
     }
 
-    /// Queue a press and a release at a point, in logical coordinates.
+    /// Queue a press and a release at a point on one surface, in logical
+    /// coordinates.
     ///
     /// They are delivered by the next [`step`](Self::step), because that is when
     /// the frame that carries them opens — the same order the compositor's own
     /// events arrive in.
-    pub fn click(&mut self, x: f32, y: f32) {
-        self.click_at(x, y, Instant::now());
+    pub fn click(&mut self, id: SurfaceId, x: f32, y: f32) {
+        self.click_at(id, x, y, Instant::now());
     }
 
     /// [`click`](Self::click), at a moment you name — so a gesture can be
     /// played through the application at the speed it is meant to have.
-    pub fn click_at(&mut self, x: f32, y: f32, now: Instant) {
-        self.host.events.push((
+    pub fn click_at(&mut self, id: SurfaceId, x: f32, y: f32, now: Instant) {
+        let surface = self.host.get_mut(id);
+        surface.events.push((
             now,
             Event::MouseDown {
                 x,
@@ -222,7 +300,7 @@ impl Headless {
                 button: MouseButton::Left,
             },
         ));
-        self.host.events.push((
+        surface.events.push((
             now,
             Event::MouseUp {
                 x,
@@ -234,85 +312,90 @@ impl Headless {
 
     /// One frame: open it, route what is queued, measure, paint, present.
     ///
+    /// Returns why the loop ended, or `None` if it did not: closing the last
+    /// surface is `Some(ExitReason::Quit)`. Nothing here stops a test stepping
+    /// again afterwards, and nothing good comes of it — the real loop returns.
+    ///
     /// The moment is the caller's, so an animation can be walked through
     /// without sleeping.
-    pub fn step(&mut self) {
-        self.step_at(Instant::now());
+    pub fn step(&mut self) -> Option<crate::ExitReason> {
+        self.step_at(Instant::now())
     }
 
     /// [`step`](Self::step), at a moment you name.
-    pub fn step_at(&mut self, at: Instant) {
+    pub fn step_at(&mut self, at: Instant) -> Option<crate::ExitReason> {
         let ctx = LoopContext {
             wayland_state: &mut self.host,
             surface_manager: &mut self.surfaces,
             gpu_context: self.gpu,
             renderer: &mut self.renderer,
         };
-        iterate(ctx, &mut self.tree, &mut self.layout_roots, Some(at));
+        iterate(ctx, &mut self.tree, &mut self.layout_roots, Some(at))
     }
 
-    fn root(&self) -> WidgetId {
+    fn root(&self, id: SurfaceId) -> WidgetId {
         self.surfaces
-            .get(self.id.expect("no surface"))
-            .expect("no surface")
+            .get(id)
+            .unwrap_or_else(|| missing(id))
             .widget_id
     }
 
-    fn target(&self) -> &RenderTarget {
+    fn target(&self, id: SurfaceId) -> &RenderTarget {
         self.surfaces
-            .get(self.id.expect("no surface"))
+            .get(id)
             .and_then(|s| s.wgpu_surface.as_ref())
             .expect("no target; step once after configuring")
     }
 
-    /// The size the root widget was measured at, in logical pixels.
-    pub fn root_size(&self) -> (f32, f32) {
-        let bounds = self.tree.get_bounds(self.root()).unwrap_or_default();
+    /// The size a surface's root widget was measured at, in logical pixels.
+    pub fn root_size(&self, id: SurfaceId) -> (f32, f32) {
+        let bounds = self.tree.get_bounds(self.root(id)).unwrap_or_default();
         (bounds.width, bounds.height)
     }
 
-    /// The size of the buffer the last frame was drawn into, in physical
-    /// pixels — the logical size times the scale the compositor confirmed.
-    pub fn physical_size(&self) -> (u32, u32) {
-        let target = self.target();
+    /// The size of the buffer a surface's last frame was drawn into, in
+    /// physical pixels — the logical size times the scale the compositor
+    /// confirmed.
+    pub fn physical_size(&self, id: SurfaceId) -> (u32, u32) {
+        let target = self.target(id);
         (target.width(), target.height())
     }
 
-    /// The screen space this surface last asked the compositor to reserve.
-    pub fn exclusive_zone_asked(&self) -> Option<i32> {
-        self.host.exclusive_zones.last().copied()
-    }
-
-    /// Every reservation this surface has asked for, oldest first. A frame that
+    /// Every reservation a surface has asked for, oldest first. A frame that
     /// republishes one it already sent is not the same as one that says nothing,
     /// and only a list can tell them apart.
-    pub fn exclusive_zones_asked(&self) -> &[i32] {
-        &self.host.exclusive_zones
+    pub fn exclusive_zones_asked(&self, id: SurfaceId) -> &[i32] {
+        &self.host.get(id).exclusive_zones
     }
 
-    /// The sizes this surface has asked for, oldest first.
-    pub fn sizes_asked(&self) -> &[(u32, u32)] {
-        &self.host.sizes_asked
+    /// The sizes a surface has asked for, oldest first.
+    pub fn sizes_asked(&self, id: SurfaceId) -> &[(u32, u32)] {
+        &self.host.get(id).sizes_asked
     }
 
-    /// How many frames have been presented and had their callback re-armed.
-    pub fn frames_presented(&self) -> u32 {
-        self.host.frame_callbacks
+    /// How many frames a surface has presented and had its callback re-armed.
+    pub fn frames_presented(&self, id: SurfaceId) -> u32 {
+        self.host.get(id).frame_callbacks
     }
 
-    /// The colour at one pixel of the last frame, in physical coordinates.
-    pub fn read_pixel(&self, x: u32, y: u32) -> [u8; 4] {
-        match self.target() {
+    /// Every surface the compositor was told to build, oldest first — including
+    /// the ones an application spawned at runtime, and popups.
+    pub fn surfaces_created(&self) -> &[SurfaceId] {
+        &self.host.created
+    }
+
+    /// Every surface the compositor was told to tear down, in the order it was
+    /// told.
+    pub fn surfaces_destroyed(&self) -> &[SurfaceId] {
+        &self.host.destroyed
+    }
+
+    /// The colour at one pixel of a surface's last frame, in physical
+    /// coordinates.
+    pub fn read_pixel(&self, id: SurfaceId, x: u32, y: u32) -> [u8; 4] {
+        match self.target(id) {
             RenderTarget::Offscreen(offscreen) => offscreen.read_pixel(x, y),
             RenderTarget::Swapchain(_) => panic!("a headless surface has no swapchain"),
-        }
-    }
-}
-
-impl Drop for Headless {
-    fn drop(&mut self) {
-        if let Some(owner) = self.owner.take() {
-            reactive::dispose_owner_now(owner);
         }
     }
 }
