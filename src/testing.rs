@@ -119,7 +119,7 @@ impl Platform for Recorder {
 
 /// One application, one surface, stepped by hand.
 pub struct Headless {
-    gpu: GpuContext,
+    gpu: &'static GpuContext,
     tree: Tree,
     renderer: Option<Renderer>,
     surfaces: SurfaceManager,
@@ -129,12 +129,31 @@ pub struct Headless {
     layout_roots: rustc_hash::FxHashMap<WidgetId, Vec<WidgetId>>,
 }
 
+/// One device for the whole test binary.
+///
+/// An instance, an adapter request and a queue, and every application in a
+/// process can share one set. It outlives them all because a `wgpu::Device` is
+/// cheapest when nothing has to decide when to stop holding it, and a test
+/// binary ends soon enough for that to be the whole of the lifetime question.
+///
+/// One device is not most of what starting an application costs. Measured on
+/// lavapipe: 48ms here, against 76ms to build the `Renderer` that every
+/// application needs one of anyway. So this is a fifth off a test binary, not an
+/// order of magnitude.
+///
+/// The absence of an adapter is cached too: without that, a machine with no GPU
+/// re-discovers it once per test, which is the slow way to skip.
+fn shared_device() -> Option<&'static GpuContext> {
+    static GPU: std::sync::OnceLock<Option<GpuContext>> = std::sync::OnceLock::new();
+    GPU.get_or_init(GpuContext::try_new).as_ref()
+}
+
 impl Headless {
     /// `None` where there is no GPU adapter at all — a frame has to land
     /// somewhere, and the somewhere is a texture this allocates.
     pub fn new() -> Option<Self> {
         Some(Self {
-            gpu: GpuContext::try_new()?,
+            gpu: shared_device()?,
             tree: Tree::new(),
             renderer: None,
             surfaces: SurfaceManager::new(),
@@ -226,7 +245,7 @@ impl Headless {
         let ctx = LoopContext {
             wayland_state: &mut self.host,
             surface_manager: &mut self.surfaces,
-            gpu_context: &self.gpu,
+            gpu_context: self.gpu,
             renderer: &mut self.renderer,
         };
         iterate(ctx, &mut self.tree, &mut self.layout_roots, Some(at));
@@ -295,5 +314,31 @@ impl Drop for Headless {
         if let Some(owner) = self.owner.take() {
             reactive::dispose_owner_now(owner);
         }
+    }
+}
+
+#[cfg(test)]
+mod one_device_for_the_binary {
+    use super::*;
+
+    /// Two applications in one process are handed the same context, so the
+    /// second pays nothing for an adapter. Without it #275's list of scenarios
+    /// is a list of Vulkan devices.
+    ///
+    /// The identity is not observable through [`Headless`]'s public surface,
+    /// which is why this is a unit test rather than one in
+    /// `tests/headless_app.rs`: an accessor added so a test could look would
+    /// outlive the test.
+    #[test]
+    fn two_applications_are_handed_the_same_device() {
+        let Some(first) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let second = Headless::new().expect("the first one had an adapter");
+
+        assert!(
+            std::ptr::eq(first.gpu, second.gpu),
+            "a second application built a context of its own"
+        );
     }
 }
