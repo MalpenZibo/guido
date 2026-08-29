@@ -38,6 +38,7 @@ const V_HANDLE: f32 = 60.4938;
 
 /// A horizontal scroller: 200x80 over 888px of content — 10 columns of 80,
 /// spaced 8, padded 8.
+const H_VIEWPORT: f32 = 80.0;
 const H_CONTENT: f32 = 888.0;
 const H_HANDLE: f32 = 44.1441;
 
@@ -98,11 +99,19 @@ impl H {
         h
     }
 
+    /// The horizontal scroller, moved off its parent's origin the same way
+    /// `vertical_inset` moves the vertical one.
+    fn horizontal_inset() -> Self {
+        let mut h = Self::horizontal();
+        h.tree.set_origin(h.root, INSET, INSET);
+        h
+    }
+
     fn horizontal() -> Self {
         Self::new(
             container()
                 .width(VIEWPORT)
-                .height(80.0)
+                .height(H_VIEWPORT)
                 .scrollable(ScrollAxis::Horizontal)
                 .child(
                     container()
@@ -110,7 +119,7 @@ impl H {
                         .padding(8.0)
                         .children((0..10).map(|_| container().width(80.0).height(24.0))),
                 ),
-            80.0,
+            H_VIEWPORT,
             true,
         )
     }
@@ -190,11 +199,17 @@ impl H {
     /// The ripple this frame draws on the scrollbar handle, in the handle's own
     /// coordinates, if it draws one.
     fn handle_ripple(&mut self) -> Option<(f32, f32)> {
+        self.handle_ripple_disc().map(|(center, _)| center)
+    }
+
+    /// The same, with how opaque the disc is — which is what says whether it is
+    /// held, completing or abandoned.
+    fn handle_ripple_disc(&mut self) -> Option<((f32, f32), f32)> {
         self.handle_node()
             .overlay_commands
             .iter()
             .find_map(|cmd| match &**cmd {
-                DrawCommand::Circle { center, .. } => Some(*center),
+                DrawCommand::Circle { center, color, .. } => Some((*center, color.a)),
                 _ => None,
             })
     }
@@ -512,5 +527,113 @@ fn the_width_a_hover_adds_to_the_handle_answers_a_press_too() {
         cx < BAR_WIDTH / 2.0,
         "pressed the handle's left edge and the ripple started at {cx}, \
          past the middle of a {BAR_WIDTH}-wide handle"
+    );
+}
+
+/// The horizontal handle answers a press off-origin too.
+///
+/// The forwarding is shared between the axes, but the geometry either side of
+/// it is not: the rects come from a different branch of
+/// `scrollbar_handle_rect`, and the widening turns about the bottom edge rather
+/// than the right one. The file's own opening argument applies — either axis
+/// can lose it on its own.
+#[test]
+fn the_horizontal_handle_ripples_from_where_it_landed_too() {
+    let handle_x = INSET + TRACK_START;
+    let handle_y = INSET + H_VIEWPORT - BAR_WIDTH - TRACK_START;
+
+    for (qx, qy) in [(0.25, 0.25), (0.75, 0.75)] {
+        let (local_x, local_y) = (H_HANDLE * qx, BAR_WIDTH * qy);
+        let mut h = H::horizontal_inset();
+
+        let pressed = Instant::now();
+        h.dispatch_at(
+            Event::MouseDown {
+                x: handle_x + local_x,
+                y: handle_y + local_y,
+                button: MouseButton::Left,
+            },
+            pressed,
+        );
+        h.frame(pressed + Duration::from_millis(16));
+
+        let (cx, cy) = h
+            .handle_ripple()
+            .unwrap_or_else(|| panic!("the press at quadrant ({qx}, {qy}) started no ripple"));
+        assert!(
+            (cx - local_x).abs() < 2.0 && (cy - local_y).abs() < 2.0,
+            "quadrant ({qx}, {qy}): ripple at ({cx}, {cy}), pressed at ({local_x}, {local_y})"
+        );
+    }
+}
+
+/// A release on the handle finishes the ripple rather than abandoning it —
+/// including on the width the hover added.
+///
+/// The `MouseUp` that ends a drag is forwarded like the `MouseDown` that began
+/// it, and the handle decides from its coordinates which of three things
+/// happened. Each leaves the disc in a different state a frame later, which is
+/// why the assertion is on the opacity and not on the disc being there:
+///
+/// - released inside — the expansion completes, fading over `FADE_OUT`, so the
+///   disc is still drawn and dimmer than it was.
+/// - released elsewhere — abandoned, fading over `CANCEL_FADE`, five times
+///   quicker, and gone by the time this looks.
+/// - never arrived — no exit begins at all, and the disc sits at full strength
+///   for ever. Only "dimmer, and still there" excludes both of the others.
+///
+/// Hovered, and pressed on the widening, because that is the only state in
+/// which the release has anything to undo: at rest the scale is 1 and dropping
+/// it changes nothing.
+#[test]
+fn releasing_on_the_widened_handle_finishes_the_ripple_rather_than_abandoning_it() {
+    let mut h = H::vertical_inset();
+    let y = INSET + TRACK_START + V_HANDLE / 2.0;
+    let hovered = Instant::now();
+    h.dispatch(Event::MouseMove {
+        x: INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        y,
+    });
+    for step in 1..=8 {
+        h.frame(hovered + Duration::from_millis(16 * step));
+    }
+
+    let (left, _) = h
+        .handle_node()
+        .local_transform
+        .transform_point(0.0, V_HANDLE / 2.0);
+    let x = INSET + left + 1.0;
+
+    let pressed = hovered + Duration::from_millis(200);
+    h.dispatch_at(
+        Event::MouseDown {
+            x,
+            y,
+            button: MouseButton::Left,
+        },
+        pressed,
+    );
+    // Past FADE_IN, so the disc is at its full strength and the fade below is
+    // the only thing that can have dimmed it.
+    let released = pressed + Duration::from_millis(100);
+    h.frame(released);
+    let (_, held) = h.handle_ripple_disc().expect("the press started no ripple");
+
+    h.dispatch_at(
+        Event::MouseUp {
+            x,
+            y,
+            button: MouseButton::Left,
+        },
+        released,
+    );
+    h.frame(released + Duration::from_millis(150));
+
+    let (_, leaving) = h
+        .handle_ripple_disc()
+        .expect("the disc was gone 150ms after the release: it was abandoned, not completed");
+    assert!(
+        leaving < held,
+        "the disc is still at {leaving} against {held} held: the release never reached the handle"
     );
 }
