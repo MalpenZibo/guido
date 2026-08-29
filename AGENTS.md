@@ -125,13 +125,25 @@ That last row is what is left of the hole. Until #264 it was the whole of it:
 nothing could construct an application, so everything it does with what the
 compositor says was watched by a person running an example. `Headless` closes
 that half — it drives `iterate`, the same function `App::run` drives, against a
-recorder that answers for one surface and keeps what it was asked.
+recorder that answers for every surface the loop holds and keeps what each was
+asked.
 
 What it cannot close is the half below it. The recorder is not a compositor: it
 proves guido asks for an exclusive zone of 50, never that niri does the right
-thing with one. And it answers for one static surface, so dynamic spawn and
-close, popups and the session lock are still watched by a person, even though
-they type-check against the same trait.
+thing with one.
+
+It now holds as many surfaces as the loop will carry, so a second surface, and
+`spawn_surface` and `close` at runtime, are watched too. So is the order the
+loop tears a popup chain down in — though only the loop's half of it: the
+recorder answers `popup_descendants_bottom_up` from its own map, so the Wayland
+implementation of that same rule still has no sensor (#292).
+
+The session lock, output hotplug and popup grab conflicts are the remainder.
+They need no redesign — the map was the missing part — but they do need
+machinery: the recorder answers four of `Platform`'s lock methods with the
+trait's defaults, `sync_outputs` is `pub(crate)` so no test in `tests/` can
+reach it, and the recorder throws away the `PopupConfig` that would say which
+popups hold a grab.
 
 ## What watches the harness
 
