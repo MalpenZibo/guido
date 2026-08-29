@@ -2593,6 +2593,20 @@ mod a_frame_is_a_description_not_a_connection {
     }
 }
 
+/// A surface the manager owns, for the tests that need one rather than a
+/// recorder alone — `send_size` reads its config, and a frame needs somewhere to
+/// land.
+///
+/// The widget is the smallest there is: none of these lay anything out, it only
+/// has to be registered so the tree can name it. The tree is the caller's
+/// because [`ManagedSurface::new`] registers into it and some callers go on to
+/// use it.
+#[cfg(test)]
+fn managed_surface(config: SurfaceConfig, tree: &mut Tree) -> ManagedSurface {
+    let (widget, owner) = with_owner(|| Box::new(widgets::container()) as Box<dyn Widget>);
+    ManagedSurface::new(SurfaceId::next(), config, widget, owner, tree)
+}
+
 /// The frame path asks a compositor for things, and this is the asking written
 /// down. `WaylandState` is one answer to it; a recorder that keeps what it was
 /// asked is another, and having two is the whole point — one implementation is
@@ -2610,6 +2624,7 @@ mod a_second_host_can_answer_for_a_compositor {
     struct Recorder {
         configured: Option<(u32, u32)>,
         exclusive_zones: Vec<i32>,
+        sizes_asked: Vec<(u32, u32)>,
     }
 
     impl Surface for Recorder {
@@ -2623,6 +2638,10 @@ mod a_second_host_can_answer_for_a_compositor {
 
         fn set_exclusive_zone(&mut self, zone: i32) {
             self.exclusive_zones.push(zone);
+        }
+
+        fn set_size(&mut self, width: u32, height: u32) {
+            self.sizes_asked.push((width, height));
         }
     }
 
@@ -2709,6 +2728,43 @@ mod a_second_host_can_answer_for_a_compositor {
         let mut surface = confirmed(1920, 1080);
         resync_exclusive_zone(&mut surface, &side_dock(), Some((240, 1080)));
         assert_eq!(surface.exclusive_zones, vec![240]);
+    }
+
+    /// What a bar asks for: the height it declared, and whatever
+    /// `surface::honour_owned_axes` leaves of the width, which for both
+    /// horizontal edges is nothing.
+    #[test]
+    fn a_bar_asks_for_its_own_height_and_leaves_the_stretched_width_to_the_compositor() {
+        let mut tree = Tree::new();
+        let managed = managed_surface(bar(), &mut tree);
+        let mut surface = confirmed(1920, 32);
+
+        let (needs_measure, root) = send_size(&managed, &mut surface);
+
+        assert_eq!(surface.sizes_asked, vec![(0, 32)]);
+        assert!(!needs_measure, "two fixed axes have nothing to measure");
+        assert_eq!(
+            root, managed.widget_id,
+            "and the layout job names this root"
+        );
+    }
+
+    /// A `content()` axis has no number of its own, so it asks for the one the
+    /// compositor confirmed — not the 1px placeholder, which is what it would
+    /// fall back to if `send_size` stopped reading the live size.
+    #[test]
+    fn a_dock_asks_for_the_width_it_was_confirmed_at_rather_than_the_placeholder() {
+        let mut tree = Tree::new();
+        let managed = managed_surface(side_dock(), &mut tree);
+        let mut surface = confirmed(240, 1080);
+
+        let (needs_measure, _) = send_size(&managed, &mut surface);
+
+        assert_eq!(surface.sizes_asked, vec![(240, 0)]);
+        assert!(
+            needs_measure,
+            "and the width is still the surface's own, so it is still waiting on a measure"
+        );
     }
 
     /// A constant on the same unmeasured surface goes out at once: the guard is
@@ -2826,7 +2882,6 @@ mod a_frame_lands_where_the_surface_points {
     use super::*;
     use crate::renderer::{GpuContext, RenderTarget};
     use crate::surface::SurfaceConfig;
-    use crate::widgets::container;
 
     const W: u32 = 100;
     const H: u32 = 32;
@@ -2895,14 +2950,7 @@ mod a_frame_lands_where_the_surface_points {
         let Some(gpu) = gpu() else { return };
 
         let mut tree = Tree::new();
-        let (widget, owner) = reactive::with_owner(|| Box::new(container()) as Box<dyn Widget>);
-        let mut surface = surface_manager::ManagedSurface::new(
-            SurfaceId::next(),
-            SurfaceConfig::new(),
-            widget,
-            owner,
-            &mut tree,
-        );
+        let mut surface = managed_surface(SurfaceConfig::new(), &mut tree);
         surface.wgpu_surface = Some(RenderTarget::offscreen(&gpu, 8, 8));
         let mut renderer = Renderer::new(
             gpu.device.clone(),

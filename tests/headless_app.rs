@@ -26,6 +26,20 @@ fn bar(clicks: RwSignal<u32>) -> Container {
     )
 }
 
+/// A surface whose height is whatever it holds, on an anchor that hands the
+/// width to the compositor. Two tests share it, and the only thing that differs
+/// between them is the height it is then configured at.
+fn content_bar() -> SurfaceConfig {
+    SurfaceConfig::new()
+        .height(content())
+        .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+        .exclusive_zone(ExclusiveZone::Auto)
+}
+
+fn measuring_24() -> Container {
+    container().height(24.0).child(container().height(24.0))
+}
+
 fn headless() -> Option<Headless> {
     match Headless::new() {
         Some(app) => Some(app),
@@ -129,13 +143,7 @@ fn a_bar_reserving_automatically_declares_its_height_when_it_is_created() {
 #[test]
 fn a_content_sized_surface_reserves_only_once_a_frame_has_measured_it() {
     let Some(mut app) = headless() else { return };
-    app.surface(
-        SurfaceConfig::new()
-            .height(content())
-            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
-            .exclusive_zone(ExclusiveZone::Auto),
-        || container().height(24.0).child(container().height(24.0)),
-    );
+    app.surface(content_bar(), measuring_24);
 
     assert_eq!(
         app.exclusive_zones_asked(),
@@ -150,6 +158,43 @@ fn a_content_sized_surface_reserves_only_once_a_frame_has_measured_it() {
         app.exclusive_zones_asked(),
         [1, 24],
         "the frame measured the content and the reservation followed"
+    );
+    assert_eq!(
+        app.sizes_asked(),
+        [(0, 1)],
+        "and it asked for no new size, having measured back the one it has: the \
+         resize is conditional where the resync is not. This is the only thing \
+         watching that condition's false arm — see \
+         a_surface_configured_taller_than_its_content_asks_to_shrink_to_it for \
+         the true one"
+    );
+}
+
+/// The other half of what a frame tells the compositor: not only what to
+/// reserve, but what size to be.
+///
+/// A surface configured taller than its content measures asks to shrink, and
+/// the request goes out from inside the measure pass — the one place the
+/// measured number is known before the compositor knows it. The width stays 0
+/// throughout, for the reason `surface::honour_owned_axes` gives.
+#[test]
+fn a_surface_configured_taller_than_its_content_asks_to_shrink_to_it() {
+    let Some(mut app) = headless() else { return };
+    app.surface(content_bar(), measuring_24);
+
+    assert_eq!(
+        app.sizes_asked(),
+        [(0, 1)],
+        "born asking for the placeholder, having measured nothing"
+    );
+
+    app.configure(200, 50, 1.0);
+    app.step();
+
+    assert_eq!(
+        app.sizes_asked(),
+        [(0, 1), (0, 24)],
+        "the frame measured 24 against a surface configured at 50, and said so"
     );
 }
 
