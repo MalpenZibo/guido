@@ -1,11 +1,16 @@
-//! The scrollbar handle is drawn where the offset says it is.
+//! The scrollbar handle is drawn where the offset says it is, and answers a
+//! press wherever it is drawn.
 //!
 //! Scrolling is paint-only, and the loop runs `advance_animations` for a
 //! `JobType::Animation` job alone. A wheel scroll and a click on the track both
-//! request a plain `Paint`, so every case here dispatches an event and paints
-//! with no animation pass in between — which is what the loop actually does for
-//! them. Running one here would mask the defect: it repositions the handle, and
-//! the test would pass without the fix.
+//! request a plain `Paint`, so the cases that ask *where the handle is* dispatch
+//! an event and paint with no animation pass in between — which is what the loop
+//! actually does for them. Running one there would mask the defect: it
+//! repositions the handle, and the test would pass without the fix.
+//!
+//! The cases that ask *what the handle answers* run one, because they have to:
+//! a ripple is drawn only once it has grown, and it grows in an animation pass.
+//! They read what the paint says rather than assuming the frame they are on.
 //!
 //! Both axes, because both are drawn from the same derivation and either can
 //! lose it on its own.
@@ -452,5 +457,60 @@ fn hovering_the_handle_colours_it_wherever_the_scroller_sits() {
     assert!(
         hovered > resting,
         "the handle is filled at {hovered} hovered and {resting} at rest: the enter never landed"
+    );
+}
+
+/// A hovered handle is drawn wider than it is laid out, and the part that only
+/// the hover adds has to answer a press like the rest of it.
+///
+/// The widening is a scale the *scroller* applies at paint time — about the
+/// handle's outer edge, and never stored on the handle — so the handle's own
+/// bounds stay its resting strip however wide it is drawn. A press on the half
+/// that only exists while hovered therefore reached a widget that had no idea
+/// it was there.
+///
+/// Where the pixels are is read off the paint rather than assumed, so the case
+/// does not depend on the spring having settled by any particular frame.
+#[test]
+fn the_width_a_hover_adds_to_the_handle_answers_a_press_too() {
+    let mut h = H::vertical_inset();
+    let hovered = Instant::now();
+    h.dispatch(Event::MouseMove {
+        x: INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        y: INSET + TRACK_START + V_HANDLE / 2.0,
+    });
+    for step in 1..=8 {
+        h.frame(hovered + Duration::from_millis(16 * step));
+    }
+
+    // The handle's painted edges, in the scroller's space: its own transform
+    // carries the hover scale, so the left edge is where the widening reaches.
+    let painted = h.handle_node().local_transform;
+    let (left, _) = painted.transform_point(0.0, V_HANDLE / 2.0);
+    let (right, _) = painted.transform_point(BAR_WIDTH, V_HANDLE / 2.0);
+    assert!(
+        right - left > BAR_WIDTH + 0.5,
+        "the hover widened the handle to {} from {BAR_WIDTH}: nothing was added to press on",
+        right - left
+    );
+
+    let pressed = hovered + Duration::from_millis(200);
+    h.dispatch_at(
+        Event::MouseDown {
+            x: INSET + left + 1.0,
+            y: INSET + TRACK_START + V_HANDLE / 2.0,
+            button: MouseButton::Left,
+        },
+        pressed,
+    );
+    h.frame(pressed + Duration::from_millis(16));
+
+    let (cx, _) = h
+        .handle_ripple()
+        .expect("a press on the widened edge started no ripple");
+    assert!(
+        cx < BAR_WIDTH / 2.0,
+        "pressed the handle's left edge and the ripple started at {cx}, \
+         past the middle of a {BAR_WIDTH}-wide handle"
     );
 }
