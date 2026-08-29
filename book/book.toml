@@ -8,6 +8,11 @@ src = "src"
 [build]
 build-dir = "book"
 
+# `mdbook test` is rustdoc, and rustdoc defaults to edition 2015 — under which
+# half the samples do not parse for reasons that have nothing to do with guido.
+[rust]
+edition = "2024"
+
 [output.html]
 git-repository-url = "https://github.com/zibo/guido"
 edit-url-template = "https://github.com/zibo/guido/edit/main/book/{path}"
