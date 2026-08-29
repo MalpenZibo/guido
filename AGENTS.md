@@ -98,8 +98,11 @@ cargo test --test golden_images
 Install it with `vulkan-swrast` on Arch, `mesa-vulkan-drivers` on Debian and
 Ubuntu. On any other adapter those tests skip themselves — a golden holds only
 against the rasterizer it was blessed on — so `cargo test --all-features` is
-green on a machine with a GPU and the pixels are checked by the job that points
-at lavapipe. In that job a skip is a failure.
+green on a machine with a GPU, and everything that needs an adapter is run by
+the job that points at lavapipe. **In that job a skip is a failure**, and it
+runs the whole suite rather than the targets somebody remembered to list: two
+files that need an adapter were once not on that list, and skipped green in
+every run for months.
 
 ## What proves what
 

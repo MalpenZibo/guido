@@ -55,7 +55,9 @@ jobs:
               cargo fmt --all
               cargo clippy --all-targets --all-features -- -D warnings
               cargo test --all-features
-              GUIDO_GOLDEN_REQUIRED=1 cargo test --test golden_images
+              GUIDO_GOLDEN_REQUIRED=1 GUIDO_GPU_REQUIRED=1 \
+                cargo test --all-features --tests
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GUIDO_GOLDEN_REQUIRED: "1"
+          GUIDO_GPU_REQUIRED: "1"
