@@ -132,3 +132,10 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.image]
 opt-level = 3
+# naga is the WGSL front end, run on every shader module and every pipeline a
+# `Renderer` builds — which is once per surface, and once per headless test.
+# Measured on lavapipe: `Renderer::new` costs 133ms with naga at opt-level 0 and
+# 76ms at 3. The price is naga's own codegen, 29s to 34s on a cold build, paid
+# once per build rather than once per surface.
+[profile.dev.package.naga]
+opt-level = 3
