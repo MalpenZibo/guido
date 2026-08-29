@@ -13,6 +13,9 @@ Guido is built on three core ideas:
 ## How They Work Together
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // 1. Create reactive state
 let count = create_signal(0);
 
@@ -23,6 +26,8 @@ let view = container()
 
     // 3. Declarative styling responds to state
     .child(text(move || format!("Count: {}", count.get())));
+# ;
+# }
 ```
 
 When `count` changes, only the text updates - the container doesn't need to re-render.

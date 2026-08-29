@@ -7,9 +7,13 @@ widget ended up, and where the keyboard should go.
 ## Creating a WidgetRef
 
 ```rust
+# extern crate guido;
+# fn main() {
 use guido::prelude::*;
 
 let module_ref = create_widget_ref();
+# ;
+# }
 ```
 
 This creates a `WidgetRef` with an internal `Signal<Rect>` initialized to `Rect::default()` (all zeros). The signal is updated automatically after each layout pass.
@@ -19,11 +23,17 @@ This creates a `WidgetRef` with an internal `Signal<Rect>` initialized to `Rect:
 Attach the ref to a container using the `.widget_ref()` builder method:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let module_ref = create_widget_ref();
 let module = container()
     .widget_ref(module_ref)
     .padding(8.0)
     .background(Color::rgb(0.2, 0.2, 0.3))
     .child(text("System Info"));
+# ;
+# }
 ```
 
 ## Reading Bounds Reactively
@@ -31,10 +41,16 @@ let module = container()
 Read the bounds via `.rect()`, which returns a `Signal<Rect>`:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let module_ref = create_widget_ref();
 let bounds_text = text(move || {
     let r = module_ref.rect().get();
     format!("x={:.0} y={:.0} w={:.0} h={:.0}", r.x, r.y, r.width, r.height)
 });
+# ;
+# }
 ```
 
 The `Rect` contains surface-relative coordinates:
@@ -45,7 +61,15 @@ The `Rect` contains surface-relative coordinates:
 
 A common use case is positioning a popup centered under a clickable module:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# const BAR_HEIGHT: u32 = 32;
+# const POPUP_WIDTH: u32 = 200;
+# const SCREEN_WIDTH: u32 = 1920;
+# fn popup_content() -> Container { container() }
+# fn main() {
+# let show_popup = create_signal(false);
 let module_ref = create_widget_ref();
 
 // The module in the status bar
@@ -65,6 +89,8 @@ let popup = container()
         (x, BAR_HEIGHT)
     })
     .child(popup_content());
+# ;
+# }
 ```
 
 ## Moving the Keyboard
@@ -73,6 +99,10 @@ Attach the ref to the widget that takes focus — a `text_input`, since a contai
 cannot hold focus — and ask:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let value = create_signal(String::new());
 let field = create_widget_ref();
 
 container()
@@ -83,6 +113,8 @@ container()
             .on_click(move || field.focus())
             .child(text("Edit")),
     )
+# ;
+# }
 ```
 
 `focus()` lands on the next frame, not inside the call. Focus is resolved against
@@ -107,10 +139,16 @@ left parked would fire at whatever took that ref next.
 The rest of the verb:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let field = create_widget_ref();
 field.blur();          // give the keyboard back, if this widget has it
 field.is_focused();    // reactive when read in a tracked scope
 field.widget();        // Some(WidgetId) once laid out; None before, and None
                        // again once the widget leaves or the ref's scope dies
+# ;
+# }
 ```
 
 For a field that should simply be ready when the screen appears, there is no need

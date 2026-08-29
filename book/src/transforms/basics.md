@@ -7,15 +7,25 @@ Learn the fundamental transform operations: translate, rotate, and scale.
 Move a widget by offset values:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .translate((20.0, 10.0))  // Move 20px right, 10px down
+# ;
+# }
 ```
 
 Negative values move in the opposite direction:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .translate((-10.0, 0.0))  // Move 10px left
+# ;
+# }
 ```
 
 ## Rotation
@@ -23,16 +33,26 @@ container()
 Rotate a widget around its center (default):
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .rotate(45.0)  // Rotate 45 degrees clockwise
+# ;
+# }
 ```
 
 Degrees, always, and the number is kept as written. A full turn is `360.0` and
 not `0.0`, two turns are `720.0`, and nothing is normalised behind your back:
 
 ```rust
-container().rotate(360.0)   // one full turn — animates as one
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container().rotate(360.0);   // one full turn — animates as one
 container().rotate(-90.0)   // a quarter turn anticlockwise
+# ;
+# }
 ```
 
 That matters as soon as the angle is animated. See
@@ -45,8 +65,13 @@ That matters as soon as the angle is animated. See
 Scale equally in both dimensions:
 
 ```rust
-container().scale(1.5)   // 150% size
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container().scale(1.5);   // 150% size
 container().scale(0.8)   // 80% size
+# ;
+# }
 ```
 
 ### Non-Uniform Scale
@@ -54,7 +79,12 @@ container().scale(0.8)   // 80% size
 Scale differently on each axis:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container().scale((2.0, 0.5))  // 200% width, 50% height
+# ;
+# }
 ```
 
 ## Combining Them
@@ -64,10 +94,15 @@ order — **translate, then rotate, then scale** — whatever order you write th
 in:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .rotate(30.0)
     .translate((50.0, 0.0))
     .scale(1.2)
+# ;
+# }
 ```
 
 The order is fixed rather than taken from the call site so that two containers
@@ -83,11 +118,16 @@ centre of the container unless you say otherwise — so rotating about a corner 
 Transforms can use signals for dynamic updates:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let rotation = create_signal(0.0f32);
 
 container()
     .rotate(rotation)
     .on_click(move || rotation.update(|r| *r += 45.0))
+# ;
+# }
 ```
 
 When the signal changes, the container repaints. Nothing re-runs layout: all
@@ -96,7 +136,7 @@ neither does anything around it.
 
 ## Complete Example
 
-```rust
+```rust,ignore
 fn transform_demo() -> impl Widget {
     let rotation = create_signal(0.0f32);
     let scale_factor = create_signal(1.0f32);
@@ -147,7 +187,7 @@ fn transform_demo() -> impl Widget {
 
 All transform properties accept static values, signals, or closures. Integers also work (e.g., `.rotate(45)`, `.scale(2)`).
 
-```rust
+```rust,ignore
 impl Container {
     pub fn translate<M>(self, t: impl IntoSignal<Translate, M>) -> Self;
     pub fn rotate<M>(self, degrees: impl IntoSignal<f32, M>) -> Self;
@@ -161,12 +201,17 @@ impl Container {
 A pair builds either one; a bare number builds a uniform `Scale`.
 
 ```rust
-Translate::NONE                  // no displacement
-Translate::new(20.0, 10.0)       // or just (20.0, 10.0)
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+Translate::NONE;                  // no displacement
+Translate::new(20.0, 10.0);       // or just (20.0, 10.0)
 
-Scale::NONE                      // unscaled — 1.0 on both axes
-Scale::uniform(1.5)              // or just 1.5
+Scale::NONE;                      // unscaled — 1.0 on both axes
+Scale::uniform(1.5);              // or just 1.5
 Scale::new(2.0, 0.5)             // or just (2.0, 0.5)
+# ;
+# }
 ```
 
 There is no matrix in the application-facing API. The three components are what

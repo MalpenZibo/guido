@@ -4,7 +4,7 @@ This page explains how input events flow through Guido.
 
 ## Event Flow
 
-```
+```text
 Wayland → Platform → App → Widget Tree
                               │
                               ├─ MouseMove
@@ -17,9 +17,9 @@ Wayland → Platform → App → Widget Tree
 
 ### Mouse Movement
 
-```rust
-Event::MouseMove { x, y }
-Event::MouseEnter
+```text
+Event::MouseMove { x, y };
+Event::MouseEnter;
 Event::MouseLeave
 ```
 
@@ -27,8 +27,8 @@ Tracked for hover states. The platform layer determines which widget the cursor 
 
 ### Mouse Buttons
 
-```rust
-Event::MouseDown { x, y, button }
+```text
+Event::MouseDown { x, y, button };
 Event::MouseUp { x, y, button }
 ```
 
@@ -36,8 +36,8 @@ Used for click detection and pressed states.
 
 ### Scrolling
 
-```rust
-Event::Scroll { x, y, delta_x, delta_y, source }
+```text
+Event::Scroll { x, y, delta_x, delta_y, source };
 Event::ScrollEnd { x, y }
 ```
 
@@ -71,7 +71,7 @@ Events propagate from children to parents (bubble up):
 4. If not handled, bubbles to parent
 5. Continues until handled or reaches root
 
-```rust
+```rust,ignore
 fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
     // Check children first (innermost)
     for &child_id in self.children.iter().rev() {
@@ -100,7 +100,7 @@ fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventRespon
 
 ### Basic Hit Test
 
-```rust
+```rust,ignore
 fn contains(&self, x: f32, y: f32) -> bool {
     x >= self.x && x <= self.x + self.width &&
     y >= self.y && y <= self.y + self.height
@@ -111,17 +111,23 @@ fn contains(&self, x: f32, y: f32) -> bool {
 
 Clicks outside rounded corners don't register:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let radius = 8.0f32;
 // SDF-based hit test
 let dist = sdf_rounded_rect(point, bounds, radius, k);
 dist <= 0.0  // Inside if distance is negative
+# ;
+# }
 ```
 
 ### With Transforms
 
 Inverse transform applied to test point:
 
-```rust
+```rust,ignore
 fn contains_transformed(&self, x: f32, y: f32) -> bool {
     let (local_x, local_y) = self.transform.inverse().transform_point(x, y);
     self.bounds.contains(local_x, local_y)
@@ -133,15 +139,20 @@ fn contains_transformed(&self, x: f32, y: f32) -> bool {
 Containers register callbacks:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .on_click(|| println!("Clicked!"))
     .on_hover(|hovered| println!("Hover: {}", hovered))
     .on_scroll(|dx, dy, source| println!("Scroll"))
+# ;
+# }
 ```
 
 Internally stored as optional closures:
 
-```rust
+```rust,ignore
 pub struct Container {
     on_click: Option<Box<dyn Fn()>>,
     on_hover: Option<Box<dyn Fn(bool)>>,
@@ -158,7 +169,7 @@ The state layer system uses events internally:
 3. **MouseDown** → Set pressed state true, record click point
 4. **MouseUp** → Set pressed state false, trigger ripple contraction
 
-```rust
+```rust,ignore
 fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
     match event {
         Event::MouseEnter => {
@@ -182,7 +193,7 @@ resolving a state layer subscribes to them — see
 
 Widgets return whether they handled the event:
 
-```rust
+```rust,ignore
 pub enum EventResponse {
     Handled,   // Stop propagation
     Ignored,   // Continue to parent
@@ -195,7 +206,7 @@ pub enum EventResponse {
 
 The platform layer receives Wayland protocol events:
 
-```rust
+```rust,ignore
 // From wl_pointer
 fn pointer_motion(x: f32, y: f32) {
     self.cursor_x = x;
@@ -215,7 +226,10 @@ fn pointer_button(button: u32, state: ButtonState) {
 
 Uses calloop for event loop integration:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // Main loop
 loop {
     // 1. Process Wayland events
@@ -228,6 +242,8 @@ loop {
     // 3. Render to screen
     renderer.render(&ctx);
 }
+# ;
+# }
 ```
 
 ## Keyboard Events

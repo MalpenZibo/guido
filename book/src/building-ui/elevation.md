@@ -7,11 +7,16 @@ Guido supports Material Design-style elevation shadows for creating depth and hi
 ## Basic Elevation
 
 ```rust
-container().elevation(2.0)   // Subtle shadow
-container().elevation(4.0)   // Light shadow
-container().elevation(8.0)   // Medium shadow
-container().elevation(12.0)  // Strong shadow
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container().elevation(2.0);   // Subtle shadow
+container().elevation(4.0);   // Light shadow
+container().elevation(8.0);   // Medium shadow
+container().elevation(12.0);  // Strong shadow
 container().elevation(16.0)  // Very strong shadow
+# ;
+# }
 ```
 
 ## How Elevation Works
@@ -26,10 +31,15 @@ Elevation creates a diffuse shadow beneath the container. Higher values create:
 Elevation can change on interaction for tactile feedback:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .elevation(2.0)
     .when_hovered(|s| s.elevation(4.0))     // Lift on hover
     .when_pressed(|s| s.elevation(1.0))   // Press down on click
+# ;
+# }
 ```
 
 This creates a "lifting" effect on hover and a "pressing" effect on click.
@@ -39,10 +49,15 @@ This creates a "lifting" effect on hover and a "pressing" effect on click.
 Smooth elevation transitions:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .elevation(2.0)
     .animate_elevation(Transition::new(200.0, TimingFunction::EaseOut))
     .when_hovered(|s| s.elevation(6.0))
+# ;
+# }
 ```
 
 ## Elevation with Corner Radius
@@ -50,15 +65,20 @@ container()
 Shadows respect corner radius:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .corners(Corners::squircle(12.0))
     
     .elevation(8.0)  // Shadow follows rounded shape
+# ;
+# }
 ```
 
 ## Complete Example
 
-```rust
+```rust,ignore
 fn elevated_card() -> Container {
     container()
         .width(200.0)
@@ -102,10 +122,15 @@ fn elevated_card() -> Container {
 - **Pressed**: Decrease elevation by 1-2 levels (or to minimum)
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .elevation(4.0)
     .when_hovered(|s| s.elevation(8.0))    // +4 on hover
     .when_pressed(|s| s.elevation(2.0))  // -2 on press
+# ;
+# }
 ```
 
 ## Elevation with Light/Dark Themes
@@ -113,8 +138,13 @@ container()
 On dark backgrounds, elevation is subtle but effective. Pair with slight background lightening for better visibility:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .background(Color::rgb(0.12, 0.12, 0.16))
     .elevation(4.0)
     .when_hovered(|s| s.elevation(8.0).lighter(0.03))
+# ;
+# }
 ```

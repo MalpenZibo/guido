@@ -4,7 +4,7 @@ This section covers Guido's internal architecture for developers who want to und
 
 ## System Overview
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                          Application                             │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
@@ -51,10 +51,15 @@ Guido uses signals rather than virtual DOM diffing. Widgets are created once; th
 All configuration uses the builder pattern with method chaining:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .padding(16.0)
     .background(Color::RED)
     .child(text("Hello"))
+# ;
+# }
 ```
 
 ### SDF Rendering

@@ -13,12 +13,17 @@ Changes are defined declaratively, and the framework handles state transitions, 
 ## Basic Usage
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .background(Color::rgb(0.2, 0.2, 0.3))
     .corners(8.0)
     .when_hovered(|s| s.lighter(0.1))      // Style when hovered
     .when_pressed(|s| s.ripple())         // Style when pressed
     .child(text("Click me"))
+# ;
+# }
 ```
 
 ## Available Overrides
@@ -28,44 +33,80 @@ State layers can override these properties:
 ### Background
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# container()
 // Explicit color
 .when_hovered(|s| s.background(Color::rgb(0.4, 0.6, 0.9)))
 
 // Relative to base
 .when_hovered(|s| s.lighter(0.1))   // 10% lighter
 .when_pressed(|s| s.darker(0.1))  // 10% darker
+# ;
+# }
 ```
 
 ### Border
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# container()
 .when_hovered(|s| s.border(2.0, Color::WHITE))   // both halves, always
+# ;
+# }
 ```
 
 ### Transform
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# container()
 .when_pressed(|s| s.scale(0.98))
+# ;
+# }
 ```
 
 ### Corner Radius
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# container()
 .when_hovered(|s| s.corners(12.0))
+# ;
+# }
 ```
 
 ### Elevation
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# container()
 .when_hovered(|s| s.elevation(8.0))
 .when_pressed(|s| s.elevation(2.0))
+# ;
+# }
 ```
 
 ### Ripple
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# container()
 .when_pressed(|s| s.ripple())
 .when_pressed(|s| s.ripple_with_color(Color::rgba(1.0, 0.8, 0.0, 0.4)))
+# ;
+# }
 ```
 
 ## Combining Overrides
@@ -73,6 +114,10 @@ State layers can override these properties:
 Chain multiple overrides in a single state:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# container()
 .when_hovered(|s| s
     .lighter(0.1)
     .border(2.0, Color::WHITE)
@@ -84,6 +129,8 @@ Chain multiple overrides in a single state:
     .darker(0.05)
     .scale(0.98)
 )
+# ;
+# }
 ```
 
 ## With Animations
@@ -91,16 +138,21 @@ Chain multiple overrides in a single state:
 Add transitions for smooth state changes:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .background(Color::rgb(0.3, 0.5, 0.8))
     .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
     .when_hovered(|s| s.lighter(0.15))
     .when_pressed(|s| s.darker(0.1))
+# ;
+# }
 ```
 
 ## Complete Example
 
-```rust
+```rust,ignore
 fn interactive_button(label: &str) -> Container {
     container()
         .padding(16.0)
@@ -132,7 +184,7 @@ fn interactive_button(label: &str) -> Container {
 
 Internally, `StateStyle` holds all possible overrides:
 
-```rust
+```rust,ignore
 pub struct StateStyle {
     pub background: Option<BackgroundOverride>,
     // Both halves or neither: half a border is no border.

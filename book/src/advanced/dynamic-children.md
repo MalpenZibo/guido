@@ -10,12 +10,27 @@ Children come in four forms — two static, two reactive, plus a keyed variant
 for lists:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn build_menu(_entries: Vec<Entry>) -> Container { container() }
+# fn menu_widget() -> Container { container() }
+# fn build_rows(_items: Vec<Item>) -> Vec<Container> { Vec::new() }
+# #[derive(Clone)]
+# struct Entry { id: u32 }
+# #[derive(Clone, PartialEq)]
+# struct Item { id: u32, label: String }
+# fn row(_item: Item) -> Container { container() }
+# fn main() {
+# let entries = create_signal(vec![Entry { id: 1 }]);
+# let items = create_signal(vec![Item { id: 1, label: String::from("one") }]);
 container()
     .child(text("Hello"))                                  // static single
     .child(move || build_menu(entries.get()))              // reactive single
     .children([text("A"), text("B")])                      // static list
     .children(move || build_rows(items.get()))             // reactive list
     .children(keyed(move || items.get(), |i| i.id, row))   // reactive keyed list
+# ;
+# }
 ```
 
 The rule is the one from SolidJS and Leptos: **a value is static, a closure
@@ -29,13 +44,28 @@ change, never because a sibling changed.
 ## Reactive Single Child
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn build_menu(_entries: Vec<Entry>) -> Container { container() }
+# fn menu_widget() -> Container { container() }
+# #[derive(Clone)]
+# struct Entry;
+# fn main() {
+# let menu_entries = create_signal(Vec::<Entry>::new());
+# #[derive(Clone)]
+# struct Window;
+# struct State { active_window: RwSignal<Option<Window>> }
+# fn title_widget(_w: Window) -> Container { container() }
+# let state = State { active_window: create_signal(None) };
 // Content rebuilt when the data changes
-container().child(move || build_menu(menu_entries.get()))
+container().child(move || build_menu(menu_entries.get()));
 
 // Presence: Option shows/hides — None removes the child
 container().child(move || {
     state.active_window.get().map(|w| title_widget(w))
 })
+# ;
+# }
 ```
 
 Because widget properties are themselves lazy closures (a `text(move || ...)`
@@ -52,10 +82,18 @@ instead of the raw signal — memos notify only when the computed value
 actually changes:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# #[derive(Clone, PartialEq)]
+# struct Item { id: u32, label: String }
+# fn main() {
+# let items = create_signal(vec![Item { id: 1, label: String::from("one") }]);
 let count = create_memo(move || items.with(|l| l.len()));
 
 // Rebuilt only when the count changes, not on every list edit
 container().child(move || text(format!("{} items", count.get())))
+# ;
+# }
 ```
 
 ## Reactive Lists
@@ -63,11 +101,20 @@ container().child(move || text(format!("{} items", count.get())))
 The unkeyed closure form replaces **all rows** when it re-runs:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# #[derive(Clone, PartialEq)]
+# struct Item { id: u32, label: String }
+# fn row_widget(_item: &Item) -> Container { container() }
+# fn main() {
+# let items = create_signal(vec![Item { id: 1, label: String::from("one") }]);
 container().children(move || {
     items.with(|list| {
         list.iter().map(|item| row_widget(item)).collect::<Vec<_>>()
     })
 })
+# ;
+# }
 ```
 
 Rows have no identity across runs: inner state (hover, animations, local
@@ -75,11 +122,20 @@ signals) does not survive a re-run. That is fine for simple rows; for rows
 that carry state, use `keyed()`:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn item_widget(_item: Item) -> Container { container() }
+# #[derive(Clone, PartialEq)]
+# struct Item { id: u32, label: String }
+# fn main() {
+# let items = create_signal(vec![Item { id: 1, label: String::from("one") }]);
 container().children(keyed(
     move || items.get(),   // tracked; items: Clone + PartialEq
     |item| item.id,        // stable identity (survives reorders)
     |item| item_widget(item),
 ))
+# ;
+# }
 ```
 
 Per item, identity (`key`) and content (`PartialEq`) are diffed separately:
@@ -93,9 +149,20 @@ Per item, identity (`key`) and content (`PartialEq`) are diffed separately:
 Keys must be unique and stable — never use the index:
 
 ```rust
-keyed(data, |item| item.id, build)          // Good: stable identity
-keyed(data, |item| item.name.clone(), build) // Good: any Hash + Eq key
-keyed(data, |(index, _)| *index, build)      // Bad: reorder loses state
+# extern crate guido;
+# use guido::prelude::*;
+# #[derive(Clone)]
+# struct Row { id: u32, name: String }
+# impl PartialEq for Row { fn eq(&self, other: &Self) -> bool { self.id == other.id } }
+# fn build(_row: Row) -> Container { container() }
+# fn build_at(_row: (usize, Row)) -> Container { container() }
+# fn main() {
+# let data = create_signal(Vec::<Row>::new());
+keyed(move || data.get(), |item| item.id, build);          // Good: stable identity
+keyed(move || data.get(), |item| item.name.clone(), build); // Good: any Hash + Eq key
+keyed(move || data.get().into_iter().enumerate(), |(index, _)| *index, build_at)  // Bad: reorder loses state
+# ;
+# }
 ```
 
 The key is anything `Hash + Eq + Clone`, and rows are indexed by the key itself
@@ -111,7 +178,7 @@ Reactive closures and keyed builders run inside an **owner scope**: signals
 and effects created there are automatically owned and cleaned up when the
 child is removed or rebuilt.
 
-```rust
+```rust,ignore
 fn item_widget(item: Item) -> impl Widget {
     // This signal is OWNED by this row
     let clicks = create_signal(0);
@@ -142,7 +209,7 @@ closure.
 
 ## Complete Example
 
-```rust
+```rust,ignore
 #[derive(Clone, PartialEq)]
 struct Item {
     id: u64,
@@ -203,6 +270,15 @@ fn button(label: &str, on_click: impl Fn() + 'static) -> Container {
 Combine static and dynamic children freely, in any order:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn warning_banner() -> Container { container() }
+# fn item_view(_item: Item) -> Container { container() }
+# #[derive(Clone, PartialEq)]
+# struct Item { id: u32, label: String }
+# fn main() {
+# let items = create_signal(vec![Item { id: 1, label: String::from("one") }]);
+# let warning = create_signal(false);
 container()
     .layout(Flex::column().spacing(8.0))
     // Static header
@@ -213,11 +289,13 @@ container()
     .children(keyed(move || items.get(), |i| i.id, item_view))
     // Static footer
     .child(container().child(text("End of list").color(Color::rgb(0.6, 0.6, 0.7))))
+# ;
+# }
 ```
 
 ## API Reference
 
-```rust
+```rust,ignore
 impl Container {
     // A widget value, or a reactive closure returning a widget / Option<widget>
     pub fn child<M>(self, child: impl IntoChild<M>) -> Self;

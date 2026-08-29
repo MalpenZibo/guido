@@ -5,9 +5,15 @@ Animate transform changes with smooth transitions.
 ## Enabling Animation
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let rotation_signal = create_signal(0.0f32);
 container()
     .rotate(rotation_signal)
     .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
+# ;
+# }
 ```
 
 When `rotation_signal` changes, the transform animates smoothly.
@@ -17,11 +23,17 @@ When `rotation_signal` changes, the transform animates smoothly.
 Standard easing curve transitions:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let rotation = create_signal(0.0f32);
 // Smooth ease-out rotation
 container()
     .rotate(rotation)
     .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
     .on_click(move || rotation.update(|r| *r += 45.0))
+# ;
+# }
 ```
 
 ## Spring-Based Animation
@@ -29,9 +41,15 @@ container()
 Physics simulation for bouncy, natural motion:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let scale_signal = create_signal(1.0f32);
 container()
     .scale(scale_signal)
     .animate_scale(Transition::spring(SpringConfig::BOUNCY))
+# ;
+# }
 ```
 
 Spring presets:
@@ -45,6 +63,9 @@ Spring presets:
 ### Click to Rotate
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let rotation = create_signal(0.0f32);
 
 container()
@@ -57,11 +78,16 @@ container()
     .when_hovered(|s| s.lighter(0.1))
     .when_pressed(|s| s.ripple())
     .on_click(move || rotation.update(|r| *r += 45.0))
+# ;
+# }
 ```
 
 ### Bouncy Scale Toggle
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let scale_factor = create_signal(1.0f32);
 let is_scaled = create_signal(false);
 
@@ -73,19 +99,29 @@ container()
         let target = if is_scaled.get() { 1.3 } else { 1.0 };
         scale_factor.set(target);
     })
+# ;
+# }
 ```
 
 ### Scale on Press (State Layer)
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .animate_scale(Transition::spring(SpringConfig::GENTLE))
     .when_pressed(|s| s.scale(0.98))
+# ;
+# }
 ```
 
 ### Smooth Translation
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let offset_x = create_signal(0.0f32);
 
 container()
@@ -94,6 +130,8 @@ container()
     .on_scroll(move |_, dy, _| {
         offset_x.update(|x| *x += dy * 10.0);
     })
+# ;
+# }
 ```
 
 ## When to Use Each Type
@@ -110,7 +148,7 @@ container()
 
 ## Complete Example
 
-```rust
+```rust,ignore
 fn animated_transforms_demo() -> impl Widget {
     let rotation = create_signal(0.0f32);
     let scale = create_signal(1.0f32);
@@ -156,7 +194,7 @@ fn animated_transforms_demo() -> impl Widget {
 
 ## API Reference
 
-```rust
+```rust,ignore
 impl Container {
     pub fn animate_translate(self, transition: Transition) -> Self;
     pub fn animate_rotate(self, transition: Transition) -> Self;

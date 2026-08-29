@@ -85,6 +85,13 @@ cargo run --example status_bar     # a real surface, on a real compositor
 
 mdbook build book                  # the user documentation
 mdbook serve book                  # ... with live reload
+
+# The book's samples are compiled by rustdoc, which needs the library and a
+# search path holding exactly one copy of it. Unset WAYLAND_DISPLAY: `mdbook
+# test` runs what it compiles, and a sample that starts an application would
+# open a surface on your screen.
+cargo build --all-features --target-dir target/book
+env -u WAYLAND_DISPLAY mdbook test book -L target/book/debug/deps
 ```
 
 The golden images need a software rasterizer, because a golden is only
@@ -116,7 +123,7 @@ every run for months.
 | documented API | doc tests, and `cargo doc` with warnings denied |
 | the user documentation | `mdbook build book` in CI |
 | API names written in *prose* — this file, the skills, `docs/`, the book, the README | `tests/documentation_references.rs` |
-| API names written in the book's *code samples* | **nothing yet.** The book teaches almost entirely through samples, and until they compile a rename is invisible there |
+| API names written in the book's *code samples* | `mdbook test` in CI — rustdoc over two fifths of the book's lines. 32% are `ignore`: samples that describe internals, or that cannot stand alone |
 | the workflow this file, `/implement` and the templates describe | `tests/agent_workflow.rs` |
 | the application above the compositor — a surface configuring, a frame opening, input routing, what a surface asks for in return | `tests/headless_app.rs` — the real loop, with a recorder where the compositor is |
 | Wayland protocol behaviour: what actually goes out on the wire, and what a compositor does with it | **nothing automated.** Run an example and say what you saw in the pull request |

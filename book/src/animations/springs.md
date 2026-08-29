@@ -5,7 +5,12 @@ Spring animations use physics simulation for natural, dynamic motion. Unlike dur
 ## Creating Spring Transitions
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 Transition::spring(SpringConfig::BOUNCY)
+# ;
+# }
 ```
 
 ## Built-in Configurations
@@ -15,7 +20,12 @@ Transition::spring(SpringConfig::BOUNCY)
 Balanced spring - responsive without excessive bounce, settles in ~270ms:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 SpringConfig::DEFAULT
+# ;
+# }
 ```
 
 ### SNAPPY
@@ -23,7 +33,12 @@ SpringConfig::DEFAULT
 Quickest response with subtle overshoot, settles in ~185ms:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 SpringConfig::SNAPPY
+# ;
+# }
 ```
 
 ### GENTLE
@@ -31,7 +46,12 @@ SpringConfig::SNAPPY
 Slower and smooth - minimal overshoot, settles in ~325ms:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 SpringConfig::GENTLE
+# ;
+# }
 ```
 
 ### BOUNCY
@@ -39,7 +59,12 @@ SpringConfig::GENTLE
 Energetic spring - visible bounce, settles in ~410ms:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 SpringConfig::BOUNCY
+# ;
+# }
 ```
 
 ## When to Use Springs
@@ -51,6 +76,9 @@ Springs excel at:
 - **Physical feedback** - Elements that should feel tangible
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // Width expansion with spring
 let expanded = create_signal(false);
 
@@ -58,6 +86,8 @@ container()
     .width(move || if expanded.get() { 600.0 } else { 50.0 })
     .animate_width(Transition::spring(SpringConfig::DEFAULT))
     .on_click(move || expanded.update(|e| *e = !*e))
+# ;
+# }
 ```
 
 ## Spring vs Duration
@@ -79,6 +109,9 @@ container()
 ### Bouncy Scale
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let scale_factor = create_signal(1.0f32);
 let is_scaled = create_signal(false);
 
@@ -90,28 +123,40 @@ container()
         let target = if is_scaled.get() { 1.3 } else { 1.0 };
         scale_factor.set(target);
     })
+# ;
+# }
 ```
 
 ### Smooth Expansion
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let expanded = create_signal(false);
 
 container()
     .width(move || at_least(if expanded.get() { 400.0 } else { 200.0 }))
     .animate_width(Transition::spring(SpringConfig::GENTLE))
     .on_click(move || expanded.update(|e| *e = !*e))
+# ;
+# }
 ```
 
 ### Animated Rotation
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let rotation = create_signal(0.0f32);
 
 container()
     .rotate(rotation)
     .animate_rotate(Transition::spring(SpringConfig::DEFAULT))
     .on_click(move || rotation.update(|r| *r += 90.0))
+# ;
+# }
 ```
 
 ## Combining Spring and Duration
@@ -119,6 +164,9 @@ container()
 Use different transition types for different properties:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     // Spring for physical properties
     .animate_rotate(Transition::spring(SpringConfig::BOUNCY))
@@ -127,11 +175,13 @@ container()
     // Duration for color properties
     .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
     .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))
+# ;
+# }
 ```
 
 ## Complete Example
 
-```rust
+```rust,ignore
 fn spring_button() -> Container {
     let pressed = create_signal(false);
 
@@ -169,7 +219,7 @@ is a shake nobody had to choreograph.
 It has to be two *different* frames, though. A press and its release are two,
 so a button shakes itself:
 
-```rust
+```rust,ignore
 fn nudge(angle: RwSignal<f32>) -> Container {
     container()
         .rotate(move || angle.get())
@@ -196,7 +246,7 @@ the next animation starts from a stop however small the residue was.
 
 ## API Reference
 
-```rust
+```rust,ignore
 /// Spring configuration presets
 pub struct SpringConfig {
     pub stiffness: f32,

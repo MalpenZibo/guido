@@ -6,7 +6,7 @@ Widgets are the building blocks of Guido UIs. Every visual element is a widget, 
 
 All widgets implement the `Widget` trait:
 
-```rust
+```rust,ignore
 pub trait Widget {
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size;
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
@@ -47,7 +47,12 @@ See [Container](container.md) for details.
 Renders text content:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container().child(text("Hello, World!").font_size(16.0).color(Color::WHITE))
+# ;
+# }
 ```
 
 See [Text](../building-ui/text.md) for styling options.
@@ -57,9 +62,14 @@ See [Text](../building-ui/text.md) for styling options.
 Single-line text editing with selection, clipboard, and undo/redo:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let username = create_signal(String::new());
 
 container().child(text_input(username).color(Color::WHITE).on_submit(|text| println!("Submitted: {}", text)))
+# ;
+# }
 ```
 
 See [Text Input](../building-ui/text-input.md) for details.
@@ -69,6 +79,9 @@ See [Text Input](../building-ui/text-input.md) for details.
 Guido UIs are built through composition - nesting widgets inside containers:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .layout(Flex::column().spacing(8.0))
     .children([
@@ -80,10 +93,12 @@ container()
                 text("Item 2"),
             ]),
     ])
+# ;
+# }
 ```
 
 This creates:
-```
+```text
 ┌─────────────────┐
 │ Title           │
 │ ┌─────┬───────┐ │
@@ -97,27 +112,37 @@ This creates:
 Guido provides functions that return configured widgets:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // Creates a Container
-container()
+container();
 
 // Creates a Text widget
 text("content")
+# ;
+# }
 ```
 
 These use the builder pattern for configuration:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .padding(16.0)          // Returns Container
     .background(Color::RED) // Returns Container
     .corners(8.0)     // Returns Container
+# ;
+# }
 ```
 
 ## The impl Widget Pattern
 
 Functions often return `impl Widget` instead of concrete types:
 
-```rust
+```rust,ignore
 fn my_button(label: &str) -> impl Widget {
     container()
         .padding(12.0)
@@ -133,7 +158,7 @@ This allows returning any widget type without exposing implementation details.
 
 During layout, parent widgets pass constraints to children:
 
-```rust
+```rust,ignore
 pub struct Constraints {
     pub min_width: f32,
     pub max_width: f32,
@@ -149,10 +174,15 @@ Children choose a size within these constraints. This enables flexible layouts w
 Control widget sizing with builder methods:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .width(100.0)                          // Fixed width
     .height(50.0)                          // Fixed height
     .width(at_least(50.0).at_most(200.0))  // Bounded instead
+# ;
+# }
 ```
 
 ## Event Flow
@@ -166,9 +196,14 @@ Events flow from the platform through the widget tree:
 5. Widget handles event or ignores it
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .on_click(|| println!("Clicked!"))
     .child(text("Click me"))
+# ;
+# }
 ```
 
 The container receives clicks anywhere within its bounds, including over the text.

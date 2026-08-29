@@ -4,8 +4,15 @@ Duration-based transitions animate properties over a fixed time with an easing c
 
 ## Creating Transitions
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let timing = TimingFunction::EaseOut;
+# let duration_ms = 200u64;
 Transition::new(duration_ms, timing)
+# ;
+# }
 ```
 
 - `duration_ms` - Animation duration in milliseconds
@@ -16,28 +23,43 @@ Transition::new(duration_ms, timing)
 ### Background Animation
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .background(Color::rgb(0.3, 0.5, 0.8))
     .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
     .when_hovered(|s| s.lighter(0.15))
+# ;
+# }
 ```
 
 ### Border Animation
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .border(1.0, Color::rgb(0.3, 0.3, 0.4))
     .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
     .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))
     .when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
+# ;
+# }
 ```
 
 ### Transform Animation
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .animate_scale(Transition::new(300.0, TimingFunction::EaseOut))
     .when_pressed(|s| s.scale(0.98))
+# ;
+# }
 ```
 
 ## Duration Guidelines
@@ -54,6 +76,9 @@ container()
 Transitions work seamlessly with state layers:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .background(Color::rgb(0.2, 0.2, 0.3))
     .elevation(2.0)
@@ -65,11 +90,13 @@ container()
     // State changes trigger animations
     .when_hovered(|s| s.lighter(0.1).elevation(4.0))
     .when_pressed(|s| s.darker(0.05).elevation(1.0))
+# ;
+# }
 ```
 
 ## Complete Example
 
-```rust
+```rust,ignore
 fn animated_card() -> Container {
     container()
         .padding(20.0)
@@ -101,9 +128,9 @@ fn animated_card() -> Container {
 
 ## API Reference
 
-```rust
+```text
 /// Create a duration-based transition
-Transition::new(duration_ms: f32, timing: TimingFunction) -> Transition
+Transition::new(duration_ms: f32, timing: TimingFunction) -> Transition;
 
 /// Create a spring-based transition
 Transition::spring(config: SpringConfig) -> Transition

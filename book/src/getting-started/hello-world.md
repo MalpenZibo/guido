@@ -18,7 +18,8 @@ cargo add guido
 
 Replace `src/main.rs` with:
 
-```rust
+```rust,no_run
+# extern crate guido;
 use guido::prelude::*;
 
 fn main() {
@@ -67,14 +68,21 @@ Let's break down each part:
 ### The Prelude
 
 ```rust
+# extern crate guido;
+# fn main() {
 use guido::prelude::*;
+# ;
+# }
 ```
 
 The prelude imports everything you need: widgets, colors, layout types, and reactive primitives.
 
 ### Surface Configuration
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 App::new().run(|app| {
     let _surface_id = app.add_surface(
         SurfaceConfig::new()
@@ -84,6 +92,8 @@ App::new().run(|app| {
         || { /* widget tree */ },
     );
 });
+# ;
+# }
 ```
 
 The `SurfaceConfig` defines how the window appears:
@@ -98,6 +108,9 @@ Note: `run()` takes a setup closure where you add surfaces. `add_surface()` retu
 The view is built using **containers** - the primary building block in Guido:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .height(fill())
     .layout(
@@ -106,6 +119,8 @@ container()
             .main_alignment(MainAlignment::SpaceBetween)
             .cross_alignment(CrossAlignment::Center),
     )
+# ;
+# }
 ```
 
 This creates a container that:
@@ -119,6 +134,10 @@ This creates a container that:
 Each section of the status bar is a child container:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# container()
 .child(
     container()
         .padding(8.0)
@@ -126,6 +145,8 @@ Each section of the status bar is a child container:
         .corners(4.0)
         .child(text("Guido")),
 )
+# ;
+# }
 ```
 
 The container has:
@@ -137,7 +158,12 @@ The container has:
 ### Text Widgets
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 text("Hello World!")
+# ;
+# }
 ```
 
 The `text()` function creates a text widget. It carries the content and nothing
@@ -145,7 +171,12 @@ else: colour, size, family and weight are declared on an enclosing container and
 inherited from the nearest one that sets them.
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container().child(text("Hello World!").font_size(24.0).color(Color::WHITE))
+# ;
+# }
 ```
 
 With nothing declared above it, text is white at 14 logical pixels.
@@ -154,7 +185,8 @@ With nothing declared above it, text is white at 14 logical pixels.
 
 Let's make it interactive with a click counter. Update your code:
 
-```rust
+```rust,no_run
+# extern crate guido;
 use guido::prelude::*;
 
 fn main() {

@@ -7,8 +7,13 @@ Guido renders crisp, anti-aliased borders using SDF (Signed Distance Field) tech
 ## Basic Border
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .border(2.0, Color::WHITE)  // 2px white border
+# ;
+# }
 ```
 
 A border is always both halves at once — everywhere. A width with no colour and
@@ -17,15 +22,34 @@ nothing for a half-declaration to mean, and no way to write one. Each half takes
 a signal of its own, which covers anything that has to change:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# #[derive(Clone, Copy)]
+# struct Theme { text: Color, text_weak: Color, weak: Color, strong: Color, line: Color, accent: Color, error: Color, danger: Color, surface: Color }
+# impl Default for Theme { fn default() -> Self { let c = Color::WHITE; Self { text: c, text_weak: c, weak: c, strong: c, line: c, accent: c, error: c, danger: c, surface: c } } }
+# fn main() {
+# let failed = create_signal(false);
+# let theme = Theme::default();
 container().border(1.5, move || if failed.get() { theme.danger } else { theme.line })
+# ;
+# }
 ```
 
 A state layer says it the same way, and replaces the whole border:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# #[derive(Clone, Copy)]
+# struct Theme { text: Color, text_weak: Color, weak: Color, strong: Color, line: Color, accent: Color, error: Color, danger: Color, surface: Color }
+# impl Default for Theme { fn default() -> Self { let c = Color::WHITE; Self { text: c, text_weak: c, weak: c, strong: c, line: c, accent: c, error: c, danger: c, surface: c } } }
+# fn main() {
+# let theme = Theme::default();
 container()
     .border(1.5, theme.line)
     .when_focused(|s| s.border(1.5, theme.accent))
+# ;
+# }
 ```
 
 ## Corner Radius
@@ -33,7 +57,12 @@ container()
 ### Uniform Radius
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container().corners(8.0)  // 8px radius on all corners
+# ;
+# }
 ```
 
 ## Corner Curvature (Superellipse)
@@ -45,9 +74,14 @@ Control the shape of corners using CSS K-values. This determines how the corner 
 iOS-style smooth corners. The curve starts further from the corner for a smoother transition.
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .corners(Corners::squircle(12.0))
     
+# ;
+# }
 ```
 
 ### Circle (K=1)
@@ -55,8 +89,13 @@ container()
 Standard circular corners. This is the default.
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .corners(12.0)  // Default is circular
+# ;
+# }
 ```
 
 ### Bevel (K=0)
@@ -64,9 +103,14 @@ container()
 Diagonal cut corners. Creates a chamfered look.
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .corners(Corners::bevel(12.0))
     
+# ;
+# }
 ```
 
 ### Scoop (K=-1)
@@ -74,9 +118,14 @@ container()
 Concave/inward corners. Creates a scooped appearance.
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .corners(Corners::scoop(12.0))
     
+# ;
+# }
 ```
 
 ### Custom Curvature
@@ -84,9 +133,14 @@ container()
 For values between the presets:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .corners(Corners::superellipse(12.0, 1.5))
       // Between circle and squircle
+# ;
+# }
 ```
 
 ## Curvature Reference
@@ -103,12 +157,17 @@ container()
 Borders can animate on state changes:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .border(1.0, Color::rgb(0.3, 0.3, 0.4))
     .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
     .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))
     .when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
     .when_pressed(|s| s.border(3.0, Color::rgb(0.7, 0.7, 0.8)))
+# ;
+# }
 ```
 
 ## Borders with Different Curvatures
@@ -116,10 +175,15 @@ container()
 Borders respect corner curvature:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .border(2.0, Color::rgb(0.5, 0.3, 0.7))
     .corners(Corners::squircle(12.0))
       // Border follows squircle shape
+# ;
+# }
 ```
 
 ## Borders with Gradients
@@ -127,6 +191,9 @@ container()
 Borders work with gradient backgrounds:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .gradient(LinearGradient::horizontal(
         Color::rgb(0.3, 0.1, 0.4),
@@ -134,11 +201,13 @@ container()
     ))
     .corners(8.0)
     .border(2.0, Color::rgba(1.0, 1.0, 1.0, 0.3))  // Semi-transparent white
+# ;
+# }
 ```
 
 ## Complete Example
 
-```rust
+```rust,ignore
 fn card_with_border() -> Container {
     container()
         .padding(16.0)

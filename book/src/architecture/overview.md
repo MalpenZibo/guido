@@ -19,9 +19,14 @@ Single-threaded reactive primitives inspired by SolidJS.
 The runtime uses thread-local storage for dependency tracking. When a signal is read inside a `Memo`, `Effect`, or during widget `paint()`/`layout()`, it registers as a dependency.
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let count = create_signal(0);
 let doubled = create_memo(move || count.get() * 2);
 // Runtime knows doubled depends on count
+# ;
+# }
 ```
 
 ### `widgets/` - UI Components
@@ -50,7 +55,7 @@ Text rendering with:
 
 Pluggable layouts via the `Layout` trait:
 
-```rust
+```rust,ignore
 pub trait Layout {
     fn layout(
         &mut self,
@@ -91,11 +96,11 @@ Built-in: `Flex` for row/column layouts.
 
 2D affine transforms (6 floats, 24 bytes — exactly what the GPU shader consumes):
 
-```rust
-container().translate((x, y))
-container().rotate(deg)
-container().scale(s)
-t1.then(&t2)  // Composition
+```text
+container().translate((x, y));
+container().rotate(deg);
+container().scale(s);
+t1.then(&t2);  // Composition
 t.inverse()   // Inversion
 ```
 
@@ -104,16 +109,21 @@ t.inverse()   // Inversion
 Define rotation/scale pivot:
 
 ```rust
-Pivot::CENTER
-Pivot::TOP_LEFT
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+Pivot::CENTER;
+Pivot::TOP_LEFT;
 Pivot::percent(25.0, 75.0)
+# ;
+# }
 ```
 
 ## Widget Trait
 
 All widgets implement:
 
-```rust
+```rust,ignore
 pub trait Widget {
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size;
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
@@ -127,7 +137,7 @@ Widgets access children through the `Tree` parameter, which provides centralized
 
 Parent passes constraints to children:
 
-```rust
+```rust,ignore
 pub struct Constraints {
     pub min_width: f32,
     pub max_width: f32,

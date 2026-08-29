@@ -7,10 +7,15 @@ Ripples provide Material Design-style touch feedback. They expand from the click
 Add a default ripple to the pressed state:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .background(Color::rgb(0.2, 0.2, 0.3))
     .corners(8.0)
     .when_pressed(|s| s.ripple())
+# ;
+# }
 ```
 
 The default ripple uses a semi-transparent white overlay.
@@ -20,20 +25,31 @@ The default ripple uses a semi-transparent white overlay.
 Customize the ripple color:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# container()
 .when_pressed(|s| s.ripple_with_color(Color::rgba(1.0, 0.8, 0.0, 0.4)))
+# ;
+# }
 ```
 
 Good ripple colors have transparency (alpha 0.2-0.5):
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // Subtle white
-Color::rgba(1.0, 1.0, 1.0, 0.2)
+Color::rgba(1.0, 1.0, 1.0, 0.2);
 
 // Yellow accent
-Color::rgba(1.0, 0.8, 0.0, 0.4)
+Color::rgba(1.0, 0.8, 0.0, 0.4);
 
 // Blue accent
 Color::rgba(0.3, 0.5, 1.0, 0.3)
+# ;
+# }
 ```
 
 ## Ripple with Other Effects
@@ -41,11 +57,17 @@ Color::rgba(0.3, 0.5, 1.0, 0.3)
 Combine ripples with other pressed state changes:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# container()
 .when_pressed(|s| s
     .ripple()
     .darker(0.05)
     .scale(0.98)
 )
+# ;
+# }
 ```
 
 ## How Ripples Work
@@ -82,9 +104,15 @@ The ripple:
 Each press is its own ripple, and they overlap:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let increment = move || {};
 container()
     .when_pressed(|s| s.ripple())
     .on_click(increment)
+# ;
+# }
 ```
 
 Clicking this repeatedly layers one disc over the next, because two clicks are
@@ -110,12 +138,18 @@ invisible.
 Both speeds are clamped to a sane range, so a zero or a negative one degrades
 instead of stalling the frame loop:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# container()
 .when_pressed(|s| s.ripple_config(RippleConfig {
     color: Color::rgba(1.0, 1.0, 1.0, 0.3),
     expand_speed: 1.5,   // faster growth
     fade_speed: 1.0,
 }))
+# ;
+# }
 ```
 
 ## Ripples on Transformed Containers
@@ -123,6 +157,9 @@ instead of stalling the frame loop:
 Ripples work correctly even with transforms:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .padding(16.0)
     .background(Color::rgb(0.4, 0.6, 0.4))
@@ -133,6 +170,8 @@ container()
     .rotate(5.0)
     .when_hovered(|s| s.lighter(0.1))
     .when_pressed(|s| s.ripple())
+# ;
+# }
 ```
 
 Click coordinates are properly transformed to local container space.
@@ -141,10 +180,13 @@ Click coordinates are properly transformed to local container space.
 
 Ripples respect different corner styles:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // Squircle ripple
 container()
-    .corners(Corners::squircle(12.0))
+    .corners(Corners::squircle(12.0));
     
     .when_pressed(|s| s.ripple())
 
@@ -153,11 +195,13 @@ container()
     .corners(Corners::bevel(12.0))
     
     .when_pressed(|s| s.ripple())
+# ;
+# }
 ```
 
 ## Complete Example
 
-```rust
+```rust,ignore
 fn ripple_button(label: &str, color: Color) -> Container {
     container()
         .padding(16.0)
@@ -188,9 +232,19 @@ ripple_button("Action Button", Color::rgb(0.8, 0.3, 0.3))
 ## API Reference
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let a = 1.0f32;
+# let b = 0.5f32;
+# let g = 0.5f32;
+# let r = 0.5f32;
+# container()
 // Default semi-transparent white ripple
 .when_pressed(|s| s.ripple())
 
 // Custom colored ripple
 .when_pressed(|s| s.ripple_with_color(Color::rgba(r, g, b, a)))
+# ;
+# }
 ```

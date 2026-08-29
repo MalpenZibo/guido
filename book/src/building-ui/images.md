@@ -6,13 +6,15 @@ Guido supports displaying both raster images (PNG, JPEG, GIF, WebP) and SVG vect
 
 The `image()` function creates an image widget from a file path:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# fn main() {
 use guido::prelude::*;
 
 // Load a PNG image
 container()
     .width(32.0)
-    .height(32.0)
+    .height(32.0);
     .child(image("./icon.png"))
 
 // Load an SVG (auto-detected by extension)
@@ -20,6 +22,8 @@ container()
     .width(100.0)
     .height(100.0)
     .child(image("./logo.svg"))
+# ;
+# }
 ```
 
 ## Image Sources
@@ -27,20 +31,28 @@ container()
 You can load images from different sources using `ImageSource`:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let svg_string = String::new();
+# let image_bytes: &[u8] = &[];
+# let rgba_bytes: Vec<u8> = Vec::new();
 // From file path (raster)
-ImageSource::Path("./photo.jpg".into())
+ImageSource::Path("./photo.jpg".into());
 
 // From memory (raster)
-ImageSource::Bytes(image_bytes.into())
+ImageSource::Bytes(image_bytes.into());
 
 // From file path (SVG)
-ImageSource::SvgPath("./icon.svg".into())
+ImageSource::SvgPath("./icon.svg".into());
 
 // From memory (SVG)
-ImageSource::SvgBytes(svg_string.as_bytes().into())
+ImageSource::SvgBytes(svg_string.as_bytes().into());
 
 // Raw pre-decoded RGBA8 pixels (width * height * 4 bytes, row-major)
 ImageSource::Rgba { width: 22, height: 22, pixels: rgba_bytes.into() }
+# ;
+# }
 ```
 
 When using a string path with `image()`, the file extension determines the type automatically: `.svg` files use SVG rendering, all others use raster decoding.
@@ -53,14 +65,19 @@ The box comes from the enclosing container, like every other size in guido; the
 image decides only how its pixels land inside it.
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // A 32x32 box
-container().width(32.0).height(32.0).child(image("./icon.png"))
+container().width(32.0).height(32.0).child(image("./icon.png"));
 
 // Width fixed, height from the aspect ratio (the default fit is Contain)
-container().width(200.0).child(image("./banner.png"))
+container().width(200.0).child(image("./banner.png"));
 
 // No box at all - the image reports its intrinsic size
 image("./icon.png")
+# ;
+# }
 ```
 
 ## Content Fit Modes
@@ -80,11 +97,14 @@ the pixels land. `Contain` takes only the largest rect of the image's own
 aspect ratio that fits, so the empty strip is left to the parent's alignment
 rather than painted.
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // Cover a 200x150 box, cropping what does not fit
 container()
     .width(200.0)
-    .height(150.0)
+    .height(150.0);
     .child(image("./photo.jpg").content_fit(ContentFit::Cover))
 
 // A wallpaper: cover the whole surface
@@ -92,13 +112,18 @@ container()
     .width(fill())
     .height(fill())
     .child(image(wallpaper).content_fit(ContentFit::Cover))
+# ;
+# }
 ```
 
 ## Transform Composition
 
 Images inherit transforms from parent containers, just like text:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // Rotated image
 container()
     .rotate(15.0)
@@ -106,7 +131,7 @@ container()
         container()
             .width(32.0)
             .height(32.0)
-            .child(image("./badge.svg"))
+            .child(image("./badge.svg"));
     )
 
 // Scaled image
@@ -116,7 +141,7 @@ container()
         container()
             .width(24.0)
             .height(24.0)
-            .child(image("./icon.png"))
+            .child(image("./icon.png"));
     )
 
 // Combined transforms
@@ -124,6 +149,8 @@ container()
     .rotate(45.0)
     .scale(2.0)
     .child(image("./logo.svg"))
+# ;
+# }
 ```
 
 ## SVG Quality
@@ -141,6 +168,9 @@ This means SVGs stay crisp regardless of how they're scaled or transformed.
 For dynamically generated or embedded SVGs:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let svg_data = r##"
     <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
         <circle cx="50" cy="50" r="40" fill="#4f46e5" />
@@ -151,6 +181,8 @@ container()
     .width(48.0)
     .height(48.0)
     .child(image(ImageSource::SvgBytes(svg_data.as_bytes().into())))
+# ;
+# }
 ```
 
 An `Image` carries no box of its own: the container it sits in is what gives it
@@ -161,13 +193,16 @@ that box.
 
 Image sources can be reactive, allowing dynamic image changes:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let icon_source = create_signal(ImageSource::Path("./play.png".into()));
 
 // The image updates when the signal changes
 container()
     .width(32.0)
-    .height(32.0)
+    .height(32.0);
     .child(image(icon_source))
 
 // Change the image on click
@@ -176,6 +211,8 @@ container()
         icon_source.set(ImageSource::Path("./pause.png".into()));
     })
     .child(image(icon_source))
+# ;
+# }
 ```
 
 ## Supported Formats
@@ -193,7 +230,8 @@ container()
 
 Here's a complete example showing various image features:
 
-```rust
+```rust,no_run
+# extern crate guido;
 use guido::prelude::*;
 
 fn main() {

@@ -9,11 +9,16 @@ This section covers the visual styling options in Guido. Learn how to create pol
 Guido uses a **builder pattern** for styling - each method returns the widget, allowing chained calls:
 
 ```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 container()
     .padding(16.0)
     .background(Color::rgb(0.2, 0.2, 0.3))
     .corners(8.0)
     .border(1.0, Color::WHITE)
+# ;
+# }
 ```
 
 All styling is done in Rust code, not external CSS files. This provides type safety and IDE support.
@@ -28,7 +33,13 @@ All styling is done in Rust code, not external CSS files. This provides type saf
 
 ## Quick Reference
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let end = 1.0f32;
+# let start = 0.0f32;
+# container()
 // Background
 .background(Color::rgb(0.2, 0.2, 0.3))
 .gradient(LinearGradient::horizontal(start, end))
@@ -50,4 +61,6 @@ All styling is done in Rust code, not external CSS files. This provides type saf
 // Size
 .width(100.0)
 .height(50.0)
+# ;
+# }
 ```

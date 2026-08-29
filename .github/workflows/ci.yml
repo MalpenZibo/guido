@@ -69,6 +69,27 @@ jobs:
       # optional feature and does not say so compiles there and nowhere else.
       - name: Build the tests with the default features
         run: cargo check --tests
+      # The book teaches through samples — two fifths of its lines are inside a
+      # ```rust fence — and until this ran, a rename was invisible in every one
+      # of them. It lives here rather than in the Book job because it is rustdoc
+      # and needs the compiled crate, which this job already has.
+      #
+      # WAYLAND_DISPLAY is unset deliberately: `mdbook test` *runs* what it
+      # compiles, and a sample that starts an application would dial a
+      # compositor. Every such sample is `no_run`, and this is the belt to that
+      # pair of braces.
+      - uses: peaceiris/actions-mdbook@v2
+        with:
+          mdbook-version: latest
+      # A dedicated target directory, and not `target/debug/deps`. `mdbook test`
+      # gives rustdoc `-L` and no `--extern`, so `extern crate guido` resolves by
+      # searching that path — and a shared target directory holds one guido
+      # artifact per feature set, which is `E0464: multiple candidates`. This one
+      # is written by a single build and holds exactly one.
+      - name: Build the library for the book
+        run: cargo build --all-features --target-dir target/book
+      - name: Compile the book's samples
+        run: env -u WAYLAND_DISPLAY -u DISPLAY mdbook test book -L target/book/debug/deps
 
   # Keyed `golden` because the goldens are why this job has a rasterizer, and
   # named for what it does because it runs the whole suite.

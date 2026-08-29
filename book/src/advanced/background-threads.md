@@ -8,7 +8,10 @@ Guido signals (`RwSignal<T>` and `Signal<T>`) live on the main thread and are `!
 
 For services that only push data to signals (no commands from UI):
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 use std::time::Duration;
 
 let time = create_signal(String::new());
@@ -23,13 +26,15 @@ create_task(move |ctx| async move {
 });
 
 // The task automatically stops when the component unmounts
+# ;
+# }
 ```
 
 ## Bidirectional Service
 
 For services that also receive commands from the UI, use `tokio::select!` for efficient async multiplexing:
 
-```rust
+```rust,ignore
 enum Cmd {
     Refresh,
     SetInterval(u64),
@@ -69,7 +74,8 @@ container()
 
 ## Complete Example: System Monitor
 
-```rust
+```rust,ignore
+# extern crate guido;
 use guido::prelude::*;
 use std::time::Duration;
 
@@ -122,7 +128,10 @@ fn main() {
 
 You can create multiple independent services:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let weather = create_signal(String::new());
 let news = create_signal(String::new());
 
@@ -144,13 +153,15 @@ create_task(move |ctx| async move {
         tokio::time::sleep(Duration::from_secs(60)).await; // Every minute
     }
 });
+# ;
+# }
 ```
 
 ## Error Handling
 
 Handle errors from background services:
 
-```rust
+```rust,ignore
 enum DataState {
     Loading,
     Success(String),
@@ -182,7 +193,10 @@ text(move || match status.get() {
 
 Simple clock using a service:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let time = create_signal(String::new());
 let time_w = time.writer();
 
@@ -197,6 +211,8 @@ create_task(move |ctx| async move {
 let view = container()
     .padding(20.0)
     .child(container().child(text(move || time.get()).font_size(48.0).color(Color::WHITE)));
+# ;
+# }
 ```
 
 ## Reading UI State From a Task: `watch()`
@@ -206,7 +222,10 @@ a task that needs to follow something the UI decides — is `watch()`, which
 returns a `tokio::sync::watch::Receiver<T>`: `Send`, always holding the current
 value, and awaitable.
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let menu_open = create_memo(move || active_menu.get() == Some(Menu::SystemInfo));
 let mut open_rx = menu_open.watch();
 
@@ -227,6 +246,8 @@ create_task(move |ctx| async move {
         }
     }
 });
+# ;
+# }
 ```
 
 Watching a `Memo` is usually what you want: it only notifies when the derived
@@ -241,7 +262,10 @@ instead of polling for it.
 
 ### Use `tokio::select!` for Responsive Shutdown
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 // Good: select! wakes on either event
 loop {
     tokio::select! {
@@ -260,13 +284,18 @@ while ctx.is_running() {
     // do work
     tokio::time::sleep(Duration::from_millis(50)).await;
 }
+# ;
+# }
 ```
 
 ### Batch Signal Updates
 
 If multiple signals update together, update them in sequence:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let cpu_w = cpu.writer();
 let memory_w = memory.writer();
 let disk_w = disk.writer();
@@ -283,6 +312,8 @@ create_task(move |ctx| async move {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 });
+# ;
+# }
 ```
 
 ### The Service Handle Is `Copy`
@@ -290,7 +321,10 @@ create_task(move |ctx| async move {
 `Service<Cmd>` is a handle into the reactive arena, so it goes into as many
 callbacks as you like without a clone:
 
-```rust
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
 let service = create_service(...);
 
 container()
@@ -304,6 +338,8 @@ container()
             .on_click(move || service.send(Cmd::Action2))
             .child(text("Action 2"))
     )
+# ;
+# }
 ```
 
 To send commands from *inside* another background task, take the `Send` half

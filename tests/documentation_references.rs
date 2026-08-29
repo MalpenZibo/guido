@@ -34,14 +34,15 @@ const NOT_CRATE_SYMBOLS: &[&str] = &[
     // Names the crate does not contain because something else produces them:
     // a macro builds them from the caller's own type or function, an example
     // file is named after them, or they belong to the reader's code rather
-    // than the library's. Compiling the examples is what would check these,
-    // and until the book compiles nothing here can.
+    // than the library's. Compiling the examples is what would check these;
+    // the book's own samples are compiled by `mdbook test` since #294.
     "Button",
     "rotation_signal",
     "mdbook",
     "lavapipe",
     "llvmpipe",
     "VK_ICD_FILENAMES",
+    "WAYLAND_DISPLAY",
     "vulkan-swrast",
     "mesa-vulkan-drivers",
 ];
@@ -263,5 +264,63 @@ fn every_identifier_the_user_documentation_names_still_exists() {
          identifiers checked)",
         stale.len(),
         stale.join("\n")
+    );
+}
+
+/// Every fence in the book says what it holds, in a spelling rustdoc knows.
+///
+/// A fence rustdoc does not recognise is not an error — it is a block rustdoc
+/// declines to test, silently. While making the book compile, a mechanical pass
+/// appended a `;` to 38 fences; ```` ```rust; ```` tested nothing, `mdbook test`
+/// stayed green, and 8% of the book was quietly exempt. One of the blocks
+/// behind those fences taught two methods the crate does not have.
+///
+/// An unlabelled fence is the same trap from the other side: mdbook hands it to
+/// rustdoc as Rust, so a diagram of box-drawing characters becomes a failing
+/// test for reasons that read like a compiler bug.
+#[test]
+fn every_fence_in_the_book_says_what_it_holds() {
+    const ALLOWED: [&str; 6] = ["rust", "rust,ignore", "rust,no_run", "text", "bash", "toml"];
+    // wgsl is a shader, and there is exactly one.
+    const ALSO: [&str; 1] = ["wgsl"];
+
+    let mut pages = Vec::new();
+    read_dir_files(&repo().join("book/src"), "md", &mut pages);
+    assert!(
+        !pages.is_empty(),
+        "no book chapters found: scanning nothing"
+    );
+
+    let mut wrong = Vec::new();
+    let mut checked = 0usize;
+    for doc in pages {
+        let source = std::fs::read_to_string(&doc).expect("unreadable chapter");
+        let mut inside = false;
+        for (number, line) in source.lines().enumerate() {
+            if !line.starts_with("```") {
+                continue;
+            }
+            if inside {
+                inside = false;
+                continue;
+            }
+            inside = true;
+            checked += 1;
+            let info = line[3..].trim();
+            if ALLOWED.contains(&info) || ALSO.contains(&info) {
+                continue;
+            }
+            let name = doc.strip_prefix(repo()).unwrap_or(&doc).display();
+            wrong.push(format!("  {name}:{}: ```{info}", number + 1));
+        }
+    }
+
+    assert!(
+        wrong.is_empty(),
+        "{} fence(s) in the book carry an info string rustdoc does not know, so \
+         `mdbook test` skips them without saying so. An empty one counts: mdbook \
+         gives it to rustdoc as Rust.\n{}\n\n({checked} fences checked)",
+        wrong.len(),
+        wrong.join("\n")
     );
 }
