@@ -591,6 +591,78 @@ fn the_horizontal_handle_ripples_from_where_it_landed_too() {
     }
 }
 
+/// The widening grows inward, from the edge the bar sits against.
+///
+/// Which point the scale turns about is the one thing the paint and the hit
+/// test have to agree on, and they agree by asking the same function — so a
+/// wrong answer moves both together and every press case here still passes.
+/// `cargo mutants` says as much: replacing `scrollbar_scale_pivot` with
+/// `Default::default()`, which is the centre, survived them all.
+///
+/// What it cannot survive is a question about the pixels. A vertical bar sits
+/// against the right edge of its scroller, so that is the edge that must not
+/// move: widening about the centre would push the bar out over the container's
+/// own boundary, half of it into the margin.
+#[test]
+fn the_hover_widens_the_handle_inward_and_leaves_its_outer_edge_alone() {
+    let mut h = H::vertical_inset();
+    let edges = |h: &mut H| {
+        let painted = h.handle_node().local_transform;
+        (
+            painted.transform_point(0.0, V_HANDLE / 2.0).0,
+            painted.transform_point(BAR_WIDTH, V_HANDLE / 2.0).0,
+        )
+    };
+    let (resting_left, resting_right) = edges(&mut h);
+
+    let hovered = Instant::now();
+    h.dispatch(Event::MouseMove {
+        x: INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        y: INSET + TRACK_START + V_HANDLE / 2.0,
+    });
+    for step in 1..=8 {
+        h.frame(hovered + Duration::from_millis(16 * step));
+    }
+    let (left, right) = edges(&mut h);
+
+    assert!(
+        (right - resting_right).abs() < 0.01,
+        "the outer edge moved from {resting_right} to {right}: the bar is widening over the \
+         container's boundary rather than into it"
+    );
+    assert!(
+        left < resting_left - 0.5,
+        "the inner edge is at {left} against {resting_left} at rest: nothing widened"
+    );
+}
+
+/// The pointer leaving the scroller takes the handle's hover with it.
+///
+/// `handle_scrollbar_event`'s `MouseLeave` arm is the only thing that clears
+/// it: a pointer that leaves the whole scroller sends no `MouseMove` on its way
+/// out, so without this the bar stays lit and widened after the pointer has
+/// gone. `cargo mutants` found the arm deletable with nothing objecting.
+#[test]
+fn leaving_the_scroller_takes_the_handles_hover_with_it() {
+    let mut h = H::vertical_inset();
+    let resting = h.handle_fill_alpha();
+
+    h.dispatch(Event::MouseMove {
+        x: INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        y: INSET + TRACK_START + V_HANDLE / 2.0,
+    });
+    assert!(h.handle_fill_alpha() > resting, "the handle never lit up");
+
+    h.dispatch(Event::MouseLeave);
+
+    let after = h.handle_fill_alpha();
+    assert!(
+        (after - resting).abs() < 0.001,
+        "the handle is still filled at {after} against {resting} at rest: the pointer left and \
+         the hover stayed"
+    );
+}
+
 /// A release on the handle finishes the ripple rather than abandoning it —
 /// including on the width the hover added.
 ///
