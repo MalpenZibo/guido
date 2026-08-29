@@ -127,8 +127,8 @@ fn a_bar_reserving_automatically_declares_its_height_when_it_is_created() {
 
     assert_eq!(
         app.exclusive_zones_asked(),
-        [50],
-        "once, at creation, and the frames after it say nothing"
+        [51],
+        "DELIBERATELY BROKEN: proving the golden job runs this file"
     );
 }
 
