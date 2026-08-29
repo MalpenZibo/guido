@@ -530,6 +530,30 @@ fn the_width_a_hover_adds_to_the_handle_answers_a_press_too() {
     );
 }
 
+/// The horizontal handle takes the hover colour too.
+///
+/// The pair to the case above, and between them they are what #260 asked for:
+/// that scrollbar answered neither a hover nor a press on a compositor, and
+/// both halves of it were this — a scroller nowhere near its parent's origin,
+/// and a bar whose mismatch is in y where the vertical one's is in x, which is
+/// why one of them still answered in part and this one not at all.
+#[test]
+fn hovering_the_horizontal_handle_colours_it_too() {
+    let mut h = H::horizontal_inset();
+    let resting = h.handle_fill_alpha();
+
+    h.dispatch(Event::MouseMove {
+        x: INSET + TRACK_START + H_HANDLE / 2.0,
+        y: INSET + H_VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+    });
+
+    let hovered = h.handle_fill_alpha();
+    assert!(
+        hovered > resting,
+        "the handle is filled at {hovered} hovered and {resting} at rest: the enter never landed"
+    );
+}
+
 /// The horizontal handle answers a press off-origin too.
 ///
 /// The forwarding is shared between the axes, but the geometry either side of
