@@ -41,7 +41,7 @@ impl HitContext {
     }
 
     /// The same, for a point that has already had the transform undone.
-    fn rebase(&self, x: f32, y: f32) -> (f32, f32) {
+    pub(super) fn rebase(&self, x: f32, y: f32) -> (f32, f32) {
         (x - self.bounds.x, y - self.bounds.y)
     }
 }

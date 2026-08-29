@@ -10,9 +10,12 @@
 //! Both axes, because both are drawn from the same derivation and either can
 //! lose it on its own.
 
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
 use guido::layout::{Constraints, Flex};
 use guido::prelude::*;
-use guido::renderer::{PaintContext, RenderNode};
+use guido::renderer::{DrawCommand, PaintContext, RenderNode};
 use guido::tree::{Tree, WidgetId};
 
 /// The scrollbar sits 2px in from the edges of the container along its axis,
@@ -21,6 +24,7 @@ use guido::tree::{Tree, WidgetId};
 const VIEWPORT: f32 = 200.0;
 const TRACK_START: f32 = 2.0;
 const TRACK_LENGTH: f32 = 196.0;
+const BAR_WIDTH: f32 = 6.0;
 
 /// A vertical scroller: 200x200 over 648px of content — 20 rows of 24, spaced
 /// 8, padded 8. The handle is `viewport / content * track` long.
@@ -31,6 +35,15 @@ const V_HANDLE: f32 = 60.4938;
 /// spaced 8, padded 8.
 const H_CONTENT: f32 = 888.0;
 const H_HANDLE: f32 = 44.1441;
+
+/// How far `H::vertical_inset` holds the scroller off its parent's origin.
+///
+/// The cases above lay the scroller out at (0, 0), where its own coordinate
+/// space and its parent's are the same one — and the scrollbars are laid out
+/// from the scroller's *local* bounds while the events reaching it are in its
+/// parent's. At the origin those two agree by accident, so an offset is what
+/// makes the difference between them visible.
+const INSET: f32 = 20.0;
 
 /// Where the handle belongs for a given offset: the same proportion
 /// `ScrollState::scrollbar_handle_rect` computes, written out so the test says
@@ -64,6 +77,20 @@ impl H {
             VIEWPORT,
             false,
         )
+    }
+
+    /// The same scroller, moved `INSET` off its parent's origin — the ordinary
+    /// case, and the one where the scroller's own coordinate space is not the
+    /// space the events reaching it are in.
+    ///
+    /// Moved rather than wrapped: the `Tree` holds a widget's origin apart from
+    /// its cached size, so setting it after layout is the whole of what a
+    /// parent would have done to it, without a second widget standing between
+    /// the scroller and every reader below.
+    fn vertical_inset() -> Self {
+        let mut h = Self::vertical();
+        h.tree.set_origin(h.root, INSET, INSET);
+        h
     }
 
     fn horizontal() -> Self {
@@ -115,13 +142,65 @@ impl H {
         node
     }
 
-    /// The painted position of the scrollbar handle, along the axis it travels.
+    /// The same, at a named instant, so that the frame after it can be placed a
+    /// known distance later.
+    fn dispatch_at(&mut self, event: Event, at: Instant) {
+        self.tree.set_event_instant(Some(at));
+        self.dispatch(event);
+        self.tree.set_event_instant(None);
+    }
+
+    /// One animation frame, at `at`.
+    ///
+    /// The loop gives every widget that asked for one its own `Animation` job,
+    /// so a ripple living on the scrollbar handle advances even though nothing
+    /// above it is animating. Advancing the whole subtree is that queue's
+    /// stand-in: no test here can name the handle, which the scroller owns
+    /// privately.
+    fn frame(&mut self, at: Instant) {
+        self.tree.set_frame_instant(Some(at));
+        for id in self.tree.collect_subtree_post_order(self.root) {
+            self.tree
+                .with_widget_mut(id, |w, id, t| w.advance_animations(t, id));
+        }
+        self.tree.set_frame_instant(None);
+    }
+
+    /// The opacity the scrollbar handle is filled with this frame.
+    ///
+    /// The three states the handle declares differ only in the alpha of a white
+    /// fill — resting, hovered, pressed — so that is what says which one it is
+    /// in.
+    fn handle_fill_alpha(&mut self) -> f32 {
+        self.handle_node()
+            .commands
+            .iter()
+            .find_map(|cmd| match &**cmd {
+                DrawCommand::RoundedRect { color, .. } => Some(color.a),
+                _ => None,
+            })
+            .expect("the handle fills itself")
+    }
+
+    /// The ripple this frame draws on the scrollbar handle, in the handle's own
+    /// coordinates, if it draws one.
+    fn handle_ripple(&mut self) -> Option<(f32, f32)> {
+        self.handle_node()
+            .overlay_commands
+            .iter()
+            .find_map(|cmd| match &**cmd {
+                DrawCommand::Circle { center, .. } => Some(*center),
+                _ => None,
+            })
+    }
+
+    /// The scrollbar handle's painted node.
     ///
     /// `paint_scrollbar_containers` draws the track and then the handle, after
     /// the content, so the scroller's children are content, track, handle. The
     /// handle's extent is asserted so that a change to that order fails here
     /// loudly rather than by silently measuring the wrong node.
-    fn handle_pos(&mut self) -> f32 {
+    fn handle_node(&mut self) -> Rc<RenderNode> {
         let horizontal = self.horizontal;
         let expect_extent = if horizontal { H_HANDLE } else { V_HANDLE };
 
@@ -131,7 +210,7 @@ impl H {
             3,
             "expected content, track and handle under the scroller"
         );
-        let handle = &node.children[2];
+        let handle = Rc::clone(&node.children[2]);
         let extent = if horizontal {
             handle.bounds.width
         } else {
@@ -143,8 +222,13 @@ impl H {
             handle.bounds.width,
             handle.bounds.height
         );
+        handle
+    }
 
-        if horizontal {
+    /// The painted position of the scrollbar handle, along the axis it travels.
+    fn handle_pos(&mut self) -> f32 {
+        let handle = self.handle_node();
+        if self.horizontal {
             handle.local_transform.tx()
         } else {
             handle.local_transform.ty()
@@ -298,5 +382,75 @@ fn pressing_the_painted_handle_starts_a_drag_rather_than_jumping_the_track() {
         near(after, 120.0),
         "pressing the painted handle at y={painted_centre} moved the content to {after}: \
          the paint and the hit test disagree about where the handle is"
+    );
+}
+
+/// A press has to reach the whole handle, and the disc it starts has to grow
+/// from where it landed — wherever the scroller itself sits.
+///
+/// The handle is a `Container` of its own and the scroller forwards the press
+/// to it. Forwarding it unchanged hands a point in the scroller's parent space
+/// to a widget laid out in the scroller's own, and the two differ by exactly
+/// the scroller's origin: off the surface origin the handle answers for a strip
+/// beside itself, so part of it — or all of it — takes no press at all, and
+/// where one does land the ripple starts that far from the finger.
+///
+/// Four quadrants, because a shift shows up as a fraction of the handle
+/// answering rather than none of it, which is how #261 was seen by hand.
+#[test]
+fn a_press_anywhere_on_the_handle_ripples_from_where_it_landed() {
+    let handle_x = INSET + VIEWPORT - BAR_WIDTH - TRACK_START;
+    let handle_y = INSET + TRACK_START;
+
+    for (qx, qy) in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)] {
+        let (local_x, local_y) = (BAR_WIDTH * qx, V_HANDLE * qy);
+        let mut h = H::vertical_inset();
+
+        let pressed = Instant::now();
+        h.dispatch_at(
+            Event::MouseDown {
+                x: handle_x + local_x,
+                y: handle_y + local_y,
+                button: MouseButton::Left,
+            },
+            pressed,
+        );
+        h.frame(pressed + Duration::from_millis(16));
+
+        let (cx, cy) = h
+            .handle_ripple()
+            .unwrap_or_else(|| panic!("the press at quadrant ({qx}, {qy}) started no ripple"));
+
+        // The disc settles from the press point onto the handle's centre as it
+        // grows, so one frame's worth of that drift is expected and a whole
+        // scroller origin's worth is the defect.
+        assert!(
+            (cx - local_x).abs() < 2.0 && (cy - local_y).abs() < 2.0,
+            "quadrant ({qx}, {qy}): ripple at ({cx}, {cy}), pressed at ({local_x}, {local_y})"
+        );
+    }
+}
+
+/// The hover colour reaches the handle wherever the scroller sits.
+///
+/// The scroller decides hover itself, against the widened hit area, and then
+/// tells the handle with a synthetic `MouseEnter` at the handle's centre. That
+/// point is in the scroller's space like everything else the scroller
+/// computes, and the handle answers in its own — so the enter has the same
+/// origin to shed as the press does.
+#[test]
+fn hovering_the_handle_colours_it_wherever_the_scroller_sits() {
+    let mut h = H::vertical_inset();
+    let resting = h.handle_fill_alpha();
+
+    h.dispatch(Event::MouseMove {
+        x: INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        y: INSET + TRACK_START + V_HANDLE / 2.0,
+    });
+
+    let hovered = h.handle_fill_alpha();
+    assert!(
+        hovered > resting,
+        "the handle is filled at {hovered} hovered and {resting} at rest: the enter never landed"
     );
 }

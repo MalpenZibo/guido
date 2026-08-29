@@ -1,5 +1,7 @@
 //! Scrollable container functionality.
 
+use std::borrow::Cow;
+
 use crate::animation::{SpringConfig, Transition};
 use crate::jobs::{JobRequest, RequiredJob, request_job};
 use crate::layout::Constraints;
@@ -10,6 +12,7 @@ use crate::widgets::widget::{Event, EventResponse, MouseButton, Rect, ScrollSour
 
 use super::Container;
 use super::animations::AnimationState;
+use super::interaction::HitContext;
 use crate::widgets::state_layer::Stateful;
 
 impl Container {
@@ -532,12 +535,22 @@ impl Container {
         }
     }
 
-    /// Handle scrollbar-related events, returns EventResponse if handled
+    /// Handle scrollbar-related events, returns EventResponse if handled.
+    ///
+    /// Everything below works in the scroller's own space, because that is the
+    /// space the scrollbars live in: their rects are derived from local bounds
+    /// (see `layout_scrollbar_containers`), and the origins the `Tree` holds
+    /// for the track and handle widgets are written from the same derivation.
+    /// The event arrives in the scroller's *parent's* space, like `hit.bounds`,
+    /// so it is rebased once here rather than at each of the places that
+    /// forwards it on — which is how a handle came to answer for a strip beside
+    /// itself, and to ripple that far from the finger, on every scroller not
+    /// sitting at its parent's origin.
     pub(super) fn handle_scrollbar_event(
         &mut self,
         tree: &mut Tree,
         id: WidgetId,
-        bounds: Rect,
+        hit: &HitContext,
         event: &Event,
     ) -> Option<EventResponse> {
         if self.scroll_axis == ScrollAxis::None
@@ -545,6 +558,16 @@ impl Container {
         {
             return None;
         }
+
+        let local: Cow<'_, Event> = match event.coords() {
+            Some((x, y)) => {
+                let (local_x, local_y) = hit.rebase(x, y);
+                Cow::Owned(event.with_coords(local_x, local_y))
+            }
+            None => Cow::Borrowed(event),
+        };
+        let event = local.as_ref();
+        let bounds = Rect::new(0.0, 0.0, hit.bounds.width, hit.bounds.height);
 
         match event {
             Event::MouseDown { x, y, button } if *button == MouseButton::Left => {
@@ -640,9 +663,7 @@ impl Container {
                 if self.scroll().scroll_state.scrollbar_dragging {
                     self.scroll_mut().scroll_state.scrollbar_dragging = false;
                     if let Some(handle_id) = self.scroll().v_scrollbar_handle_id {
-                        tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
-                            widget.event(tree, widget_id, event);
-                        });
+                        forward_to_handle(tree, handle_id, event);
                     }
                     request_job(id, JobRequest::Paint);
                     return Some(EventResponse::Handled);
@@ -650,9 +671,7 @@ impl Container {
                 if self.scroll().scroll_state.h_scrollbar_dragging {
                     self.scroll_mut().scroll_state.h_scrollbar_dragging = false;
                     if let Some(handle_id) = self.scroll().h_scrollbar_handle_id {
-                        tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
-                            widget.event(tree, widget_id, event);
-                        });
+                        forward_to_handle(tree, handle_id, event);
                     }
                     request_job(id, JobRequest::Paint);
                     return Some(EventResponse::Handled);
@@ -675,14 +694,10 @@ impl Container {
 
                 if had_hover {
                     if let Some(handle_id) = v_handle {
-                        tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
-                            widget.event(tree, widget_id, event);
-                        });
+                        forward_to_handle(tree, handle_id, event);
                     }
                     if let Some(handle_id) = h_handle {
-                        tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
-                            widget.event(tree, widget_id, event);
-                        });
+                        forward_to_handle(tree, handle_id, event);
                     }
                 }
                 if had_hover || had_drag {
@@ -738,9 +753,7 @@ impl Container {
                 ScrollbarAxis::Horizontal => sd.h_scrollbar_handle_id,
             };
             if let Some(handle_id) = handle_id {
-                tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
-                    widget.event(tree, widget_id, event);
-                });
+                forward_to_handle(tree, handle_id, event);
             }
 
             request_job(id, JobRequest::Paint);
@@ -874,33 +887,25 @@ impl Container {
             needs_repaint = true;
         }
 
-        // Send synthetic MouseEnter/MouseLeave events to handle container when hover state changes.
-        // We can't forward raw MouseMove events because the Container's bounds check would fail
-        // (coordinates are in parent space, not local to the handle widget).
+        // A synthetic enter and leave rather than the move itself: hover is
+        // decided above against the widened hit area, and the handle deciding
+        // it again against its own narrow rect would disagree with the
+        // scrollbar that just widened for the pointer.
         let handle_id = match axis {
             ScrollbarAxis::Vertical => sd.v_scrollbar_handle_id,
             ScrollbarAxis::Horizontal => sd.h_scrollbar_handle_id,
         };
         if let Some(handle_id) = handle_id {
             if is_hovered && !was_hovered {
-                // Transitioning to hovered state - send coordinates at handle center
-                let center_x = handle_rect.x + handle_rect.width / 2.0;
-                let center_y = handle_rect.y + handle_rect.height / 2.0;
-                tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
-                    widget.event(
-                        tree,
-                        widget_id,
-                        &Event::MouseEnter {
-                            x: center_x,
-                            y: center_y,
-                        },
-                    );
-                });
+                // The centre of the handle: a point it holds whatever part of
+                // the widened area the pointer is actually over.
+                let enter = Event::MouseEnter {
+                    x: handle_rect.x + handle_rect.width / 2.0,
+                    y: handle_rect.y + handle_rect.height / 2.0,
+                };
+                forward_to_handle(tree, handle_id, &enter);
             } else if !is_hovered && was_hovered {
-                // Transitioning away from hovered state
-                tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
-                    widget.event(tree, widget_id, &Event::MouseLeave);
-                });
+                forward_to_handle(tree, handle_id, &Event::MouseLeave);
             }
         }
 
@@ -958,6 +963,17 @@ impl Container {
 
         old_x != sd.scroll_state.offset_x || old_y != sd.scroll_state.offset_y
     }
+}
+
+/// Hand an event to the handle widget.
+///
+/// The handle is a `Container` of its own, hit-testing against the bounds the
+/// `Tree` holds for it, so the event has to be in the scroller's space —
+/// which, inside `handle_scrollbar_event`, it already is.
+fn forward_to_handle(tree: &mut Tree, handle_id: WidgetId, event: &Event) {
+    tree.with_widget_mut(handle_id, |handle, id, tree| {
+        handle.event(tree, id, event);
+    });
 }
 
 /// The handle's interactive rect: its extent along the scroll axis, widened

@@ -1617,7 +1617,7 @@ impl Widget for Container {
             _ => Cow::Borrowed(event),
         };
 
-        if let Some(response) = self.handle_scrollbar_event(tree, id, hit.bounds, &local_event) {
+        if let Some(response) = self.handle_scrollbar_event(tree, id, &hit, &local_event) {
             return response;
         }
 
