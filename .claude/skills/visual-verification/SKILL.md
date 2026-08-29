@@ -44,7 +44,8 @@ corner tangent points. Blessing on anything else is refused by the test.
 On any other adapter they skip themselves, which is why `cargo test` on a
 machine with a GPU does not drown in failures that are not regressions. Set
 `GUIDO_GOLDEN_ANY_ADAPTER=1` to run them anyway and look. CI sets
-`GUIDO_GOLDEN_REQUIRED=1` in the golden job, where a skip is a failure.
+`GUIDO_GOLDEN_REQUIRED=1` in the job that points at lavapipe, where a skip is a
+failure.
 
 ### Reading a failure
 

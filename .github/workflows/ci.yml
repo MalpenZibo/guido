@@ -70,12 +70,22 @@ jobs:
       - name: Build the tests with the default features
         run: cargo check --tests
 
+  # Keyed `golden` because the goldens are why this job has a rasterizer, and
+  # named for what it does because it runs the whole suite.
+  #
+  # This string and the `main` ruleset's required status check are one edit
+  # apart: change either and change both, or every pull request waits on a
+  # check that can no longer appear, which is #288. The ruleset is invisible
+  # from here — `repos/.../branches/main/protection` answers 404 and reads as
+  # "nothing is required"; it is `repos/.../rules/branches/main` that answers.
+  #
+  # The order is not the intuitive one. Adding the new name *beside* the old
+  # blocks just as hard, because a required check that never reports stays
+  # pending for ever: the old name has to come out of the ruleset first, then
+  # the rename merges, then the new name goes in. Removing the coupling
+  # altogether is #290.
   golden:
-    # The name is narrower than what this job does — it runs the whole suite
-    # now, so a failure in `signal_fields` reports under it. Renaming it is a
-    # one-word change here and a change to the repository's ruleset, which
-    # requires this exact string as a status check: #289.
-    name: Golden images
+    name: Everything, on a rasterizer
     runs-on: ubuntu-latest
     env:
       # Without an adapter every test that needs one skips itself, which would
