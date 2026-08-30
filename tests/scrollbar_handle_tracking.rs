@@ -733,3 +733,74 @@ fn releasing_on_the_widened_handle_finishes_the_ripple_rather_than_abandoning_it
         "the disc is still at {leaving} against {held} held: the release never reached the handle"
     );
 }
+
+/// The handle takes the hover colour where it is painted, on the frame a wheel
+/// scroll asks for.
+///
+/// The handle widget hit-tests against the origin the `Tree` holds for it, and
+/// that origin is written where it is read — in `forward_to_handle`, from the
+/// same derivation the paint draws from.
+///
+/// It was written on animation frames instead, and `advance_animations` runs
+/// for a `JobType::Animation` job alone: a wheel scroll asks for a plain
+/// `Paint`, so after one the stored origin was wherever the last layout had
+/// left it, and the pointer met a handle that was no longer there.
+///
+/// Deliberately no animation pass anywhere here: running one would have
+/// repositioned the handle and hidden exactly that.
+#[test]
+fn the_handle_takes_the_hover_colour_where_it_is_painted_after_a_wheel_scroll() {
+    let mut h = H::vertical();
+    let resting = h.handle_fill_alpha();
+
+    h.wheel(120.0);
+
+    let painted = h.handle_pos();
+    h.dispatch(Event::MouseMove {
+        x: VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        y: painted + V_HANDLE / 2.0,
+    });
+
+    let hovered = h.handle_fill_alpha();
+    assert!(
+        hovered > resting,
+        "the handle painted at {painted} is filled at {hovered}, the same as its resting \
+         {resting}: the pointer went to where the handle used to be"
+    );
+}
+
+/// And answers a press there, which is the other half of the same origin.
+///
+/// The press is asserted against the *hover* colour rather than the resting
+/// one, because the pointer has to be on the handle to press it: a press that
+/// registered as nothing more than a hover would satisfy "brighter than rest",
+/// and it is the pressed colour the issue asks for.
+///
+/// The drag begins either way — the scroller decides that from the derived rect
+/// — so it is the feedback this watches, the pressed colour and the ripple.
+#[test]
+fn the_handle_is_pressable_where_it_is_painted_after_a_wheel_scroll() {
+    let mut h = H::vertical();
+    h.wheel(120.0);
+
+    let painted = h.handle_pos();
+    let (x, y) = (
+        VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        painted + V_HANDLE / 2.0,
+    );
+    h.dispatch(Event::MouseMove { x, y });
+    let hovered = h.handle_fill_alpha();
+
+    h.dispatch(Event::MouseDown {
+        x,
+        y,
+        button: MouseButton::Left,
+    });
+
+    let pressed = h.handle_fill_alpha();
+    assert!(
+        pressed > hovered,
+        "the handle painted at {painted} is filled at {pressed} against {hovered} hovered: \
+         the press went to where the handle used to be"
+    );
+}

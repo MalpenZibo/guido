@@ -1419,13 +1419,6 @@ impl Widget for Container {
             }
         }
 
-        // Keep the origin the Tree holds for the handle in step with the offset,
-        // for the events forwarded to the handle widget. What is *drawn* no
-        // longer depends on this pass having run — see `scrollbar_handle_origin`.
-        if self.scroll_axis != ScrollAxis::None {
-            self.update_scrollbar_handle_positions(tree, id);
-        }
-
         // Advance scrollbar scale animations (for hover expansion effect)
         // Must be done here since scroll/hover is paint-only and layout may not run
         if self.advance_scrollbar_scale_animations_internal(id, now) {
