@@ -141,9 +141,16 @@ thing with one.
 
 It now holds as many surfaces as the loop will carry, so a second surface, and
 `spawn_surface` and `close` at runtime, are watched too. So is the order the
-loop tears a popup chain down in — though only the loop's half of it: the
-recorder answers `popup_descendants_bottom_up` from its own map, so the Wayland
-implementation of that same rule still has no sensor (#292).
+loop tears a popup chain down in, and this one is watched all the way now: both
+`Platform` implementations answer `popup_descendants_bottom_up` from one
+`descendants_bottom_up`, so the recorder and the compositor are given the same
+order by the same code. What `src/platform/popups.rs` still keeps to itself is
+six lines saying which surfaces are popups and whose children they are.
+
+The grab-conflict teardown is the exception, and a live one: two chains are
+still concatenated in whatever order the surfaces were stored in, and nothing
+can referee it because the recorder discards the `PopupConfig` that says which
+popups hold a grab (#300).
 
 The session lock, output hotplug and popup grab conflicts are the remainder.
 They need no redesign — the map was the missing part — but they do need

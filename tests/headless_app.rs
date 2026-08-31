@@ -299,6 +299,10 @@ fn a_surface_spawned_at_runtime_reaches_the_compositor_and_the_last_close_ends_t
 /// a live child raises `not_the_topmost_popup` and the compositor kills the
 /// connection. Until now that ordering was a comment in `process_surface_commands`
 /// and an example somebody ran.
+///
+/// Two popups deep rather than one, so that the order is something a list can
+/// get wrong: with a single popup every rule agrees, and this case could not
+/// tell a teardown order from its reverse.
 #[test]
 fn a_popup_is_destroyed_before_the_surface_it_hangs_from() {
     let Some(mut app) = headless() else { return };
@@ -308,15 +312,62 @@ fn a_popup_is_destroyed_before_the_surface_it_hangs_from() {
 
     let popup = spawn_popup(parent, PopupConfig::new(80).height(40), measuring_24);
     app.step();
+    let nested = spawn_popup(popup.id(), PopupConfig::new(60).height(30), measuring_24);
+    app.step();
 
-    assert_eq!(app.surfaces_created(), [parent, popup.id()]);
+    assert_eq!(app.surfaces_created(), [parent, popup.id(), nested.id()]);
 
     surface_handle(parent).close();
     app.step();
 
     assert_eq!(
         app.surfaces_destroyed(),
-        [popup.id(), parent],
+        [nested.id(), popup.id(), parent],
         "the child goes first, or the compositor kills the connection"
+    );
+}
+
+/// A branching popup tree comes down topmost first, and "topmost" is a decided
+/// order rather than whatever a map iterated.
+///
+/// xdg-shell keeps the live popups in a stack and a client must destroy them
+/// from the top down; the one raised last is the one on top. A `SurfaceId` is a
+/// monotonic counter, so descending id *is* that stack, and it gives
+/// child-before-parent for free — a popup cannot be created on a parent that
+/// does not exist yet.
+///
+/// The chain in `a_popup_is_destroyed_before_the_surface_it_hangs_from` has one
+/// child at every level, so every order agrees on it. This one branches, which
+/// is where they stop agreeing: a frontier reversed, a recursion, and a hash
+/// iteration are three different answers, and only one of them is the stack.
+#[test]
+fn a_branching_popup_tree_comes_down_newest_first() {
+    let Some(mut app) = headless() else { return };
+    let parent = app.surface(content_bar(), measuring_24);
+    app.configure(parent, 200, 24, 1.0);
+    app.step();
+
+    let first = spawn_popup(parent, PopupConfig::new(80).height(40), measuring_24);
+    app.step();
+    let nested = spawn_popup(first.id(), PopupConfig::new(60).height(30), measuring_24);
+    app.step();
+    // A sibling of `first`, raised after the whole of `first`'s own chain.
+    let last = spawn_popup(parent, PopupConfig::new(80).height(40), measuring_24);
+    app.step();
+
+    assert_eq!(
+        app.surfaces_created(),
+        [parent, first.id(), nested.id(), last.id()],
+        "the four surfaces exist, in the order they were asked for"
+    );
+
+    surface_handle(parent).close();
+    app.step();
+
+    assert_eq!(
+        app.surfaces_destroyed(),
+        [last.id(), nested.id(), first.id(), parent],
+        "the stack comes down from the top: the newest popup, then the deepest \
+         branch, then its root, then the surface they all hang from"
     );
 }

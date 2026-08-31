@@ -45,6 +45,9 @@ use crate::reactive::global::GlobalSignal;
 use crate::widgets::{Color, Rect, Widget};
 
 /// Unique identifier for each surface in the application.
+///
+/// Ids come from one counter that only goes up, so a larger id was handed out
+/// later. [`raw`](SurfaceId::raw) is how to ask.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SurfaceId(u64);
 
@@ -55,7 +58,10 @@ impl SurfaceId {
         SurfaceId(COUNTER.fetch_add(1, Ordering::Relaxed))
     }
 
-    /// Get the raw ID value (for debugging/logging).
+    /// The counter value behind the id.
+    ///
+    /// Useful for logging, and load-bearing in one place: `descendants_bottom_up`
+    /// sorts popups by it, a larger value meaning a later surface.
     pub fn raw(&self) -> u64 {
         self.0
     }

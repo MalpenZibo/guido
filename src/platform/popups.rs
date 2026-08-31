@@ -180,31 +180,32 @@ impl WaylandState {
         true
     }
 
-    /// Live popup descendants of `root`, deepest first — the order the
-    /// protocol demands for teardown (a popup must be destroyed before its
-    /// parent, or the compositor raises `not_the_topmost_popup`).
+    /// Live popup descendants of `root`, in teardown order.
+    ///
+    /// The rule is [`crate::descendants_bottom_up`]'s; this only says which
+    /// surfaces are popups and whose children they are.
     pub(crate) fn popup_descendants_bottom_up(&self, root: SurfaceId) -> Vec<SurfaceId> {
-        let mut out = Vec::new();
-        let mut frontier = vec![root];
-        while let Some(current) = frontier.pop() {
-            for (id, state) in &self.surfaces {
-                if let SurfaceRole::Popup { parent, .. } = &state.role
-                    && *parent == current
-                {
-                    out.push(*id);
-                    frontier.push(*id);
-                }
-            }
-        }
-        out.reverse(); // deepest first
-        out
+        crate::descendants_bottom_up(
+            root,
+            self.surfaces
+                .iter()
+                .filter_map(|(id, state)| match &state.role {
+                    SurfaceRole::Popup { parent, .. } => Some((*id, *parent)),
+                    _ => None,
+                }),
+        )
     }
 
     /// Grabbing popups that would make a new grab on `new_parent` illegal:
     /// xdg-shell requires a new grab to nest under the current grab holder,
     /// so any live grabbing popup that is not `new_parent` itself (or one
     /// of its ancestors) must be destroyed before the new popup is created.
-    /// Returned deepest-chain-first, ready for ordered teardown.
+    ///
+    /// Each chain comes back in [`crate::descendants_bottom_up`]'s order, but
+    /// the chains are concatenated in whatever order the surfaces were stored
+    /// in — so two independent grab chains interleave arbitrarily. Nothing can
+    /// referee that today: the recorder discards the `PopupConfig` that says
+    /// which popups hold a grab, so this path has no sensor at all. #300.
     pub(crate) fn conflicting_grab_popups(&self, new_parent: SurfaceId) -> Vec<SurfaceId> {
         // Ancestor chain of the new popup (surfaces a nested grab may sit on)
         let mut ancestors = vec![new_parent];

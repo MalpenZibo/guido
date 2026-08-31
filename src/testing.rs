@@ -173,17 +173,15 @@ impl Platform for Recorder {
         self.surfaces.remove(&id);
     }
 
-    /// Deepest first, which is the order the protocol demands and the order the
-    /// loop is supposed to close them in.
+    /// The same rule the Wayland platform answers with — the recorder's job is
+    /// to know who hangs from whom, not to have an opinion about the order.
     fn popup_descendants_bottom_up(&self, root: SurfaceId) -> Vec<SurfaceId> {
-        let mut out = Vec::new();
-        for (&child, surface) in &self.surfaces {
-            if surface.parent == Some(root) {
-                out.extend(self.popup_descendants_bottom_up(child));
-                out.push(child);
-            }
-        }
-        out
+        crate::descendants_bottom_up(
+            root,
+            self.surfaces
+                .iter()
+                .filter_map(|(id, surface)| surface.parent.map(|parent| (*id, parent))),
+        )
     }
 
     fn create_render_target(

@@ -53,10 +53,11 @@ sensor. It needs the `testing` feature and a GPU adapter.
 
 What has none: what goes out on the wire, and what a compositor does with it.
 The recorder proves guido asks for an exclusive zone of 50; it cannot prove niri
-reserves 50. And it is the recorder's own answer to
-`popup_descendants_bottom_up` that the teardown test walks — what is proved is
-that the *loop* asks in that order, not that `src/platform/popups.rs` computes
-it right.
+reserves 50. The teardown order is no longer in that half — both `Platform`
+implementations answer `popup_descendants_bottom_up` from one
+`descendants_bottom_up`, so the order the test walks is the order the
+compositor is given. What `src/platform/popups.rs` still answers alone is which
+surfaces are popups and whose children they are.
 
 Still verified by running an example and looking: **the session lock, output
 hotplug, and grab conflicts between popups**. They type-check against the same
