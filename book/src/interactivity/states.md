@@ -395,10 +395,9 @@ Add transitions for smooth state changes:
 # use guido::prelude::*;
 # fn main() {
 container()
-    .background(Color::rgb(0.3, 0.5, 0.8))
-    .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
-    .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
-    .animate_scale(Transition::spring(SpringConfig::GENTLE))
+    .background(Color::rgb(0.3, 0.5, 0.8).transition(200.0))
+    .border(1.0.transition(150.0), Color::WHITE)
+    .scale(Scale::NONE.transition(Transition::spring(SpringConfig::GENTLE)))
     .when_hovered(|s| s.lighter(0.1).border(2.0, Color::WHITE))
     .when_pressed(|s| s.darker(0.1).scale(0.98))
 # ;
@@ -453,8 +452,7 @@ container()
     .padding(16.0)
     .background(Color::rgb(0.15, 0.15, 0.2))
     .corners(8.0)
-    .elevation(2.0)
-    .animate_elevation(Transition::new(200.0, TimingFunction::EaseOut))
+    .elevation(2.0.transition(200.0))
     .when_hovered(|s| s.elevation(6.0).lighter(0.03))
     .when_pressed(|s| s.elevation(1.0))
     .children([...])

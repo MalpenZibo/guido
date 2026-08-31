@@ -157,7 +157,8 @@ pub fn quit_app() {
 /// re-exported here.
 pub mod prelude {
     pub use crate::animation::{
-        Keyframes, SpringConfig, TimingFunction, Transition, TransitionConfig,
+        Animate, Animated, IntoAnimated, Keyframes, SpringConfig, TimingFunction, Transition,
+        TransitionConfig,
     };
     pub use crate::backdrop::{BackdropBlur, BackdropSources};
     pub use crate::compositor::{CompositorEffects, compositor_effects};

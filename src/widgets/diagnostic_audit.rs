@@ -19,7 +19,7 @@
 
 #![cfg(debug_assertions)]
 
-use crate::animation::{TimingFunction, Transition};
+use crate::animation::{Animate, TimingFunction, Transition};
 use crate::layout::{Constraints, Flex};
 use crate::reactive::create_signal;
 use crate::reactive::diagnostics::report_count;
@@ -127,18 +127,24 @@ fn a_fully_reactive_container_is_quiet() {
 
     let widget = container()
         .layout(Flex::row().spacing(move || n.get()))
-        .padding(move || n.get())
-        .background(move || if flag.get() { Color::RED } else { Color::BLUE })
-        .border(move || n.get() + 1.0, Color::WHITE)
-        .corners(move || crate::widgets::Corners::superellipse(n.get() + 4.0, n.get() + 1.0))
-        .elevation(move || n.get())
-        .width(move || n.get() + 100.0)
-        .height(move || n.get() + 100.0)
+        .padding((move || n.get()).transition(t()))
+        .background((move || if flag.get() { Color::RED } else { Color::BLUE }).transition(t()))
+        .border(
+            (move || n.get() + 1.0).transition(t()),
+            Color::WHITE.transition(t()),
+        )
+        .corners(
+            (move || crate::widgets::Corners::superellipse(n.get() + 4.0, n.get() + 1.0))
+                .transition(t()),
+        )
+        .elevation((move || n.get()).transition(t()))
+        .width((move || n.get() + 100.0).transition(t()))
+        .height((move || n.get() + 100.0).transition(t()))
         .visible(move || !flag.get())
         // All three, not just the one: each reaches its target through its
         // own signal and its own converting derivation, so a tracking
         // regression in `translate` or `scale` would leave this green.
-        .rotate(move || n.get())
+        .rotate((move || n.get()).transition(t()))
         .translate(move || (n.get(), 0.0))
         .scale(move || n.get())
         .gradient(move || {
@@ -155,15 +161,6 @@ fn a_fully_reactive_container_is_quiet() {
                 Overflow::Visible
             }
         })
-        .animate_background(t())
-        .animate_border_width(t())
-        .animate_border_color(t())
-        .animate_corners(t())
-        .animate_elevation(t())
-        .animate_padding(t())
-        .animate_width(t())
-        .animate_height(t())
-        .animate_rotate(t())
         .when_hovered(|s| s.lighter(0.1))
         .when_pressed(|s| s.ripple())
         .when_focused(|s| s.border(2.0, Color::WHITE))

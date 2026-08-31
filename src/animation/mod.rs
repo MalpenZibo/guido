@@ -1,10 +1,13 @@
 mod animatable;
+mod animated;
 mod keyframes;
 mod spring;
 mod timing;
 
 pub(crate) use animatable::carry_velocity;
 pub use animatable::{Animatable, Channels};
+pub(crate) use animated::Motion;
+pub use animated::{Animate, Animated, AnimatedMarker, IntoAnimated, Plain};
 pub use keyframes::Keyframes;
 pub use spring::{SpringConfig, SpringState};
 pub use timing::{CustomCurve, TimingFunction};
@@ -118,5 +121,45 @@ impl From<Transition> for TransitionConfig {
             forward: t,
             reverse: None,
         }
+    }
+}
+
+/// A bare number is a duration in milliseconds, the way
+/// [`Keyframes::new`](Keyframes::new) already takes one:
+/// `.background(theme.surface.transition(200.0))`.
+///
+/// The curve it implies is [`EaseOut`](TimingFunction::EaseOut), and *not*
+/// [`Transition::default`]'s spring — a spring has no duration for the number
+/// to attach to. So the animation vocabulary has two defaults, deliberately:
+/// a transition asked for by name springs, and one asked for by duration eases
+/// out. `EaseOut` is what this codebase and its documentation reach for when
+/// they name a curve at all, by better than two to one.
+impl From<f32> for TransitionConfig {
+    fn from(duration_ms: f32) -> Self {
+        Transition::new(duration_ms, TimingFunction::EaseOut).into()
+    }
+}
+
+/// The same, written without a decimal point — `.transition(200)`, matching
+/// [`Transition::new`], which takes its duration through
+/// [`IntoF32`](crate::layout::IntoF32) for exactly this reason.
+///
+/// Two impls and not `IntoF32`'s four: a blanket one would collide with
+/// [`From<Transition>`], and adding `f64` would make the bare `200.0` above
+/// ambiguous — an unsuffixed float literal has to have exactly one impl to
+/// land on. `f32` and `i32` are what a literal defaults to, which is the whole
+/// of what this shorthand is for; a runtime `f64` says
+/// `Transition::new(ms, ..)`.
+impl From<i32> for TransitionConfig {
+    fn from(duration_ms: i32) -> Self {
+        Transition::new(duration_ms, TimingFunction::EaseOut).into()
+    }
+}
+
+/// A spring named on its own: `.transition(SpringConfig::SNAPPY)`, which is
+/// what `Transition::spring(SpringConfig::SNAPPY)` says at greater length.
+impl From<SpringConfig> for TransitionConfig {
+    fn from(config: SpringConfig) -> Self {
+        Transition::spring(config).into()
     }
 }

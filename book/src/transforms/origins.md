@@ -174,9 +174,8 @@ fn create_rotating_box(origin: Pivot, label: &'static str) -> Container {
                 .height(60.0)
                 .background(Color::rgb(0.3, 0.5, 0.8))
                 .corners(8.0)
-                .rotate(rotation)
+                .rotate(rotation.transition(Transition::new(300.0, TimingFunction::EaseOut)))
                 .pivot(origin)
-                .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
                 .when_hovered(|s| s.lighter(0.1))
                 .on_click(move || rotation.update(|r| *r += 45.0)),
             container().child(text(label).font_size(12.0).color(Color::WHITE)),

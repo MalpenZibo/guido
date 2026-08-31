@@ -95,9 +95,7 @@ const FIELD_BORDER: f32 = 1.5;
 
 ```rust
 container()
-    .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-    .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
-    .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))
+    .border(1.0.transition(150.0), Color::rgb(0.3, 0.3, 0.4).transition(150.0))
     .when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
 ```
 
@@ -220,10 +218,11 @@ is what lets one signal switch the effect on and off rather than forcing the
 caller to rebuild the widget in a Rust branch.
 
 **What is not reactive** is structural: `.layout(..)`, `.scrollable(..)`,
-`.scrollbar(..)`, `.scrollbar_visibility(..)`, `.control()`, and the
-`.animate_*()` declarations. These say
-what kind of thing the container *is*; change one and you are describing a
-different widget, so declare it in the closure that builds the widget instead.
+`.scrollbar(..)`, `.scrollbar_visibility(..)`, `.control()`, and the motion a
+value is declared with — `.transition(..)` and `.timeline(..)`. These say what
+kind of thing the container *is*; change one and you are describing a different
+widget, so declare it in the closure that builds the widget instead. The
+*value* a motion decorates is as reactive as any other.
 
 ## Text Styling
 
@@ -333,8 +332,9 @@ fn styled_card(title: &str, content: &str) -> Container {
         // Size and padding
         .width(300.0)
         .padding(20.0)
-        // Background and corners
-        .background(Color::rgb(0.15, 0.15, 0.2))
+        // Background and corners — the background eases, so the hover below
+        // arrives over 200ms rather than in one frame
+        .background(Color::rgb(0.15, 0.15, 0.2).transition(200.0))
         .corners(Corners::squircle(12.0))
         
         // Border
@@ -343,8 +343,7 @@ fn styled_card(title: &str, content: &str) -> Container {
         .elevation(4.0)
         // Layout
         .layout(Flex::column().spacing(12.0))
-        // State layers
-        .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
+        // State layers — they supply values; the motion is declared above
         .when_hovered(|s| s.lighter(0.05).elevation(6.0))
         // Children
         .children([

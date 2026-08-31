@@ -109,7 +109,7 @@ impl Container {
     /// value its signal actually holds, not the one captured at construction.
     ///
     /// See the module docs for why this cannot wait for the first paint.
-    pub(super) fn seed_animations(&mut self, id: WidgetId, now: std::time::Instant) {
+    pub(super) fn seed_animations(&mut self, id: WidgetId) {
         // Written out one by one: each property animates a different type, so
         // there is no single accessor to loop over.
         let anims = self.anims.as_ref();
@@ -163,34 +163,15 @@ impl Container {
         let Some(ref mut anims) = self.anims else {
             return;
         };
-        if let (Some(anim), Some(target)) = (&mut anims.background, bg_target) {
-            anim.set_immediate(target);
-        }
-        if let (Some(anim), Some(target)) = (&mut anims.corners, cr_target) {
-            anim.set_immediate(target);
-        }
-        if let (Some(anim), Some(target)) = (&mut anims.elevation, el_target) {
-            anim.set_immediate(target);
-        }
-        if let (Some(anim), Some(target)) = (&mut anims.border_color, bc_target) {
-            anim.set_immediate(target);
-        }
-        // An enter transition animates in from the declared value instead of
-        // snapping to the target. Written three times rather than looped:
-        // each component animates a different type.
-        let mut entered = false;
-        if let (Some(anim), Some(target)) = (&mut anims.translate, tr_target) {
-            entered |= seed_or_enter(anim, target, now);
-        }
-        if let (Some(anim), Some(target)) = (&mut anims.rotate, ro_target) {
-            entered |= seed_or_enter(anim, target, now);
-        }
-        if let (Some(anim), Some(target)) = (&mut anims.scale, sc_target) {
-            entered |= seed_or_enter(anim, target, now);
-        }
-        if entered {
-            request_job(id, JobRequest::Animation(RequiredJob::Paint));
-        }
+        // One line per property rather than a loop: each animates a
+        // different type, so there is nothing to iterate over.
+        seed(&mut anims.background, bg_target);
+        seed(&mut anims.corners, cr_target);
+        seed(&mut anims.elevation, el_target);
+        seed(&mut anims.border_color, bc_target);
+        seed(&mut anims.translate, tr_target);
+        seed(&mut anims.rotate, ro_target);
+        seed(&mut anims.scale, sc_target);
     }
 
     /// Every paint: re-read the animated targets under tracking, and ask for an
@@ -209,6 +190,10 @@ impl Container {
             // An animation still in its initial state has no target to drift
             // from — seed_animations has not run for it yet.
             let moved = |initial: bool, same: bool| !initial && !same;
+            // Each property answers twice: has its target drifted, and has its
+            // timeline been asked to play. Both reads are the subscription, so
+            // every one runs whatever the last one answered — which is why
+            // these are `|=` statements and not a `||` chain.
             let mut drift = false;
 
             if let Some(a) = &anims.padding {
@@ -216,65 +201,64 @@ impl Container {
                     a.is_initial(),
                     *a.target() == self.padding.get_or(Padding::default()),
                 );
+                drift |= a.wants_play();
             }
             if let Some(a) = &anims.border_width {
                 drift |= moved(
                     a.is_initial(),
                     *a.target() == self.effective_border_width_target(id),
                 );
+                drift |= a.wants_play();
             }
             if let Some(a) = &anims.background {
                 drift |= moved(
                     a.is_initial(),
                     *a.target() == self.effective_background_target(id),
                 );
+                drift |= a.wants_play();
             }
             if let Some(a) = &anims.corners {
                 drift |= moved(
                     a.is_initial(),
                     *a.target() == self.effective_corners_target(id),
                 );
+                drift |= a.wants_play();
             }
             if let Some(a) = &anims.elevation {
                 drift |= moved(
                     a.is_initial(),
                     *a.target() == self.effective_elevation_target(id),
                 );
+                drift |= a.wants_play();
             }
             if let Some(a) = &anims.border_color {
                 drift |= moved(
                     a.is_initial(),
                     *a.target() == self.effective_border_color_target(id),
                 );
+                drift |= a.wants_play();
             }
             if let Some(a) = &anims.translate {
                 drift |= moved(
                     a.is_initial(),
                     *a.target() == self.effective_translate_target(id),
                 );
+                drift |= a.wants_play();
             }
             if let Some(a) = &anims.rotate {
                 drift |= moved(
                     a.is_initial(),
                     *a.target() == self.effective_rotate_target(id),
                 );
+                drift |= a.wants_play();
             }
             if let Some(a) = &anims.scale {
                 drift |= moved(
                     a.is_initial(),
                     *a.target() == self.effective_scale_target(id),
                 );
+                drift |= a.wants_play();
             }
-            // The timeline's trigger, read here for the same reason as the
-            // targets: reading it is the subscription, so a container that
-            // plays on a signal is woken by it. Asking and committing are the
-            // same comparison in the same place — see `take_play`.
-            // Three statements and not `||`, for the same reason the targets
-            // above are: reading is the subscription, so all three have to be
-            // read whatever the first one answers.
-            drift |= anims.translate.as_ref().is_some_and(|a| a.wants_play());
-            drift |= anims.rotate.as_ref().is_some_and(|a| a.wants_play());
-            drift |= anims.scale.as_ref().is_some_and(|a| a.wants_play());
             drift
         });
 
@@ -284,21 +268,12 @@ impl Container {
     }
 }
 
-/// Start one component at its seeded target, or begin its enter transition.
-/// Returns whether an enter was begun, which is what needs a paint job.
-fn seed_or_enter<T: crate::animation::Animatable>(
-    anim: &mut AnimationState<T>,
-    target: T,
-    now: std::time::Instant,
-) -> bool {
-    match anim.take_enter_from() {
-        Some(enter) => {
-            anim.begin_from(enter, target, now);
-            true
-        }
-        None => {
-            anim.set_immediate(target);
-            false
-        }
+/// Start one animated property at the target just read for it.
+///
+/// Written as a call per property rather than a loop, because each animates a
+/// different type and there is no single accessor to iterate.
+fn seed<T: crate::animation::Animatable>(slot: &mut Option<AnimationState<T>>, target: Option<T>) {
+    if let (Some(anim), Some(target)) = (slot, target) {
+        anim.set_immediate(target);
     }
 }

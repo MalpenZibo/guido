@@ -51,7 +51,7 @@ fn card(label: &'static str, plays: RwSignal<u32>) -> Container {
         )
         // Declared, animated, and quietly stood aside while a sequence runs.
         .when_hovered(|s| s.scale(1.03))
-        .animate_scale(Transition::spring(SpringConfig::SNAPPY))
+        .scale(Scale::NONE.transition(Transition::spring(SpringConfig::SNAPPY)))
         .on_click(move || plays.update(|p| *p += 1))
         .child(text(label).color(Color::WHITE).font_size(16.0))
 }
@@ -65,8 +65,8 @@ fn main() {
         let view = container()
             .padding(24.0)
             .layout(Flex::row().spacing(20.0))
-            .child(card("shake", plays).keyframes_rotate(shake(), plays))
-            .child(card("nod", plays).keyframes_translate(nod(), plays));
+            .child(card("shake", plays).rotate(0.0.timeline(shake(), plays)))
+            .child(card("nod", plays).translate(Translate::NONE.timeline(nod(), plays)));
 
         app.add_surface(
             SurfaceConfig::new()

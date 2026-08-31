@@ -1,18 +1,16 @@
 # Animatable Properties
 
-This page lists all container properties that can be animated.
+Every property on this page takes a motion the same way: `.transition(..)` or
+`.timeline(..)` on the value it is being set to.
 
 ## Background
-
-Animate background color changes:
 
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
 container()
-    .background(Color::rgb(0.2, 0.2, 0.3))
-    .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
+    .background(Color::rgb(0.2, 0.2, 0.3).transition(200.0))
     .when_hovered(|s| s.lighter(0.1))
 # ;
 # }
@@ -22,17 +20,16 @@ Works with:
 - Solid colors
 - State layer overrides (lighter, darker, explicit)
 
-## Border Width
+## Border
 
-Animate border thickness:
+A border is declared as a pair, and each half carries its own timing:
 
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
 container()
-    .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-    .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
+    .border(1.0.transition(150.0), Color::rgb(0.3, 0.3, 0.4))
     // A border is declared as a pair, so the layer restates the colour it is
     // not changing — otherwise the width eases while the colour jumps.
     .when_hovered(|s| s.border(2.0, Color::rgb(0.3, 0.3, 0.4)))
@@ -40,45 +37,51 @@ container()
 # }
 ```
 
-## Border Color
-
-Animate border color:
+The mirror image, where only the colour moves:
 
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
 container()
-    .border(2.0, Color::rgb(0.3, 0.3, 0.4))
-    .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))
-    // The mirror image: the width is restated so only the colour moves.
+    .border(2.0, Color::rgb(0.3, 0.3, 0.4).transition(150.0))
     .when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.7, 1.0)))
+# ;
+# }
+```
+
+Or both at once, on curves of their own — a width that springs while its colour
+eases is what one call could never express:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container()
+    .border(
+        2.0.transition(Transition::spring(SpringConfig::BOUNCY)),
+        Color::rgb(0.3, 0.3, 0.4).transition(300.0),
+    )
 # ;
 # }
 ```
 
 ## Transform
 
-Animate translation, rotation, and scale:
+Translation, rotation and scale each animate on their own curve. There is no
+call that animates the three together, and declaring one says nothing about the
+other two:
 
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
 container()
-    .animate_scale(Transition::new(300.0, TimingFunction::EaseOut))
+    .scale(Scale::NONE.transition(Transition::new(300.0, TimingFunction::EaseOut)))
     .when_pressed(|s| s.scale(0.98))
 # ;
 # }
 ```
-
-Works with:
-- Rotate
-- Scale
-- Translate
-
-Each on its own curve — there is no call that animates the three together, and
-declaring one says nothing about the other two.
 
 Spring animations are especially good for transforms:
 
@@ -87,14 +90,12 @@ Spring animations are especially good for transforms:
 # use guido::prelude::*;
 # fn main() {
 # container()
-.animate_scale(Transition::spring(SpringConfig::BOUNCY))
+.scale(Scale::NONE.transition(Transition::spring(SpringConfig::BOUNCY)))
 # ;
 # }
 ```
 
-## Width
-
-Animate width changes:
+## Width and Height
 
 ```rust
 # extern crate guido;
@@ -103,23 +104,44 @@ Animate width changes:
 let expanded = create_signal(false);
 
 container()
-    .width(move || if expanded.get() { 400.0 } else { 200.0 })
-    .animate_width(Transition::spring(SpringConfig::DEFAULT))
+    .width(
+        (move || if expanded.get() { 400.0 } else { 200.0 })
+            .transition(Transition::spring(SpringConfig::DEFAULT)),
+    )
 # ;
 # }
 ```
 
-## Elevation
+A size follows the content it holds as well as the length declared here, so the
+animation is over the resolved extent. These are the one pair that cannot carry
+a timeline: they declare a `Length`, which is not an animatable value in itself.
 
-Animate shadow depth:
+## Corners and Padding
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let open = create_signal(false);
+container()
+    .corners((move || if open.get() { 30.0 } else { 6.0 }).transition(250.0))
+    .padding(8.0.transition(200.0))
+# ;
+# }
+```
+
+A corner transition that crosses zero curvature changes family in one frame:
+below zero a corner is concave and a different formula draws it. Within a family
+it is continuous.
+
+## Elevation
 
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
 container()
-    .elevation(2.0)
-    .animate_elevation(Transition::new(200.0, TimingFunction::EaseOut))
+    .elevation(2.0.transition(200.0))
     .when_hovered(|s| s.elevation(6.0))
 # ;
 # }
@@ -154,23 +176,17 @@ say the same thing.
 
 ## Multiple Animations
 
-Combine animations on a single container:
+Each property carries its own, where it is declared:
 
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
 container()
-    .background(Color::rgb(0.2, 0.2, 0.3))
-    .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-    .elevation(2.0)
-
-    // Animate all
-    .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
-    .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
-    .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))
-    .animate_elevation(Transition::new(250.0, TimingFunction::EaseOut))
-    .animate_scale(Transition::spring(SpringConfig::GENTLE))
+    .background(Color::rgb(0.2, 0.2, 0.3).transition(200.0))
+    .border(1.0.transition(150.0), Color::rgb(0.3, 0.3, 0.4).transition(150.0))
+    .elevation(2.0.transition(250.0))
+    .scale(Scale::NONE.transition(Transition::spring(SpringConfig::GENTLE)))
 
     .when_hovered(|s| s
         .lighter(0.1)
@@ -187,16 +203,18 @@ container()
 
 ## Complete Reference
 
-| Property | Method | Recommended Transition |
-|----------|--------|----------------------|
-| Background | `animate_background()` | Duration, EaseOut |
-| Border Width | `animate_border_width()` | Duration, EaseOut |
-| Border Color | `animate_border_color()` | Duration, EaseOut |
-| Translate | `animate_translate()` | Spring or Duration |
-| Rotate | `animate_rotate()` | Spring or Duration |
-| Scale | `animate_scale()` | Spring or Duration |
-| Width | `animate_width()` | Spring |
-| Elevation | `animate_elevation()` | Duration, EaseOut |
+| Property | Declared on | Recommended Transition |
+|----------|-------------|----------------------|
+| Background | `background(..)` | Duration, EaseOut |
+| Border width | `border(width, _)` | Duration, EaseOut |
+| Border colour | `border(_, colour)` | Duration, EaseOut |
+| Corners | `corners(..)` | Duration |
+| Padding | `padding(..)` | Duration |
+| Translate | `translate(..)` | Spring or Duration |
+| Rotate | `rotate(..)` | Spring or Duration |
+| Scale | `scale(..)` | Spring or Duration |
+| Width, height | `width(..)`, `height(..)` | Spring |
+| Elevation | `elevation(..)` | Duration, EaseOut |
 
 ## Best Practices
 
@@ -208,8 +226,7 @@ container()
 # fn main() {
 # container()
 // Same duration for border width and color
-.animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
-.animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))
+.border(1.0.transition(150.0), Color::WHITE.transition(150.0))
 # ;
 # }
 ```
@@ -222,11 +239,11 @@ container()
 # fn main() {
 # container()
 // Spring for size/position changes
-.animate_width(Transition::spring(SpringConfig::DEFAULT))
-.animate_scale(Transition::spring(SpringConfig::BOUNCY))
+.width(200.0.transition(Transition::spring(SpringConfig::DEFAULT)))
+.scale(Scale::NONE.transition(Transition::spring(SpringConfig::BOUNCY)))
 
 // Duration for visual changes
-.animate_background(Transition::new(200.0, TimingFunction::EaseOut))
+.background(Color::WHITE.transition(200.0))
 # ;
 # }
 ```
@@ -240,14 +257,11 @@ container()
 ## API Reference
 
 ```rust,ignore
-impl Container {
-    pub fn animate_background(self, transition: Transition) -> Self;
-    pub fn animate_border_width(self, transition: Transition) -> Self;
-    pub fn animate_border_color(self, transition: Transition) -> Self;
-    pub fn animate_translate(self, transition: Transition) -> Self;
-    pub fn animate_rotate(self, transition: Transition) -> Self;
-    pub fn animate_scale(self, transition: Transition) -> Self;
-    pub fn animate_width(self, transition: Transition) -> Self;
-    pub fn animate_elevation(self, transition: Transition) -> Self;
+/// On everything a property setter accepts — a value, a signal, a closure.
+pub trait Animate<T, M>: IntoSignal<T, M> + Sized {
+    fn transition(self, transition: impl Into<TransitionConfig>) -> Animated<T>;
+    fn timeline<M2>(self, keyframes: Keyframes<T>, plays: impl IntoSignal<u32, M2>) -> Animated<T>
+    where
+        T: Animatable;
 }
 ```

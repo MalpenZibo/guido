@@ -495,12 +495,21 @@ See [STATE_LAYER.md](./STATE_LAYER.md) for full documentation.
 
 Duration-based and spring-based animations:
 
+The timing rides with the value, so a property cannot be animated without
+being set and the two cannot disagree about which property they mean:
+
 ```rust
+// A bare number is milliseconds
+.background(theme.surface.transition(200.0))
+
 // Duration with easing
-.animate_background(Transition::new(200.0, TimingFunction::EaseOut))
+.background(theme.surface.transition(Transition::new(200.0, TimingFunction::EaseOut)))
 
 // Spring physics
-.animate_scale(Transition::spring(SpringConfig::BOUNCY))
+.scale(open.transition(Transition::spring(SpringConfig::BOUNCY)))
+
+// A sequence played on a trigger, resting on the declared value between plays
+.rotate(0.0.timeline(shake, rejections))
 ```
 
 ## Performance Considerations

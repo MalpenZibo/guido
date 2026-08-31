@@ -195,13 +195,11 @@ Deep nesting with many transforms is fine for typical UIs. The transform matrice
 # fn main() {
 // Group animation
 container()
-    .rotate(group_rotation)
-    .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
+    .rotate(group_rotation.transition(Transition::new(300.0, TimingFunction::EaseOut)))
     .children([
         // Individual children can have their own animations
         container()
-            .scale(child_scale)
-            .animate_scale(Transition::spring(SpringConfig::BOUNCY))
+            .scale(child_scale.transition(Transition::spring(SpringConfig::BOUNCY)))
             .child(...),
     ])
 # ;

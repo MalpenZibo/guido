@@ -90,9 +90,10 @@ fn turn_around() -> Container {
         "Hover the strip, then leave it while the dot is still travelling. It \
          should reverse without pausing at the point you left it.",
         track(
-            dot(INK)
-                .translate(move || (if out.get() { 760.0 } else { 0.0 }, 0.0))
-                .animate_translate(Transition::spring(SpringConfig::GENTLE)),
+            dot(INK).translate(
+                (move || (if out.get() { 760.0 } else { 0.0 }, 0.0))
+                    .transition(Transition::spring(SpringConfig::GENTLE)),
+            ),
         )
         .control()
         .on_hover(move |hovered| out.set(hovered)),
@@ -109,9 +110,10 @@ fn past_the_overshoot() -> Container {
          the dot has shot past the end and is settling back — it should carry \
          on the way it was going, not lurch forward first.",
         track(
-            dot(HOT)
-                .translate(move || (if out.get() { 700.0 } else { 0.0 }, 0.0))
-                .animate_translate(Transition::spring(SpringConfig::BOUNCY)),
+            dot(HOT).translate(
+                (move || (if out.get() { 700.0 } else { 0.0 }, 0.0))
+                    .transition(Transition::spring(SpringConfig::BOUNCY)),
+            ),
         )
         .control()
         .on_hover(move |hovered| out.set(hovered)),
@@ -129,10 +131,14 @@ fn own_channel() -> Container {
          because the two are separate properties with a spring each.",
         track(
             dot(INK)
-                .translate(move || Translate::new(if out.get() { 700.0 } else { 0.0 }, 0.0))
-                .animate_translate(Transition::spring(SpringConfig::GENTLE))
-                .scale(move || if big.get() { 1.6 } else { 1.0 })
-                .animate_scale(Transition::spring(SpringConfig::GENTLE)),
+                .translate(
+                    (move || Translate::new(if out.get() { 700.0 } else { 0.0 }, 0.0))
+                        .transition(Transition::spring(SpringConfig::GENTLE)),
+                )
+                .scale(
+                    (move || if big.get() { 1.6 } else { 1.0 })
+                        .transition(Transition::spring(SpringConfig::GENTLE)),
+                ),
         )
         .control()
         .on_hover(move |hovered| out.set(hovered))
@@ -149,9 +155,10 @@ fn from_rest() -> Container {
         "Hover and wait for the dot to come to a complete stop at the far end, \
          then leave. It should ease away, not start with a kick.",
         track(
-            dot(INK)
-                .translate(move || (if out.get() { 760.0 } else { 0.0 }, 0.0))
-                .animate_translate(Transition::spring(SpringConfig::SNAPPY)),
+            dot(INK).translate(
+                (move || (if out.get() { 760.0 } else { 0.0 }, 0.0))
+                    .transition(Transition::spring(SpringConfig::SNAPPY)),
+            ),
         )
         .control()
         .on_hover(move |hovered| out.set(hovered)),
@@ -172,8 +179,7 @@ fn shake() -> Container {
             .background(HOT)
             .corners(8.0)
             .padding(10.0)
-            .rotate(move || angle.get())
-            .animate_rotate(Transition::spring(SpringConfig::BOUNCY))
+            .rotate((move || angle.get()).transition(Transition::spring(SpringConfig::BOUNCY)))
             .on_mouse_down(move |_, _| angle.set(6.0))
             .on_mouse_up(move |_, _| angle.set(0.0))
             .child(

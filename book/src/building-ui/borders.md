@@ -154,16 +154,18 @@ container()
 
 ## Animated Borders
 
-Borders can animate on state changes:
+A border is declared as a pair and each half carries its own timing, so the
+width and the colour can move on curves of their own:
 
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
 container()
-    .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-    .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
-    .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))
+    .border(
+        1.0.transition(150.0),
+        Color::rgb(0.3, 0.3, 0.4).transition(150.0),
+    )
     .when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
     .when_pressed(|s| s.border(3.0, Color::rgb(0.7, 0.7, 0.8)))
 # ;
@@ -214,9 +216,10 @@ fn card_with_border() -> Container {
         .background(Color::rgb(0.12, 0.12, 0.16))
         .corners(Corners::squircle(12.0))
         
-        .border(1.0, Color::rgb(0.2, 0.2, 0.25))
-        .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
-        .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))
+        .border(
+            1.0.transition(150.0),
+            Color::rgb(0.2, 0.2, 0.25).transition(150.0),
+        )
         .when_hovered(|s| s
             .border(2.0, Color::rgb(0.4, 0.6, 0.9))
             .lighter(0.03)

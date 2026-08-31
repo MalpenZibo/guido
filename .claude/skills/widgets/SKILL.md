@@ -15,7 +15,16 @@ Reactive: `background`, `gradient`, `backdrop_blur`, `overflow`, `corners`,
 `padding`, `visible`, `elevation`.
 
 Structural: `layout`, `child`, `children`, `scrollable`, `scrollbar`,
-`scrollbar_visibility`, `control`, `animate_*`, the event handlers.
+`scrollbar_visibility`, `control`, the event handlers — and the *motion* a
+value is declared with, which is the next section.
+
+An animatable property takes `impl IntoAnimated<T, M>` instead, which is
+everything `IntoSignal` accepts plus a value carrying its own motion:
+`background`, `corners`, `padding`, `border` (each half), `elevation`, `width`,
+`height`, `translate`, `rotate`, `scale`. The others keep plain `IntoSignal`,
+and so does every setter on `StateStyle` — a state layer supplies a value for a
+property somebody else declared, so a timing there is a compile error rather
+than a value quietly ignored.
 
 A new property lands on one side of that line. If it changes what a pixel looks
 like, it is reactive.
@@ -127,3 +136,40 @@ container().corners(Corners::superellipse(12.0, 1.5))
    changes pixels — see the `visual-verification` skill.
 4. Update `docs/` where the pattern is described, and the book chapter that
    teaches it — see the `book` skill.
+
+## The motion rides with the value
+
+`.transition(..)` and `.timeline(..)` hang off `IntoSignal` itself, so they are
+available on everything a property setter already accepts, and each returns an
+`Animated<T>`:
+
+```rust
+container()
+    .background(theme.surface.transition(200.0))
+    .width((move || if open.get() { 520.0 } else { 120.0 }).transition(SpringConfig::SNAPPY))
+    .rotate(0.0.timeline(shake(), rejections))
+```
+
+A bare number is milliseconds, eased out — the one place the animation
+vocabulary has two defaults, because `Transition::default()` is a spring and
+has no duration for a number to attach to.
+
+Three rules the shape depends on, in order of how easily they are broken:
+
+- **A declaration is the whole property.** Restating one replaces the value
+  *and* the motion, so `.background(x.transition(200.0)).background(y)` leaves
+  no animation behind. There are never two declarations for one property to
+  reconcile.
+- **`Animated<T>` is not an `IntoSignal`.** That is what makes a timing on a
+  state-layer override a compile error. Adding an `IntoSignal` impl for it
+  would put the rule back into prose.
+- **`timeline` needs `T: Animatable`.** That is what keeps a timeline off a
+  property whose declared type is not the type it animates — `width` and
+  `height` declare a `Length` and move an `f32` — so `width(w.timeline(..))`
+  does not compile rather than compiling and playing nothing.
+
+A new animatable property adds its name to four lists that nothing keeps in
+step: `ContainerAnims`'s fields, `start_timeline!` and the `advance_anim!`
+block in `advance_animations`, and the drift block in
+`resync_animation_targets`. Miss one and the property silently never plays or
+never wakes.
