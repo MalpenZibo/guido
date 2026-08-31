@@ -592,12 +592,12 @@ mod tests {
     }
     use crate::animation::TimingFunction;
 
-    /// Step a running sequence to `ms` into its run.
     /// A trigger nothing ever writes to: these tests call `play` directly.
     fn never_played() -> Signal<u32> {
         crate::reactive::create_stored(0)
     }
 
+    /// Step a running sequence to `ms` into its run.
     fn play_at<T: Animatable>(anim: &mut AnimationState<T>, ms: u64) {
         let started = anim
             .timeline

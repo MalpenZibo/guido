@@ -1678,6 +1678,12 @@ impl Widget for Container {
 /// Declare an animatable property: keep the value's signal, and install
 /// whatever motion arrived with it.
 ///
+/// A declaration is the whole property, so the last one wins outright — value
+/// *and* motion. Restating a property with a plain value takes its animation
+/// away, which is what makes `adopt_declarations_of` unnecessary: there are
+/// never two declarations for one property to reconcile, only the one written
+/// last.
+///
 /// The animation is seeded from the signal's value at builder time. For every
 /// property but padding and border width that seed is replaced at the first
 /// layout by `seed_animations`, which reads the signal rather than this
@@ -1689,16 +1695,34 @@ fn declare<T: Animatable, M>(
     slot: impl FnOnce(&mut ContainerAnims) -> &mut Option<AnimationState<T>>,
 ) -> Signal<T> {
     let (signal, motion) = value.into_animated().into_parts();
-    if let Some(motion) = motion {
+    let installed = motion.map(|motion| {
         let seed = signal.get_untracked();
-        *slot(anims.get_or_insert_with(Box::default)) = Some(match *motion {
+        match *motion {
             Motion::Ease(config) => AnimationState::new(seed, config),
             Motion::Play { keyframes, plays } => {
                 AnimationState::new(seed, instant_transition()).with_timeline(keyframes, plays)
             }
-        });
-    }
+        }
+    });
+    write_slot(anims, slot, installed);
     signal
+}
+
+/// Put an animation, or the absence of one, where the property keeps it.
+///
+/// Nothing into a container that has no animation box is the overwhelmingly
+/// common case — every plain `background(RED)` — so it must not be the thing
+/// that allocates one.
+fn write_slot<T: Animatable>(
+    anims: &mut Option<Box<ContainerAnims>>,
+    slot: impl FnOnce(&mut ContainerAnims) -> &mut Option<AnimationState<T>>,
+    installed: Option<AnimationState<T>>,
+) {
+    match anims.as_deref_mut() {
+        Some(anims) => *slot(anims) = installed,
+        None if installed.is_some() => *slot(anims.get_or_insert_with(Box::default)) = installed,
+        None => {}
+    }
 }
 
 /// The same for a width or a height, the one pair whose declared type is not
@@ -1714,11 +1738,11 @@ fn declare_size<M>(
     slot: impl FnOnce(&mut ContainerAnims) -> &mut Option<AnimationState<f32>>,
 ) -> Signal<Length> {
     let (signal, ease) = value.into_animated().into_eased();
-    if let Some(config) = ease {
+    let installed = ease.map(|config| {
         let length = signal.get_untracked();
-        let seed = length.exact.or(length.min).unwrap_or(0.0);
-        *slot(anims.get_or_insert_with(Box::default)) = Some(AnimationState::new(seed, config));
-    }
+        AnimationState::new(length.exact.or(length.min).unwrap_or(0.0), config)
+    });
+    write_slot(anims, slot, installed);
     signal
 }
 

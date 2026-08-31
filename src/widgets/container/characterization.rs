@@ -1381,6 +1381,62 @@ fn a_transition_on_the_value_is_what_makes_that_value_ease() {
     );
 }
 
+/// A declaration is the whole property, so restating one with a plain value
+/// takes its motion away with it.
+///
+/// This is what makes `adopt_declarations_of` unnecessary — there are never
+/// two declarations for one property to reconcile, only the one written last.
+/// Left unwritten, the animation would outlive the declaration that asked for
+/// it, which is the shape of the defect this whole change removes: a timing
+/// still governing a property nobody declared it on.
+#[test]
+fn restating_a_property_plainly_takes_its_motion_with_it() {
+    let color = create_signal(Color::BLACK);
+    let mut h = H::new(
+        container()
+            .layout(Flex::row())
+            .child(
+                box_of(20.0, 20.0)
+                    .background(color.transition(Transition::new(200.0, TimingFunction::Linear))),
+            )
+            // The same declaration, restated without one.
+            .child(
+                box_of(20.0, 20.0)
+                    .background(color.transition(Transition::new(200.0, TimingFunction::Linear)))
+                    .background(color),
+            ),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+
+    color.set(Color::WHITE);
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 200.0, 200.0);
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(100),
+        200.0,
+        200.0,
+    );
+
+    let painted: Vec<Color> = h
+        .paint()
+        .children
+        .iter()
+        .map(|child| rects(child).first().expect("a background").1)
+        .collect();
+    assert!(
+        painted[0].r < 0.95,
+        "the transition it was declared with still holds, got {:?}",
+        painted[0]
+    );
+    assert_eq!(
+        painted[1],
+        Color::WHITE,
+        "and the one restated plainly has no transition left to hold it back"
+    );
+}
+
 /// And on a padding, which is the one newly-timeline-capable property on the
 /// *layout* path rather than the paint path — so it is where "a sequence
 /// speaks for its property while it plays" has to hold against

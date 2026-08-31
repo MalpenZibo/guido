@@ -13,10 +13,12 @@
 
 use std::path::{Path, PathBuf};
 
-/// `AnimationState::animate_to` retargets a running animation from inside the
-/// advance loop. It is not a builder and names no property: the value it is
-/// given is the one it moves to.
-const NOT_A_DECLARATION: &[&str] = &["animate_to"];
+/// The one `pub fn animate_*` that is not a declaration, named with the file it
+/// lives in so that the exemption does not quietly cover a second one
+/// somewhere else: `AnimationState::animate_to` retargets a running animation
+/// from inside the advance loop, and the value it is given is the one it moves
+/// to.
+const NOT_A_DECLARATION: &[(&str, &str)] = &[("widgets/container/animations.rs", "animate_to")];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -52,12 +54,18 @@ fn no_public_builder_declares_a_timing_beside_its_property() {
             let Some(name) = public_fn_name(line) else {
                 continue;
             };
-            if (name.starts_with("animate_") || name.starts_with("keyframes_"))
-                && !NOT_A_DECLARATION.contains(&name)
-            {
-                let shown = file.strip_prefix(&src).unwrap_or(file).display();
-                found.push(format!("{shown}: {name}"));
+            if !name.starts_with("animate_") && !name.starts_with("keyframes_") {
+                continue;
             }
+            let shown = file
+                .strip_prefix(&src)
+                .unwrap_or(file)
+                .display()
+                .to_string();
+            if NOT_A_DECLARATION.contains(&(shown.as_str(), name)) {
+                continue;
+            }
+            found.push(format!("{shown}: {name}"));
         }
     }
     found.sort();
