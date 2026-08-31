@@ -63,8 +63,15 @@ impl<T> Animated<T> {
     pub(crate) fn into_eased(self) -> (Signal<T>, Option<TransitionConfig>) {
         let ease = match self.motion.map(|motion| *motion) {
             Some(Motion::Ease(config)) => Some(config),
-            // Unreachable for every `T` that reaches here; see above.
-            Some(Motion::Play { .. }) | None => None,
+            None => None,
+            // Loud rather than `None`, because the thing that makes this
+            // unreachable is a bound three types away: silently dropping a
+            // timeline here is the defect this whole shape exists to remove,
+            // and the day somebody relaxes that bound is the day this has to
+            // say so.
+            Some(Motion::Play { .. }) => {
+                unreachable!("a timeline needs T: Animatable, which this T is not")
+            }
         };
         (self.signal, ease)
     }

@@ -1381,6 +1381,52 @@ fn a_transition_on_the_value_is_what_makes_that_value_ease() {
     );
 }
 
+/// And on a padding, which is the one newly-timeline-capable property on the
+/// *layout* path rather than the paint path — so it is where "a sequence
+/// speaks for its property while it plays" has to hold against
+/// `update_size_targets` recomputing the declared value at every layout.
+///
+/// Asserted on the box the padding sizes rather than on a colour: a padding is
+/// not drawn, it is the space a container takes around what it holds.
+#[test]
+fn a_timeline_plays_on_a_padding() {
+    let plays = create_signal(0u32);
+    let rest = Padding::all(0.0);
+    let mut h = H::new(
+        container()
+            .padding(
+                rest.timeline(
+                    Keyframes::new(200.0)
+                        .at(0.0, rest)
+                        .at(0.5, Padding::all(20.0))
+                        .at(1.0, rest),
+                    plays,
+                ),
+            )
+            .child(box_of(20.0, 20.0)),
+    );
+    let at_rest = h.fit(200.0, 200.0);
+    h.paint();
+    assert_eq!(at_rest.width, 20.0, "nothing plays until the trigger moves");
+
+    plays.set(1);
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 200.0, 200.0);
+    h.tree
+        .set_frame_instant(Some(t0 + std::time::Duration::from_millis(100)));
+    pump(&mut h);
+    let played = h.fit(200.0, 200.0);
+    h.tree.set_frame_instant(None);
+
+    assert!(
+        played.width > at_rest.width + 5.0,
+        "the sequence has to reach the layout the padding sizes, got {} \
+         against {} at rest",
+        played.width,
+        at_rest.width
+    );
+}
+
 /// A timeline is no longer transform-only: `Keyframes<T>` was always generic
 /// and only the setters were not, so a background can flash where before it
 /// could only be eased to.
