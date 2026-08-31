@@ -59,6 +59,19 @@ impl FocusPath {
         self.chain.contains(&id)
     }
 
+    /// The root the focused widget sits under, if anything is focused.
+    ///
+    /// The chain was walked to a widget with no parent when the focus moved,
+    /// and the only widgets without one are surface roots — so the last link
+    /// already names the surface the keyboard is on.
+    /// [`Tree::surface_root_of`](crate::tree::Tree::surface_root_of) answers
+    /// the same question by walking live parents; this one is here because the
+    /// answer is already in hand, and the walk is what the path exists to have
+    /// done once.
+    pub(crate) fn root(&self) -> Option<WidgetId> {
+        self.chain.last().copied()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.chain.is_empty()
     }
@@ -182,9 +195,31 @@ pub fn release_focus(id: WidgetId) {
 /// A stored path has no such self-correction — the ancestors would keep
 /// answering "the focus is inside me" for a widget that no longer exists.
 pub(crate) fn release_focus_if_within(id: WidgetId) {
-    let path = focus().get_untracked();
-    if path.contains(id) {
+    if focus_within(id) {
         focus().set(FocusPath::default());
+    }
+}
+
+/// Whether the focus is on `id` or inside it, without subscribing.
+///
+/// The tracked spelling of the same question is `focus_path().contains(id)`,
+/// and it is the right one for anything resolving a style: it wants to be woken
+/// when the answer changes. This one is for the event path, which reads to
+/// decide and is already running because something happened — subscribing there
+/// would open a subscription from inside an event handler.
+pub(crate) fn focus_within(id: WidgetId) -> bool {
+    focus().with_untracked(|path| path.contains(id))
+}
+
+/// Drop the focus if it belongs to the surface rooted at `root`.
+///
+/// Focus is one signal for the whole application while one `Tree` holds every
+/// surface's root, so "nothing here claimed that press" speaks only for the
+/// surface the press landed on. The focus path ends at the root of whichever
+/// surface owns the keyboard, and that is the whole test.
+pub(crate) fn release_focus_under(root: WidgetId) {
+    if focus().with_untracked(|path| path.root() == Some(root)) {
+        clear_focus();
     }
 }
 

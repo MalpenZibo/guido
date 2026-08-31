@@ -415,3 +415,40 @@ fn a_new_grab_tears_down_the_chain_it_cannot_nest_under() {
         "and the new grab did open"
     );
 }
+
+/// A bar with one field on it and nothing else: the shape #206 was filed
+/// against, less the second field it did not need.
+fn bar_with_a_field(field: WidgetRef, value: RwSignal<String>) -> Container {
+    container()
+        .width(fill())
+        .height(fill())
+        .child(text_input(value).widget_ref(field))
+}
+
+/// A press nobody claimed takes the keyboard with it. The decision is the
+/// dispatcher's, and the unit tests beside it pin the decision; this is the
+/// loop actually taking it — a surface configured, a frame open, and a press
+/// routed the way the compositor's would be.
+#[test]
+fn a_click_outside_the_field_takes_the_keyboard_off_it() {
+    let Some(mut app) = headless() else { return };
+    let field = create_widget_ref();
+    let value = create_signal(String::new());
+    let surface = app.surface(fixed_bar(), move || bar_with_a_field(field, value));
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    app.click(surface, 100.0, 8.0);
+    app.step();
+    assert!(
+        field.is_focused(),
+        "a click into the field takes the keyboard"
+    );
+
+    app.click(surface, 100.0, 40.0);
+    app.step();
+    assert!(
+        !field.is_focused(),
+        "and a click on the bar behind it gives it back"
+    );
+}

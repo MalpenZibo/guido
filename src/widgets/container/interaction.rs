@@ -18,6 +18,7 @@
 use std::time::Instant;
 
 use super::*;
+use crate::reactive::focus::focus_within;
 
 /// The geometry an event is resolved against: where the container ended up,
 /// what shape it is, and the transform standing between the two.
@@ -209,16 +210,23 @@ impl Container {
         local: &Event,
         now: Instant,
     ) -> EventResponse {
+        // One question for a press, asked once and answered up to twice: by the
+        // arm that handles it, and by the focus claim at the end of the
+        // function. `contains` runs the corner SDF, and a press inside the
+        // shape is exactly the case that would run it twice.
+        let pressed_inside =
+            matches!(local, Event::MouseDown { .. }) && hit.contains(local.coords());
+
         match local {
             // Hover was tracked before the children ran. Returning Ignored
             // here is deliberate: a hover change must not stop sibling
             // containers from tracking their own.
             Event::MouseEnter { .. } | Event::MouseMove { .. } => {}
 
-            Event::MouseDown { at, button } if *button != MouseButton::Left => {
-                if hit.contains(*at)
-                    && let Some(ref ix) = self.interaction
-                {
+            // Claiming a press here is not only about the callback: the focus
+            // claim at the end of the function reads the same `pressed_inside`.
+            Event::MouseDown { button, .. } if *button != MouseButton::Left => {
+                if pressed_inside && let Some(ref ix) = self.interaction {
                     let callback = match button {
                         MouseButton::Right => ix.on_right_click.as_ref(),
                         MouseButton::Middle => ix.on_middle_click.as_ref(),
@@ -232,7 +240,7 @@ impl Container {
             }
 
             Event::MouseDown { at, button } => {
-                if hit.contains(*at)
+                if pressed_inside
                     && let Some(at) = at
                     && *button == MouseButton::Left
                     && let Some(ref mut ix) = self.interaction
@@ -411,6 +419,24 @@ impl Container {
             Event::KeyUp { .. } | Event::FocusIn | Event::FocusOut => {}
         }
 
+        // A press inside the box that lights up for this focus is a press on
+        // the field the box draws — its padding, its border, the gap beside
+        // the caret. The dispatcher takes the focus off a press nobody
+        // claimed, so claiming it here is how the box says the keyboard is
+        // still its own.
+        if pressed_inside && self.holds_the_focus_it_draws(id) {
+            return EventResponse::Handled;
+        }
+
         EventResponse::Ignored
+    }
+
+    /// Whether this container declares `when_focused` and the focus is
+    /// currently inside it.
+    fn holds_the_focus_it_draws(&self, id: WidgetId) -> bool {
+        self.interaction
+            .as_ref()
+            .is_some_and(|ix| ix.declares(|w| matches!(w, StateWhen::Focused)))
+            && focus_within(id)
     }
 }

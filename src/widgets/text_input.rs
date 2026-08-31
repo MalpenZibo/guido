@@ -1361,6 +1361,16 @@ impl Widget for TextInput {
                 request_job(id, JobRequest::Paint);
                 return EventResponse::Handled;
             }
+            // A press inside a field that holds the keyboard is the field's,
+            // whatever the button pressed. The dispatcher takes the focus off a
+            // press nobody claimed, and the arms above claim only left and
+            // middle — so a right press on the caret used to blur the very
+            // field it landed on.
+            Event::MouseDown { at: Some(at), .. }
+                if has_focus(id) && bounds.contains(at.x, at.y) =>
+            {
+                return EventResponse::Handled;
+            }
             Event::KeyDown { key, modifiers } if has_focus(id) => {
                 let response = self.handle_key(key, modifiers.ctrl, modifiers.shift, edit);
                 if response == EventResponse::Handled {

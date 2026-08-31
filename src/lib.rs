@@ -633,9 +633,18 @@ fn dispatch_events(
         // and each has its own moment.
         tree.set_event_instant(Some(*at));
         reactive::diagnostics::snapshot_zone(|| {
-            tree.with_widget_mut(root, |widget, id, tree| {
-                widget.event(tree, id, event);
-            });
+            let response =
+                tree.with_widget_mut(root, |widget, id, tree| widget.event(tree, id, event));
+
+            // A press nobody claimed is a press on nothing, and the keyboard
+            // goes with it. This is the only place that can tell: a widget is
+            // handed the presses that miss it, but never learns whether one of
+            // them turned out to be somebody else's.
+            if matches!(event, widgets::Event::MouseDown { .. })
+                && response != Some(widgets::EventResponse::Handled)
+            {
+                reactive::focus::release_focus_under(root);
+            }
         });
     }
     tree.set_event_instant(None);
@@ -2770,6 +2779,257 @@ mod dispatch_declares_the_moment {
             after > happened,
             "the moment has to be cleared when the dispatch ends, got {after:?} \
              for an event from an hour ago"
+        );
+    }
+}
+
+/// Where a press stops being the focused field's business.
+///
+/// Focus used to leave only with the whole surface: `Event::FocusOut` comes
+/// from `wl_keyboard.leave` and nothing else, so a press that landed anywhere
+/// else in the same surface left the caret blinking in a field the user had
+/// walked away from. The dispatcher is the only place that can see the
+/// difference, because it is the only place that learns whether *anything*
+/// claimed the press.
+#[cfg(test)]
+mod a_press_nothing_claimed_takes_the_focus_with_it {
+    use super::*;
+    use crate::layout::{Constraints, Flex};
+    use crate::reactive::create_signal;
+    use crate::reactive::owner::create_root_owner;
+    use crate::widget_ref::{WidgetRef, create_widget_ref, update_widget_refs};
+    use crate::widgets::state_layer::Stateful;
+    use crate::widgets::widget::{Event, MouseButton};
+    use crate::widgets::{Widget, container, text_input};
+
+    /// A surface: one root, laid out at 200x100, driven through the dispatcher
+    /// the loop drives. Two of them share a `Tree`, because the application
+    /// holds every surface's root in one.
+    struct Screen {
+        tree: Tree,
+        root: WidgetId,
+    }
+
+    impl Screen {
+        fn new(widget: impl Widget + 'static) -> Self {
+            let mut tree = Tree::new();
+            let root = Self::lay_out(&mut tree, widget);
+            Self { tree, root }
+        }
+
+        /// A second surface beside the first, in the tree they share.
+        fn add(&mut self, widget: impl Widget + 'static) -> WidgetId {
+            Self::lay_out(&mut self.tree, widget)
+        }
+
+        fn lay_out(tree: &mut Tree, widget: impl Widget + 'static) -> WidgetId {
+            let root = tree.register(Box::new(widget));
+            tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+            tree.set_origin(root, 0.0, 0.0);
+            tree.with_widget_mut(root, |w, id, t| {
+                w.layout(t, id, Constraints::new(0.0, 0.0, 200.0, 100.0))
+            });
+            // The handles resolve once their widgets have been laid out, which
+            // is the order the loop runs them in.
+            update_widget_refs(tree);
+            root
+        }
+
+        /// A left press on this screen's own surface.
+        fn press(&mut self, x: f32, y: f32) {
+            let root = self.root;
+            self.press_button(root, x, y, MouseButton::Left);
+        }
+
+        fn press_button(&mut self, root: WidgetId, x: f32, y: f32, button: MouseButton) {
+            let events = [(std::time::Instant::now(), Event::mouse_down(x, y, button))];
+            dispatch_events(&events, root, &mut self.tree, &Default::default());
+        }
+    }
+
+    /// A handle for the field, in a fresh owner: the ref and the signal behind
+    /// it are made before the tree that will come to hold them.
+    fn a_field() -> WidgetRef {
+        create_root_owner();
+        create_widget_ref()
+    }
+
+    /// A field on a surface with nothing else on it, with the keyboard already
+    /// in it. The press that put it there is the same in four of the tests
+    /// below, and it is the half of the rule that already worked.
+    fn a_focused_field() -> (Screen, WidgetRef) {
+        let field = a_field();
+        let mut screen = Screen::new(
+            container()
+                .width(200.0)
+                .height(100.0)
+                .child(text_input(create_signal(String::new())).widget_ref(field)),
+        );
+
+        screen.press(100.0, 8.0);
+        assert!(field.is_focused(), "a press inside the field focuses it");
+        (screen, field)
+    }
+
+    /// The press that lands on the background is claimed by nobody, and there
+    /// is nothing left for the focus to belong to.
+    #[test]
+    fn a_press_on_the_background_takes_the_keyboard_off_the_field() {
+        let (mut screen, field) = a_focused_field();
+
+        screen.press(100.0, 80.0);
+        assert!(
+            !field.is_focused(),
+            "a press on the background is a press on nothing, and takes the \
+             keyboard with it"
+        );
+    }
+
+    /// The press the field itself claimed. Nothing to do with the rule, and
+    /// everything to do with it not firing on the gesture that grants focus.
+    #[test]
+    fn a_press_inside_the_field_keeps_it() {
+        let (mut screen, field) = a_focused_field();
+
+        screen.press(40.0, 8.0);
+        assert!(
+            field.is_focused(),
+            "a second press inside the field moves the caret, it does not \
+             surrender the keyboard"
+        );
+    }
+
+    /// `TextInput` takes the focus on a middle press as readily as a left one
+    /// (the primary-selection paste), so a middle press has to be able to take
+    /// it away.
+    #[test]
+    fn a_middle_press_on_the_background_takes_the_keyboard_too() {
+        let (mut screen, field) = a_focused_field();
+        let root = screen.root;
+
+        screen.press_button(root, 100.0, 80.0, MouseButton::Middle);
+        assert!(
+            !field.is_focused(),
+            "the button that can take the focus can give it back"
+        );
+    }
+
+    /// The arms that grant focus are guarded on left and middle, so a right
+    /// press inside the field falls past all of them. Read as "nobody claimed
+    /// it" that is a press on nothing — and it landed on the caret.
+    #[test]
+    fn a_right_press_inside_the_field_keeps_it() {
+        let (mut screen, field) = a_focused_field();
+        let root = screen.root;
+
+        screen.press_button(root, 100.0, 8.0, MouseButton::Right);
+        assert!(
+            field.is_focused(),
+            "a press inside the field is the field's, whatever the button"
+        );
+    }
+
+    /// The other half of the box's claim: it holds presses because it holds
+    /// *this* focus, not because it once declared it would light up for one.
+    /// Without the second half every `when_focused` box in an application
+    /// swallows every press inside it.
+    #[test]
+    fn a_when_focused_box_holding_no_focus_claims_nothing() {
+        let field = a_field();
+        let mut screen = Screen::new(
+            container()
+                .width(200.0)
+                .height(100.0)
+                .layout(Flex::column())
+                .child(
+                    container()
+                        .padding(8.0)
+                        .when_focused(|s| s.border(2.0, crate::widgets::Color::WHITE))
+                        .child(text_input(create_signal(String::new())).widget_ref(field)),
+                )
+                .child(
+                    container()
+                        .width(200.0)
+                        .height(40.0)
+                        .when_focused(|s| s.border(2.0, crate::widgets::Color::WHITE)),
+                ),
+        );
+
+        screen.press(100.0, 12.0);
+        assert!(field.is_focused(), "the press reached the field");
+
+        screen.press(100.0, 50.0);
+        assert!(
+            !field.is_focused(),
+            "a box that declares when_focused while the focus is elsewhere has              claimed nothing, and the press is still a press on nothing"
+        );
+    }
+
+    /// Focus is one signal for the whole application while one `Tree` holds
+    /// every surface's root. A press on the bar must not blur the field on the
+    /// popup: the focus path ends at the root that owns it, and that is not
+    /// this one.
+    #[test]
+    fn a_press_in_one_surface_does_not_blur_a_field_focused_in_another() {
+        let (mut screen, field) = a_focused_field();
+        let other = screen.add(container().width(200.0).height(100.0));
+
+        screen.press_button(other, 100.0, 80.0, MouseButton::Left);
+        assert!(
+            field.is_focused(),
+            "a press on another surface says nothing about where this one's \
+             keyboard is"
+        );
+    }
+
+    /// The box drawn around a field is the field, as far as the user is
+    /// concerned: it lights up when the focus is inside it, and clicking its
+    /// padding is clicking the thing it draws.
+    #[test]
+    fn a_press_on_the_padding_of_a_when_focused_box_keeps_it() {
+        let field = a_field();
+        let mut screen = Screen::new(
+            container().width(200.0).height(100.0).child(
+                container()
+                    .padding(8.0)
+                    .when_focused(|s| s.border(2.0, crate::widgets::Color::WHITE))
+                    .child(text_input(create_signal(String::new())).widget_ref(field)),
+            ),
+        );
+
+        screen.press(100.0, 12.0);
+        assert!(field.is_focused(), "the press reached the field");
+
+        screen.press(4.0, 4.0);
+        assert!(
+            field.is_focused(),
+            "the padding of the box that lights up for this focus belongs to it"
+        );
+    }
+
+    /// A toolbar button acting on the field, spelled the way every button is
+    /// spelled: it has an `on_click`, so it claims the press, so the press is
+    /// not a press on nothing.
+    #[test]
+    fn a_press_a_button_claimed_keeps_it() {
+        let field = a_field();
+        let mut screen = Screen::new(
+            container()
+                .width(200.0)
+                .height(100.0)
+                .layout(Flex::column())
+                .child(text_input(create_signal(String::new())).widget_ref(field))
+                .child(container().width(200.0).height(40.0).on_click(|| {})),
+        );
+
+        screen.press(100.0, 8.0);
+        assert!(field.is_focused(), "the press reached the field");
+
+        screen.press(100.0, 40.0);
+        assert!(
+            field.is_focused(),
+            "a widget that claimed the press said the press was its own; the \
+             focus is not up for grabs"
         );
     }
 }
