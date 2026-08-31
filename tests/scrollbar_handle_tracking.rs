@@ -18,10 +18,12 @@
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use guido::layout::{Constraints, Flex};
+use guido::layout::Flex;
 use guido::prelude::*;
-use guido::renderer::{DrawCommand, PaintContext, RenderNode};
-use guido::tree::{Tree, WidgetId};
+use guido::renderer::{DrawCommand, RenderNode};
+
+mod common;
+use common::Harness;
 
 /// The scrollbar sits 2px in from the edges of the container along its axis,
 /// and is `width` across — 6 by default. So a 200-long viewport carries a
@@ -60,8 +62,7 @@ fn expected(offset: f32, content: f32, handle: f32) -> f32 {
 }
 
 struct H {
-    tree: Tree,
-    root: WidgetId,
+    surface: Harness,
     /// Whether the handle travels in x or in y — the same question as which
     /// axis the container scrolls on.
     horizontal: bool,
@@ -95,7 +96,7 @@ impl H {
     /// the scroller and every reader below.
     fn vertical_inset() -> Self {
         let mut h = Self::vertical();
-        h.tree.set_origin(h.root, INSET, INSET);
+        h.surface.tree.set_origin(h.surface.root, INSET, INSET);
         h
     }
 
@@ -103,7 +104,7 @@ impl H {
     /// `vertical_inset` moves the vertical one.
     fn horizontal_inset() -> Self {
         let mut h = Self::horizontal();
-        h.tree.set_origin(h.root, INSET, INSET);
+        h.surface.tree.set_origin(h.surface.root, INSET, INSET);
         h
     }
 
@@ -125,43 +126,27 @@ impl H {
     }
 
     fn new(view: impl Widget + 'static, height: f32, horizontal: bool) -> Self {
-        let mut tree = Tree::new();
-        let root = tree.register(Box::new(view));
-        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
         // Once, deliberately: layout does not run again for a paint-only scroll,
         // so neither does this test.
-        tree.with_widget_mut(root, |w, id, t| {
-            w.layout(t, id, Constraints::new(0.0, 0.0, VIEWPORT, height))
-        });
+        let surface = Harness::laid_out(view, VIEWPORT, height);
         Self {
-            tree,
-            root,
+            surface,
             horizontal,
         }
     }
 
     fn dispatch(&mut self, event: Event) {
-        let root = self.root;
-        self.tree
-            .with_widget_mut(root, |w, id, t| w.event(t, id, &event));
+        self.surface.send(event);
     }
 
     fn paint(&mut self) -> RenderNode {
-        let root = self.root;
-        let mut node = RenderNode::new(root.as_u64());
-        self.tree.with_widget_mut(root, |w, id, t| {
-            let mut ctx = PaintContext::new(&mut node);
-            w.paint(t, id, &mut ctx);
-        });
-        node
+        self.surface.paint()
     }
 
     /// The same, at a named instant, so that the frame after it can be placed a
     /// known distance later.
     fn dispatch_at(&mut self, event: Event, at: Instant) {
-        self.tree.set_event_instant(Some(at));
-        self.dispatch(event);
-        self.tree.set_event_instant(None);
+        self.surface.send_at(event, at);
     }
 
     /// One animation frame, at `at`.
@@ -172,12 +157,7 @@ impl H {
     /// stand-in: no test here can name the handle, which the scroller owns
     /// privately.
     fn frame(&mut self, at: Instant) {
-        self.tree.set_frame_instant(Some(at));
-        for id in self.tree.collect_subtree_post_order(self.root) {
-            self.tree
-                .with_widget_mut(id, |w, id, t| w.advance_animations(t, id));
-        }
-        self.tree.set_frame_instant(None);
+        self.surface.advance(at);
     }
 
     /// The opacity the scrollbar handle is filled with this frame.
@@ -271,12 +251,13 @@ impl H {
         } else {
             (0.0, delta)
         };
-        self.dispatch(Event::Scroll {
-            at: Some(Point::new(100.0, 40.0)),
+        self.dispatch(Event::scroll(
+            100.0,
+            40.0,
             delta_x,
             delta_y,
-            source: ScrollSource::Wheel,
-        });
+            ScrollSource::Wheel,
+        ));
     }
 }
 
@@ -309,10 +290,7 @@ fn a_wheel_scroll_moves_the_handle() {
 fn a_track_click_moves_the_handle() {
     let mut h = H::vertical();
 
-    h.dispatch(Event::MouseDown {
-        at: Some(Point::new(195.0, 190.0)),
-        button: MouseButton::Left,
-    });
+    h.dispatch(Event::mouse_down(195.0, 190.0, MouseButton::Left));
 
     let max_scroll = V_CONTENT - VIEWPORT;
     assert!(near(h.scrolled_by(), max_scroll), "the content jumped");
@@ -346,10 +324,7 @@ fn a_wheel_scroll_moves_the_horizontal_handle() {
 fn a_track_click_moves_the_horizontal_handle() {
     let mut h = H::horizontal();
 
-    h.dispatch(Event::MouseDown {
-        at: Some(Point::new(190.0, 75.0)),
-        button: MouseButton::Left,
-    });
+    h.dispatch(Event::mouse_down(190.0, 75.0, MouseButton::Left));
 
     let max_scroll = H_CONTENT - VIEWPORT;
     assert!(near(h.scrolled_by(), max_scroll), "the content jumped");
@@ -388,10 +363,7 @@ fn pressing_the_painted_handle_starts_a_drag_rather_than_jumping_the_track() {
     h.wheel(120.0);
 
     let painted_centre = h.handle_pos() + V_HANDLE / 2.0;
-    h.dispatch(Event::MouseDown {
-        at: Some(Point::new(195.0, painted_centre)),
-        button: MouseButton::Left,
-    });
+    h.dispatch(Event::mouse_down(195.0, painted_centre, MouseButton::Left));
 
     let after = h.scrolled_by();
     assert!(
@@ -424,10 +396,7 @@ fn a_press_anywhere_on_the_handle_ripples_from_where_it_landed() {
 
         let pressed = Instant::now();
         h.dispatch_at(
-            Event::MouseDown {
-                at: Some(Point::new(handle_x + local_x, handle_y + local_y)),
-                button: MouseButton::Left,
-            },
+            Event::mouse_down(handle_x + local_x, handle_y + local_y, MouseButton::Left),
             pressed,
         );
         h.frame(pressed + Duration::from_millis(16));
@@ -458,12 +427,10 @@ fn hovering_the_handle_colours_it_wherever_the_scroller_sits() {
     let mut h = H::vertical_inset();
     let resting = h.handle_fill_alpha();
 
-    h.dispatch(Event::MouseMove {
-        at: Some(Point::new(
-            INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
-            INSET + TRACK_START + V_HANDLE / 2.0,
-        )),
-    });
+    h.dispatch(Event::mouse_move(
+        INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        INSET + TRACK_START + V_HANDLE / 2.0,
+    ));
 
     let hovered = h.handle_fill_alpha();
     assert!(
@@ -487,12 +454,10 @@ fn hovering_the_handle_colours_it_wherever_the_scroller_sits() {
 fn the_width_a_hover_adds_to_the_handle_answers_a_press_too() {
     let mut h = H::vertical_inset();
     let hovered = Instant::now();
-    h.dispatch(Event::MouseMove {
-        at: Some(Point::new(
-            INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
-            INSET + TRACK_START + V_HANDLE / 2.0,
-        )),
-    });
+    h.dispatch(Event::mouse_move(
+        INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        INSET + TRACK_START + V_HANDLE / 2.0,
+    ));
     for step in 1..=8 {
         h.frame(hovered + Duration::from_millis(16 * step));
     }
@@ -510,13 +475,11 @@ fn the_width_a_hover_adds_to_the_handle_answers_a_press_too() {
 
     let pressed = hovered + Duration::from_millis(200);
     h.dispatch_at(
-        Event::MouseDown {
-            at: Some(Point::new(
-                INSET + left + 1.0,
-                INSET + TRACK_START + V_HANDLE / 2.0,
-            )),
-            button: MouseButton::Left,
-        },
+        Event::mouse_down(
+            INSET + left + 1.0,
+            INSET + TRACK_START + V_HANDLE / 2.0,
+            MouseButton::Left,
+        ),
         pressed,
     );
     h.frame(pressed + Duration::from_millis(16));
@@ -543,12 +506,10 @@ fn hovering_the_horizontal_handle_colours_it_too() {
     let mut h = H::horizontal_inset();
     let resting = h.handle_fill_alpha();
 
-    h.dispatch(Event::MouseMove {
-        at: Some(Point::new(
-            INSET + TRACK_START + H_HANDLE / 2.0,
-            INSET + H_VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
-        )),
-    });
+    h.dispatch(Event::mouse_move(
+        INSET + TRACK_START + H_HANDLE / 2.0,
+        INSET + H_VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+    ));
 
     let hovered = h.handle_fill_alpha();
     assert!(
@@ -575,10 +536,7 @@ fn the_horizontal_handle_ripples_from_where_it_landed_too() {
 
         let pressed = Instant::now();
         h.dispatch_at(
-            Event::MouseDown {
-                at: Some(Point::new(handle_x + local_x, handle_y + local_y)),
-                button: MouseButton::Left,
-            },
+            Event::mouse_down(handle_x + local_x, handle_y + local_y, MouseButton::Left),
             pressed,
         );
         h.frame(pressed + Duration::from_millis(16));
@@ -618,12 +576,10 @@ fn the_hover_widens_the_handle_inward_and_leaves_its_outer_edge_alone() {
     let (resting_left, resting_right) = edges(&mut h);
 
     let hovered = Instant::now();
-    h.dispatch(Event::MouseMove {
-        at: Some(Point::new(
-            INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
-            INSET + TRACK_START + V_HANDLE / 2.0,
-        )),
-    });
+    h.dispatch(Event::mouse_move(
+        INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        INSET + TRACK_START + V_HANDLE / 2.0,
+    ));
     for step in 1..=8 {
         h.frame(hovered + Duration::from_millis(16 * step));
     }
@@ -651,12 +607,10 @@ fn leaving_the_scroller_takes_the_handles_hover_with_it() {
     let mut h = H::vertical_inset();
     let resting = h.handle_fill_alpha();
 
-    h.dispatch(Event::MouseMove {
-        at: Some(Point::new(
-            INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
-            INSET + TRACK_START + V_HANDLE / 2.0,
-        )),
-    });
+    h.dispatch(Event::mouse_move(
+        INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        INSET + TRACK_START + V_HANDLE / 2.0,
+    ));
     assert!(h.handle_fill_alpha() > resting, "the handle never lit up");
 
     h.dispatch(Event::MouseLeave);
@@ -692,12 +646,10 @@ fn releasing_on_the_widened_handle_finishes_the_ripple_rather_than_abandoning_it
     let mut h = H::vertical_inset();
     let y = INSET + TRACK_START + V_HANDLE / 2.0;
     let hovered = Instant::now();
-    h.dispatch(Event::MouseMove {
-        at: Some(Point::new(
-            INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
-            y,
-        )),
-    });
+    h.dispatch(Event::mouse_move(
+        INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        y,
+    ));
     for step in 1..=8 {
         h.frame(hovered + Duration::from_millis(16 * step));
     }
@@ -709,26 +661,14 @@ fn releasing_on_the_widened_handle_finishes_the_ripple_rather_than_abandoning_it
     let x = INSET + left + 1.0;
 
     let pressed = hovered + Duration::from_millis(200);
-    h.dispatch_at(
-        Event::MouseDown {
-            at: Some(Point::new(x, y)),
-            button: MouseButton::Left,
-        },
-        pressed,
-    );
+    h.dispatch_at(Event::mouse_down(x, y, MouseButton::Left), pressed);
     // Past FADE_IN, so the disc is at its full strength and the fade below is
     // the only thing that can have dimmed it.
     let released = pressed + Duration::from_millis(100);
     h.frame(released);
     let (_, held) = h.handle_ripple_disc().expect("the press started no ripple");
 
-    h.dispatch_at(
-        Event::MouseUp {
-            at: Some(Point::new(x, y)),
-            button: MouseButton::Left,
-        },
-        released,
-    );
+    h.dispatch_at(Event::mouse_up(x, y, MouseButton::Left), released);
     h.frame(released + Duration::from_millis(150));
 
     let (_, leaving) = h
@@ -762,12 +702,10 @@ fn the_handle_takes_the_hover_colour_where_it_is_painted_after_a_wheel_scroll() 
     h.wheel(120.0);
 
     let painted = h.handle_pos();
-    h.dispatch(Event::MouseMove {
-        at: Some(Point::new(
-            VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
-            painted + V_HANDLE / 2.0,
-        )),
-    });
+    h.dispatch(Event::mouse_move(
+        VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        painted + V_HANDLE / 2.0,
+    ));
 
     let hovered = h.handle_fill_alpha();
     assert!(
@@ -796,15 +734,10 @@ fn the_handle_is_pressable_where_it_is_painted_after_a_wheel_scroll() {
         VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
         painted + V_HANDLE / 2.0,
     );
-    h.dispatch(Event::MouseMove {
-        at: Some(Point::new(x, y)),
-    });
+    h.dispatch(Event::mouse_move(x, y));
     let hovered = h.handle_fill_alpha();
 
-    h.dispatch(Event::MouseDown {
-        at: Some(Point::new(x, y)),
-        button: MouseButton::Left,
-    });
+    h.dispatch(Event::mouse_down(x, y, MouseButton::Left));
 
     let pressed = h.handle_fill_alpha();
     assert!(
@@ -831,16 +764,12 @@ fn the_hover_follows_the_pointer_across_the_handle_and_stops_at_its_edge() {
     let x = VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START;
     let resting = h.handle_fill_alpha();
 
-    h.dispatch(Event::MouseMove {
-        at: Some(Point::new(x, TRACK_START + V_HANDLE / 4.0)),
-    });
+    h.dispatch(Event::mouse_move(x, TRACK_START + V_HANDLE / 4.0));
     let hovered = h.handle_fill_alpha();
     assert!(hovered > resting, "the handle never lit up");
 
     // Still on the handle, further down it.
-    h.dispatch(Event::MouseMove {
-        at: Some(Point::new(x, TRACK_START + V_HANDLE * 3.0 / 4.0)),
-    });
+    h.dispatch(Event::mouse_move(x, TRACK_START + V_HANDLE * 3.0 / 4.0));
     let still = h.handle_fill_alpha();
     assert!(
         (still - hovered).abs() < 0.001,
@@ -848,9 +777,7 @@ fn the_hover_follows_the_pointer_across_the_handle_and_stops_at_its_edge() {
     );
 
     // Down the track, past the foot of the handle, and still inside the scroller.
-    h.dispatch(Event::MouseMove {
-        at: Some(Point::new(x, TRACK_START + V_HANDLE + 20.0)),
-    });
+    h.dispatch(Event::mouse_move(x, TRACK_START + V_HANDLE + 20.0));
 
     let after = h.handle_fill_alpha();
     assert!(
@@ -872,13 +799,12 @@ fn a_drag_that_loses_its_position_does_not_snap_the_offset() {
     let mut h = H::vertical();
 
     // Press the handle where it sits at rest, then drag down the track.
-    h.dispatch(Event::MouseDown {
-        at: Some(Point::new(195.0, TRACK_START + 10.0)),
-        button: MouseButton::Left,
-    });
-    h.dispatch(Event::MouseMove {
-        at: Some(Point::new(195.0, 120.0)),
-    });
+    h.dispatch(Event::mouse_down(
+        195.0,
+        TRACK_START + 10.0,
+        MouseButton::Left,
+    ));
+    h.dispatch(Event::mouse_move(195.0, 120.0));
 
     let dragged_to = h.handle_pos();
     assert!(

@@ -12,53 +12,10 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use guido::layout::Constraints;
 use guido::prelude::*;
-use guido::tree::{Tree, WidgetId};
-use guido::widgets::widget::EventResponse;
 
-struct H {
-    tree: Tree,
-    root: WidgetId,
-}
-
-impl H {
-    fn new(widget: impl Widget + 'static) -> Self {
-        let mut tree = Tree::new();
-        let root = tree.register(Box::new(widget));
-        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-        let mut h = Self { tree, root };
-        h.lay_out();
-        h
-    }
-
-    fn lay_out(&mut self) {
-        let root = self.root;
-        self.tree.with_widget_mut(root, |w, id, t| {
-            w.layout(t, id, Constraints::new(0.0, 0.0, 400.0, 200.0))
-        });
-    }
-
-    fn send(&mut self, event: Event) -> EventResponse {
-        let root = self.root;
-        guido::reactive::diagnostics::snapshot_zone(|| {
-            self.tree
-                .with_widget_mut(root, |w, id, t| w.event(t, id, &event))
-                .expect("the root is registered")
-        })
-    }
-
-    fn click(&mut self, x: f32, y: f32) {
-        self.send(Event::MouseDown {
-            at: Some(Point::new(x, y)),
-            button: MouseButton::Left,
-        });
-        self.send(Event::MouseUp {
-            at: Some(Point::new(x, y)),
-            button: MouseButton::Left,
-        });
-    }
-}
+mod common;
+use common::Harness;
 
 /// A counter a callback bumps, readable from the test.
 fn counter() -> (Rc<Cell<u32>>, impl Fn() + 'static) {
@@ -83,12 +40,14 @@ const COLLAPSED: Scale = Scale::new(1.0, 0.0);
 #[test]
 fn a_collapsed_container_takes_no_click() {
     let (clicks, bump) = counter();
-    let mut h = H::new(
+    let mut h = Harness::laid_out(
         container()
             .width(80.0)
             .height(40.0)
             .scale(COLLAPSED)
             .on_click(bump),
+        400.0,
+        200.0,
     );
 
     h.click(40.0, 20.0);
@@ -105,7 +64,7 @@ fn a_collapsed_container_takes_no_click() {
 #[test]
 fn nothing_inside_a_collapsed_container_takes_a_click() {
     let (clicks, bump) = counter();
-    let mut h = H::new(
+    let mut h = Harness::laid_out(
         container().width(80.0).height(40.0).scale(COLLAPSED).child(
             container()
                 .width(80.0)
@@ -113,6 +72,8 @@ fn nothing_inside_a_collapsed_container_takes_a_click() {
                 .background(Color::RED)
                 .on_click(bump),
         ),
+        400.0,
+        200.0,
     );
 
     h.click(40.0, 20.0);
@@ -125,7 +86,7 @@ fn nothing_inside_a_collapsed_container_takes_a_click() {
 #[test]
 fn a_collapse_reaches_every_depth_below_it() {
     let (clicks, bump) = counter();
-    let mut h = H::new(
+    let mut h = Harness::laid_out(
         container().width(80.0).height(40.0).scale(COLLAPSED).child(
             container().width(80.0).height(40.0).child(
                 container()
@@ -135,6 +96,8 @@ fn a_collapse_reaches_every_depth_below_it() {
                     .on_click(bump),
             ),
         ),
+        400.0,
+        200.0,
     );
 
     h.click(40.0, 20.0);
@@ -151,7 +114,7 @@ fn a_collapse_reaches_every_depth_below_it() {
 #[test]
 fn a_collapsed_container_does_not_swallow_a_siblings_click() {
     let (clicks, bump) = counter();
-    let mut h = H::new(
+    let mut h = Harness::laid_out(
         container()
             .layout(guido::layout::ZStack::new())
             .width(80.0)
@@ -170,6 +133,8 @@ fn a_collapsed_container_does_not_swallow_a_siblings_click() {
                     .background(Color::BLUE)
                     .on_click(bump),
             ),
+        400.0,
+        200.0,
     );
 
     h.click(40.0, 20.0);
@@ -185,12 +150,14 @@ fn a_collapsed_container_does_not_swallow_a_siblings_click() {
 fn a_collapsed_container_takes_no_scroll() {
     let (scrolls, _) = counter();
     let bump = counting(Rc::clone(&scrolls));
-    let mut h = H::new(
+    let mut h = Harness::laid_out(
         container()
             .width(80.0)
             .height(40.0)
             .scale(COLLAPSED)
             .on_scroll(move |_, _, _| bump()),
+        400.0,
+        200.0,
     );
 
     h.send(Event::Scroll {
@@ -206,7 +173,7 @@ fn a_collapsed_container_takes_no_scroll() {
 fn a_collapsed_container_takes_no_hover() {
     let (hovers, _) = counter();
     let bump = counting(Rc::clone(&hovers));
-    let mut h = H::new(
+    let mut h = Harness::laid_out(
         container()
             .width(80.0)
             .height(40.0)
@@ -216,6 +183,8 @@ fn a_collapsed_container_takes_no_hover() {
                     bump()
                 }
             }),
+        400.0,
+        200.0,
     );
 
     h.send(Event::MouseMove {
@@ -238,12 +207,14 @@ fn a_collapsed_container_takes_no_hover() {
 fn a_press_in_flight_is_given_up_when_the_container_collapses() {
     let open = create_signal(true);
     let (clicks, bump) = counter();
-    let mut h = H::new(
+    let mut h = Harness::laid_out(
         container()
             .width(80.0)
             .height(40.0)
             .scale(move || if open.get() { Scale::NONE } else { COLLAPSED })
             .on_click(bump),
+        400.0,
+        200.0,
     );
 
     h.send(Event::MouseDown {
@@ -252,7 +223,7 @@ fn a_press_in_flight_is_given_up_when_the_container_collapses() {
     });
 
     open.set(false);
-    h.lay_out();
+    h.lay_out(400.0, 200.0);
 
     h.send(Event::MouseUp {
         at: Some(Point::new(40.0, 20.0)),
@@ -268,7 +239,7 @@ fn a_press_in_flight_is_given_up_when_the_container_collapses() {
     // And the container is genuinely no longer pressed: reopening it and
     // releasing again must not fire the click the first release left owing.
     open.set(true);
-    h.lay_out();
+    h.lay_out(400.0, 200.0);
     h.send(Event::MouseUp {
         at: Some(Point::new(40.0, 20.0)),
         button: MouseButton::Left,
@@ -282,7 +253,7 @@ fn a_hover_in_flight_is_cleared_when_the_container_collapses() {
     let open = create_signal(true);
     let hovers = Rc::new(Cell::new(Vec::new()));
     let seen = Rc::clone(&hovers);
-    let mut h = H::new(
+    let mut h = Harness::laid_out(
         container()
             .width(80.0)
             .height(40.0)
@@ -292,6 +263,8 @@ fn a_hover_in_flight_is_cleared_when_the_container_collapses() {
                 v.push(inside);
                 seen.set(v);
             }),
+        400.0,
+        200.0,
     );
 
     h.send(Event::MouseMove {
@@ -300,7 +273,7 @@ fn a_hover_in_flight_is_cleared_when_the_container_collapses() {
     assert_eq!(hovers.take(), vec![true], "hovered while it was open");
 
     open.set(false);
-    h.lay_out();
+    h.lay_out(400.0, 200.0);
     h.send(Event::MouseMove {
         at: Some(Point::new(40.0, 20.0)),
     });
@@ -322,12 +295,14 @@ fn a_hover_in_flight_is_cleared_when_the_container_collapses() {
 fn a_text_input_inside_a_collapsing_container_stops_being_hovered() {
     let open = create_signal(true);
     let text = create_signal(String::from("hello"));
-    let mut h = H::new(
+    let mut h = Harness::laid_out(
         container()
             .width(200.0)
             .height(40.0)
             .scale(move || if open.get() { Scale::NONE } else { COLLAPSED })
             .child(text_input(text)),
+        400.0,
+        200.0,
     );
 
     h.send(Event::MouseMove {
@@ -340,7 +315,7 @@ fn a_text_input_inside_a_collapsing_container_stops_being_hovered() {
     );
 
     open.set(false);
-    h.lay_out();
+    h.lay_out(400.0, 200.0);
     h.send(Event::MouseMove {
         at: Some(Point::new(5.0, 5.0)),
     });
@@ -364,7 +339,7 @@ fn an_enter_with_no_position_clears_the_hover_it_finds() {
     let open = create_signal(true);
     let hovers = Rc::new(Cell::new(Vec::new()));
     let seen = Rc::clone(&hovers);
-    let mut h = H::new(
+    let mut h = Harness::laid_out(
         container()
             .width(80.0)
             .height(40.0)
@@ -374,6 +349,8 @@ fn an_enter_with_no_position_clears_the_hover_it_finds() {
                 v.push(inside);
                 seen.set(v);
             }),
+        400.0,
+        200.0,
     );
 
     h.send(Event::MouseEnter {
@@ -382,7 +359,7 @@ fn an_enter_with_no_position_clears_the_hover_it_finds() {
     assert_eq!(hovers.take(), vec![true], "hovered while it was open");
 
     open.set(false);
-    h.lay_out();
+    h.lay_out(400.0, 200.0);
     h.send(Event::MouseEnter {
         at: Some(Point::new(40.0, 20.0)),
     });
@@ -402,13 +379,15 @@ fn an_enter_with_no_position_clears_the_hover_it_finds() {
 fn a_key_still_reaches_a_descendant_of_a_collapsed_container() {
     let (keys, _) = counter();
     let bump = counting(Rc::clone(&keys));
-    let mut h = H::new(
+    let mut h = Harness::laid_out(
         container().width(80.0).height(40.0).scale(COLLAPSED).child(
             container()
                 .width(80.0)
                 .height(40.0)
                 .on_key_down(move |_, _| bump()),
         ),
+        400.0,
+        200.0,
     );
 
     h.send(Event::KeyDown {
@@ -443,7 +422,7 @@ fn a_key_still_reaches_a_descendant_of_a_collapsed_container() {
 #[test]
 fn a_collapsed_clipping_container_neither_takes_nor_strands() {
     let (clicks, bump) = counter();
-    let mut h = H::new(
+    let mut h = Harness::laid_out(
         container()
             .width(80.0)
             .height(40.0)
@@ -456,6 +435,8 @@ fn a_collapsed_clipping_container_neither_takes_nor_strands() {
                     .background(Color::RED)
                     .on_click(bump),
             ),
+        400.0,
+        200.0,
     );
 
     h.click(40.0, 20.0);
