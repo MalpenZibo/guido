@@ -688,6 +688,44 @@ fn a_click_inside_the_bounds_fires_on_click() {
     assert_eq!(clicks.get(), 1, "a click outside must not fire");
 }
 
+/// The other two buttons, which fire on the press rather than on a matched
+/// release: there is no drag to complete, so there is nothing to wait for.
+///
+/// Nothing tested these at all until a mutant said so — killing the guard that
+/// separates them from the left button left the whole suite green, which is the
+/// same as saying the two handlers could stop firing and nobody would hear.
+#[test]
+fn the_right_and_middle_buttons_fire_the_handlers_that_name_them() {
+    let right = std::rc::Rc::new(std::cell::Cell::new(0));
+    let middle = std::rc::Rc::new(std::cell::Cell::new(0));
+    let (r, m) = (right.clone(), middle.clone());
+    let mut h = H::new(
+        container()
+            .width(50.0)
+            .height(20.0)
+            .on_right_click(move || r.set(r.get() + 1))
+            .on_middle_click(move || m.set(m.get() + 1)),
+    );
+    h.fit(500.0, 500.0);
+
+    h.send(Event::mouse_down(25.0, 10.0, MouseButton::Right));
+    assert_eq!((right.get(), middle.get()), (1, 0), "a right press");
+
+    h.send(Event::mouse_down(25.0, 10.0, MouseButton::Middle));
+    assert_eq!((right.get(), middle.get()), (1, 1), "a middle press");
+
+    // The left button is neither of them, and reaches neither handler.
+    h.send(Event::mouse_down(25.0, 10.0, MouseButton::Left));
+    assert_eq!(
+        (right.get(), middle.get()),
+        (1, 1),
+        "a left press belongs to on_click, and must not reach either"
+    );
+
+    h.send(Event::mouse_down(200.0, 10.0, MouseButton::Right));
+    assert_eq!(right.get(), 1, "a right press outside must not fire");
+}
+
 /// Hit testing follows the rounded shape, not its bounding box.
 #[test]
 fn a_corner_radius_excludes_the_corner() {
