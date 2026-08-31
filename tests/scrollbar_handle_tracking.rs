@@ -804,3 +804,52 @@ fn the_handle_is_pressable_where_it_is_painted_after_a_wheel_scroll() {
          the press went to where the handle used to be"
     );
 }
+
+/// The hover follows the pointer across the handle and stops at its edge,
+/// without leaving the scroller at all.
+///
+/// The pointer leaving the scroller outright is the other case, and it is a
+/// `MouseLeave` the compositor sends. These are ordinary `MouseMove`s:
+/// `update_scrollbar_hover` decides the transitions itself and synthesises an
+/// enter and a leave for the handle, and the branch that sends the leave is one
+/// `!` and one `&&` away from firing at the wrong moment — never, or on every
+/// move while the pointer is still on the handle. `cargo mutants` found both,
+/// with nothing objecting, so both moments are asserted here: the second move
+/// that must change nothing, and the one that must put the colour back.
+#[test]
+fn the_hover_follows_the_pointer_across_the_handle_and_stops_at_its_edge() {
+    let mut h = H::vertical();
+    let x = VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START;
+    let resting = h.handle_fill_alpha();
+
+    h.dispatch(Event::MouseMove {
+        x,
+        y: TRACK_START + V_HANDLE / 4.0,
+    });
+    let hovered = h.handle_fill_alpha();
+    assert!(hovered > resting, "the handle never lit up");
+
+    // Still on the handle, further down it.
+    h.dispatch(Event::MouseMove {
+        x,
+        y: TRACK_START + V_HANDLE * 3.0 / 4.0,
+    });
+    let still = h.handle_fill_alpha();
+    assert!(
+        (still - hovered).abs() < 0.001,
+        "the handle dimmed to {still} from {hovered} while the pointer was still on it"
+    );
+
+    // Down the track, past the foot of the handle, and still inside the scroller.
+    h.dispatch(Event::MouseMove {
+        x,
+        y: TRACK_START + V_HANDLE + 20.0,
+    });
+
+    let after = h.handle_fill_alpha();
+    assert!(
+        (after - resting).abs() < 0.001,
+        "the handle is still filled at {after} against {resting} at rest: the pointer moved \
+         off it and the hover stayed"
+    );
+}
