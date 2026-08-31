@@ -309,69 +309,6 @@ impl Container {
         animating
     }
 
-    /// Write the handle's origin into the `Tree` for the current scroll offset.
-    ///
-    /// Not for the paint, which derives the position itself
-    /// (`scrollbar_handle_origin`): this is for the handle *widget*, which is a
-    /// `Container` of its own and hit-tests the events forwarded to it —
-    /// `MouseDown` at the start of a drag, the synthetic `MouseEnter` — against
-    /// the bounds the `Tree` holds for it. Layout writes that origin too.
-    ///
-    /// It does not cover the paint-only paths, and does not claim to: the one
-    /// caller is `advance_animations`, which runs for a `JobType::Animation`
-    /// job alone, so after a wheel scroll or a click on the track this origin
-    /// is stale until something asks for an animation frame. Pressing the
-    /// handle still starts the drag — that is decided from the derived rect —
-    /// but the handle's own pressed and hover colours miss it until then.
-    /// One answer for both readers is #244.
-    pub(super) fn update_scrollbar_handle_positions(&mut self, tree: &mut Tree, id: WidgetId) {
-        if self.scroll_axis == ScrollAxis::None
-            || self.scroll().scrollbar_visibility == ScrollbarVisibility::Hidden
-        {
-            return;
-        }
-
-        let sd = self.scroll();
-        let needs_vertical = sd.scroll_state.needs_vertical_scrollbar();
-        let needs_horizontal = sd.scroll_state.needs_horizontal_scrollbar();
-
-        // Get bounds from Tree (single source of truth)
-        let bounds = tree.get_bounds(id).unwrap_or_default();
-        // Use local bounds (0,0 origin) for scrollbar positioning.
-        // Scrollbars are positioned relative to container origin.
-        let local_bounds = Rect::new(0.0, 0.0, bounds.width, bounds.height);
-
-        // Update vertical scrollbar handle position
-        if self.scroll_axis.allows_vertical()
-            && needs_vertical
-            && let Some(handle_id) = self.scroll().v_scrollbar_handle_id
-        {
-            let sd = self.scroll();
-            let handle_rect = sd.scroll_state.scrollbar_handle_rect(
-                ScrollbarAxis::Vertical,
-                local_bounds,
-                &sd.scrollbar_config,
-                needs_horizontal,
-            );
-            tree.set_origin(handle_id, handle_rect.x, handle_rect.y);
-        }
-
-        // Update horizontal scrollbar handle position
-        if self.scroll_axis.allows_horizontal()
-            && needs_horizontal
-            && let Some(handle_id) = self.scroll().h_scrollbar_handle_id
-        {
-            let sd = self.scroll();
-            let handle_rect = sd.scroll_state.scrollbar_handle_rect(
-                ScrollbarAxis::Horizontal,
-                local_bounds,
-                &sd.scrollbar_config,
-                needs_vertical,
-            );
-            tree.set_origin(handle_id, handle_rect.x, handle_rect.y);
-        }
-    }
-
     /// Where the handle belongs for the offset the container holds right now.
     ///
     /// Layout gives the handle its size and writes an origin into the `Tree`;
@@ -524,7 +461,18 @@ impl Container {
     /// it appears. Undoing that scale here is what `Container::event` does with
     /// its own transform before hit testing — and without it the width a hover
     /// adds is drawn and answers nothing: no pressed colour, and no ripple.
-    fn forward_to_handle(&self, tree: &mut Tree, axis: ScrollbarAxis, event: &Event) {
+    ///
+    /// The other is the offset. The handle hit-tests against the origin the
+    /// `Tree` holds for it, which layout writes and the offset then moves
+    /// without layout — scrolling is paint-only. So the origin is brought up to
+    /// the offset here, from the same `scrollbar_handle_origin` the paint draws
+    /// from, which is what leaves one answer to where the handle is rather than
+    /// two that drift. It used to be written on animation frames instead, and a
+    /// wheel scroll asks for a plain `Paint`: the drag still began, because the
+    /// scroller decides that from the derived rect, and only the feedback went
+    /// missing — the pressed colour and the ripple, on a handle sitting visibly
+    /// under the pointer.
+    fn forward_to_handle(&self, tree: &mut Tree, id: WidgetId, axis: ScrollbarAxis, event: &Event) {
         let sd = self.scroll();
         let handle_id = match axis {
             ScrollbarAxis::Vertical => sd.v_scrollbar_handle_id,
@@ -533,6 +481,9 @@ impl Container {
         let Some(handle_id) = handle_id else {
             return;
         };
+
+        let (origin_x, origin_y) = self.scrollbar_handle_origin(tree, id, axis);
+        tree.set_origin(handle_id, origin_x, origin_y);
 
         let scale = match axis {
             ScrollbarAxis::Vertical => sd.v_scrollbar_scale_anim.as_ref(),
@@ -687,13 +638,13 @@ impl Container {
             Event::MouseUp { button, .. } if *button == MouseButton::Left => {
                 if self.scroll().scroll_state.scrollbar_dragging {
                     self.scroll_mut().scroll_state.scrollbar_dragging = false;
-                    self.forward_to_handle(tree, ScrollbarAxis::Vertical, event);
+                    self.forward_to_handle(tree, id, ScrollbarAxis::Vertical, event);
                     request_job(id, JobRequest::Paint);
                     return Some(EventResponse::Handled);
                 }
                 if self.scroll().scroll_state.h_scrollbar_dragging {
                     self.scroll_mut().scroll_state.h_scrollbar_dragging = false;
-                    self.forward_to_handle(tree, ScrollbarAxis::Horizontal, event);
+                    self.forward_to_handle(tree, id, ScrollbarAxis::Horizontal, event);
                     request_job(id, JobRequest::Paint);
                     return Some(EventResponse::Handled);
                 }
@@ -712,8 +663,8 @@ impl Container {
                 sd.scroll_state.h_scrollbar_dragging = false;
 
                 if had_hover {
-                    self.forward_to_handle(tree, ScrollbarAxis::Vertical, event);
-                    self.forward_to_handle(tree, ScrollbarAxis::Horizontal, event);
+                    self.forward_to_handle(tree, id, ScrollbarAxis::Vertical, event);
+                    self.forward_to_handle(tree, id, ScrollbarAxis::Horizontal, event);
                 }
                 if had_hover || had_drag {
                     request_job(id, JobRequest::Paint);
@@ -763,7 +714,7 @@ impl Container {
             sd.scroll_state.set_drag_start(axis, pos, offset);
 
             // Forward event to handle container for pressed state
-            self.forward_to_handle(tree, axis, event);
+            self.forward_to_handle(tree, id, axis, event);
 
             request_job(id, JobRequest::Paint);
             return Some(EventResponse::Handled);
@@ -858,7 +809,7 @@ impl Container {
     fn update_scrollbar_hover(
         &mut self,
         tree: &mut Tree,
-        _id: WidgetId,
+        id: WidgetId,
         bounds: Rect,
         axis: ScrollbarAxis,
         x: f32,
@@ -907,9 +858,9 @@ impl Container {
                 x: handle_rect.x + handle_rect.width / 2.0,
                 y: handle_rect.y + handle_rect.height / 2.0,
             };
-            self.forward_to_handle(tree, axis, &enter);
+            self.forward_to_handle(tree, id, axis, &enter);
         } else if !is_hovered && was_hovered {
-            self.forward_to_handle(tree, axis, &Event::MouseLeave);
+            self.forward_to_handle(tree, id, axis, &Event::MouseLeave);
         }
 
         needs_repaint

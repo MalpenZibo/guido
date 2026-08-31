@@ -733,3 +733,123 @@ fn releasing_on_the_widened_handle_finishes_the_ripple_rather_than_abandoning_it
         "the disc is still at {leaving} against {held} held: the release never reached the handle"
     );
 }
+
+/// The handle takes the hover colour where it is painted, on the frame a wheel
+/// scroll asks for.
+///
+/// The handle widget hit-tests against the origin the `Tree` holds for it, and
+/// that origin is written where it is read — in `forward_to_handle`, from the
+/// same derivation the paint draws from.
+///
+/// It was written on animation frames instead, and `advance_animations` runs
+/// for a `JobType::Animation` job alone: a wheel scroll asks for a plain
+/// `Paint`, so after one the stored origin was wherever the last layout had
+/// left it, and the pointer met a handle that was no longer there.
+///
+/// Deliberately no animation pass anywhere here: running one would have
+/// repositioned the handle and hidden exactly that.
+#[test]
+fn the_handle_takes_the_hover_colour_where_it_is_painted_after_a_wheel_scroll() {
+    let mut h = H::vertical();
+    let resting = h.handle_fill_alpha();
+
+    h.wheel(120.0);
+
+    let painted = h.handle_pos();
+    h.dispatch(Event::MouseMove {
+        x: VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        y: painted + V_HANDLE / 2.0,
+    });
+
+    let hovered = h.handle_fill_alpha();
+    assert!(
+        hovered > resting,
+        "the handle painted at {painted} is filled at {hovered}, the same as its resting \
+         {resting}: the pointer went to where the handle used to be"
+    );
+}
+
+/// And answers a press there, which is the other half of the same origin.
+///
+/// The press is asserted against the *hover* colour rather than the resting
+/// one, because the pointer has to be on the handle to press it: a press that
+/// registered as nothing more than a hover would satisfy "brighter than rest",
+/// and it is the pressed colour the issue asks for.
+///
+/// The drag begins either way — the scroller decides that from the derived rect
+/// — so it is the feedback this watches, the pressed colour and the ripple.
+#[test]
+fn the_handle_is_pressable_where_it_is_painted_after_a_wheel_scroll() {
+    let mut h = H::vertical();
+    h.wheel(120.0);
+
+    let painted = h.handle_pos();
+    let (x, y) = (
+        VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        painted + V_HANDLE / 2.0,
+    );
+    h.dispatch(Event::MouseMove { x, y });
+    let hovered = h.handle_fill_alpha();
+
+    h.dispatch(Event::MouseDown {
+        x,
+        y,
+        button: MouseButton::Left,
+    });
+
+    let pressed = h.handle_fill_alpha();
+    assert!(
+        pressed > hovered,
+        "the handle painted at {painted} is filled at {pressed} against {hovered} hovered: \
+         the press went to where the handle used to be"
+    );
+}
+
+/// The hover follows the pointer across the handle and stops at its edge,
+/// without leaving the scroller at all.
+///
+/// The pointer leaving the scroller outright is the other case, and it is a
+/// `MouseLeave` the compositor sends. These are ordinary `MouseMove`s:
+/// `update_scrollbar_hover` decides the transitions itself and synthesises an
+/// enter and a leave for the handle, and the branch that sends the leave is one
+/// `!` and one `&&` away from firing at the wrong moment — never, or on every
+/// move while the pointer is still on the handle. `cargo mutants` found both,
+/// with nothing objecting, so both moments are asserted here: the second move
+/// that must change nothing, and the one that must put the colour back.
+#[test]
+fn the_hover_follows_the_pointer_across_the_handle_and_stops_at_its_edge() {
+    let mut h = H::vertical();
+    let x = VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START;
+    let resting = h.handle_fill_alpha();
+
+    h.dispatch(Event::MouseMove {
+        x,
+        y: TRACK_START + V_HANDLE / 4.0,
+    });
+    let hovered = h.handle_fill_alpha();
+    assert!(hovered > resting, "the handle never lit up");
+
+    // Still on the handle, further down it.
+    h.dispatch(Event::MouseMove {
+        x,
+        y: TRACK_START + V_HANDLE * 3.0 / 4.0,
+    });
+    let still = h.handle_fill_alpha();
+    assert!(
+        (still - hovered).abs() < 0.001,
+        "the handle dimmed to {still} from {hovered} while the pointer was still on it"
+    );
+
+    // Down the track, past the foot of the handle, and still inside the scroller.
+    h.dispatch(Event::MouseMove {
+        x,
+        y: TRACK_START + V_HANDLE + 20.0,
+    });
+
+    let after = h.handle_fill_alpha();
+    assert!(
+        (after - resting).abs() < 0.001,
+        "the handle is still filled at {after} against {resting} at rest: the pointer moved \
+         off it and the hover stayed"
+    );
+}
