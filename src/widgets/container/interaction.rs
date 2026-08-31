@@ -155,9 +155,7 @@ impl Container {
                 // with no position is not one of those: there is nowhere to
                 // report, so the callback is not called and the hover below
                 // simply falls.
-                // Asked once: `contains_shape` evaluates the corner
-                // superellipse, which is three `powf`s for a squircle, and
-                // this is the coalesced-pointer-move path.
+                // One question, asked once and answered twice below.
                 let inside = hit.contains(*at);
 
                 if let Some(ref callback) = ix.on_pointer_move

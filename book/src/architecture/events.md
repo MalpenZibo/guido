@@ -161,10 +161,15 @@ container()
 ```
 
 The event still *travels*. A press given up and a hover cleared are things only
-a delivered event can do, so a button inside a menu that collapses mid-press
-hears the release and lets the press go — it simply has nowhere to have been
-released. A key or a focus change is untouched, having never had a position to
-lose.
+a delivered event can do, so a container inside a menu that collapses mid-press
+hears the release and drops its own pressed state — the state layer stops
+painting, the ripple is cancelled. What it does *not* do is call `on_click` or
+`on_mouse_up`: those say where the release landed, and it landed nowhere. An
+application pairing `on_mouse_down` with `on_mouse_up` to track a press of its
+own should expect the down without the up, and clear on the same signal that
+collapsed the box.
+
+A key or a focus change is untouched, having never had a position to lose.
 
 ## Event Handlers
 

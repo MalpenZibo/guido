@@ -859,3 +859,41 @@ fn the_hover_follows_the_pointer_across_the_handle_and_stops_at_its_edge() {
          off it and the hover stayed"
     );
 }
+
+/// A move with no position leaves a scrollbar drag where it was.
+///
+/// A pointer event that has descended into a subtree collapsed to nothing
+/// arrives without a position (#227). The arm that continues a drag has to ask
+/// for one before it moves anything: an earlier attempt at that issue answered
+/// a far-away sentinel instead, and `handle_scrollbar_drag` read it as a drag
+/// and snapped the offset to 0 — which is this function, named in the issue.
+#[test]
+fn a_drag_that_loses_its_position_does_not_snap_the_offset() {
+    let mut h = H::vertical();
+
+    // Press the handle where it sits at rest, then drag down the track.
+    h.dispatch(Event::MouseDown {
+        at: Some(Point::new(195.0, TRACK_START + 10.0)),
+        button: MouseButton::Left,
+    });
+    h.dispatch(Event::MouseMove {
+        at: Some(Point::new(195.0, 120.0)),
+    });
+
+    let dragged_to = h.handle_pos();
+    assert!(
+        dragged_to > TRACK_START + 10.0,
+        "the drag has to have moved the handle to begin with, got {dragged_to}"
+    );
+
+    // The container holding the scroller collapses: the move still arrives,
+    // because that is what gives the press up, but it arrives with nowhere.
+    h.dispatch(Event::MouseMove { at: None });
+
+    let after = h.handle_pos();
+    assert!(
+        near(after, dragged_to),
+        "a move with no position leaves the drag where it was: handle at \
+         {after}, was at {dragged_to}"
+    );
+}

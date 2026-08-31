@@ -1437,7 +1437,7 @@ impl Widget for Container {
         let skip_child_dispatch = clips_children
             && local_event
                 .coords()
-                .is_some_and(|at| !hit.bounds.contains_at(Some(at)));
+                .is_some_and(|at| !hit.bounds.contains(at.x, at.y));
 
         if !skip_child_dispatch {
             for &child_id in self.children_source.get() {

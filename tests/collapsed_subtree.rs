@@ -351,6 +351,49 @@ fn a_text_input_inside_a_collapsing_container_stops_being_hovered() {
     );
 }
 
+/// An enter into nothing is the falling edge, not a no-op.
+///
+/// `MouseEnter` is guarded on being inside, so a positionless one used to
+/// match no arm at all and whatever hover stood went on standing. The platform
+/// always pushes a move straight after an enter, so the window is one event
+/// wide — but a collapsing container is what takes the position away on the
+/// way down, so the event does occur, and one event of a stuck hover is still
+/// a stuck hover.
+#[test]
+fn an_enter_with_no_position_clears_the_hover_it_finds() {
+    let open = create_signal(true);
+    let hovers = Rc::new(Cell::new(Vec::new()));
+    let seen = Rc::clone(&hovers);
+    let mut h = H::new(
+        container()
+            .width(80.0)
+            .height(40.0)
+            .scale(move || if open.get() { Scale::NONE } else { COLLAPSED })
+            .on_hover(move |inside| {
+                let mut v = seen.take();
+                v.push(inside);
+                seen.set(v);
+            }),
+    );
+
+    h.send(Event::MouseEnter {
+        at: Some(Point::new(40.0, 20.0)),
+    });
+    assert_eq!(hovers.take(), vec![true], "hovered while it was open");
+
+    open.set(false);
+    h.lay_out();
+    h.send(Event::MouseEnter {
+        at: Some(Point::new(40.0, 20.0)),
+    });
+    assert_eq!(
+        hovers.take(),
+        vec![false],
+        "and an enter that arrives without a position says so, rather than \
+         leaving the hover standing until the next move"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 3. A key still reaches a focused descendant, which has no position
 // ---------------------------------------------------------------------------
