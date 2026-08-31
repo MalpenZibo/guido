@@ -855,12 +855,10 @@ impl Container {
         if is_hovered && !was_hovered {
             // The centre of the handle: a point it holds whatever part of the
             // widened area the pointer is actually over.
-            let enter = Event::MouseEnter {
-                at: Some(Point::new(
-                    handle_rect.x + handle_rect.width / 2.0,
-                    handle_rect.y + handle_rect.height / 2.0,
-                )),
-            };
+            let enter = Event::mouse_enter(
+                handle_rect.x + handle_rect.width / 2.0,
+                handle_rect.y + handle_rect.height / 2.0,
+            );
             self.forward_to_handle(tree, id, axis, &enter);
         } else if !is_hovered && was_hovered {
             self.forward_to_handle(tree, id, axis, &Event::MouseLeave);

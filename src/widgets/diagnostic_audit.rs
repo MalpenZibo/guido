@@ -25,7 +25,7 @@ use crate::reactive::create_signal;
 use crate::reactive::diagnostics::report_count;
 use crate::renderer::{PaintContext, RenderNode};
 use crate::tree::Tree;
-use crate::widgets::widget::{Event, Key, Modifiers, MouseButton, Point, ScrollSource};
+use crate::widgets::widget::{Event, Key, Modifiers, MouseButton, ScrollSource};
 use crate::widgets::{Color, ImageSource, LinearGradient, Overflow, ScrollAxis};
 use crate::widgets::{
     InputStyled, Stateful, TextStyled, Widget, container, image, text, text_input,
@@ -66,26 +66,11 @@ fn diagnostics_from_full_lifecycle(widget: impl Widget + 'static) -> u64 {
     // meaningful against the call sites the library actually uses.
     crate::reactive::diagnostics::snapshot_zone(|| {
         for event in [
-            Event::MouseEnter {
-                at: Some(Point::new(10.0, 10.0)),
-            },
-            Event::MouseMove {
-                at: Some(Point::new(10.0, 10.0)),
-            },
-            Event::MouseDown {
-                at: Some(Point::new(10.0, 10.0)),
-                button: MouseButton::Left,
-            },
-            Event::MouseUp {
-                at: Some(Point::new(10.0, 10.0)),
-                button: MouseButton::Left,
-            },
-            Event::Scroll {
-                at: Some(Point::new(10.0, 10.0)),
-                delta_x: 0.0,
-                delta_y: 10.0,
-                source: ScrollSource::Wheel,
-            },
+            Event::mouse_enter(10.0, 10.0),
+            Event::mouse_move(10.0, 10.0),
+            Event::mouse_down(10.0, 10.0, MouseButton::Left),
+            Event::mouse_up(10.0, 10.0, MouseButton::Left),
+            Event::scroll(10.0, 10.0, 0.0, 10.0, ScrollSource::Wheel),
             Event::KeyDown {
                 key: Key::Char('a'),
                 modifiers: Modifiers::default(),

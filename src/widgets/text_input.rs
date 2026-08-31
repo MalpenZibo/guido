@@ -1403,7 +1403,6 @@ mod tests {
     use crate::jobs::{clear_pending_jobs, clear_scheduled_jobs, next_deadline, queued_job_types};
     use crate::layout::Constraints;
     use crate::reactive::create_signal;
-    use crate::widgets::widget::Point;
 
     /// A move with no position says nothing about where a drag has got to.
     ///
@@ -1434,9 +1433,7 @@ mod tests {
         };
         input.is_dragging = true;
 
-        let moved_to = Event::MouseMove {
-            at: Some(Point::new(60.0, 5.0)),
-        };
+        let moved_to = Event::mouse_move(60.0, 5.0);
         Widget::event(&mut input, &mut tree, id, &moved_to);
         let dragged = input.selection.cursor;
         assert_ne!(

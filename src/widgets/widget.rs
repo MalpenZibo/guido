@@ -609,6 +609,60 @@ pub enum EventResponse {
 }
 
 impl Event {
+    /// A pointer move at a place.
+    ///
+    /// The constructors exist for the positioned case only, and deliberately:
+    /// it is the overwhelmingly common one, and the absent case has to stay
+    /// spelled out. `Event::MouseMove { at: None }` says what it is; a
+    /// `mouse_move_nowhere()` beside `mouse_move(x, y)` would make the two
+    /// look like a pair of ordinary alternatives, which is exactly what the
+    /// `Option` exists to prevent.
+    pub fn mouse_move(x: f32, y: f32) -> Self {
+        Event::MouseMove {
+            at: Some(Point::new(x, y)),
+        }
+    }
+
+    /// A button pressed at a place. See [`mouse_move`](Self::mouse_move).
+    pub fn mouse_down(x: f32, y: f32, button: MouseButton) -> Self {
+        Event::MouseDown {
+            at: Some(Point::new(x, y)),
+            button,
+        }
+    }
+
+    /// A button released at a place. See [`mouse_move`](Self::mouse_move).
+    pub fn mouse_up(x: f32, y: f32, button: MouseButton) -> Self {
+        Event::MouseUp {
+            at: Some(Point::new(x, y)),
+            button,
+        }
+    }
+
+    /// The pointer arriving at a place. See [`mouse_move`](Self::mouse_move).
+    pub fn mouse_enter(x: f32, y: f32) -> Self {
+        Event::MouseEnter {
+            at: Some(Point::new(x, y)),
+        }
+    }
+
+    /// A scroll at a place. See [`mouse_move`](Self::mouse_move).
+    pub fn scroll(x: f32, y: f32, delta_x: f32, delta_y: f32, source: ScrollSource) -> Self {
+        Event::Scroll {
+            at: Some(Point::new(x, y)),
+            delta_x,
+            delta_y,
+            source,
+        }
+    }
+
+    /// A scroll gesture ending at a place. See [`mouse_move`](Self::mouse_move).
+    pub fn scroll_end(x: f32, y: f32) -> Self {
+        Event::ScrollEnd {
+            at: Some(Point::new(x, y)),
+        }
+    }
+
     /// Where this event happened, if it happened anywhere.
     ///
     /// `None` for two different reasons, and a consumer wants the same thing

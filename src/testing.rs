@@ -30,7 +30,7 @@ use crate::renderer::{GpuContext, RenderTarget, Renderer};
 use crate::surface::{SurfaceConfig, SurfaceId};
 use crate::surface_manager::{ManagedSurface, SurfaceManager};
 use crate::tree::{Tree, WidgetId};
-use crate::widgets::{Event, MouseButton, Point, Widget};
+use crate::widgets::{Event, MouseButton, Widget};
 use crate::{Frame, LoopContext, Platform, Surface, iterate};
 
 /// The compositor's half of one surface: what it has said, and what it has
@@ -306,20 +306,12 @@ impl Headless {
     /// played through the application at the speed it is meant to have.
     pub fn click_at(&mut self, id: SurfaceId, x: f32, y: f32, now: Instant) {
         let surface = self.host.get_mut(id);
-        surface.events.push((
-            now,
-            Event::MouseDown {
-                at: Some(Point::new(x, y)),
-                button: MouseButton::Left,
-            },
-        ));
-        surface.events.push((
-            now,
-            Event::MouseUp {
-                at: Some(Point::new(x, y)),
-                button: MouseButton::Left,
-            },
-        ));
+        surface
+            .events
+            .push((now, Event::mouse_down(x, y, MouseButton::Left)));
+        surface
+            .events
+            .push((now, Event::mouse_up(x, y, MouseButton::Left)));
     }
 
     /// One frame: open it, route what is queued, measure, paint, present.
