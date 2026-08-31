@@ -1403,6 +1403,55 @@ mod tests {
     use crate::jobs::{clear_pending_jobs, clear_scheduled_jobs, next_deadline, queued_job_types};
     use crate::layout::Constraints;
     use crate::reactive::create_signal;
+    use crate::widgets::widget::Point;
+
+    /// A move with no position says nothing about where a drag has got to.
+    ///
+    /// A pointer event that has descended into a subtree collapsed to nothing
+    /// arrives without a position (#227), and the arm that extends a selection
+    /// has to leave it alone rather than read the absence as an origin — which
+    /// is what an earlier attempt's far-away sentinel did, putting the cursor
+    /// at index 0 for as long as the box was closed.
+    ///
+    /// A guard rather than a fix: the shape that ships already holds this,
+    /// because the drag branch asks for a position before it moves anything.
+    /// What it guards against is somebody restoring the unwrap — the `None`
+    /// arriving here is indistinguishable from a click at the origin the
+    /// moment it is given a default.
+    #[test]
+    fn a_move_with_no_position_leaves_the_selection_where_it_was() {
+        let mut tree = crate::tree::Tree::new();
+        // An id with no bounds: the drag branch does not consult them — that
+        // is what lets a selection continue past the edge of the field — so
+        // the empty rect is exactly the right stand-in here.
+        let id = tree.register(Box::new(crate::widgets::container()));
+
+        let text = create_signal(String::from("hello world"));
+        let mut input = text_input(text);
+        input.selection = Selection {
+            anchor: 2,
+            cursor: 7,
+        };
+        input.is_dragging = true;
+
+        let moved_to = Event::MouseMove {
+            at: Some(Point::new(60.0, 5.0)),
+        };
+        Widget::event(&mut input, &mut tree, id, &moved_to);
+        let dragged = input.selection.cursor;
+        assert_ne!(
+            dragged, 7,
+            "a positioned move has to extend the selection, or this test is \
+             asserting against a drag that was never running"
+        );
+
+        Widget::event(&mut input, &mut tree, id, &Event::MouseMove { at: None });
+        assert_eq!(
+            (input.selection.anchor, input.selection.cursor),
+            (2, dragged),
+            "and one with no position leaves it exactly where it was"
+        );
+    }
 
     /// Two keystrokes inside the window are one undo, and two outside it are
     /// two — which is what `HISTORY_COALESCE_MS` promises and nothing could

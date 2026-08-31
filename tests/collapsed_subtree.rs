@@ -381,14 +381,15 @@ fn a_key_still_reaches_a_descendant_of_a_collapsed_container() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. A drag in flight is not snapped to zero
+// 4. A selection or a drag in flight is not snapped to zero
 //
-// Covered where the drag lives rather than in a case of its own: a move with
-// no position leaves a scrollbar drag and a text selection exactly where they
-// were, because the arm that would move them asks for a position first. The
-// half that *does* change is the hover beside it, which is what
-// `a_text_input_inside_a_collapsing_container_stops_being_hovered` asserts.
-//
+// Asserted where the state lives, because nothing outside the crate can read a
+// selection back: `text_input::tests::a_move_with_no_position_leaves_the_
+// selection_where_it_was`. The half of that split which *is* visible from here
+// is the hover above, which falls while the selection stands.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
 // 5. Clipping behaves like the rest
 // ---------------------------------------------------------------------------
 

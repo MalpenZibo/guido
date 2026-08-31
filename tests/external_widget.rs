@@ -10,6 +10,14 @@
 //! This file covers the first: the two preludes are the only imports, which is
 //! the point of `widget_prelude` existing — the tree, the paint context and the
 //! tracking scope used to have to be reached for one module at a time.
+//!
+//! It also covers `event`, which is not required but is what a widget needs to
+//! be pointed at. That method's signature names `Event`, and a positional
+//! `Event` names `Point`, so this is where those two being reachable from the
+//! documented pair of preludes is checked.
+
+use std::cell::Cell;
+use std::rc::Rc;
 
 use guido::prelude::*;
 use guido::widget_prelude::*;
@@ -20,6 +28,9 @@ use guido::widget_prelude::*;
 struct Bar {
     extent: Signal<f32>,
     measured: f32,
+    /// Where the last pointer event said it was, if it said anywhere. Shared
+    /// with the test, which has no other way to look inside a boxed widget.
+    pointed_at: Rc<Cell<Option<Option<Point>>>>,
 }
 
 impl Widget for Bar {
@@ -30,6 +41,17 @@ impl Widget for Bar {
         tree.cache_layout(id, constraints, size);
         tree.clear_needs_layout(id);
         size
+    }
+
+    fn event(&mut self, _tree: &mut Tree, _id: WidgetId, event: &Event) -> EventResponse {
+        // A pointer event may have no position — see `Event::coords`. A widget
+        // outside the crate has to be able to say so, which means naming the
+        // `Option` rather than unwrapping it.
+        if let Event::MouseMove { at } = event {
+            self.pointed_at.set(Some(*at));
+            return EventResponse::Handled;
+        }
+        EventResponse::Ignored
     }
 
     fn paint(&self, _tree: &Tree, _id: WidgetId, ctx: &mut PaintContext) {
@@ -59,6 +81,7 @@ fn a_widget_from_outside_the_crate_lays_out_and_paints() {
     let (mut tree, root, size) = lay_out(Bar {
         extent: extent.into(),
         measured: 0.0,
+        pointed_at: Rc::new(Cell::new(None)),
     });
 
     assert_eq!(size, Size::new(20.0, 20.0));
@@ -82,6 +105,7 @@ fn it_re_measures_from_the_signal_it_read() {
     let (mut tree, root, _) = lay_out(Bar {
         extent: extent.into(),
         measured: 0.0,
+        pointed_at: Rc::new(Cell::new(None)),
     });
 
     extent.set(40.0);
@@ -92,4 +116,42 @@ fn it_re_measures_from_the_signal_it_read() {
         .expect("root is registered");
 
     assert_eq!(size, Size::new(40.0, 40.0));
+}
+
+/// A pointer event reaches a widget written outside the crate, and it can tell
+/// a position from the absence of one.
+///
+/// `Event`'s positional variants carry `Option<Point>` rather than a pair of
+/// floats, because a subtree collapsed to nothing has no position to give and
+/// no number could have said so (#227). That is public API, so a third-party
+/// widget has to be able to spell both halves — with nothing imported but the
+/// two preludes.
+#[test]
+fn a_widget_from_outside_the_crate_can_tell_a_position_from_none() {
+    let extent = create_signal(20.0f32);
+    let pointed_at = Rc::new(Cell::new(None));
+    let (mut tree, root, _) = lay_out(Bar {
+        extent: extent.into(),
+        measured: 0.0,
+        pointed_at: Rc::clone(&pointed_at),
+    });
+
+    let mut send = |at| {
+        tree.with_widget_mut(root, |w, id, t| w.event(t, id, &Event::MouseMove { at }));
+    };
+
+    send(Some(Point::new(3.0, 4.0)));
+    assert_eq!(
+        pointed_at.get(),
+        Some(Some(Point::new(3.0, 4.0))),
+        "a positioned move arrives with its position"
+    );
+
+    send(None);
+    assert_eq!(
+        pointed_at.get(),
+        Some(None),
+        "and one that lost its position arrives without it, rather than not \
+         arriving or arriving at the origin"
+    );
 }

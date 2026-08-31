@@ -125,6 +125,21 @@ impl Container {
         };
 
         match event {
+            // An enter with no position is an enter into nothing, so it is
+            // the falling edge rather than the rising one. The platform only
+            // ever sends a positioned one (`input.rs`), but a container that
+            // collapses is what takes the position away on the way down, and
+            // the move that would otherwise clear the hover is a whole event
+            // later.
+            Event::MouseEnter { at: None } if ix.is_hovered() => {
+                ix.set_flag(InteractionFlags::HOVERED, false);
+                if ix.declares(|w| matches!(w, StateWhen::Hovered)) {
+                    request_repaint(id);
+                }
+                if let Some(ref callback) = ix.on_hover {
+                    callback(false);
+                }
+            }
             Event::MouseEnter { at } if hit.contains(*at) && !ix.is_hovered() => {
                 ix.set_flag(InteractionFlags::HOVERED, true);
                 if ix.declares(|w| matches!(w, StateWhen::Hovered)) {
