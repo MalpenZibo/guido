@@ -141,16 +141,20 @@ thing with one.
 
 It now holds as many surfaces as the loop will carry, so a second surface, and
 `spawn_surface` and `close` at runtime, are watched too. So is the order the
-loop tears a popup chain down in — though only the loop's half of it: the
-recorder answers `popup_descendants_bottom_up` from its own map, so the Wayland
-implementation of that same rule still has no sensor (#292).
+loop tears a popup chain down in, and this one is watched all the way now: both
+`Platform` implementations answer `popup_descendants_bottom_up` from one
+`descendants_bottom_up`, so the recorder and the compositor are given the same
+order by the same code. What `src/platform/popups.rs` still keeps to itself is
+six lines saying which surfaces are popups and whose children they are.
 
-The session lock, output hotplug and popup grab conflicts are the remainder.
-They need no redesign — the map was the missing part — but they do need
-machinery: the recorder answers four of `Platform`'s lock methods with the
-trait's defaults, `sync_outputs` is `pub(crate)` so no test in `tests/` can
-reach it, and the recorder throws away the `PopupConfig` that would say which
-popups hold a grab.
+The grab-conflict teardown is watched too, now that the recorder keeps the
+`grab` flag it used to throw away: a new grab that cannot nest under the live
+chain brings that chain down, and a test says in which order.
+
+The session lock and output hotplug are the remainder. They need no redesign —
+the map was the missing part — but they do need machinery: the recorder answers
+four of `Platform`'s lock methods with the trait's defaults, and `sync_outputs`
+is `pub(crate)` so no test in `tests/` can reach it.
 
 ## What watches the harness
 

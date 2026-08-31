@@ -299,6 +299,10 @@ fn a_surface_spawned_at_runtime_reaches_the_compositor_and_the_last_close_ends_t
 /// a live child raises `not_the_topmost_popup` and the compositor kills the
 /// connection. Until now that ordering was a comment in `process_surface_commands`
 /// and an example somebody ran.
+///
+/// Two popups deep rather than one, so that the order is something a list can
+/// get wrong: with a single popup every rule agrees, and this case could not
+/// tell a teardown order from its reverse.
 #[test]
 fn a_popup_is_destroyed_before_the_surface_it_hangs_from() {
     let Some(mut app) = headless() else { return };
@@ -308,15 +312,106 @@ fn a_popup_is_destroyed_before_the_surface_it_hangs_from() {
 
     let popup = spawn_popup(parent, PopupConfig::new(80).height(40), measuring_24);
     app.step();
+    let nested = spawn_popup(popup.id(), PopupConfig::new(60).height(30), measuring_24);
+    app.step();
 
-    assert_eq!(app.surfaces_created(), [parent, popup.id()]);
+    assert_eq!(app.surfaces_created(), [parent, popup.id(), nested.id()]);
 
     surface_handle(parent).close();
     app.step();
 
     assert_eq!(
         app.surfaces_destroyed(),
-        [popup.id(), parent],
+        [nested.id(), popup.id(), parent],
         "the child goes first, or the compositor kills the connection"
+    );
+}
+
+/// A branching popup tree comes down topmost first, and "topmost" is a decided
+/// order rather than whatever a map iterated.
+///
+/// xdg-shell keeps the live popups in a stack and a client must destroy them
+/// from the top down; the one raised last is the one on top. A `SurfaceId` is a
+/// monotonic counter, so descending id *is* that stack, and it gives
+/// child-before-parent for free — a popup cannot be created on a parent that
+/// does not exist yet.
+///
+/// The chain in `a_popup_is_destroyed_before_the_surface_it_hangs_from` has one
+/// child at every level, so every order agrees on it. This one branches, which
+/// is where they stop agreeing: a frontier reversed, a recursion, and a hash
+/// iteration are three different answers, and only one of them is the stack.
+#[test]
+fn a_branching_popup_tree_comes_down_newest_first() {
+    let Some(mut app) = headless() else { return };
+    let parent = app.surface(content_bar(), measuring_24);
+    app.configure(parent, 200, 24, 1.0);
+    app.step();
+
+    let first = spawn_popup(parent, PopupConfig::new(80).height(40), measuring_24);
+    app.step();
+    let nested = spawn_popup(first.id(), PopupConfig::new(60).height(30), measuring_24);
+    app.step();
+    // A sibling of `first`, raised after the whole of `first`'s own chain.
+    let last = spawn_popup(parent, PopupConfig::new(80).height(40), measuring_24);
+    app.step();
+
+    assert_eq!(
+        app.surfaces_created(),
+        [parent, first.id(), nested.id(), last.id()],
+        "the four surfaces exist, in the order they were asked for"
+    );
+
+    surface_handle(parent).close();
+    app.step();
+
+    assert_eq!(
+        app.surfaces_destroyed(),
+        [last.id(), nested.id(), first.id(), parent],
+        "the stack comes down from the top: the newest popup, then the deepest \
+         branch, then its root, then the surface they all hang from"
+    );
+}
+
+/// A new grab closes the grab chain it cannot nest under, deepest first.
+///
+/// xdg-shell lets one grab chain exist at a time and a new grab must nest under
+/// the current holder. Opening one somewhere else means tearing the old chain
+/// down first, and in the same order as any other teardown — the compositor
+/// applies `not_the_topmost_popup` to these destroys like the rest.
+///
+/// This path had no sensor at all: the recorder used to discard the
+/// `PopupConfig` it was handed, so it could not say which popups held a grab
+/// and answered `conflicting_grab_popups` with the trait's empty default.
+#[test]
+fn a_new_grab_tears_down_the_chain_it_cannot_nest_under() {
+    let Some(mut app) = headless() else { return };
+    let bar = app.surface(content_bar(), measuring_24);
+    app.configure(bar, 200, 24, 1.0);
+    app.step();
+
+    let menu = spawn_popup(bar, PopupConfig::new(80).height(40).grab(), measuring_24);
+    app.step();
+    let submenu = spawn_popup(
+        menu.id(),
+        PopupConfig::new(60).height(30).grab(),
+        measuring_24,
+    );
+    app.step();
+    assert_eq!(app.surfaces_created(), [bar, menu.id(), submenu.id()]);
+
+    // A second menu on the bar itself: it cannot nest under the chain above, so
+    // that chain has to go before this one opens.
+    let other = spawn_popup(bar, PopupConfig::new(80).height(40).grab(), measuring_24);
+    app.step();
+
+    assert_eq!(
+        app.surfaces_destroyed(),
+        [submenu.id(), menu.id()],
+        "the chain comes down deepest first, before the new grab opens"
+    );
+    assert_eq!(
+        app.surfaces_created(),
+        [bar, menu.id(), submenu.id(), other.id()],
+        "and the new grab did open"
     );
 }

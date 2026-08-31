@@ -41,6 +41,10 @@ struct RecordedSurface {
     /// in a map beside it, so a parent link cannot outlive its surface — which
     /// is also where `WaylandState` keeps it.
     parent: Option<SurfaceId>,
+    /// Whether this popup took an explicit grab. Kept because
+    /// `conflicting_grab_popups` cannot be answered without it, and a recorder
+    /// that throws it away leaves that path with no sensor at all.
+    grab: bool,
     width: u32,
     height: u32,
     scale: f32,
@@ -150,7 +154,7 @@ impl Platform for Recorder {
         &mut self,
         id: SurfaceId,
         parent: SurfaceId,
-        _config: &crate::surface::PopupConfig,
+        config: &crate::surface::PopupConfig,
         size: (u32, u32),
     ) -> bool {
         self.created.push(id);
@@ -158,6 +162,7 @@ impl Platform for Recorder {
             id,
             RecordedSurface {
                 parent: Some(parent),
+                grab: config.grab,
                 width: size.0,
                 height: size.1,
                 scale: 1.0,
@@ -173,17 +178,26 @@ impl Platform for Recorder {
         self.surfaces.remove(&id);
     }
 
-    /// Deepest first, which is the order the protocol demands and the order the
-    /// loop is supposed to close them in.
+    /// The same rule the Wayland platform answers with — the recorder's job is
+    /// to know who hangs from whom, not to have an opinion about the order.
     fn popup_descendants_bottom_up(&self, root: SurfaceId) -> Vec<SurfaceId> {
-        let mut out = Vec::new();
-        for (&child, surface) in &self.surfaces {
-            if surface.parent == Some(root) {
-                out.extend(self.popup_descendants_bottom_up(child));
-                out.push(child);
-            }
-        }
-        out
+        crate::descendants_bottom_up(
+            root,
+            self.surfaces
+                .iter()
+                .filter_map(|(id, surface)| surface.parent.map(|parent| (*id, parent))),
+        )
+    }
+
+    /// Likewise: which popups hold a grab is the recorder's to know, what to do
+    /// about it is not.
+    fn conflicting_grab_popups(&self, new_parent: SurfaceId) -> Vec<SurfaceId> {
+        crate::conflicting_grabs(
+            new_parent,
+            self.surfaces.iter().filter_map(|(id, surface)| {
+                surface.parent.map(|parent| (*id, parent, surface.grab))
+            }),
+        )
     }
 
     fn create_render_target(
