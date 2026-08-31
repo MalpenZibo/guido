@@ -1289,16 +1289,17 @@ impl Widget for TextInput {
         let bounds = tree.get_bounds(id).unwrap_or_default();
 
         match event {
-            Event::MouseDown { x, y, button }
-                if bounds.contains(*x, *y) && *button == MouseButton::Left =>
-            {
+            Event::MouseDown {
+                at: Some(at),
+                button,
+            } if bounds.contains(at.x, at.y) && *button == MouseButton::Left => {
                 // Focus, then repaint to show the caret where the click landed.
                 // The blink schedules its own next wake from `paint`.
                 request_focus(tree, id);
                 request_job(id, JobRequest::Paint);
 
                 // Set cursor position
-                let char_index = self.char_index_at_x(*x, bounds);
+                let char_index = self.char_index_at_x(at.x, bounds);
                 self.selection = Selection::new(char_index);
                 self.is_dragging = true;
                 self.reset_cursor_blink(edit.at);
@@ -1306,8 +1307,13 @@ impl Widget for TextInput {
 
                 return EventResponse::Handled;
             }
-            Event::MouseMove { x, y, .. } => {
-                let in_bounds = bounds.contains(*x, *y);
+            // Matched whether or not it has a position, because the two
+            // halves want different answers: a move with no position is over
+            // nothing, so the hover below has to fall — but it says nothing
+            // about where a selection has got to, so the drag keeps what it
+            // had rather than being dragged to the start of the line.
+            Event::MouseMove { at } => {
+                let in_bounds = bounds.contains_at(*at);
 
                 // Update hover state and cursor
                 if in_bounds && !self.is_hovered {
@@ -1320,9 +1326,11 @@ impl Widget for TextInput {
                     set_cursor(CursorIcon::Default);
                 }
 
-                if self.is_dragging {
+                if let Some(at) = at
+                    && self.is_dragging
+                {
                     // Extend selection while dragging
-                    let char_index = self.char_index_at_x(*x, bounds);
+                    let char_index = self.char_index_at_x(at.x, bounds);
                     self.selection.cursor = char_index;
                     self.ensure_cursor_visible(bounds.width);
                     request_job(id, JobRequest::Paint);
@@ -1338,12 +1346,13 @@ impl Widget for TextInput {
                 }
                 return EventResponse::Handled;
             }
-            Event::MouseDown { x, y, button }
-                if bounds.contains(*x, *y) && *button == MouseButton::Middle =>
-            {
+            Event::MouseDown {
+                at: Some(at),
+                button,
+            } if bounds.contains(at.x, at.y) && *button == MouseButton::Middle => {
                 // Middle-click paste from the primary selection
                 request_focus(tree, id);
-                let char_index = self.char_index_at_x(*x, bounds);
+                let char_index = self.char_index_at_x(at.x, bounds);
                 self.selection = Selection::new(char_index);
                 if let Some(text) = primary_paste() {
                     self.insert_text(&text, edit);

@@ -34,8 +34,15 @@ impl H {
 
     fn point_at(&mut self, x: f32, y: f32) {
         let root = self.root;
-        self.tree
-            .with_widget_mut(root, |w, id, t| w.event(t, id, &Event::MouseMove { x, y }));
+        self.tree.with_widget_mut(root, |w, id, t| {
+            w.event(
+                t,
+                id,
+                &Event::MouseMove {
+                    at: Some(Point::new(x, y)),
+                },
+            )
+        });
     }
 
     /// Every text drawn, in paint order, as (content, colour).

@@ -185,8 +185,7 @@ impl Surface {
                 t,
                 id,
                 &Event::Scroll {
-                    x,
-                    y: SCROLLER_TOP + VIEWPORT / 2.0,
+                    at: Some(Point::new(x, SCROLLER_TOP + VIEWPORT / 2.0)),
                     delta_x: 0.0,
                     delta_y: delta,
                     source: ScrollSource::Wheel,

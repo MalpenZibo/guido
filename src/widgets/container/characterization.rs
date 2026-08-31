@@ -661,13 +661,11 @@ fn a_zero_area_container_skips_its_children() {
 fn click_at(x: f32, y: f32) -> [Event; 2] {
     [
         Event::MouseDown {
-            x,
-            y,
+            at: Some(Point::new(x, y)),
             button: MouseButton::Left,
         },
         Event::MouseUp {
-            x,
-            y,
+            at: Some(Point::new(x, y)),
             button: MouseButton::Left,
         },
     ]
@@ -733,10 +731,14 @@ fn hover_tracks_entering_and_leaving() {
     );
     h.fit(500.0, 500.0);
 
-    h.send(Event::MouseMove { x: 25.0, y: 10.0 });
+    h.send(Event::MouseMove {
+        at: Some(Point::new(25.0, 10.0)),
+    });
     assert!(state.get());
 
-    h.send(Event::MouseMove { x: 300.0, y: 10.0 });
+    h.send(Event::MouseMove {
+        at: Some(Point::new(300.0, 10.0)),
+    });
     assert!(!state.get());
 }
 
@@ -780,8 +782,7 @@ fn scroll_reaches_the_callback_inside_the_bounds() {
     h.fit(500.0, 500.0);
 
     h.send(Event::Scroll {
-        x: 25.0,
-        y: 10.0,
+        at: Some(Point::new(25.0, 10.0)),
         delta_x: 0.0,
         delta_y: 12.0,
         source: crate::widgets::widget::ScrollSource::Wheel,
@@ -1156,8 +1157,7 @@ fn a_ripple_and_a_transition_are_asked_about_the_same_moment() {
     h.fit(400.0, 400.0);
 
     h.send(Event::MouseDown {
-        x: 10.0,
-        y: 50.0,
+        at: Some(Point::new(10.0, 50.0)),
         button: MouseButton::Left,
     });
     w.set(120.0);
@@ -1235,8 +1235,7 @@ fn a_press_held_for_a_named_time_has_grown_by_a_named_amount() {
         &mut h,
         t0,
         Event::MouseDown {
-            x: 50.0,
-            y: 50.0,
+            at: Some(Point::new(50.0, 50.0)),
             button: MouseButton::Left,
         },
     );
@@ -1300,7 +1299,9 @@ fn painted_text_color(h: &mut H) -> Color {
 
 fn set_hover(h: &mut H, inside: bool) {
     let (x, y) = if inside { (5.0, 5.0) } else { (-50.0, -50.0) };
-    h.send(Event::MouseMove { x, y });
+    h.send(Event::MouseMove {
+        at: Some(Point::new(x, y)),
+    });
 }
 
 /// The failure this guards against is cache-shaped and silent: the container
@@ -2038,8 +2039,7 @@ fn a_layer_silent_on_a_property_does_not_shadow_the_one_below_it() {
 
     set_hover(&mut h, true);
     h.send(Event::MouseDown {
-        x: 5.0,
-        y: 5.0,
+        at: Some(Point::new(5.0, 5.0)),
         button: MouseButton::Left,
     });
     assert_eq!(rects(&h.paint())[0].1, Color::RED);
@@ -2842,8 +2842,7 @@ fn scrolling_a_frosted_card_away_withdraws_its_blur() {
     );
 
     h.send(Event::Scroll {
-        x: 20.0,
-        y: 15.0,
+        at: Some(Point::new(20.0, 15.0)),
         delta_x: 0.0,
         delta_y: 600.0,
         source: ScrollSource::Wheel,

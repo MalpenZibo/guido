@@ -350,24 +350,32 @@ impl Transform {
         }
     }
 
-    /// Compute the inverse of this transform.
+    /// Compute the inverse of this transform, or `None` where there is none.
     ///
-    /// Returns the identity for degenerate (zero-determinant) transforms.
-    pub fn inverse(&self) -> Transform {
+    /// A scale of zero on either axis squashes the plane onto a line or a
+    /// point, and the map stops being one-to-one: every point in the box lands
+    /// on top of every other, so "which point did this come from" has
+    /// infinitely many answers and the arithmetic divides by zero.
+    ///
+    /// This used to answer the identity there, on the grounds that it was the
+    /// least wrong finite answer. It was not: the caller that undoes a
+    /// transform before hit testing read it as "nothing to undo" and compared
+    /// the point against the *uncollapsed* bounds, so an invisible subtree
+    /// answered for the whole area it covers when it is open. Saying `None`
+    /// hands the caller a decision instead of a wrong number — which is how
+    /// Qt spells it too, where `inverted` sets an `invertible` flag beside the
+    /// identity it returns.
+    pub fn inverse(&self) -> Option<Transform> {
         let [a, b, tx, c, d, ty] = self.data;
 
         let det = a * d - b * c;
-
-        // Degenerate: the transform has collapsed the plane onto a line or a
-        // point and cannot be undone, so the identity is the least wrong
-        // answer available. What that costs the hit test is #227.
         if det.abs() < DEGENERATE {
-            return Self::IDENTITY;
+            return None;
         }
 
         let inv_det = 1.0 / det;
 
-        Transform {
+        Some(Transform {
             data: [
                 d * inv_det,
                 -b * inv_det,
@@ -376,7 +384,7 @@ impl Transform {
                 a * inv_det,
                 (c * tx - a * ty) * inv_det,
             ],
-        }
+        })
     }
 
     /// Transform a 2D point by this transform
@@ -543,7 +551,7 @@ mod tests {
     #[test]
     fn test_inverse_translate() {
         let t = Transform::translate(10.0, 20.0);
-        let inv = t.inverse();
+        let inv = t.inverse().expect("invertible");
         let composed = t.then(&inv);
 
         // Should be identity
@@ -555,7 +563,7 @@ mod tests {
     #[test]
     fn test_inverse_rotate() {
         let t = Transform::rotate_degrees(45.0);
-        let inv = t.inverse();
+        let inv = t.inverse().expect("invertible");
         let composed = t.then(&inv);
 
         let (x, y) = composed.transform_point(3.0, 4.0);
@@ -566,7 +574,7 @@ mod tests {
     #[test]
     fn test_inverse_scale() {
         let t = Transform::scale(2.0);
-        let inv = t.inverse();
+        let inv = t.inverse().expect("invertible");
         let composed = t.then(&inv);
 
         let (x, y) = composed.transform_point(3.0, 4.0);
@@ -805,12 +813,18 @@ mod tests {
         assert!(approx_eq(y1, y2));
     }
 
+    /// A collapsed transform has no inverse, and says so rather than handing
+    /// back the identity — which the hit test read as "nothing to undo", so an
+    /// invisible subtree answered for the area it covers when it is open.
     #[test]
-    fn test_inverse_degenerate() {
-        // Zero scale has zero determinant - should return identity
-        let t = Transform::scale(0.0);
-        let inv = t.inverse();
-        assert!(inv.is_identity());
+    fn a_collapsed_transform_has_no_inverse() {
+        assert!(Transform::scale(0.0).inverse().is_none());
+        assert!(Transform::scale_xy(1.0, 0.0).inverse().is_none());
+        assert!(Transform::scale_xy(0.0, 1.0).inverse().is_none());
+
+        // Small is not collapsed: the map is still one-to-one, so undoing it
+        // is a division by something rather than by nothing.
+        assert!(Transform::scale_xy(1.0, 0.001).inverse().is_some());
     }
 
     #[test]

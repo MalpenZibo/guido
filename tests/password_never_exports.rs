@@ -69,14 +69,14 @@ impl Field {
         // The field is only `font_size * 1.2` tall, so the y has to stay well
         // inside it or the hit test drops the press and the drag selects nothing.
         self.event(&Event::MouseDown {
-            x: 0.0,
-            y: 4.0,
+            at: Some(Point::new(0.0, 4.0)),
             button: MouseButton::Left,
         });
-        self.event(&Event::MouseMove { x: 399.0, y: 4.0 });
+        self.event(&Event::MouseMove {
+            at: Some(Point::new(399.0, 4.0)),
+        });
         self.event(&Event::MouseUp {
-            x: 399.0,
-            y: 4.0,
+            at: Some(Point::new(399.0, 4.0)),
             button: MouseButton::Left,
         });
     }

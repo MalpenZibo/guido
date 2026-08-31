@@ -272,8 +272,7 @@ impl H {
             (0.0, delta)
         };
         self.dispatch(Event::Scroll {
-            x: 100.0,
-            y: 40.0,
+            at: Some(Point::new(100.0, 40.0)),
             delta_x,
             delta_y,
             source: ScrollSource::Wheel,
@@ -311,8 +310,7 @@ fn a_track_click_moves_the_handle() {
     let mut h = H::vertical();
 
     h.dispatch(Event::MouseDown {
-        x: 195.0,
-        y: 190.0,
+        at: Some(Point::new(195.0, 190.0)),
         button: MouseButton::Left,
     });
 
@@ -349,8 +347,7 @@ fn a_track_click_moves_the_horizontal_handle() {
     let mut h = H::horizontal();
 
     h.dispatch(Event::MouseDown {
-        x: 190.0,
-        y: 75.0,
+        at: Some(Point::new(190.0, 75.0)),
         button: MouseButton::Left,
     });
 
@@ -392,8 +389,7 @@ fn pressing_the_painted_handle_starts_a_drag_rather_than_jumping_the_track() {
 
     let painted_centre = h.handle_pos() + V_HANDLE / 2.0;
     h.dispatch(Event::MouseDown {
-        x: 195.0,
-        y: painted_centre,
+        at: Some(Point::new(195.0, painted_centre)),
         button: MouseButton::Left,
     });
 
@@ -429,8 +425,7 @@ fn a_press_anywhere_on_the_handle_ripples_from_where_it_landed() {
         let pressed = Instant::now();
         h.dispatch_at(
             Event::MouseDown {
-                x: handle_x + local_x,
-                y: handle_y + local_y,
+                at: Some(Point::new(handle_x + local_x, handle_y + local_y)),
                 button: MouseButton::Left,
             },
             pressed,
@@ -464,8 +459,10 @@ fn hovering_the_handle_colours_it_wherever_the_scroller_sits() {
     let resting = h.handle_fill_alpha();
 
     h.dispatch(Event::MouseMove {
-        x: INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
-        y: INSET + TRACK_START + V_HANDLE / 2.0,
+        at: Some(Point::new(
+            INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+            INSET + TRACK_START + V_HANDLE / 2.0,
+        )),
     });
 
     let hovered = h.handle_fill_alpha();
@@ -491,8 +488,10 @@ fn the_width_a_hover_adds_to_the_handle_answers_a_press_too() {
     let mut h = H::vertical_inset();
     let hovered = Instant::now();
     h.dispatch(Event::MouseMove {
-        x: INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
-        y: INSET + TRACK_START + V_HANDLE / 2.0,
+        at: Some(Point::new(
+            INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+            INSET + TRACK_START + V_HANDLE / 2.0,
+        )),
     });
     for step in 1..=8 {
         h.frame(hovered + Duration::from_millis(16 * step));
@@ -512,8 +511,10 @@ fn the_width_a_hover_adds_to_the_handle_answers_a_press_too() {
     let pressed = hovered + Duration::from_millis(200);
     h.dispatch_at(
         Event::MouseDown {
-            x: INSET + left + 1.0,
-            y: INSET + TRACK_START + V_HANDLE / 2.0,
+            at: Some(Point::new(
+                INSET + left + 1.0,
+                INSET + TRACK_START + V_HANDLE / 2.0,
+            )),
             button: MouseButton::Left,
         },
         pressed,
@@ -543,8 +544,10 @@ fn hovering_the_horizontal_handle_colours_it_too() {
     let resting = h.handle_fill_alpha();
 
     h.dispatch(Event::MouseMove {
-        x: INSET + TRACK_START + H_HANDLE / 2.0,
-        y: INSET + H_VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        at: Some(Point::new(
+            INSET + TRACK_START + H_HANDLE / 2.0,
+            INSET + H_VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        )),
     });
 
     let hovered = h.handle_fill_alpha();
@@ -573,8 +576,7 @@ fn the_horizontal_handle_ripples_from_where_it_landed_too() {
         let pressed = Instant::now();
         h.dispatch_at(
             Event::MouseDown {
-                x: handle_x + local_x,
-                y: handle_y + local_y,
+                at: Some(Point::new(handle_x + local_x, handle_y + local_y)),
                 button: MouseButton::Left,
             },
             pressed,
@@ -617,8 +619,10 @@ fn the_hover_widens_the_handle_inward_and_leaves_its_outer_edge_alone() {
 
     let hovered = Instant::now();
     h.dispatch(Event::MouseMove {
-        x: INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
-        y: INSET + TRACK_START + V_HANDLE / 2.0,
+        at: Some(Point::new(
+            INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+            INSET + TRACK_START + V_HANDLE / 2.0,
+        )),
     });
     for step in 1..=8 {
         h.frame(hovered + Duration::from_millis(16 * step));
@@ -648,8 +652,10 @@ fn leaving_the_scroller_takes_the_handles_hover_with_it() {
     let resting = h.handle_fill_alpha();
 
     h.dispatch(Event::MouseMove {
-        x: INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
-        y: INSET + TRACK_START + V_HANDLE / 2.0,
+        at: Some(Point::new(
+            INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+            INSET + TRACK_START + V_HANDLE / 2.0,
+        )),
     });
     assert!(h.handle_fill_alpha() > resting, "the handle never lit up");
 
@@ -687,8 +693,10 @@ fn releasing_on_the_widened_handle_finishes_the_ripple_rather_than_abandoning_it
     let y = INSET + TRACK_START + V_HANDLE / 2.0;
     let hovered = Instant::now();
     h.dispatch(Event::MouseMove {
-        x: INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
-        y,
+        at: Some(Point::new(
+            INSET + VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+            y,
+        )),
     });
     for step in 1..=8 {
         h.frame(hovered + Duration::from_millis(16 * step));
@@ -703,8 +711,7 @@ fn releasing_on_the_widened_handle_finishes_the_ripple_rather_than_abandoning_it
     let pressed = hovered + Duration::from_millis(200);
     h.dispatch_at(
         Event::MouseDown {
-            x,
-            y,
+            at: Some(Point::new(x, y)),
             button: MouseButton::Left,
         },
         pressed,
@@ -717,8 +724,7 @@ fn releasing_on_the_widened_handle_finishes_the_ripple_rather_than_abandoning_it
 
     h.dispatch_at(
         Event::MouseUp {
-            x,
-            y,
+            at: Some(Point::new(x, y)),
             button: MouseButton::Left,
         },
         released,
@@ -757,8 +763,10 @@ fn the_handle_takes_the_hover_colour_where_it_is_painted_after_a_wheel_scroll() 
 
     let painted = h.handle_pos();
     h.dispatch(Event::MouseMove {
-        x: VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
-        y: painted + V_HANDLE / 2.0,
+        at: Some(Point::new(
+            VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+            painted + V_HANDLE / 2.0,
+        )),
     });
 
     let hovered = h.handle_fill_alpha();
@@ -788,12 +796,13 @@ fn the_handle_is_pressable_where_it_is_painted_after_a_wheel_scroll() {
         VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
         painted + V_HANDLE / 2.0,
     );
-    h.dispatch(Event::MouseMove { x, y });
+    h.dispatch(Event::MouseMove {
+        at: Some(Point::new(x, y)),
+    });
     let hovered = h.handle_fill_alpha();
 
     h.dispatch(Event::MouseDown {
-        x,
-        y,
+        at: Some(Point::new(x, y)),
         button: MouseButton::Left,
     });
 
@@ -823,16 +832,14 @@ fn the_hover_follows_the_pointer_across_the_handle_and_stops_at_its_edge() {
     let resting = h.handle_fill_alpha();
 
     h.dispatch(Event::MouseMove {
-        x,
-        y: TRACK_START + V_HANDLE / 4.0,
+        at: Some(Point::new(x, TRACK_START + V_HANDLE / 4.0)),
     });
     let hovered = h.handle_fill_alpha();
     assert!(hovered > resting, "the handle never lit up");
 
     // Still on the handle, further down it.
     h.dispatch(Event::MouseMove {
-        x,
-        y: TRACK_START + V_HANDLE * 3.0 / 4.0,
+        at: Some(Point::new(x, TRACK_START + V_HANDLE * 3.0 / 4.0)),
     });
     let still = h.handle_fill_alpha();
     assert!(
@@ -842,8 +849,7 @@ fn the_hover_follows_the_pointer_across_the_handle_and_stops_at_its_edge() {
 
     // Down the track, past the foot of the handle, and still inside the scroller.
     h.dispatch(Event::MouseMove {
-        x,
-        y: TRACK_START + V_HANDLE + 20.0,
+        at: Some(Point::new(x, TRACK_START + V_HANDLE + 20.0)),
     });
 
     let after = h.handle_fill_alpha();

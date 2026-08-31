@@ -8,7 +8,7 @@ use crate::layout::Constraints;
 use crate::renderer::PaintContext;
 use crate::tree::{Tree, WidgetId};
 use crate::widgets::scroll::{ScrollAxis, ScrollbarAxis, ScrollbarVisibility};
-use crate::widgets::widget::{Event, EventResponse, MouseButton, Rect, ScrollSource};
+use crate::widgets::widget::{Event, EventResponse, MouseButton, Point, Rect, ScrollSource};
 
 use super::Container;
 use super::animations::AnimationState;
@@ -493,16 +493,12 @@ impl Container {
         .unwrap_or(1.0);
 
         let unscaled: Cow<'_, Event> = match (event.coords(), tree.get_bounds(handle_id)) {
-            (Some((x, y)), Some(bounds)) => {
-                let (local_x, local_y) = untransform_point(
-                    &scrollbar_scale_transform(axis, scale),
-                    scrollbar_scale_pivot(axis),
-                    bounds,
-                    x,
-                    y,
-                );
-                Cow::Owned(event.with_coords(local_x, local_y))
-            }
+            (Some(at), Some(bounds)) => Cow::Owned(event.with_coords(untransform_point(
+                &scrollbar_scale_transform(axis, scale),
+                scrollbar_scale_pivot(axis),
+                bounds,
+                at,
+            ))),
             _ => Cow::Borrowed(event),
         };
 
@@ -536,17 +532,17 @@ impl Container {
         }
 
         let local: Cow<'_, Event> = match event.coords() {
-            Some((x, y)) => {
-                let (local_x, local_y) = hit.rebase(x, y);
-                Cow::Owned(event.with_coords(local_x, local_y))
-            }
+            Some(at) => Cow::Owned(event.with_coords(Some(hit.rebase(at)))),
             None => Cow::Borrowed(event),
         };
         let event = local.as_ref();
         let bounds = Rect::new(0.0, 0.0, hit.bounds.width, hit.bounds.height);
 
         match event {
-            Event::MouseDown { x, y, button } if *button == MouseButton::Left => {
+            Event::MouseDown {
+                at: Some(at),
+                button,
+            } if *button == MouseButton::Left => {
                 // Check vertical scrollbar
                 if self.scroll_axis.allows_vertical()
                     && self.scroll().scroll_state.needs_vertical_scrollbar()
@@ -555,8 +551,8 @@ impl Container {
                         id,
                         bounds,
                         ScrollbarAxis::Vertical,
-                        *x,
-                        *y,
+                        at.x,
+                        at.y,
                         event,
                     )
                 {
@@ -571,8 +567,8 @@ impl Container {
                         id,
                         bounds,
                         ScrollbarAxis::Horizontal,
-                        *x,
-                        *y,
+                        at.x,
+                        at.y,
                         event,
                     )
                 {
@@ -580,23 +576,31 @@ impl Container {
                 }
             }
 
-            Event::MouseMove { x, y } => {
+            // Matched whether or not it has a position. A move with no
+            // position cannot say where a drag has got to, and must not be
+            // read as one that says zero — so the drag keeps what it had and
+            // ends on the release, which needs no position at all. The hover
+            // below is the other half, and wants the opposite: over nothing
+            // is not hovered.
+            Event::MouseMove { at } => {
                 // Handle dragging
-                if self.scroll().scroll_state.scrollbar_dragging {
-                    return Some(self.handle_scrollbar_drag(
-                        id,
-                        bounds,
-                        ScrollbarAxis::Vertical,
-                        *y,
-                    ));
-                }
-                if self.scroll().scroll_state.h_scrollbar_dragging {
-                    return Some(self.handle_scrollbar_drag(
-                        id,
-                        bounds,
-                        ScrollbarAxis::Horizontal,
-                        *x,
-                    ));
+                if let Some(at) = at {
+                    if self.scroll().scroll_state.scrollbar_dragging {
+                        return Some(self.handle_scrollbar_drag(
+                            id,
+                            bounds,
+                            ScrollbarAxis::Vertical,
+                            at.y,
+                        ));
+                    }
+                    if self.scroll().scroll_state.h_scrollbar_dragging {
+                        return Some(self.handle_scrollbar_drag(
+                            id,
+                            bounds,
+                            ScrollbarAxis::Horizontal,
+                            at.x,
+                        ));
+                    }
                 }
 
                 // Update hover states
@@ -610,8 +614,7 @@ impl Container {
                         id,
                         bounds,
                         ScrollbarAxis::Vertical,
-                        *x,
-                        *y,
+                        *at,
                         event,
                     );
                 }
@@ -624,8 +627,7 @@ impl Container {
                         id,
                         bounds,
                         ScrollbarAxis::Horizontal,
-                        *x,
-                        *y,
+                        *at,
                         event,
                     );
                 }
@@ -812,8 +814,7 @@ impl Container {
         id: WidgetId,
         bounds: Rect,
         axis: ScrollbarAxis,
-        x: f32,
-        y: f32,
+        at: Option<Point>,
         _event: &Event,
     ) -> bool {
         let sd = self.scroll();
@@ -831,8 +832,8 @@ impl Container {
         let handle_hit = widen_across_axis(axis, handle_rect, hit_area);
 
         let mut needs_repaint = false;
-        let is_track_hovered = hit_area.contains(x, y);
-        let is_hovered = handle_hit.contains(x, y);
+        let is_track_hovered = hit_area.contains_at(at);
+        let is_hovered = handle_hit.contains_at(at);
 
         // Update track and handle hover state in one borrow
         let sd = self.scroll_mut();
@@ -855,8 +856,10 @@ impl Container {
             // The centre of the handle: a point it holds whatever part of the
             // widened area the pointer is actually over.
             let enter = Event::MouseEnter {
-                x: handle_rect.x + handle_rect.width / 2.0,
-                y: handle_rect.y + handle_rect.height / 2.0,
+                at: Some(Point::new(
+                    handle_rect.x + handle_rect.width / 2.0,
+                    handle_rect.y + handle_rect.height / 2.0,
+                )),
             };
             self.forward_to_handle(tree, id, axis, &enter);
         } else if !is_hovered && was_hovered {

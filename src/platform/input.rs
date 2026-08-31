@@ -33,7 +33,7 @@ use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::
 use super::wayland::WaylandState;
 use crate::reactive::CursorIcon;
 use crate::surface::SurfaceId;
-use crate::widgets::{Event, Key, Modifiers, MouseButton, ScrollSource};
+use crate::widgets::{Event, Key, Modifiers, MouseButton, Point, ScrollSource};
 
 /// Pixels per line for discrete scroll (mouse wheel)
 const SCROLL_PIXELS_PER_LINE: f32 = 40.0;
@@ -45,10 +45,16 @@ const SCROLL_PIXELS_PER_LINE: f32 = 40.0;
 /// the newest instant: it stands for where the pointer is now, not for where it
 /// was when the run began.
 fn push_move(events: &mut Vec<(Instant, Event)>, at: Instant, x: f32, y: f32) {
+    let moved = (
+        at,
+        Event::MouseMove {
+            at: Some(Point::new(x, y)),
+        },
+    );
     if let Some(last @ (_, Event::MouseMove { .. })) = events.last_mut() {
-        *last = (at, Event::MouseMove { x, y });
+        *last = moved;
     } else {
-        events.push((at, Event::MouseMove { x, y }));
+        events.push(moved);
     }
 }
 
@@ -58,8 +64,7 @@ fn push_release(events: &mut Vec<(Instant, Event)>, at: Instant, x: f32, y: f32)
     events.push((
         at,
         Event::MouseUp {
-            x,
-            y,
+            at: Some(Point::new(x, y)),
             button: MouseButton::Left,
         },
     ));
@@ -369,14 +374,16 @@ impl TouchHandler for WaylandState {
         if self.input.primary_finger.is_none() {
             self.input.primary_finger = Some(id);
             if let Some(surface_state) = self.surfaces.get_mut(&surface_id) {
-                surface_state
-                    .pending_events
-                    .push((at, Event::MouseMove { x, y }));
+                surface_state.pending_events.push((
+                    at,
+                    Event::MouseMove {
+                        at: Some(Point::new(x, y)),
+                    },
+                ));
                 surface_state.pending_events.push((
                     at,
                     Event::MouseDown {
-                        x,
-                        y,
+                        at: Some(Point::new(x, y)),
                         button: MouseButton::Left,
                     },
                 ));
@@ -514,15 +521,13 @@ impl PointerHandler for WaylandState {
                         events.push((
                             at,
                             Event::MouseEnter {
-                                x: self.input.pointer_x,
-                                y: self.input.pointer_y,
+                                at: Some(Point::new(self.input.pointer_x, self.input.pointer_y)),
                             },
                         ));
                         events.push((
                             at,
                             Event::MouseMove {
-                                x: self.input.pointer_x,
-                                y: self.input.pointer_y,
+                                at: Some(Point::new(self.input.pointer_x, self.input.pointer_y)),
                             },
                         ));
                     }
@@ -556,8 +561,7 @@ impl PointerHandler for WaylandState {
                         events.push((
                             at,
                             Event::MouseDown {
-                                x: self.input.pointer_x,
-                                y: self.input.pointer_y,
+                                at: Some(Point::new(self.input.pointer_x, self.input.pointer_y)),
                                 button: mouse_button,
                             },
                         ));
@@ -570,8 +574,7 @@ impl PointerHandler for WaylandState {
                         events.push((
                             at,
                             Event::MouseUp {
-                                x: self.input.pointer_x,
-                                y: self.input.pointer_y,
+                                at: Some(Point::new(self.input.pointer_x, self.input.pointer_y)),
                                 button: mouse_button,
                             },
                         ));
@@ -651,8 +654,7 @@ fn translate_axis(
         events.push((
             at,
             Event::Scroll {
-                x,
-                y,
+                at: Some(Point::new(x, y)),
                 delta_x,
                 delta_y,
                 source: scroll_source,
@@ -660,7 +662,12 @@ fn translate_axis(
         ));
     }
     if horizontal.stop || vertical.stop {
-        events.push((at, Event::ScrollEnd { x, y }));
+        events.push((
+            at,
+            Event::ScrollEnd {
+                at: Some(Point::new(x, y)),
+            },
+        ));
     }
 }
 
@@ -1061,10 +1068,14 @@ mod tests {
     fn a_stop_with_no_delta_is_an_end_and_nothing_else() {
         let events = axis(Some(wl_pointer::AxisSource::Finger), nothing(), stopped());
         assert_eq!(events.len(), 1, "one event, got {events:?}");
-        let Event::ScrollEnd { x, y } = events[0] else {
+        let Event::ScrollEnd { at } = events[0] else {
             panic!("a stop is a ScrollEnd, got {:?}", events[0]);
         };
-        assert_eq!((x, y), (PX, PY), "and it carries the pointer, not a delta");
+        assert_eq!(
+            at,
+            Some(Point::new(PX, PY)),
+            "and it carries the pointer, not a delta"
+        );
 
         // Either axis alone says it: a vertical gesture ends on the vertical
         // axis, a horizontal one on the horizontal.
@@ -1126,8 +1137,7 @@ mod tests {
         let events = axis(Some(wl_pointer::AxisSource::Finger), nothing(), finger(7.5));
         let [
             Event::Scroll {
-                x,
-                y,
+                at,
                 delta_y,
                 source,
                 ..
@@ -1138,9 +1148,9 @@ mod tests {
         };
         assert_eq!(*delta_y, 7.5, "pixels pass through");
         assert_eq!(*source, ScrollSource::Finger);
-        // Where the scroll happened, not how far it went: `hit.contains(x, y)`
+        // Where the scroll happened, not how far it went: `hit.contains(at)`
         // in `interaction.rs` is what decides whose scroll this is.
-        assert_eq!((*x, *y), (PX, PY), "and it carries the pointer");
+        assert_eq!(*at, Some(Point::new(PX, PY)), "and it carries the pointer");
     }
 
     /// The last message of a flick carries both: the final movement and the

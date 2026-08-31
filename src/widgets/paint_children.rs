@@ -154,10 +154,10 @@ fn reuse_cached(
         // Moved: shallow header clone (children and commands stay Rc-shared),
         // with the user transform extracted and recomposed at the new position.
         let mut reused = (**cached).clone();
-        let user_part = cached
-            .parent_position
-            .inverse()
-            .then(&cached.local_transform);
+        // A position is a pure translation, so undoing it is negating it —
+        // no determinant, no inverse, and nothing to unwrap.
+        let pos = &cached.parent_position;
+        let user_part = Transform::translate(-pos.tx(), -pos.ty()).then(&cached.local_transform);
         reused.local_transform = child_position.then(&user_part);
         reused.parent_position = child_position;
         reused.bounds = child_local;

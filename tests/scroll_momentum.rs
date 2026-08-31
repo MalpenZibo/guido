@@ -57,8 +57,7 @@ impl H {
     fn scroll(&mut self, delta: f32, source: ScrollSource) {
         let root = self.root;
         let event = Event::Scroll {
-            x: 100.0,
-            y: 100.0,
+            at: Some(Point::new(100.0, 100.0)),
             delta_x: 0.0,
             delta_y: delta,
             source,
@@ -104,7 +103,9 @@ impl H {
     /// The finger lifted, as the compositor's `axis_stop` reaches the tree.
     fn scroll_end(&mut self) {
         let root = self.root;
-        let event = Event::ScrollEnd { x: 100.0, y: 100.0 };
+        let event = Event::ScrollEnd {
+            at: Some(Point::new(100.0, 100.0)),
+        };
         self.tree
             .with_widget_mut(root, |w, id, t| w.event(t, id, &event));
     }

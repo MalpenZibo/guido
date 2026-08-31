@@ -30,7 +30,7 @@ use crate::renderer::{GpuContext, RenderTarget, Renderer};
 use crate::surface::{SurfaceConfig, SurfaceId};
 use crate::surface_manager::{ManagedSurface, SurfaceManager};
 use crate::tree::{Tree, WidgetId};
-use crate::widgets::{Event, MouseButton, Widget};
+use crate::widgets::{Event, MouseButton, Point, Widget};
 use crate::{Frame, LoopContext, Platform, Surface, iterate};
 
 /// The compositor's half of one surface: what it has said, and what it has
@@ -309,16 +309,14 @@ impl Headless {
         surface.events.push((
             now,
             Event::MouseDown {
-                x,
-                y,
+                at: Some(Point::new(x, y)),
                 button: MouseButton::Left,
             },
         ));
         surface.events.push((
             now,
             Event::MouseUp {
-                x,
-                y,
+                at: Some(Point::new(x, y)),
                 button: MouseButton::Left,
             },
         ));

@@ -191,9 +191,9 @@ pub mod prelude {
         AnyWidget, Border, Color, Container, ContentFit, Control, CornerRadii, Corners, Event,
         EventResponse, FontFamily, FontWeight, GradientDirection, Image, ImageSource, InputStyle,
         InputStyled, IntoChildren, IntoClickHandler, Key, LinearGradient, Modifiers, MouseButton,
-        Overflow, Padding, Rect, ScrollAxis, ScrollSource, ScrollbarBuilder, ScrollbarVisibility,
-        Selection, StateStyle, Stateful, Text, TextInput, TextShadow, TextStroke, TextStyle,
-        TextStyled, Widget, container, image, keyed, text, text_input,
+        Overflow, Padding, Point, Rect, ScrollAxis, ScrollSource, ScrollbarBuilder,
+        ScrollbarVisibility, Selection, StateStyle, Stateful, Text, TextInput, TextShadow,
+        TextStroke, TextStyle, TextStyled, Widget, container, image, keyed, text, text_input,
     };
     pub use crate::{
         App, ExitReason, SignalFields, component, default_font_family, load_font, quit_app,
@@ -2748,7 +2748,12 @@ mod dispatch_declares_the_moment {
         // An hour ago: no clock this process could read would answer with it,
         // so the widget can only have got it from the event.
         let happened = std::time::Instant::now() - std::time::Duration::from_secs(3600);
-        let events = [(happened, Event::MouseMove { x: 10.0, y: 10.0 })];
+        let events = [(
+            happened,
+            Event::MouseMove {
+                at: Some(crate::widgets::Point::new(10.0, 10.0)),
+            },
+        )];
 
         dispatch_events(&events, root, &mut tree, &Default::default());
 
