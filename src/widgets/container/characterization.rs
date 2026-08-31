@@ -1381,6 +1381,38 @@ fn a_transition_on_the_value_is_what_makes_that_value_ease() {
     );
 }
 
+/// A container that declares no motion carries no animation box.
+///
+/// `ContainerAnims` holds eleven `AnimationState`s and is boxed precisely so
+/// that the overwhelming majority of containers — every one that only sets a
+/// background — do not pay for it. Writing the absence of a motion is a real
+/// write, so it has to skip the container that has nothing to write it into,
+/// and nothing else can see the difference: the pixels are identical either
+/// way, which is why this asks the field directly.
+#[test]
+fn declaring_no_motion_allocates_no_animation_box() {
+    assert!(
+        container().background(Color::RED).anims.is_none(),
+        "a plain declaration must not allocate the animation box"
+    );
+    assert!(
+        container()
+            .background(Color::RED.transition(200.0))
+            .anims
+            .is_some(),
+        "and one that declares a motion has somewhere to keep it"
+    );
+    assert!(
+        container()
+            .background(Color::RED.transition(200.0))
+            .background(Color::BLUE)
+            .anims
+            .as_ref()
+            .is_some_and(|a| a.background.is_none()),
+        "restating it plainly empties the slot rather than the box"
+    );
+}
+
 /// A declaration is the whole property, so restating one with a plain value
 /// takes its motion away with it.
 ///
