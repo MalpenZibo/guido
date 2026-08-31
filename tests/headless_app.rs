@@ -371,3 +371,47 @@ fn a_branching_popup_tree_comes_down_newest_first() {
          branch, then its root, then the surface they all hang from"
     );
 }
+
+/// A new grab closes the grab chain it cannot nest under, deepest first.
+///
+/// xdg-shell lets one grab chain exist at a time and a new grab must nest under
+/// the current holder. Opening one somewhere else means tearing the old chain
+/// down first, and in the same order as any other teardown — the compositor
+/// applies `not_the_topmost_popup` to these destroys like the rest.
+///
+/// This path had no sensor at all: the recorder used to discard the
+/// `PopupConfig` it was handed, so it could not say which popups held a grab
+/// and answered `conflicting_grab_popups` with the trait's empty default.
+#[test]
+fn a_new_grab_tears_down_the_chain_it_cannot_nest_under() {
+    let Some(mut app) = headless() else { return };
+    let bar = app.surface(content_bar(), measuring_24);
+    app.configure(bar, 200, 24, 1.0);
+    app.step();
+
+    let menu = spawn_popup(bar, PopupConfig::new(80).height(40).grab(), measuring_24);
+    app.step();
+    let submenu = spawn_popup(
+        menu.id(),
+        PopupConfig::new(60).height(30).grab(),
+        measuring_24,
+    );
+    app.step();
+    assert_eq!(app.surfaces_created(), [bar, menu.id(), submenu.id()]);
+
+    // A second menu on the bar itself: it cannot nest under the chain above, so
+    // that chain has to go before this one opens.
+    let other = spawn_popup(bar, PopupConfig::new(80).height(40).grab(), measuring_24);
+    app.step();
+
+    assert_eq!(
+        app.surfaces_destroyed(),
+        [submenu.id(), menu.id()],
+        "the chain comes down deepest first, before the new grab opens"
+    );
+    assert_eq!(
+        app.surfaces_created(),
+        [bar, menu.id(), submenu.id(), other.id()],
+        "and the new grab did open"
+    );
+}

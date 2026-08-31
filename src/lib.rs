@@ -931,9 +931,56 @@ pub(crate) fn descendants_bottom_up(
     out
 }
 
+/// The grabbing popups a new grab under `new_parent` cannot coexist with, in
+/// teardown order.
+///
+/// xdg-shell allows one grab chain at a time and requires a new grab to nest
+/// under the current holder: *"The parent of a grabbing popup must either be an
+/// xdg_toplevel surface or another xdg_popup with an explicit grab."* So a grab
+/// requested anywhere else means the live chain comes down first, and it comes
+/// down in [`descendants_bottom_up`]'s order like any other — these are the same
+/// `xdg_popup.destroy` requests, and the same `not_the_topmost_popup` waiting
+/// behind them.
+///
+/// `popups` is the live popup forest as `(popup, its parent, whether it holds a
+/// grab)`. Anything on `new_parent`'s own ancestry is spared, that being exactly
+/// the chain a new grab is allowed to nest under.
+pub(crate) fn conflicting_grabs(
+    new_parent: SurfaceId,
+    popups: impl Iterator<Item = (SurfaceId, SurfaceId, bool)>,
+) -> Vec<SurfaceId> {
+    let popups: Vec<(SurfaceId, SurfaceId, bool)> = popups.collect();
+
+    // What a new grab under `new_parent` may legally nest on.
+    let mut ancestors = vec![new_parent];
+    let mut current = new_parent;
+    while let Some((_, parent, _)) = popups.iter().find(|(popup, _, _)| *popup == current) {
+        ancestors.push(*parent);
+        current = *parent;
+    }
+
+    let mut out: Vec<SurfaceId> = Vec::new();
+    for (popup, _, holds_grab) in &popups {
+        if *holds_grab && !ancestors.contains(popup) {
+            out.push(*popup);
+            out.extend(descendants_bottom_up(
+                *popup,
+                popups.iter().map(|(popup, parent, _)| (*popup, *parent)),
+            ));
+        }
+    }
+
+    // One sort for the whole answer rather than per chain: the rule that orders
+    // a chain orders two of them against each other just as well, and the
+    // alternative was concatenating chains in whatever order they were stored.
+    out.sort_unstable_by_key(|id| std::cmp::Reverse(id.raw()));
+    out.dedup();
+    out
+}
+
 #[cfg(test)]
 mod teardown_order {
-    use super::descendants_bottom_up;
+    use super::{conflicting_grabs, descendants_bottom_up};
     use crate::surface::SurfaceId;
 
     /// Ids in the order they would have been created.
@@ -990,6 +1037,49 @@ mod teardown_order {
         let s = ids(4);
         let edges = vec![(s[1], s[0]), (s[3], s[2])];
         assert_eq!(descendants_bottom_up(s[0], edges.into_iter()), vec![s[1]]);
+    }
+
+    /// A grab chain spares its own ancestry and takes everything else, in the
+    /// order everything else comes down in.
+    #[test]
+    fn a_new_grab_takes_the_chain_it_cannot_nest_under() {
+        let s = ids(4);
+        // bar s[0] ── menu s[1] (grab) ── submenu s[2] (grab)
+        let popups = vec![(s[1], s[0], true), (s[2], s[1], true)];
+        assert_eq!(
+            conflicting_grabs(s[0], popups.clone().into_iter()),
+            vec![s[2], s[1]],
+            "a grab on the bar itself cannot nest under the menu"
+        );
+        assert_eq!(
+            conflicting_grabs(s[2], popups.into_iter()),
+            Vec::new(),
+            "a grab under the current holder nests, and takes nothing down"
+        );
+    }
+
+    /// Two chains are ordered against each other by the same rule that orders
+    /// one, rather than by which was looked at first.
+    #[test]
+    fn two_grab_chains_come_down_newest_first() {
+        let s = ids(5);
+        // s[0] ── s[1] (grab) ── s[2] (grab)
+        // s[3] ── s[4] (grab)
+        let popups = vec![(s[1], s[0], true), (s[2], s[1], true), (s[4], s[3], true)];
+        let mut reversed = popups.clone();
+        reversed.reverse();
+        let want = vec![s[4], s[2], s[1]];
+        assert_eq!(conflicting_grabs(s[3], popups.into_iter()), want);
+        assert_eq!(conflicting_grabs(s[3], reversed.into_iter()), want);
+    }
+
+    /// A popup without a grab is nobody's conflict, and neither are its
+    /// children — only a grab chain has to go.
+    #[test]
+    fn a_popup_holding_no_grab_is_left_alone() {
+        let s = ids(3);
+        let popups = vec![(s[1], s[0], false), (s[2], s[1], false)];
+        assert_eq!(conflicting_grabs(s[0], popups.into_iter()), Vec::new());
     }
 
     #[test]

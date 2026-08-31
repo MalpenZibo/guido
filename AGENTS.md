@@ -147,17 +147,14 @@ loop tears a popup chain down in, and this one is watched all the way now: both
 order by the same code. What `src/platform/popups.rs` still keeps to itself is
 six lines saying which surfaces are popups and whose children they are.
 
-The grab-conflict teardown is the exception, and a live one: two chains are
-still concatenated in whatever order the surfaces were stored in, and nothing
-can referee it because the recorder discards the `PopupConfig` that says which
-popups hold a grab (#300).
+The grab-conflict teardown is watched too, now that the recorder keeps the
+`grab` flag it used to throw away: a new grab that cannot nest under the live
+chain brings that chain down, and a test says in which order.
 
-The session lock, output hotplug and popup grab conflicts are the remainder.
-They need no redesign — the map was the missing part — but they do need
-machinery: the recorder answers four of `Platform`'s lock methods with the
-trait's defaults, `sync_outputs` is `pub(crate)` so no test in `tests/` can
-reach it, and the recorder throws away the `PopupConfig` that would say which
-popups hold a grab.
+The session lock and output hotplug are the remainder. They need no redesign —
+the map was the missing part — but they do need machinery: the recorder answers
+four of `Platform`'s lock methods with the trait's defaults, and `sync_outputs`
+is `pub(crate)` so no test in `tests/` can reach it.
 
 ## What watches the harness
 

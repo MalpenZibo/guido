@@ -196,52 +196,20 @@ impl WaylandState {
         )
     }
 
-    /// Grabbing popups that would make a new grab on `new_parent` illegal:
-    /// xdg-shell requires a new grab to nest under the current grab holder,
-    /// so any live grabbing popup that is not `new_parent` itself (or one
-    /// of its ancestors) must be destroyed before the new popup is created.
+    /// Grabbing popups that would make a new grab on `new_parent` illegal.
     ///
-    /// Each chain comes back in [`crate::descendants_bottom_up`]'s order, but
-    /// the chains are concatenated in whatever order the surfaces were stored
-    /// in — so two independent grab chains interleave arbitrarily. Nothing can
-    /// referee that today: the recorder discards the `PopupConfig` that says
-    /// which popups hold a grab, so this path has no sensor at all. #300.
+    /// The rule is [`crate::conflicting_grabs`]'s; this only says which surfaces
+    /// are popups, whose children they are, and which of them hold a grab.
     pub(crate) fn conflicting_grab_popups(&self, new_parent: SurfaceId) -> Vec<SurfaceId> {
-        // Ancestor chain of the new popup (surfaces a nested grab may sit on)
-        let mut ancestors = vec![new_parent];
-        let mut current = new_parent;
-        while let Some(state) = self.surfaces.get(&current) {
-            match &state.role {
-                SurfaceRole::Popup { parent, .. } => {
-                    ancestors.push(*parent);
-                    current = *parent;
-                }
-                _ => break,
-            }
-        }
-
-        let mut conflicts: Vec<SurfaceId> = self
-            .surfaces
-            .iter()
-            .filter(|(id, state)| {
-                matches!(&state.role, SurfaceRole::Popup { config, .. } if config.grab)
-                    && !ancestors.contains(id)
-            })
-            .map(|(id, _)| *id)
-            .collect();
-        // Close whole chains children-first: append descendants and dedup
-        let mut ordered = Vec::new();
-        for id in conflicts.drain(..) {
-            for d in self.popup_descendants_bottom_up(id) {
-                if !ordered.contains(&d) {
-                    ordered.push(d);
-                }
-            }
-            if !ordered.contains(&id) {
-                ordered.push(id);
-            }
-        }
-        ordered
+        crate::conflicting_grabs(
+            new_parent,
+            self.surfaces
+                .iter()
+                .filter_map(|(id, state)| match &state.role {
+                    SurfaceRole::Popup { parent, config, .. } => Some((*id, *parent, config.grab)),
+                    _ => None,
+                }),
+        )
     }
 
     /// For auto-height popups: the width to measure content at.

@@ -59,12 +59,10 @@ implementations answer `popup_descendants_bottom_up` from one
 compositor is given. What `src/platform/popups.rs` still answers alone is which
 surfaces are popups and whose children they are.
 
-Still verified by running an example and looking: **the session lock, output
-hotplug, and grab conflicts between popups**. They type-check against the same
-trait and need no redesign, but each needs something built: the recorder leaves
-`Platform`'s four lock methods at their defaults, `outputs::sync_outputs` is
-`pub(crate)`, and the recorder discards the `PopupConfig` that says which popups
-hold a grab.
+Still verified by running an example and looking: **the session lock and output
+hotplug**. They type-check against the same trait and need no redesign, but each
+needs something built: the recorder leaves `Platform`'s four lock methods at
+their defaults, and `outputs::sync_outputs` is `pub(crate)`.
 
 When you change this layer:
 
