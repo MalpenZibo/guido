@@ -315,6 +315,13 @@ row. What the nested control changes is only who a descendant asks.
 pointer over its own bounds. It is never pressed: being pressed means being
 activated, and it has nothing to activate.
 
+**`when_focused` also keeps the focus.** A press that no widget claimed takes
+the keyboard off whatever held it, and a container declaring `when_focused`
+while that focus is inside it claims presses on itself. A box that says it
+lights up for a field has said the box is part of the field, so clicking its
+padding does not blur what it draws. See
+[Losing Focus](../building-ui/text-input.md#losing-focus).
+
 ## Which Layer Wins
 
 Layers are resolved in reverse declaration order, one property at a time: the

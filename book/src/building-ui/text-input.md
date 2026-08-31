@@ -164,6 +164,48 @@ whichever was laid out last.
 The offer is made once. A relayout does not ask again, so a resize or a scale
 change cannot drag focus back from wherever the user has since put it.
 
+## Losing Focus
+
+A press that no widget claimed takes the keyboard off the field. Clicking the
+surface behind it, or a decorative panel, or empty space in a row: nothing there
+wanted the press, so there is nothing left for the focus to belong to, and the
+caret stops.
+
+A press that something *did* claim leaves the focus alone. A container with an
+`on_click`, `on_mouse_down` or `on_mouse_up` claims the left presses that land
+on it, so a toolbar button that acts on the field it sits beside does not blur
+it, and neither does the field's own scrollbar. The other two buttons are
+claimed by the handlers that name them, `on_right_click` and `on_middle_click`:
+a container with only an `on_click` does not claim a right press, and a right
+press it did not claim is a press on nothing like any other.
+
+A press inside the focused field is always the field's, whichever button it
+was.
+
+The box drawn around a field is the third case, and it is the one worth knowing:
+a container that declares `when_focused` and currently holds that focus keeps
+presses inside itself. Clicking its padding, its border, the space beside the
+caret, is clicking the field it draws.
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let value = create_signal(String::new());
+container()
+    .padding(8.0)
+    .border(1.0, Color::rgb(0.3, 0.3, 0.4))
+    // Lights up for the focus, and keeps it: a click on the padding is a
+    // click on the field.
+    .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
+    .child(text_input(value))
+# ;
+# }
+```
+
+The focus also leaves when the whole surface does — the compositor moving the
+keyboard elsewhere — and when the field is taken out of the tree.
+
 ## Placeholder
 
 What the field says while it is empty:

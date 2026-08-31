@@ -354,7 +354,11 @@ impl InteractionState {
         match when {
             StateWhen::Hovered => self.flags.get().contains(InteractionFlags::HOVERED),
             StateWhen::Pressed => self.flags.get().contains(InteractionFlags::PRESSED),
-            StateWhen::Focused => Container::has_child_focus(id),
+            // The path, rather than a walk of this container's descendants:
+            // the same question has to be answerable from a `create_derived`
+            // closure, which has no tree, and that is where a container
+            // resolves the text colour it publishes below it.
+            StateWhen::Focused => focus_path().contains(id),
             StateWhen::When(condition) => condition.get(),
         }
     }

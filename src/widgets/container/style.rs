@@ -22,19 +22,6 @@ use super::*;
 
 impl Container {
     // -----------------------------------------------------------------------
-    // Focus, as seen by the focused state layer
-    // -----------------------------------------------------------------------
-
-    /// Whether the focused widget is this container or one of its descendants.
-    ///
-    /// Asks the focus path rather than walking the tree, so it can be called
-    /// from a `create_derived` closure — which has no tree, and is where a
-    /// container resolves the text colour it publishes to its descendants.
-    pub(super) fn has_child_focus(id: WidgetId) -> bool {
-        focus_path().contains(id)
-    }
-
-    // -----------------------------------------------------------------------
     // State layer: base value plus the override of the active state
     // -----------------------------------------------------------------------
 
