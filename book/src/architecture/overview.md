@@ -101,7 +101,7 @@ container().translate((x, y));
 container().rotate(deg);
 container().scale(s);
 t1.then(&t2);  // Composition
-t.inverse()   // Inversion
+t.inverse()   // Inversion, or None where it collapsed
 ```
 
 ### `pivot.rs` - Pivot Points

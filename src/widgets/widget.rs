@@ -158,6 +158,35 @@ pub struct Rect {
     pub height: f32,
 }
 
+/// Where a pointer is.
+///
+/// Its own type rather than a pair of floats because the interesting value is
+/// [`Option<Point>`]: a pointer event that has descended into a subtree
+/// collapsed to nothing has no position, and there is no *number* that means
+/// nowhere. See [`Event::coords`].
+/// No `Default`, deliberately. The origin is a place like any other, and this
+/// whole type exists so that "nowhere" is not spelled as a coordinate — a
+/// `Option<Point>::unwrap_or_default()` would put the pointer at the top-left
+/// corner, which is the snapped-to-zero failure #227 records.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Point {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Point {
+    #[inline]
+    pub const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+
+    /// Offset by a vector — how a container rebases a point into child space.
+    #[inline]
+    pub fn offset(self, dx: f32, dy: f32) -> Self {
+        Self::new(self.x + dx, self.y + dy)
+    }
+}
+
 /// The superellipse "length" of a vector — the shader's `superellipse_length`.
 ///
 /// `n = 1` is the diamond a bevel cuts, `n = 2` the circle of an ordinary
@@ -217,6 +246,23 @@ impl Rect {
 
     pub fn contains(&self, x: f32, y: f32) -> bool {
         x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
+    }
+
+    /// Whether a point that may not exist is inside this rect.
+    ///
+    /// An event with no position is inside nothing — see [`Event::coords`] for
+    /// the two ways it comes to have none. Every hit test asks this rather
+    /// than unwrapping first, so the rule is written once instead of being
+    /// taught to each widget separately.
+    #[inline]
+    pub fn contains_at(&self, at: Option<Point>) -> bool {
+        at.is_some_and(|at| self.contains(at.x, at.y))
+    }
+
+    /// [`contains_at`](Self::contains_at), narrowed by the corner shape.
+    #[inline]
+    pub fn contains_shape_at(&self, at: Option<Point>, corners: crate::widgets::Corners) -> bool {
+        at.is_some_and(|at| self.contains_shape(at.x, at.y, corners))
     }
 
     /// Whether a point is inside this rect once its corners are taken off.
@@ -500,21 +546,25 @@ pub enum Key {
 #[derive(Debug, Clone)]
 pub enum Event {
     /// Mouse/pointer moved
-    MouseMove { x: f32, y: f32 },
+    MouseMove { at: Option<Point> },
     /// Mouse button pressed
-    MouseDown { x: f32, y: f32, button: MouseButton },
+    MouseDown {
+        at: Option<Point>,
+        button: MouseButton,
+    },
     /// Mouse button released
-    MouseUp { x: f32, y: f32, button: MouseButton },
+    MouseUp {
+        at: Option<Point>,
+        button: MouseButton,
+    },
     /// Mouse/pointer entered the surface (with entry coordinates)
-    MouseEnter { x: f32, y: f32 },
+    MouseEnter { at: Option<Point> },
     /// Mouse/pointer left the surface
     MouseLeave,
     /// Scroll event (wheel, touchpad, or touchscreen)
     Scroll {
-        /// X position of the pointer
-        x: f32,
-        /// Y position of the pointer
-        y: f32,
+        /// Where the pointer is, if it is anywhere
+        at: Option<Point>,
         /// Horizontal scroll delta in pixels (positive = right)
         delta_x: f32,
         /// Vertical scroll delta in pixels (positive = down)
@@ -529,10 +579,8 @@ pub enum Event {
     /// no delta, because nothing moved; what it carries is the one unguessed
     /// answer to when a momentum may begin.
     ScrollEnd {
-        /// X position of the pointer
-        x: f32,
-        /// Y position of the pointer
-        y: f32,
+        /// Where the pointer is, if it is anywhere
+        at: Option<Point>,
     },
     /// Key pressed
     KeyDown {
@@ -561,15 +609,76 @@ pub enum EventResponse {
 }
 
 impl Event {
-    /// Get the coordinates from this event, if any
-    pub fn coords(&self) -> Option<(f32, f32)> {
+    /// A pointer move at a place.
+    ///
+    /// The constructors exist for the positioned case only, and deliberately:
+    /// it is the overwhelmingly common one, and the absent case has to stay
+    /// spelled out. `Event::MouseMove { at: None }` says what it is; a
+    /// `mouse_move_nowhere()` beside `mouse_move(x, y)` would make the two
+    /// look like a pair of ordinary alternatives, which is exactly what the
+    /// `Option` exists to prevent.
+    pub fn mouse_move(x: f32, y: f32) -> Self {
+        Event::MouseMove {
+            at: Some(Point::new(x, y)),
+        }
+    }
+
+    /// A button pressed at a place. See [`mouse_move`](Self::mouse_move).
+    pub fn mouse_down(x: f32, y: f32, button: MouseButton) -> Self {
+        Event::MouseDown {
+            at: Some(Point::new(x, y)),
+            button,
+        }
+    }
+
+    /// A button released at a place. See [`mouse_move`](Self::mouse_move).
+    pub fn mouse_up(x: f32, y: f32, button: MouseButton) -> Self {
+        Event::MouseUp {
+            at: Some(Point::new(x, y)),
+            button,
+        }
+    }
+
+    /// The pointer arriving at a place. See [`mouse_move`](Self::mouse_move).
+    pub fn mouse_enter(x: f32, y: f32) -> Self {
+        Event::MouseEnter {
+            at: Some(Point::new(x, y)),
+        }
+    }
+
+    /// A scroll at a place. See [`mouse_move`](Self::mouse_move).
+    pub fn scroll(x: f32, y: f32, delta_x: f32, delta_y: f32, source: ScrollSource) -> Self {
+        Event::Scroll {
+            at: Some(Point::new(x, y)),
+            delta_x,
+            delta_y,
+            source,
+        }
+    }
+
+    /// A scroll gesture ending at a place. See [`mouse_move`](Self::mouse_move).
+    pub fn scroll_end(x: f32, y: f32) -> Self {
+        Event::ScrollEnd {
+            at: Some(Point::new(x, y)),
+        }
+    }
+
+    /// Where this event happened, if it happened anywhere.
+    ///
+    /// `None` for two different reasons, and a consumer wants the same thing
+    /// from both: a keyboard or focus event never had a position, and a
+    /// pointer event that descended into a subtree collapsed to nothing has
+    /// lost the one it had. Either way there is no point to test against
+    /// bounds, so nothing is under the pointer here.
+    #[inline]
+    pub fn coords(&self) -> Option<Point> {
         match self {
-            Event::MouseMove { x, y } => Some((*x, *y)),
-            Event::MouseDown { x, y, .. } => Some((*x, *y)),
-            Event::MouseUp { x, y, .. } => Some((*x, *y)),
-            Event::MouseEnter { x, y } => Some((*x, *y)),
-            Event::Scroll { x, y, .. } => Some((*x, *y)),
-            Event::ScrollEnd { x, y } => Some((*x, *y)),
+            Event::MouseMove { at }
+            | Event::MouseDown { at, .. }
+            | Event::MouseUp { at, .. }
+            | Event::MouseEnter { at }
+            | Event::Scroll { at, .. }
+            | Event::ScrollEnd { at } => *at,
             Event::MouseLeave
             | Event::KeyDown { .. }
             | Event::KeyUp { .. }
@@ -578,36 +687,38 @@ impl Event {
         }
     }
 
-    /// Create a new event with transformed coordinates
-    pub fn with_coords(&self, new_x: f32, new_y: f32) -> Self {
+    /// The same event somewhere else, or nowhere.
+    ///
+    /// `None` is what a container passes down when its own transform cannot
+    /// be undone. The event still travels — a press given up and a hover
+    /// cleared are things only a delivered event can do — it simply arrives
+    /// without a position, so every bounds test below answers no.
+    pub fn with_coords(&self, at: Option<Point>) -> Self {
         match self {
-            Event::MouseMove { .. } => Event::MouseMove { x: new_x, y: new_y },
+            Event::MouseMove { .. } => Event::MouseMove { at },
             Event::MouseDown { button, .. } => Event::MouseDown {
-                x: new_x,
-                y: new_y,
+                at,
                 button: *button,
             },
             Event::MouseUp { button, .. } => Event::MouseUp {
-                x: new_x,
-                y: new_y,
+                at,
                 button: *button,
             },
-            Event::MouseEnter { .. } => Event::MouseEnter { x: new_x, y: new_y },
+            Event::MouseEnter { .. } => Event::MouseEnter { at },
             Event::Scroll {
                 delta_x,
                 delta_y,
                 source,
                 ..
             } => Event::Scroll {
-                x: new_x,
-                y: new_y,
+                at,
                 delta_x: *delta_x,
                 delta_y: *delta_y,
                 source: *source,
             },
-            Event::ScrollEnd { .. } => Event::ScrollEnd { x: new_x, y: new_y },
+            Event::ScrollEnd { .. } => Event::ScrollEnd { at },
             Event::MouseLeave => Event::MouseLeave,
-            // Keyboard/focus events don't have coordinates
+            // Keyboard and focus events never had one to replace.
             Event::KeyDown { key, modifiers } => Event::KeyDown {
                 key: *key,
                 modifiers: *modifiers,

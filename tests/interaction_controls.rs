@@ -4,50 +4,33 @@
 //! label's hover is not its own glyphs, and it is not any ancestor either —
 //! it is the nearest thing marked as a unit.
 
-use guido::layout::{Constraints, Flex};
+use guido::layout::Flex;
 use guido::prelude::*;
 use guido::reactive::focus::{clear_focus, request_focus};
-use guido::renderer::{DrawCommand, PaintContext, RenderNode};
-use guido::tree::{Tree, WidgetId};
+use guido::renderer::{DrawCommand, RenderNode};
+
+mod common;
+use common::Harness;
 
 struct H {
-    tree: Tree,
-    root: WidgetId,
+    surface: Harness,
 }
 
 impl H {
     fn new(widget: impl Widget + 'static) -> Self {
-        let mut tree = Tree::new();
-        let root = tree.register(Box::new(widget));
-        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-        let mut h = Self { tree, root };
-        h.lay_out();
-        h
-    }
-
-    fn lay_out(&mut self) {
-        let root = self.root;
-        self.tree.with_widget_mut(root, |w, id, t| {
-            w.layout(t, id, Constraints::new(0.0, 0.0, 400.0, 200.0))
-        });
+        Self {
+            surface: Harness::laid_out(widget, 400.0, 200.0),
+        }
     }
 
     fn point_at(&mut self, x: f32, y: f32) {
-        let root = self.root;
-        self.tree
-            .with_widget_mut(root, |w, id, t| w.event(t, id, &Event::MouseMove { x, y }));
+        self.surface.send(Event::mouse_move(x, y));
     }
 
     /// Every text drawn, in paint order, as (content, colour).
     fn texts(&mut self) -> Vec<(String, Color)> {
-        let root = self.root;
-        let mut node = RenderNode::new(root.as_u64());
-        self.tree.with_widget_mut(root, |w, id, t| {
-            let mut ctx = PaintContext::new(&mut node);
-            w.paint(t, id, &mut ctx);
-        });
         let mut out = Vec::new();
-        collect(&node, &mut out);
+        collect(&self.surface.paint(), &mut out);
         out
     }
 
@@ -179,8 +162,8 @@ fn a_label_reacts_to_the_focus_of_the_input_beside_it() {
 
     assert_eq!(h.colour_of("Password"), WEAK);
 
-    let input = h.tree.get_children(h.root)[1];
-    request_focus(&h.tree, input);
+    let input = h.surface.tree.get_children(h.surface.root)[1];
+    request_focus(&h.surface.tree, input);
     assert_eq!(h.colour_of("Password"), STRONG);
 
     clear_focus();

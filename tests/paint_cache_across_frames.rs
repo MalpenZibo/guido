@@ -17,12 +17,15 @@
 //! Two sibling scrollable columns, because the bug needs a second widget to
 //! ask for the frame that the first one is then served stale into.
 
-use guido::layout::{Constraints, Flex};
+use guido::layout::Flex;
+
+mod common;
+use common::Harness;
 use guido::prelude::*;
 use guido::renderer::{
     CommandLayer, FlattenedCommand, PaintContext, RenderNode, flatten_root_into,
 };
-use guido::tree::{Tree, WidgetId};
+use guido::tree::WidgetId;
 use guido::widgets::Rect;
 
 const VIEWPORT: f32 = 200.0;
@@ -85,8 +88,7 @@ fn column() -> Container {
 
 /// A surface that renders frame after frame into one retained root node.
 struct Surface {
-    tree: Tree,
-    root: WidgetId,
+    surface: Harness,
     /// Retained across frames and `clear()`ed per frame — `SurfaceState::root_node`.
     root_node: RenderNode,
     commands: Vec<FlattenedCommand>,
@@ -106,16 +108,11 @@ impl Surface {
         let width = PAD + VIEWPORT + GAP + VIEWPORT + PAD;
         let height = PAD + CAPTION + CAPTION_GAP + VIEWPORT + PAD;
 
-        let mut tree = Tree::new();
-        let root = tree.register(Box::new(view));
-        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-        tree.with_widget_mut(root, |w, id, t| {
-            w.layout(t, id, Constraints::new(0.0, 0.0, width, height))
-        });
+        let harness = Harness::laid_out(view, width, height);
+        let root = harness.root;
 
         Self {
-            tree,
-            root,
+            surface: harness,
             root_node: RenderNode::new(root.as_u64()),
             commands: Vec::new(),
             layers: Vec::new(),
@@ -126,8 +123,8 @@ impl Surface {
 
     /// The scroller inside the nth column: root → column → [caption, scroller].
     fn scroller(&self, column: usize) -> WidgetId {
-        let col = self.tree.get_children(self.root)[column];
-        self.tree.get_children(col)[1]
+        let col = self.surface.tree.get_children(self.surface.root)[column];
+        self.surface.tree.get_children(col)[1]
     }
 
     /// The node the nth column's caption contributed to this frame's render
@@ -144,7 +141,7 @@ impl Surface {
     /// cache — per child of the root and never on the root itself, which is
     /// what `render_surface` does.
     fn frame(&mut self) {
-        if !self.tree.needs_paint(self.root) {
+        if !self.surface.tree.needs_paint(self.surface.root) {
             return;
         }
 
@@ -152,8 +149,7 @@ impl Surface {
         self.root_node.bounds = Rect::new(0.0, 0.0, self.width, self.height);
 
         let Self {
-            tree,
-            root,
+            surface: Harness { tree, root },
             root_node,
             commands,
             layers,
@@ -174,27 +170,27 @@ impl Surface {
     /// the offset, and the `JobRequest::Paint` it asks for arrives as
     /// `mark_needs_paint` when the job queue is drained (`jobs.rs`).
     fn scroll(&mut self, column: usize, delta: f32) {
-        let root = self.root;
+        let root = self.surface.root;
         let x = if column == 0 {
             COLUMN_A_X + VIEWPORT / 2.0
         } else {
             COLUMN_B_X + VIEWPORT / 2.0
         };
-        self.tree.with_widget_mut(root, |w, id, t| {
+        self.surface.tree.with_widget_mut(root, |w, id, t| {
             w.event(
                 t,
                 id,
-                &Event::Scroll {
+                &Event::scroll(
                     x,
-                    y: SCROLLER_TOP + VIEWPORT / 2.0,
-                    delta_x: 0.0,
-                    delta_y: delta,
-                    source: ScrollSource::Wheel,
-                },
+                    SCROLLER_TOP + VIEWPORT / 2.0,
+                    0.0,
+                    delta,
+                    ScrollSource::Wheel,
+                ),
             )
         });
         let scroller = self.scroller(column);
-        self.tree.mark_needs_paint(scroller);
+        self.surface.tree.mark_needs_paint(scroller);
     }
 
     /// The top of what the nth column's scroller draws, in surface
@@ -250,7 +246,7 @@ fn a_scrolled_list_survives_a_frame_painted_for_its_sibling() {
     // The pointer moves onto the other list's scrollbar: that column repaints,
     // this one is untouched and clean.
     let other = s.scroller(1);
-    s.tree.mark_needs_paint(other);
+    s.surface.tree.mark_needs_paint(other);
     s.frame();
 
     assert_eq!(

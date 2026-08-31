@@ -68,17 +68,9 @@ impl Field {
     fn drag_select_all(&mut self) {
         // The field is only `font_size * 1.2` tall, so the y has to stay well
         // inside it or the hit test drops the press and the drag selects nothing.
-        self.event(&Event::MouseDown {
-            x: 0.0,
-            y: 4.0,
-            button: MouseButton::Left,
-        });
-        self.event(&Event::MouseMove { x: 399.0, y: 4.0 });
-        self.event(&Event::MouseUp {
-            x: 399.0,
-            y: 4.0,
-            button: MouseButton::Left,
-        });
+        self.event(&Event::mouse_down(0.0, 4.0, MouseButton::Left));
+        self.event(&Event::mouse_move(399.0, 4.0));
+        self.event(&Event::mouse_up(399.0, 4.0, MouseButton::Left));
     }
 }
 

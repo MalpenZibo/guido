@@ -66,25 +66,11 @@ fn diagnostics_from_full_lifecycle(widget: impl Widget + 'static) -> u64 {
     // meaningful against the call sites the library actually uses.
     crate::reactive::diagnostics::snapshot_zone(|| {
         for event in [
-            Event::MouseEnter { x: 10.0, y: 10.0 },
-            Event::MouseMove { x: 10.0, y: 10.0 },
-            Event::MouseDown {
-                x: 10.0,
-                y: 10.0,
-                button: MouseButton::Left,
-            },
-            Event::MouseUp {
-                x: 10.0,
-                y: 10.0,
-                button: MouseButton::Left,
-            },
-            Event::Scroll {
-                x: 10.0,
-                y: 10.0,
-                delta_x: 0.0,
-                delta_y: 10.0,
-                source: ScrollSource::Wheel,
-            },
+            Event::mouse_enter(10.0, 10.0),
+            Event::mouse_move(10.0, 10.0),
+            Event::mouse_down(10.0, 10.0, MouseButton::Left),
+            Event::mouse_up(10.0, 10.0, MouseButton::Left),
+            Event::scroll(10.0, 10.0, 0.0, 10.0, ScrollSource::Wheel),
             Event::KeyDown {
                 key: Key::Char('a'),
                 modifiers: Modifiers::default(),

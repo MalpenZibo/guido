@@ -247,7 +247,7 @@ container().scale((sx, sy))     // Non-uniform scale
 // What they compose into. `Transform` is not in `guido::prelude`; a widget
 // written outside the crate reaches it through `guido::widget_prelude`:
 t1.then(&t2)                    // Compose transforms
-t.inverse()                     // Invert transform
+t.inverse()                     // Invert, or None where it collapsed
 t.center_at(cx, cy)             // Apply around point
 ```
 

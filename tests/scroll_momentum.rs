@@ -7,14 +7,14 @@
 
 use std::time::{Duration, Instant};
 
-use guido::layout::{Constraints, Flex};
+use guido::layout::Flex;
 use guido::prelude::*;
-use guido::renderer::{PaintContext, RenderNode};
-use guido::tree::{Tree, WidgetId};
+
+mod common;
+use common::Harness;
 
 struct H {
-    tree: Tree,
-    root: WidgetId,
+    surface: Harness,
 }
 
 impl H {
@@ -30,41 +30,20 @@ impl H {
                     .children((0..20).map(|_| container().width(120.0).height(24.0))),
             );
 
-        let mut tree = Tree::new();
-        let root = tree.register(Box::new(view));
-        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-        tree.with_widget_mut(root, |w, id, t| {
-            w.layout(t, id, Constraints::new(0.0, 0.0, 200.0, 200.0))
-        });
-        Self { tree, root }
+        Self {
+            surface: Harness::laid_out(view, 200.0, 200.0),
+        }
     }
 
     /// One scroll sample from any source, at a named moment.
     fn scroll_at(&mut self, delta: f32, source: ScrollSource, at: std::time::Instant) {
-        self.tree.set_event_instant(Some(at));
-        self.scroll(delta, source);
-        self.tree.set_event_instant(None);
+        self.surface
+            .send_at(Event::scroll(100.0, 100.0, 0.0, delta, source), at);
     }
 
     /// The finger lifted at a named moment.
     fn scroll_end_at(&mut self, at: std::time::Instant) {
-        self.tree.set_event_instant(Some(at));
-        self.scroll_end();
-        self.tree.set_event_instant(None);
-    }
-
-    /// One scroll sample from any source.
-    fn scroll(&mut self, delta: f32, source: ScrollSource) {
-        let root = self.root;
-        let event = Event::Scroll {
-            x: 100.0,
-            y: 100.0,
-            delta_x: 0.0,
-            delta_y: delta,
-            source,
-        };
-        self.tree
-            .with_widget_mut(root, |w, id, t| w.event(t, id, &event));
+        self.surface.send_at(Event::scroll_end(100.0, 100.0), at);
     }
 
     /// Play a flick of six samples eight milliseconds apart, and lift.
@@ -89,34 +68,16 @@ impl H {
     /// Run `n` animation frames at sixty a second from `start`, as the loop does
     /// while anything is animating, and return the moment of the last one.
     fn frames_from(&mut self, n: usize, start: Instant) -> Instant {
-        let root = self.root;
         let mut at = start;
         for _ in 0..n {
             at += Duration::from_millis(16);
-            self.tree.set_frame_instant(Some(at));
-            self.tree
-                .with_widget_mut(root, |w, id, t| w.advance_animations(t, id));
+            self.surface.advance(at);
         }
-        self.tree.set_frame_instant(None);
         at
     }
 
-    /// The finger lifted, as the compositor's `axis_stop` reaches the tree.
-    fn scroll_end(&mut self) {
-        let root = self.root;
-        let event = Event::ScrollEnd { x: 100.0, y: 100.0 };
-        self.tree
-            .with_widget_mut(root, |w, id, t| w.event(t, id, &event));
-    }
-
     fn offset(&mut self) -> f32 {
-        let root = self.root;
-        let mut node = RenderNode::new(root.as_u64());
-        self.tree.with_widget_mut(root, |w, id, t| {
-            let mut ctx = PaintContext::new(&mut node);
-            w.paint(t, id, &mut ctx);
-        });
-        -node.children[0].local_transform.ty()
+        -self.surface.paint().children[0].local_transform.ty()
     }
 }
 

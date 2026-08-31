@@ -660,16 +660,8 @@ fn a_zero_area_container_skips_its_children() {
 
 fn click_at(x: f32, y: f32) -> [Event; 2] {
     [
-        Event::MouseDown {
-            x,
-            y,
-            button: MouseButton::Left,
-        },
-        Event::MouseUp {
-            x,
-            y,
-            button: MouseButton::Left,
-        },
+        Event::mouse_down(x, y, MouseButton::Left),
+        Event::mouse_up(x, y, MouseButton::Left),
     ]
 }
 
@@ -733,10 +725,10 @@ fn hover_tracks_entering_and_leaving() {
     );
     h.fit(500.0, 500.0);
 
-    h.send(Event::MouseMove { x: 25.0, y: 10.0 });
+    h.send(Event::mouse_move(25.0, 10.0));
     assert!(state.get());
 
-    h.send(Event::MouseMove { x: 300.0, y: 10.0 });
+    h.send(Event::mouse_move(300.0, 10.0));
     assert!(!state.get());
 }
 
@@ -779,13 +771,13 @@ fn scroll_reaches_the_callback_inside_the_bounds() {
     );
     h.fit(500.0, 500.0);
 
-    h.send(Event::Scroll {
-        x: 25.0,
-        y: 10.0,
-        delta_x: 0.0,
-        delta_y: 12.0,
-        source: crate::widgets::widget::ScrollSource::Wheel,
-    });
+    h.send(Event::scroll(
+        25.0,
+        10.0,
+        0.0,
+        12.0,
+        crate::widgets::widget::ScrollSource::Wheel,
+    ));
     assert_eq!(deltas.get(), 12.0);
 }
 
@@ -1155,11 +1147,7 @@ fn a_ripple_and_a_transition_are_asked_about_the_same_moment() {
     );
     h.fit(400.0, 400.0);
 
-    h.send(Event::MouseDown {
-        x: 10.0,
-        y: 50.0,
-        button: MouseButton::Left,
-    });
+    h.send(Event::mouse_down(10.0, 50.0, MouseButton::Left));
     w.set(120.0);
 
     // After the press, because a ripple begins at the instant its event
@@ -1231,15 +1219,7 @@ fn a_press_held_for_a_named_time_has_grown_by_a_named_amount() {
     // clock instead of from the event, the disc would be a minute old by the
     // first frame and there would be nothing left to draw.
     let t0 = std::time::Instant::now() - std::time::Duration::from_secs(60);
-    send_at(
-        &mut h,
-        t0,
-        Event::MouseDown {
-            x: 50.0,
-            y: 50.0,
-            button: MouseButton::Left,
-        },
-    );
+    send_at(&mut h, t0, Event::mouse_down(50.0, 50.0, MouseButton::Left));
 
     // A frame later, because the press and the frame are now genuinely the same
     // instant: at t0 exactly nothing has elapsed and the disc has no opacity to
@@ -1300,7 +1280,7 @@ fn painted_text_color(h: &mut H) -> Color {
 
 fn set_hover(h: &mut H, inside: bool) {
     let (x, y) = if inside { (5.0, 5.0) } else { (-50.0, -50.0) };
-    h.send(Event::MouseMove { x, y });
+    h.send(Event::mouse_move(x, y));
 }
 
 /// The failure this guards against is cache-shaped and silent: the container
@@ -2037,11 +2017,7 @@ fn a_layer_silent_on_a_property_does_not_shadow_the_one_below_it() {
     h.fit(100.0, 100.0);
 
     set_hover(&mut h, true);
-    h.send(Event::MouseDown {
-        x: 5.0,
-        y: 5.0,
-        button: MouseButton::Left,
-    });
+    h.send(Event::mouse_down(5.0, 5.0, MouseButton::Left));
     assert_eq!(rects(&h.paint())[0].1, Color::RED);
 }
 
@@ -2841,13 +2817,7 @@ fn scrolling_a_frosted_card_away_withdraws_its_blur() {
         "visible at the top of the scroll"
     );
 
-    h.send(Event::Scroll {
-        x: 20.0,
-        y: 15.0,
-        delta_x: 0.0,
-        delta_y: 600.0,
-        source: ScrollSource::Wheel,
-    });
+    h.send(Event::scroll(20.0, 15.0, 0.0, 600.0, ScrollSource::Wheel));
     // Two frames: the first repaints the scroller and settles the flags, the
     // second is where a clean card is culled — or never offered at all.
     h.frame(40.0, 30.0);

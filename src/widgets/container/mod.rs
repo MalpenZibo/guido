@@ -47,7 +47,7 @@ use super::state_layer::{
     Moves, RippleConfig, StateStyle, StateWhen, Stateful, resolve_background,
 };
 use super::widget::{
-    Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding, Rect,
+    Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding, Point, Rect,
     ScrollSource, Widget,
 };
 
@@ -1393,13 +1393,15 @@ impl Widget for Container {
             pivot: self.pivot_signal().get_or(Pivot::CENTER),
         };
 
-        // Undo our own transform before hit testing against the laid-out bounds
+        // Undo our own transform before hit testing against the laid-out
+        // bounds. A transform collapsed to a line has no inverse, and the
+        // event goes on without a position rather than with the wrong one —
+        // it still has to arrive, because a press given up and a hover
+        // cleared are things only a delivered event can do.
         let local_event: Cow<'_, Event> = match event.coords() {
-            Some((x, y)) if !hit.transform.is_identity() => {
-                let (local_x, local_y) =
-                    untransform_point(&hit.transform, hit.pivot, hit.bounds, x, y);
-                Cow::Owned(event.with_coords(local_x, local_y))
-            }
+            Some(at) if !hit.transform.is_identity() => Cow::Owned(
+                event.with_coords(untransform_point(&hit.transform, hit.pivot, hit.bounds, at)),
+            ),
             _ => Cow::Borrowed(event),
         };
 
@@ -1413,14 +1415,13 @@ impl Widget for Container {
         // Children are positioned relative to our origin (and to the scroll
         // offset, when we scroll), so their events have to be too.
         let child_event: Cow<'_, Event> = match local_event.coords() {
-            Some((x, y)) => {
-                let (mut cx, mut cy) = (x - hit.bounds.x, y - hit.bounds.y);
+            Some(at) => {
+                let mut child_at = hit.rebase(at);
                 if self.scroll_axis != ScrollAxis::None {
                     let sd = self.scroll();
-                    cx += sd.scroll_state.offset_x;
-                    cy += sd.scroll_state.offset_y;
+                    child_at = child_at.offset(sd.scroll_state.offset_x, sd.scroll_state.offset_y);
                 }
-                Cow::Owned(local_event.with_coords(cx, cy))
+                Cow::Owned(local_event.with_coords(Some(child_at)))
             }
             None => local_event.clone(),
         };
@@ -1430,10 +1431,13 @@ impl Widget for Container {
         // below it (a collapsed submenu used to do exactly that).
         let clips_children = self.overflow_resolved.get() == Overflow::Hidden
             || self.scroll_axis != ScrollAxis::None;
+        // An event with no position falls outside nothing, so the children
+        // are still asked — and still answer no, because their own bounds
+        // test is given the same absence.
         let skip_child_dispatch = clips_children
             && local_event
                 .coords()
-                .is_some_and(|(x, y)| !hit.bounds.contains(x, y));
+                .is_some_and(|at| !hit.bounds.contains(at.x, at.y));
 
         if !skip_child_dispatch {
             for &child_id in self.children_source.get() {

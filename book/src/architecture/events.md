@@ -18,8 +18,8 @@ Wayland → Platform → App → Widget Tree
 ### Mouse Movement
 
 ```text
-Event::MouseMove { x, y };
-Event::MouseEnter;
+Event::MouseMove { at };
+Event::MouseEnter { at };
 Event::MouseLeave
 ```
 
@@ -28,8 +28,8 @@ Tracked for hover states. The platform layer determines which widget the cursor 
 ### Mouse Buttons
 
 ```text
-Event::MouseDown { x, y, button };
-Event::MouseUp { x, y, button }
+Event::MouseDown { at, button };
+Event::MouseUp { at, button }
 ```
 
 Used for click detection and pressed states.
@@ -37,11 +37,11 @@ Used for click detection and pressed states.
 ### Scrolling
 
 ```text
-Event::Scroll { x, y, delta_x, delta_y, source };
-Event::ScrollEnd { x, y }
+Event::Scroll { at, delta_x, delta_y, source };
+Event::ScrollEnd { at }
 ```
 
-- `x`, `y` - Pointer position
+- `at` - Pointer position, or `None`: see [Where an event is](#where-an-event-is)
 - `delta_x` - Horizontal scroll amount, in pixels
 - `delta_y` - Vertical scroll amount, in pixels
 - `source` - `Wheel`, `Finger` or `Continuous`
@@ -125,14 +125,51 @@ dist <= 0.0  // Inside if distance is negative
 
 ### With Transforms
 
-Inverse transform applied to test point:
+The transform is undone before the point is compared against the laid-out
+bounds — and a transform that has collapsed the widget onto a line has no
+inverse to undo it with:
 
 ```rust,ignore
-fn contains_transformed(&self, x: f32, y: f32) -> bool {
-    let (local_x, local_y) = self.transform.inverse().transform_point(x, y);
-    self.bounds.contains(local_x, local_y)
+fn contains(&self, at: Option<Point>) -> bool {
+    // `untransform_point` answers None where the transform has no inverse,
+    // and `contains_at` answers false for a point that is not there.
+    self.bounds.contains_at(untransform_point(&self.transform, at))
 }
 ```
+
+## Where an event is
+
+A pointer event carries `at: Option<Point>`, and the `None` is the interesting
+half. It means one of two things, and a consumer wants the same answer from
+both: a keyboard or focus event never had a position, and a pointer event that
+descended into a subtree scaled to nothing has *lost* the one it had.
+
+`scale(0.0)` squashes the plane onto a line. The map stops being one-to-one —
+every point in the box lands on top of every other — so there is no inverse,
+and no coordinate that could stand for "nowhere": every number is somewhere,
+and a descendant that rotates or mirrors would carry a far-away sentinel back
+into the visible half-plane.
+
+So the position is simply absent, and every bounds test below answers no:
+
+```rust,ignore
+container()
+    .width(80.0)
+    .height(40.0)
+    .scale(Scale::new(1.0, 0.0))   // collapsed: takes no click, hover or scroll
+    .on_click(|| unreachable!())
+```
+
+The event still *travels*. A press given up and a hover cleared are things only
+a delivered event can do, so a container inside a menu that collapses mid-press
+hears the release and drops its own pressed state — the state layer stops
+painting, the ripple is cancelled. What it does *not* do is call `on_click` or
+`on_mouse_up`: those say where the release landed, and it landed nowhere. An
+application pairing `on_mouse_down` with `on_mouse_up` to track a press of its
+own should expect the down without the up, and clear on the same signal that
+collapsed the box.
+
+A key or a focus change is untouched, having never had a position to lose.
 
 ## Event Handlers
 
@@ -172,12 +209,12 @@ The state layer system uses events internally:
 ```rust,ignore
 fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
     match event {
-        Event::MouseEnter => {
+        Event::MouseEnter { .. } => {
             self.flags.update(|f| f.insert(InteractionFlags::HOVERED));
         }
-        Event::MouseDown { x, y, .. } => {
+        Event::MouseDown { at: Some(at), .. } => {
             self.flags.update(|f| f.insert(InteractionFlags::PRESSED));
-            self.ripple.start(*x, *y, Instant::now());
+            self.ripple.start(at.x, at.y, Instant::now());
         }
         // ...
     }
@@ -211,7 +248,7 @@ The platform layer receives Wayland protocol events:
 fn pointer_motion(x: f32, y: f32) {
     self.cursor_x = x;
     self.cursor_y = y;
-    self.dispatch(Event::MouseMove { x, y });
+    self.dispatch(Event::MouseMove { at: Some(Point::new(x, y)) });
 }
 
 fn pointer_button(button: u32, state: ButtonState) {

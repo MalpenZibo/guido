@@ -31,60 +31,57 @@ pub(super) struct HitContext {
 impl HitContext {
     /// Whether a point falls inside the container's *shape* — its bounds
     /// narrowed by the corner radius, not the bounding box.
-    pub(super) fn contains(&self, x: f32, y: f32) -> bool {
-        self.bounds.contains_shape(x, y, self.corners)
+    ///
+    /// An event with no position is inside nothing. That is the whole of
+    /// #227: a container collapsed to a line has no inverse to undo, so the
+    /// point that reaches it is `None`, and every bounds test below it answers
+    /// no without any of them having to know why.
+    #[inline]
+    pub(super) fn contains(&self, at: Option<Point>) -> bool {
+        self.bounds.contains_shape_at(at, self.corners)
     }
 
-    /// A surface-space point expressed relative to the container's own origin.
-    pub(super) fn local(&self, x: f32, y: f32) -> (f32, f32) {
-        local_point(&self.transform, self.pivot, self.bounds, x, y)
+    /// A surface-space point expressed relative to the container's own origin
+    /// — the space ripples and pointer callbacks work in.
+    pub(super) fn local(&self, at: Point) -> Option<Point> {
+        Some(
+            untransform_point(&self.transform, self.pivot, self.bounds, at)?
+                .offset(-self.bounds.x, -self.bounds.y),
+        )
     }
 
     /// The same, for a point that has already had the transform undone.
-    pub(super) fn rebase(&self, x: f32, y: f32) -> (f32, f32) {
-        (x - self.bounds.x, y - self.bounds.y)
+    pub(super) fn rebase(&self, at: Point) -> Point {
+        at.offset(-self.bounds.x, -self.bounds.y)
     }
 }
 
-/// Map a point from surface space into the container's untransformed space.
+/// Map a point from surface space into the container's untransformed space,
+/// or `None` where the container occupies no space to be pointed at.
 ///
 /// A container's own transform is applied around its origin at paint time, so
 /// hit testing has to undo it before comparing against the laid-out bounds.
 /// An identity transform returns the point unchanged.
 ///
-/// A transform that has collapsed the container onto a line or a point cannot
-/// be undone, and the point comes back unchanged — so an invisible subtree
-/// answers for the whole area it occupies when it is open. That is #227, and
-/// it is older than the components API: it needs the *event* to be able to say
-/// it has no position, which no coordinate can say on its behalf.
+/// A transform that has collapsed the container onto a line or a point has no
+/// inverse, and there is no coordinate that means "nowhere" — every number is
+/// somewhere, and a descendant that rotates or mirrors would carry a far-away
+/// sentinel back into the visible half-plane. So the absence is the answer.
 pub(super) fn untransform_point(
     transform: &Transform,
     origin: Pivot,
     bounds: Rect,
-    x: f32,
-    y: f32,
-) -> (f32, f32) {
+    at: Point,
+) -> Option<Point> {
     if transform.is_identity() {
-        return (x, y);
+        return Some(at);
     }
     let (origin_x, origin_y) = origin.resolve(bounds);
-    transform
+    let (ux, uy) = transform
         .center_at(origin_x, origin_y)
-        .inverse()
-        .transform_point(x, y)
-}
-
-/// [`untransform_point`] expressed relative to the container's own origin —
-/// the space ripples and pointer callbacks work in.
-pub(super) fn local_point(
-    transform: &Transform,
-    origin: Pivot,
-    bounds: Rect,
-    x: f32,
-    y: f32,
-) -> (f32, f32) {
-    let (ux, uy) = untransform_point(transform, origin, bounds, x, y);
-    (ux - bounds.x, uy - bounds.y)
+        .inverse()?
+        .transform_point(at.x, at.y);
+    Some(Point::new(ux, uy))
 }
 
 impl Container {
@@ -111,7 +108,7 @@ impl Container {
         id: WidgetId,
         hit: &HitContext,
         event: &Event,
-        at: Instant,
+        now: Instant,
     ) {
         let has_animated = self.has_animated_state_properties();
         // Read before the mutable borrow: cancelling a ripple below needs it.
@@ -128,7 +125,22 @@ impl Container {
         };
 
         match event {
-            Event::MouseEnter { x, y } if hit.contains(*x, *y) && !ix.is_hovered() => {
+            // An enter with no position is an enter into nothing, so it is
+            // the falling edge rather than the rising one. The platform only
+            // ever sends a positioned one (`input.rs`), but a container that
+            // collapses is what takes the position away on the way down, and
+            // the move that would otherwise clear the hover is a whole event
+            // later.
+            Event::MouseEnter { at: None } if ix.is_hovered() => {
+                ix.set_flag(InteractionFlags::HOVERED, false);
+                if ix.declares(|w| matches!(w, StateWhen::Hovered)) {
+                    request_repaint(id);
+                }
+                if let Some(ref callback) = ix.on_hover {
+                    callback(false);
+                }
+            }
+            Event::MouseEnter { at } if hit.contains(*at) && !ix.is_hovered() => {
                 ix.set_flag(InteractionFlags::HOVERED, true);
                 if ix.declares(|w| matches!(w, StateWhen::Hovered)) {
                     request_repaint(id);
@@ -137,18 +149,25 @@ impl Container {
                     callback(true);
                 }
             }
-            Event::MouseMove { x, y } => {
+            Event::MouseMove { at } => {
                 // A pressed container keeps receiving moves that leave it —
-                // that implicit capture is what makes dragging work.
+                // that implicit capture is what makes dragging work. A move
+                // with no position is not one of those: there is nowhere to
+                // report, so the callback is not called and the hover below
+                // simply falls.
+                // One question, asked once and answered twice below.
+                let inside = hit.contains(*at);
+
                 if let Some(ref callback) = ix.on_pointer_move
-                    && (hit.contains(*x, *y) || ix.is_pressed())
+                    && (inside || ix.is_pressed())
+                    && let Some(at) = at
                 {
-                    let (lx, ly) = hit.rebase(*x, *y);
-                    callback(lx, ly);
+                    let local = hit.rebase(*at);
+                    callback(local.x, local.y);
                 }
 
                 let was_hovered = ix.is_hovered();
-                ix.set_flag(InteractionFlags::HOVERED, hit.contains(*x, *y));
+                ix.set_flag(InteractionFlags::HOVERED, inside);
 
                 // Dragging off the container abandons the press. Only leaving
                 // the whole surface used to say so, which left a ripple
@@ -159,7 +178,7 @@ impl Container {
                     && ix.ripple.is_active()
                     && let Some(ref config) = ripple_config
                 {
-                    ix.ripple.cancel(config, at);
+                    ix.ripple.cancel(config, now);
                     request_job(id, JobRequest::Animation(RequiredJob::Paint));
                 }
 
@@ -188,7 +207,7 @@ impl Container {
         hit: &HitContext,
         event: &Event,
         local: &Event,
-        at: Instant,
+        now: Instant,
     ) -> EventResponse {
         match local {
             // Hover was tracked before the children ran. Returning Ignored
@@ -196,8 +215,8 @@ impl Container {
             // containers from tracking their own.
             Event::MouseEnter { .. } | Event::MouseMove { .. } => {}
 
-            Event::MouseDown { x, y, button } if *button != MouseButton::Left => {
-                if hit.contains(*x, *y)
+            Event::MouseDown { at, button } if *button != MouseButton::Left => {
+                if hit.contains(*at)
                     && let Some(ref ix) = self.interaction
                 {
                     let callback = match button {
@@ -212,8 +231,9 @@ impl Container {
                 }
             }
 
-            Event::MouseDown { x, y, button } => {
-                if hit.contains(*x, *y)
+            Event::MouseDown { at, button } => {
+                if hit.contains(*at)
+                    && let Some(at) = at
                     && *button == MouseButton::Left
                     && let Some(ref mut ix) = self.interaction
                 {
@@ -225,9 +245,13 @@ impl Container {
                         .iter()
                         .any(|(w, s)| matches!(w, StateWhen::Pressed) && s.ripple.is_some());
                     if has_ripple {
-                        let (screen_x, screen_y) = event.coords().unwrap_or((*x, *y));
-                        let (local_x, local_y) = hit.local(screen_x, screen_y);
-                        ix.ripple.start(local_x, local_y, at);
+                        // The ripple starts under the finger, so it wants the
+                        // point as the surface gave it, not the one already
+                        // rebased for this container.
+                        let on_screen = event.coords().unwrap_or(*at);
+                        if let Some(local) = hit.local(on_screen) {
+                            ix.ripple.start(local.x, local.y, now);
+                        }
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
@@ -237,8 +261,8 @@ impl Container {
                     if let Some(ref ix) = self.interaction
                         && let Some(ref callback) = ix.on_mouse_down
                     {
-                        let (lx, ly) = hit.rebase(*x, *y);
-                        callback(lx, ly);
+                        let local = hit.rebase(*at);
+                        callback(local.x, local.y);
                         return EventResponse::Handled;
                     }
                     // A press is claimed even without a down handler, so the
@@ -251,7 +275,7 @@ impl Container {
                 }
             }
 
-            Event::MouseUp { x, y, button } => {
+            Event::MouseUp { at, button } => {
                 if let Some(ref mut ix) = self.interaction
                     && ix.is_pressed()
                     && *button == MouseButton::Left
@@ -266,10 +290,10 @@ impl Container {
                     if ix.ripple.is_active()
                         && let Some(config) = ix.ripple_config()
                     {
-                        if hit.contains(*x, *y) {
-                            ix.ripple.release(&config, at);
+                        if hit.contains(*at) {
+                            ix.ripple.release(&config, now);
                         } else {
-                            ix.ripple.cancel(&config, at);
+                            ix.ripple.cancel(&config, now);
                         }
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
@@ -279,17 +303,18 @@ impl Container {
                     }
 
                     let mut handled = false;
-                    if let Some(ref ix) = self.interaction
+                    if let Some(at) = at
+                        && let Some(ref ix) = self.interaction
                         && let Some(ref callback) = ix.on_mouse_up
                     {
-                        let (lx, ly) = hit.rebase(*x, *y);
-                        callback(lx, ly);
+                        let local = hit.rebase(*at);
+                        callback(local.x, local.y);
                         handled = true;
                     }
                     // A click is a release *inside* the shape; a release that
                     // wandered off only ends the press.
                     if let Some(ref ix) = self.interaction
-                        && hit.contains(*x, *y)
+                        && hit.contains(*at)
                         && let Some(ref callback) = ix.on_click
                     {
                         callback();
@@ -319,7 +344,7 @@ impl Container {
                     if ix.ripple.is_active()
                         && let Some(config) = ix.ripple_config()
                     {
-                        ix.ripple.cancel(&config, at);
+                        ix.ripple.cancel(&config, now);
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
 
@@ -332,17 +357,16 @@ impl Container {
             }
 
             Event::Scroll {
-                x,
-                y,
+                at,
                 delta_x,
                 delta_y,
                 source,
             } => {
-                if hit.contains(*x, *y) {
+                if hit.contains(*at) {
                     // Our own scrolling consumes the event first; the callback
                     // only sees what scrolling did not take.
                     if self.scroll_axis != ScrollAxis::None
-                        && self.apply_scroll(*delta_x, *delta_y, *source, at)
+                        && self.apply_scroll(*delta_x, *delta_y, *source, now)
                     {
                         // A paint, and only a paint. A sample means the finger
                         // is still down, so there is no momentum for an
@@ -373,10 +397,10 @@ impl Container {
             // The finger lifted. Momentum starts here or not at all — and it
             // starts now, on the event, rather than becoming due for whatever
             // frame happens along next.
-            Event::ScrollEnd { x, y } => {
-                if self.scroll_axis != ScrollAxis::None && hit.contains(*x, *y) {
+            Event::ScrollEnd { at } => {
+                if self.scroll_axis != ScrollAxis::None && hit.contains(*at) {
                     let sd = self.scroll_mut();
-                    sd.scroll_state.end_gesture(at);
+                    sd.scroll_state.end_gesture(now);
                     if sd.scroll_state.should_apply_momentum() {
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }

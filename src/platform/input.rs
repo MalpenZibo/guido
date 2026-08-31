@@ -33,7 +33,7 @@ use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::
 use super::wayland::WaylandState;
 use crate::reactive::CursorIcon;
 use crate::surface::SurfaceId;
-use crate::widgets::{Event, Key, Modifiers, MouseButton, ScrollSource};
+use crate::widgets::{Event, Key, Modifiers, MouseButton, Point, ScrollSource};
 
 /// Pixels per line for discrete scroll (mouse wheel)
 const SCROLL_PIXELS_PER_LINE: f32 = 40.0;
@@ -44,22 +44,22 @@ const SCROLL_PIXELS_PER_LINE: f32 = 40.0;
 /// costs a full event-dispatch walk of the widget tree. The coalesced one keeps
 /// the newest instant: it stands for where the pointer is now, not for where it
 /// was when the run began.
-fn push_move(events: &mut Vec<(Instant, Event)>, at: Instant, x: f32, y: f32) {
+fn push_move(events: &mut Vec<(Instant, Event)>, at: Instant, pointer: Point) {
+    let moved = (at, Event::MouseMove { at: Some(pointer) });
     if let Some(last @ (_, Event::MouseMove { .. })) = events.last_mut() {
-        *last = (at, Event::MouseMove { x, y });
+        *last = moved;
     } else {
-        events.push((at, Event::MouseMove { x, y }));
+        events.push(moved);
     }
 }
 
 /// The finger is gone: release the synthesized press, and clear hover, because
 /// unlike a real pointer nothing hovers after a lift.
-fn push_release(events: &mut Vec<(Instant, Event)>, at: Instant, x: f32, y: f32) {
+fn push_release(events: &mut Vec<(Instant, Event)>, at: Instant, pointer: Point) {
     events.push((
         at,
         Event::MouseUp {
-            x,
-            y,
+            at: Some(pointer),
             button: MouseButton::Left,
         },
     ));
@@ -142,8 +142,11 @@ impl EventClock {
 pub struct InputState {
     // Pointer
     pub(super) pointer: Option<wl_pointer::WlPointer>,
-    pub(super) pointer_x: f32,
-    pub(super) pointer_y: f32,
+    /// Where the pointer is. One field rather than two coordinates, because
+    /// every use of it is a [`Point`] — an `Event` carries an `Option<Point>`,
+    /// and re-pairing two floats at each construction site is how one of them
+    /// comes to be the wrong one.
+    pub(super) pointer_at: Point,
     pub(super) pointer_over_surface: bool,
     pub(super) pointer_enter_serial: u32,
 
@@ -187,8 +190,7 @@ impl InputState {
     ) -> Self {
         Self {
             pointer: None,
-            pointer_x: 0.0,
-            pointer_y: 0.0,
+            pointer_at: Point::new(0.0, 0.0),
             pointer_over_surface: false,
             pointer_enter_serial: 0,
             touch: None,
@@ -371,15 +373,10 @@ impl TouchHandler for WaylandState {
             if let Some(surface_state) = self.surfaces.get_mut(&surface_id) {
                 surface_state
                     .pending_events
-                    .push((at, Event::MouseMove { x, y }));
-                surface_state.pending_events.push((
-                    at,
-                    Event::MouseDown {
-                        x,
-                        y,
-                        button: MouseButton::Left,
-                    },
-                ));
+                    .push((at, Event::mouse_move(x, y)));
+                surface_state
+                    .pending_events
+                    .push((at, Event::mouse_down(x, y, MouseButton::Left)));
             }
         }
     }
@@ -400,7 +397,7 @@ impl TouchHandler for WaylandState {
         if self.input.primary_finger == Some(id) {
             self.input.primary_finger = None;
             if let Some(surface_state) = self.surfaces.get_mut(&surface_id) {
-                push_release(&mut surface_state.pending_events, at, x, y);
+                push_release(&mut surface_state.pending_events, at, Point::new(x, y));
             }
         }
     }
@@ -426,7 +423,7 @@ impl TouchHandler for WaylandState {
         if self.input.primary_finger == Some(id)
             && let Some(surface_state) = self.surfaces.get_mut(&surface_id)
         {
-            push_move(&mut surface_state.pending_events, at, x, y);
+            push_move(&mut surface_state.pending_events, at, Point::new(x, y));
         }
     }
 
@@ -460,7 +457,7 @@ impl TouchHandler for WaylandState {
         {
             // The compositor is telling us the gesture is not ours any more.
             let at = untimed();
-            push_release(&mut surface_state.pending_events, at, x, y);
+            push_release(&mut surface_state.pending_events, at, Point::new(x, y));
         }
         self.input.touch_fingers.clear();
     }
@@ -504,8 +501,8 @@ impl PointerHandler for WaylandState {
                     self.input.pointer_over_surface = true;
                     self.input.pointer_enter_serial = serial;
                     self.input.latest_input_serial = serial;
-                    self.input.pointer_x = event.position.0 as f32;
-                    self.input.pointer_y = event.position.1 as f32;
+                    self.input.pointer_at =
+                        Point::new(event.position.0 as f32, event.position.1 as f32);
 
                     // Track which surface has pointer focus
                     self.current_pointer_surface = surface_id;
@@ -514,15 +511,13 @@ impl PointerHandler for WaylandState {
                         events.push((
                             at,
                             Event::MouseEnter {
-                                x: self.input.pointer_x,
-                                y: self.input.pointer_y,
+                                at: Some(self.input.pointer_at),
                             },
                         ));
                         events.push((
                             at,
                             Event::MouseMove {
-                                x: self.input.pointer_x,
-                                y: self.input.pointer_y,
+                                at: Some(self.input.pointer_at),
                             },
                         ));
                     }
@@ -542,10 +537,10 @@ impl PointerHandler for WaylandState {
                     }
                 }
                 PointerEventKind::Motion { .. } => {
-                    self.input.pointer_x = event.position.0 as f32;
-                    self.input.pointer_y = event.position.1 as f32;
+                    self.input.pointer_at =
+                        Point::new(event.position.0 as f32, event.position.1 as f32);
                     if let Some(events) = target_events {
-                        push_move(events, at, self.input.pointer_x, self.input.pointer_y);
+                        push_move(events, at, self.input.pointer_at);
                     }
                 }
                 PointerEventKind::Press { button, serial, .. } => {
@@ -556,8 +551,7 @@ impl PointerHandler for WaylandState {
                         events.push((
                             at,
                             Event::MouseDown {
-                                x: self.input.pointer_x,
-                                y: self.input.pointer_y,
+                                at: Some(self.input.pointer_at),
                                 button: mouse_button,
                             },
                         ));
@@ -570,8 +564,7 @@ impl PointerHandler for WaylandState {
                         events.push((
                             at,
                             Event::MouseUp {
-                                x: self.input.pointer_x,
-                                y: self.input.pointer_y,
+                                at: Some(self.input.pointer_at),
                                 button: mouse_button,
                             },
                         ));
@@ -590,8 +583,7 @@ impl PointerHandler for WaylandState {
                             source,
                             &horizontal,
                             &vertical,
-                            self.input.pointer_x,
-                            self.input.pointer_y,
+                            self.input.pointer_at,
                         );
                     }
                 }
@@ -611,8 +603,7 @@ fn translate_axis(
     source: Option<wl_pointer::AxisSource>,
     horizontal: &AxisScroll,
     vertical: &AxisScroll,
-    x: f32,
-    y: f32,
+    pointer: Point,
 ) {
     let scroll_source = match source {
         Some(wl_pointer::AxisSource::Wheel) => ScrollSource::Wheel,
@@ -651,8 +642,7 @@ fn translate_axis(
         events.push((
             at,
             Event::Scroll {
-                x,
-                y,
+                at: Some(pointer),
                 delta_x,
                 delta_y,
                 source: scroll_source,
@@ -660,7 +650,7 @@ fn translate_axis(
         ));
     }
     if horizontal.stop || vertical.stop {
-        events.push((at, Event::ScrollEnd { x, y }));
+        events.push((at, Event::ScrollEnd { at: Some(pointer) }));
     }
 }
 
@@ -1023,8 +1013,7 @@ mod tests {
             source,
             &horizontal,
             &vertical,
-            PX,
-            PY,
+            Point::new(PX, PY),
         );
         events.into_iter().map(|(_, event)| event).collect()
     }
@@ -1061,10 +1050,14 @@ mod tests {
     fn a_stop_with_no_delta_is_an_end_and_nothing_else() {
         let events = axis(Some(wl_pointer::AxisSource::Finger), nothing(), stopped());
         assert_eq!(events.len(), 1, "one event, got {events:?}");
-        let Event::ScrollEnd { x, y } = events[0] else {
+        let Event::ScrollEnd { at } = events[0] else {
             panic!("a stop is a ScrollEnd, got {:?}", events[0]);
         };
-        assert_eq!((x, y), (PX, PY), "and it carries the pointer, not a delta");
+        assert_eq!(
+            at,
+            Some(Point::new(PX, PY)),
+            "and it carries the pointer, not a delta"
+        );
 
         // Either axis alone says it: a vertical gesture ends on the vertical
         // axis, a horizontal one on the horizontal.
@@ -1126,8 +1119,7 @@ mod tests {
         let events = axis(Some(wl_pointer::AxisSource::Finger), nothing(), finger(7.5));
         let [
             Event::Scroll {
-                x,
-                y,
+                at,
                 delta_y,
                 source,
                 ..
@@ -1138,9 +1130,9 @@ mod tests {
         };
         assert_eq!(*delta_y, 7.5, "pixels pass through");
         assert_eq!(*source, ScrollSource::Finger);
-        // Where the scroll happened, not how far it went: `hit.contains(x, y)`
+        // Where the scroll happened, not how far it went: `hit.contains(at)`
         // in `interaction.rs` is what decides whose scroll this is.
-        assert_eq!((*x, *y), (PX, PY), "and it carries the pointer");
+        assert_eq!(*at, Some(Point::new(PX, PY)), "and it carries the pointer");
     }
 
     /// The last message of a flick carries both: the final movement and the
