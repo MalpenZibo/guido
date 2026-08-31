@@ -23,10 +23,10 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::advance_anim;
-use crate::animation::TransitionConfig;
+use crate::animation::{Animatable, IntoAnimated, Motion};
 use crate::backdrop::BackdropBlur;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
-use crate::layout::{Constraints, Flex, IntoF32, Layout, Length, Size};
+use crate::layout::{Constraints, Flex, Layout, Length, Size};
 use crate::pivot::Pivot;
 use crate::reactive::{
     IntoSignal, OptionSignalExt, RwSignal, Signal, create_signal, focus_path, with_signal_tracking,
@@ -202,8 +202,8 @@ pub(super) struct TransformProps {
     pub(super) pivot: Option<Signal<Pivot>>,
 }
 
-/// Boxed animation states. Only allocated when `.transition()` or
-/// `.animate_*()` is called, saving ~400 bytes per non-animated Container.
+/// Boxed animation states. Only allocated when a declared value arrives
+/// carrying a motion, saving ~400 bytes per non-animated Container.
 #[derive(Default)]
 pub(super) struct ContainerAnims {
     pub(super) width: Option<AnimationState<f32>>,
@@ -501,11 +501,6 @@ impl Container {
         self.scroll_data.get_or_insert_with(Box::default)
     }
 
-    /// Get or create animation states box
-    fn anims_mut(&mut self) -> &mut ContainerAnims {
-        self.anims.get_or_insert_with(Box::default)
-    }
-
     /// Get or create the transform components.
     fn transform_mut(&mut self) -> &mut TransformProps {
         self.transform.get_or_insert_with(Box::default)
@@ -573,8 +568,9 @@ impl Container {
     /// - `padding([1.0, 2.0, 3.0, 4.0])` — `[top, right, bottom, left]` (CSS 4-value)
     /// - `padding(Padding::all(8.0).with_top(20.0))` — builder pattern
     /// - `padding(signal)` or `padding(move || ...)` — reactive
-    pub fn padding<M>(mut self, value: impl IntoSignal<Padding, M>) -> Self {
-        self.padding = Some(value.into_signal());
+    /// - `padding(8.0.transition(200.0))` — eased instead of jumped to
+    pub fn padding<M>(mut self, value: impl IntoAnimated<Padding, M>) -> Self {
+        self.padding = Some(declare(&mut self.anims, value, |a| &mut a.padding));
         self
     }
 
@@ -588,9 +584,11 @@ impl Container {
     /// ```ignore
     /// container().background(Color::rgb(0.2, 0.2, 0.3))
     /// container().background(Color::rgba(0.0, 0.0, 0.0, 0.5))  // 50% transparent black
+    /// container().background(theme.surface.transition(200.0))  // eased
+    /// container().background(theme.surface.timeline(flash(), errors))
     /// ```
-    pub fn background<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.background = Some(color.into_signal());
+    pub fn background<M>(mut self, color: impl IntoAnimated<Color, M>) -> Self {
+        self.background = Some(declare(&mut self.anims, color, |a| &mut a.background));
         self
     }
 
@@ -615,8 +613,14 @@ impl Container {
     /// The shape reaches everything: the box, its border and shadow, the blur
     /// behind it, the clip its children are cut to, and the region that
     /// answers a click.
-    pub fn corners<M>(mut self, corners: impl IntoSignal<crate::widgets::Corners, M>) -> Self {
-        self.corners = Some(corners.into_signal());
+    ///
+    /// A shape that eases carries its own timing —
+    /// `corners(8.0.transition(250.0))`. A transition that crosses zero
+    /// curvature changes family in one frame: below zero a corner is concave,
+    /// and the formula that draws it (and the one that answers a click) is a
+    /// different one. Within a family it is continuous.
+    pub fn corners<M>(mut self, corners: impl IntoAnimated<crate::widgets::Corners, M>) -> Self {
+        self.corners = Some(declare(&mut self.anims, corners, |a| &mut a.corners));
         self
     }
 
@@ -671,13 +675,24 @@ impl Container {
     ///
     /// A width repeated across layers is a constant in your own code — there is
     /// deliberately no way to leave half a border unsaid.
+    ///
+    /// Each half carries its own timing, which is what the pair wanted: the
+    /// two channels are different types and a border can spring open while its
+    /// colour eases.
+    ///
+    /// ```ignore
+    /// container().border(
+    ///     (move || if thick.get() { 14.0 } else { 2.0 }).transition(SpringConfig::BOUNCY),
+    ///     Color::rgb(0.40, 0.50, 0.70).transition(300.0),
+    /// )
+    /// ```
     pub fn border<M1, M2>(
         mut self,
-        width: impl IntoSignal<f32, M1>,
-        color: impl IntoSignal<Color, M2>,
+        width: impl IntoAnimated<f32, M1>,
+        color: impl IntoAnimated<Color, M2>,
     ) -> Self {
-        self.border_width = Some(width.into_signal());
-        self.border_color = Some(color.into_signal());
+        self.border_width = Some(declare(&mut self.anims, width, |a| &mut a.border_width));
+        self.border_color = Some(declare(&mut self.anims, color, |a| &mut a.border_color));
         self
     }
 
@@ -701,14 +716,19 @@ impl Container {
     }
 
     /// Set the width of the container.
-    pub fn width<M>(mut self, width: impl IntoSignal<Length, M>) -> Self {
-        self.width = Some(width.into_signal());
+    ///
+    /// `width(w.transition(200.0))` grows and shrinks over time instead of
+    /// jumping. A size follows the content it holds as well as the length
+    /// declared here, so the animation is over the resolved extent.
+    pub fn width<M>(mut self, width: impl IntoAnimated<Length, M>) -> Self {
+        self.width = Some(declare_size(&mut self.anims, width, |a| &mut a.width));
         self
     }
 
-    /// Set the height of the container.
-    pub fn height<M>(mut self, height: impl IntoSignal<Length, M>) -> Self {
-        self.height = Some(height.into_signal());
+    /// Set the height of the container. Eases the same way
+    /// [`width`](Self::width) does.
+    pub fn height<M>(mut self, height: impl IntoAnimated<Length, M>) -> Self {
+        self.height = Some(declare_size(&mut self.anims, height, |a| &mut a.height));
         self
     }
 
@@ -833,8 +853,10 @@ impl Container {
         self
     }
 
-    pub fn elevation<M>(mut self, level: impl IntoSignal<f32, M>) -> Self {
-        self.elevation = Some(level.into_signal());
+    /// The Material lift, as a shadow. `elevation(8.0.transition(120.0))`
+    /// raises and drops it in motion rather than as a jump.
+    pub fn elevation<M>(mut self, level: impl IntoAnimated<f32, M>) -> Self {
+        self.elevation = Some(declare(&mut self.anims, level, |a| &mut a.elevation));
         self
     }
 
@@ -843,12 +865,19 @@ impl Container {
     /// Paint-only, like the other two: the space the layout gave it does not
     /// move, so nothing around it shifts.
     ///
+    /// The three components move independently: each carries its own timing,
+    /// so a card can spring into place while its rotation eases. Declaring one
+    /// says nothing about the other two.
+    ///
     /// ```ignore
     /// container().translate((20.0, 10.0))
     /// container().translate(move || Translate::new(offset.get(), 0.0))
+    /// container().translate(target.transition(SpringConfig::SNAPPY))
+    /// container().translate(Translate::NONE.timeline(nod(), refusals))
     /// ```
-    pub fn translate<M>(mut self, t: impl IntoSignal<Translate, M>) -> Self {
-        self.transform_mut().translate = Some(t.into_signal());
+    pub fn translate<M>(mut self, t: impl IntoAnimated<Translate, M>) -> Self {
+        let signal = declare(&mut self.anims, t, |a| &mut a.translate);
+        self.transform_mut().translate = Some(signal);
         self
     }
 
@@ -862,9 +891,24 @@ impl Container {
     /// ```ignore
     /// container().rotate(45.0)
     /// container().rotate(move || heading.get())
+    /// container().rotate(0.0.timeline(shake(), rejections))
     /// ```
-    pub fn rotate<M>(mut self, degrees: impl IntoSignal<f32, M>) -> Self {
-        self.transform_mut().rotate = Some(degrees.into_signal());
+    ///
+    /// An eased angle is interpolated as the number it is, so a turn to 360°
+    /// is a full revolution. Nothing takes a shorter way round on the
+    /// container's behalf: an angle that arrives already wrapped — from
+    /// `atan2`, say — wraps the animation with it, and unwrapping it is the
+    /// caller's to do because only the caller knows which way was meant.
+    ///
+    /// A declared `.reverse()` follows the *number*, not the turn, because the
+    /// angle is an `f32` and `f32::is_reverse` means decreasing. So a tilt from
+    /// `0.0` to `-8.0` takes the reverse curve going out and the forward one
+    /// coming home. Where that matters, declare the rest angle as the larger
+    /// number — `8.0` out and `0.0` home — or leave the reverse undeclared and
+    /// use one curve both ways.
+    pub fn rotate<M>(mut self, degrees: impl IntoAnimated<f32, M>) -> Self {
+        let signal = declare(&mut self.anims, degrees, |a| &mut a.rotate);
+        self.transform_mut().rotate = Some(signal);
         self
     }
 
@@ -876,9 +920,12 @@ impl Container {
     /// ```ignore
     /// container().scale(1.5)
     /// container().scale((2.0, 0.5))
+    /// container().scale(open_size.transition(SpringConfig::SNAPPY))
+    /// container().scale(Scale::NONE.timeline(pulse(), beats))
     /// ```
-    pub fn scale<M>(mut self, factor: impl IntoSignal<Scale, M>) -> Self {
-        self.transform_mut().scale = Some(factor.into_signal());
+    pub fn scale<M>(mut self, factor: impl IntoAnimated<Scale, M>) -> Self {
+        let signal = declare(&mut self.anims, factor, |a| &mut a.scale);
+        self.transform_mut().scale = Some(signal);
         self
     }
 
@@ -886,274 +933,6 @@ impl Container {
     /// grows from. The centre of the container by default.
     pub fn pivot<M>(mut self, origin: impl IntoSignal<Pivot, M>) -> Self {
         self.transform_mut().pivot = Some(origin.into_signal());
-        self
-    }
-
-    /// Enable animation for width changes
-    pub fn animate_width(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self
-            .width
-            .as_ref()
-            .map(|w| {
-                // Builder time, before the widget exists: a snapshot by nature
-                let len = w.get_untracked();
-                len.exact.or(len.min).unwrap_or(0.0)
-            })
-            .unwrap_or(0.0);
-        self.anims_mut().width = Some(AnimationState::new(initial, transition));
-        self
-    }
-
-    /// Enable animation for height changes
-    pub fn animate_height(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self
-            .height
-            .as_ref()
-            .map(|h| {
-                let len = h.get_untracked();
-                len.exact.or(len.min).unwrap_or(0.0)
-            })
-            .unwrap_or(0.0);
-        self.anims_mut().height = Some(AnimationState::new(initial, transition));
-        self
-    }
-
-    /// Enable animation for background color changes
-    pub fn animate_background(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.background.get_or_untracked(Color::TRANSPARENT);
-        self.anims_mut().background = Some(AnimationState::new(initial, transition));
-        self
-    }
-
-    /// Ease the corner *shape* — the four radii and the curvature — instead
-    /// of snapping to it.
-    ///
-    /// A transition that crosses zero curvature changes family in one frame:
-    /// below zero a corner is concave, and the formula that draws it (and the
-    /// one that answers a click) is a different one. Within a family it is
-    /// continuous.
-    pub fn animate_corners(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self
-            .corners
-            .get_or_untracked(crate::widgets::Corners::SQUARE);
-        self.anims_mut().corners = Some(AnimationState::new(initial, transition));
-        self
-    }
-
-    /// Enable animation for padding changes
-    pub fn animate_padding(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.padding.get_or_untracked(Padding::default());
-        self.anims_mut().padding = Some(AnimationState::new(initial, transition));
-        self
-    }
-
-    /// Enable animation for border width changes.
-    ///
-    /// Width and colour keep separate `animate_*` declarations even though the
-    /// border is *declared* as a pair: these name an animatable channel, not a
-    /// way to state a value, and the two channels are different types with
-    /// their own curves. `examples/animation_example.rs` springs the width while
-    /// easing the colour, which one call could not express.
-    pub fn animate_border_width(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.border_width.get_or_untracked(0.0);
-        self.anims_mut().border_width = Some(AnimationState::new(initial, transition));
-        self
-    }
-
-    /// Enable animation for border colour changes. See
-    /// [`animate_border_width`](Self::animate_border_width) for why the two
-    /// halves have their own declarations.
-    pub fn animate_border_color(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.border_color.get_or_untracked(Color::TRANSPARENT);
-        self.anims_mut().border_color = Some(AnimationState::new(initial, transition));
-        self
-    }
-
-    /// Animate elevation changes — the Material lift on hover, in motion
-    /// rather than as a jump.
-    pub fn animate_elevation(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.elevation.get_or_untracked(0.0);
-        self.anims_mut().elevation = Some(AnimationState::new(initial, transition));
-        self
-    }
-
-    /// Ease `translate` changes instead of snapping to them.
-    ///
-    /// The three components animate independently: each has its own curve, so
-    /// a card can spring into place while its rotation eases. Declaring one
-    /// says nothing about the other two.
-    pub fn animate_translate(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.translate_signal().get_or_untracked(Translate::NONE);
-        // Whatever sequence is already here comes along: a fresh state would
-        // throw it away, and the order the two builders were written in would
-        // decide whether it exists — silently, with the trigger still firing.
-        let previous = self.anims_mut().translate.take();
-        let mut anim = AnimationState::new(initial, transition);
-        anim.adopt_declarations_of(previous);
-        self.anims_mut().translate = Some(anim);
-        self
-    }
-
-    /// Ease `rotate` changes instead of snapping to them.
-    ///
-    /// The angle is interpolated as the number it is, so a turn to 360° is a
-    /// full revolution and a turn to 720° is two. Nothing takes a shorter way
-    /// round on the container's behalf: an angle that arrives already wrapped
-    /// — from `atan2`, say — wraps the animation with it, and unwrapping it is
-    /// the caller's to do because only the caller knows which way was meant.
-    ///
-    /// A declared `.reverse()` follows the *number*, not the turn, because the
-    /// angle is an `f32` and `f32::is_reverse` means decreasing. So a tilt from
-    /// `0.0` to `-8.0` takes the reverse curve going out and the forward one
-    /// coming home. Where that matters, declare the rest angle as the larger
-    /// number — `8.0` out and `0.0` home — or leave the reverse undeclared and
-    /// use one curve both ways.
-    pub fn animate_rotate(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.rotate_signal().get_or_untracked(0.0);
-        let previous = self.anims_mut().rotate.take();
-        let mut anim = AnimationState::new(initial, transition);
-        anim.adopt_declarations_of(previous);
-        self.anims_mut().rotate = Some(anim);
-        self
-    }
-
-    /// Ease `scale` changes instead of snapping to them.
-    pub fn animate_scale(mut self, transition: impl Into<TransitionConfig>) -> Self {
-        let initial = self.scale_signal().get_or_untracked(Scale::NONE);
-        let previous = self.anims_mut().scale.take();
-        let mut anim = AnimationState::new(initial, transition);
-        anim.adopt_declarations_of(previous);
-        self.anims_mut().scale = Some(anim);
-        self
-    }
-
-    /// Play a sequence of displacements whenever `plays` changes.
-    ///
-    /// The other animations here move *towards* a value; this one has none. It
-    /// plays, and while it plays it replaces whatever `translate` declares,
-    /// handing the property back when it ends — the rule CSS gives an
-    /// animation over a normal declaration.
-    ///
-    /// The trigger is a count and not a flag on purpose: a second refusal has
-    /// to shake as loudly as the first, and a signal that stays equal notifies
-    /// nobody. The count it starts at is whatever it holds when the container
-    /// is built, so nothing plays on the first frame.
-    pub fn keyframes_translate<M>(
-        mut self,
-        keyframes: crate::animation::Keyframes<Translate>,
-        plays: impl IntoSignal<u32, M>,
-    ) -> Self {
-        let initial = self.translate_signal().get_or_untracked(Translate::NONE);
-        let anim = self
-            .anims_mut()
-            .translate
-            .get_or_insert_with(|| AnimationState::new(initial, instant_transition()));
-        anim.set_timeline(keyframes);
-        anim.set_play_trigger(plays.into_signal());
-        self
-    }
-
-    /// Play a sequence of angles whenever `plays` changes — a shake, a wobble,
-    /// a turn that comes back. See
-    /// [`keyframes_translate`](Self::keyframes_translate) for what a timeline
-    /// is and why the trigger counts.
-    ///
-    /// ```ignore
-    /// container().keyframes_rotate(
-    ///     Keyframes::new(320.0)
-    ///         .at(0.0, 0.0)
-    ///         .at(0.2, 1.5)
-    ///         .at(0.5, -1.0)
-    ///         .at(1.0, 0.0),
-    ///     rejections,
-    /// )
-    /// ```
-    pub fn keyframes_rotate<M>(
-        mut self,
-        keyframes: crate::animation::Keyframes<f32>,
-        plays: impl IntoSignal<u32, M>,
-    ) -> Self {
-        let initial = self.rotate_signal().get_or_untracked(0.0);
-        let anim = self
-            .anims_mut()
-            .rotate
-            .get_or_insert_with(|| AnimationState::new(initial, instant_transition()));
-        anim.set_timeline(keyframes);
-        anim.set_play_trigger(plays.into_signal());
-        self
-    }
-
-    /// Play a sequence of scales whenever `plays` changes — a pulse, a bounce.
-    /// See [`keyframes_translate`](Self::keyframes_translate).
-    pub fn keyframes_scale<M>(
-        mut self,
-        keyframes: crate::animation::Keyframes<Scale>,
-        plays: impl IntoSignal<u32, M>,
-    ) -> Self {
-        let initial = self.scale_signal().get_or_untracked(Scale::NONE);
-        let anim = self
-            .anims_mut()
-            .scale
-            .get_or_insert_with(|| AnimationState::new(initial, instant_transition()));
-        anim.set_timeline(keyframes);
-        anim.set_play_trigger(plays.into_signal());
-        self
-    }
-
-    /// Animate `translate` with an ENTER transition: on first layout it
-    /// animates from `enter_from` to its effective value, so the widget
-    /// appears mid-animation — no signal flip, no timer.
-    pub fn animate_translate_from(
-        mut self,
-        enter_from: impl Into<Translate>,
-        transition: impl Into<TransitionConfig>,
-    ) -> Self {
-        let initial = self.translate_signal().get_or_untracked(Translate::NONE);
-        let previous = self.anims_mut().translate.take();
-        let mut anim = AnimationState::new(initial, transition).with_enter_from(enter_from.into());
-        anim.adopt_declarations_of(previous);
-        self.anims_mut().translate = Some(anim);
-        self
-    }
-
-    /// Animate `rotate` with an ENTER transition. See
-    /// [`animate_translate_from`](Self::animate_translate_from).
-    ///
-    /// `IntoF32` rather than `Into<f32>` so that `animate_rotate_from(45, ..)`
-    /// works, the way `animate_scale_from(2, ..)` does through `From<i32> for
-    /// Scale`: there is no `From<i32> for f32`, and an angle written as a bare
-    /// integer is the ordinary case.
-    pub fn animate_rotate_from(
-        mut self,
-        enter_from: impl IntoF32,
-        transition: impl Into<TransitionConfig>,
-    ) -> Self {
-        let enter_from = enter_from.into_f32();
-        let initial = self.rotate_signal().get_or_untracked(0.0);
-        let previous = self.anims_mut().rotate.take();
-        let mut anim = AnimationState::new(initial, transition).with_enter_from(enter_from);
-        anim.adopt_declarations_of(previous);
-        self.anims_mut().rotate = Some(anim);
-        self
-    }
-
-    /// Animate `scale` with an ENTER transition: a menu that scales open
-    /// declares it directly, and `open` can simply start true.
-    ///
-    /// ```ignore
-    /// .scale(move || if open.get() { Scale::NONE } else { Scale::uniform(0.9) })
-    /// .animate_scale_from(0.9, Transition::spring(SpringConfig::SNAPPY))
-    /// ```
-    pub fn animate_scale_from(
-        mut self,
-        enter_from: impl Into<Scale>,
-        transition: impl Into<TransitionConfig>,
-    ) -> Self {
-        let initial = self.scale_signal().get_or_untracked(Scale::NONE);
-        let previous = self.anims_mut().scale.take();
-        let mut anim = AnimationState::new(initial, transition).with_enter_from(enter_from.into());
-        anim.adopt_declarations_of(previous);
-        self.anims_mut().scale = Some(anim);
         self
     }
 
@@ -1311,6 +1090,36 @@ impl Widget for Container {
             });
             let anims = self.anims.as_mut().unwrap();
 
+            // A trigger that has moved starts the sequence, before the frame
+            // that will show its first value. The read is a snapshot: the
+            // subscription belongs to `resync_animation_targets`, which asks
+            // the same question inside its tracking scope.
+            macro_rules! start_timeline {
+                ($field:ident) => {
+                    if let Some(anim) = anims.$field.as_mut()
+                        && anim.take_play()
+                    {
+                        anim.play(now);
+                    }
+                };
+            }
+            // Every property that can carry one, not the three transform
+            // components a timeline used to be limited to. Width and height
+            // are the only pair left out, and they are left out by
+            // construction: they declare a `Length`, and `Keyframes<Length>`
+            // has no constructor.
+            crate::reactive::diagnostics::snapshot_zone(|| {
+                start_timeline!(padding);
+                start_timeline!(border_width);
+                start_timeline!(background);
+                start_timeline!(corners);
+                start_timeline!(elevation);
+                start_timeline!(border_color);
+                start_timeline!(translate);
+                start_timeline!(rotate);
+                start_timeline!(scale);
+            });
+
             // Layout-affecting animations: width, height, padding
             advance_anim!(anims, width, id, any_animating, now, layout);
             advance_anim!(anims, height, id, any_animating, now, layout);
@@ -1363,22 +1172,6 @@ impl Widget for Container {
                 now,
                 paint
             );
-            // A trigger that has moved starts the sequence, before the frame
-            // that will show its first value. The read is a snapshot: the
-            // subscription belongs to `resync_animation_targets`, which asks
-            // the same question inside its tracking scope.
-            macro_rules! start_timeline {
-                ($field:ident) => {
-                    if let Some(anim) = anims.$field.as_mut()
-                        && crate::reactive::diagnostics::snapshot_zone(|| anim.take_play())
-                    {
-                        anim.play(now);
-                    }
-                };
-            }
-            start_timeline!(translate);
-            start_timeline!(rotate);
-            start_timeline!(scale);
             advance_anim!(
                 anims,
                 translate,
@@ -1552,7 +1345,7 @@ impl Widget for Container {
         }
 
         self.update_size_targets(tree, id, &lengths, content_size);
-        self.seed_animations(id, tree.frame_instant());
+        self.seed_animations(id);
 
         let size = self.resolve_size(&lengths, constraints, content_size);
 
@@ -1882,6 +1675,53 @@ impl Widget for Container {
     }
 }
 
+/// Declare an animatable property: keep the value's signal, and install
+/// whatever motion arrived with it.
+///
+/// The animation is seeded from the signal's value at builder time. For every
+/// property but padding and border width that seed is replaced at the first
+/// layout by `seed_animations`, which reads the signal rather than this
+/// snapshot; those two are read there only for their subscription, so their
+/// seed survives into the first advance.
+fn declare<T: Animatable, M>(
+    anims: &mut Option<Box<ContainerAnims>>,
+    value: impl IntoAnimated<T, M>,
+    slot: impl FnOnce(&mut ContainerAnims) -> &mut Option<AnimationState<T>>,
+) -> Signal<T> {
+    let (signal, motion) = value.into_animated().into_parts();
+    if let Some(motion) = motion {
+        let seed = signal.get_untracked();
+        *slot(anims.get_or_insert_with(Box::default)) = Some(match *motion {
+            Motion::Ease(config) => AnimationState::new(seed, config),
+            Motion::Play { keyframes, plays } => {
+                AnimationState::new(seed, instant_transition()).with_timeline(keyframes, plays)
+            }
+        });
+    }
+    signal
+}
+
+/// The same for a width or a height, the one pair whose declared type is not
+/// the type it animates — see [`Animated::into_eased`], which is where that
+/// narrowing is argued.
+///
+/// The seed is where the *first frame* starts, so it reads the declared length
+/// alone. `update_size_targets` recomputes the target from the measured
+/// content at every layout after that, which is why the two formulas differ.
+fn declare_size<M>(
+    anims: &mut Option<Box<ContainerAnims>>,
+    value: impl IntoAnimated<Length, M>,
+    slot: impl FnOnce(&mut ContainerAnims) -> &mut Option<AnimationState<f32>>,
+) -> Signal<Length> {
+    let (signal, ease) = value.into_animated().into_eased();
+    if let Some(config) = ease {
+        let length = signal.get_untracked();
+        let seed = length.exact.or(length.min).unwrap_or(0.0);
+        *slot(anims.get_or_insert_with(Box::default)) = Some(AnimationState::new(seed, config));
+    }
+    signal
+}
+
 pub fn container() -> Container {
     Container::new()
 }
@@ -1889,7 +1729,7 @@ pub fn container() -> Container {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::animation::{TimingFunction, Transition};
+    use crate::animation::{Animate, TimingFunction, Transition};
     use crate::jobs::{self, Job};
     use crate::layout::Constraints;
     use crate::reactive::create_signal;
@@ -1907,15 +1747,16 @@ mod tests {
     #[test]
     fn write_between_first_layout_and_first_paint_starts_animation() {
         let open = create_signal(false);
-        let widget = container()
-            .scale(move || {
+        let widget = container().scale(
+            (move || {
                 if open.get() {
                     Scale::NONE
                 } else {
                     Scale::new(1.0, 0.0)
                 }
             })
-            .animate_scale(Transition::new(200, TimingFunction::EaseOut));
+            .transition(Transition::new(200, TimingFunction::EaseOut)),
+        );
 
         let mut tree = Tree::new();
         let id = tree.register(Box::new(widget));
@@ -1956,56 +1797,15 @@ mod tests {
         );
     }
 
-    /// An enter transition starts animating at first layout — the widget
-    /// appears mid-animation, no signal flip or timer needed.
-    #[test]
-    fn enter_transition_starts_animating_at_first_layout() {
-        use crate::animation::TimingFunction;
-
-        let collapsed = Scale::new(1.0, 0.0);
-        let entering = container()
-            .scale(Scale::NONE)
-            .animate_scale_from(collapsed, Transition::new(200, TimingFunction::EaseOut));
-        let plain = container()
-            .scale(Scale::NONE)
-            .animate_scale(Transition::new(200, TimingFunction::EaseOut));
-
-        let mut tree = Tree::new();
-        let entering_id = tree.register(Box::new(entering));
-        let plain_id = tree.register(Box::new(plain));
-        let c = Constraints::new(0.0, 0.0, 100.0, 100.0);
-        for id in [entering_id, plain_id] {
-            tree.with_widget_mut(id, |w, id, tree| {
-                w.layout(tree, id, c);
-            });
-        }
-
-        let entering_animating = tree
-            .with_widget_mut(entering_id, |w, id, tree| w.advance_animations(tree, id))
-            .unwrap();
-        let plain_animating = tree
-            .with_widget_mut(plain_id, |w, id, tree| w.advance_animations(tree, id))
-            .unwrap();
-        assert!(
-            entering_animating,
-            "enter transition must be in flight right after the first layout"
-        );
-        assert!(
-            !plain_animating,
-            "a plain animation initializes settled at its target"
-        );
-    }
-
     /// Content-sized surfaces measure under the measure-final flag: layout
     /// must report animation TARGETS, not in-flight values, so a growth
     /// animation resizes the surface once instead of once per frame.
     #[test]
     fn measure_final_reads_animation_targets() {
         let height_sig = create_signal(100.0_f32);
-        let widget = container()
-            .width(50.0)
-            .height(move || height_sig.get())
-            .animate_height(Transition::new(200, TimingFunction::EaseOut));
+        let widget = container().width(50.0).height(
+            (move || height_sig.get()).transition(Transition::new(200, TimingFunction::EaseOut)),
+        );
 
         let mut tree = Tree::new();
         let id = tree.register(Box::new(widget));
@@ -2051,8 +1851,7 @@ mod tests {
     fn padding_write_after_first_layout_schedules_animation() {
         let pad = create_signal(4.0_f32);
         let widget = container()
-            .padding(move || pad.get())
-            .animate_padding(Transition::new(200, TimingFunction::EaseOut));
+            .padding((move || pad.get()).transition(Transition::new(200, TimingFunction::EaseOut)));
 
         let mut tree = Tree::new();
         let id = tree.register(Box::new(widget));

@@ -2,7 +2,10 @@
 
 Animate transform changes with smooth transitions.
 
-## Enabling Animation
+## Declaring one
+
+The timing rides with the value: `.transition(..)` on whatever the component is
+being set to, so a component cannot be animated without being set.
 
 ```rust
 # extern crate guido;
@@ -10,8 +13,7 @@ Animate transform changes with smooth transitions.
 # fn main() {
 # let rotation_signal = create_signal(0.0f32);
 container()
-    .rotate(rotation_signal)
-    .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
+    .rotate(rotation_signal.transition(Transition::new(300.0, TimingFunction::EaseOut)))
 # ;
 # }
 ```
@@ -29,8 +31,7 @@ Standard easing curve transitions:
 # let rotation = create_signal(0.0f32);
 // Smooth ease-out rotation
 container()
-    .rotate(rotation)
-    .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
+    .rotate(rotation.transition(Transition::new(300.0, TimingFunction::EaseOut)))
     .on_click(move || rotation.update(|r| *r += 45.0))
 # ;
 # }
@@ -46,8 +47,7 @@ Physics simulation for bouncy, natural motion:
 # fn main() {
 # let scale_signal = create_signal(1.0f32);
 container()
-    .scale(scale_signal)
-    .animate_scale(Transition::spring(SpringConfig::BOUNCY))
+    .scale(scale_signal.transition(Transition::spring(SpringConfig::BOUNCY)))
 # ;
 # }
 ```
@@ -73,8 +73,7 @@ container()
     .height(80.0)
     .background(Color::rgb(0.3, 0.6, 0.8))
     .corners(8.0)
-    .rotate(rotation)
-    .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
+    .rotate(rotation.transition(Transition::new(300.0, TimingFunction::EaseOut)))
     .when_hovered(|s| s.lighter(0.1))
     .when_pressed(|s| s.ripple())
     .on_click(move || rotation.update(|r| *r += 45.0))
@@ -92,8 +91,7 @@ let scale_factor = create_signal(1.0f32);
 let is_scaled = create_signal(false);
 
 container()
-    .scale(scale_factor)
-    .animate_scale(Transition::spring(SpringConfig::BOUNCY))
+    .scale(scale_factor.transition(Transition::spring(SpringConfig::BOUNCY)))
     .on_click(move || {
         is_scaled.update(|s| *s = !*s);
         let target = if is_scaled.get() { 1.3 } else { 1.0 };
@@ -110,7 +108,7 @@ container()
 # use guido::prelude::*;
 # fn main() {
 container()
-    .animate_scale(Transition::spring(SpringConfig::GENTLE))
+    .scale(Scale::NONE.transition(Transition::spring(SpringConfig::GENTLE)))
     .when_pressed(|s| s.scale(0.98))
 # ;
 # }
@@ -125,8 +123,10 @@ container()
 let offset_x = create_signal(0.0f32);
 
 container()
-    .translate(move || (offset_x.get(), 0.0))
-    .animate_translate(Transition::new(400.0, TimingFunction::EaseInOut))
+    .translate(
+        (move || (offset_x.get(), 0.0))
+            .transition(Transition::new(400.0, TimingFunction::EaseInOut)),
+    )
     .on_scroll(move |_, dy, _| {
         offset_x.update(|x| *x += dy * 10.0);
     })
@@ -164,8 +164,7 @@ fn animated_transforms_demo() -> impl Widget {
                 .height(80.0)
                 .background(Color::rgb(0.3, 0.5, 0.8))
                 .corners(8.0)
-                .rotate(rotation)
-                .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
+                .rotate(rotation.transition(Transition::new(300.0, TimingFunction::EaseOut)))
                 .when_hovered(|s| s.lighter(0.1))
                 .when_pressed(|s| s.ripple())
                 .on_click(move || rotation.update(|r| *r += 45.0))
@@ -178,8 +177,7 @@ fn animated_transforms_demo() -> impl Widget {
                 .height(80.0)
                 .background(Color::rgb(0.3, 0.8, 0.4))
                 .corners(8.0)
-                .scale(scale)
-                .animate_scale(Transition::spring(SpringConfig::BOUNCY))
+                .scale(scale.transition(Transition::spring(SpringConfig::BOUNCY)))
                 .when_hovered(|s| s.lighter(0.1))
                 .when_pressed(|s| s.ripple())
                 .on_click(move || {
@@ -195,15 +193,11 @@ fn animated_transforms_demo() -> impl Widget {
 ## API Reference
 
 ```rust,ignore
+// The three components each take a value that may carry its own motion.
 impl Container {
-    pub fn animate_translate(self, transition: Transition) -> Self;
-    pub fn animate_rotate(self, transition: Transition) -> Self;
-    pub fn animate_scale(self, transition: Transition) -> Self;
-
-    // Each has an enter form, animating in from a value on first layout
-    pub fn animate_translate_from(self, from: impl Into<Translate>, t: Transition) -> Self;
-    pub fn animate_rotate_from(self, from: impl IntoF32, t: Transition) -> Self;
-    pub fn animate_scale_from(self, from: impl Into<Scale>, t: Transition) -> Self;
+    pub fn translate<M>(self, t: impl IntoAnimated<Translate, M>) -> Self;
+    pub fn rotate<M>(self, degrees: impl IntoAnimated<f32, M>) -> Self;
+    pub fn scale<M>(self, factor: impl IntoAnimated<Scale, M>) -> Self;
 }
 
 // Duration-based

@@ -167,6 +167,30 @@ impl StateStyle {
     }
 
     /// Set an explicit background color for this state.
+    ///
+    /// A value, and nothing about time. The motion belongs to the property,
+    /// declared once beside its base value, and a state layer *overrides* a
+    /// property somebody else owns — so a hover already eases under whatever
+    /// the base declared:
+    ///
+    /// ```ignore
+    /// container()
+    ///     .background(base.transition(200.0))    // the property eases
+    ///     .when_hovered(|s| s.background(HOT.transition(900.0)))   // the override changes the value
+    /// ```
+    ///
+    /// Declaring a timing here is a compile error rather than a value quietly
+    /// ignored, which is the whole reason [`Animated`](crate::animation::Animated)
+    /// is not an [`IntoSignal`]:
+    ///
+    /// ```compile_fail
+    /// use guido::prelude::*;
+    ///
+    /// const HOT: Color = Color::rgb(0.9, 0.3, 0.2);
+    /// let _ = container()
+    ///     .background(Color::BLACK)
+    ///     .when_hovered(|s| s.background(HOT.transition(900.0)));
+    /// ```
     pub fn background<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
         self.background = Some(BackgroundOverride::Exact(color.into_signal()));
         self

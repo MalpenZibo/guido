@@ -233,8 +233,9 @@ fn styled_card(title: &str, content: &str) -> Container {
         .width(300.0)
         .padding(20.0)
 
-        // Background and corners
-        .background(Color::rgb(0.15, 0.15, 0.2))
+        // Background and corners — the background eases, so the hover below
+        // arrives over 200ms rather than in one frame
+        .background(Color::rgb(0.15, 0.15, 0.2).transition(200.0))
         .corners(Corners::squircle(12.0))
         
 
@@ -247,8 +248,7 @@ fn styled_card(title: &str, content: &str) -> Container {
         // Layout
         .layout(Flex::column().spacing(12.0))
 
-        // State layers
-        .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
+        // State layers — they supply values; the motion was declared above
         .when_hovered(|s| s.lighter(0.05).elevation(6.0))
 
         // Children

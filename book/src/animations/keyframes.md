@@ -6,7 +6,8 @@ change looks like, and none of what a sequence looks like — a shake, a flash, 
 bounce, anything that has to pass through somewhere on its way and end where it
 started.
 
-A timeline is the other shape. It has no target: it plays.
+A timeline is the other shape. It has no target: it plays. Declare it with
+`.timeline(..)`, on the value the property rests at between plays:
 
 ```rust
 # extern crate guido;
@@ -14,7 +15,7 @@ A timeline is the other shape. It has no target: it plays.
 # fn main() {
 # let rejections = create_signal(0);
 container()
-    .keyframes_rotate(
+    .rotate(0.0.timeline(
         Keyframes::new(320.0)
             .at(0.0, 0.0)
             .at(0.15, 2.0)
@@ -22,10 +23,55 @@ container()
             .at(0.65, 0.9)
             .at(1.0, 0.0),
         rejections,
-    )
+    ))
 # ;
 # }
 ```
+
+It reaches every animatable property, not only the transform components — a
+`Keyframes<Color>` on a background is a flash:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let errors = create_signal(0);
+# let surface = Color::rgb(0.15, 0.15, 0.2);
+container()
+    .background(surface.timeline(
+        Keyframes::new(240.0)
+            .at(0.0, surface)
+            .at(0.3, Color::rgb(0.8, 0.2, 0.2))
+            .at(1.0, surface),
+        errors,
+    ))
+# ;
+# }
+```
+
+## The resting value
+
+The value `.timeline(..)` is called on is what the property *is* whenever
+nothing is playing. A shake returns to where it began, which makes it look
+redundant — but a sequence that ends somewhere else snaps back to it, and a
+sequence resting on a live signal has nowhere else to put its expression:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let rejections = create_signal(0);
+# let spin = create_signal(0u32);
+# let shake = || Keyframes::new(320.0).at(0.0, 0.0).at(0.5, 2.0).at(1.0, 0.0);
+// A glyph that spins on one signal, and shakes on another.
+container()
+    .rotate((move || spin.get() as f32 * 90.0).timeline(shake(), rejections))
+# ;
+# }
+```
+
+A timeline is for something that happens and is over. A change that should
+persist is a transition.
 
 ## What plays it
 
@@ -81,8 +127,8 @@ at the same time without the two meeting at all:
 # let shake = move || {};
 container()
     .when_hovered(|s| s.scale(1.03))
-    .animate_scale(Transition::spring(SpringConfig::SNAPPY))
-    .keyframes_rotate(shake(), rejections)
+    .scale(Scale::NONE.transition(Transition::spring(SpringConfig::SNAPPY)))
+    .rotate(0.0.timeline(shake(), rejections))
 # ;
 # }
 ```
@@ -101,21 +147,20 @@ component:
 # let shake = move || {};
 container()
     .when_hovered(|s| s.rotate(3.0))
-    .animate_rotate(Transition::spring(SpringConfig::SNAPPY))
-    .keyframes_rotate(shake(), rejections)
+    .rotate(0.0.timeline(shake(), rejections))
 # ;
 # }
 ```
 
 Here the hover tilt is still declared while the shake runs; it simply is not
-being drawn. When the sequence ends the property is handed back **through its
-declared transition**, from wherever the sequence left it — so a pointer that
-arrived mid-shake gets its spring, rather than the card jumping to the tilted
-angle on the sequence's last frame. A callback on that transition fires as it
-normally would, for the same reason.
+being drawn. When the sequence ends the property is handed back from wherever
+the sequence left it, rather than the card jumping to the tilted angle on the
+sequence's last frame.
 
-The builders do not care which order you write them in: declaring a transition
-after a sequence keeps the sequence, and the other way round too.
+A property carries one motion: a value is declared either with a transition or
+with a timeline, and a second declaration of the same property replaces the
+whole thing — the value included. Where a card wants both a spring and a
+sequence, they go on two components, as in the example above.
 
 ## What a segment cannot be eased with
 

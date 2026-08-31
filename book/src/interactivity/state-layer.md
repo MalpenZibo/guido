@@ -135,19 +135,27 @@ Chain multiple overrides in a single state:
 
 ## With Animations
 
-Add transitions for smooth state changes:
+The motion belongs to the property, declared once beside its base value. A
+layer supplies a value for a property somebody else owns, and carries no timing
+of its own — so a hover eases under whatever the base declared:
 
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
 container()
-    .background(Color::rgb(0.3, 0.5, 0.8))
-    .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
+    .background(Color::rgb(0.3, 0.5, 0.8).transition(200.0))
     .when_hovered(|s| s.lighter(0.15))
     .when_pressed(|s| s.darker(0.1))
 # ;
 # }
+```
+
+Writing a timing on the override does not compile. It would be a declaration
+that is legal and does nothing:
+
+```rust,ignore
+.when_hovered(|s| s.background(HOT.transition(900.0)))   // error
 ```
 
 ## Complete Example
@@ -156,14 +164,11 @@ container()
 fn interactive_button(label: &str) -> Container {
     container()
         .padding(16.0)
-        .background(Color::rgb(0.3, 0.5, 0.8))
+        // Each property carries its own motion
+        .background(Color::rgb(0.3, 0.5, 0.8).transition(200.0))
         .corners(8.0)
-        .border(1.0, Color::rgb(0.4, 0.6, 0.9))
-
-        // Animations
-        .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
-        .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
-        .animate_scale(Transition::spring(SpringConfig::GENTLE))
+        .border(1.0.transition(150.0), Color::rgb(0.4, 0.6, 0.9))
+        .scale(Scale::NONE.transition(Transition::spring(SpringConfig::GENTLE)))
 
         // State layers
         .when_hovered(|s| s

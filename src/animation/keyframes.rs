@@ -11,22 +11,25 @@
 //! settled on, where an animation outranks a normal declaration for as long as
 //! it runs and hands the property back afterwards.
 //!
+//! It is declared where the value is, with
+//! [`timeline`](crate::animation::Animate::timeline), on whatever the property
+//! rests at between plays:
+//!
 //! ```ignore
-//! container()
-//!     .keyframes_rotate(
-//!         Keyframes::new(320.0)
-//!             .at(0.0, 0.0)
-//!             .at(0.2, 1.5)
-//!             .at(0.5, -1.0)
-//!             .at(0.8, 0.4)
-//!             .at(1.0, 0.0),
-//!         rejections,
-//!     )
+//! container().rotate(0.0.timeline(
+//!     Keyframes::new(320.0)
+//!         .at(0.0, 0.0)
+//!         .at(0.2, 1.5)
+//!         .at(0.5, -1.0)
+//!         .at(0.8, 0.4)
+//!         .at(1.0, 0.0),
+//!     rejections,
+//! ))
 //! ```
 //!
-//! A timeline belongs to the one component it moves: `keyframes_rotate` for a
-//! shake, `keyframes_translate` for a nod, `keyframes_scale` for a pulse. A
-//! hover that scales is untouched by a sequence that rotates.
+//! A timeline belongs to the one property it moves — a rotation for a shake, a
+//! translation for a nod, a background for a flash — so a hover that scales is
+//! untouched by a sequence that rotates.
 //!
 //! # What the offsets mean
 //!

@@ -239,8 +239,10 @@ fn main() {
                         // `content()` surface has something whose size moves.
                         let grown = container()
                             .width(120.0)
-                            .height(move || if tall.get() { 150.0 } else { 50.0 })
-                            .animate_height(Transition::new(400.0, TimingFunction::EaseOut))
+                            .height(
+                                (move || if tall.get() { 150.0 } else { 50.0 })
+                                    .transition(Transition::new(400.0, TimingFunction::EaseOut)),
+                            )
                             .background(Color::rgb(0.30, 0.45, 0.35))
                             .corners(6.0)
                             .into_any();

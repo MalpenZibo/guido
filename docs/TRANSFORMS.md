@@ -113,8 +113,7 @@ Animate transform changes with transitions:
 let rotation = create_signal(0.0f32);
 
 container()
-    .rotate(rotation)
-    .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
+    .rotate(rotation.transition(Transition::new(300.0, TimingFunction::EaseOut)))
     .on_click(move || rotation.update(|r| *r += 45.0))
 ```
 
@@ -124,8 +123,7 @@ For physics-based animation:
 
 ```rust
 container()
-    .scale(scale_signal)
-    .animate_scale(Transition::spring(SpringConfig::BOUNCY))
+    .scale(scale_signal.transition(Transition::spring(SpringConfig::BOUNCY)))
 ```
 
 ## Nested Transforms
@@ -200,12 +198,9 @@ impl Transform {
 
 ```rust
 impl Container {
-    pub fn translate<M>(self, t: impl IntoSignal<Translate, M>) -> Self;
-    pub fn rotate<M>(self, degrees: impl IntoSignal<f32, M>) -> Self;
-    pub fn scale<M>(self, factor: impl IntoSignal<Scale, M>) -> Self;
+    pub fn translate<M>(self, t: impl IntoAnimated<Translate, M>) -> Self;
+    pub fn rotate<M>(self, degrees: impl IntoAnimated<f32, M>) -> Self;
+    pub fn scale<M>(self, factor: impl IntoAnimated<Scale, M>) -> Self;
     pub fn pivot<M>(self, pivot: impl IntoSignal<Pivot, M>) -> Self;
-    pub fn animate_translate(self, transition: impl Into<TransitionConfig>) -> Self;
-    pub fn animate_rotate(self, transition: impl Into<TransitionConfig>) -> Self;
-    pub fn animate_scale(self, transition: impl Into<TransitionConfig>) -> Self;
 }
 ```

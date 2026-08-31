@@ -1,7 +1,7 @@
 //! Does attaching a size animation change how a capped container lays out?
 //!
 //! Each row below is the SAME container twice: on the left as written, on the
-//! right with `.animate_width(...)` added and nothing else. The animation never
+//! right with a transition on its declared width and nothing else. The animation never
 //! runs — there is no signal to move it — so the two ought to be identical.
 //!
 //! Run it on a build with the fix and the pairs match. Run it on one without
@@ -29,20 +29,19 @@ fn heading(s: &str) -> Text {
 
 /// The cap, drawn as an outline so overflowing content is visible against it.
 fn capped(animated: bool, body: impl Widget + 'static) -> Container {
-    let c = container()
-        .width(at_most(CAP))
-        .border(1.0, Color::rgb(0.45, 0.5, 0.65))
+    let width = at_most(CAP);
+    let c = if animated {
+        container().width(width.transition(Transition::new(200, TimingFunction::EaseOut)))
+    } else {
+        container().width(width)
+    };
+    c.border(1.0, Color::rgb(0.45, 0.5, 0.65))
         .corners(4.0)
         .padding(6.0)
         // Visible, not Hidden: clipping would conceal exactly what we are here
         // to look at.
         .overflow(Overflow::Visible)
-        .child(body);
-    if animated {
-        c.animate_width(Transition::new(200, TimingFunction::EaseOut))
-    } else {
-        c
-    }
+        .child(body)
 }
 
 /// One case, shown twice, with its measured size printed underneath.
@@ -75,7 +74,7 @@ fn pair(title: &str, build: impl Fn(bool) -> Container + 'static) -> Container {
             container()
                 .layout(Flex::row().spacing(24.0))
                 .child(side("come scritto", build(false), plain_ref))
-                .child(side("+ .animate_width()", build(true), anim_ref)),
+                .child(side("+ .transition()", build(true), anim_ref)),
         )
 }
 

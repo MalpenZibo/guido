@@ -199,21 +199,31 @@ is its own ripple and they overlap; up to four are alive at a time.
 
 ## Animations
 
-State transitions can be animated using the `animate_*` methods:
+The motion belongs to the *property*, declared once beside its base value. A
+state layer supplies a value for a property somebody else owns, so it carries no
+timing of its own — and a hover eases under whatever the base declared:
 
 ```rust
 container()
-    .background(Color::rgb(0.3, 0.6, 0.4))
-    .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
+    .background(Color::rgb(0.3, 0.6, 0.4).transition(200.0))
     .when_hovered(|s| s.lighter(0.15))
     .when_pressed(|s| s.darker(0.1))
 ```
 
-Available animation methods:
-- `animate_background(Transition)` - Animate background color changes
-- `animate_border_width(Transition)` - Animate border width changes
-- `animate_border_color(Transition)` - Animate border color changes
-- `animate_translate(Transition)` / `animate_rotate(..)` / `animate_scale(..)`
+Declaring a timing on the override is a compile error rather than a value
+quietly ignored, because [`Animated`] is deliberately not an [`IntoSignal`]:
+
+```rust
+// does not compile
+.when_hovered(|s| s.background(HOT.transition(900.0)))
+```
+
+Every animatable property takes a motion the same way — `background`, `border`
+(each half separately), `corners`, `padding`, `elevation`, `width`, `height`,
+`translate`, `rotate` and `scale`.
+
+[`Animated`]: ../src/animation/animated.rs
+[`IntoSignal`]: ../src/reactive/into_signal.rs
 
 ### Transition Types
 
@@ -233,15 +243,12 @@ Transition::spring(SpringConfig::GENTLE)
 fn create_button(label: &str) -> Container {
     container()
         .padding(16.0)
-        .background(Color::rgb(0.3, 0.5, 0.8))
+        .background(Color::rgb(0.3, 0.5, 0.8).transition(200.0))
         .corners(8.0)
-        .border(1.0, Color::rgb(0.4, 0.6, 0.9))
-        
+        .border(1.0.transition(150.0), Color::rgb(0.4, 0.6, 0.9))
+
         // The label follows the state too, not just the box
         .control()   // the text below declares .when_hovered(|s| s.color(Color::rgb(0.95, 0.98, 1.0)))
-        // Animations
-        .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
-        .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
         // State overrides
         .when_hovered(|s| s.lighter(0.1).border(2.0, Color::rgb(0.5, 0.7, 1.0)))
         .when_pressed(|s| s.ripple().darker(0.05).scale(0.98))

@@ -54,8 +54,10 @@ fn main() {
                             .height(60.0)
                             .background(Color::rgb(0.3, 0.6, 0.8))
                             .corners(8.0)
-                            .rotate(move || rotation.get())
-                            .animate_rotate(Transition::new(300.0, TimingFunction::EaseOut))
+                            .rotate(
+                                (move || rotation.get())
+                                    .transition(Transition::new(300.0, TimingFunction::EaseOut)),
+                            )
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || {
@@ -78,8 +80,10 @@ fn main() {
                             .height(60.0)
                             .background(Color::rgb(0.3, 0.8, 0.4))
                             .corners(8.0)
-                            .scale(move || scale_factor.get())
-                            .animate_scale(Transition::spring(SpringConfig::BOUNCY))
+                            .scale(
+                                (move || scale_factor.get())
+                                    .transition(Transition::spring(SpringConfig::BOUNCY)),
+                            )
                             .when_hovered(|s| s.lighter(0.1))
                             .when_pressed(|s| s.ripple())
                             .on_click(move || {

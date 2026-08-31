@@ -53,8 +53,7 @@ Smooth elevation transitions:
 # use guido::prelude::*;
 # fn main() {
 container()
-    .elevation(2.0)
-    .animate_elevation(Transition::new(200.0, TimingFunction::EaseOut))
+    .elevation(2.0.transition(Transition::new(200.0, TimingFunction::EaseOut)))
     .when_hovered(|s| s.elevation(6.0))
 # ;
 # }
@@ -83,11 +82,9 @@ fn elevated_card() -> Container {
     container()
         .width(200.0)
         .padding(20.0)
-        .background(Color::rgb(0.15, 0.15, 0.2))
+        .background(Color::rgb(0.15, 0.15, 0.2).transition(150.0))
         .corners(12.0)
-        .elevation(4.0)
-        .animate_background(Transition::new(150.0, TimingFunction::EaseOut))
-        .animate_elevation(Transition::new(200.0, TimingFunction::EaseOut))
+        .elevation(4.0.transition(200.0))
         .when_hovered(|s| s.elevation(8.0).lighter(0.05))
         .when_pressed(|s| s.elevation(2.0).darker(0.05))
         .layout(Flex::column().spacing(8.0))

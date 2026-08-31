@@ -52,12 +52,11 @@ fn main() {
 
 fn card(title: &str, hint: impl Into<String>, body: Container) -> Container {
     container()
-        .background(CARD)
+        .background(CARD.transition(Transition::new(150.0, TimingFunction::EaseOut)))
         .corners(12.0)
         .padding(12.0)
         .layout(Flex::column().spacing(7.0))
         .when_hovered(|s| s.lighter(0.04))
-        .animate_background(Transition::new(150.0, TimingFunction::EaseOut))
         .children([
             text(title.to_string())
                 .font_size(14.0)
@@ -93,8 +92,10 @@ fn width_card() -> Container {
         track(
             36.0,
             container()
-                .width(move || if wide.get() { WIDE } else { NARROW })
-                .animate_width(Transition::spring(SpringConfig::DEFAULT))
+                .width(
+                    (move || if wide.get() { WIDE } else { NARROW })
+                        .transition(Transition::spring(SpringConfig::DEFAULT)),
+                )
                 .height(fill())
                 .background(INK)
                 .corners(6.0),
@@ -111,8 +112,7 @@ fn colour_card() -> Container {
             .width(280.0)
             .height(48.0)
             .corners(8.0)
-            .background(Color::rgb(0.22, 0.20, 0.30))
-            .animate_background(transition)
+            .background(Color::rgb(0.22, 0.20, 0.30).transition(transition))
             .when_hovered(|s| s.background(HOT))
     };
 
@@ -138,19 +138,25 @@ fn corner_and_size_card() -> Container {
         track(
             56.0,
             container()
-                .width(move || if open.get() { 520.0 } else { 120.0 })
-                .animate_width(Transition::spring(SpringConfig::SNAPPY))
+                .width(
+                    (move || if open.get() { 520.0 } else { 120.0 })
+                        .transition(Transition::spring(SpringConfig::SNAPPY)),
+                )
                 .height(fill())
-                .background(move || {
-                    if open.get() {
-                        Color::rgb(0.25, 0.55, 0.40)
-                    } else {
-                        Color::rgb(0.25, 0.30, 0.45)
-                    }
-                })
-                .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
-                .corners(move || if open.get() { 30.0 } else { 6.0 })
-                .animate_corners(Transition::new(250.0, TimingFunction::EaseInOut)),
+                .background(
+                    (move || {
+                        if open.get() {
+                            Color::rgb(0.25, 0.55, 0.40)
+                        } else {
+                            Color::rgb(0.25, 0.30, 0.45)
+                        }
+                    })
+                    .transition(200.0),
+                )
+                .corners(
+                    (move || if open.get() { 30.0 } else { 6.0 })
+                        .transition(Transition::new(250.0, TimingFunction::EaseInOut)),
+                ),
         )
         .on_click(move || open.update(|o| *o = !*o)),
     )
@@ -170,11 +176,10 @@ fn border_card() -> Container {
             .background(Color::rgb(0.13, 0.13, 0.18))
             .corners(10.0)
             .border(
-                move || if thick.get() { 14.0 } else { 2.0 },
-                Color::rgb(0.40, 0.50, 0.70),
+                (move || if thick.get() { 14.0 } else { 2.0 })
+                    .transition(Transition::spring(SpringConfig::BOUNCY)),
+                Color::rgb(0.40, 0.50, 0.70).transition(300.0),
             )
-            .animate_border_width(Transition::spring(SpringConfig::BOUNCY))
-            .animate_border_color(Transition::new(300.0, TimingFunction::EaseOut))
             // A border is declared as a pair, so the hover restates the width —
             // and restates it as the same signal, or hovering would pin it and
             // the click would have nothing left to spring. Each half of a state

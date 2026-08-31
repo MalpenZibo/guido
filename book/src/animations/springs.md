@@ -83,8 +83,10 @@ Springs excel at:
 let expanded = create_signal(false);
 
 container()
-    .width(move || if expanded.get() { 600.0 } else { 50.0 })
-    .animate_width(Transition::spring(SpringConfig::DEFAULT))
+    .width(
+        (move || if expanded.get() { 600.0 } else { 50.0 })
+            .transition(Transition::spring(SpringConfig::DEFAULT)),
+    )
     .on_click(move || expanded.update(|e| *e = !*e))
 # ;
 # }
@@ -116,8 +118,7 @@ let scale_factor = create_signal(1.0f32);
 let is_scaled = create_signal(false);
 
 container()
-    .scale(scale_factor)
-    .animate_scale(Transition::spring(SpringConfig::BOUNCY))
+    .scale(scale_factor.transition(Transition::spring(SpringConfig::BOUNCY)))
     .on_click(move || {
         is_scaled.update(|s| *s = !*s);
         let target = if is_scaled.get() { 1.3 } else { 1.0 };
@@ -136,8 +137,10 @@ container()
 let expanded = create_signal(false);
 
 container()
-    .width(move || at_least(if expanded.get() { 400.0 } else { 200.0 }))
-    .animate_width(Transition::spring(SpringConfig::GENTLE))
+    .width(
+        (move || at_least(if expanded.get() { 400.0 } else { 200.0 }))
+            .transition(Transition::spring(SpringConfig::GENTLE)),
+    )
     .on_click(move || expanded.update(|e| *e = !*e))
 # ;
 # }
@@ -152,8 +155,7 @@ container()
 let rotation = create_signal(0.0f32);
 
 container()
-    .rotate(rotation)
-    .animate_rotate(Transition::spring(SpringConfig::DEFAULT))
+    .rotate(rotation.transition(Transition::spring(SpringConfig::DEFAULT)))
     .on_click(move || rotation.update(|r| *r += 90.0))
 # ;
 # }
@@ -169,12 +171,12 @@ Use different transition types for different properties:
 # fn main() {
 container()
     // Spring for physical properties
-    .animate_rotate(Transition::spring(SpringConfig::BOUNCY))
-    .animate_width(Transition::spring(SpringConfig::GENTLE))
+    .rotate(0.0.transition(Transition::spring(SpringConfig::BOUNCY)))
+    .width(200.0.transition(Transition::spring(SpringConfig::GENTLE)))
 
     // Duration for color properties
-    .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
-    .animate_border_color(Transition::new(150.0, TimingFunction::EaseOut))
+    .background(Color::WHITE.transition(Transition::new(200.0, TimingFunction::EaseOut)))
+    .border(1.0, Color::WHITE.transition(Transition::new(150.0, TimingFunction::EaseOut)))
 # ;
 # }
 ```
@@ -187,15 +189,15 @@ fn spring_button() -> Container {
 
     container()
         .padding(20.0)
-        .background(Color::rgb(0.3, 0.5, 0.8))
+        // Duration for color - smooth transition
+        .background(Color::rgb(0.3, 0.5, 0.8).transition(200.0))
         .corners(12.0)
-        .scale(move || if pressed.get() { 1.1 } else { 1.0 })
 
         // Spring for scale - bouncy feedback
-        .animate_scale(Transition::spring(SpringConfig::BOUNCY))
-
-        // Duration for color - smooth transition
-        .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
+        .scale(
+            (move || if pressed.get() { 1.1 } else { 1.0 })
+                .transition(Transition::spring(SpringConfig::BOUNCY)),
+        )
 
         .when_hovered(|s| s.lighter(0.1))
         .on_click(move || {
@@ -222,8 +224,7 @@ so a button shakes itself:
 ```rust,ignore
 fn nudge(angle: RwSignal<f32>) -> Container {
     container()
-        .rotate(move || angle.get())
-        .animate_rotate(Transition::spring(SpringConfig::BOUNCY))
+        .rotate((move || angle.get()).transition(Transition::spring(SpringConfig::BOUNCY)))
         .on_mouse_down(move |_, _| angle.set(2.0))
         .on_mouse_up(move |_, _| angle.set(0.0))
         .child(text("shake me"))

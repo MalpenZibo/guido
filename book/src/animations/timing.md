@@ -83,8 +83,9 @@ Use `EaseOut` - immediate response, smooth finish:
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
+# let c = Color::WHITE;
 # container()
-.animate_background(Transition::new(200.0, TimingFunction::EaseOut))
+.background(c.transition(Transition::new(200.0, TimingFunction::EaseOut)))
 # ;
 # }
 ```
@@ -98,7 +99,7 @@ Use `EaseInOut` - smooth start and stop:
 # use guido::prelude::*;
 # fn main() {
 # container()
-.animate_width(Transition::new(300.0, TimingFunction::EaseInOut))
+.width(200.0.transition(Transition::new(300.0, TimingFunction::EaseInOut)))
 # ;
 # }
 ```
@@ -138,7 +139,7 @@ Transition::new(200.0, TimingFunction::EaseIn)
 # use guido::prelude::*;
 # fn main() {
 container()
-    .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
+    .background(Color::rgb(0.3, 0.5, 0.8).transition(Transition::new(200.0, TimingFunction::EaseOut)))
     .when_hovered(|s| s.lighter(0.1))
 # ;
 # }
@@ -153,8 +154,10 @@ container()
 let expanded = create_signal(false);
 
 container()
-    .width(move || if expanded.get() { 400.0 } else { 200.0 })
-    .animate_width(Transition::new(300.0, TimingFunction::EaseInOut))
+    .width(
+        (move || if expanded.get() { 400.0 } else { 200.0 })
+            .transition(Transition::new(300.0, TimingFunction::EaseInOut)),
+    )
     .on_click(move || expanded.update(|e| *e = !*e))
 # ;
 # }
@@ -167,7 +170,7 @@ container()
 # use guido::prelude::*;
 # fn main() {
 container()
-    .animate_scale(Transition::new(300.0, TimingFunction::EaseOut))
+    .scale(Scale::NONE.transition(Transition::new(300.0, TimingFunction::EaseOut)))
     .when_pressed(|s| s.scale(0.98))
 # ;
 # }
@@ -181,12 +184,13 @@ For physical motion (bouncing, overshooting), use spring animations:
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
+# let c = Color::WHITE;
 # container()
 // Spring for bouncy physical motion
-.animate_scale(Transition::spring(SpringConfig::BOUNCY))
+.scale(Scale::NONE.transition(Transition::spring(SpringConfig::BOUNCY)))
 
 // Duration for smooth UI transitions
-.animate_background(Transition::new(200.0, TimingFunction::EaseOut))
+.background(c.transition(Transition::new(200.0, TimingFunction::EaseOut)))
 # ;
 # }
 ```

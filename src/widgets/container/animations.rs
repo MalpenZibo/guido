@@ -21,7 +21,7 @@ struct Timeline<T> {
     /// events and a signal that stays equal notifies nobody. Reading it and
     /// committing to it live in one place, so the pass that subscribes and the
     /// pass that plays cannot disagree about what has been seen.
-    trigger: Option<Signal<u32>>,
+    trigger: Signal<u32>,
     last_play: u32,
 }
 
@@ -75,13 +75,9 @@ pub struct AnimationState<T: Animatable> {
     initialized: bool,
     /// Previous value for change detection
     prev_value: Option<T>,
-    /// Pending enter value: consumed at first layout to start an enter
-    /// animation instead of snapping to the target
-    enter_from: Option<T>,
     /// A sequence to play on demand, and what plays it. Boxed and absent by
-    /// default: `ContainerAnims` holds eleven of these states and only three
-    /// can carry a sequence — `keyframes_translate`, `keyframes_rotate` and
-    /// `keyframes_scale` — so the rest pay a pointer rather than the struct.
+    /// default: most declared properties ease to a target and never carry one,
+    /// so they pay a pointer rather than the struct.
     timeline: Option<Box<Timeline<T>>>,
 }
 
@@ -108,7 +104,6 @@ impl<T: Animatable> AnimationState<T> {
             spring_state,
             initialized: false, // Not yet initialized with real content-based value
             prev_value: None,
-            enter_from: None,
             timeline: None,
         }
     }
@@ -331,54 +326,19 @@ impl<T: Animatable> AnimationState<T> {
             || (self.spring_state.is_some() && self.progress < 0.99)
     }
 
-    /// Give this property a sequence to play, keeping whatever already plays
-    /// it.
-    pub(crate) fn set_timeline(&mut self, keyframes: Keyframes<T>) {
-        match &mut self.timeline {
-            Some(timeline) => timeline.keyframes = keyframes,
-            None => {
-                self.timeline = Some(Box::new(Timeline {
-                    keyframes,
-                    playing: None,
-                    trigger: None,
-                    last_play: 0,
-                }))
-            }
-        }
-    }
-
-    /// Give it the signal that plays it. Ignored without a sequence, which
-    /// cannot happen through the builders.
-    pub(crate) fn set_play_trigger(&mut self, trigger: Signal<u32>) {
-        if let Some(timeline) = &mut self.timeline {
-            timeline.last_play = trigger.get_untracked();
-            timeline.trigger = Some(trigger);
-        }
-    }
-
-    /// Carry what a caller declared over from the state this one replaces.
+    /// Give this property a sequence and the signal that plays it.
     ///
-    /// The builders each construct a fresh `AnimationState`, so without this
-    /// the order `keyframes_*`, `animate_*` and `animate_*_from` were written
-    /// in would decide what survived — silently, since a trigger would go on
-    /// firing against a state that had nothing to play and an enter would
-    /// simply never run.
-    ///
-    /// Both fields, not just the sequence. Carrying one and dropping the other
-    /// is the same defect this exists to fix, and it was open on `enter_from`
-    /// for as long as this took only the timeline: writing
-    /// `animate_scale_from(0.9, ..)` before `animate_scale(..)` lost the enter.
-    ///
-    /// An `enter_from` already on `self` wins — it came from the builder being
-    /// written now, and the later declaration is the one a caller means.
-    pub(crate) fn adopt_declarations_of(&mut self, previous: Option<Self>) {
-        let Some(previous) = previous else { return };
-        if let Some(timeline) = previous.timeline {
-            self.timeline = Some(timeline);
-        }
-        if self.enter_from.is_none() {
-            self.enter_from = previous.enter_from;
-        }
+    /// One declaration per property, so this replaces rather than merges:
+    /// a motion arrives with the value it moves, and a second `.rotate(..)`
+    /// restates the whole property.
+    pub(crate) fn with_timeline(mut self, keyframes: Keyframes<T>, plays: Signal<u32>) -> Self {
+        self.timeline = Some(Box::new(Timeline {
+            keyframes,
+            playing: None,
+            last_play: plays.get_untracked(),
+            trigger: plays,
+        }));
+        self
     }
 
     /// Whether the trigger has moved since the sequence last played.
@@ -388,8 +348,7 @@ impl<T: Animatable> AnimationState<T> {
     pub(crate) fn wants_play(&self) -> bool {
         self.timeline
             .as_ref()
-            .and_then(|t| t.trigger.map(|signal| signal.get() != t.last_play))
-            .unwrap_or(false)
+            .is_some_and(|t| t.trigger.get() != t.last_play)
     }
 
     /// The same question, answered once: `true` hands over the play and marks
@@ -398,10 +357,7 @@ impl<T: Animatable> AnimationState<T> {
         let Some(timeline) = &mut self.timeline else {
             return false;
         };
-        let Some(trigger) = timeline.trigger else {
-            return false;
-        };
-        let now = trigger.get();
+        let now = timeline.trigger.get();
         if now == timeline.last_play {
             return false;
         }
@@ -465,32 +421,6 @@ impl<T: Animatable> AnimationState<T> {
     /// Get target value
     pub fn target(&self) -> &T {
         &self.target
-    }
-
-    /// Take the pending enter value, if any (consumed at first layout).
-    pub(crate) fn take_enter_from(&mut self) -> Option<T> {
-        self.enter_from.take()
-    }
-
-    /// Store an enter value: the first layout starts an animation from it
-    /// to the effective target instead of snapping (see
-    /// `Container::animate_scale_from`).
-    pub(crate) fn with_enter_from(mut self, from: T) -> Self {
-        self.enter_from = Some(from);
-        self
-    }
-
-    /// Begin animating from an explicit value (enter transitions): the
-    /// widget appears mid-animation instead of snapping to its target.
-    pub(crate) fn begin_from(&mut self, from: T, target: T, now: Instant) {
-        self.current = from;
-        self.start = from;
-        self.initialized = true;
-        // Reuse animate_to for direction selection and spring setup; it
-        // starts from `current`, which is now the enter value
-        let t = target;
-        self.target = from; // force the retarget below to fire
-        self.animate_to(t, now);
     }
 
     /// Set value immediately without animation (for initialization)
@@ -663,6 +593,11 @@ mod tests {
     use crate::animation::TimingFunction;
 
     /// Step a running sequence to `ms` into its run.
+    /// A trigger nothing ever writes to: these tests call `play` directly.
+    fn never_played() -> Signal<u32> {
+        crate::reactive::create_stored(0)
+    }
+
     fn play_at<T: Animatable>(anim: &mut AnimationState<T>, ms: u64) {
         let started = anim
             .timeline
@@ -681,7 +616,10 @@ mod tests {
 
         let mut anim = AnimationState::new(0.0_f32, Transition::new(0.0, TimingFunction::Linear));
         anim.set_immediate(0.0);
-        anim.set_timeline(Keyframes::new(60.0).at(0.0, 0.0).at(0.5, 10.0).at(1.0, 0.0));
+        anim = anim.with_timeline(
+            Keyframes::new(60.0).at(0.0, 0.0).at(0.5, 10.0).at(1.0, 0.0),
+            never_played(),
+        );
 
         anim.play(Instant::now());
         assert!(anim.is_animating(), "a playing timeline is an animation");
@@ -709,7 +647,10 @@ mod tests {
 
         let mut anim = AnimationState::new(0.0_f32, Transition::new(0.0, TimingFunction::Linear));
         anim.set_immediate(0.0);
-        anim.set_timeline(Keyframes::new(80.0).at(0.0, 0.0).at(1.0, 8.0));
+        anim = anim.with_timeline(
+            Keyframes::new(80.0).at(0.0, 0.0).at(1.0, 8.0),
+            never_played(),
+        );
 
         anim.play(Instant::now());
         play_at(&mut anim, 60);
@@ -736,7 +677,10 @@ mod tests {
 
         let mut anim = AnimationState::new(0.0_f32, Transition::new(200.0, TimingFunction::Linear));
         anim.set_immediate(0.0);
-        anim.set_timeline(Keyframes::new(60.0).at(0.0, 0.0).at(1.0, 10.0));
+        anim = anim.with_timeline(
+            Keyframes::new(60.0).at(0.0, 0.0).at(1.0, 10.0),
+            never_played(),
+        );
 
         anim.play(Instant::now());
         play_at(&mut anim, 30);
@@ -773,7 +717,10 @@ mod tests {
 
         let mut anim = AnimationState::new(0.0_f32, transition);
         anim.set_immediate(0.0);
-        anim.set_timeline(Keyframes::new(60.0).at(0.0, 0.0).at(1.0, 5.0));
+        anim = anim.with_timeline(
+            Keyframes::new(60.0).at(0.0, 0.0).at(1.0, 5.0),
+            never_played(),
+        );
 
         anim.animate_to(1.0, Instant::now());
         anim.play(Instant::now());
@@ -807,8 +754,7 @@ mod tests {
 
         let plays = create_signal(0_u32);
         let mut anim = AnimationState::new(0.0_f32, Transition::new(0.0, TimingFunction::Linear));
-        anim.set_timeline(Keyframes::new(40.0).at(0.0, 0.0).at(1.0, 1.0));
-        anim.set_play_trigger(plays.into());
+        anim = anim.with_timeline(Keyframes::new(40.0).at(0.0, 0.0).at(1.0, 1.0), plays.into());
 
         assert!(!anim.wants_play(), "nothing has happened yet");
 

@@ -14,7 +14,7 @@
 use rustc_hash::FxHashSet;
 
 use super::*;
-use crate::animation::{SpringConfig, TimingFunction, Transition};
+use crate::animation::{Animate, Keyframes, SpringConfig, TimingFunction, Transition};
 use crate::backdrop::BackdropSources;
 use crate::jobs::{self, JobType};
 use crate::layout::{Constraints, Flex, at_least, at_most, fill, fraction};
@@ -377,11 +377,11 @@ fn at_most_bounds_children_with_or_without_a_size_animation() {
 
     for animated in [false, true] {
         let inner = container().width(fill()).height(5.0);
-        let outer = container().width(at_most(60.0));
         let outer = if animated {
-            outer.animate_width(Transition::new(200, TimingFunction::EaseOut))
+            container()
+                .width(at_most(60.0).transition(Transition::new(200, TimingFunction::EaseOut)))
         } else {
-            outer
+            container().width(at_most(60.0))
         };
 
         let mut h = H::new(outer.child(inner));
@@ -414,8 +414,7 @@ fn a_size_animation_does_not_change_how_content_wraps() {
 
     let mut animated = H::new(
         container()
-            .width(at_most(100.0))
-            .animate_width(Transition::new(200, TimingFunction::EaseOut))
+            .width(at_most(100.0).transition(Transition::new(200, TimingFunction::EaseOut)))
             .child(text(sentence)),
     );
     let animated_size = animated.fit(500.0, 500.0);
@@ -819,10 +818,11 @@ fn advancing_animations_does_not_report_a_missing_scope() {
             .width(50.0)
             .height(50.0)
             .background(Color::RED)
-            .border(move || if wide.get() { 6.0 } else { 2.0 }, Color::BLUE)
-            .corners(move || if wide.get() { 20.0 } else { 4.0 })
-            .animate_border_width(t())
-            .animate_corners(t()),
+            .border(
+                (move || if wide.get() { 6.0 } else { 2.0 }).transition(t()),
+                Color::BLUE,
+            )
+            .corners((move || if wide.get() { 20.0 } else { 4.0 }).transition(t())),
     );
     h.fit(200.0, 200.0);
     h.paint();
@@ -863,8 +863,10 @@ fn advancing_animations_does_not_report_a_missing_scope() {
 #[test]
 fn a_border_width_animation_counts_as_movable_by_a_state_layer() {
     let animated = container()
-        .border(2.0, Color::BLUE)
-        .animate_border_width(Transition::spring(SpringConfig::BOUNCY))
+        .border(
+            2.0.transition(Transition::spring(SpringConfig::BOUNCY)),
+            Color::BLUE,
+        )
         .when_hovered(|s| s.border(14.0, Color::BLUE));
     assert!(
         animated.has_animated_state_properties(),
@@ -888,21 +890,21 @@ fn a_state_layer_moving_an_animated_transform_counts_as_movable() {
 
     assert!(
         container()
-            .animate_translate(t())
+            .translate(Translate::NONE.transition(t()))
             .when_hovered(|s| s.translate(Translate::new(0.0, -2.0)))
             .has_animated_state_properties(),
         "hovering moves the translate, so it needs an Animation job"
     );
     assert!(
         container()
-            .animate_rotate(t())
+            .rotate(0.0.transition(t()))
             .when_hovered(|s| s.rotate(2.0))
             .has_animated_state_properties(),
         "and a rotate"
     );
     assert!(
         container()
-            .animate_scale(t())
+            .scale(Scale::NONE.transition(t()))
             .when_pressed(|s| s.scale(0.98))
             .has_animated_state_properties(),
         "and a scale — the layer on every button there is"
@@ -931,20 +933,26 @@ fn each_animated_transform_component_is_a_signal_animated_prop() {
 
     assert!(
         container()
-            .animate_translate(t())
+            .translate(Translate::NONE.transition(t()))
             .has_signal_animated_props(),
         "a translate animation mirrors a signal, so it re-syncs at paint"
     );
     assert!(
-        container().animate_rotate(t()).has_signal_animated_props(),
+        container()
+            .rotate(0.0.transition(t()))
+            .has_signal_animated_props(),
         "and a rotate"
     );
     assert!(
-        container().animate_scale(t()).has_signal_animated_props(),
+        container()
+            .scale(Scale::NONE.transition(t()))
+            .has_signal_animated_props(),
         "and a scale"
     );
     assert!(
-        !container().animate_width(t()).has_signal_animated_props(),
+        !container()
+            .width(0.0.transition(t()))
+            .has_signal_animated_props(),
         "a width follows the content it measured, and is retargeted at layout"
     );
 }
@@ -1090,8 +1098,7 @@ fn a_linear_animation_is_halfway_at_half_its_duration() {
     let mut h = H::new(
         container()
             .height(10.0)
-            .width(w)
-            .animate_width(Transition::new(100.0, TimingFunction::Linear)),
+            .width(w.transition(Transition::new(100.0, TimingFunction::Linear))),
     );
     h.fit(400.0, 400.0);
 
@@ -1142,8 +1149,7 @@ fn a_ripple_and_a_transition_are_asked_about_the_same_moment() {
     let mut h = H::new(
         container()
             .height(100.0)
-            .width(w)
-            .animate_width(Transition::new(100.0, TimingFunction::Linear))
+            .width(w.transition(Transition::new(100.0, TimingFunction::Linear)))
             .when_pressed(|s| s.ripple())
             .on_click(|| {}),
     );
@@ -1321,6 +1327,104 @@ fn a_hover_layer_reaches_the_text() {
 }
 
 // ---------------------------------------------------------------------------
+// The motion rides with the value
+// ---------------------------------------------------------------------------
+
+/// Two boxes differing in one thing only — whether the colour they are handed
+/// carries a transition — and one write to the one signal both read.
+///
+/// This is the whole shape of the change in a single assertion: the timing is
+/// not a second declaration naming a property, it is part of what the property
+/// was set to, so the two containers can disagree about how they move while
+/// agreeing about what they show.
+#[test]
+fn a_transition_on_the_value_is_what_makes_that_value_ease() {
+    let color = create_signal(Color::BLACK);
+    let mut h = H::new(
+        container()
+            .layout(Flex::row())
+            .child(box_of(20.0, 20.0).background(color))
+            .child(
+                box_of(20.0, 20.0)
+                    .background(color.transition(Transition::new(200.0, TimingFunction::Linear))),
+            ),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+
+    color.set(Color::WHITE);
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 200.0, 200.0);
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(100),
+        200.0,
+        200.0,
+    );
+
+    // The two boxes' backgrounds, in the order they were declared.
+    let painted: Vec<Color> = h
+        .paint()
+        .children
+        .iter()
+        .map(|child| rects(child).first().expect("a background").1)
+        .collect();
+    assert_eq!(
+        painted[0],
+        Color::WHITE,
+        "a value declared with no motion is at its new value on the next paint"
+    );
+    assert!(
+        painted[1].r > 0.05 && painted[1].r < 0.95,
+        "and one declared with a transition is still on its way, got {:?}",
+        painted[1]
+    );
+}
+
+/// A timeline is no longer transform-only: `Keyframes<T>` was always generic
+/// and only the setters were not, so a background can flash where before it
+/// could only be eased to.
+#[test]
+fn a_timeline_plays_on_a_background() {
+    let plays = create_signal(0u32);
+    let rest = Color::BLACK;
+    let mut h = H::new(
+        box_of(50.0, 50.0).background(
+            rest.timeline(
+                Keyframes::new(200.0)
+                    .at(0.0, rest)
+                    .at(0.5, Color::RED)
+                    .at(1.0, rest),
+                plays,
+            ),
+        ),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+    assert_eq!(
+        rects(&h.paint())[0].1,
+        rest,
+        "nothing plays until the trigger moves"
+    );
+
+    plays.set(1);
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 200.0, 200.0);
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(100),
+        200.0,
+        200.0,
+    );
+
+    let flashed = rects(&h.paint())[0].1;
+    assert!(
+        flashed.r > 0.5,
+        "the sequence has to reach the pixels, got {flashed:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Keyframes
 // ---------------------------------------------------------------------------
 
@@ -1330,13 +1434,11 @@ fn a_hover_layer_reaches_the_text() {
 /// somebody else asked for.
 #[test]
 fn a_container_wakes_when_its_timeline_is_asked_to_play() {
-    use crate::animation::Keyframes;
-
     let plays = create_signal(0u32);
-    let mut h = H::new(box_of(50.0, 50.0).keyframes_rotate(
+    let mut h = H::new(box_of(50.0, 50.0).rotate(0.0.timeline(
         Keyframes::new(200.0).at(0.0, 0.0).at(0.5, 2.0).at(1.0, 0.0),
         plays,
-    ));
+    )));
     h.fit(100.0, 100.0);
     h.paint();
 
@@ -1368,17 +1470,17 @@ fn played_transform(h: &mut H) -> Transform {
 /// only question that matters: did the property move?
 #[test]
 fn a_played_sequence_actually_moves_the_transform() {
-    use crate::animation::Keyframes;
-
     let plays = create_signal(0u32);
     let mut h = H::new(
         container().layout(Flex::row()).child(
-            box_of(50.0, 50.0).keyframes_rotate(
-                Keyframes::new(200.0)
-                    .at(0.0, 0.0)
-                    .at(0.5, 20.0)
-                    .at(1.0, 0.0),
-                plays,
+            box_of(50.0, 50.0).rotate(
+                0.0.timeline(
+                    Keyframes::new(200.0)
+                        .at(0.0, 0.0)
+                        .at(0.5, 20.0)
+                        .at(1.0, 0.0),
+                    plays,
+                ),
             ),
         ),
     );
@@ -1394,67 +1496,6 @@ fn a_played_sequence_actually_moves_the_transform() {
     );
 }
 
-/// So does an enter, for the same reason and by the same route: whichever of
-/// the two builders is written second builds a fresh state, and one that took
-/// the sequence but not the enter left half the defect standing.
-#[test]
-fn declaring_a_transition_after_an_enter_does_not_lose_it() {
-    let entering = box_of(50.0, 50.0)
-        .scale(Scale::NONE)
-        .animate_scale_from(0.5, Transition::new(200.0, TimingFunction::EaseOut))
-        // Written after, which used to decide whether the enter existed.
-        .animate_scale(Transition::new(200.0, TimingFunction::EaseOut));
-
-    let mut h = H::new(container().layout(Flex::row()).child(entering));
-    h.fit(200.0, 200.0);
-    h.paint();
-    pump(&mut h);
-    h.fit(200.0, 200.0);
-    let painted = h.paint().children[0].local_transform;
-
-    assert_ne!(
-        painted,
-        Transform::IDENTITY,
-        "the enter has to start from the value it was given, not snap to the target"
-    );
-}
-
-/// And it survives the transition being declared after it.
-///
-/// `animate_rotate` builds a fresh `AnimationState`, so the sequence used
-/// to be thrown away by whichever builder came second — with the trigger
-/// still firing, the job still queued and nothing at all to show for it.
-#[test]
-fn declaring_a_transition_after_a_sequence_does_not_lose_it() {
-    use crate::animation::Keyframes;
-
-    let plays = create_signal(0u32);
-    let mut h = H::new(
-        container().layout(Flex::row()).child(
-            box_of(50.0, 50.0)
-                .keyframes_rotate(
-                    Keyframes::new(200.0)
-                        .at(0.0, 0.0)
-                        .at(0.5, 20.0)
-                        .at(1.0, 0.0),
-                    plays,
-                )
-                // Written after, which used to decide the whole thing.
-                .animate_rotate(Transition::new(100.0, TimingFunction::EaseOut)),
-        ),
-    );
-    h.fit(200.0, 200.0);
-    h.paint();
-
-    plays.set(1);
-    assert_ne!(
-        played_transform(&mut h),
-        Transform::IDENTITY,
-        "the order the two builders were written in must not decide whether \
-         the sequence exists"
-    );
-}
-
 /// A translate that animates has to arrive where its signal points.
 ///
 /// The one component with no such test until now, and four separate lists name
@@ -1467,8 +1508,7 @@ fn an_animated_translate_reaches_the_paint() {
     let mut h = H::new(
         container().layout(Flex::row()).child(
             box_of(50.0, 50.0)
-                .translate(offset)
-                .animate_translate(Transition::new(600.0, TimingFunction::Linear)),
+                .translate(offset.transition(Transition::new(600.0, TimingFunction::Linear))),
         ),
     );
     h.fit(200.0, 200.0);
@@ -1527,15 +1567,16 @@ fn a_translate_target_behind_an_untaken_branch_is_picked_up_by_the_resync() {
     let offset = create_signal(0.0f32);
     let mut h = H::new(
         container().layout(Flex::row()).child(
-            box_of(50.0, 50.0)
-                .translate(move || {
+            box_of(50.0, 50.0).translate(
+                (move || {
                     if armed.get() {
                         Translate::new(offset.get(), 0.0)
                     } else {
                         Translate::NONE
                     }
                 })
-                .animate_translate(Transition::new(80.0, TimingFunction::Linear)),
+                .transition(Transition::new(80.0, TimingFunction::Linear)),
+            ),
         ),
     );
     h.fit(200.0, 200.0);
@@ -1556,41 +1597,9 @@ fn a_translate_target_behind_an_untaken_branch_is_picked_up_by_the_resync() {
     );
 }
 
-/// An enter animates in from the value it was handed instead of snapping to
-/// the target — for a translate, which `seed_animations` reaches through a
-/// third list, after the one that decides it is initial and the one that
-/// computes its target.
-#[test]
-fn an_entering_translate_starts_from_where_it_was_told() {
-    let entering = box_of(50.0, 50.0)
-        .translate(Translate::NONE)
-        .animate_translate_from(
-            Translate::new(0.0, -20.0),
-            Transition::new(200.0, TimingFunction::EaseOut),
-        );
-
-    let mut h = H::new(container().layout(Flex::row()).child(entering));
-    h.fit(200.0, 200.0);
-    h.paint();
-    pump(&mut h);
-    h.fit(200.0, 200.0);
-    let painted = h.paint().children[0].local_transform;
-
-    assert_eq!(
-        painted.tx(),
-        0.0,
-        "the enter was declared on one axis and has to stay on it"
-    );
-    assert!(
-        painted.ty() < -1.0,
-        "it has to start up where it was told, not snap to the target, got {}",
-        painted.ty()
-    );
-}
-
 /// The other two timelines, which `advance_animations` starts and
 /// `resync_animation_targets` wakes from lists that name each component once.
-/// Only `keyframes_rotate` was played by anything before this.
+/// Only a rotation was played by anything before this.
 ///
 /// Neither sequence passes through the value that composes to the identity —
 /// the displacement stays out at 10 and the pulse never comes back below 1.1 —
@@ -1602,17 +1611,17 @@ fn an_entering_translate_starts_from_where_it_was_told() {
 /// each assertion is against.
 #[test]
 fn a_translate_sequence_and_a_scale_sequence_move_the_transform() {
-    use crate::animation::Keyframes;
-
     let plays = create_signal(0u32);
     let mut h = H::new(
         container().layout(Flex::row()).child(
-            box_of(50.0, 50.0).keyframes_translate(
-                Keyframes::new(200.0)
-                    .at(0.0, Translate::new(10.0, 0.0))
-                    .at(0.5, Translate::new(30.0, 0.0))
-                    .at(1.0, Translate::new(10.0, 0.0)),
-                plays,
+            box_of(50.0, 50.0).translate(
+                Translate::NONE.timeline(
+                    Keyframes::new(200.0)
+                        .at(0.0, Translate::new(10.0, 0.0))
+                        .at(0.5, Translate::new(30.0, 0.0))
+                        .at(1.0, Translate::new(10.0, 0.0)),
+                    plays,
+                ),
             ),
         ),
     );
@@ -1629,12 +1638,14 @@ fn a_translate_sequence_and_a_scale_sequence_move_the_transform() {
     let plays = create_signal(0u32);
     let mut h = H::new(
         container().layout(Flex::row()).child(
-            box_of(50.0, 50.0).keyframes_scale(
-                Keyframes::new(200.0)
-                    .at(0.0, Scale::uniform(1.1))
-                    .at(0.5, Scale::uniform(1.4))
-                    .at(1.0, Scale::uniform(1.1)),
-                plays,
+            box_of(50.0, 50.0).scale(
+                Scale::NONE.timeline(
+                    Keyframes::new(200.0)
+                        .at(0.0, Scale::uniform(1.1))
+                        .at(0.5, Scale::uniform(1.4))
+                        .at(1.0, Scale::uniform(1.1)),
+                    plays,
+                ),
             ),
         ),
     );
@@ -2046,9 +2057,8 @@ fn elevation_animates_towards_its_state_layer() {
             .width(40.0)
             .height(40.0)
             .background(Color::RED)
-            .elevation(0.0)
-            .when_hovered(|s| s.elevation(8.0))
-            .animate_elevation(Transition::new(80.0, TimingFunction::Linear)),
+            .elevation(0.0.transition(Transition::new(80.0, TimingFunction::Linear)))
+            .when_hovered(|s| s.elevation(8.0)),
     );
     h.fit(100.0, 100.0);
     h.paint();
@@ -2339,9 +2349,8 @@ fn the_damage_reach_covers_the_elevation_a_hover_can_reach() {
             .width(40.0)
             .height(40.0)
             .background(Color::RED)
-            .elevation(0.0)
-            .when_hovered(|s| s.elevation(8.0))
-            .animate_elevation(Transition::new(80.0, TimingFunction::Linear)),
+            .elevation(0.0.transition(Transition::new(80.0, TimingFunction::Linear)))
+            .when_hovered(|s| s.elevation(8.0)),
     );
     h.fit(100.0, 100.0);
 
@@ -2363,22 +2372,20 @@ fn the_damage_reach_covers_the_elevation_a_hover_can_reach() {
 /// artefact the reach exists to prevent, moved to the moment it is most visible.
 #[test]
 fn the_damage_reach_allows_for_a_spring_overshooting() {
-    let bouncy = |c: Container| {
-        c.width(40.0)
+    let bouncy = |transition: Transition| {
+        container()
+            .width(40.0)
             .height(40.0)
             .background(Color::RED)
-            .elevation(0.0)
+            .elevation(0.0.transition(transition))
             .when_hovered(|s| s.elevation(8.0))
     };
 
-    let mut eased = H::new(
-        bouncy(container()).animate_elevation(Transition::new(80.0, TimingFunction::Linear)),
-    );
+    let mut eased = H::new(bouncy(Transition::new(80.0, TimingFunction::Linear)));
     eased.fit(100.0, 100.0);
     let without_bounce = eased.tree.paint_overflow(eased.root);
 
-    let mut sprung =
-        H::new(bouncy(container()).animate_elevation(Transition::spring(SpringConfig::BOUNCY)));
+    let mut sprung = H::new(bouncy(Transition::spring(SpringConfig::BOUNCY)));
     sprung.fit(100.0, 100.0);
     let with_bounce = sprung.tree.paint_overflow(sprung.root);
 
@@ -2426,8 +2433,10 @@ fn a_falling_elevation_animates_down_instead_of_snapping() {
                 .width(40.0)
                 .height(40.0)
                 .background(Color::RED)
-                .elevation(move || level.get())
-                .animate_elevation(Transition::new(ramp_ms, TimingFunction::Linear)),
+                .elevation(
+                    (move || level.get())
+                        .transition(Transition::new(ramp_ms, TimingFunction::Linear)),
+                ),
         );
         (h, level)
     };
@@ -2485,9 +2494,8 @@ fn hover_flicker_cannot_push_a_shadow_outside_its_damage_rect() {
             // Small enough that the shadow is still growing with the number:
             // past ~12 the blur and the offset are both capped, so a clamp
             // there would have nothing to show for itself.
-            .elevation(0.0)
-            .when_hovered(|s| s.elevation(2.0))
-            .animate_elevation(Transition::spring(pumpable)),
+            .elevation(0.0.transition(Transition::spring(pumpable)))
+            .when_hovered(|s| s.elevation(2.0)),
     );
     h.fit(100.0, 100.0);
     h.paint();

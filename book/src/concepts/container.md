@@ -188,15 +188,16 @@ See [Transforms](../transforms/README.md) for details.
 
 ## Animations
 
-Animate property changes:
+The motion rides with the value: declare a property with a transition and it
+eases to each new value instead of jumping there.
 
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
 container()
-    .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
-    .animate_scale(Transition::spring(SpringConfig::BOUNCY))
+    .background(Color::rgb(0.3, 0.5, 0.8).transition(200.0))
+    .scale(Scale::NONE.transition(Transition::spring(SpringConfig::BOUNCY)))
 # ;
 # }
 ```
@@ -296,13 +297,9 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
         .padding(16.0)
 
         // Styling
-        .background(Color::rgb(0.3, 0.5, 0.8))
+        .background(Color::rgb(0.3, 0.5, 0.8).transition(200.0))
         .corners(8.0)
-        .border(1.0, Color::rgb(0.4, 0.6, 0.9))
-
-        // Animations
-        .animate_background(Transition::new(200.0, TimingFunction::EaseOut))
-        .animate_border_width(Transition::new(150.0, TimingFunction::EaseOut))
+        .border(1.0.transition(150.0), Color::rgb(0.4, 0.6, 0.9))
 
         // State layers
         .when_hovered(|s| s.lighter(0.1).border(2.0, Color::rgb(0.5, 0.7, 1.0)))
@@ -365,10 +362,9 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 - `.pivot(origin)` - Pivot point
 
 ### Animations
-- `.animate_background(transition)` - Animate background
-- `.animate_translate(transition)` / `.animate_rotate(..)` / `.animate_scale(..)`
-- `.animate_border_width(transition)` - Animate border width
-- `.animate_border_color(transition)` - Animate border color
+Declared on the value, not beside it:
+- `value.transition(ms)` - ease to each new value
+- `value.timeline(keyframes, plays)` - play a sequence on a trigger
 
 ### Visibility
 - `.visible(condition)` - Show or hide the container (accepts static, signal, or closure)
