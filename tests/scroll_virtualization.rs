@@ -22,6 +22,29 @@ const ROW_HEIGHT: f32 = 24.0;
 const SPACING: f32 = 8.0;
 const VIEWPORT: f32 = 200.0;
 
+/// Eight places whose `y` runs 0, 400, 400 … 40 and whose `x` runs
+/// 0, 300, 300 … 0 — ordered along neither axis, and unordered in the same
+/// shape on each of them separately. In a 100 px viewport the first and the
+/// last are visible.
+///
+/// Both coordinates carry their weight. Searching the `y` for `y < 100` lands
+/// on index 1 and drops the last row, which is what catches a wrong vertical
+/// answer; the `x` catches a wrong horizontal one, because a search for
+/// `x < 200` lands on index 1 in exactly the same way. With every row at one
+/// `x` the horizontal branch could answer anything and no row would move —
+/// which is what `cargo mutants` found by turning its `&=` into `|=` and
+/// watching nothing object.
+const SCATTERED: [(f32, f32); 8] = [
+    (0.0, 0.0),
+    (300.0, 400.0),
+    (300.0, 400.0),
+    (300.0, 400.0),
+    (300.0, 400.0),
+    (300.0, 400.0),
+    (300.0, 400.0),
+    (0.0, 40.0),
+];
+
 /// The rows that reached paint, counted by size so that the count means the
 /// same thing however deep they sit — which is the whole question here.
 fn painted_rows(widget: impl Widget + 'static, viewport: f32) -> usize {
@@ -97,38 +120,43 @@ fn a_wrapped_list_paints_the_rows_an_unwrapped_one_paints() {
 /// drops something visible.
 #[test]
 fn a_scroller_whose_children_are_ordered_along_neither_axis_paints_all_of_them() {
-    // Eight rows at one x, so every one of them is inside the viewport
-    // horizontally, at a `y` that runs 0, 400, 400 … 40 — ordered along
-    // neither axis. Two are visible in a 100 px viewport: the first, and the
-    // last. Searching that for `y < 100` lands on index 1, and the last is
-    // dropped.
-    let ys = [0.0, 400.0, 400.0, 400.0, 400.0, 400.0, 400.0, 40.0];
-
+    // Eight rows whose `y` runs 0, 400, 400 … 40 and whose `x` runs
+    // 0, 300, 300 … 0 — ordered along neither axis, and unordered in the same
+    // shape on both. Two are visible in a 100 px viewport: the first and the
+    // last.
+    //
+    // Both coordinates carry their weight. Searching the `y` for `y < 100`
+    // lands on index 1 and drops the last row, which is what this catches if
+    // the vertical answer is wrong; the `x` is what catches a wrong horizontal
+    // one, because a search for `x < 200` lands on index 1 in just the same
+    // way. With every row at one `x` the horizontal branch could answer
+    // anything and no row would move.
     let painted = painted_rows(
         container()
             .width(200.0)
             .height(100.0)
             .scrollable(ScrollAxis::Vertical)
-            .layout(Scatter(ys.to_vec()))
-            .children(rows(ys.len())),
+            .layout(Scatter(SCATTERED.to_vec()))
+            .children(rows(SCATTERED.len())),
         100.0,
     );
 
     assert_eq!(
         painted,
-        ys.len(),
+        SCATTERED.len(),
         "a scroller binary-searched bounds that are not partitioned along its axis and dropped a \
          child sitting in the viewport: {painted} of {} painted",
-        ys.len()
+        SCATTERED.len()
     );
 }
 
-/// Stacks its children at the offsets it is given, so a test can hand a
-/// container children ordered along neither axis. `Flex` orders them along one
-/// by construction and `ZStack` puts them all at the origin, where every
-/// predicate a search asks is constant and the old code came out right by
-/// accident — neither can pose the question.
-struct Scatter(Vec<f32>);
+/// Places its children exactly where it is told, so a test can hand a container
+/// children ordered along neither axis — and unordered along each of them
+/// separately, which is what watches both halves of the answer. `Flex` orders
+/// them along one axis by construction and `ZStack` puts them all at the
+/// origin, where every predicate a search asks is constant and the old code
+/// came out right by accident; neither can pose the question.
+struct Scatter(Vec<(f32, f32)>);
 
 impl Layout for Scatter {
     fn layout(
@@ -139,12 +167,12 @@ impl Layout for Scatter {
         origin: (f32, f32),
     ) -> Size {
         let mut size = Size::zero();
-        for (&child, &y) in children.iter().zip(&self.0) {
+        for (&child, &(x, y)) in children.iter().zip(&self.0) {
             let child_size = tree
                 .with_widget_mut(child, |w, id, t| w.layout(t, id, constraints))
                 .unwrap_or_default();
-            tree.set_origin(child, origin.0, origin.1 + y);
-            size.width = size.width.max(child_size.width);
+            tree.set_origin(child, origin.0 + x, origin.1 + y);
+            size.width = size.width.max(x + child_size.width);
             size.height = size.height.max(y + child_size.height);
         }
         size
@@ -193,9 +221,7 @@ fn the_counter_separates_a_narrowed_window_from_one_that_could_not_narrow() {
             .width(200.0)
             .height(100.0)
             .scrollable(ScrollAxis::Vertical)
-            .layout(Scatter(vec![
-                0.0, 400.0, 400.0, 400.0, 400.0, 400.0, 400.0, 40.0,
-            ]))
+            .layout(Scatter(SCATTERED.to_vec()))
             .children(rows(8)),
         100.0,
     );
