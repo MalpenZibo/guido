@@ -256,6 +256,26 @@ impl Rect {
     pub fn outset(&self, amount: f32) -> Self {
         self.inset(-amount)
     }
+
+    /// How far this rect stands outside `inner`, on its widest side. Zero when
+    /// it does not.
+    ///
+    /// One question about two rects, asked in three places — how far a shadow
+    /// and a transform carry a widget's painting past its own box, how far a
+    /// child's painting carries past its parent's, and how far a damage rect
+    /// has to grow to cover either. Two copies of it would be two copies of
+    /// which rect is the outer one.
+    pub fn outset_beyond(&self, inner: Rect) -> f32 {
+        [
+            inner.x - self.x,
+            inner.y - self.y,
+            (self.x + self.width) - (inner.x + inner.width),
+            (self.y + self.height) - (inner.y + inner.height),
+        ]
+        .into_iter()
+        .fold(0.0f32, f32::max)
+    }
+
     pub fn intersects(&self, other: &Rect) -> bool {
         self.x < other.x + other.width
             && self.x + self.width > other.x
@@ -775,6 +795,35 @@ pub trait Widget {
         false
     }
 
+    /// Publish how far this widget's paint will land outside its own bounds,
+    /// before anything decides whether to paint it.
+    ///
+    /// Called when a Paint job is processed, which is the frame's one chance to
+    /// ask: a parent narrows its children to the visible rect at the top of its
+    /// own paint, so by the time a child paints, the decision about it has been
+    /// taken. A transform is the reason this exists — where a widget draws is
+    /// not where it was laid out, and a parent culling by laid-out bounds drops
+    /// a widget that has moved into view.
+    ///
+    /// Layout is the wrong place to answer it. A transform is a paint property
+    /// and changing one must not reflow anything, so the answer is refreshed
+    /// here, on the same signal write that schedules the repaint, in the pass
+    /// that runs before paint. Blink resolves its transforms in a PrePaint walk
+    /// between layout and paint for the same reason.
+    ///
+    /// Report it with [`Tree::set_own_paint_reach`]. The default reports
+    /// nothing, which is right for a widget that draws inside its own box.
+    ///
+    /// Which pass to publish from follows what the reach depends on. A reach
+    /// that moves with a layout-tracked signal cannot change without a layout,
+    /// so `Text` and `TextInput` publish their stroke and shadow reach from
+    /// `layout` and never implement this. A reach that moves with a paint-only
+    /// one — a transform — has no layout to publish from, and this is where it
+    /// goes. One channel, two schedules.
+    fn refresh_paint_bounds(&self, tree: &mut Tree, id: WidgetId) {
+        let _ = (tree, id);
+    }
+
     fn layout_hints(&self) -> LayoutHints {
         LayoutHints::default()
     }
@@ -810,6 +859,40 @@ pub trait Widget {
         Self: Sized + 'static,
     {
         Box::new(self)
+    }
+}
+
+#[cfg(test)]
+mod rect_tests {
+    use super::*;
+
+    /// `outset_beyond` is what every cull test and every damage rect is built
+    /// on, and it was only ever reached through something else.
+    #[test]
+    fn a_rect_reports_how_far_it_stands_outside_another() {
+        let inner = Rect::new(0.0, 0.0, 100.0, 100.0);
+
+        assert_eq!(inner.outset_beyond(inner), 0.0, "itself");
+        assert_eq!(
+            inner.inset(10.0).outset_beyond(inner),
+            0.0,
+            "wholly inside stands outside by nothing"
+        );
+
+        // Each side on its own, so a sign or a term swapped in one of the four
+        // cannot hide behind the others.
+        assert_eq!(inner.offset(-30.0, 0.0).outset_beyond(inner), 30.0, "left");
+        assert_eq!(inner.offset(0.0, -30.0).outset_beyond(inner), 30.0, "top");
+        assert_eq!(inner.offset(30.0, 0.0).outset_beyond(inner), 30.0, "right");
+        assert_eq!(inner.offset(0.0, 30.0).outset_beyond(inner), 30.0, "bottom");
+
+        // The widest side wins, and it is not the sum of them.
+        assert_eq!(inner.outset(7.0).outset_beyond(inner), 7.0, "all four");
+        assert_eq!(
+            Rect::new(-5.0, -40.0, 110.0, 180.0).outset_beyond(inner),
+            40.0,
+            "the widest, not the first"
+        );
     }
 }
 

@@ -1106,7 +1106,7 @@ impl Widget for TextInput {
         // Refresh cached values from reactive properties
         // This reads signals and registers layout dependencies
         let overflow = self.refresh(tree, id);
-        tree.set_paint_overflow(id, overflow);
+        tree.set_own_paint_reach(id, overflow);
 
         // Update measurement cache (has internal dirty check)
         self.update_measurements();

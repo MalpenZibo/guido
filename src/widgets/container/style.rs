@@ -161,6 +161,175 @@ impl Container {
         }
     }
 
+    /// Which of the three components anything can move — the declaration, a
+    /// state layer's override of it, or an animation holding one.
+    ///
+    /// One computation, read by `animated_transform`'s gate and by
+    /// `max_transform_reach`'s. Two copies of this drifting apart would make a
+    /// container that transforms report a reach of zero and be culled while it
+    /// is moved, which is the defect this all exists to stop.
+    pub(super) fn moving_components(&self) -> Moves {
+        let anims = self.anims.as_ref();
+        let declared = self
+            .interaction
+            .as_ref()
+            .map(|ix| ix.declares_transform)
+            .unwrap_or_default();
+        Moves {
+            translate: declared.translate
+                || self.translate_signal().is_some()
+                || anims.is_some_and(|a| a.translate.is_some()),
+            rotate: declared.rotate
+                || self.rotate_signal().is_some()
+                || anims.is_some_and(|a| a.rotate.is_some()),
+            scale: declared.scale
+                || self.scale_signal().is_some()
+                || anims.is_some_and(|a| a.scale.is_some()),
+        }
+    }
+
+    /// The furthest this container's paint can land outside `bounds`, in
+    /// logical pixels — its shadow, and then whatever its transform can do to
+    /// the box that shadow surrounds.
+    ///
+    /// The largest it can reach *from what is declared* — the value, the state
+    /// layers, and whatever an animation is holding as this is asked. A
+    /// `timeline` is not bounded here: its keyframes are the animation's, not a
+    /// declaration, so the answer for one is the frame it is on rather than the
+    /// whole play. That is sound because a playing animation queues a Paint job
+    /// per changed frame and this is recomputed from it, which
+    /// `a_declared_transform_change_invalidates_the_reach_without_a_layout`
+    /// holds in place; it is not a bound taken once and trusted.
+    ///
+    /// For everything that *is* declared it is the largest, not the one
+    /// showing, for the reason [`Self::max_elevation`] gives: a transform animates paint-only, so a
+    /// hover that lifts a card never re-runs this layout. A reach sized to the
+    /// resting value would leave the lifted card outside the rect its parent
+    /// culls against, and it would vanish for exactly as long as it was moved.
+    ///
+    /// A bound rather than a value, so the error is one-sided. Everything
+    /// downstream grows a laid-out rect by this and asks whether the result is
+    /// visible; a child's drawn rect is inside its grown rect by construction,
+    /// so a child on screen is never culled. Sometimes one is painted that has
+    /// not moved into view yet.
+    ///
+    /// The two outsets compose rather than alternate: a shadow is drawn in the
+    /// container's own space and then carried by the transform, so an elevated
+    /// card that lifts reaches further than either alone. Taking the transform
+    /// over the shadow-inflated box is also what makes `scale` scale the
+    /// shadow.
+    ///
+    /// Every read here is `_untracked`, and it has to be. Layout runs a child
+    /// inside its *parent's* scope, so a tracked read registers against
+    /// whichever ancestor is innermost and reflows that one — which is why
+    /// `a_transform_does_not_reflow_the_parent_either` asks the parent rather
+    /// than the container that declared the transform, and why being outside a
+    /// scope of one's own is not enough. `snapshot_zone` is not enough either:
+    /// it silences the non-reactive-read diagnostic and leaves the read
+    /// tracked.
+    ///
+    /// What keeps the value current is not a subscription but the schedule:
+    /// `Container::refresh_paint_bounds` runs from the Paint job that the
+    /// declaring write already queues, in the pass before this frame paints.
+    /// Blink resolves its transforms in the same gap, for the same reason.
+    pub(super) fn max_transform_reach(&self, bounds: Rect, shadow_extent: f32) -> f32 {
+        let moves = self.moving_components();
+        if !moves.any() {
+            return shadow_extent;
+        }
+
+        // The box the transform actually carries: the container plus the
+        // shadow already standing outside it. Measured back against `bounds`,
+        // because that is what every consumer grows by the answer — an outset
+        // taken against `painted` would report the excursion beyond the shadow
+        // and lose its width.
+        let painted = bounds.outset(shadow_extent);
+        let pivot = self.pivot_signal().get_or_untracked(Pivot::CENTER);
+        let anims = self.anims.as_ref();
+
+        let base_translate = self.translate_signal().get_or_untracked(Translate::NONE);
+        let base_rotate = self.rotate_signal().get_or_untracked(0.0);
+        let base_scale = self.scale_signal().get_or_untracked(Scale::NONE);
+        let base = Transform::compose(base_translate, base_rotate, base_scale);
+        let mut reach = outset_of(base, painted, bounds, pivot);
+
+        // A rotation's outset is not monotone in its angle: a box turned 0 or
+        // 180 degrees sits back where it started and somewhere between stands
+        // furthest outside. Endpoints bound a shadow, which grows with
+        // elevation; they bound nothing here. So a container that can rotate at
+        // all is given the worst angle outright.
+        //
+        // Turning about a pivot keeps every point at its own distance from it,
+        // so the whole swept shape fits the circle of radius `far` about the
+        // pivot — which bounds every angle, and every pivot, without caring
+        // which. A corner pivot sweeps a much larger circle than a centre one,
+        // and half the diagonal only ever describes the centre.
+        if moves.rotate {
+            // About `bounds`, which is where `outset_of` and `flatten` resolve
+            // it. Resolving against the shadow-inflated box instead puts the
+            // centre of the swept circle somewhere the content never turns
+            // about, and the bound comes out looser than the widest angle.
+            let (px, py) = pivot.resolve(bounds);
+            let far = [
+                (painted.x, painted.y),
+                (painted.x + painted.width, painted.y),
+                (painted.x, painted.y + painted.height),
+                (painted.x + painted.width, painted.y + painted.height),
+            ]
+            .into_iter()
+            .fold(0.0f32, |most, (x, y)| most.max((x - px).hypot(y - py)));
+            let swept = Rect::new(px - far, py - far, far * 2.0, far * 2.0);
+            reach = reach.max(swept.outset_beyond(bounds));
+        }
+
+        // Each layer is a transform this container can be in, whether or not it
+        // is in it now. Resolving only the active one would make a hover re-run
+        // layout, which is the whole thing this avoids.
+        if let Some(ref ix) = self.interaction {
+            for (_, state) in ix.states.iter() {
+                if state.translate.is_none() && state.rotate.is_none() && state.scale.is_none() {
+                    continue;
+                }
+                let candidate = Transform::compose(
+                    state
+                        .translate
+                        .map_or(base_translate, |s| s.get_untracked()),
+                    state.rotate.map_or(base_rotate, |s| s.get_untracked()),
+                    state.scale.map_or(base_scale, |s| s.get_untracked()),
+                );
+                reach = reach.max(outset_of(candidate, painted, bounds, pivot));
+            }
+        }
+
+        // A spring passes its target before it settles, so the declared reach
+        // is inflated by the overshoot still to come — the same allowance
+        // `max_elevation` makes — and the value in flight, which is already
+        // past whatever overshoot it had, is folded in flat.
+        if let Some(anims) = anims {
+            let overshoot = [
+                anims.translate.as_ref().map(|a| a.peak_overshoot()),
+                anims.rotate.as_ref().map(|a| a.peak_overshoot()),
+                anims.scale.as_ref().map(|a| a.peak_overshoot()),
+            ]
+            .into_iter()
+            .flatten()
+            .fold(0.0f32, f32::max);
+            reach *= 1.0 + overshoot;
+
+            let flying = Transform::compose(
+                anims
+                    .translate
+                    .as_ref()
+                    .map_or(base_translate, |a| *a.current()),
+                anims.rotate.as_ref().map_or(base_rotate, |a| *a.current()),
+                anims.scale.as_ref().map_or(base_scale, |a| *a.current()),
+            );
+            reach = reach.max(outset_of(flying, painted, bounds, pivot));
+        }
+
+        reach
+    }
+
     pub(super) fn effective_elevation_target(&self, id: WidgetId) -> f32 {
         let base = self.elevation.get_or(0.0);
         self.resolve_state_value(id, base, |state| state.elevation.map(|s| s.get()))
@@ -248,20 +417,11 @@ impl Container {
         // Computed once and shared with the early-out below, so the two cannot
         // disagree: a component wired into the gates and forgotten in the
         // early-out would return IDENTITY and silently stop transforming.
-        let from_state = self
-            .interaction
-            .as_ref()
-            .map(|ix| ix.declares_transform)
-            .unwrap_or_default();
-        let has_translate = from_state.translate
-            || self.translate_signal().is_some()
-            || anims.is_some_and(|a| a.translate.is_some());
-        let has_rotate = from_state.rotate
-            || self.rotate_signal().is_some()
-            || anims.is_some_and(|a| a.rotate.is_some());
-        let has_scale = from_state.scale
-            || self.scale_signal().is_some()
-            || anims.is_some_and(|a| a.scale.is_some());
+        let Moves {
+            translate: has_translate,
+            rotate: has_rotate,
+            scale: has_scale,
+        } = self.moving_components();
 
         // A plain layout box is none of the three, and most containers are one.
         if !(has_translate || has_rotate || has_scale) {
@@ -464,7 +624,7 @@ const ELEVATION_STEPS: [(f32, f32, f32); 6] = [
 /// A level that is not a number is no shadow. `.elevation(f32::NAN)` is
 /// writable, and NaN fails every comparison on the way in, so it reached the
 /// interpolating branch and came back out as a NaN extent — into
-/// `set_paint_overflow`, where it disables every `min` and `max` downstream
+/// `set_own_paint_reach`, where it disables every `min` and `max` downstream
 /// without anything failing. The same guard `SpringConfig::peak_overshoot` has,
 /// for the same reason: a number that sizes a rect has to be one.
 pub(super) fn elevation_to_shadow(level: f32) -> Shadow {
@@ -493,6 +653,30 @@ pub(super) fn elevation_to_shadow(level: f32) -> Shadow {
         0.0,
         Color::rgba(0.0, 0.0, 0.0, alpha),
     )
+}
+
+/// How far `painted`, once `transform` has carried it, stands outside `bounds`.
+///
+/// Two rects because they are two questions: `painted` is everything the widget
+/// draws, `bounds` is the box a parent knows it by, and the answer has to be in
+/// terms of the second — every consumer grows a laid-out rect by it. With no
+/// transform at all the answer is the difference between them, which is the
+/// shadow, so the shadow needs no separate accounting.
+///
+/// One number for four sides, because everything reading it grows a rect
+/// equally in every direction: a scalar cannot say a card lifts upward only,
+/// and a reach that is too generous costs paint while one that is too tight
+/// loses a widget.
+fn outset_of(transform: Transform, painted: Rect, bounds: Rect, pivot: Pivot) -> f32 {
+    let moved = if transform.is_identity() {
+        painted
+    } else {
+        // About `bounds`, which is what `flatten` resolves the pivot against
+        // when it draws. Resolving against the shadow-inflated box instead
+        // would put a corner pivot in a different place here than on screen.
+        transform.about(pivot, bounds).map_rect(painted)
+    };
+    moved.outset_beyond(bounds)
 }
 
 #[cfg(test)]
@@ -563,7 +747,7 @@ mod elevation_tests {
 
     /// A level that is not a number is no shadow either. NaN fails every
     /// comparison on the way in, so it used to reach the interpolating branch and
-    /// come back out as a NaN extent — into `set_paint_overflow`, where it
+    /// come back out as a NaN extent — into `set_own_paint_reach`, where it
     /// disables every `min` and `max` downstream without anything failing.
     #[test]
     fn a_level_that_is_not_a_number_is_no_shadow() {
@@ -578,5 +762,266 @@ mod elevation_tests {
         let s = elevation_to_shadow(0.0);
         assert_eq!(s.color, Color::TRANSPARENT);
         assert_eq!(s.blur, 0.0);
+    }
+}
+
+/// `outset_of` is the arithmetic every cull and every damage rect is grown by,
+/// and it had no test until a review worked an example by hand and found it ten
+/// pixels short.
+#[cfg(test)]
+mod reach_tests {
+    use super::*;
+    use crate::animation::{Animate, SpringConfig, Transition};
+
+    /// Turning about a corner carries the far corner around a circle of the
+    /// whole diagonal, so the box sweeps well past what a centre rotation
+    /// reaches. A bound written for the centre reports 20.7 here, and the
+    /// answer is 70.7.
+    #[test]
+    fn a_rotation_about_a_corner_sweeps_further_than_one_about_the_centre() {
+        let mut worst: f32 = 0.0;
+        for degrees in 0..360 {
+            let spin = Transform::compose(Translate::NONE, degrees as f32, Scale::NONE);
+            worst = worst.max(outset_of(spin, BOX, BOX, Pivot::TOP_LEFT));
+        }
+        // What a bound written for the centre would have said.
+        let centre_shaped = (100.0f32.hypot(100.0) - 100.0) / 2.0;
+        assert!(
+            worst > centre_shaped,
+            "a corner rotation reaches {worst}; a centre-shaped bound says \
+             {centre_shaped} and would cull a widget that is on screen"
+        );
+
+        // What the code says: every point stays its own distance from the
+        // pivot, so the swept shape fits the circle of the furthest corner.
+        let swept = 100.0f32.hypot(100.0);
+        assert!(
+            swept >= worst,
+            "the swept-circle bound {swept} does not cover the worst angle {worst}"
+        );
+    }
+
+    const BOX: Rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 100.0,
+        height: 100.0,
+    };
+
+    /// With nothing moving, what a widget paints outside its box is its shadow.
+    #[test]
+    fn an_untransformed_box_reaches_exactly_its_shadow() {
+        let painted = BOX.outset(10.0);
+        assert_eq!(
+            outset_of(Transform::IDENTITY, painted, BOX, Pivot::CENTER),
+            10.0
+        );
+    }
+
+    /// The shadow and the transform compose. This is the case the review
+    /// found: measured against the shadow-inflated box the answer came out 50,
+    /// and the shadow really reaches 60.
+    #[test]
+    fn a_shadow_carried_by_a_translate_reaches_past_both() {
+        let painted = BOX.outset(10.0);
+        let lift = Transform::compose(Translate::new(0.0, -50.0), 0.0, Scale::NONE);
+        assert_eq!(outset_of(lift, painted, BOX, Pivot::CENTER), 60.0);
+    }
+
+    /// And a consumer growing the box by the answer contains what is drawn,
+    /// which is the whole promise: a widget on screen is never culled.
+    #[test]
+    fn the_grown_box_contains_what_is_drawn() {
+        let painted = BOX.outset(10.0);
+        let lift = Transform::compose(Translate::new(0.0, -50.0), 0.0, Scale::NONE);
+        let reach = outset_of(lift, painted, BOX, Pivot::CENTER);
+
+        let drawn = lift.about(Pivot::CENTER, painted).map_rect(painted);
+        let grown = BOX.outset(reach);
+        assert!(
+            grown.x <= drawn.x
+                && grown.y <= drawn.y
+                && grown.x + grown.width >= drawn.x + drawn.width
+                && grown.y + grown.height >= drawn.y + drawn.height,
+            "grown {grown:?} does not contain drawn {drawn:?}"
+        );
+    }
+
+    /// A scale carries the shadow with it rather than leaving it behind.
+    #[test]
+    fn a_scale_scales_the_shadow_it_surrounds() {
+        let painted = BOX.outset(10.0);
+        let grow = Transform::compose(Translate::NONE, 0.0, Scale::uniform(2.0));
+        // The 120-wide painted box doubles about the centre it shares with
+        // bounds, reaching 120 either side of it; 70 of that stands outside the
+        // 100-wide bounds. A shadow that did not scale would reach 60.
+        assert_eq!(outset_of(grow, painted, BOX, Pivot::CENTER), 70.0);
+    }
+
+    /// The rotation bound, asked of the container rather than of the
+    /// arithmetic under it.
+    ///
+    /// `max_transform_reach` has its own branch for rotation — the swept circle
+    /// about the pivot — and the tests below reach `outset_of` directly, so
+    /// that branch was watched by nothing. It has to cover the worst angle for
+    /// the pivot it is given, and a corner pivot sweeps far wider than a centre
+    /// one.
+    #[test]
+    fn the_rotation_bound_covers_every_angle_for_the_pivot_it_is_given() {
+        // BOTTOM_RIGHT included deliberately: it is the pivot whose swept
+        // circle reaches furthest past the *far* edges rather than the near
+        // ones, so it is the only one where the circle's width and height are
+        // load-bearing rather than masked by its origin.
+        for pivot in [
+            Pivot::CENTER,
+            Pivot::TOP_LEFT,
+            Pivot::TOP,
+            Pivot::BOTTOM_RIGHT,
+        ] {
+            let turning = container()
+                .width(100.0)
+                .height(100.0)
+                .rotate(0.0)
+                .pivot(pivot);
+            // With a shadow, so the box the rotation carries does not start at
+            // the origin. At the origin `x` is zero and half the arithmetic
+            // that reads it is indistinguishable from arithmetic that does not.
+            let shadow = 6.0;
+            let painted = BOX.outset(shadow);
+            let bound = turning.max_transform_reach(BOX, shadow);
+
+            let worst = (0..360)
+                .map(|deg| {
+                    let spin = Transform::compose(Translate::NONE, deg as f32, Scale::NONE);
+                    outset_of(spin, painted, BOX, pivot)
+                })
+                .fold(0.0f32, f32::max);
+
+            assert!(
+                bound >= worst - 0.01,
+                "{pivot:?}: the bound is {bound} and the widest angle reaches \
+                 {worst}, so a container mid-rotation would be culled"
+            );
+            // And tight. A bound that is merely large is satisfied by any
+            // arithmetic that errs upward, which leaves the whole computation
+            // unwatched — and every pixel of slack is painted and damaged.
+            assert!(
+                bound <= worst + 0.01,
+                "{pivot:?}: the bound is {bound} where the widest angle reaches \
+                 only {worst}, so every rotation pays for reach it cannot use"
+            );
+        }
+    }
+
+    /// And it is a bound, not a shrug: a box that cannot rotate is not given
+    /// the reach of one that can.
+    #[test]
+    fn a_box_that_cannot_rotate_is_not_given_a_rotation_s_reach() {
+        let still = container().width(100.0).height(100.0);
+        assert_eq!(still.max_transform_reach(BOX, 0.0), 0.0);
+        assert_eq!(still.max_transform_reach(BOX, 6.0), 6.0, "only its shadow");
+    }
+
+    /// A spring passes its target before it settles, and the reach has to
+    /// cover where it goes, not where it is going.
+    ///
+    /// This is the one part of the bound that is not about geometry: a
+    /// `SNAPPY` translate to -100 reaches past -100 on the way, and a reach of
+    /// exactly 100 culls the widget at the top of its bounce.
+    #[test]
+    fn a_spring_is_given_room_for_the_overshoot_it_has_not_taken_yet() {
+        let sprung = container().width(100.0).height(100.0).translate(
+            Translate::new(0.0, -100.0).transition(Transition::spring(SpringConfig::BOUNCY)),
+        );
+
+        let reach = sprung.max_transform_reach(BOX, 0.0);
+        assert!(
+            reach > 100.0,
+            "a spring to -100 was given a reach of {reach}, so it is culled at \
+             the far end of its own overshoot"
+        );
+
+        let eased = container()
+            .width(100.0)
+            .height(100.0)
+            .translate(Translate::new(0.0, -100.0).transition(200.0));
+        assert_eq!(
+            eased.max_transform_reach(BOX, 0.0),
+            100.0,
+            "an eased translate overshoots nothing and should pay for nothing"
+        );
+    }
+
+    /// A state layer that moves only one component is still a transform this
+    /// container can be in.
+    ///
+    /// The loop skips a layer declaring none of the three, and the skip has to
+    /// mean *none* — a layer that scales but does not translate still carries
+    /// the container somewhere its resting declaration does not, and treating
+    /// "not all three" as "none" reports a reach it does not have.
+    #[test]
+    fn a_state_layer_moving_one_component_still_counts() {
+        let scaled = container()
+            .width(100.0)
+            .height(100.0)
+            .when_pressed(|s| s.scale(Scale::uniform(2.0)));
+        assert_eq!(
+            scaled.max_transform_reach(BOX, 0.0),
+            50.0,
+            "a layer that doubles this box on press was not counted, so it is \
+             culled at its resting size while it is pressed"
+        );
+
+        // Each of the three on its own, because the skip is a conjunction and a
+        // layer declaring only the first of them is where a loosened one shows.
+        let lifted = container()
+            .width(100.0)
+            .height(100.0)
+            .when_hovered(|s| s.translate(Translate::new(0.0, -25.0)));
+        assert_eq!(
+            lifted.max_transform_reach(BOX, 0.0),
+            25.0,
+            "a layer that lifts this box on hover was not counted"
+        );
+
+        let turned = container()
+            .width(100.0)
+            .height(100.0)
+            .when_hovered(|s| s.rotate(45.0));
+        assert!(
+            turned.max_transform_reach(BOX, 0.0) > 0.0,
+            "a layer that turns this box on hover was not counted"
+        );
+    }
+
+    /// The angle that puts a square furthest outside its box is 45 degrees,
+    /// where neither endpoint of a 0-to-90 rotation is. Nothing may report a
+    /// reach smaller than this while a rotation is declared.
+    ///
+    /// About the centre. A corner pivot sweeps a far bigger circle, which is
+    /// why the bound is taken from the distance to the furthest corner rather
+    /// than from half the diagonal — see the neighbour below.
+    #[test]
+    fn a_square_reaches_furthest_halfway_through_its_rotation() {
+        let at = |deg: f32| {
+            outset_of(
+                Transform::compose(Translate::NONE, deg, Scale::NONE),
+                BOX,
+                BOX,
+                Pivot::CENTER,
+            )
+        };
+        assert_eq!(at(0.0), 0.0);
+        assert!(
+            at(90.0) < 0.01,
+            "a square turned 90 degrees is back in its box"
+        );
+
+        let corner = (100.0f32.hypot(100.0) - 100.0) / 2.0;
+        assert!(
+            (at(45.0) - corner).abs() < 0.01,
+            "at 45 degrees a square stands {corner} outside its box, got {}",
+            at(45.0)
+        );
     }
 }

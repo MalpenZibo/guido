@@ -117,15 +117,49 @@ impl<'a> PaintContext<'a> {
     pub fn apply_transform(&mut self, transform: Transform) {
         if !transform.is_identity() {
             self.node.local_transform = self.node.local_transform.then(&transform);
+            self.cull_rect_follows(transform);
         }
     }
 
     /// Apply a transform with origin by composing it with the existing transform.
     pub fn apply_transform_with_pivot(&mut self, transform: Transform, origin: Pivot) {
         if !transform.is_identity() {
-            self.node.local_transform = self.node.local_transform.then(&transform);
             self.node.pivot = origin;
+            self.apply_transform(transform);
         }
+    }
+
+    /// Move the cull rect with the transform just applied.
+    ///
+    /// The rect names the visible region in *this node's* coordinates, and a
+    /// widget that transforms itself has just changed what those coordinates
+    /// mean. Without this the rect goes on describing where the content would
+    /// have been drawn, and everything downstream that narrows children to it
+    /// — the binary-search window and the per-child cull — answers about the
+    /// wrong ones.
+    ///
+    /// The inverse, because the rect travels the other way from the content: a
+    /// subtree lifted 300px upward shows what lies 300px further down. Resolved
+    /// about the node's own pivot with `Transform::about`, the same composition
+    /// `flatten` performs, so a rotation about a corner and one about a centre
+    /// do not agree here and disagree on screen.
+    ///
+    /// A transform with no inverse — a scale of zero — collapses the content to
+    /// a point, so none of it is visible and the rect that says so is the empty
+    /// one. Dropping the rect instead would mean *nothing* is narrowed, and a
+    /// collapsed subtree is a shipped idiom here: `scale(0.0)` is how a menu
+    /// closes, and two hundred rows nobody can see would be painted on every
+    /// frame that dirtied them.
+    fn cull_rect_follows(&mut self, transform: Transform) {
+        let Some(cull) = self.cull_rect else {
+            return;
+        };
+        self.cull_rect = Some(
+            transform
+                .about(self.node.pivot, self.node.bounds)
+                .inverse()
+                .map_or(Rect::default(), |back| back.map_rect(cull)),
+        );
     }
 
     /// Set this node's transform origin.

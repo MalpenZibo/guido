@@ -70,6 +70,14 @@ Two methods are required, the rest default:
 - `event(&mut self, tree, id, event) -> EventResponse` — defaults to `Ignored`
 - `advance_animations`, `reconcile_children`, `layout_hints`,
   `register_children` — defaults
+- `refresh_paint_bounds` — a default too, and the one a widget that transforms
+  itself has to override: a parent narrows its children to the visible rect
+  before painting them, by their laid-out bounds, so a widget that draws
+  somewhere else says how far with `Tree::set_own_paint_reach`. Called from the
+  Paint job, which is where a reach that follows a paint-only property belongs —
+  a transform must not reflow anything. A reach that follows a layout-tracked
+  signal is published from `layout` instead, as `Text` and `TextInput` do for
+  their stroke and shadow
 
 Position and bounds live in the `Tree`, never on the widget. Writing a widget
 from outside the crate needs `guido::widget_prelude::*` alongside the ordinary

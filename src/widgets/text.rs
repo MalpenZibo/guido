@@ -228,7 +228,7 @@ impl Widget for Text {
         // Refresh cached values from content and declared style.
         // This reads signals and registers layout dependencies.
         let overflow = self.refresh(tree, id);
-        tree.set_paint_overflow(id, overflow);
+        tree.set_own_paint_reach(id, overflow);
 
         // Determine the effective max_width for measurement
         // If nowrap is true, don't pass max_width so text won't wrap

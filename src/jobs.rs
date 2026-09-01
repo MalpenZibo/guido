@@ -503,6 +503,12 @@ pub fn process_jobs(jobs: &[Job], tree: &mut Tree, layout_roots: &mut Vec<Widget
         }
     }
     for id in paint {
+        // Before the flag, and before this frame's paint: a parent decides
+        // which children to paint at the top of its own, so a widget that has
+        // moved has to have said so by now. See `Widget::refresh_paint_bounds`.
+        tree.with_widget_mut(id, |widget, wid, tree| {
+            widget.refresh_paint_bounds(tree, wid);
+        });
         tree.mark_needs_paint(id);
     }
     for id in layout {

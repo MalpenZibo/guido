@@ -503,6 +503,24 @@ impl Container {
         }
     }
 
+    /// Where a transform can carry what this container draws, published for
+    /// whoever is about to decide whether to paint it.
+    ///
+    /// Read outside any tracking scope on purpose. The transform components
+    /// belong to paint, and subscribing layout to them would make
+    /// `.translate(move || ..)` reflow on every write. What keeps the answer
+    /// current instead is that the same write schedules a Paint job, and
+    /// `refresh_paint_bounds` runs from that job before this frame paints.
+    fn publish_paint_reach(&self, tree: &mut Tree, id: WidgetId, bounds: Rect) {
+        let shadow = style::elevation_to_shadow(self.elevation_reach.get()).extent();
+        // Only this container's own half. What its children add is
+        // `children_outset`, which the tree keeps for it — gathered upward as
+        // they publish, and re-measured whenever this container lays out. That
+        // split is what lets this run from a Paint job without walking
+        // anything.
+        tree.set_own_paint_reach(id, self.max_transform_reach(bounds, shadow));
+    }
+
     /// Get scroll data (panics if not scrollable — only call when scroll_axis != None)
     fn scroll(&self) -> &ScrollData {
         self.scroll_data.as_deref().expect("scroll_data not set")
@@ -1392,7 +1410,31 @@ impl Widget for Container {
         // computations of it made a frame apart.
         let reach = with_signal_tracking(id, JobType::Layout, || self.max_elevation());
         self.elevation_reach.set(reach);
-        tree.set_paint_overflow(id, style::elevation_to_shadow(reach).extent());
+        // The shadow's reach is layout's to publish — it follows the elevation,
+        // which layout already tracks. What a transform adds is not: a
+        // transform is a paint property and reading it here would make moving a
+        // widget reflow it. `refresh_paint_bounds` answers that part, in the
+        // pass before paint.
+        // The children first, so what the publish below carries upward is what
+        // was just measured rather than what stood here before this layout.
+        // Layout only: `refresh_paint_bounds` runs from a Paint job, and a walk
+        // over the children there would put an O(n) back on the frame path that
+        // the window exists to keep off it.
+        // What a scroller or an `Overflow::Hidden` box paints is bounded by its
+        // own edges, however far the content inside it runs. Counting the
+        // overhang would damage, and narrow against, a rect the size of the
+        // whole scrolled column.
+        //
+        // `lengths.overflow` rather than a fresh read: `read_box_lengths`
+        // already resolved it under this layout's tracking, so the value is in
+        // hand and the dependence is the one that makes a Hidden-to-Visible
+        // toggle re-run this.
+        let clips = self.scroll_axis != ScrollAxis::None || lengths.overflow == Overflow::Hidden;
+        tree.set_clips_children(id, clips);
+        if !clips {
+            tree.remeasure_children(id);
+        }
+        self.publish_paint_reach(tree, id, Rect::from_size(size));
 
         // Register widget ref so update_widget_refs() can refresh bounds
         if let Some(ref wr) = self.widget_ref {
@@ -1472,6 +1514,11 @@ impl Widget for Container {
         }
 
         self.handle_own_event(id, &hit, event, &local_event, at)
+    }
+
+    fn refresh_paint_bounds(&self, tree: &mut Tree, id: WidgetId) {
+        let size = tree.cached_size(id).unwrap_or_default();
+        self.publish_paint_reach(tree, id, Rect::from_size(size));
     }
 
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
@@ -1610,6 +1657,7 @@ impl Widget for Container {
                 scroll_offset,
                 cull_rect: effective_cull_rect,
                 children_sorted_along: self.children_sorted_along,
+                children_reach: tree.children_reach(id),
                 // A scroller's cull rect moves under its content, so a
                 // partially visible child has to repaint for its own children
                 // to be culled against the current rect.
@@ -1654,11 +1702,11 @@ impl Widget for Container {
 
 /// The axis `children` came out ordered along, if any.
 ///
-/// Ordered means what the binary search in `paint` needs: consecutive children
-/// that do not overlap on that axis, so both of the predicates it searches with
-/// partition the slice. Anything less and `partition_point` answers about
-/// whichever child it happened to probe rather than about the viewport, and a
-/// child sitting in plain view is dropped.
+/// **Ordered** means what the binary search in `paint_children` needs:
+/// consecutive children that do not overlap on that axis, so both of the
+/// predicates it searches with partition the slice. Anything less and
+/// `partition_point` answers about whichever child it happened to probe rather
+/// than about the viewport, and a child sitting in plain view is dropped.
 ///
 /// Non-overlap also settles which axis to answer when a layout orders its
 /// children along both: a column's children overlap horizontally and a row's
@@ -1666,7 +1714,7 @@ impl Widget for Container {
 /// one that narrows.
 ///
 /// Bails on the first pair that overlaps on both, so a layout that stacks its
-/// children costs two of them and a list costs the pass that earns it.
+/// children costs two of them rather than all of them.
 fn sorted_axis(tree: &Tree, children: &[WidgetId]) -> Option<Axis> {
     // No children are ordered along nothing in particular, and answering an
     // axis for them would be a claim about nothing.
@@ -1684,14 +1732,12 @@ fn sorted_axis(tree: &Tree, children: &[WidgetId]) -> Option<Axis> {
         let (left, next_right) = bounds.span(Axis::Horizontal);
         vertical &= top >= bottom;
         horizontal &= left >= right;
-        if !vertical && !horizontal {
+        if !(vertical || horizontal) {
             return None;
         }
         (bottom, right) = (next_bottom, next_right);
     }
 
-    // The loop returns on the first pair that overlaps on both, so reaching
-    // here means at least one axis survived.
     Some(if vertical {
         Axis::Vertical
     } else {
