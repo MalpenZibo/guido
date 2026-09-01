@@ -126,3 +126,47 @@ impl Harness {
         self.tree.set_frame_instant(None);
     }
 }
+
+/// What to do with a reference file this run disagrees with.
+///
+/// Two variables, and the difference between them is the whole rule.
+/// `UPDATE_*` makes a reference that is not there yet: a new scenario needs a
+/// first picture and that is ordinary work. `REBLESS_*` rewrites one that is,
+/// which turns a failing test green without changing anything back — so it is
+/// a decision, taken with the diff in front of somebody, and the pull request
+/// carries the `golden-update` label to say it was taken.
+///
+/// One copy, read by both `assert_snapshot` and `assert_golden`, because the
+/// last time the rule lived in two places it lived in neither: both harnesses
+/// wrote unconditionally on `UPDATE_*` while their own module headers said
+/// they declined, and `REBLESS_*` was read nowhere at all.
+///
+/// A pure function of three booleans, so the table below is the test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Blessing {
+    /// Write the reference, and skip the comparison.
+    Write,
+    /// Compare against what is on disk, whatever was asked for.
+    Compare,
+}
+
+/// Whether this run may write `exists`, given what the environment asked for.
+pub fn blessing(update: bool, rebless: bool, exists: bool) -> Blessing {
+    match (update, rebless, exists) {
+        // Rewriting is what REBLESS is, and the only thing it is.
+        (_, true, _) => Blessing::Write,
+        // A reference that is not there yet is not a rewrite.
+        (true, false, false) => Blessing::Write,
+        // Asked to create one that already exists: decline, and let the
+        // comparison report what actually moved. This is the line that was
+        // missing.
+        (true, false, true) => Blessing::Compare,
+        (false, false, _) => Blessing::Compare,
+    }
+}
+
+/// Read the pair for one kind of reference — `"SNAPSHOTS"` or `"GOLDEN"`.
+pub fn blessing_from_env(kind: &str, exists: bool) -> Blessing {
+    let set = |prefix: &str| std::env::var_os(format!("{prefix}_{kind}")).is_some();
+    blessing(set("UPDATE"), set("REBLESS"), exists)
+}
