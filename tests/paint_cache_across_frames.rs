@@ -27,6 +27,7 @@ use guido::renderer::{
 };
 use guido::tree::WidgetId;
 use guido::widgets::Rect;
+use std::rc::Rc;
 
 const VIEWPORT: f32 = 200.0;
 /// The row's padding, and the column's own padding around its rows.
@@ -86,6 +87,15 @@ fn column() -> Container {
         )
 }
 
+/// The two scrolling columns, side by side.
+fn two_columns() -> Container {
+    container()
+        .layout(Flex::row().spacing(GAP))
+        .padding(PAD)
+        .child(column())
+        .child(column())
+}
+
 /// A surface that renders frame after frame into one retained root node.
 struct Surface {
     surface: Harness,
@@ -98,16 +108,7 @@ struct Surface {
 }
 
 impl Surface {
-    fn new() -> Self {
-        let view = container()
-            .layout(Flex::row().spacing(GAP))
-            .padding(PAD)
-            .child(column())
-            .child(column());
-
-        let width = PAD + VIEWPORT + GAP + VIEWPORT + PAD;
-        let height = PAD + CAPTION + CAPTION_GAP + VIEWPORT + PAD;
-
+    fn new(view: impl Widget + 'static, width: f32, height: f32) -> Self {
         let harness = Harness::laid_out(view, width, height);
         let root = harness.root;
 
@@ -133,8 +134,8 @@ impl Surface {
     /// allocation* frame after frame, where one that repaints is a new node
     /// each time. Comparing the tree against the cache would not tell those
     /// apart: `cache_paint_results` stores whatever was painted.
-    fn caption_node(&self, column: usize) -> std::rc::Rc<RenderNode> {
-        std::rc::Rc::clone(&self.root_node.children[column].children[0])
+    fn caption_node(&self, column: usize) -> Rc<RenderNode> {
+        Rc::clone(&self.root_node.children[column].children[0])
     }
 
     /// One frame: the skip gate, paint into the retained root, flatten, then
@@ -225,7 +226,11 @@ impl Surface {
 /// so `reuse_cached` serves that entry, content and scrollbar handle together.
 #[test]
 fn a_scrolled_list_survives_a_frame_painted_for_its_sibling() {
-    let mut s = Surface::new();
+    let mut s = Surface::new(
+        two_columns(),
+        PAD + VIEWPORT + GAP + VIEWPORT + PAD,
+        PAD + CAPTION + CAPTION_GAP + VIEWPORT + PAD,
+    );
 
     s.frame();
     let caption = s.caption_node(0);
@@ -260,7 +265,7 @@ fn a_scrolled_list_survives_a_frame_painted_for_its_sibling() {
         "the second list was never scrolled"
     );
     assert!(
-        std::rc::Rc::ptr_eq(&caption, &s.caption_node(0)),
+        Rc::ptr_eq(&caption, &s.caption_node(0)),
         "the caption was repainted rather than served from the paint cache — \
          a harness that stops reaching `reuse_cached` goes green however \
          broken the cache is"
