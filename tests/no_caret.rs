@@ -6,44 +6,19 @@
 //! see that, because the wakeups were correctly absent. These look at what is
 //! drawn.
 
-use guido::layout::Constraints;
+mod common;
+
+use common::Harness;
 use guido::prelude::*;
-use guido::reactive::focus::{clear_focus, request_focus};
-use guido::renderer::{DrawCommand, PaintContext, RenderNode};
-use guido::tree::Tree;
+use guido::reactive::focus::{clear_focus, has_focus, request_focus};
 
 /// Every rectangle a focused input draws. With no selection, the caret is the
 /// only one there can be.
 fn rects(input: TextInput) -> Vec<Rect> {
     clear_focus();
-    let mut tree = Tree::new();
-    let id = tree.register(Box::new(input));
-    tree.with_widget_mut(id, |w, id, t| w.register_children(t, id));
-    tree.with_widget_mut(id, |w, id, t| {
-        w.layout(t, id, Constraints::new(0.0, 0.0, 200.0, 40.0))
-    });
-    request_focus(&tree, id);
-
-    let mut node = RenderNode::new(id.as_u64());
-    tree.with_widget_mut(id, |w, id, t| {
-        let mut ctx = PaintContext::new(&mut node);
-        w.paint(t, id, &mut ctx);
-    });
-
-    let mut out = Vec::new();
-    collect(&node, &mut out);
-    out
-}
-
-fn collect(node: &RenderNode, out: &mut Vec<Rect>) {
-    for cmd in &node.commands {
-        if let DrawCommand::RoundedRect { rect, .. } = &**cmd {
-            out.push(*rect);
-        }
-    }
-    for child in &node.children {
-        collect(child, out);
-    }
+    let mut harness = Harness::laid_out(input, 200.0, 40.0);
+    request_focus(&harness.tree, harness.root);
+    harness.painted_rects()
 }
 
 #[test]
@@ -67,16 +42,13 @@ fn no_caret_draws_no_caret() {
 fn no_caret_still_takes_the_focus() {
     // The point of the option is losing the caret, not losing the keyboard.
     clear_focus();
-    let mut tree = Tree::new();
-    let id = tree.register(Box::new(
+    let harness = Harness::laid_out(
         text_input(create_signal(String::new()))
             .no_caret()
             .autofocus(),
-    ));
-    tree.with_widget_mut(id, |w, id, t| w.register_children(t, id));
-    tree.with_widget_mut(id, |w, id, t| {
-        w.layout(t, id, Constraints::new(0.0, 0.0, 200.0, 40.0))
-    });
+        200.0,
+        40.0,
+    );
 
-    assert!(guido::reactive::focus::has_focus(id));
+    assert!(has_focus(harness.root));
 }
