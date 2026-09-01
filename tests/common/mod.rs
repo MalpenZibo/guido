@@ -17,7 +17,7 @@
 
 use guido::layout::{Constraints, Size};
 use guido::prelude::*;
-use guido::renderer::{PaintContext, RenderNode};
+use guido::renderer::{DrawCommand, PaintContext, RenderNode};
 use guido::tree::{Tree, WidgetId};
 use guido::widgets::widget::EventResponse;
 
@@ -82,6 +82,27 @@ impl Harness {
     pub fn click(&mut self, x: f32, y: f32) {
         self.send(Event::mouse_down(x, y, MouseButton::Left));
         self.send(Event::mouse_up(x, y, MouseButton::Left));
+    }
+
+    /// Every rectangle the tree painted, in the order it drew them.
+    ///
+    /// What a caret or a selection highlight is made of: `TextInput` draws
+    /// both as rounded rects with no radius, and two files ask about them.
+    pub fn painted_rects(&mut self) -> Vec<Rect> {
+        fn collect(node: &RenderNode, out: &mut Vec<Rect>) {
+            for cmd in &node.commands {
+                if let DrawCommand::RoundedRect { rect, .. } = &**cmd {
+                    out.push(*rect);
+                }
+            }
+            for child in &node.children {
+                collect(child, out);
+            }
+        }
+
+        let mut out = Vec::new();
+        collect(&self.paint(), &mut out);
+        out
     }
 
     /// Paint the whole tree and hand back what it drew.
