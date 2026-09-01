@@ -11,6 +11,11 @@
 //! node, a caption's painted top, the colour of a named text. Those stay where
 //! they are asked about. This is the surface underneath them.
 //!
+//! Below `Harness`, and for the same reason, is the rule that decides whether
+//! a run may rewrite a reference file. It is not about widgets at all; it is
+//! here because both reference harnesses have to read the same copy of it, and
+//! the last time it lived in two places it lived in neither.
+//!
 //! Each test binary compiles its own copy — that is what `mod common;` does —
 //! so a helper only one file uses is dead code in the others.
 #![allow(dead_code)]
@@ -124,5 +129,85 @@ impl Harness {
                 .with_widget_mut(id, |w, id, t| w.advance_animations(t, id));
         }
         self.tree.set_frame_instant(None);
+    }
+}
+
+/// What to do with a reference file this run disagrees with.
+///
+/// Two variables, and the difference between them is the whole rule.
+/// `UPDATE_*` makes a reference that is not there yet: a new scenario needs a
+/// first picture and that is ordinary work. `REBLESS_*` rewrites one that is,
+/// which turns a failing test green without changing anything back — so it is
+/// a decision, taken with the diff in front of somebody, and the pull request
+/// carries the `golden-update` label to say it was taken.
+///
+/// One copy, read by both `assert_snapshot` and `assert_golden`, because the
+/// last time the rule lived in two places it lived in neither: both harnesses
+/// wrote unconditionally on `UPDATE_*` while their own module headers said
+/// they declined, and `REBLESS_*` was read nowhere at all.
+///
+/// A pure function of three booleans, so the table below is the test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Blessing {
+    /// Write the reference, and skip the comparison.
+    Write,
+    /// Compare against what is on disk, whatever was asked for.
+    Compare,
+}
+
+/// What to do, given what the environment asked for and whether the
+/// reference is already on disk.
+pub fn blessing(update: bool, rebless: bool, exists: bool) -> Blessing {
+    match (update, rebless, exists) {
+        // Rewriting is what REBLESS is, and the only thing it is.
+        (_, true, _) => Blessing::Write,
+        // A reference that is not there yet is not a rewrite.
+        (true, false, false) => Blessing::Write,
+        // Asked to create one that already exists: decline, and let the
+        // comparison report what actually moved. This is the line that was
+        // missing.
+        (true, false, true) => Blessing::Compare,
+        (false, false, _) => Blessing::Compare,
+    }
+}
+
+/// Read the pair for one kind of reference — `"SNAPSHOTS"` or `"GOLDEN"`.
+///
+/// Says so when it declines. Somebody who asked to bless and got silence would
+/// read the pass that follows as the blessing having happened.
+pub fn blessing_from_env(kind: &str, exists: bool) -> Blessing {
+    let asked = |prefix: &str| std::env::var_os(format!("{prefix}_{kind}")).is_some();
+    let update = asked("UPDATE");
+    let decision = blessing(update, asked("REBLESS"), exists);
+    if update && decision == Blessing::Compare {
+        eprintln!(
+            "UPDATE_{kind} declined: this reference already exists, and rewriting one \
+             makes a failing test pass without changing anything back. Read the diff \
+             the comparison is about to print; if the change is intended, that is \
+             REBLESS_{kind}=1 and the `golden-update` label on the pull request."
+        );
+    }
+    decision
+}
+
+/// Write the reference at `path`, if the rule allows it. Returns whether it
+/// wrote, so the caller can fall through to the comparison when it did not.
+///
+/// The writing is here rather than at the two call sites so that "decided it
+/// may write" and "wrote" cannot come apart: a harness that consults the rule
+/// and then writes anyway is the defect this all exists to stop, and it would
+/// read as compliant at both call sites.
+pub fn write_if_blessed(path: &std::path::Path, blessing: Blessing, write: impl FnOnce()) -> bool {
+    match blessing {
+        Blessing::Write => {
+            write();
+            assert!(
+                path.exists(),
+                "blessed {} and it is still not there",
+                path.display()
+            );
+            true
+        }
+        Blessing::Compare => false,
     }
 }
