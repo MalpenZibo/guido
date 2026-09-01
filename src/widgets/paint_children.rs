@@ -9,6 +9,13 @@
 //!
 //! The invariants it upholds:
 //!
+//! - The children are narrowed to the cull rect twice over, and the two are
+//!   not alternatives. A binary search takes the slice down to the ones the
+//!   rect can reach, which is the only bound that holds on a first paint;
+//!   the per-child test below then drops what the search let through and the
+//!   cache says is clean. The search needs the children ordered along an
+//!   axis and says nothing when they are not, which is why the cheaper test
+//!   still runs underneath it.
 //! - A culled child makes the parent's paint **partial**, and a partial paint
 //!   is never cached — otherwise reusing it later would permanently hide the
 //!   children this pass skipped. It also invalidates whatever the last
@@ -20,6 +27,7 @@
 //!   path; falling through to a full paint if it ever does keeps a missed
 //!   invalidation from showing stale content stretched to the wrong box.
 
+use crate::layout::Axis;
 use crate::renderer::PaintContext;
 use crate::transform::Transform;
 use crate::tree::{Tree, WidgetId};
@@ -39,6 +47,11 @@ pub(crate) struct ChildPaintOptions {
     /// rect moves under the content; a parent that merely inherits its own
     /// parent's cull rect does not.
     pub cache_requires_full_visibility: bool,
+    /// The axis the parent's last layout left these children ordered along, if
+    /// it left them ordered along one. Without it the children are painted
+    /// whole, however small the cull rect: a binary search over a slice that
+    /// is not partitioned answers about whichever child it probed.
+    pub children_sorted_along: Option<Axis>,
 }
 
 impl Default for ChildPaintOptions {
@@ -47,8 +60,65 @@ impl Default for ChildPaintOptions {
             scroll_offset: (0.0, 0.0),
             cull_rect: None,
             cache_requires_full_visibility: false,
+            children_sorted_along: None,
         }
     }
+}
+
+/// The children the cull rect can reach, found by binary search.
+///
+/// This is what bounds the work unconditionally. The per-child test in
+/// `paint_children` only drops children the paint cache calls clean, so on a
+/// first paint — and after anything that dirties the subtree — it drops
+/// nothing and every child is painted in full. A list of ten thousand rows
+/// costs ten thousand paints unless the slice is narrowed first.
+///
+/// Marks the paint partial when it does narrow, for the same reason the
+/// per-child cull does: a node that did not paint all of itself must not be
+/// cached as though it had, or the rect moves on and the cache serves the
+/// children it skipped.
+fn visible_window<'a>(
+    tree: &Tree,
+    children: &'a [WidgetId],
+    ctx: &mut PaintContext,
+    opts: &ChildPaintOptions,
+) -> &'a [WidgetId] {
+    // One child cannot be narrowed to fewer than one, and none cannot be
+    // narrowed at all. Before the counting, not after: a scroller's subtree is
+    // mostly single-child wrappers and childless leaves, and counting those as
+    // windows that could not narrow would bury the one container that matters
+    // under every box below it.
+    if children.len() < 2 {
+        return children;
+    }
+    let (Some(cull), Some(axis)) = (opts.cull_rect, opts.children_sorted_along) else {
+        if opts.cull_rect.is_some() {
+            // A rect to narrow to and nothing to narrow with. This is the case
+            // that silently costs a list its virtualization, and it used to
+            // report a window of one child out of one.
+            crate::render_stats::record_paint_window_declined(children.len() as u64);
+        }
+        return children;
+    };
+
+    let (near, far) = cull.span(axis);
+    let span = |cid: WidgetId| tree.get_bounds(cid).map(|b| b.span(axis));
+    let first = children.partition_point(|&cid| span(cid).is_some_and(|(_, f)| f <= near));
+    // From `first`, so `last` cannot come out below it however degenerate the
+    // rect is, and the slice below is well formed by construction.
+    let last =
+        first + children[first..].partition_point(|&cid| span(cid).is_some_and(|(n, _)| n < far));
+
+    // One either side, because these are laid-out bounds and a child draws
+    // where its own transform puts it. One child of slack is a margin, not a
+    // bound: a translate larger than a child clips against the rect anyway,
+    // which is its own defect and older than this window.
+    let window = &children[first.saturating_sub(1)..(last + 1).min(children.len())];
+    crate::render_stats::record_paint_window(children.len() as u64, window.len() as u64);
+    if window.len() < children.len() {
+        ctx.mark_partial();
+    }
+    window
 }
 
 /// Paint `children` into `ctx`, culling and reusing cached paint where possible.
@@ -59,6 +129,7 @@ pub(crate) fn paint_children(
     opts: &ChildPaintOptions,
 ) {
     let (offset_x, offset_y) = opts.scroll_offset;
+    let children = visible_window(tree, children, ctx, opts);
 
     for &child_id in children {
         // Child bounds come from the tree in the parent's local coordinates

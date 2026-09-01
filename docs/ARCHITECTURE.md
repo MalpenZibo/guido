@@ -554,7 +554,7 @@ The paint system tracks which widgets need repainting:
   subsequent frames, a clean child whose position didn't change is reused via `Rc::clone`
   (zero copies); if it moved, only the node header is cloned (children and commands stay
   shared) with the position recomposed from the decomposed parent/user transforms.
-- **Partial propagation**: a node whose children were culled (`partial`) poisons its
+- **Partial propagation**: a node that did not paint all of itself (`partial`) poisons its
   ancestors in the cache walk — incomplete paints are never cached, so reuse can never
   resurrect a subtree with missing children. Refusing to cache is only half of it: a
   partial paint also *drops* the entry the last complete one left, because the widget

@@ -11,7 +11,7 @@ node 0,0 600x36
   node 0,0 254x1 at 166,17.5
   node 0,0 90x24 at 428,6 clip(0,0 90x24 r=6)
     draw rect 0,0 90x24 fill=#262633ff radius=6/6/6/6
-    node 0,0 200x14
+    node 0,0 200x14 partial
       node 0,0 30x14
         draw rect 0,0 30x14 fill=#00ffffff radius=0/0/0/0
       node 0,0 30x14 at 34,0
@@ -19,10 +19,6 @@ node 0,0 600x36
       node 0,0 30x14 at 68,0
         draw rect 0,0 30x14 fill=#00ffffff radius=0/0/0/0
       node 0,0 30x14 at 102,0
-        draw rect 0,0 30x14 fill=#00ffffff radius=0/0/0/0
-      node 0,0 30x14 at 136,0
-        draw rect 0,0 30x14 fill=#00ffffff radius=0/0/0/0
-      node 0,0 30x14 at 170,0
         draw rect 0,0 30x14 fill=#00ffffff radius=0/0/0/0
     node 0,0 86x6 at 2,16
       draw rect 0,0 86x6 fill=#ffffff0d radius=100/100/100/100

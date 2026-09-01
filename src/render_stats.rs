@@ -62,9 +62,12 @@ pub struct StatsSnapshot {
     pub flatten_timing: PhaseTiming,
     pub gpu_render_timing: PhaseTiming,
     pub cache_paint_timing: PhaseTiming,
-    // Scroll
-    pub scroll_children_total: u64,
-    pub scroll_children_iterated: u64,
+    // The paint window: children offered to it, children it let through, and
+    // the ones it could not narrow because nothing ordered them.
+    pub window_children_total: u64,
+    pub window_children_iterated: u64,
+    pub window_declined_children: u64,
+    pub window_declined_containers: u64,
 }
 
 /// Zero-cost timing macro. Wraps a block with `Instant::now()` / `.elapsed()`
@@ -166,9 +169,11 @@ mod inner {
         flatten_phase: PhaseAccum,
         gpu_render_phase: PhaseAccum,
         cache_paint_phase: PhaseAccum,
-        // Scroll
-        scroll_children_total: u64,
-        scroll_children_iterated: u64,
+        // Paint window
+        window_children_total: u64,
+        window_children_iterated: u64,
+        window_declined_children: u64,
+        window_declined_containers: u64,
         // Report timing
         last_print: Instant,
     }
@@ -195,8 +200,10 @@ mod inner {
                 flatten_phase: PhaseAccum::new(),
                 gpu_render_phase: PhaseAccum::new(),
                 cache_paint_phase: PhaseAccum::new(),
-                scroll_children_total: 0,
-                scroll_children_iterated: 0,
+                window_children_total: 0,
+                window_children_iterated: 0,
+                window_declined_children: 0,
+                window_declined_containers: 0,
                 last_print: Instant::now(),
             }
         }
@@ -221,8 +228,10 @@ mod inner {
             self.flatten_phase.reset();
             self.gpu_render_phase.reset();
             self.cache_paint_phase.reset();
-            self.scroll_children_total = 0;
-            self.scroll_children_iterated = 0;
+            self.window_children_total = 0;
+            self.window_children_iterated = 0;
+            self.window_declined_children = 0;
+            self.window_declined_containers = 0;
             self.last_print = Instant::now();
         }
     }
@@ -323,13 +332,28 @@ mod inner {
         });
     }
 
-    /// Record scroll paint iteration stats.
+    /// Record a container that narrowed its children to the visible rect.
     #[inline]
-    pub fn record_scroll_paint_range(total_children: u64, iterated: u64) {
+    pub fn record_paint_window(total_children: u64, iterated: u64) {
         STATS.with(|s| {
             let mut stats = s.borrow_mut();
-            stats.scroll_children_total += total_children;
-            stats.scroll_children_iterated += iterated;
+            stats.window_children_total += total_children;
+            stats.window_children_iterated += iterated;
+        });
+    }
+
+    /// Record a container that had a rect to narrow to and could not: its
+    /// children are ordered along no axis, so every one of them is examined.
+    ///
+    /// This is the number worth watching. A container in this state looks
+    /// healthy from the outside — it draws the right thing — and pays for the
+    /// whole of its list on every frame that repaints it.
+    #[inline]
+    pub fn record_paint_window_declined(total_children: u64) {
+        STATS.with(|s| {
+            let mut stats = s.borrow_mut();
+            stats.window_declined_children += total_children;
+            stats.window_declined_containers += 1;
         });
     }
 
@@ -357,8 +381,10 @@ mod inner {
                 flatten_timing: stats.flatten_phase.to_timing(),
                 gpu_render_timing: stats.gpu_render_phase.to_timing(),
                 cache_paint_timing: stats.cache_paint_phase.to_timing(),
-                scroll_children_total: stats.scroll_children_total,
-                scroll_children_iterated: stats.scroll_children_iterated,
+                window_children_total: stats.window_children_total,
+                window_children_iterated: stats.window_children_iterated,
+                window_declined_children: stats.window_declined_children,
+                window_declined_containers: stats.window_declined_containers,
             }
         })
     }
@@ -458,11 +484,14 @@ mod inner {
                     ct.avg_us, ct.min_us, ct.max_us,
                 );
 
-                // Scroll stats (only if scroll activity occurred)
-                if stats.scroll_children_total > 0 {
+                // The paint window, and what it could not narrow.
+                if stats.window_children_total > 0 || stats.window_declined_children > 0 {
                     eprintln!(
-                        "  scroll: total_children={} iterated={}",
-                        stats.scroll_children_total, stats.scroll_children_iterated
+                        "  window: offered={} narrowed_to={} | declined={} children in {} containers",
+                        stats.window_children_total,
+                        stats.window_children_iterated,
+                        stats.window_declined_children,
+                        stats.window_declined_containers
                     );
                 }
 
@@ -529,7 +558,11 @@ pub fn record_phase_duration(_phase: Phase, _duration: std::time::Duration) {}
 
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]
-pub fn record_scroll_paint_range(_total_children: u64, _iterated: u64) {}
+pub fn record_paint_window(_total_children: u64, _iterated: u64) {}
+
+#[cfg(not(feature = "render-stats"))]
+#[inline(always)]
+pub fn record_paint_window_declined(_total_children: u64) {}
 
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]
@@ -738,12 +771,25 @@ mod tests {
     }
 
     #[test]
-    fn test_scroll_paint_range() {
+    fn test_paint_window() {
         setup();
-        record_scroll_paint_range(10000, 52);
-        record_scroll_paint_range(10000, 48);
+        record_paint_window(10000, 52);
+        record_paint_window(10000, 48);
         let s = get_stats();
-        assert_eq!(s.scroll_children_total, 20000);
-        assert_eq!(s.scroll_children_iterated, 100);
+        assert_eq!(s.window_children_total, 20000);
+        assert_eq!(s.window_children_iterated, 100);
+    }
+
+    /// A container that could not narrow is counted apart from one whose
+    /// window happened to cover everything. Both used to read as a window.
+    #[test]
+    fn test_paint_window_declined() {
+        setup();
+        record_paint_window(10000, 10000);
+        record_paint_window_declined(10000);
+        let s = get_stats();
+        assert_eq!(s.window_children_iterated, 10000);
+        assert_eq!(s.window_declined_children, 10000);
+        assert_eq!(s.window_declined_containers, 1);
     }
 }

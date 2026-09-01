@@ -1,4 +1,4 @@
-use crate::layout::{Constraints, Size};
+use crate::layout::{Axis, Constraints, Size};
 use crate::renderer::PaintContext;
 use crate::tree::{Tree, WidgetId};
 
@@ -208,6 +208,17 @@ impl Rect {
             y,
             width,
             height,
+        }
+    }
+
+    /// The interval this rect covers on one axis, near edge first.
+    ///
+    /// What a search along an axis compares against, and what deciding
+    /// whether two rects follow one another along it comes down to.
+    pub(crate) fn span(&self, axis: Axis) -> (f32, f32) {
+        match axis {
+            Axis::Horizontal => (self.x, self.x + self.width),
+            Axis::Vertical => (self.y, self.y + self.height),
         }
     }
 
