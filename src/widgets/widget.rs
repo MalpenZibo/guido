@@ -248,6 +248,14 @@ impl Rect {
         }
     }
 
+    /// Grow this rect by `amount` on every side.
+    ///
+    /// What "how far past its bounds does this widget paint" turns into when
+    /// something has to test against it: a shadow's falloff, or the distance a
+    /// transform can carry the box.
+    pub fn outset(&self, amount: f32) -> Self {
+        self.inset(-amount)
+    }
     pub fn intersects(&self, other: &Rect) -> bool {
         self.x < other.x + other.width
             && self.x + self.width > other.x
