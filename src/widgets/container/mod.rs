@@ -26,7 +26,7 @@ use crate::advance_anim;
 use crate::animation::{Animatable, IntoAnimated, Motion};
 use crate::backdrop::BackdropBlur;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
-use crate::layout::{Constraints, Flex, Layout, Length, Size};
+use crate::layout::{Axis, Constraints, Flex, Layout, Length, Size};
 use crate::pivot::Pivot;
 use crate::reactive::{
     IntoSignal, OptionSignalExt, RwSignal, Signal, create_signal, focus_path, with_signal_tracking,
@@ -456,6 +456,20 @@ pub struct Container {
     // Scroll configuration
     pub(super) scroll_axis: ScrollAxis,
     pub(super) scroll_data: Option<Box<ScrollData>>,
+
+    /// The axis the last layout left the children ordered along, if any.
+    ///
+    /// `paint` narrows the children to a cull rect with a binary search, and a
+    /// binary search needs a partitioned slice. Which axis partitions them —
+    /// and whether any does — is a property of what the layout *did*, not of
+    /// what the container was declared with: a `Flex::row()` under a vertical
+    /// scroller orders its children along x, and a layout free to put them
+    /// anywhere orders them along neither.
+    ///
+    /// So it is measured once per layout, where the walk over the children is
+    /// already happening and is off the frame path, rather than asked of
+    /// `Layout` at every paint.
+    pub(super) children_sorted_along: Option<Axis>,
 }
 
 impl Container {
@@ -485,6 +499,7 @@ impl Container {
             anims: None,
             scroll_axis: ScrollAxis::None,
             scroll_data: None,
+            children_sorted_along: None,
         }
     }
 
@@ -1339,6 +1354,8 @@ impl Widget for Container {
             tree.set_baseline(id, child_y + child_baseline);
         }
 
+        self.children_sorted_along = sorted_axis(tree, children);
+
         if self.scroll_axis != ScrollAxis::None {
             let sd = self.scroll_mut();
             sd.scroll_state.content_width = content_size.width + padding.horizontal_total();
@@ -1577,56 +1594,7 @@ impl Widget for Container {
             return;
         }
 
-        // Draw children - each gets its own node with position transform.
-        //
-        // For scrollable containers with a single-axis layout, use binary search
-        // to find the visible range (O(log n)) instead of iterating all children (O(n)).
         let all_children = self.children_source.get();
-
-        let visible_children: &[WidgetId] = if is_scrollable {
-            let sd = self.scroll();
-            match self.scroll_axis {
-                ScrollAxis::Vertical => {
-                    let vp_top = sd.scroll_state.offset_y;
-                    let vp_bottom = vp_top + local_bounds.height;
-                    let first = all_children.partition_point(|&cid| {
-                        tree.get_bounds(cid)
-                            .is_some_and(|b| b.y + b.height <= vp_top)
-                    });
-                    let last = all_children.partition_point(|&cid| {
-                        tree.get_bounds(cid).is_some_and(|b| b.y < vp_bottom)
-                    });
-                    let start = first.saturating_sub(1);
-                    let end = (last + 1).min(all_children.len());
-                    crate::render_stats::record_scroll_paint_range(
-                        all_children.len() as u64,
-                        (end - start) as u64,
-                    );
-                    &all_children[start..end]
-                }
-                ScrollAxis::Horizontal => {
-                    let vp_left = sd.scroll_state.offset_x;
-                    let vp_right = vp_left + local_bounds.width;
-                    let first = all_children.partition_point(|&cid| {
-                        tree.get_bounds(cid)
-                            .is_some_and(|b| b.x + b.width <= vp_left)
-                    });
-                    let last = all_children.partition_point(|&cid| {
-                        tree.get_bounds(cid).is_some_and(|b| b.x < vp_right)
-                    });
-                    let start = first.saturating_sub(1);
-                    let end = (last + 1).min(all_children.len());
-                    crate::render_stats::record_scroll_paint_range(
-                        all_children.len() as u64,
-                        (end - start) as u64,
-                    );
-                    &all_children[start..end]
-                }
-                _ => all_children, // Both/None: fall back to full iteration
-            }
-        } else {
-            all_children
-        };
 
         let scroll_offset = if is_scrollable {
             let sd = self.scroll();
@@ -1637,10 +1605,11 @@ impl Widget for Container {
         paint_children(
             tree,
             ctx,
-            visible_children,
+            all_children,
             &ChildPaintOptions {
                 scroll_offset,
                 cull_rect: effective_cull_rect,
+                children_sorted_along: self.children_sorted_along,
                 // A scroller's cull rect moves under its content, so a
                 // partially visible child has to repaint for its own children
                 // to be culled against the current rect.
@@ -1681,6 +1650,53 @@ impl Widget for Container {
             }
         }
     }
+}
+
+/// The axis `children` came out ordered along, if any.
+///
+/// Ordered means what the binary search in `paint` needs: consecutive children
+/// that do not overlap on that axis, so both of the predicates it searches with
+/// partition the slice. Anything less and `partition_point` answers about
+/// whichever child it happened to probe rather than about the viewport, and a
+/// child sitting in plain view is dropped.
+///
+/// Non-overlap also settles which axis to answer when a layout orders its
+/// children along both: a column's children overlap horizontally and a row's
+/// overlap vertically, so each rules the other axis out and the answer is the
+/// one that narrows.
+///
+/// Bails on the first pair that overlaps on both, so a layout that stacks its
+/// children costs two of them and a list costs the pass that earns it.
+fn sorted_axis(tree: &Tree, children: &[WidgetId]) -> Option<Axis> {
+    // No children are ordered along nothing in particular, and answering an
+    // axis for them would be a claim about nothing.
+    if children.is_empty() {
+        return None;
+    }
+    let (mut vertical, mut horizontal) = (true, true);
+    let (mut bottom, mut right) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+
+    for &child in children {
+        // A child the tree cannot answer for is a child the search cannot
+        // place, and one unplaceable child unpartitions the whole slice.
+        let bounds = tree.get_bounds(child)?;
+        let (top, next_bottom) = bounds.span(Axis::Vertical);
+        let (left, next_right) = bounds.span(Axis::Horizontal);
+        vertical &= top >= bottom;
+        horizontal &= left >= right;
+        if !vertical && !horizontal {
+            return None;
+        }
+        (bottom, right) = (next_bottom, next_right);
+    }
+
+    // The loop returns on the first pair that overlaps on both, so reaching
+    // here means at least one axis survived.
+    Some(if vertical {
+        Axis::Vertical
+    } else {
+        Axis::Horizontal
+    })
 }
 
 /// Declare an animatable property: keep the value's signal, and install

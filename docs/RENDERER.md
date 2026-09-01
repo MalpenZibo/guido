@@ -31,7 +31,7 @@ pub struct RenderNode {
     pub clip: Option<ClipRegion>,            // Clips this node and children
     pub overlay_clip: Option<ClipRegion>,    // Clips only overlay commands
     pub repainted: Cell<bool>,               // true = freshly painted this frame
-    pub partial: bool,                       // Some children were culled (do not cache)
+    pub partial: bool,                       // Some children were not painted (do not cache)
     pub cached_flatten: RefCell<Option<Rc<CachedFlatten>>>, // Cached flatten output
 }
 ```
@@ -49,7 +49,8 @@ to the same node that sits in the frame's render tree:
   cached nodes are shared: `repainted` is cleared once the node's output has
   been cached, and flatten writes `cached_flatten` through a `&RenderNode`.
 - `partial` propagates to ancestors during the cache walk: a subtree that
-  embeds a partially-painted node (culled children) is never cached, so a
+  embeds a partially-painted node — children narrowed away by the visible
+  window, or culled one at a time beneath it — is never cached, so a
   later cache reuse cannot resurrect an incomplete paint. It also invalidates:
   `Tree::clear_cached_paint` drops whatever the last complete paint left, which
   is a picture of the widget as it no longer is — a list that scrolls culls
