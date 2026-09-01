@@ -11,6 +11,11 @@
 //! node, a caption's painted top, the colour of a named text. Those stay where
 //! they are asked about. This is the surface underneath them.
 //!
+//! Below `Harness`, and for the same reason, is the rule that decides whether
+//! a run may rewrite a reference file. It is not about widgets at all; it is
+//! here because both reference harnesses have to read the same copy of it, and
+//! the last time it lived in two places it lived in neither.
+//!
 //! Each test binary compiles its own copy — that is what `mod common;` does —
 //! so a helper only one file uses is dead code in the others.
 #![allow(dead_code)]
@@ -150,7 +155,8 @@ pub enum Blessing {
     Compare,
 }
 
-/// Whether this run may write `exists`, given what the environment asked for.
+/// What to do, given what the environment asked for and whether the
+/// reference is already on disk.
 pub fn blessing(update: bool, rebless: bool, exists: bool) -> Blessing {
     match (update, rebless, exists) {
         // Rewriting is what REBLESS is, and the only thing it is.
@@ -166,7 +172,42 @@ pub fn blessing(update: bool, rebless: bool, exists: bool) -> Blessing {
 }
 
 /// Read the pair for one kind of reference — `"SNAPSHOTS"` or `"GOLDEN"`.
+///
+/// Says so when it declines. Somebody who asked to bless and got silence would
+/// read the pass that follows as the blessing having happened.
 pub fn blessing_from_env(kind: &str, exists: bool) -> Blessing {
-    let set = |prefix: &str| std::env::var_os(format!("{prefix}_{kind}")).is_some();
-    blessing(set("UPDATE"), set("REBLESS"), exists)
+    let asked = |prefix: &str| std::env::var_os(format!("{prefix}_{kind}")).is_some();
+    let update = asked("UPDATE");
+    let decision = blessing(update, asked("REBLESS"), exists);
+    if update && decision == Blessing::Compare {
+        eprintln!(
+            "UPDATE_{kind} declined: this reference already exists, and rewriting one \
+             makes a failing test pass without changing anything back. Read the diff \
+             the comparison is about to print; if the change is intended, that is \
+             REBLESS_{kind}=1 and the `golden-update` label on the pull request."
+        );
+    }
+    decision
+}
+
+/// Write the reference at `path`, if the rule allows it. Returns whether it
+/// wrote, so the caller can fall through to the comparison when it did not.
+///
+/// The writing is here rather than at the two call sites so that "decided it
+/// may write" and "wrote" cannot come apart: a harness that consults the rule
+/// and then writes anyway is the defect this all exists to stop, and it would
+/// read as compliant at both call sites.
+pub fn write_if_blessed(path: &std::path::Path, blessing: Blessing, write: impl FnOnce()) -> bool {
+    match blessing {
+        Blessing::Write => {
+            write();
+            assert!(
+                path.exists(),
+                "blessed {} and it is still not there",
+                path.display()
+            );
+            true
+        }
+        Blessing::Compare => false,
+    }
 }

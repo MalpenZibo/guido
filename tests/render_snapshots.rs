@@ -25,12 +25,15 @@
 //! UPDATE_SNAPSHOTS=1 cargo test --test render_snapshots
 //! ```
 //!
-//! It refuses to overwrite one that already exists. Rewriting after an intended
-//! change is `REBLESS_SNAPSHOTS=1`, which a hook refuses and which a pull
-//! request carries the `golden-update` label to authorise. Read the diff before
-//! rewriting it — that diff *is* the review.
+//! It refuses to overwrite one that already exists — the rule both harnesses
+//! read is `common::blessing`. Rewriting after an intended change is
+//! `REBLESS_SNAPSHOTS=1`, which a hook refuses and which a pull request carries
+//! the `golden-update` label to authorise. Read the diff before rewriting it —
+//! that diff *is* the review.
 
 use std::fmt::Write as _;
+
+mod common;
 
 use guido::layout::Constraints;
 use guido::prelude::*;
@@ -245,8 +248,10 @@ fn assert_snapshot(name: &str, actual: String) {
         .join("tests/snapshots")
         .join(format!("{name}.snap"));
 
-    if std::env::var_os("UPDATE_SNAPSHOTS").is_some() {
+    let blessing = common::blessing_from_env("SNAPSHOTS", path.exists());
+    if common::write_if_blessed(&path, blessing, || {
         std::fs::write(&path, &actual).expect("write snapshot");
+    }) {
         return;
     }
 
@@ -257,8 +262,10 @@ fn assert_snapshot(name: &str, actual: String) {
     if expected != actual {
         panic!(
             "render tree changed for `{name}`.\n\
-             If the change is intended, re-bless with:\n  \
-             UPDATE_SNAPSHOTS=1 cargo test --test render_snapshots\n\n\
+             Read the diff: it is the review. If the change is intended, the \n\
+             rewrite is somebody's decision and the pull request carries the \n\
+             `golden-update` label to say they took it:\n  \
+             REBLESS_SNAPSHOTS=1 cargo test --test render_snapshots\n\n\
              --- expected ---\n{expected}\n--- actual ---\n{actual}"
         );
     }

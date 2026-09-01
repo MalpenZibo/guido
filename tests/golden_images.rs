@@ -62,7 +62,8 @@
 //! Pointed at a reference that already exists, it declines and lets the
 //! comparison run instead — because rewriting a picture that disagrees with the
 //! code makes a failing test pass without changing anything back. That is
-//! `REBLESS_GOLDEN=1`; a hook refuses it, and CI refuses a pull request that
+//! `REBLESS_GOLDEN=1`, and the rule both harnesses read is `common::blessing`;
+//! a hook refuses it, and CI refuses a pull request that
 //! rewrites a reference without the `golden-update` label. So it is always
 //! somebody's decision, taken with the diff in front of them. On failure the
 //! three images (expected, actual, and a map of what moved) are written to
@@ -70,6 +71,8 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+
+mod common;
 
 use guido::layout::Constraints;
 use guido::prelude::*;
@@ -343,7 +346,8 @@ fn diff_image(expected: &Pixels, actual: &Pixels) -> Pixels {
 fn assert_golden(name: &str, adapter: &str, actual: Pixels) {
     let path = golden_path(name);
 
-    if std::env::var_os("UPDATE_GOLDEN").is_some() {
+    let blessing = common::blessing_from_env("GOLDEN", path.exists());
+    if common::write_if_blessed(&path, blessing, || {
         assert!(
             is_software_rasterizer(adapter)
                 || std::env::var_os("GUIDO_GOLDEN_ANY_ADAPTER").is_some(),
@@ -351,12 +355,12 @@ fn assert_golden(name: &str, adapter: &str, actual: Pixels) {
              Goldens are compared against lavapipe in CI, and no two rasterizers \
              antialias an edge the same way, so a golden blessed here would fail \
              there for reasons that have nothing to do with the change.\n\
-             Install lavapipe and re-run with:\n  \
-             VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
-             UPDATE_GOLDEN=1 cargo test --test golden_images"
+             Install lavapipe and re-run under the same variable, on lavapipe:\n  \
+             VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json"
         );
         write_png(&path, &actual);
         eprintln!("blessed {name} ({adapter})");
+    }) {
         return;
     }
 
@@ -429,7 +433,7 @@ fn assert_golden(name: &str, adapter: &str, actual: Pixels) {
              {}\n\
              Images written to {}\n\
              If the change is intended, re-bless on lavapipe with \
-             UPDATE_GOLDEN=1 and put the diff in the pull request — that diff \
+             REBLESS_GOLDEN=1 and put the diff in the pull request — that diff \
              is the review.",
             100.0 * changed as f64 / total,
             first.join("\n"),
