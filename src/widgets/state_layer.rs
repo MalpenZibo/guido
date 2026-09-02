@@ -138,6 +138,12 @@ pub(crate) struct Moves {
 }
 
 impl Moves {
+    /// Whether anything moves at all — the early-out a plain layout box takes,
+    /// and most containers are one.
+    pub(crate) fn any(&self) -> bool {
+        self.translate || self.rotate || self.scale
+    }
+
     pub(crate) fn merge(&mut self, other: Moves) {
         self.translate |= other.translate;
         self.rotate |= other.rotate;

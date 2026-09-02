@@ -1056,6 +1056,86 @@ fn corner_radius_invalidates_paint_only() {
     assert!(!queued.contains(&JobType::Layout), "got {queued:?}");
 }
 
+/// A transform is a paint property and moving a widget must not reflow it —
+/// not the widget, not its siblings, not the page. That has to hold even now
+/// that a parent asks how far a transform can carry a child before deciding
+/// whether to paint it: the answer is refreshed from the Paint job the same
+/// write schedules, in `refresh_paint_bounds`, and never from layout.
+///
+/// Each of the three separately, because they are declared apart and a reach
+/// read under layout tracking for one of them would be invisible in the others.
+#[test]
+fn a_transform_invalidates_paint_only() {
+    for (name, build) in [
+        (
+            "translate",
+            Box::new(|s: RwSignal<f32>| {
+                container()
+                    .width(10.0)
+                    .height(10.0)
+                    .translate(move || Translate::new(s.get(), 0.0))
+            }) as Box<dyn Fn(RwSignal<f32>) -> Container>,
+        ),
+        (
+            "rotate",
+            Box::new(|s: RwSignal<f32>| {
+                container().width(10.0).height(10.0).rotate(move || s.get())
+            }),
+        ),
+        (
+            "scale",
+            Box::new(|s: RwSignal<f32>| {
+                container()
+                    .width(10.0)
+                    .height(10.0)
+                    .scale(move || Scale::uniform(1.0 + s.get()))
+            }),
+        ),
+    ] {
+        let value = create_signal(0.0f32);
+        let mut h = H::new(build(value));
+        h.fit(500.0, 500.0);
+        h.paint();
+
+        let queued = h.jobs_from(|| value.set(30.0));
+        assert!(
+            queued.contains(&JobType::Paint),
+            "{name}: a transform must repaint, got {queued:?}"
+        );
+        assert!(
+            !queued.contains(&JobType::Layout),
+            "{name}: a transform must not reflow anything, got {queued:?}"
+        );
+    }
+}
+
+/// And the same, for a container that has a parent.
+///
+/// A child lays out inside its parent's tracking scope, so a read that does not
+/// suspend tracking registers against *the parent* — the transformed container
+/// stays quiet and its parent reflows instead. The test above cannot see it:
+/// its container is the root, where there is no outer scope to catch the read.
+#[test]
+fn a_transform_does_not_reflow_the_parent_either() {
+    let dx = create_signal(0.0f32);
+    let mut h = H::new(
+        container().layout(Flex::column()).child(
+            container()
+                .width(10.0)
+                .height(10.0)
+                .translate(move || Translate::new(dx.get(), 0.0)),
+        ),
+    );
+    h.fit(500.0, 500.0);
+    h.paint();
+
+    let queued = h.jobs_from(|| dx.set(30.0));
+    assert!(
+        !queued.contains(&JobType::Layout),
+        "a child's transform relaid out its parent, got {queued:?}"
+    );
+}
+
 #[test]
 fn visibility_invalidates_layout() {
     let shown = create_signal(true);
@@ -2700,6 +2780,181 @@ fn a_declared_elevation_change_invalidates_the_reach() {
     pump(&mut h);
     h.fit(100.0, 100.0);
     assert!(h.tree.paint_overflow(h.root) > 0.0);
+}
+
+/// A container that clips does not report the overhang it is clipping away.
+///
+/// A scroller's content runs far past its viewport by design. Counting that as
+/// "how far this widget paints outside itself" would damage a rect the size of
+/// the whole scrolled column on every frame the scroller repaints, and widen
+/// every search above it by the same. What it paints is its own box.
+#[test]
+fn a_clipping_container_does_not_carry_its_content_s_overhang() {
+    let rows: Vec<_> = (0..20)
+        .map(|_| container().width(100.0).height(50.0).background(Color::RED))
+        .collect();
+    let mut clipped = H::new(
+        container()
+            .width(100.0)
+            .height(100.0)
+            .scrollable(ScrollAxis::Vertical)
+            .layout(Flex::column())
+            .children(rows),
+    );
+    clipped.fit(400.0, 400.0);
+
+    assert_eq!(
+        clipped.tree.paint_overflow(clipped.root),
+        0.0,
+        "a scroller reported the height of everything inside it as paint that \
+         lands outside its own box"
+    );
+}
+
+/// And it keeps not carrying it, after a descendant moves.
+///
+/// The clear at layout is one write; the gather that runs whenever any
+/// descendant's reach changes writes the same field. A row with an animating
+/// transform does that every frame, so a scroller that only forgot the overhang
+/// once would have it back on the next one — with its damage rect and every
+/// search above it sized to the whole scrolled column.
+#[test]
+fn a_clipping_container_keeps_not_carrying_it_when_a_child_moves() {
+    let lift = create_signal(0.0f32);
+    let mut rows: Vec<_> = (0..20)
+        .map(|_| container().width(100.0).height(50.0).background(Color::RED))
+        .collect();
+    // The first row, so it is inside the viewport and therefore painted — a
+    // row culled on the first frame holds no paint subscription and its own
+    // write would wake nobody.
+    rows[0] = container()
+        .width(100.0)
+        .height(50.0)
+        .background(Color::BLUE)
+        .translate(move || Translate::new(0.0, -lift.get()));
+
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(100.0)
+            .scrollable(ScrollAxis::Vertical)
+            .layout(Flex::column())
+            .children(rows),
+    );
+    h.fit(400.0, 400.0);
+    // Painted, so the row holds the paint subscription its own write needs.
+    h.paint();
+    assert_eq!(h.tree.paint_overflow(h.root), 0.0);
+
+    // A frame of an animating row, with no layout in between.
+    lift.set(20.0);
+    pump(&mut h);
+
+    assert_eq!(
+        h.tree.paint_overflow(h.root),
+        0.0,
+        "one row moved and the scroller went back to claiming it paints the \
+         whole column outside its own box"
+    );
+}
+
+/// A 40x40 box carried off its laid-out place by `lift` — the smallest thing
+/// whose paint leaves its bounds without anything laying out.
+fn lifted_box(lift: RwSignal<f32>) -> Container {
+    container()
+        .width(40.0)
+        .height(40.0)
+        .background(Color::RED)
+        .translate(move || Translate::new(0.0, -lift.get()))
+}
+
+/// The transform's twin, and the one that proves `refresh_paint_bounds` is
+/// wired at all: the reach has to grow on a Paint job, with no layout run
+/// between the write and the answer.
+///
+/// A shadow's reach is republished by layout, so an elevation test passes
+/// whether or not the Paint-job refresh exists. A transform's is not — layout
+/// never subscribes to it — so this is the only thing standing between the hook
+/// in `process_jobs` and being deleted with the suite still green.
+#[test]
+fn a_declared_transform_change_invalidates_the_reach_without_a_layout() {
+    let lift = create_signal(0.0f32);
+    let mut h = H::new(lifted_box(lift));
+    h.fit(100.0, 100.0);
+    h.paint();
+    assert_eq!(h.tree.paint_overflow(h.root), 0.0);
+
+    lift.set(30.0);
+    let queued = jobs::queued_job_types(h.root);
+    assert!(
+        !queued.contains(&JobType::Layout),
+        "a transform asked for a layout: {queued:?}"
+    );
+
+    // No `fit` between the write and the assertion: the reach has to be current
+    // from the job alone, because the parent narrows to it in the same frame
+    // and nothing lays out in between.
+    pump(&mut h);
+    assert_eq!(
+        h.tree.paint_overflow(h.root),
+        30.0,
+        "the reach did not follow the transform through its Paint job"
+    );
+}
+
+/// A child that is its own relayout boundary moves without its parent laying
+/// out, and the reach still has to reach the parent.
+///
+/// This is what `gather_reach_upward` is for, and the only thing that asks for
+/// it: `publish_paint_reach` gathers a container's children when *it* lays out,
+/// which covers everything except the case where it does not lay out at all. A
+/// fixed width and height make the row a boundary (`is_relayout_boundary_for`),
+/// so `mark_needs_layout` stops there and the parent never re-runs.
+#[test]
+fn a_reach_that_grows_under_a_relayout_boundary_still_reaches_the_parent() {
+    let lift = create_signal(0.0f32);
+    let mut h = H::new(container().layout(Flex::column()).child(lifted_box(lift)));
+    h.fit(200.0, 200.0);
+    h.paint();
+    assert_eq!(h.tree.children_reach(h.root), 0.0);
+
+    lift.set(70.0);
+    pump(&mut h);
+
+    assert_eq!(
+        h.tree.children_reach(h.root),
+        70.0,
+        "the row moved under a relayout boundary and its parent never heard, so \
+         the search that narrows it would drop a row that is on screen"
+    );
+}
+
+/// And one that shrinks lets go again.
+///
+/// Growing upward can be answered by comparison — wider than the parent knows,
+/// so widen it — but shrinking cannot: this child may have been the widest and
+/// the new maximum is whatever the others say. Answering it by comparison alone
+/// would leave a scroller widened by a transform that has long since come to
+/// rest, for as long as it goes without laying out, and a window widened for
+/// nothing is virtualization spent for nothing.
+#[test]
+fn a_reach_that_shrinks_lets_the_parent_narrow_again() {
+    let lift = create_signal(70.0f32);
+    let mut h = H::new(container().layout(Flex::column()).child(lifted_box(lift)));
+    h.fit(200.0, 200.0);
+    h.paint();
+    assert_eq!(h.tree.children_reach(h.root), 70.0);
+
+    // No `fit`: the parent must let go without laying out, because a scroller
+    // that is not being resized never does.
+    lift.set(0.0);
+    pump(&mut h);
+
+    assert_eq!(
+        h.tree.children_reach(h.root),
+        0.0,
+        "the parent stayed widened by a transform that has come to rest"
+    );
 }
 
 // ---------------------------------------------------------------------------

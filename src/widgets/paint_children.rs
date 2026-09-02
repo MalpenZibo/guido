@@ -52,6 +52,11 @@ pub(crate) struct ChildPaintOptions {
     /// whole, however small the cull rect: a binary search over a slice that
     /// is not partitioned answers about whichever child it probed.
     pub children_sorted_along: Option<Axis>,
+    /// The furthest any of these children paints outside its own bounds — a
+    /// shadow's reach, or the distance its own transform can move it. Both
+    /// narrowings grow by this, so a child that draws somewhere other than
+    /// where it was laid out is still reached.
+    pub children_reach: f32,
 }
 
 impl Default for ChildPaintOptions {
@@ -61,6 +66,7 @@ impl Default for ChildPaintOptions {
             cull_rect: None,
             cache_requires_full_visibility: false,
             children_sorted_along: None,
+            children_reach: 0.0,
         }
     }
 }
@@ -101,7 +107,10 @@ fn visible_window<'a>(
         return children;
     };
 
+    // Grown by the widest reach among the children, because the bounds being
+    // searched are where they were laid out and not where they draw.
     let (near, far) = cull.span(axis);
+    let (near, far) = (near - opts.children_reach, far + opts.children_reach);
     let span = |cid: WidgetId| tree.get_bounds(cid).map(|b| b.span(axis));
     let first = children.partition_point(|&cid| span(cid).is_some_and(|(_, f)| f <= near));
     // From `first`, so `last` cannot come out below it however degenerate the
@@ -109,10 +118,11 @@ fn visible_window<'a>(
     let last =
         first + children[first..].partition_point(|&cid| span(cid).is_some_and(|(n, _)| n < far));
 
-    // One either side, because these are laid-out bounds and a child draws
-    // where its own transform puts it. One child of slack is a margin, not a
-    // bound: a translate larger than a child clips against the rect anyway,
-    // which is its own defect and older than this window.
+    // One either side, for the boundary rather than for transforms: the
+    // predicates compare edges with `<=` and `<`, so a child whose edge lands
+    // exactly on the rect can fall either way under float rounding. What a
+    // child's own transform does to where it draws is `children_reach` above,
+    // measured rather than guessed at one child's width.
     let window = &children[first.saturating_sub(1)..(last + 1).min(children.len())];
     crate::render_stats::record_paint_window(children.len() as u64, window.len() as u64);
     if window.len() < children.len() {
@@ -138,12 +148,15 @@ pub(crate) fn paint_children(
         let (child_x, child_y) = (child_bounds.x, child_bounds.y);
         let child_position = Transform::translate(child_x - offset_x, child_y - offset_y);
 
-        // Cull clean children that fall outside the visible rect
+        // Cull clean children that fall outside the visible rect. By the rect
+        // the child can paint into rather than the one it was laid out in: a
+        // shadow falls outside the box that cast it, and a transform moves the
+        // box. Its own reach is what the two have in common.
         if let Some(ref cull) = opts.cull_rect
             && !tree.needs_paint(child_id)
         {
-            let child_rect = Rect::new(child_x, child_y, child_bounds.width, child_bounds.height);
-            if !cull.intersects(&child_rect) {
+            let drawn = child_bounds.outset(tree.paint_overflow(child_id));
+            if !cull.intersects(&drawn) {
                 crate::render_stats::record_paint_child_culled();
                 ctx.mark_partial();
                 continue;

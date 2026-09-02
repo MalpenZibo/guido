@@ -34,7 +34,20 @@ application never names `Transform`: it declares `translate`, `rotate` and
 
 `Widget` has two required methods. Everything else — `event`,
 `advance_animations`, `reconcile_children`, `layout_hints`,
-`register_children` — has a default.
+`register_children`, `refresh_paint_bounds` — has a default.
+
+One of those defaults is worth knowing about if your widget draws outside the
+box it was given. A parent narrows its children to the visible region before
+painting them, and it does that by their laid-out bounds — so a widget that
+paints elsewhere, because it transforms itself or casts something past its
+edges, has to say how far. That is `refresh_paint_bounds`, which reports it with
+`Tree::set_own_paint_reach`. It runs from the paint job rather than from layout,
+so saying it never costs a reflow.
+
+Which pass you publish from follows what your reach depends on. If it moves with
+something layout already tracks — a size, a font — publish it from `layout`,
+which is what the built-in text widgets do for their stroke and shadow. If it
+moves with a paint-only property such as a transform, publish it here.
 
 ```rust,ignore
 struct Bar {

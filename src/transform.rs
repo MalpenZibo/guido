@@ -387,6 +387,47 @@ impl Transform {
         })
     }
 
+    /// This transform as it acts about `pivot` within `bounds`.
+    ///
+    /// A transform is written about the origin and applied about a pivot, and
+    /// resolving the one into the other is what `flatten` does before it draws
+    /// anything. Everything that reasons about transformed geometry ahead of
+    /// the draw — where a clip lands, how far a box can move — has to resolve
+    /// it the same way, so there is one function rather than four
+    /// transcriptions agreeing by prose.
+    #[inline]
+    pub fn about(&self, pivot: crate::pivot::Pivot, bounds: crate::widgets::Rect) -> Self {
+        let (px, py) = pivot.resolve(bounds);
+        self.center_at(px, py)
+    }
+
+    /// The smallest axis-aligned rect containing `rect` once this transform
+    /// has been applied to it.
+    ///
+    /// Under rotation the image of a rect is not a rect, so this is the
+    /// enclosing box: bigger than the shape, never smaller. Everything that
+    /// asks a rect question about transformed geometry — where a clip lands,
+    /// which children a viewport can reach — wants that answer rather than an
+    /// exact one, because being too generous only costs work while being too
+    /// mean loses pixels.
+    #[inline]
+    pub fn map_rect(&self, rect: crate::widgets::Rect) -> crate::widgets::Rect {
+        let (x1, y1) = (rect.x + rect.width, rect.y + rect.height);
+        let corners = [
+            self.transform_point(rect.x, rect.y),
+            self.transform_point(x1, rect.y),
+            self.transform_point(rect.x, y1),
+            self.transform_point(x1, y1),
+        ];
+        let (mut min_x, mut min_y) = (f32::INFINITY, f32::INFINITY);
+        let (mut max_x, mut max_y) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+        for (x, y) in corners {
+            (min_x, min_y) = (min_x.min(x), min_y.min(y));
+            (max_x, max_y) = (max_x.max(x), max_y.max(y));
+        }
+        crate::widgets::Rect::new(min_x, min_y, max_x - min_x, max_y - min_y)
+    }
+
     /// Transform a 2D point by this transform
     #[inline]
     pub fn transform_point(&self, x: f32, y: f32) -> (f32, f32) {

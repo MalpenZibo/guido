@@ -94,26 +94,7 @@ impl FlattenedCommand {
 
     /// The axis-aligned world box containing a rect of this command's own space.
     fn world_aabb(&self, rect: Rect) -> Rect {
-        let corners = [
-            self.world_transform.transform_point(rect.x, rect.y),
-            self.world_transform
-                .transform_point(rect.x + rect.width, rect.y),
-            self.world_transform
-                .transform_point(rect.x, rect.y + rect.height),
-            self.world_transform
-                .transform_point(rect.x + rect.width, rect.y + rect.height),
-        ];
-        let min_x = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
-        let max_x = corners
-            .iter()
-            .map(|c| c.0)
-            .fold(f32::NEG_INFINITY, f32::max);
-        let min_y = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
-        let max_y = corners
-            .iter()
-            .map(|c| c.1)
-            .fold(f32::NEG_INFINITY, f32::max);
-        Rect::new(min_x, min_y, max_x - min_x, max_y - min_y)
+        self.world_transform.map_rect(rect)
     }
 
     /// [`world_rounded_rect`](Self::world_rounded_rect), narrowed to what the
@@ -545,11 +526,11 @@ fn flatten_node(
     // Compute this node's world transform
     let (origin_x, origin_y) = node.pivot.resolve(node.bounds);
 
-    // Compose transforms: parent first, then local centered at origin
+    // Compose transforms: parent first, then local about its own pivot
     let local_centered = if node.local_transform.is_identity() {
         Transform::IDENTITY
     } else {
-        node.local_transform.center_at(origin_x, origin_y)
+        node.local_transform.about(node.pivot, node.bounds)
     };
     let world_transform = parent_world_transform.then(&local_centered);
 
@@ -790,45 +771,16 @@ fn world_bounds(cmd: &FlattenedCommand) -> Option<Rect> {
     ))
 }
 
-/// Compute axis-aligned bounding box from an array of points.
-fn aabb_from_points(points: &[(f32, f32)]) -> Rect {
-    let (min_x, max_x, min_y, max_y) = points.iter().fold(
-        (
-            f32::INFINITY,
-            f32::NEG_INFINITY,
-            f32::INFINITY,
-            f32::NEG_INFINITY,
-        ),
-        |(min_x, max_x, min_y, max_y), &(x, y)| {
-            (min_x.min(x), max_x.max(x), min_y.min(y), max_y.max(y))
-        },
-    );
-    Rect::new(min_x, min_y, max_x - min_x, max_y - min_y)
-}
-
 /// Transform a local clip region to world space (axis-aligned bounding box).
 ///
 /// When the transform includes rotation, the clip becomes the AABB of
 /// the rotated rectangle. This is a conservative approximation that
 /// ensures no clipped content is visible outside the clip region.
 fn transform_clip_to_world(clip: &ClipRegion, transform: &Transform) -> WorldClip {
-    // Transform all 4 corners and compute AABB
-    let corners = [
-        transform.transform_point(clip.rect.x, clip.rect.y),
-        transform.transform_point(clip.rect.x + clip.rect.width, clip.rect.y),
-        transform.transform_point(clip.rect.x, clip.rect.y + clip.rect.height),
-        transform.transform_point(
-            clip.rect.x + clip.rect.width,
-            clip.rect.y + clip.rect.height,
-        ),
-    ];
-
-    // Scale corner radius by transform scale
-    let scale = transform.extract_scale();
-
     WorldClip {
-        rect: aabb_from_points(&corners),
-        corner_radius: clip.corner_radius.scaled(scale),
+        rect: transform.map_rect(clip.rect),
+        // Scale corner radius by transform scale
+        corner_radius: clip.corner_radius.scaled(transform.extract_scale()),
         curvature: clip.curvature,
     }
 }

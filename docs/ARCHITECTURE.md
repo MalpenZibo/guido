@@ -414,6 +414,10 @@ pub trait Widget {
     /// Reconcile dynamic children. Returns true if children changed.
     fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool { false }
 
+    /// Publish how far this widget's paint lands outside its bounds, before
+    /// anything decides whether to paint it. Called from the Paint job.
+    fn refresh_paint_bounds(&self, tree: &mut Tree, id: WidgetId) {}
+
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size;
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse;
