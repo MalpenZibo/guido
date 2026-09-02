@@ -1679,13 +1679,14 @@ impl Widget for Container {
             // Clips the ripples without affecting children.
             ctx.set_overlay_clip(local_bounds, corner_radii, corner_curvature);
 
-            // Once for the frame rather than once per disc, and untracked: the
-            // discs are what carry the colour, so a container with none has
-            // nothing to subscribe for — and a ripple that is running repaints
-            // every frame anyway, which is what keeps the colour current
-            // without a subscription. This sits outside the tracked block above
-            // because that block runs whether or not a ripple exists.
-            let declared = ripple_config.color.get_untracked();
+            // Once for the frame rather than once per disc, and tracked: a
+            // ripple held past its growth stops animating on purpose so the
+            // loop can go quiet — see `Ripple::advance` — so a colour written
+            // while the finger is still down would reach nothing at all
+            // without the subscription. Its own scope rather than the block
+            // above, because that block runs whether or not a disc exists and
+            // this read is already inside the guard that says one does.
+            let declared = with_signal_tracking(id, JobType::Paint, || ripple_config.color.get());
 
             for ripple in ix.ripple.iter() {
                 let opacity = ripple.opacity();
