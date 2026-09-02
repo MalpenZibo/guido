@@ -1455,6 +1455,15 @@ mod tests {
         );
     }
 
+    /// The damage rect a surface root is holding, which every question about
+    /// damage below is asked of.
+    fn partial_damage(tree: &mut Tree, root: WidgetId) -> Rect {
+        match tree.take_damage(root) {
+            DamageRegion::Partial(rect) => rect,
+            other => panic!("expected partial damage, got {other:?}"),
+        }
+    }
+
     /// Build `root -> [a, b]`, both laid out and clean.
     fn two_children_tree() -> (Tree, WidgetId, WidgetId, WidgetId) {
         let mut tree = Tree::new();
@@ -1528,15 +1537,11 @@ mod tests {
             Size::new(10.0, 20.0),
         );
 
-        match tree.take_damage(root) {
-            DamageRegion::Partial(rect) => {
-                assert!(
-                    rect.width >= 40.0,
-                    "damage must cover the old 40px-wide box, got {rect:?}"
-                );
-            }
-            other => panic!("expected partial damage, got {other:?}"),
-        }
+        let rect = partial_damage(&mut tree, root);
+        assert!(
+            rect.width >= 40.0,
+            "damage must cover the old 40px-wide box, got {rect:?}"
+        );
     }
 
     /// Moving a widget damages both where it was and where it lands. Its own
@@ -1547,19 +1552,15 @@ mod tests {
 
         tree.set_origin(a, 0.0, 60.0);
 
-        match tree.take_damage(root) {
-            DamageRegion::Partial(rect) => {
-                assert!(
-                    rect.y <= 0.0,
-                    "damage must reach the old position, got {rect:?}"
-                );
-                assert!(
-                    rect.y + rect.height >= 80.0,
-                    "damage must reach the new position, got {rect:?}"
-                );
-            }
-            other => panic!("expected partial damage, got {other:?}"),
-        }
+        let rect = partial_damage(&mut tree, root);
+        assert!(
+            rect.y <= 0.0,
+            "damage must reach the old position, got {rect:?}"
+        );
+        assert!(
+            rect.y + rect.height >= 80.0,
+            "damage must reach the new position, got {rect:?}"
+        );
         assert!(
             !tree.needs_paint(a),
             "a widget that only moved keeps its cached paint"
@@ -1577,19 +1578,15 @@ mod tests {
 
         tree.mark_needs_paint(a);
 
-        match tree.take_damage(root) {
-            DamageRegion::Partial(rect) => {
-                assert!(
-                    rect.x <= -8.0 && rect.y <= -8.0,
-                    "damage must reach above and left of the widget, got {rect:?}"
-                );
-                assert!(
-                    rect.width >= 40.0 + 16.0 && rect.height >= 20.0 + 16.0,
-                    "and past its far edges, got {rect:?}"
-                );
-            }
-            other => panic!("expected partial damage, got {other:?}"),
-        }
+        let rect = partial_damage(&mut tree, root);
+        assert!(
+            rect.x <= -8.0 && rect.y <= -8.0,
+            "damage must reach above and left of the widget, got {rect:?}"
+        );
+        assert!(
+            rect.width >= 40.0 + 16.0 && rect.height >= 20.0 + 16.0,
+            "and past its far edges, got {rect:?}"
+        );
     }
 
     /// The widest child shrinking is the case the prune must not skip.
@@ -1827,14 +1824,12 @@ mod tests {
         );
 
         tree.mark_needs_paint(card);
-        match tree.take_damage(root) {
-            DamageRegion::Partial(rect) => assert!(
-                rect.x <= 60.0 && rect.y <= 60.0 && rect.width >= 80.0 && rect.height >= 60.0,
-                "the card's shadow is outside the damage rect, so it is left on \
-                 screen as a fringe: got {rect:?}"
-            ),
-            other => panic!("expected partial damage, got {other:?}"),
-        }
+        let rect = partial_damage(&mut tree, root);
+        assert!(
+            rect.x <= 60.0 && rect.y <= 60.0 && rect.width >= 80.0 && rect.height >= 60.0,
+            "the card's shadow is outside the damage rect, so it is left on \
+             screen as a fringe: got {rect:?}"
+        );
     }
 
     #[test]
@@ -1843,12 +1838,8 @@ mod tests {
 
         tree.mark_needs_paint(a);
 
-        match tree.take_damage(root) {
-            DamageRegion::Partial(rect) => {
-                assert_eq!((rect.x, rect.y), (0.0, 0.0));
-                assert_eq!((rect.width, rect.height), (40.0, 20.0));
-            }
-            other => panic!("expected partial damage, got {other:?}"),
-        }
+        let rect = partial_damage(&mut tree, root);
+        assert_eq!((rect.x, rect.y), (0.0, 0.0));
+        assert_eq!((rect.width, rect.height), (40.0, 20.0));
     }
 }
