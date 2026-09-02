@@ -570,6 +570,13 @@ The paint system tracks which widgets need repainting:
   per-surface `DamageRegion` (None/Partial/Full), keyed by the surface's root widget so
   multi-surface apps can't consume each other's damage. Damage is set as pending state
   BEFORE presenting, so it rides the commit that `present()` performs internally.
+- **Vacated rects**: that rect always describes the widget as it is *now*, so anything
+  that makes a widget cover *less* has to name what it is leaving before it changes —
+  `set_origin` and `cache_layout` damage the old rect and then the new one, and
+  `set_own_paint_reach` damages the ring a shrinking reach gives up (a transform coming
+  back to rest, an elevation falling to zero). Without it the buffer is redrawn correctly
+  and the compositor is never told to re-composite the pixels the widget has left, so the
+  old position survives on screen as a fringe.
 - **Incremental flatten**: `RenderNode` caches its flattened commands. Clean subtrees
   (with `repainted == false`) reuse cached commands with a translation offset, skipping
   the full recursive flatten.
