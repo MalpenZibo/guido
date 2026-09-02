@@ -229,6 +229,28 @@ themselves when the task touches them; you do not need to read them up front.
    issue in the same act — nobody opens a merged pull request's body again, and
    a follow-up recorded only there is written down and lost in one motion.
 
+   **What earns one is a bar, not whatever is left over.** The rule above with
+   no threshold is a machine for making issues: fifteen of thirty-six open ones
+   were raised by our own reviews of our own pull requests, and one of those was
+   about the rule that raises them. Ask **who is worse off today, and what would
+   they see** — a caller, a frame, an agent misled by a document — and the
+   answer picks one of three:
+
+   - **Nobody is.** A nit, a tidier spelling, something that would matter only
+     if somebody wrote a test nobody has asked for. It is a sentence in the pull
+     request body, or it is nothing. It is never an issue. If the issue you
+     would write has to say *there is no failing test to write today*, it is
+     this one.
+   - **Somebody is, and the fix belongs under this pull request's own title.**
+     Do it here, however many lines it takes. Size is not the question and never
+     was — a defect at a definition you are already editing is this one.
+   - **Somebody is, and it needs an acceptance criterion this change's test
+     cannot state.** That is the issue: not "too big", which nobody measures,
+     but separately provable.
+
+   You have to be able to name who. "Somebody might one day want to" is the
+   first case.
+
 `/implement <issue>` does all seven.
 
 ## Commits and pull requests

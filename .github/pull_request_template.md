@@ -49,5 +49,10 @@ time. Which example, which compositor, what you saw. Screenshots welcome.
 Anything deliberately out of scope, and why. "Nothing" is a fine answer.
 
 Whatever has to outlive this change gets an issue in the same act; put its
-number here.
+number here. What earns one is a bar, not whatever is left over: ask who is
+worse off today and what they would see. Nobody worse off is a sentence here
+and no issue. Worse off, and it fits under this pull request's title, is
+something you should have done rather than listed. Worse off, and it needs an
+acceptance criterion this change's test cannot state, is the issue. AGENTS.md
+step 7 has the three in full.
 -->

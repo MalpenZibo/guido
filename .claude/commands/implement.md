@@ -120,7 +120,11 @@ Push the branch, `gh pr create`, fill in the template. Link the issue with
 `Closes #$ARGUMENTS`.
 
 Whatever goes under **Left undone** that has to outlive this change gets an
-issue in the same act, and the template gets its number. `AGENTS.md` says why.
+issue in the same act, and the template gets its number. `AGENTS.md` says why —
+and sets the bar for which of them earns one, which is that somebody is worse
+off today and the fix needs an acceptance criterion this change's test cannot
+state. Everything else is a sentence in the body. Do not open an issue for
+something you could have fixed under this pull request's own title.
 
 Then report back, in five lines: what changed, what proves it, what the review
 found, what you looked at by hand, and anything you left undone, why, and

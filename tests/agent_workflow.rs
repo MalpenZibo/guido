@@ -547,3 +547,60 @@ fn what_is_left_undone_is_given_a_home_outside_the_pull_request() {
          question whose answer points past this change"
     );
 }
+
+/// And the rule that says *which* of them earns one.
+///
+/// "Whatever has to outlive this change gets an issue" has no threshold, so
+/// every observation clears it. Measured on 2026-09-02: fifteen of the
+/// thirty-six open issues were raised by our own reviews of our own pull
+/// requests, one of them about the rule that raises them. A workflow whose
+/// output is its own input does not converge.
+///
+/// The reason for the rule is unchanged — a follow-up written only in a merged
+/// body is written down and lost in one motion. What it needed was a bar, and
+/// the bar is a question with three answers rather than a size, because size is
+/// what everybody argues about and nobody measures.
+///
+/// Pinned in the two places an agent reads while deciding: the contract, and
+/// the reviewer's own description of what a note is for. The reviewer is the
+/// one that leaked — it said a note goes in the pull request *or* an issue and
+/// gave no way to choose, which for anything trying to be thorough reads as
+/// "an issue".
+#[test]
+fn an_issue_is_what_clears_a_bar_rather_than_whatever_is_left_over() {
+    const TRIAGE: &str = "worse off";
+
+    let agents = read("AGENTS.md");
+    let reviewer = read(".claude/agents/reviewer.md");
+    let template = read(".github/pull_request_template.md");
+
+    for (name, section) in [
+        (
+            "AGENTS.md's step 7",
+            section_from(&agents, "**Open the pull request**", "\n\n## "),
+        ),
+        (
+            "the template's `Left undone`",
+            section_from(&template, "## Left undone", "\n## "),
+        ),
+        (
+            "the reviewer's `Note` level",
+            section_from(&reviewer, "- **Note.**", "\n\n"),
+        ),
+    ] {
+        assert!(
+            unwrapped(section).contains(TRIAGE),
+            "{name} does not ask who is `{TRIAGE}` today, so nothing separates \
+             the follow-up that earns an issue from the one that is a nit"
+        );
+    }
+
+    // The reviewer used to offer the two homes and no way to pick between
+    // them. That exact phrasing is what the bar replaces, so it must not come
+    // back — a reworded rule elsewhere is survivable, this sentence is not.
+    assert!(
+        !unwrapped(&reviewer).contains("the pull request or an issue"),
+        "the reviewer offers a note both homes and no criterion, which is the \
+         sentence the bar exists to replace"
+    );
+}
