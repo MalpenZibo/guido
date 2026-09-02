@@ -136,7 +136,12 @@ the two speeds can put the disc back where it started, half-grown and already
 invisible.
 
 Both speeds are clamped to a sane range, so a zero or a negative one degrades
-instead of stalling the frame loop:
+instead of stalling the frame loop.
+
+The colour is a `Signal<Color>`, as every other declared value is, so it is
+built through `RippleConfig::with_color` — which takes a value, a closure or a
+signal — rather than assigned as a bare `Color`. The two speeds stay plain
+numbers:
 
 ```rust,ignore
 # extern crate guido;
@@ -144,9 +149,9 @@ instead of stalling the frame loop:
 # fn main() {
 # container()
 .when_pressed(|s| s.ripple_config(RippleConfig {
-    color: Color::rgba(1.0, 1.0, 1.0, 0.3),
     expand_speed: 1.5,   // faster growth
     fade_speed: 1.0,
+    ..RippleConfig::with_color(Color::rgba(1.0, 1.0, 1.0, 0.3))
 }))
 # ;
 # }

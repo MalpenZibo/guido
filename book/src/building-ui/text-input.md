@@ -483,10 +483,11 @@ fn login_form() -> Container {
 text_input(signal: Signal<String>) -> TextInput
 
 impl TextInput {
-    pub fn password(self, enabled: bool) -> Self;
-    pub fn mask_char(self, c: char) -> Self;
+    pub fn password<M>(self, enabled: impl IntoSignal<bool, M>) -> Self;
+    pub fn mask_char<M>(self, c: impl IntoSignal<char, M>) -> Self;
     pub fn autofocus(self) -> Self;
-    pub fn no_caret(self) -> Self;
+    pub fn caret<M>(self, caret: impl IntoSignal<bool, M>) -> Self;
+    pub fn no_caret(self) -> Self;  // Shorthand for caret(false)
     pub fn placeholder<M>(self, text: impl IntoSignal<String, M>) -> Self;
     pub fn on_change<F: Fn(&str) + 'static>(self, callback: F) -> Self;
     pub fn on_submit<F: Fn(&str) + 'static>(self, callback: F) -> Self;
