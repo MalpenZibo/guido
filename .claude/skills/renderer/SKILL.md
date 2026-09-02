@@ -73,10 +73,28 @@ never allocate it.
 
 ## Rendering somewhere other than a screen
 
-`Renderer::render_to_view(view, width, height, commands, layers, clear)` draws a
-frame into any texture. `render()` is that, plus acquiring a swapchain texture
-and presenting. This is what the golden image tests use, and it means anything
-in this pipeline can be tested without a compositor.
+`Renderer::render(target, commands, layers, clear)` takes a `RenderTarget`, and
+a frame lands in one of two places. `RenderTarget::Swapchain` is the
+compositor's: acquired per frame, presented after, and able to fail — `render`
+returns `false` for a lost or outdated swapchain, which is common right after a
+resize. `RenderTarget::Offscreen` is an `OffscreenTarget`, a texture the caller
+owns and nobody shows; it cannot fail that way because it is already there.
+Everything upstream draws the same commands either way.
+
+The offscreen half is behind `#[cfg(any(test, feature = "testing"))]`, so a test
+outside the crate turns on the `testing` feature to reach it. Read a frame back
+with `OffscreenTarget::read_pixel(x, y)`, which owns the row padding wgpu
+requires and the map-then-poll order — written correctly once here rather than
+copied wrongly per caller.
+
+`Renderer::render_to_view(view, width, height, commands, layers, clear)` is the
+layer under both: it draws into a texture view and knows nothing about where the
+view came from. `tests/golden_images.rs` still calls it and builds its own
+target. Everything since goes through `RenderTarget::offscreen(&gpu, width,
+height)` instead — `Headless` in `src/testing.rs` builds one per surface, which
+is what `tests/headless_app.rs` drives without naming it. That is the path to
+follow: it is the same `render` the compositor branch runs, and a third way to
+build a target is how the two drift.
 
 ## Performance
 
