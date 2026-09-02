@@ -12,11 +12,28 @@ declarations do not.**
 
 Reactive: `background`, `gradient`, `backdrop_blur`, `overflow`, `corners`,
 `border`, `translate`, `rotate`, `scale`, `pivot`, `width`, `height`,
-`padding`, `visible`, `elevation`.
+`padding`, `visible`, `elevation` — and beyond `Container`, `Text`'s `wrap`,
+`Image`'s `content_fit`, `TextInput`'s `password`, `mask_char` and `caret`,
+`RippleConfig`'s colour, and the direction a `Flex` is built with.
 
 Structural: `layout`, `child`, `children`, `scrollable`, `scrollbar`,
 `scrollbar_visibility`, `control`, the event handlers — and the *motion* a
 value is declared with, which is the next section.
+
+`autofocus` is the one that looks structural and is neither: it is a one-shot
+consumed at the first layout, so "take focus when this appears" is an event,
+and a signal form would mean something else.
+
+A zero-argument setter naming the off case — `nowrap()`, `no_caret()` — is a
+shorthand for the property beside it (`wrap(false)`, `caret(false)`), not a
+second way to say it. The property is what takes the signal.
+
+**A value read from an event handler is the exception, and it is a real one.**
+`TextInput`'s two clipboard guards ask whether the field masks *now*, untracked,
+rather than reading the copy layout took: an event does not wait for a layout
+pass, so the cached answer would export a secret for the frame after the field
+was told to hide it. Reading a declared value outside layout or paint means
+asking why the cache is not good enough, and saying so where it is read.
 
 An animatable property takes `impl IntoAnimated<T, M>` instead, which is
 everything `IntoSignal` accepts plus a value carrying its own motion:

@@ -123,6 +123,21 @@ text_input(password)
 # }
 ```
 
+Masking is a declared value, so it takes a signal — which is what an eye icon
+beside the field needs. Declaring it rather than rebuilding the input is what
+keeps the caret, the selection and the focus where they were:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let password = create_signal(String::new());
+# let hidden = create_signal(true);
+text_input(password).password(hidden)
+# ;
+# }
+```
+
 By default, characters are masked with `•`. Customize the mask character:
 
 ```rust

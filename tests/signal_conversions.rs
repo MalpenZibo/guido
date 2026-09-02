@@ -81,3 +81,51 @@ fn a_signal_of_the_property_type_is_unaffected() {
     let p = create_signal(Padding::all(4.0));
     let _ = container().corners(c).scale(s).padding(p);
 }
+
+/// The properties that stopped being read once, in all three spellings.
+///
+/// The point of the change was that these take a signal at all; the point of
+/// this test is that they still take the other two. A setter widened to
+/// `impl IntoSignal<T, M>` accepts the value form through the blanket `Into`
+/// impl and the closure form through `IntoVal`'s reflexive one, so nothing has
+/// to be added to `converting_signals!` for a property whose declared type is
+/// the type it is given — but nothing checks that until somebody writes it
+/// down, which is what this is.
+#[test]
+fn the_values_that_became_signals_take_all_three_forms() {
+    let masked = create_signal(true);
+    let mask = create_signal('*');
+    let fit = create_signal(ContentFit::Cover);
+    let wraps = create_signal(false);
+    let axis = create_signal(Axis::Vertical);
+    let hot = create_signal(Color::RED);
+
+    let _ = text("value").wrap(false);
+    let _ = text("closure").wrap(move || wraps.get());
+    let _ = text("signal").wrap(wraps);
+
+    let _ = image("x.png").content_fit(ContentFit::Cover);
+    let _ = image("x.png").content_fit(move || fit.get());
+    let _ = image("x.png").content_fit(fit);
+
+    let _ = text_input(create_signal(String::new()))
+        .password(true)
+        .mask_char('*')
+        .caret(false);
+    let _ = text_input(create_signal(String::new()))
+        .password(move || masked.get())
+        .mask_char(move || mask.get())
+        .caret(move || wraps.get());
+    let _ = text_input(create_signal(String::new()))
+        .password(masked)
+        .mask_char(mask)
+        .caret(wraps);
+
+    let _ = container().layout(Flex::new(Axis::Horizontal));
+    let _ = container().layout(Flex::new(move || axis.get()));
+    let _ = container().layout(Flex::new(axis));
+
+    let _ = container().when_pressed(|s| s.ripple_with_color(Color::RED));
+    let _ = container().when_pressed(move |s| s.ripple_with_color(move || hot.get()));
+    let _ = container().when_pressed(move |s| s.ripple_with_color(hot));
+}
