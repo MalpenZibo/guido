@@ -30,7 +30,7 @@
 
 use super::{Axis, Constraints, CrossAlignment, Layout, MainAlignment, Size};
 use crate::{
-    reactive::{IntoSignal, OptionSignalExt, Signal, create_stored},
+    reactive::{IntoSignal, OptionSignalExt, Signal},
     tree::{Tree, WidgetId},
 };
 
@@ -55,9 +55,9 @@ impl Flex {
     /// Default alignments match CSS Flexbox:
     /// - `main_alignment`: `Start` (CSS `justify-content: flex-start`)
     /// - `cross_alignment`: `Stretch` (CSS `align-items: stretch`)
-    pub fn new(direction: Axis) -> Self {
+    pub fn new<M>(direction: impl IntoSignal<Axis, M>) -> Self {
         Self {
-            direction: create_stored(direction),
+            direction: direction.into_signal(),
             spacing: None,
             main_alignment: None,
             cross_alignment: None,
@@ -425,4 +425,65 @@ impl Layout for Flex {
 /// aligns a baseline-less box among text.
 fn baseline_of(tree: &Tree, id: WidgetId, cross_size: f32) -> f32 {
     tree.baseline(id).unwrap_or(cross_size)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::jobs;
+    use crate::reactive::create_signal;
+    use crate::widgets::container;
+
+    fn frame(tree: &mut Tree, root: WidgetId) {
+        jobs::pump_and_layout(tree, root, Constraints::new(0.0, 0.0, 400.0, 400.0));
+    }
+
+    /// A row becomes a column on a write, with the same widgets in the tree.
+    ///
+    /// The direction has always been held as `Signal<Axis>` and read through it
+    /// on every pass — only `Flex::new`'s signature stood between here and a
+    /// layout that answers to one. Asserted on the children's origins rather
+    /// than on the container's size, because two boxes of the same size in a
+    /// square make the row and the column the same size and only the placement
+    /// tells them apart.
+    #[test]
+    fn a_row_becomes_a_column_when_its_direction_says_so() {
+        let horizontal = create_signal(true);
+        let axis = move || {
+            if horizontal.get() {
+                Axis::Horizontal
+            } else {
+                Axis::Vertical
+            }
+        };
+
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(container().layout(Flex::new(axis)).children(
+            vec![
+                container().width(20.0).height(20.0),
+                container().width(20.0).height(20.0),
+            ],
+        )));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        frame(&mut tree, root);
+        let kids = tree.get_children(root).to_vec();
+        assert_eq!(kids.len(), 2, "two children, laid out");
+        let second = tree.get_origin(kids[1]).expect("laid out");
+        assert!(
+            second.0 > 0.0 && second.1 == 0.0,
+            "a row puts the second child to the right, got {second:?}"
+        );
+
+        horizontal.set(false);
+        frame(&mut tree, root);
+
+        let same_kids = tree.get_children(root).to_vec();
+        assert_eq!(same_kids, kids, "the children were rebuilt, not relaid out");
+        let second = tree.get_origin(kids[1]).expect("laid out");
+        assert!(
+            second.1 > 0.0 && second.0 == 0.0,
+            "a column puts the second child below, got {second:?}"
+        );
+    }
 }

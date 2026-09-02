@@ -545,6 +545,35 @@ pub(crate) fn queued_job_types(widget_id: WidgetId) -> Vec<JobType> {
     })
 }
 
+/// Run everything a signal write queued for `root`'s surface, then lay it out.
+///
+/// The drain is what turns a write into `needs_layout` on the widget that read
+/// the signal — and, because `mark_needs_layout` walks to the relayout
+/// boundary, on the ancestors that have to descend to reach it. Skip it and
+/// every container takes its unchanged-constraints early-out, so nothing below
+/// is asked to lay out again and the test measures the cache instead of the
+/// resolution.
+///
+/// Here rather than in each `mod tests` that wants it: five of them had written
+/// this out, and one said so in its own comment, which is a duplicate
+/// cross-referencing a duplicate.
+#[cfg(test)]
+pub(crate) fn pump_and_layout(
+    tree: &mut Tree,
+    root: WidgetId,
+    constraints: crate::layout::Constraints,
+) -> Option<crate::layout::Size> {
+    let roots: rustc_hash::FxHashSet<WidgetId> = [root].into_iter().collect();
+    distribute_jobs(tree, &roots);
+    let drained = drain_surface_jobs(root);
+    let mut layout_roots = Vec::new();
+    process_jobs(&drained, tree, &mut layout_roots);
+    recycle_job_buffer(drained);
+    recycle_job_buffer(drain_orphan_jobs());
+
+    tree.with_widget_mut(root, |w, id, t| w.layout(t, id, constraints))
+}
+
 /// Forget every scheduled job (for testing).
 #[cfg(test)]
 pub(crate) fn clear_scheduled_jobs() {
