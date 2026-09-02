@@ -2697,6 +2697,62 @@ fn a_falling_elevation_animates_down_instead_of_snapping() {
     assert_eq!(shadow_count(&h.paint()), 0, "and settles flat");
 }
 
+/// An elevation that goes flat damages the ring the shadow gave up, whichever
+/// line gets there first.
+///
+/// A shrinking reach vacates a ring that a rect built from the *new* reach
+/// stops short of. Two separate things cover it here, and the point of this
+/// test is that it does not care which:
+///
+/// - `Container::layout` calls `cache_layout` before `publish_paint_reach`, so
+///   the mark happens while the old reach is still standing.
+/// - `Tree::set_own_paint_reach` damages the ring itself when the reach shrinks.
+///
+/// So this is not what proves that fix — an elevation never takes the path the
+/// fix was written for, which is the Paint job (`refresh_paint_bounds` shrinks
+/// the reach, `mark_needs_paint` follows), and that is watched at the `Tree`
+/// level. What this says is that the *outcome* holds for a real elevation on a
+/// real container, and keeps holding if either of the two ever goes away: swap
+/// the two lines in `layout` and the setter still covers it, take the setter's
+/// damage out and the order still does.
+#[test]
+fn an_elevation_going_flat_damages_the_ring_the_shadow_gave_up() {
+    let level = create_signal(8.0f32);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .elevation(move || level.get()),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    let lifted = h.tree.paint_overflow(h.root);
+    assert!(lifted > 0.0, "a lifted card has to reach past its box");
+    let ring = h.tree.get_bounds(h.root).expect("laid out").outset(lifted);
+    let _ = h.tree.take_damage(h.root);
+
+    level.set(0.0);
+    pump(&mut h);
+    h.fit(100.0, 100.0);
+    assert_eq!(
+        h.tree.paint_overflow(h.root),
+        0.0,
+        "the shadow is what this frame gives up"
+    );
+
+    match h.tree.take_damage(h.root) {
+        crate::tree::DamageRegion::Partial(rect) => assert_eq!(
+            ring.outset_beyond(rect),
+            0.0,
+            "the frame that flattens the shadow damages {rect:?}, so the ring \
+             it cast at {ring:?} is left on screen"
+        ),
+        other => panic!("expected partial damage, got {other:?}"),
+    }
+}
+
 /// The clamp the descent above must not trip is still doing its job.
 ///
 /// A spring keeps its momentum across a retarget, so hover flicker pumps it:
