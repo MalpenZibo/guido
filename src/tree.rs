@@ -1882,6 +1882,44 @@ mod tests {
         (tree, root, child)
     }
 
+    /// A reach that shrinks without moving the union vacates nothing, and so
+    /// damages nothing.
+    ///
+    /// The guard is `after < before`, and equality is the boundary it turns on.
+    /// A widget whose children already reach further than it does can drop its
+    /// own reach to nothing without a pixel changing hands — `paint_overflow`
+    /// answers the children's number before and after — so a rect damaged here
+    /// would be a rect re-composited for no reason, on every frame of the
+    /// return leg of every spring under a wider sibling.
+    ///
+    /// Reading `<=` instead is what this refuses. Nothing else does: the two
+    /// spellings agree everywhere except exactly here.
+    #[test]
+    fn a_reach_that_shrinks_under_its_children_damages_nothing() {
+        let (mut tree, root, child) = inset_child();
+
+        // The child reaches 90 past the root's own box, so the root's union is
+        // the child's from here on.
+        tree.set_own_paint_reach(child, 100.0);
+        assert_eq!(tree.children_outset(root), 90.0, "the setup, not the claim");
+        tree.set_own_paint_reach(root, 30.0);
+        let _ = tree.take_damage(root);
+
+        let held = tree.paint_overflow(root);
+        tree.set_own_paint_reach(root, 10.0);
+        assert_eq!(
+            tree.paint_overflow(root),
+            held,
+            "the union has to be the children's on both sides, or this asks \
+             nothing"
+        );
+
+        assert!(
+            matches!(tree.take_damage(root), DamageRegion::None),
+            "nothing was vacated, so nothing should have been damaged"
+        );
+    }
+
     /// A transform carries a widget away from its box and then back, and the
     /// frame it comes back on has to name the pixels it is leaving.
     ///
