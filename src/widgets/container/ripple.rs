@@ -339,7 +339,6 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::widgets::Color;
 
     fn cfg() -> RippleConfig {
         RippleConfig::default()
@@ -498,9 +497,9 @@ mod tests {
     fn an_impossible_speed_does_not_stall_or_invert_the_effect() {
         for (expand, fade) in [(0.0, 0.0), (-2.0, -2.0), (f32::NAN, f32::INFINITY)] {
             let config = RippleConfig {
-                color: Color::WHITE,
                 expand_speed: expand,
                 fade_speed: fade,
+                ..Default::default()
             };
             let t0 = Instant::now();
             let mut state = RippleState::new();

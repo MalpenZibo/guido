@@ -1379,6 +1379,76 @@ fn a_press_held_for_a_named_time_has_grown_by_a_named_amount() {
     );
 }
 
+/// The colour of the first overlay disc, which is the ripple.
+fn painted_ripple_color(h: &mut H) -> Option<Color> {
+    h.paint()
+        .overlay_commands
+        .iter()
+        .find_map(|cmd| match &**cmd {
+            DrawCommand::Circle { color, .. } => Some(*color),
+            _ => None,
+        })
+}
+
+/// A ripple's colour is declared, so a theme switch reaches it.
+///
+/// The one colour that animates under a finger was the one frozen at build
+/// time: `RippleConfig::color` was a `Color` where every other `StateStyle`
+/// setter took a signal. Now it is a `Signal<Color>`, as `BorderOverride`'s
+/// halves are, and the two speeds beside it stay plain.
+///
+/// Asserted on the drawn disc, and on its hue rather than its alpha, because
+/// the alpha is multiplied by the ripple's own opacity and falls as the disc
+/// fades — the hue is what the declaration decides.
+///
+/// What this cannot tell apart, and no test can: whether the read subscribes.
+/// A ripple only has a colour worth changing while it is running, and a running
+/// ripple repaints on every frame anyway — so the disc would follow the signal
+/// even if paint read it untracked. What is pinned here is the half that was
+/// actually broken: the colour is read per frame rather than captured when the
+/// state layer was declared.
+#[test]
+fn a_ripple_takes_the_colour_it_is_given_now() {
+    let hot = create_signal(Color::rgba(1.0, 0.0, 0.0, 0.4));
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(100.0)
+            .when_pressed(move |s: StateStyle| s.ripple_with_color(hot))
+            .on_click(|| {}),
+    );
+    h.fit(400.0, 400.0);
+
+    let t0 = std::time::Instant::now() - std::time::Duration::from_secs(60);
+    send_at(&mut h, t0, Event::mouse_down(50.0, 50.0, MouseButton::Left));
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(8),
+        400.0,
+        400.0,
+    );
+
+    let red = painted_ripple_color(&mut h).expect("the press starts a ripple");
+    assert!(
+        red.r > 0.9 && red.g < 0.1,
+        "the declared colour is what the disc is drawn with, got {red:?}"
+    );
+
+    hot.set(Color::rgba(0.0, 0.0, 1.0, 0.4));
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(16),
+        400.0,
+        400.0,
+    );
+
+    let blue = painted_ripple_color(&mut h).expect("the ripple is still running");
+    assert!(
+        blue.b > 0.9 && blue.r < 0.1,
+        "the ripple kept the colour it was built with, got {blue:?}"
+    );
+}
+
 /// Lay out, run the queued jobs, paint, and report the first text colour.
 fn painted_text_color(h: &mut H) -> Color {
     pump(h);

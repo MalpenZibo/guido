@@ -14,15 +14,20 @@
 //!     .child(text("Interactive button"))
 //! ```
 
-use crate::reactive::{IntoSignal, Signal};
+use crate::reactive::{IntoSignal, Signal, create_stored};
 use crate::transform::{Scale, Translate};
 use crate::widgets::Color;
 
 /// Configuration for ripple effect animation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy)]
 pub struct RippleConfig {
-    /// Color of the ripple (usually semi-transparent white)
-    pub color: Color,
+    /// Color of the ripple (usually semi-transparent white).
+    ///
+    /// A signal, as `BorderOverride`'s halves are, so a theme switch reaches the
+    /// one colour that animates under a finger. The two speeds beside it stay
+    /// plain: nobody themes how fast a ripple expands, and a signal there would
+    /// be a guess at a caller that does not exist.
+    pub color: Signal<Color>,
     /// Speed multiplier for ripple expansion (higher = faster)
     pub expand_speed: f32,
     /// Speed multiplier for ripple fade out (higher = faster)
@@ -32,7 +37,7 @@ pub struct RippleConfig {
 impl Default for RippleConfig {
     fn default() -> Self {
         Self {
-            color: Color::rgba(1.0, 1.0, 1.0, 0.3),
+            color: create_stored(Color::rgba(1.0, 1.0, 1.0, 0.3)),
             expand_speed: 1.0,
             fade_speed: 1.0,
         }
@@ -46,10 +51,14 @@ impl RippleConfig {
     }
 
     /// Create a ripple config with a custom color.
-    pub fn with_color(color: Color) -> Self {
+    pub fn with_color<M>(color: impl IntoSignal<Color, M>) -> Self {
+        // The speeds spelled out rather than `..Default::default()`, which now
+        // builds a stored signal for the colour and drops it — and a dropped
+        // `Signal` frees nothing, since the slot lives as long as its owner.
         Self {
-            color,
-            ..Default::default()
+            color: color.into_signal(),
+            expand_speed: 1.0,
+            fade_speed: 1.0,
         }
     }
 }
@@ -330,7 +339,7 @@ impl StateStyle {
     ///     .when_pressed(|s| s.ripple_with_color(Color::rgba(1.0, 0.5, 0.0, 0.3)))
     ///     .child(text("Orange ripple"))
     /// ```
-    pub fn ripple_with_color(mut self, color: Color) -> Self {
+    pub fn ripple_with_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
         self.ripple = Some(RippleConfig::with_color(color));
         self
     }

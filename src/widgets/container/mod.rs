@@ -344,7 +344,7 @@ impl InteractionState {
             .iter()
             .rev()
             .find(|(when, s)| matches!(when, StateWhen::Pressed) && s.ripple.is_some())
-            .and_then(|(_, s)| s.ripple.clone())
+            .and_then(|(_, s)| s.ripple)
     }
 
     /// Whether the layer is active right now. Reading this is what subscribes
@@ -1679,6 +1679,14 @@ impl Widget for Container {
             // Clips the ripples without affecting children.
             ctx.set_overlay_clip(local_bounds, corner_radii, corner_curvature);
 
+            // Once for the frame rather than once per disc, and untracked: the
+            // discs are what carry the colour, so a container with none has
+            // nothing to subscribe for — and a ripple that is running repaints
+            // every frame anyway, which is what keeps the colour current
+            // without a subscription. This sits outside the tracked block above
+            // because that block runs whether or not a ripple exists.
+            let declared = ripple_config.color.get_untracked();
+
             for ripple in ix.ripple.iter() {
                 let opacity = ripple.opacity();
                 if opacity <= 0.0 {
@@ -1687,12 +1695,8 @@ impl Widget for Container {
                 let (center_x, center_y) = ripple.center(bounds.width, bounds.height);
                 let radius = ripple.radius(bounds.width, bounds.height);
 
-                let ripple_color = Color::rgba(
-                    ripple_config.color.r,
-                    ripple_config.color.g,
-                    ripple_config.color.b,
-                    ripple_config.color.a * opacity,
-                );
+                let ripple_color =
+                    Color::rgba(declared.r, declared.g, declared.b, declared.a * opacity);
 
                 ctx.draw_overlay_circle(center_x, center_y, radius, ripple_color);
             }
