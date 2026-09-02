@@ -503,6 +503,11 @@ impl Tree {
     /// carried outside it reports nothing, an ancestor narrowing by laid-out
     /// bounds drops the row, and the visible box goes with it. Flutter and
     /// Blink union descendant paint bounds up the tree for the same reason.
+    ///
+    /// A reach that shrinks damages the ring it is vacating before it goes, on
+    /// the same contract as `set_origin`: the rect a repaint reports is built
+    /// from the reach the widget has *now*, so nothing else would ever name
+    /// the pixels it painted a frame ago.
     pub fn set_own_paint_reach(&mut self, id: WidgetId, reach: f32) {
         let Some(idx) = self.get_dense_index(id) else {
             return;
@@ -515,9 +520,20 @@ impl Tree {
         // reads `paint_overflow`, so a widget whose children already reach
         // further has moved nothing anyone can see, and the walk above it —
         // whose shrink path re-measures siblings — is pure cost.
-        let before = self.paint_overflow(id);
+        let before = self.paint_overflow_from(self.dense[idx].own_paint_reach, idx);
+        let after = self.paint_overflow_from(reach, idx);
+        // A reach that shrinks vacates the ring between the two, and the rect
+        // built from the new one stops short of it. Damaged before the write,
+        // while the old reach is still what this widget answers — the same
+        // shape `set_origin` uses for the geometry it owns, and for the same
+        // reason. A reach that *grows* needs none of it: the mark that follows
+        // builds a rect from the wider value, and it contains the narrower one.
+        if after < before
+            && let Some((root, vacated)) = self.surface_relative_bounds_and_root(id)
+        {
+            self.expand_damage_rect(root, vacated);
+        }
         self.dense[idx].own_paint_reach = reach;
-        let after = self.paint_overflow(id);
         if before == after {
             return;
         }
@@ -712,10 +728,14 @@ impl Tree {
     /// somewhere other than where it was laid out.
     pub(crate) fn paint_overflow(&self, id: WidgetId) -> f32 {
         self.get_dense_index(id).map_or(0.0, |idx| {
-            self.dense[idx]
-                .own_paint_reach
-                .max(self.dense[idx].children_outset)
+            self.paint_overflow_from(self.dense[idx].own_paint_reach, idx)
         })
+    }
+
+    /// The same, for a reach the caller names — which is how a write asks what
+    /// its own answer is about to become while the old one is still standing.
+    fn paint_overflow_from(&self, reach: f32, idx: usize) -> f32 {
+        reach.max(self.dense[idx].children_outset)
     }
 
     /// Get the children of a widget (returns a slice to avoid heap allocation).
@@ -1841,5 +1861,88 @@ mod tests {
         let rect = partial_damage(&mut tree, root);
         assert_eq!((rect.x, rect.y), (0.0, 0.0));
         assert_eq!((rect.width, rect.height), (40.0, 20.0));
+    }
+
+    /// A 50x50 child inset in a 200x200 root, with its damage taken and its
+    /// paint flags cleared — the shape both questions below are asked of.
+    fn inset_child() -> (Tree, WidgetId, WidgetId) {
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(MockWidget::new()));
+        let child = tree.register(Box::new(MockWidget::new()));
+        tree.set_parent(child, root);
+
+        let c = Constraints::new(0.0, 0.0, 200.0, 200.0);
+        tree.cache_layout(root, c, Size::new(200.0, 200.0));
+        tree.cache_layout(child, c, Size::new(50.0, 50.0));
+        tree.set_origin(child, 10.0, 10.0);
+        for id in [root, child] {
+            tree.clear_needs_paint(id);
+        }
+        let _ = tree.take_damage(root);
+        (tree, root, child)
+    }
+
+    /// A transform carries a widget away from its box and then back, and the
+    /// frame it comes back on has to name the pixels it is leaving.
+    ///
+    /// The outbound frame damages where the widget went, because the reach is
+    /// refreshed before the rect is built and the rect is built from the reach.
+    /// The return frame is refreshed the same way and reports the widget's own
+    /// 50x50 box — so the pixels at its old position are never handed to
+    /// `wl_surface.damage_buffer` and the compositor leaves the widget there.
+    #[test]
+    fn damage_covers_where_a_transform_came_back_from() {
+        let (mut tree, root, child) = inset_child();
+
+        // Out: a translate of 100 reaches 100 past every edge.
+        tree.set_own_paint_reach(child, 100.0);
+        tree.mark_needs_paint(child);
+        let went = partial_damage(&mut tree, root);
+        assert_eq!(
+            Rect::new(10.0, 110.0, 50.0, 50.0).outset_beyond(went),
+            0.0,
+            "the outbound frame does not even cover where it went: {went:?}"
+        );
+
+        tree.clear_needs_paint(child);
+        tree.clear_needs_paint(root);
+
+        // Back to rest, on the frame after.
+        tree.set_own_paint_reach(child, 0.0);
+        tree.mark_needs_paint(child);
+        let came_back = partial_damage(&mut tree, root);
+        assert_eq!(
+            went.outset_beyond(came_back),
+            0.0,
+            "the return frame damages {came_back:?}, which leaves the pixels \
+             the widget occupied at {went:?} on screen as a fringe"
+        );
+    }
+
+    /// The same defect without a transform anywhere near it.
+    ///
+    /// An elevation falling to nothing shrinks the same reach by the same
+    /// route, and predates transforms contributing to it at all. Here so the
+    /// fix is not made transform-shaped when the defect is not.
+    #[test]
+    fn damage_covers_the_shadow_an_elevation_drop_leaves_behind() {
+        let (mut tree, root, child) = inset_child();
+
+        tree.set_own_paint_reach(child, 8.0);
+        tree.mark_needs_paint(child);
+        let with_shadow = partial_damage(&mut tree, root);
+
+        tree.clear_needs_paint(child);
+        tree.clear_needs_paint(root);
+
+        tree.set_own_paint_reach(child, 0.0);
+        tree.mark_needs_paint(child);
+        let without = partial_damage(&mut tree, root);
+        assert_eq!(
+            with_shadow.outset_beyond(without),
+            0.0,
+            "the frame that drops the shadow damages {without:?}, so the ring \
+             it cast at {with_shadow:?} stays on screen"
+        );
     }
 }
