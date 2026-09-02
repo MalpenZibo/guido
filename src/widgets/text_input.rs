@@ -230,12 +230,17 @@ pub struct TextInput {
     cached_font_weight: FontWeight,
 
     // Password mode
-    is_password: bool,
-    mask_char: char,
+    password: Option<Signal<bool>>,
+    /// What `password` said when layout last read it, which is what the masked
+    /// display and its measurements were built from.
+    cached_password: bool,
+    mask_char: Option<Signal<char>>,
+    cached_mask_char: char,
 
     /// Whether a caret is drawn at all. Off costs nothing: no caret, no blink,
     /// nothing to wake the loop for.
-    caret: bool,
+    caret: Option<Signal<bool>>,
+    cached_caret: bool,
 
     /// Handle for application code to reach this input — to focus it, mostly.
     widget_ref: Option<WidgetRef>,
@@ -305,9 +310,12 @@ impl TextInput {
             cached_font_size: 14.0,
             cached_font_family: default_family,
             cached_font_weight: FontWeight::NORMAL,
-            is_password: false,
-            mask_char: '•',
-            caret: true,
+            password: None,
+            cached_password: false,
+            mask_char: None,
+            cached_mask_char: '•',
+            caret: None,
+            cached_caret: true,
             widget_ref: None,
             placeholder: None,
             autofocus_pending: false,
@@ -370,14 +378,14 @@ impl TextInput {
     }
 
     /// Enable password mode (masks text with bullet characters)
-    pub fn password(mut self, enabled: bool) -> Self {
-        self.is_password = enabled;
+    pub fn password<M>(mut self, enabled: impl IntoSignal<bool, M>) -> Self {
+        self.password = Some(enabled.into_signal());
         self
     }
 
     /// Set custom mask character for password mode (default: '•')
-    pub fn mask_char(mut self, c: char) -> Self {
-        self.mask_char = c;
+    pub fn mask_char<M>(mut self, c: impl IntoSignal<char, M>) -> Self {
+        self.mask_char = Some(c.into_signal());
         self
     }
 
@@ -420,8 +428,17 @@ impl TextInput {
     /// It is also the cheapest field there is. A blinking caret is the one thing
     /// a still screen redraws on its own, twice a second, forever; without it an
     /// idle surface wakes the loop for nothing at all.
-    pub fn no_caret(mut self) -> Self {
-        self.caret = false;
+    pub fn no_caret(self) -> Self {
+        self.caret(false)
+    }
+
+    /// Whether a caret is drawn at all.
+    ///
+    /// The property [`no_caret`](Self::no_caret) is the shorthand for. Read
+    /// where the rest of the declared values are read, so a field can be told
+    /// to stop drawing one without being rebuilt and losing its focus.
+    pub fn caret<M>(mut self, caret: impl IntoSignal<bool, M>) -> Self {
+        self.caret = Some(caret.into_signal());
         self
     }
 
@@ -461,11 +478,27 @@ impl TextInput {
         self
     }
 
+    /// Whether this field masks its contents **right now**.
+    ///
+    /// Asked by the two guards that refuse to export a secret, and they run
+    /// from event handling rather than from layout — so they read the signal
+    /// itself rather than `cached_password`, which is only as fresh as the last
+    /// pass. A field switched to masked between two frames must refuse the very
+    /// next Ctrl+C, not the one after it.
+    ///
+    /// Untracked on purpose: an event handler is not a tracking scope, and
+    /// subscribing here would tie a copy to a keystroke.
+    fn masks_now(&self) -> bool {
+        self.password.get_or_untracked(false)
+    }
+
     /// Get the display text (masked if password mode), using cache when clean
     fn display_text(&mut self) -> &str {
         if self.display_text_dirty {
-            self.cached_display_text = if self.is_password {
-                self.mask_char.to_string().repeat(self.cached_char_count)
+            self.cached_display_text = if self.cached_password {
+                self.cached_mask_char
+                    .to_string()
+                    .repeat(self.cached_char_count)
             } else {
                 self.cached_value.clone()
             };
@@ -545,6 +578,24 @@ impl TextInput {
         let (new_value, new_font_size, new_font_family, new_font_weight, overflow) =
             with_signal_tracking(id, JobType::Layout, || {
                 let style = self.resolved_text_style(tree, id);
+
+                // Assigned here rather than returned, as the font metrics are:
+                // the rule in this function is that a value comes back through
+                // the tuple only when it is compared against its cache below to
+                // raise a dirty flag. These three raise their own or none.
+                self.cached_caret = self.caret.get_or(true);
+                let password = self.password.get_or(false);
+                let mask_char = self.mask_char.get_or('•');
+                if password != self.cached_password || mask_char != self.cached_mask_char {
+                    // Both feed `display_text`, and the masked string is what
+                    // the measurements are taken from, so either changing
+                    // invalidates the same two caches a new value does.
+                    self.cached_password = password;
+                    self.cached_mask_char = mask_char;
+                    self.display_text_dirty = true;
+                    self.measurements_dirty = true;
+                }
+
                 (
                     self.value.get(),
                     style.font_size.get_or(14.0),
@@ -595,7 +646,7 @@ impl TextInput {
     /// A focused field is the normal state of a lock screen, and that ran all
     /// night.
     fn update_cursor_blink(&mut self, id: WidgetId, now: Instant) -> bool {
-        if !self.caret || !has_focus(id) {
+        if !self.cached_caret || !has_focus(id) {
             return false;
         }
         let period = Duration::from_millis(CURSOR_BLINK_MS);
@@ -880,7 +931,7 @@ impl TextInput {
     /// theatre banking sites are mocked for: it stops password managers, not
     /// attackers, and pushes people towards passwords they can type.
     fn exportable_selection(&self) -> Option<String> {
-        if self.is_password {
+        if self.masks_now() {
             return None;
         }
         self.get_selected_text()
@@ -898,7 +949,7 @@ impl TextInput {
         // A cut that cannot copy is not a cut. Refusing the gesture outright is
         // what GtkPasswordEntry does, and it keeps Ctrl+X from quietly becoming
         // a delete while the user believes the clipboard was filled.
-        if self.is_password {
+        if self.masks_now() {
             return;
         }
         if self.selection.has_selection() {
@@ -1251,7 +1302,7 @@ impl Widget for TextInput {
         // `self.caret` gates the *drawing*, not only the blink: stopping the blink
         // leaves `cursor_visible` at whatever it last was — true, from the
         // constructor — and a field asked for no caret got a permanent one.
-        if self.caret && is_focused {
+        if self.cached_caret && is_focused {
             // The toggle happens in `advance_animations`, and this is what asks
             // for the wake that runs it. It has to be here, not at the moment
             // focus arrives: focus comes from a click, from `autofocus`, or from
@@ -1506,6 +1557,178 @@ mod tests {
         );
     }
 
+    /// A field inside a container, laid out from the container, focused.
+    ///
+    /// The container is what makes these tests about *reactivity* rather than
+    /// about plumbing. A `TextInput` re-runs its own layout on every call, so a
+    /// value read without tracking still reaches a second direct `layout(..)`
+    /// and the test passes while nothing subscribes. A container takes its
+    /// unchanged-constraints early-out and never asks its children again, so
+    /// the second pass reaches the field only if the write marked it.
+    fn field_in_container(input: TextInput) -> (Tree, WidgetId, WidgetId) {
+        clear_pending_jobs();
+        clear_scheduled_jobs();
+        crate::reactive::focus::clear_focus();
+
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(crate::widgets::container().child(input)));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        let id = tree.get_children(root)[0];
+        relayout(&mut tree, root);
+        request_focus(&tree, id);
+        clear_pending_jobs();
+        (tree, root, id)
+    }
+
+    /// Re-lay out from `root` after draining the jobs a signal write queued.
+    ///
+    /// The drain is what turns a write into `needs_layout` on the widget that
+    /// read it; without it the second pass measures the cache.
+    fn relayout(tree: &mut Tree, root: WidgetId) {
+        crate::jobs::pump_and_layout(tree, root, Constraints::new(0.0, 0.0, 200.0, 40.0));
+    }
+
+    /// Put the caret at the end, which is where its x becomes a measurement of
+    /// the displayed text rather than a constant zero.
+    fn caret_to_end(tree: &mut Tree, id: WidgetId) {
+        tree.with_widget_mut(id, |w, wid, t| {
+            w.event(
+                t,
+                wid,
+                &Event::KeyDown {
+                    key: Key::End,
+                    modifiers: crate::widgets::widget::Modifiers::default(),
+                },
+            )
+        });
+    }
+
+    /// Every rectangle the field draws. Focused with no selection, the caret is
+    /// the only one there can be, and its x is where the displayed text ends.
+    fn drawn_rects(tree: &mut Tree, id: WidgetId) -> Vec<crate::widgets::Rect> {
+        fn collect(node: &crate::renderer::RenderNode, out: &mut Vec<crate::widgets::Rect>) {
+            for cmd in &node.commands {
+                if let crate::renderer::DrawCommand::RoundedRect { rect, .. } = &**cmd {
+                    out.push(*rect);
+                }
+            }
+            for child in &node.children {
+                collect(child, out);
+            }
+        }
+        let mut out = Vec::new();
+        collect(&paint_once(tree, id), &mut out);
+        out
+    }
+
+    /// Masking is a value the field can be told, and the eye icon beside a
+    /// password box is what needs it.
+    ///
+    /// Read off the caret's x, which sits at the end of the *displayed* text:
+    /// bullets and `iiii` are different widths in any font, so the assertion
+    /// does not depend on which one is installed — only that they differ.
+    #[test]
+    fn masking_answers_to_a_signal() {
+        let masked = create_signal(true);
+        let (mut tree, root, id) =
+            field_in_container(text_input(create_signal("iiiiiiii".to_owned())).password(masked));
+
+        caret_to_end(&mut tree, id);
+        let with_bullets = drawn_rects(&mut tree, id);
+        assert_eq!(with_bullets.len(), 1, "the caret, and nothing else");
+
+        masked.set(false);
+        relayout(&mut tree, root);
+        let with_letters = drawn_rects(&mut tree, id);
+
+        assert_ne!(
+            with_bullets[0].x, with_letters[0].x,
+            "the field kept drawing bullets after the signal said not to"
+        );
+        assert!(
+            has_focus(id),
+            "the point of declaring this rather than rebuilding the widget is \
+             that the focus survives it"
+        );
+    }
+
+    /// The same for what the mask is made of.
+    #[test]
+    fn the_mask_character_answers_to_a_signal() {
+        let mask = create_signal('.');
+        let (mut tree, root, id) = field_in_container(
+            text_input(create_signal("aaaaaaaa".to_owned()))
+                .password(true)
+                .mask_char(mask),
+        );
+
+        caret_to_end(&mut tree, id);
+        let narrow = drawn_rects(&mut tree, id);
+
+        mask.set('W');
+        relayout(&mut tree, root);
+        let wide = drawn_rects(&mut tree, id);
+
+        assert!(
+            wide[0].x > narrow[0].x,
+            "eight W's have to be wider than eight full stops: {narrow:?} then \
+             {wide:?}"
+        );
+    }
+
+    /// Whether a caret is drawn at all, likewise.
+    #[test]
+    fn the_caret_answers_to_a_signal() {
+        let show = create_signal(true);
+        let (mut tree, root, id) =
+            field_in_container(text_input(create_signal("hi".to_owned())).caret(show));
+
+        assert_eq!(drawn_rects(&mut tree, id).len(), 1, "a caret to begin with");
+
+        show.set(false);
+        relayout(&mut tree, root);
+
+        assert!(
+            drawn_rects(&mut tree, id).is_empty(),
+            "asked for no caret and got one anyway"
+        );
+        assert!(has_focus(id), "and the focus is still here");
+    }
+
+    /// A field switched to masked refuses the very next copy, not the one after.
+    ///
+    /// The two guards that refuse to export a secret run from event handling,
+    /// which is not a tracking scope and does not wait for a layout pass. So
+    /// they ask the signal rather than `cached_password`, which is only as
+    /// fresh as the last pass — reading the copy would hand out the secret for
+    /// one frame after the field was told to hide it.
+    #[test]
+    fn masking_refuses_an_export_before_the_next_layout() {
+        let masked = create_signal(false);
+        let mut input = text_input(create_signal("hunter2".to_owned())).password(masked);
+        input.cached_value = "hunter2".to_owned();
+        input.cached_char_count = 7;
+        input.selection = Selection {
+            cursor: 7,
+            anchor: 0,
+        };
+
+        assert_eq!(
+            input.exportable_selection().as_deref(),
+            Some("hunter2"),
+            "an unmasked field exports its selection"
+        );
+
+        masked.set(true);
+        // No layout in between: this is the frame the write landed in.
+
+        assert_eq!(
+            input.exportable_selection(),
+            None,
+            "the field exported a secret it had just been told to mask"
+        );
+    }
+
     /// A laid-out input, focused unless told otherwise.
     fn field(input: TextInput, focused: bool) -> (Tree, WidgetId) {
         clear_pending_jobs();
@@ -1530,12 +1753,13 @@ mod tests {
             .unwrap_or(false)
     }
 
-    fn paint_once(tree: &mut Tree, id: WidgetId) {
+    fn paint_once(tree: &mut Tree, id: WidgetId) -> crate::renderer::RenderNode {
         let mut node = crate::renderer::RenderNode::new(id.as_u64());
         tree.with_widget_mut(id, |w, id, t| {
             let mut ctx = crate::renderer::PaintContext::new(&mut node);
             w.paint(t, id, &mut ctx);
         });
+        node
     }
 
     #[test]
