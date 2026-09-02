@@ -63,8 +63,12 @@ learns to skim, and then the one finding that mattered is skimmed with it.
 - **Worth answering.** Real, and the author may act on it or say in the pull
   request why they did not. Silence is what is not allowed, not disagreement.
 - **Note.** A nit, a wording, a thing to consider if somebody touches this
-  again. It goes in the pull request or an issue. It never stops anything, and a
-  reader who ignores every note has lost nothing.
+  again. It goes in the pull request, and by default that is where it stays: a
+  note becomes an issue only when somebody is worse off today and the fix needs
+  an acceptance criterion this change's test cannot state, which is the bar
+  AGENTS.md step 7 sets. Offering both homes with no way to choose is how a
+  review that found nothing wrong still files three issues. It never stops
+  anything, and a reader who ignores every note has lost nothing.
 
 For each finding: what is wrong, where — file and line — and what would have to
 be true instead. Distinguish what you verified by reading or running it from
