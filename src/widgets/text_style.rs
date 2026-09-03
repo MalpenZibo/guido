@@ -494,7 +494,12 @@ macro_rules! declares_text_style {
 pub(crate) use declares_text_style;
 
 /// The same vocabulary for an override, which supplies values and never a
-/// timing — see [`declares_text_style`] for why the two differ.
+/// timing.
+///
+/// The motion belongs to whoever *declared* a property, and a state layer does
+/// not declare it — so the two differ by the types they accept rather than by a
+/// rule written down anywhere, which is the shape `Container` and `StateStyle`
+/// already have.
 impl TextStyle {
     /// Colour of the glyphs.
     ///

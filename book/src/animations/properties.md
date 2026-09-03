@@ -174,6 +174,36 @@ Both are correct, and the second is the one to reach for when the depth is
 driven by something other than pointer state. Prefer the state layer when it can
 say the same thing.
 
+## Text Colour and Size
+
+Declared on the widget that draws the glyphs — a `text` or a `text_input` —
+because that is where text style is declared at all:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let busy = create_signal(false);
+text("saving…").color(
+    (move || if busy.get() { Color::rgb(0.9, 0.6, 0.2) } else { Color::WHITE })
+        .transition(200.0),
+)
+# ;
+# }
+```
+
+`color` and `font_size` are the two that move. A family and a weight snap to an
+installed face, and a stroke and a shadow are records with nothing to
+interpolate, so those four take values only.
+
+An easing `font_size` re-measures the text on every frame it moves, which
+reflows whatever contains it — worth a shorter duration than a colour, and worth
+avoiding in a long list.
+
+A state override supplies a value and never a timing, here as everywhere:
+`when_hovered(|s| s.color(..))` takes a colour, and a transition on it is a
+compile error rather than something quietly ignored.
+
 ## Multiple Animations
 
 Each property carries its own, where it is declared:
@@ -215,6 +245,8 @@ container()
 | Scale | `scale(..)` | Spring or Duration |
 | Width, height | `width(..)`, `height(..)` | Spring |
 | Elevation | `elevation(..)` | Duration, EaseOut |
+| Text colour | `color(..)` on a `text` or `text_input` | Duration, EaseOut |
+| Font size | `font_size(..)` on a `text` or `text_input` | Duration |
 
 ## Best Practices
 

@@ -231,13 +231,11 @@ impl Stateful for Text {
 crate::widgets::text_style::declares_text_style!(Text, style, anims);
 
 impl Widget for Text {
-    /// Move the declared motions on, and ask for another frame while either is
-    /// still running.
+    /// Move the declared motions on, and ask for the frame that carries them
+    /// further.
     ///
-    /// The targets come from `declared_*`, snapshotted by the last `refresh`,
-    /// because this runs outside a tracking scope: reading a signal here would
-    /// subscribe the widget to it from the animation pass, which is the
-    /// non-reactive-read the diagnostic exists to catch.
+    /// Where they are pointed is decided in `retarget_text_anims`, during
+    /// layout, so there is no target to resolve here — only time to pass.
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         self.advance_text_anims(tree, id)
     }
@@ -562,33 +560,118 @@ mod tests {
     }
 
     /// The same for a size, which moves layout rather than paint — so the claim
-    /// is about what was measured, not about what was drawn.
+    /// is what the *container* measured, not what the text drew.
+    ///
+    /// Inside a container on purpose. A size that eases has to reflow whatever
+    /// encloses it, and `Text` is not a relayout boundary, so the wake walks up
+    /// to the nearest one; asserting on a bare root text would prove the value
+    /// moved and say nothing about the subtree that has to follow it.
     #[test]
     fn a_declared_transition_eases_the_font_size() {
         let size = create_signal(10.0f32);
         let mut tree = Tree::new();
         let root = tree.register(Box::new(
-            Text::new("x").font_size((move || size.get()).transition(400.0)),
+            container().child(Text::new("x").font_size((move || size.get()).transition(400.0))),
         ));
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
 
         let t0 = std::time::Instant::now();
-        let (_, from) = frame_at(&mut tree, root, t0);
-        assert!((from - 10.0).abs() < 0.01, "starts where it was declared");
+        tree.set_frame_instant(Some(t0));
+        let from = measured(&mut tree, root, 800.0).height;
+        tree.set_frame_instant(None);
 
         size.set(30.0);
-        // As above: the write's own frame starts the ease, the next one shows it.
-        frame_at(&mut tree, root, t0 + std::time::Duration::from_millis(1));
-        let (_, midway) = frame_at(&mut tree, root, t0 + std::time::Duration::from_millis(100));
+        // The write's own frame is where the ease begins; the next shows it.
+        tree.set_frame_instant(Some(t0 + std::time::Duration::from_millis(1)));
+        measured(&mut tree, root, 800.0);
+        tree.set_frame_instant(None);
+
+        tree.set_frame_instant(Some(t0 + std::time::Duration::from_millis(100)));
+        let midway = measured(&mut tree, root, 800.0).height;
+        tree.set_frame_instant(None);
+
+        tree.set_frame_instant(Some(t0 + std::time::Duration::from_millis(600)));
+        let arrived = measured(&mut tree, root, 800.0).height;
+        tree.set_frame_instant(None);
+
         assert!(
-            midway > 10.01 && midway < 29.99,
-            "the size has to be on its way rather than arrived, got {midway}"
+            midway > from + 0.5 && midway < arrived - 0.5,
+            "the container has to be re-measured while the size eases: {from} \
+             then {midway} then {arrived}"
+        );
+        assert!(
+            arrived > from + 1.0,
+            "and it arrives larger: {from} then {arrived}"
+        );
+    }
+
+    /// A text that only *paints* a colour signal does not subscribe its layout
+    /// to it.
+    ///
+    /// Retargeting a motion needs the resolved colour during layout, so the
+    /// read has to happen in that scope — but only where there is a motion to
+    /// retarget. Read unconditionally, every label in a surface re-measures
+    /// when a theme colour changes, and `Text` is not a relayout boundary, so
+    /// that walk reaches the enclosing subtree.
+    #[test]
+    fn a_colour_without_a_motion_wakes_no_layout() {
+        let hue = create_signal(Color::rgb(0.0, 0.0, 0.0));
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(Text::new("x").color(hue)));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        frame(&mut tree, root);
+        jobs::clear_pending_jobs();
+
+        hue.set(Color::rgb(1.0, 1.0, 1.0));
+        let woken = jobs::queued_job_types(root);
+        assert!(
+            !woken.contains(&JobType::Layout),
+            "a painted colour must not re-measure the text: {woken:?}"
         );
 
-        let (_, arrived) = frame_at(&mut tree, root, t0 + std::time::Duration::from_millis(600));
+        // And the text that *does* declare a motion is the one that pays for it.
+        let moved = create_signal(Color::rgb(0.0, 0.0, 0.0));
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new("x").color((move || moved.get()).transition(400.0)),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        frame(&mut tree, root);
+        jobs::clear_pending_jobs();
+
+        moved.set(Color::rgb(1.0, 1.0, 1.0));
+        let woken = jobs::queued_job_types(root);
         assert!(
-            (arrived - 30.0).abs() < 0.01,
-            "and it arrives, got {arrived}"
+            woken.contains(&JobType::Layout),
+            "a declared motion has to be retargeted, which is a layout read: \
+             {woken:?}"
+        );
+    }
+
+    /// A motion that has never run starts where the signal is now, not where it
+    /// was when the builder ran.
+    ///
+    /// The seed is taken with `get_untracked` at declaration time, so a write
+    /// landing between construction and the first layout would otherwise make
+    /// the first frame ease up from a stale value instead of simply being there.
+    #[test]
+    fn a_motion_seeds_rather_than_eases_on_its_first_frame() {
+        let hue = create_signal(Color::rgb(0.0, 0.0, 0.0));
+        let text = Text::new("x").color((move || hue.get()).transition(400.0));
+
+        // Between the builder and the first layout, as a popup's content is
+        // built one frame and laid out the next.
+        hue.set(Color::rgb(1.0, 1.0, 1.0));
+
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(text));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let (first, _) = frame_at(&mut tree, root, std::time::Instant::now());
+        assert!(
+            first.r > 0.99,
+            "the first frame has to be where the signal is, not eased up from \
+             what the builder saw: got {first:?}"
         );
     }
 

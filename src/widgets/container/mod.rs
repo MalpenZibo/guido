@@ -11,7 +11,7 @@ mod style;
 #[cfg(test)]
 mod characterization;
 
-pub(crate) use animations::instant_transition;
+use animations::instant_transition;
 pub(crate) use animations::with_measure_final;
 pub use animations::{AdvanceResult, AnimationState, get_animated_value};
 use interaction::{HitContext, untransform_point};
