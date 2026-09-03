@@ -675,6 +675,132 @@ mod tests {
         );
     }
 
+    /// A transition inside its delay keeps asking to be woken, and stops asking
+    /// once it has arrived.
+    ///
+    /// The delay is the window where a motion is running and has produced no
+    /// new value. Asking for a paint there wakes the loop every frame for a
+    /// picture that has not changed; asking for *nothing at all* strands the
+    /// ease, because the frame that would carry it never comes. So it asks to
+    /// be woken without asking for a picture.
+    ///
+    /// Note what this test must not do: clear the pending jobs mid-flight. The
+    /// queued Animation job *is* the chain — `Text` takes an
+    /// unchanged-constraints early-out, so a cleared queue means no layout, no
+    /// retarget and no advance, and the ease stops for good. The first draft of
+    /// this test did exactly that and read the result as a defect.
+    #[test]
+    fn a_delayed_transition_asks_to_be_woken_without_asking_for_a_picture() {
+        use crate::animation::{TimingFunction, Transition};
+
+        let hue = create_signal(Color::rgb(0.0, 0.0, 0.0));
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new("x").color(
+                (move || hue.get())
+                    .transition(Transition::new(100.0, TimingFunction::Linear).delay(200.0)),
+            ),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let t0 = std::time::Instant::now();
+        frame_at(&mut tree, root, t0);
+        hue.set(Color::rgb(1.0, 1.0, 1.0));
+        frame_at(&mut tree, root, t0 + std::time::Duration::from_millis(1));
+
+        // Inside the delay: nothing drawn has changed, and it still has to come
+        // back for the frames that will carry it.
+        let inside = frame_at(&mut tree, root, t0 + std::time::Duration::from_millis(50)).0;
+        assert!(
+            inside.r < 0.01,
+            "the delay has not elapsed, so the colour must not have moved: {inside:?}"
+        );
+        assert!(
+            jobs::queued_job_types(root).contains(&JobType::Animation),
+            "a motion inside its delay has to ask to be woken: {:?}",
+            jobs::queued_job_types(root)
+        );
+
+        // Past the delay and the duration, it has arrived.
+        let arrived = frame_at(&mut tree, root, t0 + std::time::Duration::from_millis(400)).0;
+        assert!(
+            arrived.r > 0.99,
+            "a delayed ease still has to run once the delay is up: {arrived:?}"
+        );
+
+        // And then it stops asking, or a still surface never idles.
+        frame_at(&mut tree, root, t0 + std::time::Duration::from_millis(500));
+        jobs::clear_pending_jobs();
+        frame_at(&mut tree, root, t0 + std::time::Duration::from_millis(600));
+        assert!(
+            !jobs::queued_job_types(root).contains(&JobType::Animation),
+            "a settled motion has to stop asking for frames: {:?}",
+            jobs::queued_job_types(root)
+        );
+    }
+
+    /// A font-size motion does not drag the colour into the layout scope with
+    /// it.
+    ///
+    /// The guard is per property: a text that eases its size still paints its
+    /// colour, so a colour write must not re-measure it. Read off the jobs,
+    /// because the widget has an animation box either way — which is the case
+    /// the `is_some_and` on the box cannot distinguish on its own.
+    #[test]
+    fn easing_a_size_does_not_make_the_colour_a_layout_read() {
+        let hue = create_signal(Color::rgb(0.0, 0.0, 0.0));
+        let size = create_signal(10.0f32);
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new("x")
+                .font_size((move || size.get()).transition(400.0))
+                .color(hue),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        frame(&mut tree, root);
+        jobs::clear_pending_jobs();
+
+        hue.set(Color::rgb(1.0, 1.0, 1.0));
+        let woken = jobs::queued_job_types(root);
+        assert!(
+            !woken.contains(&JobType::Layout),
+            "only the size was declared with a motion, so the colour is still a \
+             paint read: {woken:?}"
+        );
+    }
+
+    /// A state override reaches every text property, not only the colour.
+    ///
+    /// `TextStyle`'s setters are the override half of the vocabulary, and each
+    /// one is a separate two-line body — `cargo mutants` emptied five of the
+    /// six and nothing objected, because the only override anyone had tested
+    /// was a colour. Asserted on the size, which is the one an override can
+    /// move that shows up in what was measured.
+    #[test]
+    fn a_state_override_reaches_more_than_the_colour() {
+        let hot = create_signal(true);
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new("x")
+                .font_size(10.0)
+                .state(hot, |s: TextStyle| s.font_size(30.0)),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let (_, overridden) = frame(&mut tree, root);
+        assert!(
+            (overridden - 30.0).abs() < 0.01,
+            "the override supplies the size while it is active, got {overridden}"
+        );
+
+        hot.set(false);
+        let (_, declared) = frame(&mut tree, root);
+        assert!(
+            (declared - 10.0).abs() < 0.01,
+            "and the declaration comes back when it is not, got {declared}"
+        );
+    }
+
     /// Lay out and paint, returning the first text command's colour and size.
     ///
     /// The queued jobs are processed first, which is what turns a signal write
