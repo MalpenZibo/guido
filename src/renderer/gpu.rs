@@ -253,14 +253,15 @@ impl ShapeInstance {
 
     /// Set shadow properties.
     pub fn with_shadow(mut self, shadow: &super::types::Shadow, scale: f32) -> Self {
-        self.shadow_offset = [shadow.offset.0 * scale, shadow.offset.1 * scale];
-        self.shadow_blur = shadow.blur * scale;
-        self.shadow_spread = shadow.spread * scale;
+        let scaled = shadow.scaled(scale);
+        self.shadow_offset = [scaled.offset.0, scaled.offset.1];
+        self.shadow_blur = scaled.blur;
+        self.shadow_spread = scaled.spread;
         self.shadow_color = [
-            shadow.color.r,
-            shadow.color.g,
-            shadow.color.b,
-            shadow.color.a,
+            scaled.color.r,
+            scaled.color.g,
+            scaled.color.b,
+            scaled.color.a,
         ];
         self
     }
