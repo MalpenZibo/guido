@@ -1,13 +1,15 @@
 use smallvec::SmallVec;
 
+use crate::renderer::Shadow;
 use crate::transform::{Scale, Translate};
 use crate::widgets::{Color, Padding};
 
-/// The channels of one animatable value. `Corners` is the widest at five —
-/// four radii and a curvature — and six costs the same 32 bytes as five, so
-/// the inline capacity is six: the headroom is free and a value that spills
-/// costs four heap allocations per spring retarget in `carry_velocity`.
-pub type Channels = SmallVec<[f32; 6]>;
+/// The channels of one animatable value. `Shadow` is the widest at eight — two
+/// offsets, a blur, a spread and four colour components — and it is what sets
+/// the inline capacity: a value that spills costs four heap allocations per
+/// spring retarget in `carry_velocity`, which is a worse trade than the eight
+/// bytes eight slots cost over the six `Corners` needs.
+pub type Channels = SmallVec<[f32; 8]>;
 
 /// Trait for types that can be animated by interpolating between values
 pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
@@ -23,6 +25,7 @@ pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
     /// - `Scale`: the two factors, added and unsigned, decreasing
     /// - `Color`: alpha decreasing, then luminance decreasing
     /// - `Padding`: total padding decreasing
+    /// - `Shadow`: extent decreasing, then alpha decreasing
     ///
     /// # A value of more than one number has ties, and they are not reversals
     ///
@@ -155,6 +158,47 @@ impl Animatable for Color {
 
     fn channels(&self) -> Channels {
         Channels::from_slice(&[self.r, self.g, self.b, self.a])
+    }
+}
+
+impl Animatable for Shadow {
+    fn lerp(from: &Self, to: &Self, t: f32) -> Self {
+        let f = |a: f32, b: f32| a + (b - a) * t;
+        Self {
+            offset: (f(from.offset.0, to.offset.0), f(from.offset.1, to.offset.1)),
+            blur: f(from.blur, to.blur),
+            spread: f(from.spread, to.spread),
+            color: Color::lerp(&from.color, &to.color, t),
+        }
+    }
+
+    /// Shrinking, and then fading at a constant size.
+    ///
+    /// [`extent`](Shadow::extent) is the same reduction the
+    /// damage rect is sized by, so "reverse" here means the same thing it means
+    /// to everything downstream: the shadow is giving ground back. Alpha breaks
+    /// the tie because `extent` reports the full reach at any alpha above zero,
+    /// so a shadow fading out at a constant geometry would otherwise read as
+    /// forward in both directions.
+    ///
+    /// The ties this keeps are the ones that trade one dimension for another —
+    /// a blur of 8 becoming a spread of 8, an offset moving from down to
+    /// sideways. Both reduce to the same extent, and neither is larger.
+    fn is_reverse(from: &Self, to: &Self) -> bool {
+        (to.extent(), to.color.a) < (from.extent(), from.color.a)
+    }
+
+    fn channels(&self) -> Channels {
+        Channels::from_slice(&[
+            self.offset.0,
+            self.offset.1,
+            self.blur,
+            self.spread,
+            self.color.r,
+            self.color.g,
+            self.color.b,
+            self.color.a,
+        ])
     }
 }
 
@@ -345,13 +389,19 @@ mod tests {
         assert_eq!(Color::WHITE.channels().len(), 4);
         assert_eq!(Padding::all(2.0).channels().len(), 4);
         assert_eq!(Translate::new(1.0, 2.0).channels().len(), 2);
-        // The widest, and so the one the inline capacity is sized from: four
-        // radii and a curvature. `carry_velocity` builds four of these per
-        // retarget, so a spilled one is four heap allocations per spring.
+        // The widest, and so the one the inline capacity is sized from: two
+        // offsets, a blur, a spread and four colour components.
+        // `carry_velocity` builds four of these per retarget, so a spilled one
+        // is four heap allocations per spring. `Corners` is the runner-up at
+        // five, and is asserted too so that shrinking the capacity back to it
+        // fails here rather than in a profile.
+        let inline = Channels::new().inline_size();
+        assert_eq!(Shadow::none().channels().len(), 8);
         assert!(
-            crate::widgets::Corners::SQUARE.channels().len() <= Channels::new().inline_size(),
+            Shadow::none().channels().len() <= inline,
             "Channels must hold the widest animatable value without spilling"
         );
+        assert!(crate::widgets::Corners::SQUARE.channels().len() <= inline);
         assert_eq!(Scale::uniform(2.0).channels().len(), 2);
         assert_eq!(3.0_f32.channels().as_slice(), &[3.0]);
     }
