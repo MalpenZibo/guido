@@ -117,7 +117,8 @@ prelude — see `tests/external_widget.rs`.
 `Flex::column()`, `ZStack`. The `Layout` trait is public, so an application can
 write its own.
 
-Children: `.child()` and `.maybe_child()` for static ones. `.children()` takes
+Children: `.child()` for a static one — a widget, or an `Option` of one that
+is simply absent when `None`. `.children()` takes
 whatever `IntoChildren` fits — an iterator of widgets is static, a closure is
 dynamic and re-runs when what it read changes, and `keyed(data, key, build)`
 reconciles by key so widget state survives a reorder:

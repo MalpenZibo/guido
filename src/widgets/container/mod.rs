@@ -606,18 +606,19 @@ impl Container {
         self
     }
 
-    /// Add a single child: a widget value, or a closure returning one for
-    /// reactive content.
+    /// Add a single child: a widget value, an `Option` of one, or a closure
+    /// returning either for reactive content.
+    ///
+    /// ```
+    /// # use guido::prelude::*;
+    /// # let admin = true;
+    /// # let count = create_signal(0i32);
+    /// container().child(text("always"));
+    /// container().child(admin.then(|| text("sometimes")));  // absent when None
+    /// container().child(move || (count.get() > 0).then(|| text("badge")));
+    /// ```
     pub fn child<M>(mut self, child: impl IntoChild<M>) -> Self {
         child.add_to_container(&mut self.children_source);
-        self
-    }
-
-    /// Add a child if Some (static mode)
-    pub fn maybe_child(mut self, widget: Option<impl Widget + 'static>) -> Self {
-        if let Some(w) = widget {
-            self = self.child(w);
-        }
         self
     }
 

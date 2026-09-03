@@ -2,7 +2,7 @@
 //!
 //! This example shows:
 //! 1. Static children with .child() - Fixed at creation
-//! 2. Conditional static with .maybe_child() - NOT reactive (evaluated once)
+//! 2. Conditional static with .child(Option) - NOT reactive (evaluated once)
 //! 3. Dynamic list with .children() - Fully reactive with keyed reconciliation
 //! 4. NEW: Mixing static and dynamic children - Now works in any order!
 //! 5. Unified .child() and .children() APIs - Accept both static and dynamic
@@ -97,13 +97,13 @@ fn main() {
                     container()
                         .layout(Flex::column().spacing(8.0))
                         .child(
-                            container().child(text("2. .maybe_child() - NOT REACTIVE!").color(Color::rgb(1.0, 0.9, 0.9)))
+                            container().child(text("2. .child(Option) - NOT REACTIVE!").color(Color::rgb(1.0, 0.9, 0.9)))
                         )
                         .child(
                             container().child(text("LIMITATION: Evaluated ONCE at creation").color(Color::rgb(1.0, 0.7, 0.7)))
                         )
                         .child(
-                            container().child(text(move || format!("Signal: {} (but .maybe_child won't react!)", show_optional.get())).color(Color::WHITE))
+                            container().child(text(move || format!("Signal: {} (but .child(Option) won't react!)", show_optional.get())).color(Color::WHITE))
                         )
                         .child(
                             container()
@@ -112,7 +112,7 @@ fn main() {
                                 // Evaluated ONCE at creation — it will never
                                 // update. Debug builds warn about exactly this
                                 // read; the closure below is the fix.
-                                .maybe_child(
+                                .child(
                                     if show_optional.get() {
                                         Some(
                                             container()
