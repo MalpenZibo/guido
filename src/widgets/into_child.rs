@@ -45,11 +45,12 @@ pub struct DynamicChild;
 ///
 /// Accepted forms:
 /// - a widget value — static, evaluated once
+/// - `Option<widget>` — static, and absent when `None`
 /// - `move || widget` / `move || Option<widget>` — reactive: the closure
 ///   re-runs when a signal it reads changes, and its result replaces the
 ///   previous child (`None` removes it)
 #[diagnostic::on_unimplemented(
-    message = "`.child()` takes a widget or a reactive closure, and `{Self}` is neither",
+    message = "`.child()` takes a widget, an `Option` of one, or a reactive closure, and `{Self}` is none of them",
     note = "reactive forms: `.child(move || widget)` or `.child(move || Option<widget>)` — the closure re-runs and replaces the child when a signal it reads changes",
     note = "for reactive lists use `.children(...)` with a closure or `keyed(data, key, build)`"
 )]
@@ -61,6 +62,22 @@ pub trait IntoChild<Marker = StaticChild> {
 impl<W: Widget + 'static> IntoChild<StaticChild> for W {
     fn add_to_container(self, children_source: &mut ChildrenSource) {
         children_source.add_static(Box::new(self));
+    }
+}
+
+/// A child that may not be there — static, like the widget it wraps. `None` is
+/// a child that was never added rather than one that can come back; the
+/// reactive form of the same question is `move || Option<widget>`.
+///
+/// It shares `StaticChild` with the blanket above and does not overlap it:
+/// `Option` is not `#[fundamental]`, so no downstream crate can write
+/// `impl Widget for Option<_>`, and coherence knows `Option<W>: Widget` never
+/// holds.
+impl<W: Widget + 'static> IntoChild<StaticChild> for Option<W> {
+    fn add_to_container(self, children_source: &mut ChildrenSource) {
+        if let Some(widget) = self {
+            widget.add_to_container(children_source);
+        }
     }
 }
 
@@ -451,6 +468,7 @@ mod tests {
     use crate::layout::{Constraints, Size};
     use crate::reactive::{create_signal, on_cleanup};
     use crate::tree::{Tree, WidgetId};
+    use crate::widgets::{Container, container};
 
     struct TestWidget;
     impl Widget for TestWidget {
@@ -467,6 +485,32 @@ mod tests {
         let mut source = ChildrenSource::default();
         source.set_container_id(parent);
         (tree, source)
+    }
+
+    /// An `Option` is a child, so `child` is the only way in.
+    ///
+    /// Counted off the tree rather than off the `ChildrenSource`, because a
+    /// static child is registered when the container registers its children
+    /// and not before — the source holds it pending until then.
+    #[test]
+    fn an_optional_child_is_a_child() {
+        fn registered(container: Container) -> usize {
+            let mut tree = Tree::new();
+            let id = tree.register(Box::new(container));
+            tree.with_widget_mut(id, |w, id, t| w.register_children(t, id));
+            tree.get_children(id).len()
+        }
+
+        assert_eq!(
+            registered(container().child(Some(TestWidget))),
+            1,
+            "`Some(w)` is the widget"
+        );
+        assert_eq!(
+            registered(container().child(None::<TestWidget>)),
+            0,
+            "`None` is no child at all"
+        );
     }
 
     /// Two keys that a 64-bit hash cannot tell apart must still be two rows.

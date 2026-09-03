@@ -44,16 +44,31 @@ container().children([
 
 ### Conditional Children
 
-```rust,ignore
+An `Option` is a child, so `child` takes one — absent when `None`:
+
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
 let show_extra = create_signal(false);
 
-container().children([
-    text("Always shown"),
-    container().maybe_child(show_extra, || text("Sometimes shown")),
-])
+container()
+    .child(text("Always shown"))
+    .child(show_extra.get().then(|| text("Sometimes shown")))
+# ;
+# }
+```
+
+That reads the signal once, when the tree is built, so it never changes again.
+For a child that comes and goes, pass a closure — it re-runs when a signal it
+read changes:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let show_extra = create_signal(false);
+container().child(move || show_extra.get().then(|| text("Sometimes shown")))
 # ;
 # }
 ```
@@ -226,7 +241,7 @@ container().visible(move || tab.get() == "settings")
 # }
 ```
 
-Unlike `.maybe_child()` which adds or removes a child from the tree, `.visible()` keeps the widget in the tree but hides it completely. This is useful when you want to toggle visibility without recreating the widget and its state.
+Unlike `.child(Option)`, which adds or removes a child from the tree, `.visible()` keeps the widget in the tree but hides it completely. This is useful when you want to toggle visibility without recreating the widget and its state.
 
 ## Scrolling
 
@@ -324,7 +339,7 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 ### Children
 - `.child(widget)` - Add single child
 - `.children([...])` - Add multiple children
-- `.maybe_child(Option<widget>)` - Conditional child
+- `.child(Option<widget>)` - Conditional child, absent when `None`
 - `.child(move || ..)` - Reactive child, rebuilt when a signal it read changes
 - `.children(keyed(items, key_fn, view_fn))` - Keyed reactive list
 
