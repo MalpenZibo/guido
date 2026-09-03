@@ -6,10 +6,11 @@ use crate::reactive::{IntoSignal, OptionSignalExt, Signal, with_signal_tracking}
 use crate::renderer::{PaintContext, measure_text_full};
 use crate::tree::{Tree, WidgetId};
 
+use super::container::get_animated_value;
 use super::control::Control;
 use super::font::{FontFamily, FontWeight};
 use super::state_layer::{StateWhen, Stateful};
-use super::text_style::{TextShadow, TextStroke, TextStyle, TextStyled};
+use super::text_style::{TextAnims, TextShadow, TextStroke, TextStyle};
 use super::widget::{Color, Event, EventResponse, Rect, Widget};
 
 /// How far a stroke and a shadow reach past the glyphs they decorate.
@@ -26,8 +27,9 @@ pub(crate) fn decoration_overflow(stroke: Option<TextStroke>, shadow: Option<Tex
 
 /// A run of text.
 ///
-/// Style is declared here — [`TextStyled`] — because this is the widget that
-/// draws the glyphs. Whatever it does not declare falls back to the defaults:
+/// Style is declared here — see `declares_text_style` — because this is the
+/// widget that draws the glyphs. Whatever it does not declare falls back to
+/// the defaults:
 /// white, 14 logical pixels, the registered family, normal weight.
 ///
 /// ```ignore
@@ -52,6 +54,9 @@ pub struct Text {
     /// Blur radius for the backdrop the glyphs cut out of what is behind them.
     /// `None` for every text that is not made of glass.
     backdrop_blur: Option<Signal<f32>>,
+    /// How the declared colour and size move, when they were declared with a
+    /// motion. Absent for every text that only says what it is.
+    anims: Option<Box<TextAnims>>,
     /// Cached values for painting (avoid re-reading signals)
     cached_text: String,
     cached_font_size: f32,
@@ -74,6 +79,7 @@ impl Text {
             own_hover: None,
             wrap: None,
             backdrop_blur: None,
+            anims: None,
             cached_text: String::new(), // Will be set during first layout
             cached_font_size: 14.0,
             cached_font_family: default_family,
@@ -128,10 +134,10 @@ impl Text {
     /// Legibility is not what it buys on its own, and of the two decorations
     /// that give it, one composes and one does not.
     ///
-    /// A [`text_stroke`](super::TextStyled::text_stroke) does: over frost it is
+    /// A [`text_stroke`](Self::text_stroke) does: over frost it is
     /// drawn as a true contour — dilated from the same coverage mask, laid
     /// outside the letter — rather than as copies of the glyphs under the fill.
-    /// A [`text_shadow`](super::TextStyled::text_shadow) does not: it is still
+    /// A [`text_shadow`](Self::text_shadow) does not: it is still
     /// copies, so it covers the letter's own area as well as its edge, which is
     /// invisible under an opaque fill and an opaque letter over glass.
     pub fn backdrop_blur<M>(mut self, radius: impl IntoSignal<f32, M>) -> Self {
@@ -189,16 +195,25 @@ impl Text {
     ///
     /// Returns how far the decoration reaches past the glyphs, which the
     /// caller records as damage slop.
-    fn refresh(&mut self, tree: &Tree, id: WidgetId) -> f32 {
-        with_signal_tracking(id, JobType::Layout, || {
+    fn refresh(&mut self, tree: &Tree, id: WidgetId) -> (f32, Option<Color>) {
+        let mut declared_color = None;
+        let overflow = with_signal_tracking(id, JobType::Layout, || {
             let style = self.resolved_style(tree, id);
             self.cached_text = self.content.get();
             self.cached_font_size = style.font_size.get_or(14.0);
+            // Only where a colour motion was declared. Reading it here
+            // subscribes this text's *layout* to the colour, and a text that
+            // merely paints one has no reason to re-measure when it changes —
+            // paint reads it under its own scope, as it always did.
+            declared_color = self
+                .animates_text_color()
+                .then(|| style.color.get_or(Color::WHITE));
             self.cached_font_family = style.font_family.get_or_else(default_font_family);
             self.cached_font_weight = style.font_weight.get_or(FontWeight::NORMAL);
             self.cached_wrap = self.wrap.get_or(true);
             decoration_overflow(style.stroke.map(|s| s.get()), style.shadow.map(|s| s.get()))
-        })
+        });
+        (overflow, declared_color)
     }
 }
 
@@ -213,13 +228,20 @@ impl Stateful for Text {
     }
 }
 
-impl TextStyled for Text {
-    fn text_style_mut(&mut self) -> &mut TextStyle {
-        self.style.get_or_insert_with(Box::default)
-    }
-}
+crate::widgets::text_style::declares_text_style!(Text, style, anims);
 
 impl Widget for Text {
+    /// Move the declared motions on, and ask for another frame while either is
+    /// still running.
+    ///
+    /// The targets come from `declared_*`, snapshotted by the last `refresh`,
+    /// because this runs outside a tracking scope: reading a signal here would
+    /// subscribe the widget to it from the animation pass, which is the
+    /// non-reactive-read the diagnostic exists to catch.
+    fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
+        self.advance_text_anims(tree, id)
+    }
+
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
         // Text widgets are never relayout boundaries
         tree.set_relayout_boundary(id, false);
@@ -243,7 +265,15 @@ impl Widget for Text {
 
         // Refresh cached values from content and declared style.
         // This reads signals and registers layout dependencies.
-        let overflow = self.refresh(tree, id);
+        let (overflow, declared_color) = self.refresh(tree, id);
+        // Pointed at the freshly resolved target here, where both it and the
+        // frame's instant are in hand.
+        self.cached_font_size = self.retarget_text_anims(
+            tree,
+            id,
+            declared_color.unwrap_or(Color::WHITE),
+            self.cached_font_size,
+        );
         tree.set_own_paint_reach(id, overflow);
 
         // Determine the effective max_width for measurement
@@ -332,7 +362,9 @@ impl Widget for Text {
         let (color, stroke, shadow, blur) = with_signal_tracking(id, JobType::Paint, || {
             let style = self.resolved_style(tree, id);
             (
-                style.color.get_or(Color::WHITE),
+                get_animated_value(self.anims.as_ref().and_then(|a| a.color.as_ref()), || {
+                    style.color.get_or(Color::WHITE)
+                }),
                 style.stroke.map(|s| s.get()),
                 style.shadow.map(|s| s.get()),
                 self.backdrop_blur.map(|radius| radius.get()),
@@ -386,12 +418,12 @@ pub fn text<M>(content: impl IntoSignal<String, M>) -> Text {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::animation::Animate;
     use crate::jobs;
     use crate::layout::Constraints;
     use crate::reactive::create_signal;
     use crate::renderer::{DrawCommand, RenderNode};
     use crate::widgets::container;
-    use crate::widgets::text_style::TextStyled;
 
     /// Lay out after draining queued jobs, and hand back the measured size.
     fn measured(tree: &mut Tree, root: WidgetId, width: f32) -> crate::layout::Size {
@@ -430,6 +462,133 @@ mod tests {
             unwrapped.width > wrapped.width,
             "an unwrapped line has to run past the width a wrapped one fits in: \
              {wrapped:?} then {unwrapped:?}"
+        );
+    }
+
+    /// Every text command a frame drew, in paint order.
+    fn all_text(tree: &mut Tree, root: WidgetId, at: std::time::Instant) -> Vec<(Color, f32)> {
+        tree.set_frame_instant(Some(at));
+        measured(tree, root, 800.0);
+        let mut node = RenderNode::new(root.as_u64());
+        tree.with_widget_mut(root, |w, id, t| {
+            let mut ctx = PaintContext::new(&mut node);
+            w.paint(t, id, &mut ctx);
+        });
+        tree.set_frame_instant(None);
+
+        fn walk(node: &RenderNode, out: &mut Vec<(Color, f32)>) {
+            for cmd in &node.commands {
+                if let DrawCommand::Text {
+                    color, font_size, ..
+                } = &**cmd
+                {
+                    out.push((*color, *font_size));
+                }
+            }
+            for c in &node.children {
+                walk(c, out);
+            }
+        }
+        let mut out = Vec::new();
+        walk(&node, &mut out);
+        out
+    }
+
+    /// A frame at a named instant: jobs, layout, animations, paint.
+    ///
+    /// The instant is named because an eased colour is a function of how long
+    /// it has been running, and a test that let the clock decide would assert
+    /// on whatever the machine managed between two calls.
+    fn frame_at(tree: &mut Tree, root: WidgetId, at: std::time::Instant) -> (Color, f32) {
+        tree.set_frame_instant(Some(at));
+        let out = frame(tree, root);
+        tree.set_frame_instant(None);
+        out
+    }
+
+    /// A declared colour carries how it moves, so it eases where a bare one
+    /// snaps.
+    ///
+    /// The pair differs in nothing but the transition, and both are written the
+    /// same signal — so the eased one being *between* the two colours a frame
+    /// later is the whole claim, and the plain one being already arrived is
+    /// what says the test is not merely watching a slow machine.
+    #[test]
+    fn a_declared_transition_eases_the_colour() {
+        const FROM: Color = Color::rgb(0.0, 0.0, 0.0);
+        const TO: Color = Color::rgb(1.0, 1.0, 1.0);
+
+        let sig = create_signal(FROM);
+
+        // Both texts in one tree: two `Tree`s number their widgets from zero,
+        // so the pair would share ids and the job queue — which is keyed by id
+        // — would hand one widget's animation frame to the other.
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            container()
+                .child(Text::new("eased").color((move || sig.get()).transition(400.0)))
+                .child(Text::new("plain").color(sig)),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let t0 = std::time::Instant::now();
+        all_text(&mut tree, root, t0);
+
+        sig.set(TO);
+
+        // The frame the write lands on is where the ease *begins*, so it is
+        // still at the old colour there. The one after it is where the claim is.
+        all_text(&mut tree, root, t0 + std::time::Duration::from_millis(1));
+        let drawn = all_text(&mut tree, root, t0 + std::time::Duration::from_millis(100));
+
+        let (eased, plain) = (drawn[0].0, drawn[1].0);
+        assert!(
+            plain.r > 0.99,
+            "a colour declared without a transition arrives on the next paint, \
+             got {plain:?}"
+        );
+        assert!(
+            eased.r > 0.01 && eased.r < 0.99,
+            "a quarter of the way through a 400ms ease the colour has to be \
+             between the two, got {eased:?}"
+        );
+
+        let settled = all_text(&mut tree, root, t0 + std::time::Duration::from_millis(600));
+        assert!(
+            settled[0].0.r > 0.99,
+            "the ease never finished, got {:?}",
+            settled[0].0
+        );
+    }
+
+    /// The same for a size, which moves layout rather than paint — so the claim
+    /// is about what was measured, not about what was drawn.
+    #[test]
+    fn a_declared_transition_eases_the_font_size() {
+        let size = create_signal(10.0f32);
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new("x").font_size((move || size.get()).transition(400.0)),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let t0 = std::time::Instant::now();
+        let (_, from) = frame_at(&mut tree, root, t0);
+        assert!((from - 10.0).abs() < 0.01, "starts where it was declared");
+
+        size.set(30.0);
+        // As above: the write's own frame starts the ease, the next one shows it.
+        frame_at(&mut tree, root, t0 + std::time::Duration::from_millis(1));
+        let (_, midway) = frame_at(&mut tree, root, t0 + std::time::Duration::from_millis(100));
+        assert!(
+            midway > 10.01 && midway < 29.99,
+            "the size has to be on its way rather than arrived, got {midway}"
+        );
+
+        let (_, arrived) = frame_at(&mut tree, root, t0 + std::time::Duration::from_millis(600));
+        assert!(
+            (arrived - 30.0).abs() < 0.01,
+            "and it arrives, got {arrived}"
         );
     }
 

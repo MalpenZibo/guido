@@ -28,7 +28,7 @@ struct Timeline<T> {
 /// A transition of no duration: a timeline speaks for its property while it
 /// plays, and outside it the declared value applies at once, exactly as it
 /// would with no animation at all.
-pub(super) fn instant_transition() -> Transition {
+pub(crate) fn instant_transition() -> Transition {
     Transition::new(0.0, crate::animation::TimingFunction::Linear)
 }
 

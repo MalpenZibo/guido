@@ -27,9 +27,7 @@ use crate::renderer::{PaintContext, RenderNode};
 use crate::tree::Tree;
 use crate::widgets::widget::{Event, Key, Modifiers, MouseButton, ScrollSource};
 use crate::widgets::{Color, ImageSource, LinearGradient, Overflow, Scroll};
-use crate::widgets::{
-    InputStyled, Stateful, TextStyled, Widget, container, image, text, text_input,
-};
+use crate::widgets::{InputStyled, Stateful, Widget, container, image, text, text_input};
 
 /// Put a widget through the whole `Widget` trait and return how many reads the
 /// library performed with no reactive scope.

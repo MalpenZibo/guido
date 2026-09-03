@@ -233,8 +233,12 @@ text("Hello").font_size(16.0).color(Color::WHITE)
 ```
 
 `color`, `font_size`, `font_family`, `font_weight`, `bold`, `mono`,
-`text_stroke` and `text_shadow` come from the `TextStyled` trait, implemented
-by `Text` and `TextInput` — the two widgets that draw glyphs. A `TextInput`
+`text_stroke` and `text_shadow` are declared on `Text` and `TextInput` — the two
+widgets that draw glyphs — from one list, so the two cannot drift apart.
+`color` and `font_size` are declarations, so they carry how they move as well
+as what they are: `color(theme.warn.transition(200.0))`. The rest take values,
+because a family and a weight snap to an installed face and a stroke and a
+shadow have nothing to interpolate. A `TextInput`
 also implements `InputStyled` for `cursor_color`, `selection_color` and
 `placeholder_color`, which only it can draw.
 
