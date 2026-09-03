@@ -32,6 +32,9 @@ const VIEWPORT: f32 = 200.0;
 const TRACK_START: f32 = 2.0;
 const TRACK_LENGTH: f32 = 196.0;
 const BAR_WIDTH: f32 = 6.0;
+/// What the bar widens to under the pointer — `Scroll`'s own default, and the
+/// numerator of the scale the widening is made of.
+const HOVER_WIDTH: f32 = 10.0;
 
 /// A vertical scroller: 200x200 over 648px of content — 20 rows of 24, spaced
 /// 8, padded 8. The handle is `viewport / content * track` long.
@@ -467,10 +470,19 @@ fn the_width_a_hover_adds_to_the_handle_answers_a_press_too() {
     let painted = h.handle_node().local_transform;
     let (left, _) = painted.transform_point(0.0, V_HANDLE / 2.0);
     let (right, _) = painted.transform_point(BAR_WIDTH, V_HANDLE / 2.0);
+    let widened = right - left;
     assert!(
-        right - left > BAR_WIDTH + 0.5,
-        "the hover widened the handle to {} from {BAR_WIDTH}: nothing was added to press on",
-        right - left
+        widened > BAR_WIDTH + 0.5,
+        "the hover widened the handle to {widened} from {BAR_WIDTH}: nothing was added to press on"
+    );
+    // And widened *by the ratio the two widths make*, not by some other
+    // arithmetic on them. A lower bound alone is satisfied by any scale at all,
+    // including the ~60x that multiplying the widths together would give; the
+    // spring is bouncy, so the ceiling allows an overshoot and no more.
+    assert!(
+        widened < HOVER_WIDTH * 1.5,
+        "the handle grew to {widened}, which is not the {HOVER_WIDTH} the hover \
+         width asks for"
     );
 
     let pressed = hovered + Duration::from_millis(200);

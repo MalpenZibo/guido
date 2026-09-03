@@ -606,6 +606,70 @@ fn visibility_answers_to_a_signal() {
     );
 }
 
+/// The gutter a reserved scrollbar takes out of the content is the bar plus a
+/// margin on each side.
+///
+/// `reserve_gutter` is the point of the setting — space the content never gets,
+/// scrollbar drawn or not — so the arithmetic that decides how much is worth
+/// pinning: `width + margin * 2`, not `width + margin + 2`, and not the margin
+/// counted once.
+#[test]
+fn a_reserved_gutter_is_the_bar_and_a_margin_on_each_side() {
+    fn content_width(width: f32, margin: f32) -> f32 {
+        let mut h = H::new(
+            container()
+                .width(200.0)
+                .height(100.0)
+                .scroll(Scroll::vertical().width(width).margin(margin))
+                .child(container().width(fill()).height(900.0)),
+        );
+        h.fit(500.0, 500.0);
+        // The content is the first child; a fill-width box reports what it was
+        // offered, which is the container minus the gutter.
+        h.paint().children[0].bounds.width
+    }
+
+    let wide_margin = content_width(6.0, 2.0);
+    let no_margin = content_width(6.0, 0.0);
+    assert_eq!(
+        no_margin - wide_margin,
+        4.0,
+        "two margins of 2 is 4px of content, so the margin is counted on both \
+         sides: {no_margin} against {wide_margin}"
+    );
+}
+
+/// A vertical scroller builds the parts for one axis, not for both.
+///
+/// The two branches that create them are guarded on the axis *and* on not
+/// having built them already. Loosen either to an `or` and a vertical scroller
+/// registers a horizontal track and handle as well — which nothing lays out and
+/// nothing paints, so the count has to be read off the tree rather than off the
+/// paint, or the waste is invisible.
+#[test]
+fn a_one_axis_scroller_builds_one_axis_worth_of_parts() {
+    let mut vertical = scroller(Scroll::vertical());
+    vertical.fit(500.0, 500.0);
+    let one_axis = vertical.tree.get_children(vertical.root).len();
+
+    let mut both = H::new(
+        container()
+            .width(100.0)
+            .height(100.0)
+            .scroll(Scroll::both())
+            .child(box_of(900.0, 900.0)),
+    );
+    both.fit(500.0, 500.0);
+    let two_axes = both.tree.get_children(both.root).len();
+
+    assert_eq!(
+        two_axes - one_axis,
+        2,
+        "one axis is a track and a handle, so two axes is exactly two more: \
+         {one_axis} against {two_axes}"
+    );
+}
+
 /// Whether a scrollbar exists at all comes down to one comparison — content
 /// against viewport — so the viewport a scroller records has to be its
 /// *visible* extent, never the unbounded constraint the scrolled axis is laid
