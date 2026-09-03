@@ -289,6 +289,52 @@ mod tests {
         jobs::pump_and_layout(tree, root, c).expect("the root is registered")
     }
 
+    /// A square SVG, inline, so the test needs no asset on disk and no decoder.
+    fn svg(side: u32) -> ImageSource {
+        let src = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="{side}" height="{side}"><rect width="{side}" height="{side}" fill="red"/></svg>"#
+        );
+        ImageSource::SvgBytes(src.into_bytes().into())
+    }
+
+    /// An image draws itself, at the box it was given and the fit it declares.
+    ///
+    /// `paint` had nothing watching it at all: emptying the whole method was
+    /// invisible to every test, because the one that asks about `content_fit`
+    /// asks the *measured size* and never looks at what was drawn.
+    #[test]
+    fn an_image_draws_its_source_into_its_own_box() {
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(Image::new(svg(20)).content_fit(ContentFit::Fill)));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        measured(&mut tree, root, Constraints::new(0.0, 0.0, 40.0, 40.0));
+
+        let mut node = crate::renderer::RenderNode::new(root.as_u64());
+        tree.with_widget_mut(root, |w, id, t| {
+            let mut ctx = crate::renderer::PaintContext::new(&mut node);
+            w.paint(t, id, &mut ctx);
+        });
+
+        let drawn = node
+            .commands
+            .iter()
+            .find_map(|cmd| match &**cmd {
+                crate::renderer::DrawCommand::Image {
+                    rect, content_fit, ..
+                } => Some((*rect, *content_fit)),
+                _ => None,
+            })
+            .expect("an image command");
+
+        assert_eq!(
+            (drawn.0.width, drawn.0.height),
+            (40.0, 40.0),
+            "the image is drawn into the box layout gave it, got {:?}",
+            drawn.0
+        );
+        assert_eq!(drawn.1, ContentFit::Fill, "and with the fit it declares");
+    }
+
     /// How an image fills its box is a value it can be told.
     ///
     /// Read under the same tracking as the source, because the fit decides the

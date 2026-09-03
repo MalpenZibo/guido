@@ -1505,6 +1505,49 @@ fn a_ripple_takes_the_colour_it_is_given_now() {
         green.g > 0.9 && green.b < 0.1,
         "the disc under a still finger never saw the write, got {green:?}"
     );
+    // The alpha is the declared one scaled by the disc's own opacity, which is
+    // 1.0 for a ripple held at full growth — so here the two coincide and the
+    // scaling is visible as itself rather than as some other arithmetic.
+    assert!(
+        (green.a - 0.4).abs() < 0.01,
+        "the declared alpha is scaled by the disc's opacity, not combined with \
+         it some other way: got {green:?}"
+    );
+}
+
+/// The pressed layer's ripple is the one that paints, even when another layer
+/// declares one too.
+///
+/// `ripple_config` asks for a layer that is *both* `Pressed` and has a ripple.
+/// Loosen that to either and the search — which runs in reverse declaration
+/// order — answers with whichever was declared last, so a hover ripple
+/// declared after a pressed one would take over the press.
+#[test]
+fn a_hover_ripple_does_not_stand_in_for_the_pressed_one() {
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(100.0)
+            .when_pressed(|s: StateStyle| s.ripple_with_color(Color::rgba(1.0, 0.0, 0.0, 0.4)))
+            .when_hovered(|s: StateStyle| s.ripple_with_color(Color::rgba(0.0, 0.0, 1.0, 0.4)))
+            .on_click(|| {}),
+    );
+    h.fit(400.0, 400.0);
+
+    let t0 = std::time::Instant::now() - std::time::Duration::from_secs(60);
+    send_at(&mut h, t0, Event::mouse_down(50.0, 50.0, MouseButton::Left));
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(8),
+        400.0,
+        400.0,
+    );
+
+    let drawn = painted_ripple_color(&mut h).expect("the press starts a ripple");
+    assert!(
+        drawn.r > 0.9 && drawn.b < 0.1,
+        "the hover layer's colour reached a press it does not describe: {drawn:?}"
+    );
 }
 
 /// Lay out, run the queued jobs, paint, and report the first text colour.
