@@ -820,6 +820,7 @@ mod tests {
             s.font_family(FontFamily::Monospace)
                 .font_weight(FontWeight::BOLD)
                 .text_stroke(TextStroke::new(3.0, Color::WHITE))
+                .text_shadow(TextShadow::new(0.0, 0.0, 9.0, Color::WHITE))
         })));
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
 
@@ -830,13 +831,28 @@ mod tests {
             "the family override applies"
         );
         assert_eq!(styled.1, FontWeight::BOLD, "and the weight");
-        let with_stroke = measured(&mut tree, root, 800.0);
+        // A stroke and a shadow reach paint as the slop the text publishes,
+        // never as a field of the command, so that is where they are asked
+        // about.
+        let decorated = tree.paint_overflow(root);
+        assert!(
+            decorated >= 3.0,
+            "the stroke and shadow overrides have to reach the published reach, \
+             got {decorated}"
+        );
 
         hot.set(false);
         let plain = painted_style(&mut tree, root);
-        assert_ne!(plain.0, FontFamily::Monospace, "and both come back off");
+        assert_ne!(
+            plain.0,
+            FontFamily::Monospace,
+            "and all of them come back off"
+        );
         assert_ne!(plain.1, FontWeight::BOLD);
-        let _ = with_stroke;
+        assert!(
+            tree.paint_overflow(root) < decorated,
+            "including the two only the reach can see"
+        );
     }
 
     /// The family and weight of the first painted text command.
