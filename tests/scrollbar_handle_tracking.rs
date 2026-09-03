@@ -835,3 +835,34 @@ fn a_drag_that_loses_its_position_does_not_snap_the_offset() {
          {after}, was at {dragged_to}"
     );
 }
+
+/// A drag ends on the button that began it, and not on any other.
+///
+/// The `MouseUp` arm is guarded on `MouseButton::Left`, and a drag can only
+/// *start* on Left — so the guard looks like it cannot matter, and `cargo
+/// mutants` replacing it with `true` went unnoticed. It matters while a drag is
+/// live: a right-click released over a scroller mid-drag would drop the drag,
+/// and the handle would stop following a pointer whose button is still down.
+#[test]
+fn a_right_release_does_not_end_a_left_drag() {
+    let mut h = H::vertical();
+    let (x, y) = (
+        VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        TRACK_START + V_HANDLE / 2.0,
+    );
+
+    h.dispatch(Event::mouse_move(x, y));
+    h.dispatch(Event::mouse_down(x, y, MouseButton::Left));
+
+    // The other button goes up while the drag is still held.
+    h.dispatch(Event::mouse_up(x, y, MouseButton::Right));
+
+    h.dispatch(Event::mouse_move(x, y + 40.0));
+    let dragged = h.handle_pos();
+    assert!(
+        dragged > TRACK_START + 1.0,
+        "the handle sat at {dragged} after the pointer moved 40px with the \
+         button still down: a release of a button that never started this drag \
+         ended it"
+    );
+}
