@@ -240,7 +240,7 @@ Make containers scrollable when content overflows:
 container()
     .width(200.0)
     .height(200.0)
-    .scrollable(ScrollAxis::Vertical)
+    .scroll(Scroll::vertical())
     .child(large_content())
 # ;
 # }
@@ -248,12 +248,18 @@ container()
 
 ### Scroll Axes
 
-| Axis | Description |
+The axis is chosen by constructor, and it is the one part of a `Scroll` that
+takes no signal — it decides what kind of widget this is, as `layout` and
+`control` do.
+
+| Constructor | Description |
 |------|-------------|
-| `ScrollAxis::None` | No scrolling (default) |
-| `ScrollAxis::Vertical` | Vertical scrolling only |
-| `ScrollAxis::Horizontal` | Horizontal scrolling only |
-| `ScrollAxis::Both` | Both directions |
+| `Scroll::vertical()` | Vertical scrolling only |
+| `Scroll::horizontal()` | Horizontal scrolling only |
+| `Scroll::both()` | Both directions |
+
+A container with no `.scroll(..)` does not scroll, which is what the old
+`ScrollAxis::None` said.
 
 ### Custom Scrollbars
 
@@ -262,13 +268,14 @@ container()
 # use guido::prelude::*;
 # fn main() {
 container()
-    .scrollable(ScrollAxis::Vertical)
-    .scrollbar(|sb| {
-        sb.width(6.0)
-          .handle_color(Color::rgb(0.4, 0.6, 0.9))
-          .handle_hover_color(Color::rgb(0.5, 0.7, 1.0))
-          .handle_corner_radius(3.0)
-    })
+    .scroll(
+        Scroll::vertical()
+            .width(6.0)
+            .handle(|h| h
+                .background(Color::rgb(0.4, 0.6, 0.9))
+                .corners(3.0)
+                .when_hovered(|s| s.background(Color::rgb(0.5, 0.7, 1.0)))),
+    )
 # ;
 # }
 ```
@@ -280,8 +287,7 @@ container()
 # use guido::prelude::*;
 # fn main() {
 container()
-    .scrollable(ScrollAxis::Vertical)
-    .scrollbar_visibility(ScrollbarVisibility::Hidden)
+    .scroll(Scroll::vertical().visibility(ScrollbarVisibility::Hidden))
 # ;
 # }
 ```
@@ -370,6 +376,11 @@ Declared on the value, not beside it:
 - `.visible(condition)` - Show or hide the container (accepts static, signal, or closure)
 
 ### Scrolling
-- `.scrollable(axis)` - Enable scrolling (None, Vertical, Horizontal, Both)
-- `.scrollbar(|sb| ...)` - Customize scrollbar appearance
-- `.scrollbar_visibility(visibility)` - Show or hide scrollbar
+- `.scroll(Scroll::vertical() | Scroll::horizontal() | Scroll::both())` - Scroll,
+  and say what the scrollbar looks like. One value: the parts cannot be declared
+  apart from the thing they configure
+- `Scroll::width`, `hover_width`, `margin`, `min_handle_size`, `reserve_gutter` /
+  `overlay()`, `visibility(..)` - the measurements the container's layout needs,
+  each taking a static value, a signal or a closure
+- `Scroll::track(|t| ..)` and `Scroll::handle(|h| ..)` - the scrollbar is two
+  containers, so these take everything a container takes

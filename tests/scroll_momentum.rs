@@ -22,7 +22,7 @@ impl H {
         let view = container()
             .width(200.0)
             .height(200.0)
-            .scrollable(ScrollAxis::Vertical)
+            .scroll(Scroll::vertical())
             .child(
                 container()
                     .layout(Flex::column().spacing(8.0))

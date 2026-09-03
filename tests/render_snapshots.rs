@@ -307,19 +307,19 @@ fn scrolling() {
             box_of(200.0, 200.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
                 .corners(8.0)
-                .scrollable(ScrollAxis::Vertical)
+                .scroll(Scroll::vertical())
                 .child(column(20)),
         )
         .child(
             box_of(200.0, 200.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
-                .scrollable(ScrollAxis::Vertical)
+                .scroll(Scroll::vertical())
                 .child(column(2)),
         )
         .child(
             box_of(200.0, 80.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
-                .scrollable(ScrollAxis::Horizontal)
+                .scroll(Scroll::horizontal())
                 .child(
                     container()
                         .layout(Flex::row().spacing(8.0))
@@ -573,7 +573,7 @@ fn bar_like_composition() {
         .child(container().width(fill()).height(1.0))
         .child(
             box_of(90.0, 24.0)
-                .scrollable(ScrollAxis::Horizontal)
+                .scroll(Scroll::horizontal())
                 .background(Color::rgb(0.15, 0.15, 0.2))
                 .corners(6.0)
                 .child(

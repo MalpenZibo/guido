@@ -88,7 +88,7 @@ inside its subtree. Which is what makes the case above work at all — the focus
 is in a *sibling*, and both belong to the same unit.
 
 `control()` is rarely written by hand. Anything the pointer can act on is a
-unit by necessity, so `on_click`, `on_hover`, `on_scroll`, `scrollable` and a
+unit by necessity, so `on_click`, `on_hover`, `on_scroll`, `scroll` and a
 declared state layer all imply it. Write it where the boundary is real but
 nothing else announces it — a field's label and input, a row whose highlight
 belongs to the row.

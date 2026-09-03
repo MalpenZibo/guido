@@ -73,7 +73,7 @@ fn main() {
             .child(
                 container()
                     .height(300.0)
-                    .scrollable(ScrollAxis::Vertical)
+                    .scroll(Scroll::vertical())
                     .child(dyn_container_view),
             );
 

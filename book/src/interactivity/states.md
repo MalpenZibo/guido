@@ -279,7 +279,7 @@ container()
 ```
 
 `on_click` makes that container a control, because anything the pointer can act
-on is a unit by necessity. So do `on_hover`, `on_scroll`, `scrollable` and any
+on is a unit by necessity. So do `on_hover`, `on_scroll`, `scroll` and any
 declared state layer. Write `control()` yourself where the boundary is real but
 nothing else announces it:
 

@@ -1,6 +1,8 @@
 //! Scroll configuration types for scrollable containers.
 
-use super::widget::{Color, Rect};
+use super::widget::Rect;
+use crate::reactive::{IntoSignal, Signal};
+use crate::widgets::{Color, Container};
 
 /// Axis for scrollbar calculations (vertical or horizontal)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,183 +47,201 @@ pub enum ScrollbarVisibility {
     Hidden,
 }
 
-/// Configuration for scrollbar appearance
-#[derive(Debug, Clone)]
-pub struct ScrollbarConfig {
+/// The measurements the container's own layout needs before anything paints.
+///
+/// Resolved once per layout pass from the signals on [`Scroll`], and handed to
+/// the geometry below as plain numbers — the track and handle rects are
+/// arithmetic, and arithmetic should not be reading signals halfway through.
+///
+/// What is *not* here is appearance. Colour, corners, borders and the hover and
+/// pressed states are `Container`'s vocabulary, reached through
+/// [`Scroll::track`] and [`Scroll::handle`], because the scrollbar is two
+/// containers and always was.
+#[derive(Debug, Clone, Copy)]
+pub struct ScrollbarMetrics {
     /// Width of the scrollbar track and handle (normal state)
     pub width: f32,
     /// Width of the scrollbar when hovered (expanded state)
     pub hover_width: f32,
     /// Margin from the edge of the container
     pub margin: f32,
-    /// Color of the scrollbar track
-    pub track_color: Color,
-    /// Corner radius of the track
-    pub track_corner_radius: f32,
-    /// Corner curvature of the track (K-value: 0=bevel, 1=circular, 2=squircle)
-    pub track_corner_curvature: f32,
-    /// Color of the scrollbar handle
-    pub handle_color: Color,
-    /// Corner radius of the handle
-    pub handle_corner_radius: f32,
-    /// Corner curvature of the handle (K-value: 0=bevel, 1=circular, 2=squircle)
-    pub handle_corner_curvature: f32,
-    /// Color of the handle when hovered
-    pub handle_hover_color: Color,
-    /// Color of the handle when pressed/dragged
-    pub handle_pressed_color: Color,
     /// Minimum size of the handle (to ensure it's always grabbable)
     pub min_handle_size: f32,
-    /// Whether scrollbar reserves gutter space in layout
+    /// Whether the scrollbar reserves gutter space in layout
     pub reserve_gutter: bool,
 }
 
-impl Default for ScrollbarConfig {
+impl Default for ScrollbarMetrics {
     fn default() -> Self {
         Self {
             width: 6.0,
             hover_width: 10.0,
             margin: 2.0,
-            track_color: Color::rgba(1.0, 1.0, 1.0, 0.05),
-            track_corner_radius: 100.0, // Large value to ensure pill shape (clamped to half width)
-            track_corner_curvature: 1.0, // Circular corners (standard)
-            handle_color: Color::rgba(1.0, 1.0, 1.0, 0.3),
-            handle_corner_radius: 100.0, // Large value to ensure pill shape (clamped to half width)
-            handle_corner_curvature: 1.0, // Circular corners (standard)
-            handle_hover_color: Color::rgba(1.0, 1.0, 1.0, 0.5),
-            handle_pressed_color: Color::rgba(1.0, 1.0, 1.0, 0.6),
             min_handle_size: 20.0,
             reserve_gutter: true,
         }
     }
 }
 
-/// Builder for customizing scrollbar appearance
-#[derive(Default)]
-pub struct ScrollbarBuilder {
-    config: ScrollbarConfig,
+/// A radius far past half the width, which the shader clamps — so a scrollbar
+/// stays a pill at whatever width is declared.
+fn pill() -> crate::widgets::Corners {
+    crate::widgets::Corners::rounded(100.0)
 }
 
-impl ScrollbarBuilder {
-    /// Create a new scrollbar builder with default settings
-    pub fn new() -> Self {
-        Self::default()
+/// How a container scrolls, and what its scrollbar looks like.
+///
+/// One value rather than three setters. `scrollable`, `scrollbar_visibility`
+/// and `scrollbar` were separate, and the last two were silent no-ops on a
+/// container that never became scrollable — half a scroll configuration that
+/// compiled and did nothing. Reached through [`Container::scroll`], there is no
+/// way to spell the parts apart from the thing they configure.
+///
+/// ```ignore
+/// container().scroll(Scroll::vertical())
+///
+/// container().scroll(
+///     Scroll::vertical()
+///         .width(6.0)
+///         .handle(|h| h.background(theme.handle)
+///             .when_hovered(|s| s.background(theme.hot))),
+/// )
+/// ```
+///
+/// The axis is structural — it decides what kind of widget this is — so it is
+/// chosen by constructor and takes no signal, as `layout` and `control` do not.
+/// Everything else here is declared and therefore reactive.
+pub struct Scroll {
+    pub(crate) axis: ScrollAxis,
+    pub(crate) visibility: Option<Signal<ScrollbarVisibility>>,
+    pub(crate) width: Option<Signal<f32>>,
+    pub(crate) hover_width: Option<Signal<f32>>,
+    pub(crate) margin: Option<Signal<f32>>,
+    pub(crate) min_handle_size: Option<Signal<f32>>,
+    pub(crate) reserve_gutter: Option<Signal<bool>>,
+    pub(crate) track: Option<Box<dyn Fn(Container) -> Container>>,
+    pub(crate) handle: Option<Box<dyn Fn(Container) -> Container>>,
+}
+
+impl Scroll {
+    fn new(axis: ScrollAxis) -> Self {
+        Self {
+            axis,
+            visibility: None,
+            width: None,
+            hover_width: None,
+            margin: None,
+            min_handle_size: None,
+            reserve_gutter: None,
+            track: None,
+            handle: None,
+        }
     }
 
-    /// Set the width of the scrollbar (normal state)
-    pub fn width(mut self, width: f32) -> Self {
-        self.config.width = width;
+    /// Scroll vertically.
+    pub fn vertical() -> Self {
+        Self::new(ScrollAxis::Vertical)
+    }
+
+    /// Scroll horizontally.
+    pub fn horizontal() -> Self {
+        Self::new(ScrollAxis::Horizontal)
+    }
+
+    /// Scroll on both axes.
+    pub fn both() -> Self {
+        Self::new(ScrollAxis::Both)
+    }
+
+    /// Whether the scrollbar is drawn. Hidden still scrolls.
+    pub fn visibility<M>(mut self, visibility: impl IntoSignal<ScrollbarVisibility, M>) -> Self {
+        self.visibility = Some(visibility.into_signal());
         self
     }
 
-    /// Set the width of the scrollbar when hovered (expanded state)
-    pub fn hover_width(mut self, width: f32) -> Self {
-        self.config.hover_width = width;
+    /// The width of the track and handle at rest.
+    pub fn width<M>(mut self, width: impl IntoSignal<f32, M>) -> Self {
+        self.width = Some(width.into_signal());
         self
     }
 
-    /// Set the margin from the container edge
-    pub fn margin(mut self, margin: f32) -> Self {
-        self.config.margin = margin;
+    /// The width the handle grows to under the pointer.
+    ///
+    /// Not a `when_hovered(|s| s.width(..))`: the growth is a scale animation on
+    /// the handle, so it belongs to the geometry rather than to the styling.
+    pub fn hover_width<M>(mut self, width: impl IntoSignal<f32, M>) -> Self {
+        self.hover_width = Some(width.into_signal());
         self
     }
 
-    /// Set the track color
-    pub fn track_color(mut self, color: Color) -> Self {
-        self.config.track_color = color;
+    /// The gap between the scrollbar and the container's edges.
+    pub fn margin<M>(mut self, margin: impl IntoSignal<f32, M>) -> Self {
+        self.margin = Some(margin.into_signal());
         self
     }
 
-    /// Set the track corner radius
-    pub fn track_corner_radius(mut self, radius: f32) -> Self {
-        self.config.track_corner_radius = radius;
+    /// How short the handle is allowed to get, so it stays grabbable.
+    pub fn min_handle_size<M>(mut self, size: impl IntoSignal<f32, M>) -> Self {
+        self.min_handle_size = Some(size.into_signal());
         self
     }
 
-    /// Set the track corner curvature (K-value)
-    /// - 0.0 = bevel (diagonal cut)
-    /// - 1.0 = circular (standard, default)
-    /// - 2.0 = squircle (iOS-style smooth)
-    pub fn track_corner_curvature(mut self, curvature: f32) -> Self {
-        self.config.track_corner_curvature = curvature;
+    /// Whether the scrollbar takes space from the content or floats over it.
+    pub fn reserve_gutter<M>(mut self, reserve: impl IntoSignal<bool, M>) -> Self {
+        self.reserve_gutter = Some(reserve.into_signal());
         self
     }
 
-    /// Set the track to use squircle corners (K=2, iOS-style)
-    pub fn track_squircle(mut self) -> Self {
-        self.config.track_corner_curvature = 2.0;
+    /// Float the scrollbar over the content. Shorthand for
+    /// `reserve_gutter(false)`.
+    pub fn overlay(self) -> Self {
+        self.reserve_gutter(false)
+    }
+
+    /// The track as it looks with nothing declared.
+    ///
+    /// Named rather than buried in the scroll code so an application can read
+    /// the values it is overriding, and so [`track`](Self::track) has something
+    /// to say when it says the closure composes over a default.
+    pub fn default_track() -> Container {
+        Container::new()
+            .background(Color::rgba(1.0, 1.0, 1.0, 0.05))
+            .corners(pill())
+    }
+
+    /// The handle as it looks with nothing declared, hover and press included.
+    pub fn default_handle() -> Container {
+        use crate::widgets::state_layer::{StateStyle, Stateful};
+        Container::new()
+            .background(Color::rgba(1.0, 1.0, 1.0, 0.3))
+            .corners(pill())
+            .when_hovered(|s: StateStyle| s.background(Color::rgba(1.0, 1.0, 1.0, 0.5)))
+            .when_pressed(|s: StateStyle| s.background(Color::rgba(1.0, 1.0, 1.0, 0.6)).ripple())
+    }
+
+    /// Style the track — the groove the handle runs in.
+    ///
+    /// The closure receives the `Container` the track is, so everything a
+    /// container declares is available and reactive by construction. It
+    /// receives [`default_track`](Self::default_track), so what it does not set
+    /// it keeps — and ignoring the argument (`|_| container()`) is how you get
+    /// a track with no default styling at all.
+    ///
+    /// Its geometry is not yours to set: the scroll code lays both parts out
+    /// from the measurements above under tight constraints, so `width`,
+    /// `height` and any position set here are overwritten.
+    pub fn track(mut self, f: impl Fn(Container) -> Container + 'static) -> Self {
+        self.track = Some(Box::new(f));
         self
     }
 
-    /// Set the handle color
-    pub fn handle_color(mut self, color: Color) -> Self {
-        self.config.handle_color = color;
+    /// Style the handle — the part that moves and answers a drag.
+    ///
+    /// The same contract as [`track`](Self::track), over
+    /// [`default_handle`](Self::default_handle), and the same geometry caveat.
+    pub fn handle(mut self, f: impl Fn(Container) -> Container + 'static) -> Self {
+        self.handle = Some(Box::new(f));
         self
-    }
-
-    /// Set the handle corner radius
-    pub fn handle_corner_radius(mut self, radius: f32) -> Self {
-        self.config.handle_corner_radius = radius;
-        self
-    }
-
-    /// Set the handle corner curvature (K-value)
-    /// - 0.0 = bevel (diagonal cut)
-    /// - 1.0 = circular (standard, default)
-    /// - 2.0 = squircle (iOS-style smooth)
-    pub fn handle_corner_curvature(mut self, curvature: f32) -> Self {
-        self.config.handle_corner_curvature = curvature;
-        self
-    }
-
-    /// Set the handle to use squircle corners (K=2, iOS-style)
-    pub fn handle_squircle(mut self) -> Self {
-        self.config.handle_corner_curvature = 2.0;
-        self
-    }
-
-    /// Set both track and handle to use squircle corners (K=2, iOS-style)
-    pub fn squircle(mut self) -> Self {
-        self.config.track_corner_curvature = 2.0;
-        self.config.handle_corner_curvature = 2.0;
-        self
-    }
-
-    /// Set the handle hover color
-    pub fn handle_hover_color(mut self, color: Color) -> Self {
-        self.config.handle_hover_color = color;
-        self
-    }
-
-    /// Set the handle pressed/dragged color
-    pub fn handle_pressed_color(mut self, color: Color) -> Self {
-        self.config.handle_pressed_color = color;
-        self
-    }
-
-    /// Set the minimum handle size
-    pub fn min_handle_size(mut self, size: f32) -> Self {
-        self.config.min_handle_size = size;
-        self
-    }
-
-    /// Set whether scrollbar reserves gutter space in layout
-    /// When true (default), content area is reduced to make room for scrollbar
-    /// When false, scrollbar overlays the content
-    pub fn reserve_gutter(mut self, reserve: bool) -> Self {
-        self.config.reserve_gutter = reserve;
-        self
-    }
-
-    /// Make the scrollbar overlay content (no gutter space reserved)
-    pub fn overlay(mut self) -> Self {
-        self.config.reserve_gutter = false;
-        self
-    }
-
-    /// Build the scrollbar configuration
-    pub fn build(self) -> ScrollbarConfig {
-        self.config
     }
 }
 
@@ -484,7 +504,7 @@ impl ScrollState {
         &self,
         axis: ScrollbarAxis,
         bounds: Rect,
-        config: &ScrollbarConfig,
+        config: &ScrollbarMetrics,
         needs_other_scrollbar: bool,
     ) -> Rect {
         let margin = config.margin;
@@ -518,7 +538,7 @@ impl ScrollState {
         &self,
         axis: ScrollbarAxis,
         bounds: Rect,
-        config: &ScrollbarConfig,
+        config: &ScrollbarMetrics,
         needs_other_scrollbar: bool,
     ) -> Rect {
         let margin = config.margin;
@@ -551,7 +571,7 @@ impl ScrollState {
         &self,
         axis: ScrollbarAxis,
         track_size: f32,
-        config: &ScrollbarConfig,
+        config: &ScrollbarMetrics,
     ) -> f32 {
         let (viewport, content) = match axis {
             ScrollbarAxis::Vertical => (self.viewport_height, self.content_height),
@@ -591,7 +611,7 @@ impl ScrollState {
         &self,
         axis: ScrollbarAxis,
         bounds: Rect,
-        config: &ScrollbarConfig,
+        config: &ScrollbarMetrics,
         needs_other_scrollbar: bool,
     ) -> Rect {
         let track = self.scrollbar_track_rect(axis, bounds, config, needs_other_scrollbar);
@@ -1023,7 +1043,7 @@ mod tests {
             ..Default::default()
         };
 
-        let config = ScrollbarConfig::default();
+        let config = ScrollbarMetrics::default();
 
         // Vertical: viewport/content = 0.5, so handle should be 50% of track
         let v_handle = state.scrollbar_handle_size(ScrollbarAxis::Vertical, 400.0, &config);
@@ -1042,7 +1062,7 @@ mod tests {
             ..Default::default()
         };
 
-        let config = ScrollbarConfig::default();
+        let config = ScrollbarMetrics::default();
 
         // Handle should be at least min_handle_size
         let handle = state.scrollbar_handle_size(ScrollbarAxis::Vertical, 400.0, &config);

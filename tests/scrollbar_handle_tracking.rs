@@ -32,6 +32,9 @@ const VIEWPORT: f32 = 200.0;
 const TRACK_START: f32 = 2.0;
 const TRACK_LENGTH: f32 = 196.0;
 const BAR_WIDTH: f32 = 6.0;
+/// What the bar widens to under the pointer — `Scroll`'s own default, and the
+/// numerator of the scale the widening is made of.
+const HOVER_WIDTH: f32 = 10.0;
 
 /// A vertical scroller: 200x200 over 648px of content — 20 rows of 24, spaced
 /// 8, padded 8. The handle is `viewport / content * track` long.
@@ -74,7 +77,7 @@ impl H {
             container()
                 .width(VIEWPORT)
                 .height(VIEWPORT)
-                .scrollable(ScrollAxis::Vertical)
+                .scroll(Scroll::vertical())
                 .child(
                     container()
                         .layout(Flex::column().spacing(8.0))
@@ -113,7 +116,7 @@ impl H {
             container()
                 .width(VIEWPORT)
                 .height(H_VIEWPORT)
-                .scrollable(ScrollAxis::Horizontal)
+                .scroll(Scroll::horizontal())
                 .child(
                     container()
                         .layout(Flex::row().spacing(8.0))
@@ -467,10 +470,19 @@ fn the_width_a_hover_adds_to_the_handle_answers_a_press_too() {
     let painted = h.handle_node().local_transform;
     let (left, _) = painted.transform_point(0.0, V_HANDLE / 2.0);
     let (right, _) = painted.transform_point(BAR_WIDTH, V_HANDLE / 2.0);
+    let widened = right - left;
     assert!(
-        right - left > BAR_WIDTH + 0.5,
-        "the hover widened the handle to {} from {BAR_WIDTH}: nothing was added to press on",
-        right - left
+        widened > BAR_WIDTH + 0.5,
+        "the hover widened the handle to {widened} from {BAR_WIDTH}: nothing was added to press on"
+    );
+    // And widened *by the ratio the two widths make*, not by some other
+    // arithmetic on them. A lower bound alone is satisfied by any scale at all,
+    // including the ~60x that multiplying the widths together would give; the
+    // spring is bouncy, so the ceiling allows an overshoot and no more.
+    assert!(
+        widened < HOVER_WIDTH * 1.5,
+        "the handle grew to {widened}, which is not the {HOVER_WIDTH} the hover \
+         width asks for"
     );
 
     let pressed = hovered + Duration::from_millis(200);
@@ -821,5 +833,36 @@ fn a_drag_that_loses_its_position_does_not_snap_the_offset() {
         near(after, dragged_to),
         "a move with no position leaves the drag where it was: handle at \
          {after}, was at {dragged_to}"
+    );
+}
+
+/// A drag ends on the button that began it, and not on any other.
+///
+/// The `MouseUp` arm is guarded on `MouseButton::Left`, and a drag can only
+/// *start* on Left — so the guard looks like it cannot matter, and `cargo
+/// mutants` replacing it with `true` went unnoticed. It matters while a drag is
+/// live: a right-click released over a scroller mid-drag would drop the drag,
+/// and the handle would stop following a pointer whose button is still down.
+#[test]
+fn a_right_release_does_not_end_a_left_drag() {
+    let mut h = H::vertical();
+    let (x, y) = (
+        VIEWPORT - BAR_WIDTH / 2.0 - TRACK_START,
+        TRACK_START + V_HANDLE / 2.0,
+    );
+
+    h.dispatch(Event::mouse_move(x, y));
+    h.dispatch(Event::mouse_down(x, y, MouseButton::Left));
+
+    // The other button goes up while the drag is still held.
+    h.dispatch(Event::mouse_up(x, y, MouseButton::Right));
+
+    h.dispatch(Event::mouse_move(x, y + 40.0));
+    let dragged = h.handle_pos();
+    assert!(
+        dragged > TRACK_START + 1.0,
+        "the handle sat at {dragged} after the pointer moved 40px with the \
+         button still down: a release of a button that never started this drag \
+         ended it"
     );
 }

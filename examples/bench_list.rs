@@ -32,7 +32,7 @@ fn main() {
             move || {
                 container()
                     .background(Color::rgb(0.10, 0.10, 0.14))
-                    .scrollable(ScrollAxis::Vertical)
+                    .scroll(Scroll::vertical())
                     .child(
                         container()
                             .layout(Flex::column().spacing(4.0))

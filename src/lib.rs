@@ -191,9 +191,9 @@ pub mod prelude {
         AnyWidget, Border, Color, Container, ContentFit, Control, CornerRadii, Corners, Event,
         EventResponse, FontFamily, FontWeight, GradientDirection, Image, ImageSource, InputStyle,
         InputStyled, IntoChildren, IntoClickHandler, Key, LinearGradient, Modifiers, MouseButton,
-        Overflow, Padding, Point, Rect, ScrollAxis, ScrollSource, ScrollbarBuilder,
-        ScrollbarVisibility, Selection, StateStyle, Stateful, Text, TextInput, TextShadow,
-        TextStroke, TextStyle, TextStyled, Widget, container, image, keyed, text, text_input,
+        Overflow, Padding, Point, Rect, Scroll, ScrollSource, ScrollbarVisibility, Selection,
+        StateStyle, Stateful, Text, TextInput, TextShadow, TextStroke, TextStyle, TextStyled,
+        Widget, container, image, keyed, text, text_input,
     };
     pub use crate::{
         App, ExitReason, SignalFields, component, default_font_family, load_font, quit_app,

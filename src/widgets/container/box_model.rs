@@ -178,10 +178,10 @@ impl Container {
         // A reserved gutter is space the content never gets, scrollbar shown
         // or not — that is the point of reserving it.
         if let Some(ref sd) = self.scroll_data
-            && sd.scrollbar_config.reserve_gutter
+            && sd.metrics.reserve_gutter
             && sd.scrollbar_visibility != ScrollbarVisibility::Hidden
         {
-            let gutter = sd.scrollbar_config.width + sd.scrollbar_config.margin * 2.0;
+            let gutter = sd.metrics.width + sd.metrics.margin * 2.0;
             if self.scroll_axis.allows_vertical() {
                 max_width = (max_width - gutter).max(0.0);
             }

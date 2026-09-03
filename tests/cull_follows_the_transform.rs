@@ -64,7 +64,7 @@ fn scroller(children: Vec<guido::widgets::Container>) -> guido::widgets::Contain
     container()
         .width(200.0)
         .height(VIEWPORT)
-        .scrollable(ScrollAxis::Vertical)
+        .scroll(Scroll::vertical())
         .layout(Flex::column().spacing(PITCH - ROW_HEIGHT))
         .children(children)
 }
@@ -76,7 +76,7 @@ fn a_translated_column_paints_the_rows_the_translate_brings_into_view() {
         container()
             .width(200.0)
             .height(VIEWPORT)
-            .scrollable(ScrollAxis::Vertical)
+            .scroll(Scroll::vertical())
             .child(
                 container()
                     .layout(Flex::column().spacing(PITCH - ROW_HEIGHT))
@@ -107,7 +107,7 @@ fn an_untranslated_column_still_narrows_to_its_viewport() {
         container()
             .width(200.0)
             .height(VIEWPORT)
-            .scrollable(ScrollAxis::Vertical)
+            .scroll(Scroll::vertical())
             .child(
                 container()
                     .layout(Flex::column().spacing(PITCH - ROW_HEIGHT))
@@ -213,7 +213,7 @@ fn a_subtree_scaled_to_nothing_paints_nothing() {
         container()
             .width(200.0)
             .height(VIEWPORT)
-            .scrollable(ScrollAxis::Vertical)
+            .scroll(Scroll::vertical())
             .child(
                 container()
                     .layout(Flex::column().spacing(PITCH - ROW_HEIGHT))
@@ -266,7 +266,7 @@ fn the_window_widens_on_the_near_side_as_well() {
         container()
             .width(200.0)
             .height(VIEWPORT)
-            .scrollable(ScrollAxis::Vertical)
+            .scroll(Scroll::vertical())
             .child(
                 container()
                     .layout(Flex::column().spacing(PITCH - ROW_HEIGHT))

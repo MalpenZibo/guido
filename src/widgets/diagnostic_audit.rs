@@ -26,7 +26,7 @@ use crate::reactive::diagnostics::report_count;
 use crate::renderer::{PaintContext, RenderNode};
 use crate::tree::Tree;
 use crate::widgets::widget::{Event, Key, Modifiers, MouseButton, ScrollSource};
-use crate::widgets::{Color, ImageSource, LinearGradient, Overflow, ScrollAxis};
+use crate::widgets::{Color, ImageSource, LinearGradient, Overflow, Scroll};
 use crate::widgets::{
     InputStyled, Stateful, TextStyled, Widget, container, image, text, text_input,
 };
@@ -165,7 +165,7 @@ fn a_scrollable_container_is_quiet() {
     let widget = container()
         .width(100.0)
         .height(100.0)
-        .scrollable(ScrollAxis::Both)
+        .scroll(Scroll::both())
         .padding(move || n.get())
         .child(container().width(500.0).height(500.0));
 
