@@ -43,7 +43,7 @@ impl InputStyle {}
 /// Implemented by [`TextInput`](crate::widgets::TextInput) alone, because it
 /// is the only widget that draws any of it. That is the whole point of the
 /// trait existing separately from
-/// [`TextStyled`](crate::widgets::TextStyled): a placeholder colour has
+/// the text style beside it: a placeholder colour has
 /// nowhere to land except on the widget that draws the placeholder.
 pub trait InputStyled: Sized {
     #[doc(hidden)]

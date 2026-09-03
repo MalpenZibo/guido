@@ -28,7 +28,7 @@ use super::control::Control;
 use super::font::{FontFamily, FontWeight};
 use super::input_style::{InputStyle, InputStyled};
 use super::state_layer::{StateWhen, Stateful};
-use super::text_style::{TextStyle, TextStyled};
+use super::text_style::TextStyle;
 use super::widget::{Color, Event, EventResponse, Key, MouseButton, Rect, Widget};
 
 /// Cursor blink interval in milliseconds
@@ -283,6 +283,8 @@ pub struct TextInput {
     /// What this input declares about its own text, and about the furniture
     /// only it draws. Boxed and absent by default.
     text_style: Option<Box<TextStyle>>,
+    /// How the declared colour and size move, when declared with a motion.
+    text_anims: Option<Box<crate::widgets::text_style::TextAnims>>,
     input_style: Option<Box<InputStyle>>,
     /// Overrides that apply while this field's control is in a state, in
     /// declaration order.
@@ -330,6 +332,7 @@ impl TextInput {
             on_change: None,
             on_submit: None,
             text_style: None,
+            text_anims: None,
             input_style: None,
             states: Vec::new(),
         }
@@ -575,7 +578,7 @@ impl TextInput {
     /// The reads happen in this widget's tracking scope, so a change to a
     /// declared metric re-lays-out this input and nothing else.
     fn refresh(&mut self, tree: &Tree, id: WidgetId) -> f32 {
-        let (new_value, new_font_size, new_font_family, new_font_weight, overflow) =
+        let (new_value, new_font_size, new_font_family, new_font_weight, overflow, new_color) =
             with_signal_tracking(id, JobType::Layout, || {
                 let style = self.resolved_text_style(tree, id);
 
@@ -605,6 +608,8 @@ impl TextInput {
                         style.stroke.map(|s| s.get()),
                         style.shadow.map(|s| s.get()),
                     ),
+                    self.animates_text_color()
+                        .then(|| style.color.get_or(Color::WHITE)),
                 )
             });
 
@@ -618,6 +623,12 @@ impl TextInput {
             self.selection.cursor = self.selection.cursor.min(self.cached_char_count);
             self.selection.anchor = self.selection.anchor.min(self.cached_char_count);
         }
+
+        // The declared motions, pointed at what the style now resolves to. The
+        // same two properties `Text` animates, from the same list — see
+        // `declares_text_style`.
+        let new_font_size =
+            self.retarget_text_anims(tree, id, new_color.unwrap_or(Color::WHITE), new_font_size);
 
         // Check font properties - only set dirty flag if changed
         if (new_font_size - self.cached_font_size).abs() > f32::EPSILON {
@@ -1133,11 +1144,7 @@ impl Stateful for TextInput {
     }
 }
 
-impl TextStyled for TextInput {
-    fn text_style_mut(&mut self) -> &mut TextStyle {
-        self.text_style.get_or_insert_with(Box::default)
-    }
-}
+crate::widgets::text_style::declares_text_style!(TextInput, text_style, text_anims);
 
 impl InputStyled for TextInput {
     fn input_style_mut(&mut self) -> &mut InputStyle {
@@ -1147,7 +1154,9 @@ impl InputStyled for TextInput {
 
 impl Widget for TextInput {
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
-        self.update_cursor_blink(id, tree.frame_instant())
+        let blinking = self.update_cursor_blink(id, tree.frame_instant());
+        let animating = self.advance_text_anims(tree, id);
+        blinking || animating
     }
 
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
@@ -1218,7 +1227,10 @@ impl Widget for TextInput {
             with_signal_tracking(id, JobType::Paint, || {
                 let style = self.resolved_text_style(tree, id);
                 let input = self.resolved_input_style();
-                let text_color = style.color.get_or(Color::WHITE);
+                let text_color = crate::widgets::container::get_animated_value(
+                    self.text_anims.as_ref().and_then(|a| a.color.as_ref()),
+                    || style.color.get_or(Color::WHITE),
+                );
                 // Only when there is nothing to show instead. Read inside the
                 // tracking scope like every other paint input, so a prompt that
                 // changes repaints the field.
@@ -1693,6 +1705,54 @@ mod tests {
             "asked for no caret and got one anyway"
         );
         assert!(has_focus(id), "and the focus is still here");
+    }
+
+    /// A field's declared colour eases exactly as a text's does.
+    ///
+    /// The two widgets take their style setters from one list
+    /// (`declares_text_style`), so this is parity being *observed* rather than
+    /// assumed: the macro guarantees the method exists, and this guarantees the
+    /// storage behind it is wired — an input that accepted a transition and
+    /// ignored it would be the silently-dropped value the whole rule exists to
+    /// prevent.
+    #[test]
+    fn a_declared_transition_eases_an_input_colour() {
+        use crate::animation::Animate;
+
+        let hue = create_signal(Color::rgb(0.0, 0.0, 0.0));
+        let (mut tree, root, _id) = field_in_container(
+            text_input(create_signal("abc".to_owned()))
+                .color((move || hue.get()).transition(400.0)),
+        );
+
+        fn drawn(tree: &mut Tree, id: WidgetId, at: std::time::Instant) -> Option<Color> {
+            tree.set_frame_instant(Some(at));
+            relayout(tree, id);
+            let node = paint_once(tree, id);
+            tree.set_frame_instant(None);
+            fn walk(node: &crate::renderer::RenderNode) -> Option<Color> {
+                for cmd in &node.commands {
+                    if let crate::renderer::DrawCommand::Text { color, .. } = &**cmd {
+                        return Some(*color);
+                    }
+                }
+                node.children.iter().find_map(|c| walk(c))
+            }
+            walk(&node)
+        }
+
+        let t0 = std::time::Instant::now();
+        drawn(&mut tree, root, t0);
+
+        hue.set(Color::rgb(1.0, 1.0, 1.0));
+        drawn(&mut tree, root, t0 + std::time::Duration::from_millis(1));
+        let midway = drawn(&mut tree, root, t0 + std::time::Duration::from_millis(100))
+            .expect("the field draws its text");
+
+        assert!(
+            midway.r > 0.01 && midway.r < 0.99,
+            "an input's declared colour has to ease like a text's, got {midway:?}"
+        );
     }
 
     /// A field switched to masked refuses the very next copy, not the one after.

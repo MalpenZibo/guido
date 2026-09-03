@@ -1819,10 +1819,10 @@ fn sorted_axis(tree: &Tree, children: &[WidgetId]) -> Option<Axis> {
 /// layout by `seed_animations`, which reads the signal rather than this
 /// snapshot; those two are read there only for their subscription, so their
 /// seed survives into the first advance.
-fn declare<T: Animatable, M>(
-    anims: &mut Option<Box<ContainerAnims>>,
+pub(crate) fn declare<A: Default, T: Animatable, M>(
+    anims: &mut Option<Box<A>>,
     value: impl IntoAnimated<T, M>,
-    slot: impl FnOnce(&mut ContainerAnims) -> &mut Option<AnimationState<T>>,
+    slot: impl FnOnce(&mut A) -> &mut Option<AnimationState<T>>,
 ) -> Signal<T> {
     let (signal, motion) = value.into_animated().into_parts();
     let installed = motion.map(|motion| {
@@ -1843,9 +1843,9 @@ fn declare<T: Animatable, M>(
 /// Nothing into a container that has no animation box is the overwhelmingly
 /// common case — every plain `background(RED)` — so it must not be the thing
 /// that allocates one.
-fn write_slot<T: Animatable>(
-    anims: &mut Option<Box<ContainerAnims>>,
-    slot: impl FnOnce(&mut ContainerAnims) -> &mut Option<AnimationState<T>>,
+fn write_slot<A: Default, T: Animatable>(
+    anims: &mut Option<Box<A>>,
+    slot: impl FnOnce(&mut A) -> &mut Option<AnimationState<T>>,
     installed: Option<AnimationState<T>>,
 ) {
     match anims.as_deref_mut() {

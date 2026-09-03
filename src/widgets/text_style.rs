@@ -44,7 +44,11 @@
 
 use smallvec::SmallVec;
 
+use std::time::Instant;
+
+use crate::jobs::RequiredJob;
 use crate::reactive::{IntoSignal, Signal};
+use crate::widgets::container::AnimationState;
 
 use super::font::{FontFamily, FontWeight};
 use super::widget::Color;
@@ -236,74 +240,323 @@ impl TextStyle {
     }
 }
 
-/// The vocabulary for declaring text style, written once.
+/// Where a declared text property keeps its motion.
 ///
-/// Implemented by whoever *draws* glyphs — [`Text`](crate::widgets::Text) and
-/// [`TextInput`](crate::widgets::TextInput) — and by [`TextStyle`] itself, so
-/// a state override is built with the same words as the widget:
-/// `when_hovered(|s| s.color(..))`.
-///
-/// ```ignore
-/// container()
-///     .child(text("quiet").color(theme.weak))
-///     .child(text("loud").color(theme.strong))
-/// ```
-pub trait TextStyled: Sized {
-    #[doc(hidden)]
-    fn text_style_mut(&mut self) -> &mut TextStyle;
+/// Boxed and absent by default, like the style beside it: a text that declares
+/// no timing pays a null check rather than two animation states. Only the two
+/// interpolable properties are here — see [`declares_text_style`].
+#[derive(Default)]
+pub(crate) struct TextAnims {
+    pub(crate) color: Option<AnimationState<Color>>,
+    pub(crate) font_size: Option<AnimationState<f32>>,
+}
 
+impl TextAnims {
+    /// Point both motions at what the style now resolves to, and say what has
+    /// to happen next.
+    ///
+    /// Returns the job the frame after this one wants, and the size to measure
+    /// with — the animated one while it is moving, the declared one otherwise.
+    ///
+    /// A motion that has never run is *seeded* rather than eased: its stored
+    /// value is whatever `get_untracked` saw when the builder ran, and a write
+    /// landing between construction and the first layout would otherwise make
+    /// the first frame ease from a value that was already stale.
+    pub(crate) fn retarget(
+        &mut self,
+        color: Color,
+        size: f32,
+        now: Instant,
+    ) -> (Option<RequiredJob>, f32) {
+        let mut wants = None;
+        if let Some(a) = self.color.as_mut() {
+            if a.is_initial() {
+                a.set_immediate(color);
+            } else {
+                a.animate_to(color, now);
+            }
+            if a.is_animating() {
+                wants = Some(RequiredJob::Paint);
+            }
+        }
+        let mut measured = size;
+        if let Some(a) = self.font_size.as_mut() {
+            if a.is_initial() {
+                a.set_immediate(size);
+            } else {
+                a.animate_to(size, now);
+            }
+            measured = a.displayed();
+            // A size still moving has to be measured again, not merely redrawn.
+            if a.is_animating() {
+                wants = Some(RequiredJob::Layout);
+            }
+        }
+        (wants, measured)
+    }
+
+    /// Move both motions on, and say what the next frame wants.
+    ///
+    /// `None` where nothing moved: a transition inside its `delay_ms` is
+    /// animating and has produced no new value, and asking for a paint there
+    /// would wake the loop every frame for a picture that has not changed.
+    pub(crate) fn advance(&mut self, now: Instant) -> Option<RequiredJob> {
+        let mut wants = None;
+        if let Some(a) = self.color.as_mut()
+            && a.advance(now).is_changed()
+        {
+            wants = Some(RequiredJob::Paint);
+        }
+        if let Some(a) = self.font_size.as_mut()
+            && a.advance(now).is_changed()
+        {
+            wants = Some(RequiredJob::Layout);
+        }
+        wants
+    }
+
+    /// Whether either motion is still on its way, which is what keeps the
+    /// frames coming while a delay is running.
+    pub(crate) fn is_animating(&self) -> bool {
+        self.color.as_ref().is_some_and(|a| a.is_animating())
+            || self.font_size.as_ref().is_some_and(|a| a.is_animating())
+    }
+
+    /// Whether a colour motion was declared. The declared colour has to be read
+    /// under layout tracking to retarget it, and that subscription is worth
+    /// paying only where there is something to retarget — every other text
+    /// reads its colour at paint alone, as it always did.
+    pub(crate) fn animates_color(&self) -> bool {
+        self.color.is_some()
+    }
+}
+
+/// The vocabulary for declaring text style, on a widget that draws glyphs.
+///
+/// Written once and emitted for both [`Text`](crate::widgets::Text) and
+/// [`TextInput`](crate::widgets::TextInput), which is what keeps the two in
+/// step: a property added here reaches both, and one that reaches only one of
+/// them cannot be written.
+///
+/// These are the *declaration* sites, so `color` and `font_size` carry how they
+/// move as well as what they are — `color(theme.warn.transition(200.0))`. The
+/// four below them take values only, because they are not values that can be
+/// interpolated: a family and a weight snap to an installed face, and a stroke
+/// and a shadow are records with no `Animatable` between them.
+///
+/// The *override* site is [`TextStyle`], and its setters take values alone.
+/// That is not a second vocabulary but the rule falling out of the types: a
+/// timing on `when_hovered(|s| s.color(..))` is a compile error rather than a
+/// value quietly ignored, which is the same shape `Container` and `StateStyle`
+/// already have.
+macro_rules! declares_text_style {
+    ($widget:ty, $style:ident, $anims:ident) => {
+        impl $widget {
+            fn text_style_mut(&mut self) -> &mut $crate::widgets::text_style::TextStyle {
+                self.$style.get_or_insert_with(Default::default)
+            }
+
+            /// Point the declared motions at the resolved style, and hand back
+            /// the size to measure with.
+            ///
+            /// Emitted rather than written per widget: the setters above are
+            /// the same for both, and so is what has to happen behind them — a
+            /// widget that took a transition and did not carry it would be the
+            /// silently-dropped value the whole rule exists to prevent.
+            fn retarget_text_anims(
+                &mut self,
+                tree: &$crate::tree::Tree,
+                id: $crate::tree::WidgetId,
+                color: $crate::widgets::Color,
+                size: f32,
+            ) -> f32 {
+                let Some(anims) = self.$anims.as_deref_mut() else {
+                    return size;
+                };
+                let (wants, measured) = anims.retarget(color, size, tree.frame_instant());
+                if let Some(required) = wants {
+                    $crate::jobs::request_job(id, $crate::jobs::JobRequest::Animation(required));
+                }
+                measured
+            }
+
+            /// Move the declared motions on, and ask for the frame that carries
+            /// them further.
+            fn advance_text_anims(
+                &mut self,
+                tree: &$crate::tree::Tree,
+                id: $crate::tree::WidgetId,
+            ) -> bool {
+                let now = tree.frame_instant();
+                let Some(anims) = self.$anims.as_deref_mut() else {
+                    return false;
+                };
+                let moved = anims.advance(now);
+                let running = anims.is_animating();
+                if let Some(required) = moved {
+                    $crate::jobs::request_job(id, $crate::jobs::JobRequest::Animation(required));
+                } else if running {
+                    // Inside a delay: still on its way, nothing new to draw, so
+                    // it asks to be woken without asking for a picture.
+                    $crate::jobs::request_job(
+                        id,
+                        $crate::jobs::JobRequest::Animation($crate::jobs::RequiredJob::None),
+                    );
+                }
+                running
+            }
+
+            /// Whether a colour motion was declared — see
+            /// [`TextAnims::animates_color`].
+            fn animates_text_color(&self) -> bool {
+                self.$anims
+                    .as_deref()
+                    .is_some_and($crate::widgets::text_style::TextAnims::animates_color)
+            }
+
+            /// Colour of the glyphs, and how it moves.
+            pub fn color<M>(
+                mut self,
+                color: impl $crate::animation::IntoAnimated<$crate::widgets::Color, M>,
+            ) -> Self {
+                let signal = $crate::widgets::container::declare(
+                    &mut self.$anims,
+                    color,
+                    |a: &mut $crate::widgets::text_style::TextAnims| &mut a.color,
+                );
+                self.text_style_mut().color = Some(signal);
+                self
+            }
+
+            /// Font size in logical pixels, and how it moves.
+            pub fn font_size<M>(
+                mut self,
+                size: impl $crate::animation::IntoAnimated<f32, M>,
+            ) -> Self {
+                let signal = $crate::widgets::container::declare(
+                    &mut self.$anims,
+                    size,
+                    |a: &mut $crate::widgets::text_style::TextAnims| &mut a.font_size,
+                );
+                self.text_style_mut().font_size = Some(signal);
+                self
+            }
+
+            /// Font family.
+            pub fn font_family<M>(
+                mut self,
+                family: impl $crate::reactive::IntoSignal<$crate::widgets::FontFamily, M>,
+            ) -> Self {
+                self.text_style_mut().font_family = Some(family.into_signal());
+                self
+            }
+
+            /// Font weight on the CSS 100-900 scale.
+            pub fn font_weight<M>(
+                mut self,
+                weight: impl $crate::reactive::IntoSignal<$crate::widgets::FontWeight, M>,
+            ) -> Self {
+                self.text_style_mut().font_weight = Some(weight.into_signal());
+                self
+            }
+
+            /// Shorthand for [`font_weight`](Self::font_weight) at `FontWeight::BOLD`.
+            pub fn bold(self) -> Self {
+                self.font_weight($crate::widgets::FontWeight::BOLD)
+            }
+
+            /// Shorthand for [`font_family`](Self::font_family) at the monospace family.
+            pub fn mono(self) -> Self {
+                self.font_family($crate::widgets::FontFamily::Monospace)
+            }
+
+            /// Contour drawn around the glyphs, under the fill.
+            pub fn text_stroke<M>(
+                mut self,
+                stroke: impl $crate::reactive::IntoSignal<$crate::widgets::TextStroke, M>,
+            ) -> Self {
+                self.text_style_mut().stroke = Some(stroke.into_signal());
+                self
+            }
+
+            /// Soft shadow cast by the glyphs.
+            pub fn text_shadow<M>(
+                mut self,
+                shadow: impl $crate::reactive::IntoSignal<$crate::widgets::TextShadow, M>,
+            ) -> Self {
+                self.text_style_mut().shadow = Some(shadow.into_signal());
+                self
+            }
+        }
+    };
+}
+
+pub(crate) use declares_text_style;
+
+/// The same vocabulary for an override, which supplies values and never a
+/// timing.
+///
+/// The motion belongs to whoever *declared* a property, and a state layer does
+/// not declare it — so the two differ by the types they accept rather than by a
+/// rule written down anywhere, which is the shape `Container` and `StateStyle`
+/// already have.
+impl TextStyle {
     /// Colour of the glyphs.
-    fn color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.text_style_mut().color = Some(color.into_signal());
+    ///
+    /// An override supplies a value and never a timing: the motion belongs to
+    /// whoever *declared* the property, and a state layer does not declare it.
+    /// So this is a compile error rather than a value quietly ignored, which is
+    /// the whole reason [`Animated`](crate::animation::Animated) is not an
+    /// [`IntoSignal`]:
+    ///
+    /// ```compile_fail
+    /// use guido::prelude::*;
+    ///
+    /// const HOT: Color = Color::rgb(0.9, 0.3, 0.2);
+    /// let _ = text("label").when_hovered(|s| s.color(HOT.transition(80.0)));
+    /// ```
+    pub fn color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.color = Some(color.into_signal());
         self
     }
 
     /// Font size in logical pixels.
-    fn font_size<M>(mut self, size: impl IntoSignal<f32, M>) -> Self {
-        self.text_style_mut().font_size = Some(size.into_signal());
+    pub fn font_size<M>(mut self, size: impl IntoSignal<f32, M>) -> Self {
+        self.font_size = Some(size.into_signal());
         self
     }
 
     /// Font family.
-    fn font_family<M>(mut self, family: impl IntoSignal<FontFamily, M>) -> Self {
-        self.text_style_mut().font_family = Some(family.into_signal());
+    pub fn font_family<M>(mut self, family: impl IntoSignal<FontFamily, M>) -> Self {
+        self.font_family = Some(family.into_signal());
         self
     }
 
     /// Font weight on the CSS 100-900 scale.
-    fn font_weight<M>(mut self, weight: impl IntoSignal<FontWeight, M>) -> Self {
-        self.text_style_mut().font_weight = Some(weight.into_signal());
+    pub fn font_weight<M>(mut self, weight: impl IntoSignal<FontWeight, M>) -> Self {
+        self.font_weight = Some(weight.into_signal());
         self
     }
 
     /// Shorthand for [`font_weight`](Self::font_weight) at `FontWeight::BOLD`.
-    fn bold(self) -> Self {
+    pub fn bold(self) -> Self {
         self.font_weight(FontWeight::BOLD)
     }
 
     /// Shorthand for [`font_family`](Self::font_family) at the monospace family.
-    fn mono(self) -> Self {
+    pub fn mono(self) -> Self {
         self.font_family(FontFamily::Monospace)
     }
 
     /// Contour drawn around the glyphs, under the fill.
-    fn text_stroke<M>(mut self, stroke: impl IntoSignal<TextStroke, M>) -> Self {
-        self.text_style_mut().stroke = Some(stroke.into_signal());
+    pub fn text_stroke<M>(mut self, stroke: impl IntoSignal<TextStroke, M>) -> Self {
+        self.stroke = Some(stroke.into_signal());
         self
     }
 
     /// Soft shadow cast by the glyphs.
-    fn text_shadow<M>(mut self, shadow: impl IntoSignal<TextShadow, M>) -> Self {
-        self.text_style_mut().shadow = Some(shadow.into_signal());
-        self
-    }
-}
-
-/// A partial text style is itself something to declare style on, which is what
-/// lets a state override use the same builder as the widget:
-/// `when_hovered(|s| s.color(..))`.
-impl TextStyled for TextStyle {
-    fn text_style_mut(&mut self) -> &mut TextStyle {
+    pub fn text_shadow<M>(mut self, shadow: impl IntoSignal<TextShadow, M>) -> Self {
+        self.shadow = Some(shadow.into_signal());
         self
     }
 }

@@ -30,9 +30,28 @@ text("Hello").font_size(24.0).color(theme.text)
 # }
 ```
 
-The methods come from the `TextStyled` trait — `color`, `font_size`,
-`font_family`, `font_weight`, `bold`, `mono`, `text_stroke`, `text_shadow` —
-implemented by the two widgets that draw glyphs, `Text` and `TextInput`.
+The methods — `color`, `font_size`, `font_family`, `font_weight`, `bold`,
+`mono`, `text_stroke`, `text_shadow` — belong to the two widgets that draw
+glyphs, `Text` and `TextInput`, and are written from one list so the two always
+offer the same thing.
+
+`color` and `font_size` are *declarations*, so they say how they move as well as
+what they are:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let busy = create_signal(false);
+text("saving…").color((move || if busy.get() { Color::RED } else { Color::WHITE })
+    .transition(200.0))
+# ;
+# }
+```
+
+A state override supplies a value and never a timing — `when_hovered(|s|
+s.color(..))` takes a colour alone, and a transition there is a compile error
+rather than something quietly ignored.
 
 ### Repeating a style
 

@@ -21,7 +21,6 @@ use crate::layout::{Constraints, Flex, at_least, at_most, fill, fraction};
 use crate::reactive::create_signal;
 use crate::renderer::{DrawCommand, PaintContext, RenderNode};
 use crate::widgets::CornerRadii;
-use crate::widgets::TextStyled;
 use crate::widgets::widget::{Event, EventResponse, MouseButton};
 
 // ---------------------------------------------------------------------------
