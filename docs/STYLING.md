@@ -143,23 +143,47 @@ container().corners(Corners::scoop(12.0))             // K=-1, concave
 container().corners(Corners::superellipse(12.0, 1.5)) // anything between
 ```
 
-## Shadows and Elevation
+## Shadows
 
-Material Design-style elevation shadows:
+One property, four degrees of freedom: offset, blur, spread and colour.
 
 ```rust
-container().elevation(2.0)   // Subtle shadow
-container().elevation(8.0)   // More pronounced shadow
-container().elevation(16.0)  // Strong shadow
+container().shadow(Shadow::new((0.0, 2.0), 4.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.16)))
+container().shadow(Shadow::simple((0.0, 8.0), 16.0, Color::rgba(0.0, 0.0, 0.0, 0.22)))
+container().shadow(Shadow::none())
 ```
 
-### Elevation in State Layers
+There is no elevation level and no table behind one. A design system's ladder is
+a set of `Shadow` constants the application writes down, the way it writes down
+its colours — `Shadow::new`, `Shadow::simple` and `Shadow::none` are all `const`
+so they cost nothing:
+
+```rust
+mod elevation {
+    use guido::prelude::{Color, Shadow};
+
+    const fn step(offset_y: f32, blur: f32, alpha: f32) -> Shadow {
+        Shadow::new((0.0, offset_y), blur, 0.0, Color::rgba(0.0, 0.0, 0.0, alpha))
+    }
+
+    pub const FLAT: Shadow = Shadow::none();
+    pub const LOW: Shadow = step(1.0, 3.0, 0.12);
+    pub const RAISED: Shadow = step(3.0, 6.0, 0.19);
+    pub const HIGH: Shadow = step(6.0, 10.0, 0.22);
+}
+```
+
+`examples/shadow_example.rs` shows that ladder beside the three things one
+number could never say: a shadow thrown sideways, a coloured one, and one with
+spread.
+
+### Shadows in State Layers
 
 ```rust
 container()
-    .elevation(2.0)
-    .when_hovered(|s| s.elevation(4.0))
-    .when_pressed(|s| s.elevation(1.0))
+    .shadow(elevation::LOW.transition(160.0))
+    .when_hovered(|s| s.shadow(elevation::RAISED))
+    .when_pressed(|s| s.shadow(elevation::FLAT))
 ```
 
 ## Padding
@@ -344,11 +368,14 @@ fn styled_card(title: &str, content: &str) -> Container {
         // Border
         .border(1.0, Color::rgb(0.25, 0.25, 0.3))
         // Shadow
-        .elevation(4.0)
+        .shadow(Shadow::simple((0.0, 4.0), 8.0, Color::rgba(0.0, 0.0, 0.0, 0.2)))
         // Layout
         .layout(Flex::column().spacing(12.0))
         // State layers — they supply values; the motion is declared above
-        .when_hovered(|s| s.lighter(0.05).elevation(6.0))
+        .when_hovered(|s| {
+            s.lighter(0.05)
+                .shadow(Shadow::simple((0.0, 6.0), 12.0, Color::rgba(0.0, 0.0, 0.0, 0.24)))
+        })
         // Children
         .children([
             container().child(text(title).font_size(18.0).color(Color::WHITE)),

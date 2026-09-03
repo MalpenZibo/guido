@@ -12,7 +12,7 @@ declarations do not.**
 
 Reactive: `background`, `gradient`, `backdrop_blur`, `overflow`, `corners`,
 `border`, `translate`, `rotate`, `scale`, `pivot`, `width`, `height`,
-`padding`, `visible`, `elevation` — and beyond `Container`, `Text`'s `wrap`,
+`padding`, `visible`, `shadow` — and beyond `Container`, `Text`'s `wrap`,
 `Image`'s `content_fit`, `TextInput`'s `password`, `mask_char` and `caret`,
 `RippleConfig`'s colour, and the direction a `Flex` is built with.
 
@@ -48,7 +48,7 @@ asking why the cache is not good enough, and saying so where it is read.
 
 An animatable property takes `impl IntoAnimated<T, M>` instead, which is
 everything `IntoSignal` accepts plus a value carrying its own motion:
-`background`, `corners`, `padding`, `border` (each half), `elevation`, `width`,
+`background`, `corners`, `padding`, `border` (each half), `shadow`, `width`,
 `height`, `translate`, `rotate`, `scale`. The others keep plain `IntoSignal`,
 and so does every setter on `StateStyle` — a state layer supplies a value for a
 property somebody else declared, so a timing there is a compile error rather

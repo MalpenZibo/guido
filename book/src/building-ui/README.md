@@ -28,7 +28,7 @@ All styling is done in Rust code, not external CSS files. This provides type saf
 - [Styling Overview](styling.md) - Complete styling reference
 - [Colors](colors.md) - Color creation and manipulation
 - [Borders & Corners](borders.md) - Borders, corner radius, and curvature
-- [Elevation & Shadows](elevation.md) - Material Design-style shadows
+- [Shadows](shadows.md) - offset, blur, spread and colour
 - [Text](text.md) - Text styling and typography
 
 ## Quick Reference
@@ -52,7 +52,7 @@ All styling is done in Rust code, not external CSS files. This provides type saf
 .border(2.0, Color::WHITE)
 
 // Shadow
-.elevation(4.0)
+.shadow(Shadow::simple((0.0, 4.0), 8.0, Color::rgba(0.0, 0.0, 0.0, 0.2)))
 
 // Spacing
 .padding(16.0)

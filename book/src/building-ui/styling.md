@@ -79,15 +79,19 @@ container()
 # }
 ```
 
-## Shadows (Elevation)
+## Shadows
+
+Four degrees of freedom: offset, blur, spread and colour. There is no elevation
+level — a design system's ladder is a set of `Shadow` constants the application
+writes down. See [Shadows](shadows.md).
 
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
-container().elevation(2.0);   // Subtle
-container().elevation(8.0);   // Medium
-container().elevation(16.0)  // Strong
+container().shadow(Shadow::simple((0.0, 2.0), 4.0, Color::rgba(0.0, 0.0, 0.0, 0.16)));
+container().shadow(Shadow::simple((0.0, 6.0), 10.0, Color::rgba(0.0, 0.0, 0.0, 0.22)));
+container().shadow(Shadow::new((14.0, 0.0), 8.0, 4.0, Color::rgba(0.9, 0.2, 0.3, 0.5)))
 # ;
 # }
 ```
@@ -244,13 +248,16 @@ fn styled_card(title: &str, content: &str) -> Container {
         .border(1.0, Color::rgb(0.25, 0.25, 0.3))
 
         // Shadow
-        .elevation(4.0)
+        .shadow(Shadow::simple((0.0, 4.0), 8.0, Color::rgba(0.0, 0.0, 0.0, 0.2)))
 
         // Layout
         .layout(Flex::column().spacing(12.0))
 
         // State layers — they supply values; the motion was declared above
-        .when_hovered(|s| s.lighter(0.05).elevation(6.0))
+        .when_hovered(|s| {
+            s.lighter(0.05)
+                .shadow(Shadow::simple((0.0, 6.0), 12.0, Color::rgba(0.0, 0.0, 0.0, 0.24)))
+        })
 
         // Children
         .children([

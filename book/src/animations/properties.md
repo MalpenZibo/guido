@@ -134,18 +134,23 @@ A corner transition that crosses zero curvature changes family in one frame:
 below zero a corner is concave and a different formula draws it. Within a family
 it is continuous.
 
-## Elevation
+## Shadow
 
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
+# const LOW: Shadow = Shadow::simple((0.0, 1.0), 3.0, Color::rgba(0.0, 0.0, 0.0, 0.12));
+# const RAISED: Shadow = Shadow::simple((0.0, 3.0), 6.0, Color::rgba(0.0, 0.0, 0.0, 0.19));
 # fn main() {
 container()
-    .elevation(2.0.transition(200.0))
-    .when_hovered(|s| s.elevation(6.0))
+    .shadow(LOW.transition(200.0))
+    .when_hovered(|s| s.shadow(RAISED))
 # ;
 # }
 ```
+
+All four fields interpolate — offset, blur, spread and colour — so a shadow can
+change colour as it grows, or slide from below a card to beside it.
 
 A shadow falls outside the box that casts it, so the container has to tell the
 layout how far its painting reaches — and the reach has to cover the deepest
@@ -156,16 +161,18 @@ That makes the two ways of lifting a card cost different amounts:
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
+# const LOW: Shadow = Shadow::simple((0.0, 1.0), 3.0, Color::rgba(0.0, 0.0, 0.0, 0.12));
+# const RAISED: Shadow = Shadow::simple((0.0, 3.0), 6.0, Color::rgba(0.0, 0.0, 0.0, 0.19));
 # fn main() {
 # let lifted = create_signal(false);
 # container()
-// Constants: the deepest is 6 whatever happens, so hovering moves only the
+// Constants: the deepest is RAISED whatever happens, so hovering moves only the
 // paint and nothing is re-laid-out.
-.elevation(2.0).when_hovered(|s| s.elevation(6.0))
+.shadow(LOW).when_hovered(|s| s.shadow(RAISED))
 
 // A signal: the deepest genuinely changes when it is written, so every write
 // re-runs the layout of this subtree.
-.elevation(move || if lifted.get() { 6.0 } else { 2.0 })
+.shadow(move || if lifted.get() { RAISED } else { LOW })
 # ;
 # }
 ```
@@ -211,21 +218,24 @@ Each property carries its own, where it is declared:
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
+# const FLAT: Shadow = Shadow::none();
+# const LOW: Shadow = Shadow::simple((0.0, 1.0), 3.0, Color::rgba(0.0, 0.0, 0.0, 0.12));
+# const RAISED: Shadow = Shadow::simple((0.0, 3.0), 6.0, Color::rgba(0.0, 0.0, 0.0, 0.19));
 # fn main() {
 container()
     .background(Color::rgb(0.2, 0.2, 0.3).transition(200.0))
     .border(1.0.transition(150.0), Color::rgb(0.3, 0.3, 0.4).transition(150.0))
-    .elevation(2.0.transition(250.0))
+    .shadow(LOW.transition(250.0))
     .scale(Scale::NONE.transition(Transition::spring(SpringConfig::GENTLE)))
 
     .when_hovered(|s| s
         .lighter(0.1)
         .border(2.0, Color::WHITE)
-        .elevation(6.0)
+        .shadow(RAISED)
     )
     .when_pressed(|s| s
         .scale(0.98)
-        .elevation(1.0)
+        .shadow(FLAT)
     )
 # ;
 # }
@@ -244,7 +254,7 @@ container()
 | Rotate | `rotate(..)` | Spring or Duration |
 | Scale | `scale(..)` | Spring or Duration |
 | Width, height | `width(..)`, `height(..)` | Spring |
-| Elevation | `elevation(..)` | Duration, EaseOut |
+| Shadow | `shadow(..)` | Duration, EaseOut |
 | Text colour | `color(..)` on a `text` or `text_input` | Duration, EaseOut |
 | Font size | `font_size(..)` on a `text` or `text_input` | Duration |
 

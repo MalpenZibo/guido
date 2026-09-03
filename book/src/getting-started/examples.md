@@ -199,20 +199,19 @@ cargo run --example children_example
 
 ---
 
-### elevation_example
+### shadow_example
 
-Material Design-style elevation shadows.
+Every degree of freedom a `Shadow` has, and where a ladder of them lives.
 
 ```bash
-cargo run --example elevation_example
+cargo run --example shadow_example
 ```
 
-![Elevation Example](../images/elevation_example.png)
-
 **Features demonstrated:**
-- Different elevation levels (2, 4, 8, 12, 16)
-- Elevation changes on hover/press
-- Animated elevation transitions
+- A ladder of shadows defined by the application, as `const` values
+- A shadow thrown sideways, a coloured one, and one with spread — none of which
+  a single elevation number could ask for
+- A hover that lifts a card, with the motion declared beside the value
 
 ---
 

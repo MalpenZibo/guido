@@ -23,7 +23,7 @@
     - [Styling Overview](building-ui/styling.md)
     - [Colors](building-ui/colors.md)
     - [Borders & Corners](building-ui/borders.md)
-    - [Elevation & Shadows](building-ui/elevation.md)
+    - [Shadows](building-ui/shadows.md)
     - [Text](building-ui/text.md)
     - [Text Input](building-ui/text-input.md)
     - [Images](building-ui/images.md)
