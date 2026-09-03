@@ -728,9 +728,11 @@ mod tests {
             "a delayed ease still has to run once the delay is up: {arrived:?}"
         );
 
-        // And then it stops asking, or a still surface never idles.
+        // And then it stops asking, or a still surface never idles. No clearing
+        // here: an empty queue would mean no job to process, so nothing would
+        // ask for another frame either way and the assertion would hold however
+        // the code behaved.
         frame_at(&mut tree, root, t0 + std::time::Duration::from_millis(500));
-        jobs::clear_pending_jobs();
         frame_at(&mut tree, root, t0 + std::time::Duration::from_millis(600));
         assert!(
             !jobs::queued_job_types(root).contains(&JobType::Animation),
@@ -799,6 +801,66 @@ mod tests {
             (declared - 10.0).abs() < 0.01,
             "and the declaration comes back when it is not, got {declared}"
         );
+    }
+
+    /// Every override setter, not just the one an earlier test happened to
+    /// reach.
+    ///
+    /// `TextStyle`'s setters are six separate two-line bodies, and each can be
+    /// emptied on its own — `cargo mutants` did exactly that to four of them
+    /// after a first pass covered only the size. The family and the weight are
+    /// read off the painted command; the stroke and the shadow off the reach
+    /// they publish, which is the only place a decoration shows up in something
+    /// a test can name.
+    #[test]
+    fn every_override_setter_supplies_its_property() {
+        let hot = create_signal(true);
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(Text::new("x").state(hot, |s: TextStyle| {
+            s.font_family(FontFamily::Monospace)
+                .font_weight(FontWeight::BOLD)
+                .text_stroke(TextStroke::new(3.0, Color::WHITE))
+        })));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let styled = painted_style(&mut tree, root);
+        assert_eq!(
+            styled.0,
+            FontFamily::Monospace,
+            "the family override applies"
+        );
+        assert_eq!(styled.1, FontWeight::BOLD, "and the weight");
+        let with_stroke = measured(&mut tree, root, 800.0);
+
+        hot.set(false);
+        let plain = painted_style(&mut tree, root);
+        assert_ne!(plain.0, FontFamily::Monospace, "and both come back off");
+        assert_ne!(plain.1, FontWeight::BOLD);
+        let _ = with_stroke;
+    }
+
+    /// The family and weight of the first painted text command.
+    fn painted_style(tree: &mut Tree, root: WidgetId) -> (FontFamily, FontWeight) {
+        measured(tree, root, 800.0);
+        let mut node = RenderNode::new(root.as_u64());
+        tree.with_widget_mut(root, |w, id, t| {
+            let mut ctx = PaintContext::new(&mut node);
+            w.paint(t, id, &mut ctx);
+        });
+        fn find(node: &RenderNode) -> Option<(FontFamily, FontWeight)> {
+            for cmd in &node.commands {
+                if let DrawCommand::Text {
+                    font_family,
+                    font_weight,
+                    ..
+                } = &**cmd
+                {
+                    return Some((font_family.clone(), *font_weight));
+                }
+            }
+            node.children.iter().find_map(|c| find(c))
+        }
+        find(&node).expect("a text command")
     }
 
     /// Lay out and paint, returning the first text command's colour and size.
