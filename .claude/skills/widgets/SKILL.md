@@ -16,9 +16,20 @@ Reactive: `background`, `gradient`, `backdrop_blur`, `overflow`, `corners`,
 `Image`'s `content_fit`, `TextInput`'s `password`, `mask_char` and `caret`,
 `RippleConfig`'s colour, and the direction a `Flex` is built with.
 
-Structural: `layout`, `child`, `children`, `scrollable`, `scrollbar`,
-`scrollbar_visibility`, `control`, the event handlers — and the *motion* a
-value is declared with, which is the next section.
+Structural: `layout`, `child`, `children`, `control`, the axis a `Scroll` is
+built with, the event handlers — and the *motion* a value is declared with,
+which is the next section.
+
+`Scroll` is what a family of setters looks like once it is one value.
+`scrollable`, `scrollbar_visibility` and `scrollbar` were three, and the last
+two were silent no-ops on a container that never became scrollable. Now
+`container().scroll(Scroll::vertical())`, and the parts cannot be spelled apart
+from the thing they configure. Its measurements — `width`, `hover_width`,
+`margin`, `min_handle_size`, `reserve_gutter`, `visibility` — are reactive; its
+appearance is `Container`'s own vocabulary, reached through `.track(|t| ..)`
+and `.handle(|h| ..)`, because the scrollbar *is* two containers. Styling a
+part means styling a container, so nothing has to be mirrored into a second
+vocabulary as `Container` grows.
 
 `autofocus` is the one that looks structural and is neither: it is a one-shot
 consumed at the first layout, so "take focus when this appears" is an event,
