@@ -20,6 +20,7 @@ use crate::jobs::{self, JobType};
 use crate::layout::{Constraints, Flex, at_least, at_most, fill, fraction};
 use crate::reactive::create_signal;
 use crate::renderer::{DrawCommand, PaintContext, RenderNode};
+use crate::widgets::CornerRadii;
 use crate::widgets::TextStyled;
 use crate::widgets::widget::{Event, EventResponse, MouseButton};
 
@@ -482,6 +483,107 @@ fn fixed_size_makes_a_relayout_boundary() {
 // Scroll
 // ---------------------------------------------------------------------------
 
+/// The colour and corner radii of every rounded rect a paint produced.
+fn painted_rects_with_style(node: &RenderNode) -> Vec<(Color, CornerRadii)> {
+    fn walk(node: &RenderNode, out: &mut Vec<(Color, CornerRadii)>) {
+        for cmd in &node.commands {
+            if let DrawCommand::RoundedRect { color, radius, .. } = &**cmd {
+                out.push((*color, *radius));
+            }
+        }
+        for child in &node.children {
+            walk(child, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(node, &mut out);
+    out
+}
+
+/// A scroller with a handle the test can find by its colour.
+fn scroller(scroll: Scroll) -> H {
+    H::new(
+        container()
+            .height(100.0)
+            .scroll(scroll)
+            .child(box_of(40.0, 900.0)),
+    )
+}
+
+/// The scrollbar is styled as what it is — two containers — so a signal reaches
+/// it like it reaches anything else.
+///
+/// This is the whole point of the change. `ScrollbarConfig` held plain colours
+/// captured at build time, so a theme switch restyled every surface except its
+/// scrollbars.
+#[test]
+fn a_handle_colour_declared_with_a_signal_follows_it() {
+    let hot = create_signal(Color::rgb(1.0, 0.0, 0.0));
+    let mut h = scroller(Scroll::vertical().handle(move |c: Container| c.background(hot)));
+    h.fit(500.0, 500.0);
+
+    let before = painted_rects_with_style(&h.paint());
+    assert!(
+        before.iter().any(|(c, _)| c.r > 0.9 && c.g < 0.1),
+        "the declared handle colour has to reach the paint: {before:?}"
+    );
+
+    hot.set(Color::rgb(0.0, 0.0, 1.0));
+    pump(&mut h);
+    h.fit(500.0, 500.0);
+
+    let after = painted_rects_with_style(&h.paint());
+    assert!(
+        after.iter().any(|(c, _)| c.b > 0.9 && c.r < 0.1),
+        "the handle kept the colour it was built with: {after:?}"
+    );
+}
+
+/// And it takes corners the old pair could not spell.
+///
+/// `ScrollbarConfig` carried a radius and a K-value, which reaches
+/// `Corners::superellipse` and nothing else. A bevel, a scoop or a per-corner
+/// radius were all expressible downstream and unreachable from the API.
+#[test]
+fn a_handle_takes_corners_the_old_pair_could_not_spell() {
+    let mut h = scroller(Scroll::vertical().handle(|c: Container| {
+        c.background(Color::rgb(1.0, 0.0, 0.0))
+            .corners([8.0, 0.0, 8.0, 0.0])
+    }));
+    h.fit(500.0, 500.0);
+
+    let (_, radii) = painted_rects_with_style(&h.paint())
+        .into_iter()
+        .find(|(c, _)| c.r > 0.9 && c.g < 0.1)
+        .expect("the handle, found by its declared colour");
+
+    assert!(
+        radii.top_left > 7.9 && radii.top_right < 0.1,
+        "a per-corner radius has to survive to paint, got {radii:?}"
+    );
+}
+
+/// A scrollbar that comes and goes on a signal, with the content scrollable
+/// either way.
+#[test]
+fn visibility_answers_to_a_signal() {
+    let shown = create_signal(ScrollbarVisibility::Always);
+    let mut h = scroller(Scroll::vertical().visibility(shown));
+    h.fit(500.0, 500.0);
+    let with_bar = h.paint().children.len();
+
+    shown.set(ScrollbarVisibility::Hidden);
+    pump(&mut h);
+    h.fit(500.0, 500.0);
+    let without = h.paint().children.len();
+
+    assert!(
+        without < with_bar,
+        "the scrollbar stayed on screen after the signal hid it: {with_bar} \
+         then {without}"
+    );
+}
+
 /// Whether a scrollbar exists at all comes down to one comparison — content
 /// against viewport — so the viewport a scroller records has to be its
 /// *visible* extent, never the unbounded constraint the scrolled axis is laid
@@ -490,12 +592,7 @@ fn fixed_size_makes_a_relayout_boundary() {
 /// is exactly what "the scrollbars stopped appearing" means.
 #[test]
 fn an_overflowing_scroller_paints_its_scrollbar() {
-    let mut h = H::new(
-        container()
-            .height(100.0)
-            .scrollable(ScrollAxis::Vertical)
-            .child(box_of(40.0, 900.0)),
-    );
+    let mut h = scroller(Scroll::vertical());
     h.fit(500.0, 500.0);
 
     let node = h.paint();
@@ -511,7 +608,7 @@ fn an_overflowing_horizontal_scroller_paints_its_scrollbar() {
     let mut h = H::new(
         container()
             .width(100.0)
-            .scrollable(ScrollAxis::Horizontal)
+            .scroll(Scroll::horizontal())
             .child(box_of(900.0, 40.0)),
     );
     h.fit(500.0, 500.0);
@@ -524,7 +621,7 @@ fn a_scroller_whose_content_fits_paints_no_scrollbar() {
     let mut h = H::new(
         container()
             .height(100.0)
-            .scrollable(ScrollAxis::Vertical)
+            .scroll(Scroll::vertical())
             .child(box_of(40.0, 20.0)),
     );
     h.fit(500.0, 500.0);
@@ -540,7 +637,7 @@ fn a_vertical_scroller_offers_children_unbounded_height() {
     let mut h = H::new(
         container()
             .height(100.0)
-            .scrollable(ScrollAxis::Vertical)
+            .scroll(Scroll::vertical())
             .child(box_of(40.0, 900.0)),
     );
     assert_eq!(
@@ -3024,7 +3121,7 @@ fn a_clipping_container_does_not_carry_its_content_s_overhang() {
         container()
             .width(100.0)
             .height(100.0)
-            .scrollable(ScrollAxis::Vertical)
+            .scroll(Scroll::vertical())
             .layout(Flex::column())
             .children(rows),
     );
@@ -3064,7 +3161,7 @@ fn a_clipping_container_keeps_not_carrying_it_when_a_child_moves() {
         container()
             .width(100.0)
             .height(100.0)
-            .scrollable(ScrollAxis::Vertical)
+            .scroll(Scroll::vertical())
             .layout(Flex::column())
             .children(rows),
     );
@@ -3329,7 +3426,7 @@ fn scrolling_a_frosted_card_away_withdraws_its_blur() {
         container()
             .width(40.0)
             .height(30.0)
-            .scrollable(ScrollAxis::Vertical)
+            .scroll(Scroll::vertical())
             .children(rows),
     );
     assert!(

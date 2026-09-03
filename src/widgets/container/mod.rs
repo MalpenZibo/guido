@@ -40,9 +40,7 @@ use super::children::ChildrenSource;
 use super::control::Control;
 use super::into_child::{IntoChild, IntoChildren};
 use super::paint_children::{ChildPaintOptions, paint_children};
-use super::scroll::{
-    ScrollAxis, ScrollState, ScrollbarBuilder, ScrollbarConfig, ScrollbarVisibility,
-};
+use super::scroll::{Scroll, ScrollAxis, ScrollState, ScrollbarMetrics, ScrollbarVisibility};
 use super::state_layer::{
     Moves, RippleConfig, StateStyle, StateWhen, Stateful, resolve_background,
 };
@@ -365,10 +363,16 @@ impl InteractionState {
 }
 
 /// Scroll state and configuration, boxed to avoid bloating Container.
-/// Only allocated when `.scrollable()` is called.
+/// Only allocated when `.scroll()` is called.
 pub(super) struct ScrollData {
+    /// What the application declared. Holds the signals and the two styling
+    /// closures; nothing reads it per frame except to resolve the metrics.
+    pub(super) scroll: Scroll,
+    /// The declared measurements, resolved under this pass's layout tracking.
+    /// The track and handle rects are arithmetic and read this, not signals.
+    pub(super) metrics: ScrollbarMetrics,
+    /// What `visibility` said when layout last read it.
     pub(super) scrollbar_visibility: ScrollbarVisibility,
-    pub(super) scrollbar_config: ScrollbarConfig,
     pub(super) scroll_state: ScrollState,
     pub(super) v_scrollbar_track_id: Option<WidgetId>,
     pub(super) v_scrollbar_handle_id: Option<WidgetId>,
@@ -378,11 +382,18 @@ pub(super) struct ScrollData {
     pub(super) h_scrollbar_scale_anim: Option<AnimationState<f32>>,
 }
 
-impl Default for ScrollData {
-    fn default() -> Self {
+impl ScrollData {
+    /// Built from the declaration and nothing else — there is no default axis
+    /// to invent, because a `Scroll` always names one.
+    ///
+    /// The resolved fields start at their own defaults and are overwritten by
+    /// `resolve_scroll` at the top of the first layout, before anything reads
+    /// them.
+    fn new(scroll: Scroll) -> Self {
         Self {
+            scroll,
+            metrics: ScrollbarMetrics::default(),
             scrollbar_visibility: ScrollbarVisibility::Always,
-            scrollbar_config: ScrollbarConfig::default(),
             scroll_state: ScrollState::default(),
             v_scrollbar_track_id: None,
             v_scrollbar_handle_id: None,
@@ -521,8 +532,38 @@ impl Container {
         tree.set_own_paint_reach(id, self.max_transform_reach(bounds, shadow));
     }
 
+    /// Resolve the declared scroll measurements for this pass.
+    ///
+    /// Under layout tracking, and at the top of `layout`, because the gutter
+    /// these describe comes out of the content box before anything is measured
+    /// — so a width written to a signal has to re-run this container's layout,
+    /// not merely repaint it. The geometry below reads the resolved numbers:
+    /// a track rect is arithmetic, and arithmetic should not be reading signals
+    /// halfway through.
+    fn resolve_scroll(&mut self, id: WidgetId) {
+        let Some(data) = self.scroll_data.as_mut() else {
+            return;
+        };
+        let scroll = &data.scroll;
+        let defaults = ScrollbarMetrics::default();
+        let (metrics, visibility) = with_signal_tracking(id, JobType::Layout, || {
+            (
+                ScrollbarMetrics {
+                    width: scroll.width.get_or(defaults.width),
+                    hover_width: scroll.hover_width.get_or(defaults.hover_width),
+                    margin: scroll.margin.get_or(defaults.margin),
+                    min_handle_size: scroll.min_handle_size.get_or(defaults.min_handle_size),
+                    reserve_gutter: scroll.reserve_gutter.get_or(defaults.reserve_gutter),
+                },
+                scroll.visibility.get_or(ScrollbarVisibility::Always),
+            )
+        });
+        data.metrics = metrics;
+        data.scrollbar_visibility = visibility;
+    }
+
     /// Get scroll data (panics if not scrollable — only call when scroll_axis != None)
-    fn scroll(&self) -> &ScrollData {
+    fn scroll_data(&self) -> &ScrollData {
         self.scroll_data.as_deref().expect("scroll_data not set")
     }
 
@@ -534,10 +575,6 @@ impl Container {
     }
 
     /// Get or create scroll data
-    fn scroll_or_init(&mut self) -> &mut ScrollData {
-        self.scroll_data.get_or_insert_with(Box::default)
-    }
-
     /// Get or create the transform components.
     fn transform_mut(&mut self) -> &mut TransformProps {
         self.transform.get_or_insert_with(Box::default)
@@ -789,28 +826,29 @@ impl Container {
         self
     }
 
-    /// Enable scrolling on this container.
-    pub fn scrollable(mut self, axis: ScrollAxis) -> Self {
-        self.scroll_axis = axis;
-        if axis != ScrollAxis::None {
-            self.scroll_data = Some(Box::default());
-        }
-        self
-    }
-
-    /// Configure scrollbar visibility.
-    pub fn scrollbar_visibility(mut self, visibility: ScrollbarVisibility) -> Self {
-        self.scroll_or_init().scrollbar_visibility = visibility;
-        self
-    }
-
-    /// Customize scrollbar appearance.
-    pub fn scrollbar<F>(mut self, f: F) -> Self
-    where
-        F: FnOnce(ScrollbarBuilder) -> ScrollbarBuilder,
-    {
-        let builder = f(ScrollbarBuilder::default());
-        self.scroll_or_init().scrollbar_config = builder.build();
+    /// Scroll this container, and say what its scrollbar looks like.
+    ///
+    /// One value rather than three setters. `scrollbar_visibility` and
+    /// `scrollbar` used to be separate and were silent no-ops on a container
+    /// that never became scrollable — half a configuration that compiled and
+    /// did nothing. There is no way to write that now:
+    ///
+    /// ```compile_fail,E0599
+    /// # use guido::prelude::*;
+    /// // The parts cannot be declared apart from the thing they configure.
+    /// // E0599 pinned on purpose: a bare `compile_fail` passes on any error at
+    /// // all, including a typo in the test itself, so it would go on passing
+    /// // long after it stopped meaning anything.
+    /// container().scrollbar_visibility(ScrollbarVisibility::Hidden);
+    /// ```
+    ///
+    /// ```ignore
+    /// container().scroll(Scroll::vertical())
+    /// container().scroll(Scroll::both().overlay().handle(|h| h.background(RED)))
+    /// ```
+    pub fn scroll(mut self, scroll: Scroll) -> Self {
+        self.scroll_axis = scroll.axis;
+        self.scroll_data = Some(Box::new(ScrollData::new(scroll)));
         self
     }
 
@@ -1317,6 +1355,12 @@ impl Widget for Container {
             return size;
         }
 
+        // Before `ensure_scrollbar_containers`, which reads the resolved
+        // visibility to decide whether to build the parts at all — and before
+        // the gutter `child_layout` takes out of the content box, which is
+        // measured from the resolved width and margin.
+        self.resolve_scroll(id);
+
         tree.set_relayout_boundary(id, self.is_relayout_boundary_for(constraints));
         self.ensure_scrollbar_containers(tree, id);
 
@@ -1481,7 +1525,7 @@ impl Widget for Container {
             Some(at) => {
                 let mut child_at = hit.rebase(at);
                 if self.scroll_axis != ScrollAxis::None {
-                    let sd = self.scroll();
+                    let sd = self.scroll_data();
                     child_at = child_at.offset(sd.scroll_state.offset_x, sd.scroll_state.offset_y);
                 }
                 Cow::Owned(local_event.with_coords(Some(child_at)))
@@ -1623,7 +1667,7 @@ impl Widget for Container {
         // For scrollable containers: viewport mapped to layout space (before scroll transform).
         // For non-scrollable containers: inherited from parent via PaintContext.
         let effective_cull_rect = if is_scrollable {
-            let sd = self.scroll();
+            let sd = self.scroll_data();
             Some(Rect::new(
                 sd.scroll_state.offset_x,
                 sd.scroll_state.offset_y,
@@ -1644,7 +1688,7 @@ impl Widget for Container {
         let all_children = self.children_source.get();
 
         let scroll_offset = if is_scrollable {
-            let sd = self.scroll();
+            let sd = self.scroll_data();
             (sd.scroll_state.offset_x, sd.scroll_state.offset_y)
         } else {
             (0.0, 0.0)

@@ -77,7 +77,7 @@ fn a_wrapped_list_paints_the_rows_an_unwrapped_one_paints() {
         container()
             .width(200.0)
             .height(VIEWPORT)
-            .scrollable(ScrollAxis::Vertical)
+            .scroll(Scroll::vertical())
             .layout(Flex::column().spacing(SPACING))
             .children(rows(ROWS)),
         VIEWPORT,
@@ -87,7 +87,7 @@ fn a_wrapped_list_paints_the_rows_an_unwrapped_one_paints() {
         container()
             .width(200.0)
             .height(VIEWPORT)
-            .scrollable(ScrollAxis::Vertical)
+            .scroll(Scroll::vertical())
             .child(
                 container()
                     .layout(Flex::column().spacing(SPACING))
@@ -135,7 +135,7 @@ fn a_scroller_whose_children_are_ordered_along_neither_axis_paints_all_of_them()
         container()
             .width(200.0)
             .height(100.0)
-            .scrollable(ScrollAxis::Vertical)
+            .scroll(Scroll::vertical())
             .layout(Scatter(SCATTERED.to_vec()))
             .children(rows(SCATTERED.len())),
         100.0,
@@ -195,7 +195,7 @@ fn the_counter_separates_a_narrowed_window_from_one_that_could_not_narrow() {
         container()
             .width(200.0)
             .height(VIEWPORT)
-            .scrollable(ScrollAxis::Vertical)
+            .scroll(Scroll::vertical())
             .layout(Flex::column().spacing(SPACING))
             .children(rows(ROWS)),
         VIEWPORT,
@@ -220,7 +220,7 @@ fn the_counter_separates_a_narrowed_window_from_one_that_could_not_narrow() {
         container()
             .width(200.0)
             .height(100.0)
-            .scrollable(ScrollAxis::Vertical)
+            .scroll(Scroll::vertical())
             .layout(Scatter(SCATTERED.to_vec()))
             .children(rows(8)),
         100.0,

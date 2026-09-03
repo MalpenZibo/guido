@@ -84,7 +84,7 @@ fn column() -> Container {
                 .width(VIEWPORT)
                 .height(VIEWPORT)
                 .background(Color::rgb(0.15, 0.15, 0.2))
-                .scrollable(ScrollAxis::Vertical)
+                .scroll(Scroll::vertical())
                 .child(
                     // The list itself is drawn, not just its rows: it spans
                     // the whole content, so it is never culled and never

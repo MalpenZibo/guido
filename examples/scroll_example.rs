@@ -24,7 +24,7 @@ fn main() {
                         .height(200.0)
                         .background(Color::rgb(0.15, 0.15, 0.2))
                         .corners(8.0)
-                        .scrollable(ScrollAxis::Vertical)
+                        .scroll(Scroll::vertical())
                         .child(
                             container()
                                 .layout(Flex::column().spacing(8.0))
@@ -58,7 +58,7 @@ fn main() {
                         .height(80.0)
                         .background(Color::rgb(0.15, 0.15, 0.2))
                         .corners(8.0)
-                        .scrollable(ScrollAxis::Horizontal)
+                        .scroll(Scroll::horizontal())
                         .child(
                             container()
                                 .layout(Flex::row().spacing(8.0))
@@ -101,15 +101,19 @@ fn main() {
                         .height(200.0)
                         .background(Color::rgb(0.15, 0.15, 0.2))
                         .corners(8.0)
-                        .scrollable(ScrollAxis::Vertical)
-                        .scrollbar(|sb| {
-                            sb.width(6.0)
-                                .handle_color(Color::rgb(0.4, 0.6, 0.9))
-                                .handle_hover_color(Color::rgb(0.5, 0.7, 1.0))
-                                .handle_pressed_color(Color::rgb(0.6, 0.8, 1.0))
-                                .handle_corner_radius(3.0)
-                                .track_color(Color::rgba(0.4, 0.6, 0.9, 0.1))
-                        })
+                        .scroll(
+                            Scroll::vertical()
+                                .width(6.0)
+                                .track(|t| t.background(Color::rgba(0.4, 0.6, 0.9, 0.1)))
+                                .handle(|h| {
+                                    h.background(Color::rgb(0.4, 0.6, 0.9))
+                                        .corners(3.0)
+                                        .when_hovered(|s| s.background(Color::rgb(0.5, 0.7, 1.0)))
+                                        .when_pressed(|s| {
+                                            s.background(Color::rgb(0.6, 0.8, 1.0)).ripple()
+                                        })
+                                }),
+                        )
                         .child(
                             container()
                                 .layout(Flex::column().spacing(8.0))
@@ -143,8 +147,7 @@ fn main() {
                         .height(200.0)
                         .background(Color::rgb(0.15, 0.15, 0.2))
                         .corners(8.0)
-                        .scrollable(ScrollAxis::Vertical)
-                        .scrollbar_visibility(ScrollbarVisibility::Hidden)
+                        .scroll(Scroll::vertical().visibility(ScrollbarVisibility::Hidden))
                         .child(
                             container()
                                 .layout(Flex::column().spacing(8.0))

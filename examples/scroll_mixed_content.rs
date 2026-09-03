@@ -79,13 +79,16 @@ fn main() {
                             .height(400.0)
                             .background(Color::rgb(0.12, 0.12, 0.18))
                             .corners(12.0)
-                            .scrollable(ScrollAxis::Vertical)
-                            .scrollbar(|sb| {
-                                sb.width(6.0)
-                                    .handle_color(Color::rgb(0.4, 0.5, 0.6))
-                                    .handle_hover_color(Color::rgb(0.5, 0.6, 0.7))
-                                    .track_color(Color::rgba(0.3, 0.3, 0.4, 0.3))
-                            })
+                            .scroll(
+                                Scroll::vertical()
+                                    .width(6.0)
+                                    .track(|t| t.background(Color::rgba(0.3, 0.3, 0.4, 0.3)))
+                                    .handle(|h| {
+                                        h.background(Color::rgb(0.4, 0.5, 0.6)).when_hovered(|s| {
+                                            s.background(Color::rgb(0.5, 0.6, 0.7))
+                                        })
+                                    }),
+                            )
                             .child(
                                 container()
                                     .layout(Flex::column().spacing(16.0))
@@ -252,13 +255,16 @@ fn main() {
                             .height(160.0)
                             .background(Color::rgb(0.12, 0.12, 0.18))
                             .corners(12.0)
-                            .scrollable(ScrollAxis::Horizontal)
-                            .scrollbar(|sb| {
-                                sb.width(6.0)
-                                    .handle_color(Color::rgb(0.5, 0.6, 0.4))
-                                    .handle_hover_color(Color::rgb(0.6, 0.7, 0.5))
-                                    .track_color(Color::rgba(0.3, 0.4, 0.3, 0.3))
-                            })
+                            .scroll(
+                                Scroll::horizontal()
+                                    .width(6.0)
+                                    .track(|t| t.background(Color::rgba(0.3, 0.4, 0.3, 0.3)))
+                                    .handle(|h| {
+                                        h.background(Color::rgb(0.5, 0.6, 0.4)).when_hovered(|s| {
+                                            s.background(Color::rgb(0.6, 0.7, 0.5))
+                                        })
+                                    }),
+                            )
                             .child(
                                 container()
                                     .layout(Flex::row().spacing(12.0))
@@ -286,12 +292,10 @@ fn main() {
                             .height(100.0)
                             .background(Color::rgb(0.12, 0.12, 0.18))
                             .corners(12.0)
-                            .scrollable(ScrollAxis::Horizontal)
-                            .scrollbar(|sb| {
-                                sb.width(4.0)
-                                    .handle_color(Color::rgb(0.6, 0.5, 0.7))
-                                    .handle_hover_color(Color::rgb(0.7, 0.6, 0.8))
-                            })
+                            .scroll(Scroll::horizontal().width(4.0).handle(|h| {
+                                h.background(Color::rgb(0.6, 0.5, 0.7))
+                                    .when_hovered(|s| s.background(Color::rgb(0.7, 0.6, 0.8)))
+                            }))
                             .child(
                                 container()
                                     .layout(Flex::row().spacing(16.0))

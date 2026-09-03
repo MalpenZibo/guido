@@ -74,7 +74,7 @@ impl H {
             container()
                 .width(VIEWPORT)
                 .height(VIEWPORT)
-                .scrollable(ScrollAxis::Vertical)
+                .scroll(Scroll::vertical())
                 .child(
                     container()
                         .layout(Flex::column().spacing(8.0))
@@ -113,7 +113,7 @@ impl H {
             container()
                 .width(VIEWPORT)
                 .height(H_VIEWPORT)
-                .scrollable(ScrollAxis::Horizontal)
+                .scroll(Scroll::horizontal())
                 .child(
                     container()
                         .layout(Flex::row().spacing(8.0))
