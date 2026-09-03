@@ -574,7 +574,6 @@ impl Container {
             .expect("scroll_data not set")
     }
 
-    /// Get or create scroll data
     /// Get or create the transform components.
     fn transform_mut(&mut self) -> &mut TransformProps {
         self.transform.get_or_insert_with(Box::default)
@@ -842,9 +841,20 @@ impl Container {
     /// container().scrollbar_visibility(ScrollbarVisibility::Hidden);
     /// ```
     ///
-    /// ```ignore
-    /// container().scroll(Scroll::vertical())
-    /// container().scroll(Scroll::both().overlay().handle(|h| h.background(RED)))
+    /// ```compile_fail,E0599
+    /// # use guido::prelude::*;
+    /// // ... and neither can the styling.
+    /// container().scrollbar(|sb| sb.width(6.0));
+    /// ```
+    ///
+    /// ```
+    /// # use guido::prelude::*;
+    /// container().scroll(Scroll::vertical());
+    /// container().scroll(
+    ///     Scroll::both()
+    ///         .overlay()
+    ///         .handle(|h| h.background(Color::RED)),
+    /// );
     /// ```
     pub fn scroll(mut self, scroll: Scroll) -> Self {
         self.scroll_axis = scroll.axis;

@@ -563,24 +563,46 @@ fn a_handle_takes_corners_the_old_pair_could_not_spell() {
     );
 }
 
-/// A scrollbar that comes and goes on a signal, with the content scrollable
-/// either way.
+/// A scrollbar that comes back after being hidden.
+///
+/// Starting Hidden is the half worth testing, and the half the agreed design
+/// chose a property over a `.hidden()` flag for — "a flag can only be set, and
+/// this has to be able to come back". A container laid out Hidden returns from
+/// `ensure_scrollbar_containers` before registering the track and the handle,
+/// so the flip back has to create them *and* lay them out in one pass; and it
+/// only gets that pass because `resolve_scroll` reads the visibility under
+/// layout tracking, which is what marks the container and keeps it off the
+/// unchanged-constraints fast path.
+///
+/// That the content still scrolls while the bar is hidden is not re-asserted
+/// here — `Hidden` gates only the drawing, and the scroll tests in
+/// `tests/scroll_momentum.rs` and `tests/scrollbar_handle_tracking.rs` own that
+/// question.
 #[test]
 fn visibility_answers_to_a_signal() {
-    let shown = create_signal(ScrollbarVisibility::Always);
+    let shown = create_signal(ScrollbarVisibility::Hidden);
     let mut h = scroller(Scroll::vertical().visibility(shown));
     h.fit(500.0, 500.0);
-    let with_bar = h.paint().children.len();
+    let hidden_children = h.paint().children.len();
+
+    shown.set(ScrollbarVisibility::Always);
+    pump(&mut h);
+    h.fit(500.0, 500.0);
+    let shown_children = h.paint().children.len();
+
+    assert!(
+        shown_children > hidden_children,
+        "the scrollbar never came back: {hidden_children} children hidden, \
+         {shown_children} shown"
+    );
 
     shown.set(ScrollbarVisibility::Hidden);
     pump(&mut h);
     h.fit(500.0, 500.0);
-    let without = h.paint().children.len();
-
-    assert!(
-        without < with_bar,
-        "the scrollbar stayed on screen after the signal hid it: {with_bar} \
-         then {without}"
+    assert_eq!(
+        h.paint().children.len(),
+        hidden_children,
+        "and it goes away again"
     );
 }
 
