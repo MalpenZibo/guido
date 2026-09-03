@@ -491,6 +491,6 @@ impl StateStyleBuilder {
 
     // Ripple
     pub fn ripple(self) -> Self;
-    pub fn ripple_with_color(self, color: Color) -> Self;
+    pub fn ripple_with_color<M>(self, color: impl IntoSignal<Color, M>) -> Self;
 }
 ```

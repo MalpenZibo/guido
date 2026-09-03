@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::jobs::JobType;
 use crate::layout::{Constraints, Size};
-use crate::reactive::{IntoSignal, Signal, with_signal_tracking};
+use crate::reactive::{IntoSignal, OptionSignalExt, Signal, with_signal_tracking};
 use crate::renderer::PaintContext;
 use crate::tree::{Tree, WidgetId};
 
@@ -106,7 +106,9 @@ pub enum ContentFit {
 /// ```
 pub struct Image {
     source: Signal<ImageSource>,
-    content_fit: ContentFit,
+    content_fit: Option<Signal<ContentFit>>,
+    /// Read under layout tracking, and used again by paint on the same frame.
+    cached_content_fit: ContentFit,
     /// Cached intrinsic size from the image source
     intrinsic_size: Option<(u32, u32)>,
     /// Cached source for change detection
@@ -118,15 +120,16 @@ impl Image {
     pub fn new<M>(source: impl IntoSignal<ImageSource, M>) -> Self {
         Self {
             source: source.into_signal(),
-            content_fit: ContentFit::default(),
+            content_fit: None,
+            cached_content_fit: ContentFit::default(),
             intrinsic_size: None,
             cached_source: None,
         }
     }
 
     /// Set the content fit mode.
-    pub fn content_fit(mut self, fit: ContentFit) -> Self {
-        self.content_fit = fit;
+    pub fn content_fit<M>(mut self, fit: impl IntoSignal<ContentFit, M>) -> Self {
+        self.content_fit = Some(fit.into_signal());
         self
     }
 
@@ -169,7 +172,7 @@ impl Image {
             intrinsic_h
         };
 
-        let size = match self.content_fit {
+        let size = match self.cached_content_fit {
             ContentFit::None => Size::new(intrinsic_w, intrinsic_h),
             ContentFit::Fill | ContentFit::Cover => Size::new(offered_w, offered_h),
             ContentFit::Contain => {
@@ -203,7 +206,15 @@ impl Widget for Image {
         tree.set_relayout_boundary(id, false);
 
         // Read the source with signal tracking so a change triggers re-layout
-        let current_source = with_signal_tracking(id, JobType::Layout, || self.source.get());
+        // Both under the same tracking: the fit decides the measured size, so a
+        // write to it has to re-run layout exactly as a new source does.
+        let (current_source, fit) = with_signal_tracking(id, JobType::Layout, || {
+            (
+                self.source.get(),
+                self.content_fit.get_or(ContentFit::default()),
+            )
+        });
+        self.cached_content_fit = fit;
 
         // Load intrinsic size if not cached or source changed
         let source_changed = self
@@ -236,7 +247,7 @@ impl Widget for Image {
         if let Some(ref source) = self.cached_source {
             let size = tree.cached_size(id).unwrap_or_default();
             let local_bounds = Rect::new(0.0, 0.0, size.width, size.height);
-            ctx.draw_image(source.clone(), local_bounds, self.content_fit);
+            ctx.draw_image(source.clone(), local_bounds, self.cached_content_fit);
         }
     }
 }
@@ -266,4 +277,109 @@ impl Widget for Image {
 /// ```
 pub fn image<M>(source: impl IntoSignal<ImageSource, M>) -> Image {
     Image::new(source)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::jobs;
+    use crate::reactive::create_signal;
+
+    fn measured(tree: &mut Tree, root: WidgetId, c: Constraints) -> Size {
+        jobs::pump_and_layout(tree, root, c).expect("the root is registered")
+    }
+
+    /// A square SVG, inline, so the test needs no asset on disk and no decoder.
+    fn svg(side: u32) -> ImageSource {
+        let src = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="{side}" height="{side}"><rect width="{side}" height="{side}" fill="red"/></svg>"#
+        );
+        ImageSource::SvgBytes(src.into_bytes().into())
+    }
+
+    /// An image draws itself, at the box it was given and the fit it declares.
+    ///
+    /// `paint` had nothing watching it at all: emptying the whole method was
+    /// invisible to every test, because the one that asks about `content_fit`
+    /// asks the *measured size* and never looks at what was drawn.
+    #[test]
+    fn an_image_draws_its_source_into_its_own_box() {
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(Image::new(svg(20)).content_fit(ContentFit::Fill)));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        measured(&mut tree, root, Constraints::new(0.0, 0.0, 40.0, 40.0));
+
+        let mut node = crate::renderer::RenderNode::new(root.as_u64());
+        tree.with_widget_mut(root, |w, id, t| {
+            let mut ctx = crate::renderer::PaintContext::new(&mut node);
+            w.paint(t, id, &mut ctx);
+        });
+
+        let drawn = node
+            .commands
+            .iter()
+            .find_map(|cmd| match &**cmd {
+                crate::renderer::DrawCommand::Image {
+                    rect, content_fit, ..
+                } => Some((*rect, *content_fit)),
+                _ => None,
+            })
+            .expect("an image command");
+
+        assert_eq!(
+            (drawn.0.width, drawn.0.height),
+            (40.0, 40.0),
+            "the image is drawn into the box layout gave it, got {:?}",
+            drawn.0
+        );
+        assert_eq!(drawn.1, ContentFit::Fill, "and with the fit it declares");
+    }
+
+    /// How an image fills its box is a value it can be told.
+    ///
+    /// Read under the same tracking as the source, because the fit decides the
+    /// measured size — `ContentFit::None` reports the intrinsic size whatever
+    /// is on offer, `Fill` reports what is offered — so a write has to re-run
+    /// layout rather than only repaint. Those two are the pair asserted here:
+    /// they disagree by construction whenever the offer is not the intrinsic
+    /// size, which needs no image file to be true.
+    #[test]
+    fn content_fit_answers_to_a_signal() {
+        let fills = create_signal(true);
+        let fit = move || {
+            if fills.get() {
+                ContentFit::Fill
+            } else {
+                ContentFit::None
+            }
+        };
+
+        // Under a container, and measured from the container, because that is
+        // what makes this a test of *reactivity* rather than of plumbing: a
+        // container takes an unchanged-constraints early-out and never asks its
+        // children again, so the second pass only reaches the image if the
+        // write marked it. An image laid out directly re-measures on every call
+        // and would pass with the fit read untracked.
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(crate::widgets::container().child(
+            Image::new(ImageSource::Path("does-not-exist.png".into())).content_fit(fit),
+        )));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let offered = Constraints::new(0.0, 0.0, 200.0, 120.0);
+        let filled = measured(&mut tree, root, offered);
+
+        fills.set(false);
+        let intrinsic = measured(&mut tree, root, offered);
+
+        assert_ne!(
+            filled, intrinsic,
+            "the fit was read once: both passes measured {filled:?}"
+        );
+        assert_eq!(
+            filled,
+            Size::new(200.0, 120.0),
+            "Fill takes what is offered"
+        );
+    }
 }

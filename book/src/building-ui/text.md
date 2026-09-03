@@ -477,6 +477,7 @@ impl Text {
     pub fn font_weight<M>(self, weight: impl IntoSignal<FontWeight, M>) -> Self;
     pub fn bold(self) -> Self;      // Shorthand for FontWeight::BOLD
     pub fn mono(self) -> Self;      // Shorthand for FontFamily::Monospace
-    pub fn nowrap(self) -> Self;
+    pub fn wrap<M>(self, wrap: impl IntoSignal<bool, M>) -> Self;
+    pub fn nowrap(self) -> Self;    // Shorthand for wrap(false)
 }
 ```

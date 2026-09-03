@@ -97,6 +97,25 @@ the pixels land. `Contain` takes only the largest rect of the image's own
 aspect ratio that fits, so the empty strip is left to the parent's alignment
 rather than painted.
 
+Like every declared value, it takes a signal as readily as a value, so an image
+can change how it fills its box without being rebuilt:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let cropped = create_signal(true);
+image("./photo.jpg").content_fit(move || {
+    if cropped.get() {
+        ContentFit::Cover
+    } else {
+        ContentFit::Contain
+    }
+})
+# ;
+# }
+```
+
 ```rust,ignore
 # extern crate guido;
 # use guido::prelude::*;

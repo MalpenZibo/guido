@@ -1379,6 +1379,177 @@ fn a_press_held_for_a_named_time_has_grown_by_a_named_amount() {
     );
 }
 
+/// One frame at a named instant, through the skip-frame gate.
+///
+/// `frame_at` pumps and lays out but leaves painting to the caller, so a test
+/// that then calls `h.paint()` repaints unconditionally and cannot see a frame
+/// the loop would have skipped. This one goes through `H::frame`, which serves
+/// the retained node when nothing needs paint — which is the whole difference
+/// between a value the loop noticed and one it did not.
+fn gated_frame_at(h: &mut H, now: std::time::Instant, width: f32, height: f32) -> Frame {
+    h.tree.set_frame_instant(Some(now));
+    let frame = h.frame(width, height);
+    h.tree.set_frame_instant(None);
+    frame
+}
+
+/// The colour of the first overlay disc in a frame the loop actually produced.
+fn ripple_color_of(frame: &Frame) -> Option<Color> {
+    frame
+        .node
+        .overlay_commands
+        .iter()
+        .find_map(|cmd| match &**cmd {
+            DrawCommand::Circle { color, .. } => Some(*color),
+            _ => None,
+        })
+}
+
+/// The colour of the first overlay disc, which is the ripple.
+fn painted_ripple_color(h: &mut H) -> Option<Color> {
+    h.paint()
+        .overlay_commands
+        .iter()
+        .find_map(|cmd| match &**cmd {
+            DrawCommand::Circle { color, .. } => Some(*color),
+            _ => None,
+        })
+}
+
+/// A ripple's colour is declared, so a theme switch reaches it.
+///
+/// The one colour that animates under a finger was the one frozen at build
+/// time: `RippleConfig::color` was a `Color` where every other `StateStyle`
+/// setter took a signal. Now it is a `Signal<Color>`, as `BorderOverride`'s
+/// halves are, and the two speeds beside it stay plain.
+///
+/// Asserted on the drawn disc, and on its hue rather than its alpha, because
+/// the alpha is multiplied by the ripple's own opacity and falls as the disc
+/// fades — the hue is what the declaration decides.
+///
+/// The second half holds the press past its growth, which is the state the
+/// declaration has to survive: a ripple that has finished growing stops asking
+/// for frames so the loop can go quiet — see `Ripple::advance` — so the disc
+/// under a still finger is not being repainted by an animation, and a colour
+/// written then reaches the screen only because paint subscribed to it.
+///
+/// What this still does not pin is the subscription itself. Reading the colour
+/// untracked passes here too, because `Tree::cache_layout` marks the widget for
+/// paint on every layout pass — running layout *is* the invalidation signal —
+/// so the skip-frame gate never comes up after a `fit` and each frame repaints
+/// whatever the last write left. The read is tracked because the held case is
+/// real, not because anything in `src/` would object if it stopped being.
+#[test]
+fn a_ripple_takes_the_colour_it_is_given_now() {
+    let hot = create_signal(Color::rgba(1.0, 0.0, 0.0, 0.4));
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(100.0)
+            .when_pressed(move |s: StateStyle| s.ripple_with_color(hot))
+            .on_click(|| {}),
+    );
+    h.fit(400.0, 400.0);
+
+    let t0 = std::time::Instant::now() - std::time::Duration::from_secs(60);
+    send_at(&mut h, t0, Event::mouse_down(50.0, 50.0, MouseButton::Left));
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(8),
+        400.0,
+        400.0,
+    );
+
+    let red = painted_ripple_color(&mut h).expect("the press starts a ripple");
+    assert!(
+        red.r > 0.9 && red.g < 0.1,
+        "the declared colour is what the disc is drawn with, got {red:?}"
+    );
+
+    hot.set(Color::rgba(0.0, 0.0, 1.0, 0.4));
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(16),
+        400.0,
+        400.0,
+    );
+
+    let blue = painted_ripple_color(&mut h).expect("the ripple is still running");
+    assert!(
+        blue.b > 0.9 && blue.r < 0.1,
+        "the ripple kept the colour it was built with, got {blue:?}"
+    );
+
+    // Now hold it past its growth, which is where the loop is allowed to go
+    // quiet and where an unsubscribed read would strand the colour.
+    let settled = t0 + std::time::Duration::from_secs(2);
+    gated_frame_at(&mut h, settled, 400.0, 400.0);
+    assert!(
+        !pump(&mut h),
+        "a ripple held past its growth has to stop asking for frames, or the \
+         case this is about does not arise"
+    );
+
+    hot.set(Color::rgba(0.0, 1.0, 0.0, 0.4));
+    eprintln!("needs_paint after write = {}", h.tree.needs_paint(h.root));
+    let frame = gated_frame_at(
+        &mut h,
+        settled + std::time::Duration::from_millis(8),
+        400.0,
+        400.0,
+    );
+
+    eprintln!("frame colour = {:?}", ripple_color_of(&frame));
+    let green = ripple_color_of(&frame).expect("the finger is still down");
+    assert!(
+        green.g > 0.9 && green.b < 0.1,
+        "the disc under a still finger never saw the write, got {green:?}"
+    );
+    // The alpha is the declared one scaled by the disc's own opacity, which is
+    // 1.0 for a ripple held at full growth — so here the two coincide and the
+    // scaling is visible as itself rather than as some other arithmetic.
+    assert!(
+        (green.a - 0.4).abs() < 0.01,
+        "the declared alpha is scaled by the disc's opacity, not combined with \
+         it some other way: got {green:?}"
+    );
+}
+
+/// The pressed layer's ripple is the one that paints, even when another layer
+/// declares one too.
+///
+/// `ripple_config` asks for a layer that is *both* `Pressed` and has a ripple.
+/// Loosen that to either and the search — which runs in reverse declaration
+/// order — answers with whichever was declared last, so a hover ripple
+/// declared after a pressed one would take over the press.
+#[test]
+fn a_hover_ripple_does_not_stand_in_for_the_pressed_one() {
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(100.0)
+            .when_pressed(|s: StateStyle| s.ripple_with_color(Color::rgba(1.0, 0.0, 0.0, 0.4)))
+            .when_hovered(|s: StateStyle| s.ripple_with_color(Color::rgba(0.0, 0.0, 1.0, 0.4)))
+            .on_click(|| {}),
+    );
+    h.fit(400.0, 400.0);
+
+    let t0 = std::time::Instant::now() - std::time::Duration::from_secs(60);
+    send_at(&mut h, t0, Event::mouse_down(50.0, 50.0, MouseButton::Left));
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(8),
+        400.0,
+        400.0,
+    );
+
+    let drawn = painted_ripple_color(&mut h).expect("the press starts a ripple");
+    assert!(
+        drawn.r > 0.9 && drawn.b < 0.1,
+        "the hover layer's colour reached a press it does not describe: {drawn:?}"
+    );
+}
+
 /// Lay out, run the queued jobs, paint, and report the first text colour.
 fn painted_text_color(h: &mut H) -> Color {
     pump(h);

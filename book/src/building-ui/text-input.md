@@ -123,6 +123,21 @@ text_input(password)
 # }
 ```
 
+Masking is a declared value, so it takes a signal — which is what an eye icon
+beside the field needs. Declaring it rather than rebuilding the input is what
+keeps the caret, the selection and the focus where they were:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let password = create_signal(String::new());
+# let hidden = create_signal(true);
+text_input(password).password(hidden)
+# ;
+# }
+```
+
 By default, characters are masked with `•`. Customize the mask character:
 
 ```rust
@@ -468,10 +483,11 @@ fn login_form() -> Container {
 text_input(signal: Signal<String>) -> TextInput
 
 impl TextInput {
-    pub fn password(self, enabled: bool) -> Self;
-    pub fn mask_char(self, c: char) -> Self;
+    pub fn password<M>(self, enabled: impl IntoSignal<bool, M>) -> Self;
+    pub fn mask_char<M>(self, c: impl IntoSignal<char, M>) -> Self;
     pub fn autofocus(self) -> Self;
-    pub fn no_caret(self) -> Self;
+    pub fn caret<M>(self, caret: impl IntoSignal<bool, M>) -> Self;
+    pub fn no_caret(self) -> Self;  // Shorthand for caret(false)
     pub fn placeholder<M>(self, text: impl IntoSignal<String, M>) -> Self;
     pub fn on_change<F: Fn(&str) + 'static>(self, callback: F) -> Self;
     pub fn on_submit<F: Fn(&str) + 'static>(self, callback: F) -> Self;

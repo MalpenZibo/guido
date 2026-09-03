@@ -46,8 +46,9 @@ pub struct Text {
     /// control encloses this text — the case where it is its own unit and has
     /// to notice the pointer itself.
     own_hover: Option<RwSignal<bool>>,
-    /// If true, text won't wrap and will be clipped by parent container
-    nowrap: bool,
+    /// Whether the text wraps at the width it is given. `None` is the default,
+    /// which wraps — an absent signal costs a null check rather than a read.
+    wrap: Option<Signal<bool>>,
     /// Blur radius for the backdrop the glyphs cut out of what is behind them.
     /// `None` for every text that is not made of glass.
     backdrop_blur: Option<Signal<f32>>,
@@ -56,6 +57,7 @@ pub struct Text {
     cached_font_size: f32,
     cached_font_family: FontFamily,
     cached_font_weight: FontWeight,
+    cached_wrap: bool,
 }
 
 impl Text {
@@ -70,19 +72,32 @@ impl Text {
             style: None,
             states: Vec::new(),
             own_hover: None,
-            nowrap: false,
+            wrap: None,
             backdrop_blur: None,
             cached_text: String::new(), // Will be set during first layout
             cached_font_size: 14.0,
             cached_font_family: default_family,
             cached_font_weight: FontWeight::NORMAL,
+            cached_wrap: true,
         }
     }
 
     /// Prevent text from wrapping. Text will be clipped by parent container.
     /// Use this for text inside animated containers to prevent re-wrapping during animation.
-    pub fn nowrap(mut self) -> Self {
-        self.nowrap = true;
+    ///
+    /// The shorthand for [`wrap(false)`](Self::wrap), which is the common case
+    /// and the one worth a name of its own.
+    pub fn nowrap(self) -> Self {
+        self.wrap(false)
+    }
+
+    /// Whether the text wraps at the width it is given.
+    ///
+    /// Wrapping is a layout decision — an unwrapped text is measured with no
+    /// maximum width and clipped by whatever contains it — so a write here
+    /// re-measures rather than merely repainting.
+    pub fn wrap<M>(mut self, wrap: impl IntoSignal<bool, M>) -> Self {
+        self.wrap = Some(wrap.into_signal());
         self
     }
 
@@ -181,6 +196,7 @@ impl Text {
             self.cached_font_size = style.font_size.get_or(14.0);
             self.cached_font_family = style.font_family.get_or_else(default_font_family);
             self.cached_font_weight = style.font_weight.get_or(FontWeight::NORMAL);
+            self.cached_wrap = self.wrap.get_or(true);
             decoration_overflow(style.stroke.map(|s| s.get()), style.shadow.map(|s| s.get()))
         })
     }
@@ -231,8 +247,9 @@ impl Widget for Text {
         tree.set_own_paint_reach(id, overflow);
 
         // Determine the effective max_width for measurement
-        // If nowrap is true, don't pass max_width so text won't wrap
-        let max_width = if self.nowrap {
+        // An unwrapped text is measured with no maximum, so it runs on one line
+        // and whatever contains it does the clipping.
+        let max_width = if !self.cached_wrap {
             None
         } else if constraints.max_width.is_finite() {
             Some(constraints.max_width)
@@ -368,8 +385,6 @@ pub fn text<M>(content: impl IntoSignal<String, M>) -> Text {
 
 #[cfg(test)]
 mod tests {
-    use rustc_hash::FxHashSet;
-
     use super::*;
     use crate::jobs;
     use crate::layout::Constraints;
@@ -377,6 +392,46 @@ mod tests {
     use crate::renderer::{DrawCommand, RenderNode};
     use crate::widgets::container;
     use crate::widgets::text_style::TextStyled;
+
+    /// Lay out after draining queued jobs, and hand back the measured size.
+    fn measured(tree: &mut Tree, root: WidgetId, width: f32) -> crate::layout::Size {
+        jobs::pump_and_layout(tree, root, Constraints::new(0.0, 0.0, width, 600.0))
+            .expect("the root is registered")
+    }
+
+    /// Wrapping is a declared value, so it answers to a write.
+    ///
+    /// `nowrap()` is the shorthand and stays; `wrap(signal)` is the property.
+    /// Asserted on the measured height rather than on anything drawn, because
+    /// wrapping is a layout decision — `max_width` is withheld from the
+    /// measurer — and the height is what a second line adds. The text is long
+    /// enough that no installed font can fit it on one line at this width,
+    /// which is what keeps the assertion off the font metrics.
+    #[test]
+    fn wrapping_answers_to_a_signal() {
+        let wrap = create_signal(true);
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new("a considerable quantity of words, far more than fit").wrap(wrap),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let wrapped = measured(&mut tree, root, 80.0);
+
+        wrap.set(false);
+        let unwrapped = measured(&mut tree, root, 80.0);
+
+        assert!(
+            unwrapped.height < wrapped.height,
+            "the text kept wrapping after the signal said not to: {wrapped:?} \
+             then {unwrapped:?}"
+        );
+        assert!(
+            unwrapped.width > wrapped.width,
+            "an unwrapped line has to run past the width a wrapped one fits in: \
+             {wrapped:?} then {unwrapped:?}"
+        );
+    }
 
     /// Lay out and paint, returning the first text command's colour and size.
     ///
@@ -387,17 +442,7 @@ mod tests {
     /// its unchanged-constraints early-out, so the text is never asked to lay
     /// out again and the test measures the cache instead of the resolution.
     fn frame(tree: &mut Tree, root: WidgetId) -> (Color, f32) {
-        let roots: FxHashSet<WidgetId> = [root].into_iter().collect();
-        jobs::distribute_jobs(tree, &roots);
-        let drained = jobs::drain_surface_jobs(root);
-        let mut layout_roots = Vec::new();
-        jobs::process_jobs(&drained, tree, &mut layout_roots);
-        jobs::recycle_job_buffer(drained);
-        jobs::recycle_job_buffer(jobs::drain_orphan_jobs());
-
-        tree.with_widget_mut(root, |w, id, t| {
-            w.layout(t, id, Constraints::new(0.0, 0.0, 800.0, 600.0))
-        });
+        measured(tree, root, 800.0);
         let mut node = RenderNode::new(root.as_u64());
         tree.with_widget_mut(root, |w, id, t| {
             let mut ctx = PaintContext::new(&mut node);
