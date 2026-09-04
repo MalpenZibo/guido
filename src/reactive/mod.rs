@@ -49,7 +49,7 @@ pub use memo::{Memo, create_memo};
 // with_owner and OwnerId are internal and automatically used by the
 // dynamic children system; the public dispose_owner is deferred (safe to
 // call from anywhere), the synchronous engine stays crate-internal.
-pub(crate) use owner::{OwnerId, create_root_owner, dispose_owner_now, with_owner};
+pub(crate) use owner::{OwnerId, create_root_owner, dispose_owner_now, under_owner, with_owner};
 pub use owner::{dispose_owner, on_cleanup};
 pub use trigger::{Trigger, create_trigger};
 

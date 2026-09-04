@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use crate::jobs::{JobRequest, request_job};
 use crate::layout::{Constraints, Size};
-use crate::reactive::{OwnerId, dispose_owner_now};
+use crate::reactive::{OwnerId, dispose_owner_now, under_owner};
 use crate::renderer::PaintContext;
 use crate::tree::{Tree, WidgetId};
 
@@ -441,7 +441,7 @@ enum OwnerHandle {
     Exclusive(OwnerId),
     /// The owner scope is shared by several widgets (one closure run built
     /// them all); it is disposed when the last of them drops.
-    Shared { _guard: SharedOwner },
+    Shared(SharedOwner),
 }
 
 /// Reference-counted owner scope: disposes the owner when the last clone
@@ -449,7 +449,7 @@ enum OwnerHandle {
 /// row inside one scope.
 #[derive(Clone)]
 pub struct SharedOwner {
-    _guard: Rc<OwnerGuard>,
+    guard: Rc<OwnerGuard>,
 }
 
 struct OwnerGuard(OwnerId);
@@ -463,7 +463,7 @@ impl Drop for OwnerGuard {
 impl SharedOwner {
     pub fn new(owner_id: OwnerId) -> Self {
         Self {
-            _guard: Rc::new(OwnerGuard(owner_id)),
+            guard: Rc::new(OwnerGuard(owner_id)),
         }
     }
 }
@@ -481,7 +481,18 @@ impl OwnedWidget {
     pub fn new_shared(inner: Box<dyn Widget>, shared: SharedOwner) -> Self {
         Self {
             inner,
-            owner: OwnerHandle::Shared { _guard: shared },
+            owner: OwnerHandle::Shared(shared),
+        }
+    }
+}
+
+impl OwnerHandle {
+    /// The scope this widget's reactive resources belong to, however it holds
+    /// it — one widget to a scope, or one scope shared by a closure's whole run.
+    fn id(&self) -> OwnerId {
+        match self {
+            OwnerHandle::Exclusive(id) => *id,
+            OwnerHandle::Shared(shared) => shared.guard.0,
         }
     }
 }
@@ -504,12 +515,41 @@ impl Widget for OwnedWidget {
         self.inner.reconcile_children(tree, id)
     }
 
+    /// Registration is reactive work, so it happens under this widget's own
+    /// scope rather than under whatever scope the frame is in.
+    ///
+    /// This and [`layout`](Self::layout) are the two that re-enter it, and the
+    /// line is drawn there because they are the two the frame runs as
+    /// *machinery*: nothing a caller wrote decides what they build.
+    ///
+    /// `event` and `reconcile_children` run a caller's own closure — a handler,
+    /// an `items_fn` — and a signal made there may be handed somewhere that
+    /// outlives the row on purpose. Disposing it would turn a later read into a
+    /// panic, so those two are left alone, and a test says so rather than a
+    /// comment promising it. That nothing in the library allocates there either
+    /// is true today and is the weaker half of the reason: it would stop being
+    /// true without anything failing, which is why it is not the argument.
+    ///
+    /// The factory ran inside `with_owner`; this runs afterwards, and anything
+    /// it creates — `Container::fold_enabled`'s derived — would otherwise be
+    /// filed under the surface and outlive the widget by the whole life of the
+    /// application.
+    ///
+    /// Descendants come along: a plain `Container` inside this one is
+    /// registered from within this call, so it is inside the scope too.
     fn register_children(&mut self, tree: &mut Tree, id: WidgetId) {
-        self.inner.register_children(tree, id)
+        under_owner(self.owner.id(), || self.inner.register_children(tree, id))
     }
 
+    /// Laying out builds things too, so it is inside the scope for the same
+    /// reason registration is.
+    ///
+    /// A scroller assembles its scrollbar's track and handle the first time it
+    /// lays out — two containers, and every declared property on them is a
+    /// signal. That is ten per row against `fold_enabled`'s one, and it needs
+    /// nothing of the caller but `.scroll(..)`.
     fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
-        self.inner.layout(tree, id, constraints)
+        under_owner(self.owner.id(), || self.inner.layout(tree, id, constraints))
     }
 
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
@@ -518,5 +558,279 @@ impl Widget for OwnedWidget {
 
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
         self.inner.event(tree, id, event)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::*;
+    use crate::jobs::pump_and_layout;
+    use crate::reactive::storage::live_signal_count;
+    use crate::reactive::{RwSignal, create_signal};
+    use crate::widgets::{AnyWidget, Scroll, container, keyed};
+
+    /// A registered root, and the two phases that make a keyed list actually
+    /// replace its rows: the queued jobs, then a layout.
+    ///
+    /// Without the jobs the reconciler never runs — the widget ids come back
+    /// identical and a leak test reads a meaningless zero. The generation
+    /// counter moving on the reused ids is what says a round happened.
+    struct Rows {
+        tree: Tree,
+        root: WidgetId,
+    }
+
+    impl Rows {
+        fn new(widget: impl Widget + 'static) -> Self {
+            let mut tree = Tree::new();
+            let root = tree.register(Box::new(widget));
+            tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+            // The first frame builds the rows. Without it the baseline below
+            // is taken before any exist, and every round after it looks like
+            // growth.
+            let mut rows = Self { tree, root };
+            rows.frame();
+            rows
+        }
+
+        /// A press and release at a point, in the surface's coordinates.
+        fn click(&mut self, x: f32, y: f32) {
+            let root = self.root;
+            crate::reactive::diagnostics::snapshot_zone(|| {
+                for event in [
+                    Event::mouse_down(x, y, crate::widgets::widget::MouseButton::Left),
+                    Event::mouse_up(x, y, crate::widgets::widget::MouseButton::Left),
+                ] {
+                    self.tree
+                        .with_widget_mut(root, |w, id, t| w.event(t, id, &event));
+                }
+            });
+        }
+
+        fn frame(&mut self) {
+            pump_and_layout(
+                &mut self.tree,
+                self.root,
+                Constraints::new(0.0, 0.0, 200.0, 200.0),
+            );
+        }
+    }
+
+    /// Replace every key, so each round builds a full set of rows and discards
+    /// the set before it. The assertion is here so that every caller has it.
+    fn churn(rows: &mut Rows, keys: RwSignal<Vec<u32>>, round: u32) {
+        let before = rows.tree.get_children(rows.root).to_vec();
+        keys.set((0..ROWS).map(|i| round * 100 + i).collect());
+        rows.frame();
+        assert_ne!(
+            before,
+            rows.tree.get_children(rows.root).to_vec(),
+            "round {round} replaced no rows, so nothing after it measures anything"
+        );
+    }
+
+    /// How wide `churn` makes a list, whatever it started at.
+    const ROWS: u32 = 4;
+
+    /// A row's reactive resources die with the row — including the ones built
+    /// while it was being *registered*, not only the ones its factory built.
+    ///
+    /// `Container::fold_enabled` is the only thing in the widget layer that
+    /// creates a signal during `register_children`, and it does so exactly when
+    /// a row declares `enabled` inside a control that declares it too. Until
+    /// this was fixed the derived it built was filed under the *surface*, and a
+    /// list that churned leaked one signal per row for the surface's lifetime —
+    /// measured at +41 over forty rows built and discarded.
+    ///
+    /// The baseline is taken after a round rather than before, because the
+    /// dynamic-children machinery allocates one signal on its first reconcile
+    /// and never again: counting from zero would fold that one-off into the
+    /// number and make the test assert a constant instead of a slope.
+    #[test]
+    fn a_signal_built_while_a_row_registers_dies_with_the_row() {
+        let keys = create_signal(vec![0u32, 1, 2, 3]);
+        let outer = create_signal(true);
+        let mut rows = Rows::new(
+            container()
+                .width(200.0)
+                .height(200.0)
+                .enabled(outer)
+                .children(keyed(
+                    move || keys.get(),
+                    |k| *k,
+                    move |_| {
+                        let own = create_signal(true);
+                        container().width(50.0).height(10.0).enabled(own).into_any()
+                    },
+                )),
+        );
+
+        churn(&mut rows, keys, 1);
+        let settled = live_signal_count();
+
+        for round in 2..=10u32 {
+            churn(&mut rows, keys, round);
+        }
+
+        assert_eq!(
+            live_signal_count(),
+            settled,
+            "thirty-six rows built and discarded left signals behind"
+        );
+    }
+
+    /// `event` is outside the scope on purpose, and this is what says so.
+    ///
+    /// A handler runs at a caller's intent, not as machinery, and an
+    /// application may create a signal there and hand it somewhere that
+    /// outlives the row — a selection the list reports upwards, say. Wrapping
+    /// `event` would dispose it and turn every later read into a panic. So the
+    /// exclusion is a promise to the caller, and a promise nothing tested is
+    /// one the next person to widen this would break without hearing anything.
+    #[test]
+    fn a_signal_a_handler_creates_outlives_the_row_that_created_it() {
+        let keys = create_signal(vec![0u32, 1, 2, 3]);
+        let escaped: Rc<RefCell<Option<RwSignal<u32>>>> = Rc::new(RefCell::new(None));
+        let sink = escaped.clone();
+        let mut rows = Rows::new(container().width(200.0).height(200.0).children(keyed(
+            move || keys.get(),
+            |k| *k,
+            move |k| {
+                let sink = sink.clone();
+                container()
+                    .width(50.0)
+                    .height(10.0)
+                    .on_click(move || *sink.borrow_mut() = Some(create_signal(k)))
+                    .into_any()
+            },
+        )));
+
+        // Click the first row, so its handler builds a signal and hands it out.
+        rows.click(0.0, 0.0);
+        let handed_out = escaped.borrow().expect("the handler ran");
+        assert_eq!(handed_out.get_untracked(), 0);
+
+        // Now churn that row away entirely.
+        for round in 1..=3u32 {
+            churn(&mut rows, keys, round);
+        }
+
+        assert_eq!(
+            handed_out.get_untracked(),
+            0,
+            "the row's disposal took a signal its handler had given away"
+        );
+    }
+
+    /// The control, and it is what makes the test above mean anything: a row
+    /// that declares nothing for `fold_enabled` to fold allocates no signal at
+    /// registration, so it churned cleanly even before the fix. If this ever
+    /// fails, the one above is measuring the machinery rather than the defect.
+    #[test]
+    fn a_row_that_builds_nothing_at_registration_was_never_the_problem() {
+        let keys = create_signal(vec![0u32, 1, 2, 3]);
+        let mut rows = Rows::new(container().width(200.0).height(200.0).children(keyed(
+            move || keys.get(),
+            |k| *k,
+            move |_| -> AnyWidget { container().width(50.0).height(10.0).into_any() },
+        )));
+
+        churn(&mut rows, keys, 1);
+        let settled = live_signal_count();
+        for round in 2..=10u32 {
+            churn(&mut rows, keys, round);
+        }
+        assert_eq!(live_signal_count(), settled);
+    }
+
+    /// The scope a row re-enters is its own, so a list *inside* a row is inside
+    /// it too — and the rows that list builds get their owners parented there
+    /// rather than at the surface.
+    ///
+    /// Three levels of `enabled` nested in each other, which is three derived
+    /// signals per leaf and the shape that leaked hardest: +108 over nine
+    /// rounds before the fix, against +36 for the flat list above.
+    #[test]
+    fn a_list_inside_a_row_is_inside_the_row_s_scope() {
+        let outer_keys = create_signal(vec![0u32, 1, 2, 3]);
+        let enabled = create_signal(true);
+        let mut rows = Rows::new(
+            container()
+                .width(200.0)
+                .height(200.0)
+                .enabled(enabled)
+                .children(keyed(
+                    move || outer_keys.get(),
+                    |k| *k,
+                    move |k| {
+                        let inner_keys = create_signal(vec![k * 10, k * 10 + 1]);
+                        let own = create_signal(true);
+                        container()
+                            .width(100.0)
+                            .height(50.0)
+                            .enabled(own)
+                            .children(keyed(
+                                move || inner_keys.get(),
+                                |x| *x,
+                                move |_| {
+                                    let deep = create_signal(true);
+                                    container().width(10.0).height(5.0).enabled(deep).into_any()
+                                },
+                            ))
+                            .into_any()
+                    },
+                )),
+        );
+        churn(&mut rows, outer_keys, 1);
+        let settled = live_signal_count();
+        for round in 2..=10u32 {
+            churn(&mut rows, outer_keys, round);
+        }
+        assert_eq!(
+            live_signal_count(),
+            settled,
+            "a nested list left its rows' signals behind"
+        );
+    }
+
+    /// A row that scrolls builds its scrollbar during *layout*, not during
+    /// registration — and every declared property on the track and the handle
+    /// is a signal.
+    ///
+    /// This is the same defect an octave lower: ten signals per row against
+    /// `fold_enabled`'s one, measured at +360 over thirty-six rows, and it asks
+    /// nothing of the caller but `.scroll(..)`. A fix that covered only
+    /// registration would have left it exactly as it was.
+    #[test]
+    fn a_scrollbar_built_while_a_row_lays_out_dies_with_the_row() {
+        let keys = create_signal(vec![0u32, 1, 2, 3]);
+        let mut rows = Rows::new(container().width(200.0).height(200.0).children(keyed(
+            move || keys.get(),
+            |k| *k,
+            move |_| {
+                container()
+                    .width(50.0)
+                    .height(20.0)
+                    .scroll(Scroll::vertical())
+                    .children(
+                        (0..8)
+                            .map(|_| container().width(50.0).height(20.0).into_any())
+                            .collect::<Vec<_>>(),
+                    )
+                    .into_any()
+            },
+        )));
+        churn(&mut rows, keys, 1);
+        let settled = live_signal_count();
+        for round in 2..=10u32 {
+            churn(&mut rows, keys, round);
+        }
+        assert_eq!(
+            live_signal_count(),
+            settled,
+            "a scroller left its scrollbar's signals behind"
+        );
     }
 }
