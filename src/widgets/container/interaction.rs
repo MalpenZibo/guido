@@ -101,6 +101,57 @@ impl Container {
         }
     }
 
+    /// Give up the pointer: the hover, the press, and a ripple that will now
+    /// never be completed.
+    ///
+    /// Two events lead here and they mean the same thing. A `MouseLeave` says
+    /// the pointer went somewhere else; the gate at the top of
+    /// [`event`](Widget::event) says this container stopped accepting it. In
+    /// both cases nothing was activated, so the ripple is cancelled rather than
+    /// completed, and `on_hover(false)` is owed to whoever asked to be told.
+    ///
+    /// The gate needs this because it returns before
+    /// [`track_pointer`](Self::track_pointer): nothing else would ever take
+    /// `HOVERED` off a container the pointer left while it was switched off,
+    /// and it would light up again the moment it was switched back on with the
+    /// pointer somewhere else entirely. (The *reads* are gated too — see
+    /// [`Control::is_hovered`] — which is what makes the flip itself immediate;
+    /// this is what keeps it true afterwards.)
+    ///
+    /// Every write here is change-guarded, so the events that keep arriving
+    /// over a disabled subtree cost one comparison each and wake nobody.
+    ///
+    /// [`Control::is_hovered`]: crate::widgets::Control::is_hovered
+    pub(super) fn pointer_left(&mut self, id: WidgetId, now: Instant) {
+        let Some(ref mut ix) = self.interaction else {
+            return;
+        };
+        let was_hovered = ix.is_hovered();
+        let was_pressed = ix.is_pressed();
+        if was_hovered {
+            ix.set_flag(InteractionFlags::HOVERED, false);
+            if let Some(ref callback) = ix.on_hover {
+                callback(false);
+            }
+        }
+        ix.set_flag(InteractionFlags::PRESSED, false);
+
+        // The pointer left without releasing, so nothing was activated and
+        // there is nothing to complete: the ripple just goes.
+        if ix.ripple.is_active()
+            && let Some(config) = ix.ripple_config()
+        {
+            ix.ripple.cancel(&config, now);
+            request_job(id, JobRequest::Animation(RequiredJob::Paint));
+        }
+
+        if (was_hovered && ix.declares(|w| matches!(w, StateWhen::Hovered)))
+            || (was_pressed && ix.declares(|w| matches!(w, StateWhen::Pressed)))
+        {
+            self.request_state_change_repaint(id);
+        }
+    }
+
     /// Update hover state and fire the pointer-move callback, before children
     /// get the event: a child that handles a `MouseMove` must not stop its
     /// ancestors from tracking their own hover.
@@ -334,35 +385,7 @@ impl Container {
                 }
             }
 
-            Event::MouseLeave => {
-                if let Some(ref mut ix) = self.interaction {
-                    let was_hovered = ix.is_hovered();
-                    let was_pressed = ix.is_pressed();
-                    if ix.is_hovered() {
-                        ix.set_flag(InteractionFlags::HOVERED, false);
-                        if let Some(ref callback) = ix.on_hover {
-                            callback(false);
-                        }
-                    }
-                    ix.set_flag(InteractionFlags::PRESSED, false);
-
-                    // The pointer left without releasing, so nothing was
-                    // activated and there is nothing to complete: the ripple
-                    // just goes.
-                    if ix.ripple.is_active()
-                        && let Some(config) = ix.ripple_config()
-                    {
-                        ix.ripple.cancel(&config, now);
-                        request_job(id, JobRequest::Animation(RequiredJob::Paint));
-                    }
-
-                    if (was_hovered && ix.declares(|w| matches!(w, StateWhen::Hovered)))
-                        || (was_pressed && ix.declares(|w| matches!(w, StateWhen::Pressed)))
-                    {
-                        self.request_state_change_repaint(id);
-                    }
-                }
-            }
+            Event::MouseLeave => self.pointer_left(id, now),
 
             Event::Scroll {
                 at,

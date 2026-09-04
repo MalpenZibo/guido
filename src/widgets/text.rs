@@ -180,10 +180,11 @@ impl Text {
             // No control above: this text is its own unit. It can notice the
             // pointer over its own bounds, and it can hold the focus if
             // something gave it — but it cannot be pressed, because being
-            // pressed means being activated and it has nothing to activate.
+            // pressed means being activated and it has nothing to activate,
+            // and it cannot be disabled, because it takes no input to refuse.
             (StateWhen::Hovered, None) => self.own_hover.is_some_and(|h| h.get()),
             (StateWhen::Focused, None) => crate::reactive::focus::focus_path().contains(id),
-            (StateWhen::Pressed, None) => false,
+            (StateWhen::Pressed | StateWhen::Disabled, None) => false,
         }
     }
 

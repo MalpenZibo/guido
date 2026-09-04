@@ -33,7 +33,7 @@
 //! switch the row's highlight off while the pointer is plainly still on it.
 
 use crate::reactive::focus::focus_path;
-use crate::reactive::signal::RwSignal;
+use crate::reactive::signal::{OptionSignalExt, RwSignal, Signal};
 use crate::tree::WidgetId;
 
 use super::container::InteractionFlags;
@@ -47,11 +47,21 @@ use super::state_layer::StateWhen;
 pub struct Control {
     id: WidgetId,
     flags: RwSignal<InteractionFlags>,
+    /// Whether this unit takes input, with its ancestors already folded in —
+    /// see [`Container::enabled`](crate::widgets::Container::enabled).
+    ///
+    /// `None` where nothing at or above this unit was declared with one, which
+    /// is nearly every control there is and costs no signal at all.
+    enabled: Option<Signal<bool>>,
 }
 
 impl Control {
-    pub(crate) fn new(id: WidgetId, flags: RwSignal<InteractionFlags>) -> Self {
-        Self { id, flags }
+    pub(crate) fn new(
+        id: WidgetId,
+        flags: RwSignal<InteractionFlags>,
+        enabled: Option<Signal<bool>>,
+    ) -> Self {
+        Self { id, flags, enabled }
     }
 
     /// The container that declared the boundary.
@@ -60,13 +70,17 @@ impl Control {
     }
 
     /// Whether the pointer is inside the control.
+    ///
+    /// A disabled unit is never hovered and never pressed: it refuses the
+    /// pointer, so it is not under one. The declaration is read first, so a
+    /// control that is off does not subscribe to flags it would ignore.
     pub fn is_hovered(&self) -> bool {
-        self.flags.get().contains(InteractionFlags::HOVERED)
+        self.is_enabled() && self.flags.get().contains(InteractionFlags::HOVERED)
     }
 
     /// Whether the pointer is down on the control.
     pub fn is_pressed(&self) -> bool {
-        self.flags.get().contains(InteractionFlags::PRESSED)
+        self.is_enabled() && self.flags.get().contains(InteractionFlags::PRESSED)
     }
 
     /// Whether the keyboard focus is inside the control's subtree.
@@ -75,16 +89,38 @@ impl Control {
     /// question has to be answerable from a `create_derived` closure, which has
     /// no tree, and that is where a container resolves the text colour it
     /// publishes below it.
+    ///
+    /// Gated on the declaration, like hover and press: a disabled unit shows no
+    /// focus ring, which is what Qt, GTK and a `<fieldset disabled>` all show.
+    /// A field that must go on saying the keyboard is *its* is not disabled —
+    /// it is [read-only](crate::widgets::TextInput::readonly), which is a
+    /// different thing and keeps everything here.
     pub fn has_focus(&self) -> bool {
-        focus_path().contains(self.id)
+        self.is_enabled() && focus_path().contains(self.id)
+    }
+
+    /// Whether this unit, and every unit above it, takes input.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.get_or(true)
+    }
+
+    /// The complement, which is how a state layer reads it.
+    pub fn is_disabled(&self) -> bool {
+        !self.is_enabled()
+    }
+
+    /// The folded answer itself, so a nested unit can fold its own into it.
+    pub(crate) fn enabled_signal(&self) -> Option<Signal<bool>> {
+        self.enabled
     }
 
     /// Whether a state layer with this trigger applies right now.
     ///
     /// The single statement of what each [`StateWhen`] means. Everything that
     /// resolves a state layer against a unit goes through here — the container
-    /// its own layers, a `Text` or a `TextInput` the layers it declares — so no
-    /// two of them can come to disagree about the unit they share.
+    /// its own layers, a `Text` or a `TextInput` the layers it declares — so
+    /// "a disabled unit is never hovered" is written once rather than once per
+    /// widget that could disagree about it.
     ///
     /// Reading the answer is what subscribes the caller, which is why it is
     /// asked only for a layer that declares something about the property being
@@ -94,6 +130,7 @@ impl Control {
             StateWhen::Hovered => self.is_hovered(),
             StateWhen::Pressed => self.is_pressed(),
             StateWhen::Focused => self.has_focus(),
+            StateWhen::Disabled => self.is_disabled(),
             StateWhen::When(condition) => condition.get(),
         }
     }

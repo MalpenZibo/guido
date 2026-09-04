@@ -67,10 +67,15 @@ impl RippleConfig {
 /// When a state layer applies.
 ///
 /// The first three are noticed by the container itself — the pointer is inside
-/// it, the pointer is down on it, the focus is somewhere below it. The fourth
+/// it, the pointer is down on it, the focus is somewhere below it. The fifth
 /// is a condition the app already holds: "the last submit failed", "this row
 /// is selected". Nothing has to propagate for that one, so it needs no
 /// mechanism beyond reading the signal where the style is resolved.
+///
+/// [`Disabled`](Self::Disabled) is the one that propagates: it is declared
+/// with [`enabled`](crate::widgets::Container::enabled) on a container and
+/// answered by every widget below it, which is what a bare `When(busy)` cannot
+/// promise across two widgets in two files.
 #[derive(Clone, Copy)]
 pub enum StateWhen {
     /// The pointer is inside the container's shape.
@@ -79,6 +84,8 @@ pub enum StateWhen {
     Pressed,
     /// The container, or anything below it, holds the keyboard focus.
     Focused,
+    /// The control, or something above it, was declared not enabled.
+    Disabled,
     /// A condition the app owns.
     When(Signal<bool>),
 }
@@ -433,6 +440,20 @@ pub trait Stateful: Sized {
     /// the focus is in a *sibling*, and both belong to the same control.
     fn when_focused(mut self, f: impl FnOnce(Self::Style) -> Self::Style) -> Self {
         self.push_state_style(StateWhen::Focused, f(Self::Style::default()));
+        self
+    }
+
+    /// While the control refuses input.
+    ///
+    /// The look declared beside the behaviour:
+    /// [`enabled`](crate::widgets::Container::enabled) is what stops the
+    /// events, and this is what says so — so a greyed field and a dead one
+    /// cannot come apart, and `Disabled` means the same thing in every file.
+    ///
+    /// It reads the *effective* answer, ancestors folded in, so a label inside
+    /// a disabled form greys with the form without being told twice.
+    fn when_disabled(mut self, f: impl FnOnce(Self::Style) -> Self::Style) -> Self {
+        self.push_state_style(StateWhen::Disabled, f(Self::Style::default()));
         self
     }
 

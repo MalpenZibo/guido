@@ -370,7 +370,8 @@ impl TextInput {
             // focus, so both answers are its own.
             (StateWhen::Hovered, None) => self.hover.get(),
             (StateWhen::Focused, None) => crate::reactive::focus::focus_path().contains(id),
-            (StateWhen::Pressed, None) => false,
+            // Nothing above it declared `enabled`, so nothing switched it off.
+            (StateWhen::Pressed | StateWhen::Disabled, None) => false,
         }
     }
 
