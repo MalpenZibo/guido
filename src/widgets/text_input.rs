@@ -364,9 +364,7 @@ impl TextInput {
     fn is_state_active(&self, id: WidgetId, control: Option<&Control>, when: &StateWhen) -> bool {
         match (when, control) {
             (StateWhen::When(condition), _) => condition.get(),
-            (StateWhen::Hovered, Some(control)) => control.is_hovered(),
-            (StateWhen::Pressed, Some(control)) => control.is_pressed(),
-            (StateWhen::Focused, Some(control)) => control.has_focus(),
+            (_, Some(control)) => control.is_active(when),
             // No control above: the field is its own unit. It already tracks
             // the pointer for its cursor, and it is the thing that holds the
             // focus, so both answers are its own.

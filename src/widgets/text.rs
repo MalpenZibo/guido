@@ -174,9 +174,9 @@ impl Text {
     fn is_state_active(&self, id: WidgetId, control: Option<&Control>, when: &StateWhen) -> bool {
         match (when, control) {
             (StateWhen::When(condition), _) => condition.get(),
-            (StateWhen::Hovered, Some(control)) => control.is_hovered(),
-            (StateWhen::Pressed, Some(control)) => control.is_pressed(),
-            (StateWhen::Focused, Some(control)) => control.has_focus(),
+            // Inside a unit, every state is that unit's answer, whatever the
+            // state is — the whole point of `Control`.
+            (_, Some(control)) => control.is_active(when),
             // No control above: this text is its own unit. It can notice the
             // pointer over its own bounds, and it can hold the focus if
             // something gave it — but it cannot be pressed, because being

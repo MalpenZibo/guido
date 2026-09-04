@@ -2515,7 +2515,8 @@ fn a_translate_sequence_and_a_scale_sequence_move_the_transform() {
 /// a widget that no longer exists.
 #[test]
 fn unregistering_a_focused_widget_releases_the_focus() {
-    use crate::reactive::{focus_path, request_focus};
+    use crate::reactive::focus::focus_path;
+    use crate::reactive::request_focus;
 
     let mut h = H::new(
         container()

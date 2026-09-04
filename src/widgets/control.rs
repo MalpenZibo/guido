@@ -37,6 +37,7 @@ use crate::reactive::signal::RwSignal;
 use crate::tree::WidgetId;
 
 use super::container::InteractionFlags;
+use super::state_layer::StateWhen;
 
 /// A handle on the interaction unit a widget belongs to.
 ///
@@ -69,7 +70,31 @@ impl Control {
     }
 
     /// Whether the keyboard focus is inside the control's subtree.
+    ///
+    /// The path, rather than a walk of the unit's descendants: the same
+    /// question has to be answerable from a `create_derived` closure, which has
+    /// no tree, and that is where a container resolves the text colour it
+    /// publishes below it.
     pub fn has_focus(&self) -> bool {
         focus_path().contains(self.id)
+    }
+
+    /// Whether a state layer with this trigger applies right now.
+    ///
+    /// The single statement of what each [`StateWhen`] means. Everything that
+    /// resolves a state layer against a unit goes through here — the container
+    /// its own layers, a `Text` or a `TextInput` the layers it declares — so no
+    /// two of them can come to disagree about the unit they share.
+    ///
+    /// Reading the answer is what subscribes the caller, which is why it is
+    /// asked only for a layer that declares something about the property being
+    /// resolved.
+    pub(crate) fn is_active(&self, when: &StateWhen) -> bool {
+        match when {
+            StateWhen::Hovered => self.is_hovered(),
+            StateWhen::Pressed => self.is_pressed(),
+            StateWhen::Focused => self.has_focus(),
+            StateWhen::When(condition) => condition.get(),
+        }
     }
 }

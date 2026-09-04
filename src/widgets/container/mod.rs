@@ -29,7 +29,7 @@ use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Axis, Constraints, Flex, Layout, Length, Size};
 use crate::pivot::Pivot;
 use crate::reactive::{
-    IntoSignal, OptionSignalExt, RwSignal, Signal, create_signal, focus_path, with_signal_tracking,
+    IntoSignal, OptionSignalExt, RwSignal, Signal, create_signal, with_signal_tracking,
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::{Scale, Transform, Translate};
@@ -348,20 +348,13 @@ impl InteractionState {
             .and_then(|(_, s)| s.ripple)
     }
 
-    /// Whether the layer is active right now. Reading this is what subscribes
-    /// the caller to the state, which is why it is not asked for layers that
-    /// declare nothing about the property being resolved.
-    pub(super) fn is_active(&self, id: WidgetId, when: &StateWhen) -> bool {
-        match when {
-            StateWhen::Hovered => self.flags.get().contains(InteractionFlags::HOVERED),
-            StateWhen::Pressed => self.flags.get().contains(InteractionFlags::PRESSED),
-            // The path, rather than a walk of this container's descendants:
-            // the same question has to be answerable from a `create_derived`
-            // closure, which has no tree, and that is where a container
-            // resolves the text colour it publishes below it.
-            StateWhen::Focused => focus_path().contains(id),
-            StateWhen::When(condition) => condition.get(),
-        }
+    /// This container as the interaction unit it is, which is what resolves its
+    /// own state layers.
+    ///
+    /// A container asks [`Control::is_active`] exactly as a `Text` below it
+    /// does, so the two cannot come to disagree about the unit they share.
+    pub(super) fn as_control(&self, id: WidgetId) -> Control {
+        Control::new(id, self.flags)
     }
 }
 

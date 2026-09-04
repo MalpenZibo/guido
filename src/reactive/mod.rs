@@ -30,9 +30,7 @@ pub use context::{
 pub(crate) use cursor::take_cursor_change;
 pub use cursor::{CursorIcon, set_cursor};
 pub use effect::create_effect;
-pub(crate) use focus::{
-    focus_path, has_focus, release_focus, release_focus_if_within, request_focus,
-};
+pub(crate) use focus::{has_focus, release_focus, release_focus_if_within, request_focus};
 pub(crate) use into_signal::converting_signals;
 #[doc(hidden)]
 pub use into_signal::{
