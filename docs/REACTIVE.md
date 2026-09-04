@@ -598,6 +598,21 @@ fn create_child(id: u64) -> impl Widget {
 container().children(keyed(move || items.get(), |id| *id, create_child))
 ```
 
+**The scope is not only the builder closure.** A widget goes on creating
+reactive resources after its factory has returned — `register_children` folds a
+subtree's `enabled` into one signal, and `layout` builds a scroller's track and
+handle, each with a signal per declared property. `OwnedWidget` re-enters its
+own scope for both, so those die with the row exactly as the signal in the
+example above does. Before that they were filed under the surface and outlived the widget by
+the whole life of the application: a churning list leaked one signal per row for
+`enabled`, and ten for a row that scrolled.
+
+What that scope does **not** cover is `event` or `reconcile_children`. Those
+run a closure you wrote — a handler, an `items_fn` — and a signal made there may
+be handed to something that outlives the row on purpose. Disposing it with the
+row would turn every later read into a panic, so it is left alone, and there is
+a test that says so rather than a comment promising it.
+
 ### Disposing Owner Scopes: `dispose_owner`
 
 `guido::reactive::dispose_owner(id)` disposes an owner created with

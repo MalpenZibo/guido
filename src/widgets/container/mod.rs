@@ -1144,12 +1144,12 @@ impl Container {
     /// which is nearly all of them, and nesting is the only case that allocates
     /// at all — one declaration inside another's reach.
     ///
-    /// That one signal belongs to the surface rather than to this widget:
-    /// `register_signal` files under `current_owner`, and registration does not
-    /// run inside the owner a dynamic row was built in. So a keyed list whose
-    /// rows declare `enabled` beneath a control that also does leaks a slot per
-    /// row created, for the surface's lifetime. Closing it means running
-    /// registration under the widget's own owner, which is #330.
+    /// That one signal belongs to this widget, and dies with it:
+    /// `OwnedWidget` re-enters its own scope for `register_children`, so a
+    /// keyed list whose rows declare `enabled` beneath a control that also does
+    /// no longer leaves a slot per row behind. It did until #330 — the leak was
+    /// found here, because this was the only thing in the widget layer creating
+    /// a signal during registration.
     fn fold_enabled(&mut self, tree: &Tree, id: WidgetId) {
         let Some(ix) = self.interaction.as_deref_mut() else {
             return;
