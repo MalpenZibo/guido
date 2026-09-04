@@ -27,6 +27,7 @@
 //! [`resolve_size`]: Container::resolve_size
 
 use super::*;
+use crate::finite::FiniteOr;
 use crate::layout::Axis;
 
 /// The container's own size declarations, resolved for one layout pass.
@@ -91,9 +92,9 @@ impl Container {
         let (padding, mut width, mut height, overflow) =
             with_signal_tracking(id, JobType::Layout, || {
                 (
-                    self.animated_padding(),
-                    self.width.as_ref().map(|w| w.get()).unwrap_or_default(),
-                    self.height.as_ref().map(|h| h.get()).unwrap_or_default(),
+                    self.animated_padding(id),
+                    self.width.get_finite_or(Length::default(), id, "width"),
+                    self.height.get_finite_or(Length::default(), id, "height"),
                     self.overflow.get_or(Overflow::Visible),
                 )
             });

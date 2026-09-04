@@ -4303,3 +4303,283 @@ fn a_disabled_scroller_does_not_scroll() {
         "the same scroller, enabled, takes the wheel"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A signal that stops being a number
+// ---------------------------------------------------------------------------
+
+/// The one that costs a battery. `animate_to`'s early-out is
+/// `new_target == self.target`, and NaN is equal to nothing including itself,
+/// so every pass reads a new target, begins a segment and asks for another
+/// Animation job. The surface never goes idle again.
+#[test]
+fn a_value_that_is_not_a_number_lets_the_surface_go_idle() {
+    let angle = create_signal(0.0f32);
+    let mut h = H::new(box_of(50.0, 50.0).rotate(angle.transition(200.0)));
+    h.fit(200.0, 200.0);
+    h.paint();
+
+    angle.set(f32::NAN);
+    let t0 = std::time::Instant::now();
+    // Well past any transition this could have started.
+    for step in 0..6 {
+        frame_at(
+            &mut h,
+            t0 + std::time::Duration::from_millis(step * 200),
+            200.0,
+            200.0,
+        );
+    }
+
+    assert!(
+        !pump(&mut h),
+        "the surface is still animating towards a value that will never arrive"
+    );
+}
+
+/// What a coerced value leaves behind: the property reads as if it had not
+/// been declared, which for every transform component is identity.
+///
+/// Not NaN, and not "somewhere" — a defined value, which is the whole of the
+/// CSS rule this follows: a bad number is replaced once, where it is resolved,
+/// so nothing downstream ever has to know it happened.
+#[test]
+fn a_value_that_is_not_a_number_reads_as_if_it_were_not_declared() {
+    let angle = create_signal(45.0f32);
+    let mut h = H::new(box_of(50.0, 50.0).rotate(angle));
+    h.fit(200.0, 200.0);
+    assert!(
+        !h.paint().local_transform.is_identity(),
+        "the control turns before the bad number arrives"
+    );
+
+    angle.set(f32::NAN);
+    assert!(
+        h.paint().local_transform.is_identity(),
+        "a rotation nobody can compute is a rotation nobody asked for"
+    );
+}
+
+/// Worse than wrong for one frame: NaN is stored as the segment's start, and
+/// `lerp(NaN, target, t)` is NaN at every `t`, so a later and perfectly finite
+/// target animates from NaN to NaN for the life of the process.
+///
+/// Coercing where the value is resolved is what stops that reaching the
+/// animation at all. Asserted against a control that was never given a bad
+/// number, so the claim is "these two agree" rather than a restatement of which
+/// way round the matrix stores a sine.
+#[test]
+fn a_property_follows_its_signal_again_once_the_signal_recovers() {
+    let poisoned = create_signal(0.0f32);
+    let clean = create_signal(0.0f32);
+    let mut h = H::new(
+        container()
+            .layout(Flex::row())
+            .child(box_of(50.0, 50.0).rotate(poisoned.transition(200.0)))
+            .child(box_of(50.0, 50.0).rotate(clean.transition(200.0))),
+    );
+    h.fit(400.0, 200.0);
+    h.paint();
+
+    let t0 = std::time::Instant::now();
+    poisoned.set(f32::NAN);
+    // Two frames, so a bad number would be not merely the target but through
+    // `lerp` into `current` — which `begin_segment` then keeps as the start of
+    // every segment after it.
+    frame_at(&mut h, t0, 400.0, 200.0);
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(50),
+        400.0,
+        200.0,
+    );
+
+    // Both are now asked for the same quarter turn, and given the same time.
+    poisoned.set(90.0);
+    clean.set(90.0);
+    for step in 1..=4 {
+        frame_at(
+            &mut h,
+            t0 + std::time::Duration::from_millis(step * 100),
+            400.0,
+            200.0,
+        );
+    }
+
+    // The rotation only: the two sit at different x in the row, and where a box
+    // was laid out is not what this is about.
+    let painted = h.paint();
+    let turn = |t: Transform| [t.a(), t.b(), t.c(), t.d()];
+    assert_eq!(
+        turn(painted.children[0].local_transform),
+        turn(painted.children[1].local_transform),
+        "a property given one bad number never followed its signal again"
+    );
+}
+
+/// `Pivot` is the fourth transform component, and it does not go through a
+/// state layer — so the door the other three pass is not on its way.
+///
+/// Hit testing is where it lands: `untransform_point` composes the transform
+/// about the pivot, and a NaN origin makes every `contains` answer no, so a
+/// container stops taking the clicks that are plainly inside it.
+///
+/// The bad number is the *vertical* anchor here and the horizontal one in the
+/// enumeration above, so neither arm of the answer can be deleted unnoticed.
+#[test]
+fn a_pivot_that_is_not_a_number_does_not_swallow_a_click() {
+    let clicks = std::rc::Rc::new(std::cell::Cell::new(0));
+    let counter = clicks.clone();
+    let mut h = H::new(
+        box_of(50.0, 50.0)
+            .rotate(45.0)
+            .pivot(move || Pivot::percent(50.0, f32::NAN))
+            .on_click(move || counter.set(counter.get() + 1)),
+    );
+    h.fit(200.0, 200.0);
+
+    for event in click_at(25.0, 25.0) {
+        h.send(event);
+    }
+    assert_eq!(
+        clicks.get(),
+        1,
+        "a pivot nobody can compute stopped the container being clicked"
+    );
+}
+
+/// The third of the three things the fix owes: it says so, and says so once.
+///
+/// A property that quietly stops following its signal is the hardest failure in
+/// this library to find by looking — the picture is *correct*, it is just not
+/// the one that was asked for — so the silence is the defect, not a detail of
+/// it. Once per property rather than once per frame, because paint reads this
+/// again every time it runs.
+#[cfg(debug_assertions)]
+#[test]
+fn a_value_that_is_not_a_number_is_reported_once() {
+    use crate::reactive::diagnostics::report_count;
+
+    let angle = create_signal(f32::NAN);
+    let mut h = H::new(box_of(50.0, 50.0).rotate(angle));
+    h.fit(200.0, 200.0);
+
+    let before = report_count();
+    for _ in 0..5 {
+        h.paint();
+    }
+    let reports = report_count() - before;
+    assert_eq!(reports, 1, "five paints, and it should have said so once");
+}
+
+/// Every declared property goes through the door, not the six somebody
+/// remembered.
+///
+/// The design rests on one claim — that a bad number is coerced *where it is
+/// resolved*, so no consumer downstream has to know — and a door with holes in
+/// it is not that claim, it is six special cases. The first draft of this fix
+/// converted six accessors and left `shadow`, `padding`, `width`, `height` and
+/// the three untracked transform reads behind.
+///
+/// So this asks each resolver directly rather than looking for a symptom
+/// further down. A symptom test passes for the wrong reason all the time —
+/// the first version of this one did, because a NaN width is clamped into a
+/// finite size by the layout below it, and a NaN shadow never reaches a drawn
+/// rect. What the door promises is about the value it hands out, so that is
+/// what is asserted.
+#[test]
+fn every_declared_property_is_resolved_to_a_finite_value() {
+    let nan = f32::NAN;
+    let declared = || {
+        box_of(50.0, 50.0)
+            .width(nan)
+            .height(nan)
+            .padding(nan)
+            .corners(nan)
+            .border(nan, Color::rgba(nan, 0.0, 0.0, 1.0))
+            .rotate(nan)
+            .scale(nan)
+            .translate((nan, nan))
+            // Horizontal only: with both anchors bad, either arm of the
+            // answer still detects it and neither can be deleted noticeably.
+            // The hit-testing test takes the vertical for the same reason.
+            .pivot(Pivot::percent(nan, 50.0))
+            .background(Color::rgba(nan, 0.0, 0.0, 1.0))
+            .shadow(Shadow::new((nan, nan), nan, nan, Color::BLACK))
+    };
+
+    // One copy in a tree, so the accessors have a laid-out widget to answer
+    // for, and one in hand to ask — they take the id rather than reading it
+    // off themselves, and nothing here declares a state layer.
+    let mut h = H::new(declared());
+    h.fit(200.0, 200.0);
+    let id = h.root;
+    let c = declared();
+
+    let finite = |name: &str, channels: Vec<f32>| {
+        assert!(
+            channels.iter().all(|c| c.is_finite()),
+            "{name} resolved to a value that is not finite: {channels:?}"
+        );
+    };
+
+    {
+        finite(
+            "background",
+            c.effective_background_target(id).channels().to_vec(),
+        );
+        finite(
+            "border_color",
+            c.effective_border_color_target(id).channels().to_vec(),
+        );
+        finite("border_width", vec![c.effective_border_width_target(id)]);
+        finite(
+            "corners",
+            c.effective_corners_target(id).channels().to_vec(),
+        );
+        finite("shadow", c.effective_shadow_target(id).channels().to_vec());
+        finite(
+            "padding",
+            c.effective_padding_target(id).channels().to_vec(),
+        );
+        finite(
+            "translate",
+            c.effective_translate_target(id).channels().to_vec(),
+        );
+        finite("rotate", vec![c.effective_rotate_target(id)]);
+        finite("scale", c.effective_scale_target(id).channels().to_vec());
+        let pivot = c.resolved_pivot(id);
+        let (px, py) = pivot.resolve(Rect::new(0.0, 0.0, 50.0, 50.0));
+        finite("pivot", vec![px, py]);
+        let lengths = c.read_box_lengths(id, Constraints::new(0.0, 0.0, 200.0, 200.0));
+        finite("padding (laid out)", lengths.padding.channels().to_vec());
+        let numbers = |l: crate::layout::Length| {
+            [l.min, l.max, l.exact, l.fraction]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<f32>>()
+        };
+        finite("width", numbers(lengths.width));
+        finite("height", numbers(lengths.height));
+        // Shadow has two resolvers, and the first draft of this fix converted
+        // one: with the extent left raw, a container with a bad shadow and a
+        // transform reported a damage rect that did not cover where it drew.
+        finite("shadow extent", vec![c.max_shadow_extent(id)]);
+    }
+
+    // And a state layer's override is passed over the same way, so the base
+    // shows through rather than the layer's bad number replacing it.
+    let hovered = container()
+        .width(50.0)
+        .height(50.0)
+        .background(Color::RED)
+        .when_hovered(|s| s.background(Color::rgba(nan, 0.0, 0.0, 1.0)));
+    let mut h = H::new(hovered);
+    h.fit(200.0, 200.0);
+    set_hover(&mut h, true);
+    assert_eq!(
+        rects(&h.paint()).first().map(|(_, c)| *c),
+        Some(Color::RED),
+        "a hover layer nobody can compute replaced the background anyway"
+    );
+}

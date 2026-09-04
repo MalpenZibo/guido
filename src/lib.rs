@@ -3,6 +3,7 @@ pub mod backdrop;
 mod blur;
 pub mod compositor;
 mod deferred;
+pub(crate) mod finite;
 pub mod image_metadata;
 mod ingress;
 mod jobs;

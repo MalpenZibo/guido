@@ -144,7 +144,7 @@ impl Container {
             with_signal_tracking(id, JobType::Animation, || {
                 // Read for the subscription even where the value is unused.
                 if pd_init {
-                    let _ = self.padding.get_or(Padding::default());
+                    let _ = self.effective_padding_target(id);
                 }
                 if bw_init {
                     let _ = self.effective_border_width_target(id);
@@ -199,7 +199,7 @@ impl Container {
             if let Some(a) = &anims.padding {
                 drift |= moved(
                     a.is_initial(),
-                    *a.target() == self.padding.get_or(Padding::default()),
+                    *a.target() == self.effective_padding_target(id),
                 );
                 drift |= a.wants_play();
             }

@@ -1261,7 +1261,7 @@ impl Widget for Container {
                 scale_target,
             ) = crate::reactive::diagnostics::snapshot_zone(|| {
                 (
-                    self.padding.get_or(Padding::default()),
+                    self.effective_padding_target(id),
                     self.effective_border_width_target(id),
                     self.effective_background_target(id),
                     self.effective_corners_target(id),
@@ -1572,7 +1572,7 @@ impl Widget for Container {
         // Kept as well as published, because paint clamps to it: the shadow that
         // is drawn and the rect that is repainted have to be one number, not two
         // computations of it made a frame apart.
-        let reach = with_signal_tracking(id, JobType::Layout, || self.max_shadow_extent());
+        let reach = with_signal_tracking(id, JobType::Layout, || self.max_shadow_extent(id));
         self.shadow_reach.set(reach);
         // The shadow's reach is layout's to publish — it follows the shadow,
         // which layout already tracks. What a transform adds is not: a
@@ -1626,7 +1626,7 @@ impl Widget for Container {
             bounds: tree.get_bounds(id).unwrap_or_default(),
             corners: self.animated_corners(id),
             transform: self.animated_transform(id),
-            pivot: self.pivot_signal().get_or(Pivot::CENTER),
+            pivot: self.resolved_pivot(id),
         };
 
         // Undo our own transform before hit testing against the laid-out
@@ -1723,7 +1723,7 @@ impl Widget for Container {
                 self.animated_corners(id),
                 self.animated_shadow(id),
                 self.animated_transform(id),
-                self.pivot_signal().get_or(Pivot::CENTER),
+                self.resolved_pivot(id),
                 self.animated_border_width(id),
                 self.animated_border_color(id),
                 self.gradient.as_ref().and_then(|g| g.get()),
