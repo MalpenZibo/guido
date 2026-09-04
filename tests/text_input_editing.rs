@@ -26,6 +26,7 @@ use guido::reactive::clipboard::{
     clear_system_clipboard, clipboard_paste, primary_copy, take_clipboard_change,
 };
 use guido::reactive::focus::{clear_focus, focus_path, request_focus};
+use guido::renderer::{DrawCommand, RenderNode};
 use guido::tree::WidgetId;
 
 /// Narrow enough that a sentence does not fit, which is what the scrolling
@@ -188,6 +189,20 @@ impl Field {
     /// Where the caret is drawn, if it is showing.
     fn caret_x(&mut self) -> Option<f32> {
         self.caret().map(|c| c.x)
+    }
+
+    /// The colour the field's own glyphs were drawn in.
+    fn text_colour(&mut self) -> Option<Color> {
+        fn find(node: &RenderNode) -> Option<Color> {
+            for cmd in &node.commands {
+                if let DrawCommand::Text { color, .. } = &**cmd {
+                    return Some(*color);
+                }
+            }
+            node.children.iter().find_map(|child| find(child))
+        }
+        self.harness.lay_out(WIDTH, HEIGHT);
+        find(&self.harness.paint())
     }
 
     /// The caret's rectangle, if it is showing.
@@ -716,14 +731,41 @@ fn a_read_only_field_refuses_every_edit() {
             .child(text_input(value).readonly(readonly)),
     );
 
-    field.key(Key::Char('x'));
-    field.key(Key::Backspace);
-    field.key(Key::Delete);
-    field.ctrl('a');
-    field.ctrl('x');
-    field.ctrl('v');
-    field.ctrl('z');
-    field.ctrl('y');
+    // The response as well as the text. The refusal itself is at the writers,
+    // so the text would be right even if the keyboard gate were gone entirely —
+    // what says the gate is still there is the field declining the key, which
+    // is what lets somebody else have it.
+    for key in [Key::Char('x'), Key::Backspace, Key::Delete] {
+        assert_eq!(
+            field.key(key),
+            EventResponse::Ignored,
+            "a key it will not use is a key somebody else may"
+        );
+    }
+    for c in ['x', 'v', 'z', 'y'] {
+        assert_eq!(
+            field.press(
+                Key::Char(c),
+                Modifiers {
+                    ctrl: true,
+                    ..Default::default()
+                }
+            ),
+            EventResponse::Ignored,
+            "ctrl+{c} edits, so it is refused too"
+        );
+    }
+    // Ctrl+A only selects, so it is not refused.
+    assert_eq!(
+        field.press(
+            Key::Char('a'),
+            Modifiers {
+                ctrl: true,
+                ..Default::default()
+            }
+        ),
+        EventResponse::Handled
+    );
     assert_eq!(field.text(), "hi", "not one of those may change the text");
 
     readonly.set(false);
@@ -758,6 +800,39 @@ fn a_read_only_field_refuses_a_middle_click_paste() {
         field.text().contains("pasted"),
         "and the same click works when the field is not read-only: {}",
         field.text()
+    );
+}
+
+/// A field resolves its own state layers through its control, exactly as a
+/// `Text` beside it does — nothing declared one on a `TextInput` before, so the
+/// whole of `is_state_active` could be replaced by a constant unnoticed.
+#[test]
+fn a_field_styles_itself_from_its_control() {
+    const CALM: Color = Color::rgb(0.5, 0.5, 0.5);
+    const LIT: Color = Color::rgb(1.0, 1.0, 1.0);
+
+    let value = create_signal("hi".to_owned());
+    let enabled = create_signal(true);
+    let mut field = Field::wrapped(
+        value,
+        container()
+            .width(WIDTH)
+            .height(HEIGHT)
+            .enabled(enabled)
+            .child(text_input(value).color(CALM).when_focused(|s| s.color(LIT))),
+    );
+
+    assert_eq!(
+        field.text_colour(),
+        Some(LIT),
+        "the field holds the focus, so its focused layer applies"
+    );
+
+    enabled.set(false);
+    assert_eq!(
+        field.text_colour(),
+        Some(CALM),
+        "a disabled unit is not where the keyboard is aimed, so the layer lifts"
     );
 }
 
