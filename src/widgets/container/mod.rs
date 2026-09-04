@@ -201,14 +201,17 @@ pub(super) struct TransformProps {
 }
 
 /// Boxed animation states. Only allocated when a declared value arrives
-/// carrying a motion, saving ~400 bytes per non-animated Container.
+/// carrying a motion, which is what keeps them off a `Container` that declares
+/// none: the struct measures ~2.4KB, and `AnimationState<Shadow>` is the
+/// largest slot in it at 296 bytes — four copies of a 32-byte value with no
+/// niche to pack the `Option` into.
 #[derive(Default)]
 pub(super) struct ContainerAnims {
     pub(super) width: Option<AnimationState<f32>>,
     pub(super) height: Option<AnimationState<f32>>,
     pub(super) background: Option<AnimationState<Color>>,
     pub(super) corners: Option<AnimationState<crate::widgets::Corners>>,
-    pub(super) elevation: Option<AnimationState<f32>>,
+    pub(super) shadow: Option<AnimationState<Shadow>>,
     pub(super) padding: Option<AnimationState<Padding>>,
     pub(super) border_width: Option<AnimationState<f32>>,
     pub(super) border_color: Option<AnimationState<Color>>,
@@ -417,7 +420,7 @@ pub struct Container {
     pub(super) corners: Option<Signal<crate::widgets::Corners>>,
     pub(super) border_width: Option<Signal<f32>>,
     pub(super) border_color: Option<Signal<Color>>,
-    pub(super) elevation: Option<Signal<f32>>,
+    pub(super) shadow: Option<Signal<Shadow>>,
     pub(super) width: Option<Signal<Length>>,
     pub(super) height: Option<Signal<Length>>,
     pub(super) overflow: Option<Signal<Overflow>>,
@@ -434,16 +437,17 @@ pub struct Container {
     /// one such read of several on that path, so that is a bonus rather than
     /// the reason.
     pub(super) overflow_resolved: Cell<Overflow>,
-    /// The elevation the last layout sized this container's damage rect for.
+    /// How far past its own bounds the last layout sized this container's
+    /// damage rect to reach — the extent of the deepest shadow it can cast.
     ///
-    /// Written by `layout` and read by `animated_elevation`, so the shadow that
-    /// is drawn and the rect that is repainted are the *same number* rather than
+    /// Written by `layout` and read by `animated_shadow`, so the shadow that is
+    /// drawn and the rect that is repainted are the *same number* rather than
     /// two computations of it. They were two, and they disagreed: paint asked
-    /// [`max_elevation`](style) again, which reads the elevation signal at its
-    /// current value, so a card animating from 8 down to 0 was clamped to the 0
-    /// it had not reached yet and the shadow vanished in one frame while the
-    /// animation went on running.
-    pub(super) elevation_reach: Cell<f32>,
+    /// [`max_shadow_extent`](style) again, which reads the shadow signal at its
+    /// current value, so a card animating from a deep shadow to none was clamped
+    /// to the nothing it had not reached yet and the shadow vanished in one
+    /// frame while the animation went on running.
+    pub(super) shadow_reach: Cell<f32>,
     pub(super) visible: Option<Signal<bool>>,
     pub(super) transform: Option<Box<TransformProps>>,
 
@@ -461,7 +465,8 @@ pub struct Container {
     /// reasons too — see `is_control` — so this is only the explicit half.
     pub(super) declared_control: bool,
 
-    // Animation state (boxed to save ~400 bytes per non-animated container)
+    // Animation state, boxed: ~2.4KB that a container declaring no motion
+    // never allocates.
     pub(super) anims: Option<Box<ContainerAnims>>,
 
     // Scroll configuration
@@ -495,12 +500,12 @@ impl Container {
             corners: None,
             border_width: None,
             border_color: None,
-            elevation: None,
+            shadow: None,
             width: None,
             height: None,
             overflow: None,
             overflow_resolved: Cell::new(Overflow::Visible),
-            elevation_reach: Cell::new(0.0),
+            shadow_reach: Cell::new(0.0),
             visible: None,
             transform: None,
             interaction: None,
@@ -523,13 +528,13 @@ impl Container {
     /// current instead is that the same write schedules a Paint job, and
     /// `refresh_paint_bounds` runs from that job before this frame paints.
     fn publish_paint_reach(&self, tree: &mut Tree, id: WidgetId, bounds: Rect) {
-        let shadow = style::elevation_to_shadow(self.elevation_reach.get()).extent();
+        let shadow_extent = self.shadow_reach.get();
         // Only this container's own half. What its children add is
         // `children_outset`, which the tree keeps for it — gathered upward as
         // they publish, and re-measured whenever this container lays out. That
         // split is what lets this run from a Paint job without walking
         // anything.
-        tree.set_own_paint_reach(id, self.max_transform_reach(bounds, shadow));
+        tree.set_own_paint_reach(id, self.max_transform_reach(bounds, shadow_extent));
     }
 
     /// Resolve the declared scroll measurements for this pass.
@@ -939,10 +944,25 @@ impl Container {
         self
     }
 
-    /// The Material lift, as a shadow. `elevation(8.0.transition(120.0))`
-    /// raises and drops it in motion rather than as a jump.
-    pub fn elevation<M>(mut self, level: impl IntoAnimated<f32, M>) -> Self {
-        self.elevation = Some(declare(&mut self.anims, level, |a| &mut a.elevation));
+    /// The shadow this container casts — offset, blur, spread and colour, all
+    /// four of them.
+    ///
+    /// There is no elevation level and no table behind one. A design system's
+    /// ladder is a set of `Shadow` values the application writes down, the way
+    /// it writes down its colours.
+    ///
+    /// ```
+    /// use guido::prelude::*;
+    ///
+    /// const LIFTED: Shadow = Shadow::new((0.0, 8.0), 16.0, 0.0, Color::BLACK);
+    /// let _ = container().shadow(LIFTED);
+    /// let _ = container().shadow(LIFTED.transition(120.0));
+    /// let _ = container()
+    ///     .shadow(Shadow::none().transition(120.0))
+    ///     .when_hovered(|s| s.shadow(LIFTED));
+    /// ```
+    pub fn shadow<M>(mut self, shadow: impl IntoAnimated<Shadow, M>) -> Self {
+        self.shadow = Some(declare(&mut self.anims, shadow, |a| &mut a.shadow));
         self
     }
 
@@ -1138,7 +1158,7 @@ impl Widget for Container {
                 border_width_target,
                 bg_target,
                 corners_target,
-                elevation_target,
+                shadow_target,
                 border_color_target,
                 translate_target,
                 rotate_target,
@@ -1149,7 +1169,7 @@ impl Widget for Container {
                     self.effective_border_width_target(id),
                     self.effective_background_target(id),
                     self.effective_corners_target(id),
-                    self.effective_elevation_target(id),
+                    self.effective_shadow_target(id),
                     self.effective_border_color_target(id),
                     // Only where there is an animation to aim: each of these
                     // walks the state layers, and all three used to run for a
@@ -1199,7 +1219,7 @@ impl Widget for Container {
                 start_timeline!(border_width);
                 start_timeline!(background);
                 start_timeline!(corners);
-                start_timeline!(elevation);
+                start_timeline!(shadow);
                 start_timeline!(border_color);
                 start_timeline!(translate);
                 start_timeline!(rotate);
@@ -1240,15 +1260,7 @@ impl Widget for Container {
                 now,
                 paint
             );
-            advance_anim!(
-                anims,
-                elevation,
-                elevation_target,
-                id,
-                any_animating,
-                now,
-                paint
-            );
+            advance_anim!(anims, shadow, shadow_target, id, any_animating, now, paint);
             advance_anim!(
                 anims,
                 border_color,
@@ -1450,22 +1462,22 @@ impl Widget for Container {
         // Cache constraints and size for partial layout
         tree.cache_layout(id, constraints, size);
 
-        // An elevation shadow falls outside the box that casts it, so the damage
-        // this container reports has to reach past its own bounds.
+        // A shadow falls outside the box that casts it, so the damage this
+        // container reports has to reach past its own bounds.
         //
-        // The *largest* elevation it can reach, not the one showing: elevation
+        // The *deepest* shadow it can cast, not the one showing: a shadow
         // animates paint-only, so a hover that lifts a card never re-runs this
         // layout, and a reach sized to the resting value would leave the shadow
         // ring outside every damage rect — invisible on the way up, and left
         // behind on the way down. Read under layout tracking, so a declared
-        // elevation changing does re-run it.
+        // shadow changing does re-run it.
         //
         // Kept as well as published, because paint clamps to it: the shadow that
         // is drawn and the rect that is repainted have to be one number, not two
         // computations of it made a frame apart.
-        let reach = with_signal_tracking(id, JobType::Layout, || self.max_elevation());
-        self.elevation_reach.set(reach);
-        // The shadow's reach is layout's to publish — it follows the elevation,
+        let reach = with_signal_tracking(id, JobType::Layout, || self.max_shadow_extent());
+        self.shadow_reach.set(reach);
+        // The shadow's reach is layout's to publish — it follows the shadow,
         // which layout already tracks. What a transform adds is not: a
         // transform is a paint property and reading it here would make moving a
         // widget reflow it. `refresh_paint_bounds` answers that part, in the
@@ -1591,7 +1603,7 @@ impl Widget for Container {
         let (
             background,
             corners,
-            elevation_level,
+            shadow,
             user_transform,
             pivot,
             border_width,
@@ -1603,7 +1615,7 @@ impl Widget for Container {
             (
                 self.animated_background(id),
                 self.animated_corners(id),
-                self.animated_elevation(id),
+                self.animated_shadow(id),
                 self.animated_transform(id),
                 self.pivot_signal().get_or(Pivot::CENTER),
                 self.animated_border_width(id),
@@ -1659,7 +1671,7 @@ impl Widget for Container {
                 gradient,
                 corner_radii,
                 corner_curvature,
-                elevation: elevation_level,
+                shadow,
                 border_width,
                 border_color,
             },

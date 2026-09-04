@@ -1063,8 +1063,8 @@ fn advancing_animations_does_not_report_a_missing_scope() {
 ///
 /// It answered no: the list named `border_color` and not `border_width`, from
 /// when the two were declared separately and a layer really could change one
-/// alone. This PR added `elevation` to that list and left the hole next to it
-/// that it had just made reachable.
+/// alone. A later change added the shadow to that list and left the hole next
+/// to it that it had just made reachable.
 ///
 /// Asked of the predicate rather than through a hover, because a hover reaches
 /// the animation by a second route as well: the interaction flags are a signal,
@@ -1126,6 +1126,208 @@ fn a_state_layer_moving_an_animated_transform_counts_as_movable() {
             .when_pressed(|s| s.scale(0.98))
             .has_animated_state_properties(),
         "and with nothing animated, a plain repaint is the whole job"
+    );
+}
+
+/// A declared shadow that carries a motion is already at its value on the first
+/// frame, rather than easing up to it from nothing.
+///
+/// That is what `seed_animations` is for, and the guard in front of it is a
+/// chain of `||` over every animatable slot — so a container animating *nothing
+/// but a shadow* is the only shape that says the shadow's own term carries the
+/// chain. On a ramp no runner can finish, so "already there" cannot be confused
+/// with "arrived quickly".
+#[test]
+fn a_declared_shadow_starts_at_its_value_rather_than_easing_up_to_it() {
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .shadow(LIFTED.transition(Transition::new(60_000.0, TimingFunction::Linear))),
+    );
+    h.fit(100.0, 100.0);
+
+    assert_eq!(
+        drawn_shadow(&h.paint()),
+        Some(LIFTED),
+        "a declaration is where the motion starts, not where it is heading"
+    );
+}
+
+/// A write landing between the first layout and the first paint is not missed.
+///
+/// That is the whole of what `seed_animations` buys: it reads every animated
+/// property under Animation tracking at the *first layout*, so the subscription
+/// exists before anything can be written. The module docs name the bug —
+/// a menu whose open-flip fired in that window stayed collapsed for ever.
+///
+/// Asserted on the job queue rather than on the picture, because the picture
+/// cannot tell: `resync_animation_targets` re-reads the targets at every paint,
+/// so any frame that happens for another reason repairs it. What only the seed
+/// can do is make the write itself ask for that frame.
+///
+/// The guard in front of the seed is a chain of `||` over every animatable
+/// slot, so this has to animate the shadow and nothing else.
+#[test]
+fn a_shadow_written_before_the_first_paint_still_asks_for_its_frame() {
+    let declared = create_signal(Shadow::none());
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .shadow(
+                (move || declared.get()).transition(Transition::new(40.0, TimingFunction::Linear)),
+            ),
+    );
+    // The first layout, and no paint after it.
+    h.fit(100.0, 100.0);
+    h.drain_jobs();
+
+    declared.set(LIFTED);
+    let queued = jobs::queued_job_types(h.root);
+    assert!(
+        queued.contains(&JobType::Animation),
+        "the write landed before any paint and nothing was listening: {queued:?}"
+    );
+}
+
+/// The same for a background, which is the slot beside the shadow's in that
+/// guard and has never had a test of its own.
+///
+/// Not this change's property, but this change is what put a light on the
+/// clause: the chain is only as good as its weakest term, and each one needs a
+/// container that animates *that property alone* to say it carries.
+#[test]
+fn a_background_written_before_the_first_paint_still_asks_for_its_frame() {
+    let declared = create_signal(Color::RED);
+    let mut h = H::new(container().width(40.0).height(40.0).background(
+        (move || declared.get()).transition(Transition::new(40.0, TimingFunction::Linear)),
+    ));
+    h.fit(100.0, 100.0);
+    h.drain_jobs();
+
+    declared.set(Color::BLUE);
+    let queued = jobs::queued_job_types(h.root);
+    assert!(
+        queued.contains(&JobType::Animation),
+        "the write landed before any paint and nothing was listening: {queued:?}"
+    );
+}
+
+/// And corners, the slot beside the shadow's in the animated-state list.
+#[test]
+fn corners_alone_are_an_animated_state_property() {
+    assert!(
+        container()
+            .corners(4.0.transition(Transition::new(80.0, TimingFunction::Linear)))
+            .when_hovered(|s| s.corners(12.0))
+            .has_animated_state_properties(),
+        "hovering moves the corners, so it needs an Animation job"
+    );
+}
+
+/// A shadow that has arrived stops asking for frames.
+///
+/// `resync_animation_targets` compares the target it holds against the one the
+/// declarations resolve to, and asks for an Animation job when they differ.
+/// Invert that comparison and it asks when they *agree* — so a settled shadow
+/// requests a frame on every paint, for ever, and nothing about the picture on
+/// screen is wrong. Only the job queue can see it.
+///
+/// The queue is drained first and the assertion is on what the *paint* puts
+/// back, so there is something to find either way: a test that cleared the
+/// queue and then asserted it was empty would pass however the code behaved.
+#[test]
+fn a_settled_shadow_stops_asking_for_frames() {
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .shadow(LIFTED.transition(Transition::new(40.0, TimingFunction::Linear))),
+    );
+    h.fit(100.0, 100.0);
+    settle(&mut h, 200);
+
+    h.drain_jobs();
+    h.paint();
+    let queued = jobs::queued_job_types(h.root);
+    assert!(
+        !queued.contains(&JobType::Animation),
+        "a shadow that has arrived asked for another frame: {queued:?}"
+    );
+}
+
+/// A shadow is on both animated-property lists, and a container that animates
+/// nothing else has to be enough to put it there.
+///
+/// Asked of the predicates rather than through a hover, for the reason the
+/// border-width test above gives. Each list is a chain of `||` over eight or
+/// nine slots, so a clause that drifted into `&&` still answers correctly for
+/// every container that animates two things — only one that animates the shadow
+/// *alone* can tell.
+#[test]
+fn a_shadow_alone_is_an_animated_property_on_both_lists() {
+    let t = || Transition::new(80.0, TimingFunction::Linear);
+
+    assert!(
+        container()
+            .shadow(Shadow::none().transition(t()))
+            .when_hovered(|s| s.shadow(LIFTED))
+            .has_animated_state_properties(),
+        "hovering moves the shadow, so it needs an Animation job"
+    );
+    assert!(
+        !container()
+            .shadow(LIFTED)
+            .when_hovered(|s| s.shadow(LOW))
+            .has_animated_state_properties(),
+        "and with no motion declared, a plain repaint is the whole job"
+    );
+    assert!(
+        container()
+            .shadow(Shadow::none().transition(t()))
+            .has_signal_animated_props(),
+        "a shadow animation mirrors a signal, so it re-syncs at paint"
+    );
+}
+
+/// The alpha floor is a floor: a shadow exactly at it is still nothing.
+///
+/// `>` and `>=` differ on one value, and that value is reachable — an
+/// application can declare it, and an animation leaving transparent passes
+/// through it. Drawn at the boundary, the rect it pushes carries a shadow
+/// nobody can see.
+#[test]
+fn a_shadow_exactly_at_the_alpha_floor_is_not_drawn() {
+    let alpha = create_signal(style::SHADOW_ALPHA_FLOOR);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .shadow(move || {
+                Shadow::new(
+                    (0.0, 2.0),
+                    4.0,
+                    0.0,
+                    Color::rgba(0.0, 0.0, 0.0, alpha.get()),
+                )
+            }),
+    );
+    h.fit(100.0, 100.0);
+    assert!(
+        drawn_shadow(&h.paint()).is_none(),
+        "at the floor exactly, there is nothing to see"
+    );
+
+    alpha.set(style::SHADOW_ALPHA_FLOOR * 1.5);
+    h.fit(100.0, 100.0);
+    assert!(
+        drawn_shadow(&h.paint()).is_some(),
+        "and just above it there is"
     );
 }
 
@@ -2182,6 +2384,67 @@ fn a_translate_target_behind_an_untaken_branch_is_picked_up_by_the_resync() {
     );
 }
 
+/// The same for a shadow, which reaches paint by its own slot in both the seed
+/// and the drift list.
+///
+/// Two things this is the only witness to. `seed_animations` guards on a chain
+/// of `||` over every animatable slot, so a container animating *nothing but a
+/// shadow* is what says the shadow's own term carries the chain. And
+/// `resync_animation_targets` compares the held target against the effective one
+/// — invert that comparison and a target behind an untaken branch is never
+/// picked up, which is exactly the write below.
+#[test]
+fn a_shadow_target_behind_an_untaken_branch_is_picked_up_by_the_resync() {
+    let armed = create_signal(false);
+    let depth = create_signal(4.0f32);
+    let shadow_of = move |blur: f32| {
+        Shadow::new(
+            (0.0, blur * 0.5),
+            blur,
+            0.0,
+            Color::rgba(0.0, 0.0, 0.0, 0.5),
+        )
+    };
+    // The root, not a child: a fixed-size container is a relayout boundary, and
+    // `pump` discards the layout roots the real loop lays out from — so a nested
+    // one keeps the reach of its last layout and `animated_shadow` clamps the
+    // convergence away. The same reason the easing test gives.
+    let mut h = H::new(
+        container()
+            .width(50.0)
+            .height(50.0)
+            .background(Color::RED)
+            .shadow(
+                (move || {
+                    if armed.get() {
+                        shadow_of(depth.get())
+                    } else {
+                        Shadow::none()
+                    }
+                })
+                .transition(Transition::new(80.0, TimingFunction::Linear)),
+            ),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+
+    // The branch flips, which the first subscription can see.
+    armed.set(true);
+    settle(&mut h, 120);
+
+    // And this one it cannot: only the re-sync stands between it and a stale
+    // target.
+    depth.set(20.0);
+    settle(&mut h, 120);
+
+    let painted = drawn_shadow(&h.paint()).expect("a shadow is drawn");
+    assert!(
+        (painted.blur - 20.0).abs() < 0.5,
+        "a target behind a branch nobody tracked still has to converge, got {}",
+        painted.blur
+    );
+}
+
 /// The other two timelines, which `advance_animations` starts and
 /// `resync_animation_targets` wakes from lists that name each component once.
 /// Only a rotation was played by anything before this.
@@ -2629,22 +2892,24 @@ fn the_last_declared_border_layer_wins() {
     assert_eq!(borders(&h.paint()), vec![(2.0, Color::WHITE)]);
 }
 
-/// Elevation transitions like every other paint property now, instead of
-/// jumping.
+/// A shadow transitions like every other paint property, instead of jumping.
 #[test]
-fn elevation_animates_towards_its_state_layer() {
+fn a_shadow_animates_towards_its_state_layer() {
     let mut h = H::new(
         container()
             .width(40.0)
             .height(40.0)
             .background(Color::RED)
-            .elevation(0.0.transition(Transition::new(80.0, TimingFunction::Linear)))
-            .when_hovered(|s| s.elevation(8.0)),
+            .shadow(Shadow::none().transition(Transition::new(80.0, TimingFunction::Linear)))
+            .when_hovered(|s| s.shadow(LIFTED)),
     );
     h.fit(100.0, 100.0);
     h.paint();
 
-    assert_eq!(shadow_count(&h.paint()), 0, "flat on the surface at rest");
+    assert!(
+        drawn_shadow(&h.paint()).is_none(),
+        "flat on the surface at rest"
+    );
 
     set_hover(&mut h, true);
     // Two frames: the first starts the animation, the second is far enough up
@@ -2657,16 +2922,15 @@ fn elevation_animates_towards_its_state_layer() {
         h.fit(100.0, 100.0);
         h.paint();
     }
-    assert_eq!(
-        shadow_count(&h.paint()),
-        1,
+    assert!(
+        drawn_shadow(&h.paint()).is_some(),
         "it casts a shadow while it rises"
     );
 
     settle(&mut h, 80);
     set_hover(&mut h, false);
     settle(&mut h, 80);
-    assert_eq!(shadow_count(&h.paint()), 0, "and settles back down");
+    assert!(drawn_shadow(&h.paint()).is_none(), "and settles back down");
 }
 
 /// Run frames until nothing is animating, or `limit` frames pass.
@@ -2752,25 +3016,9 @@ fn gradient_ends(node: &RenderNode) -> Option<(Color, Color)> {
     })
 }
 
-/// How many of the node's rects carry a shadow.
-fn shadow_count(node: &RenderNode) -> usize {
-    node.commands
-        .iter()
-        .filter(|c| {
-            matches!(
-                &***c,
-                DrawCommand::RoundedRect {
-                    shadow: Some(_),
-                    ..
-                }
-            )
-        })
-        .count()
-}
-
 /// A shadow belongs to the box, not to the fill, so a gradient must not lose
 /// it. Both are reactive, so a signal can move a container from one branch of
-/// the decoration to the other between frames — an elevation animation that
+/// the decoration to the other between frames — a shadow animation that
 /// crossed into the gradient branch stopped drawing while still asking for a
 /// frame at every step.
 #[test]
@@ -2779,14 +3027,17 @@ fn a_gradient_keeps_its_shadow() {
         container()
             .width(40.0)
             .height(20.0)
-            .elevation(3.0)
+            .shadow(LOW)
             .gradient(LinearGradient::horizontal(Color::RED, Color::BLUE)),
     );
     h.fit(100.0, 100.0);
     let node = h.paint();
 
     assert_eq!(gradient_ends(&node), Some((Color::RED, Color::BLUE)));
-    assert_eq!(shadow_count(&node), 1, "the gradient is still elevated");
+    assert!(
+        drawn_shadow(&node).is_some(),
+        "the gradient still casts its shadow"
+    );
 }
 
 /// A border resolving to nothing visible must draw nothing, rather than send an
@@ -2919,24 +3170,24 @@ fn events_use_the_clip_of_the_frame_on_screen() {
 /// reports has to reach past its own bounds — and it has to reach far enough for
 /// the *largest* shadow it can cast, not the one showing.
 ///
-/// Elevation animates paint-only, so a hover that lifts a card never re-runs the
+/// A shadow animates paint-only, so a hover that lifts a card never re-runs the
 /// layout that records the reach. Sized to the resting value, the shadow ring
 /// falls outside every damage rect: absent on the way up, left on screen on the
 /// way down.
 #[test]
-fn the_damage_reach_covers_the_elevation_a_hover_can_reach() {
+fn the_damage_reach_covers_the_shadow_a_hover_can_reach() {
     let mut h = H::new(
         container()
             .width(40.0)
             .height(40.0)
             .background(Color::RED)
-            .elevation(0.0.transition(Transition::new(80.0, TimingFunction::Linear)))
-            .when_hovered(|s| s.elevation(8.0)),
+            .shadow(Shadow::none().transition(Transition::new(80.0, TimingFunction::Linear)))
+            .when_hovered(|s| s.shadow(LIFTED)),
     );
     h.fit(100.0, 100.0);
 
     let reach = h.tree.paint_overflow(h.root);
-    let lifted = style::elevation_to_shadow(8.0).extent();
+    let lifted = LIFTED.extent();
     assert!(
         reach >= lifted && lifted > 0.0,
         "reach {reach} must cover the hovered shadow {lifted}"
@@ -2958,8 +3209,8 @@ fn the_damage_reach_allows_for_a_spring_overshooting() {
             .width(40.0)
             .height(40.0)
             .background(Color::RED)
-            .elevation(0.0.transition(transition))
-            .when_hovered(|s| s.elevation(8.0))
+            .shadow(Shadow::none().transition(transition))
+            .when_hovered(|s| s.shadow(LIFTED))
     };
 
     let mut eased = H::new(bouncy(Transition::new(80.0, TimingFunction::Linear)));
@@ -2975,29 +3226,188 @@ fn the_damage_reach_allows_for_a_spring_overshooting() {
         "a bouncy spring has to reach further than an ease: {with_bounce} vs {without_bounce}"
     );
     assert!(
-        with_bounce >= style::elevation_to_shadow(8.0 * 1.17).extent() - 0.01,
+        with_bounce >= LIFTED.extent() * 1.17 - 0.01,
         "and far enough for BOUNCY's ~17%, got {with_bounce}"
     );
 }
 
-/// The shadow's reach, as drawn — `None` where the box casts none.
-fn shadow_extent(node: &RenderNode) -> Option<f32> {
+/// One of the five numbers `Shadow::lerp` moves, named so a failure says which.
+type ShadowChannel = (&'static str, fn(&Shadow) -> f32);
+
+/// Three shadows to test with, standing where the elevation table's levels 8, 3
+/// and 0.001 used to stand: one deep enough to reach well past its box, one
+/// shallow, and one whose alpha is under the floor paint gates on.
+const LIFTED: Shadow = Shadow::new((0.0, 6.0), 10.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.22));
+const LOW: Shadow = Shadow::new((0.0, 2.0), 4.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.16));
+const FAINT: Shadow = Shadow::new((0.0, 1.0), 3.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.001));
+
+/// The shadow this node draws — `None` where the box casts none.
+fn drawn_shadow(node: &RenderNode) -> Option<Shadow> {
     node.commands.iter().find_map(|c| match &**c {
         DrawCommand::RoundedRect {
             shadow: Some(shadow),
             ..
-        } => Some(shadow.extent()),
+        } => Some(*shadow),
         _ => None,
     })
 }
 
-/// A `.elevation(signal)` that falls has to *animate* down. It used to rise
+/// Every shadow in the tree, in paint order — one per box that casts one.
+fn shadows_in(node: &RenderNode) -> Vec<Shadow> {
+    let mut found = drawn_shadow(node).into_iter().collect::<Vec<_>>();
+    for child in &node.children {
+        found.extend(shadows_in(child));
+    }
+    found
+}
+
+/// The four fields of `Shadow` are four degrees of freedom, and the API has to
+/// reach all four.
+///
+/// `elevation` reached one. It funnelled a single `f32` through a table that
+/// always wrote `(0.0, offset_y)`, the blur that level was paired with, a spread
+/// of `0.0` and black at the alpha the table chose — so a shadow thrown
+/// sideways, a coloured one, or any spread at all was something the renderer
+/// could draw and the API could not ask for.
+#[test]
+fn every_field_of_a_shadow_reaches_the_renderer() {
+    let declared = Shadow::new((12.0, -4.0), 8.0, 3.0, Color::rgba(1.0, 0.0, 0.0, 0.5));
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .shadow(declared),
+    );
+    h.fit(100.0, 100.0);
+
+    let painted = drawn_shadow(&h.paint()).expect("a container with a shadow casts one");
+    assert_eq!(painted.offset, (12.0, -4.0), "sideways, and upward");
+    assert_eq!(painted.blur, 8.0);
+    assert_eq!(
+        painted.spread, 3.0,
+        "the field the table always left at zero"
+    );
+    assert_eq!(painted.color, Color::rgba(1.0, 0.0, 0.0, 0.5), "not black");
+}
+
+/// The motion rides with the declaration here like everywhere else: a shadow
+/// declared with a transition eases towards its new value, and the same shadow
+/// declared without one arrives on the next paint.
+///
+/// Both containers in one tree, reading one signal. Two `Tree`s would number
+/// their widgets from zero apiece and the job queue is keyed by id, so one
+/// container's animation frame would be delivered to the other.
+///
+/// The *animated* one is the root, and it has to be. A fixed-size container is
+/// a relayout boundary, so a Layout job on one does not bubble — it makes that
+/// container a layout root, and `pump` throws the layout roots away where the
+/// real loop lays out from them. A nested animated container would therefore
+/// keep the reach its first layout recorded, and `animated_shadow` clamps to
+/// that reach: the easing shadow would be scaled down to the resting one and
+/// read as never having moved. The container that declares no motion is not
+/// clamped at all, so a stale reach cannot reach it.
+///
+/// On a ramp no loaded runner can finish, because the claim is about what is
+/// drawn *while* it eases: with a short one a slow machine would arrive between
+/// two sleeps and read the correct arrival as a failure to animate. That it
+/// arrives at all is `a_shadow_animates_towards_its_state_layer`'s claim.
+#[test]
+fn a_declared_shadow_eases_only_where_the_declaration_carries_a_motion() {
+    let lifted = create_signal(false);
+    // Every channel differs, and the horizontal offset differs in *sign*: a
+    // `lerp` that dropped a channel would carry it through unchanged, and with
+    // endpoints that agree on it nothing would notice. Three of the five used
+    // to survive exactly that mutation — including the sideways offset and the
+    // spread, which are two of the three degrees of freedom this API exists to
+    // reach.
+    let flat = Shadow::new((6.0, 2.0), 4.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.4));
+    let deep = Shadow::new((-10.0, 12.0), 24.0, 6.0, Color::rgba(0.0, 0.0, 0.0, 0.55));
+    let pick = move || if lifted.get() { deep } else { flat };
+
+    let mut h = H::new(
+        container()
+            .width(120.0)
+            .height(120.0)
+            .background(Color::RED)
+            .shadow(pick.transition(Transition::new(60_000.0, TimingFunction::Linear)))
+            .child(
+                container()
+                    .width(40.0)
+                    .height(40.0)
+                    .background(Color::BLUE)
+                    .shadow(pick),
+            ),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+    assert_eq!(shadows_in(&h.paint()), vec![flat, flat], "both at rest");
+
+    lifted.set(true);
+    h.fit(200.0, 200.0);
+    assert_eq!(
+        shadows_in(&h.paint())[1],
+        deep,
+        "no motion declared, so it is simply there"
+    );
+
+    // The frame after the write starts the animation and is still at the old
+    // value, so it says nothing either way and is not sampled.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    pump(&mut h);
+    h.fit(200.0, 200.0);
+    h.paint();
+
+    // Two samples after that rather than one: a single reading says only that
+    // it left, and what is claimed is that it is *easing* — between the two
+    // shadows on one frame, and further along on the next.
+    let mut seen = Vec::new();
+    for _ in 0..2 {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        pump(&mut h);
+        h.fit(200.0, 200.0);
+        seen.push(shadows_in(&h.paint())[0]);
+    }
+
+    // Every channel, not the blur alone. Each has to have left its resting
+    // value, be short of its target, and be further along on the second sample
+    // than the first — whichever direction it is travelling in, since the
+    // horizontal offset here is going the other way.
+    let channels: [ShadowChannel; 5] = [
+        ("offset.x", |s| s.offset.0),
+        ("offset.y", |s| s.offset.1),
+        ("blur", |s| s.blur),
+        ("spread", |s| s.spread),
+        ("alpha", |s| s.color.a),
+    ];
+    for (name, read) in channels {
+        let (from, to) = (read(&flat), read(&deep));
+        let (first, second) = (read(&seen[0]), read(&seen[1]));
+        let moving = if to > from {
+            from < first && first < second && second < to
+        } else {
+            from > first && first > second && second > to
+        };
+        assert!(
+            moving,
+            "{name} has to be on its way from {from} to {to} and still moving, \
+             got {first} then {second}"
+        );
+    }
+    assert_eq!(
+        shadows_in(&h.paint())[1],
+        deep,
+        "and the one beside it has been there all along"
+    );
+}
+
+/// A `.shadow(signal)` that falls has to *animate* down. It used to rise
 /// animated and drop in one frame.
 ///
 /// The reach the layout records is also the ceiling paint clamps to, and the
 /// ceiling was recomputed at paint time from the declarations — which by then
-/// say 0, while the shadow on screen is still 8 deep. Every frame of the descent
-/// drew `min(interpolated, 0.0)`: no shadow at all, for an animation that went
+/// say nothing, while the shadow on screen is still deep. Every frame of the
+/// descent drew a shadow clamped to nothing, for an animation that went
 /// on running and asking for frames.
 ///
 /// The descent runs on a ramp no loaded runner can reach the end of, because the
@@ -3006,52 +3416,52 @@ fn shadow_extent(node: &RenderNode) -> Option<f32> {
 /// correct absence of a shadow as the bug. Arrival is checked separately, by
 /// settling rather than by a clock.
 #[test]
-fn a_falling_elevation_animates_down_instead_of_snapping() {
+fn a_falling_shadow_animates_down_instead_of_snapping() {
     let falling = |ramp_ms: f32| {
-        let level = create_signal(8.0f32);
+        let declared = create_signal(LIFTED);
         let h = H::new(
             container()
                 .width(40.0)
                 .height(40.0)
                 .background(Color::RED)
-                .elevation(
-                    (move || level.get())
+                .shadow(
+                    (move || declared.get())
                         .transition(Transition::new(ramp_ms, TimingFunction::Linear)),
                 ),
         );
-        (h, level)
+        (h, declared)
     };
 
-    let (mut h, level) = falling(60_000.0);
+    let (mut h, declared) = falling(60_000.0);
     h.fit(100.0, 100.0);
     assert!(
-        shadow_extent(&h.paint()).is_some(),
+        drawn_shadow(&h.paint()).is_some(),
         "a lifted card casts a shadow"
     );
 
-    level.set(0.0);
+    declared.set(Shadow::none());
     for step in 0..5 {
         std::thread::sleep(std::time::Duration::from_millis(4));
         pump(&mut h);
         h.fit(100.0, 100.0);
         assert!(
-            shadow_extent(&h.paint()).is_some(),
+            drawn_shadow(&h.paint()).is_some(),
             "frame {step} of the descent drew no shadow at all"
         );
     }
 
     // And it does arrive, on a ramp it can finish.
-    let (mut h, level) = falling(60.0);
+    let (mut h, declared) = falling(60.0);
     h.fit(100.0, 100.0);
     h.paint();
-    level.set(0.0);
+    declared.set(Shadow::none());
     pump(&mut h);
     settle(&mut h, 200);
-    assert_eq!(shadow_count(&h.paint()), 0, "and settles flat");
+    assert!(drawn_shadow(&h.paint()).is_none(), "and settles flat");
 }
 
-/// An elevation that goes flat damages the ring the shadow gave up, whichever
-/// line gets there first.
+/// A shadow that goes flat damages the ring it gave up, whichever line gets
+/// there first.
 ///
 /// A shrinking reach vacates a ring that a rect built from the *new* reach
 /// stops short of. Two separate things cover it here, and the point of this
@@ -3061,22 +3471,22 @@ fn a_falling_elevation_animates_down_instead_of_snapping() {
 ///   the mark happens while the old reach is still standing.
 /// - `Tree::set_own_paint_reach` damages the ring itself when the reach shrinks.
 ///
-/// So this is not what proves that fix — an elevation never takes the path the
-/// fix was written for, which is the Paint job (`refresh_paint_bounds` shrinks
-/// the reach, `mark_needs_paint` follows), and that is watched at the `Tree`
-/// level. What this says is that the *outcome* holds for a real elevation on a
-/// real container, and keeps holding if either of the two ever goes away: swap
+/// So this is not what proves that fix — a shadow never takes the path the fix
+/// was written for, which is the Paint job (`refresh_paint_bounds` shrinks the
+/// reach, `mark_needs_paint` follows), and that is watched at the `Tree` level.
+/// What this says is that the *outcome* holds for a real shadow on a real
+/// container, and keeps holding if either of the two ever goes away: swap
 /// the two lines in `layout` and the setter still covers it, take the setter's
 /// damage out and the order still does.
 #[test]
-fn an_elevation_going_flat_damages_the_ring_the_shadow_gave_up() {
-    let level = create_signal(8.0f32);
+fn a_shadow_going_flat_damages_the_ring_it_gave_up() {
+    let declared = create_signal(LIFTED);
     let mut h = H::new(
         container()
             .width(40.0)
             .height(40.0)
             .background(Color::RED)
-            .elevation(move || level.get()),
+            .shadow(move || declared.get()),
     );
     h.fit(100.0, 100.0);
     h.paint();
@@ -3086,7 +3496,7 @@ fn an_elevation_going_flat_damages_the_ring_the_shadow_gave_up() {
     let ring = h.tree.get_bounds(h.root).expect("laid out").outset(lifted);
     let _ = h.tree.take_damage(h.root);
 
-    level.set(0.0);
+    declared.set(Shadow::none());
     pump(&mut h);
     h.fit(100.0, 100.0);
     assert_eq!(
@@ -3128,11 +3538,8 @@ fn hover_flicker_cannot_push_a_shadow_outside_its_damage_rect() {
             .width(40.0)
             .height(40.0)
             .background(Color::RED)
-            // Small enough that the shadow is still growing with the number:
-            // past ~12 the blur and the offset are both capped, so a clamp
-            // there would have nothing to show for itself.
-            .elevation(0.0.transition(Transition::spring(pumpable)))
-            .when_hovered(|s| s.elevation(2.0)),
+            .shadow(Shadow::none().transition(Transition::spring(pumpable)))
+            .when_hovered(|s| s.shadow(LOW)),
     );
     h.fit(100.0, 100.0);
     h.paint();
@@ -3153,7 +3560,7 @@ fn hover_flicker_cannot_push_a_shadow_outside_its_damage_rect() {
         pump(&mut h);
         h.fit(100.0, 100.0);
         let node = h.paint();
-        if let Some(extent) = shadow_extent(&node) {
+        if let Some(extent) = drawn_shadow(&node).map(|s| s.extent()) {
             worst = worst.max(extent);
             assert!(
                 extent <= reach + 0.01,
@@ -3164,28 +3571,28 @@ fn hover_flicker_cannot_push_a_shadow_outside_its_damage_rect() {
     assert!(worst > 0.0, "the flicker has to actually raise a shadow");
 }
 
-/// A declared elevation changing does need a new reach, so it must invalidate
-/// the layout that recorded the old one.
+/// A declared shadow changing does need a new reach, so it must invalidate the
+/// layout that recorded the old one.
 #[test]
-fn a_declared_elevation_change_invalidates_the_reach() {
-    let level = create_signal(0.0f32);
+fn a_declared_shadow_change_invalidates_the_reach() {
+    let declared = create_signal(Shadow::none());
     let mut h = H::new(
         container()
             .width(40.0)
             .height(40.0)
             .background(Color::RED)
-            .elevation(move || level.get()),
+            .shadow(move || declared.get()),
     );
     h.fit(100.0, 100.0);
     h.paint();
     assert_eq!(h.tree.paint_overflow(h.root), 0.0);
 
-    let queued = h.jobs_from(|| level.set(6.0));
+    let queued = h.jobs_from(|| declared.set(LOW));
     assert!(queued.contains(&JobType::Layout), "got {queued:?}");
 
     // `jobs_from` consumes the jobs without running them, so the reach is
     // recomputed by a write that gets pumped.
-    level.set(9.0);
+    declared.set(LIFTED);
     pump(&mut h);
     h.fit(100.0, 100.0);
     assert!(h.tree.paint_overflow(h.root) > 0.0);
@@ -3281,7 +3688,7 @@ fn lifted_box(lift: RwSignal<f32>) -> Container {
 /// wired at all: the reach has to grow on a Paint job, with no layout run
 /// between the write and the answer.
 ///
-/// A shadow's reach is republished by layout, so an elevation test passes
+/// A shadow's reach is republished by layout, so a shadow test passes
 /// whether or not the Paint-job refresh exists. A transform's is not — layout
 /// never subscribes to it — so this is the only thing standing between the hook
 /// in `process_jobs` and being deleted with the suite still green.
@@ -3561,25 +3968,32 @@ fn a_gradient_can_be_switched_off_and_the_background_returns() {
 }
 
 /// The border is gated on resolving to something visible; the shadow has to be
-/// too. The opening frames of a lift are at ~0.001, where the shadow's alpha
-/// rounds to nothing — and without a floor each one still pushed a rect
-/// carrying it, every frame, for as long as the animation was leaving zero.
+/// too. The opening frames of a lift out of `Shadow::none()` are at ~0.001,
+/// where the shadow's alpha rounds to nothing — and without a floor each one
+/// still pushed a rect carrying it, every frame, for as long as the animation
+/// was leaving transparent.
 #[test]
 fn a_shadow_too_faint_to_see_is_not_drawn() {
-    let level = create_signal(0.001f32);
+    let declared = create_signal(FAINT);
     let mut h = H::new(
         container()
             .width(40.0)
             .height(40.0)
             .background(Color::RED)
-            .elevation(move || level.get()),
+            .shadow(move || declared.get()),
     );
     h.fit(100.0, 100.0);
-    assert_eq!(shadow_count(&h.paint()), 0, "invisible, so not drawn");
+    assert!(
+        drawn_shadow(&h.paint()).is_none(),
+        "invisible, so not drawn"
+    );
 
-    level.set(1.0);
+    declared.set(LOW);
     h.fit(100.0, 100.0);
-    assert_eq!(shadow_count(&h.paint()), 1, "and drawn once it can be seen");
+    assert!(
+        drawn_shadow(&h.paint()).is_some(),
+        "and drawn once it can be seen"
+    );
 }
 
 /// The clip is part of the shape, for the region as much as for the renderer. A

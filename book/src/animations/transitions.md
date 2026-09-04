@@ -89,14 +89,17 @@ carries no timing of its own. The property eases whatever supplies its value:
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
+# const FLAT: Shadow = Shadow::none();
+# const LOW: Shadow = Shadow::simple((0.0, 1.0), 3.0, Color::rgba(0.0, 0.0, 0.0, 0.12));
+# const RAISED: Shadow = Shadow::simple((0.0, 3.0), 6.0, Color::rgba(0.0, 0.0, 0.0, 0.19));
 # fn main() {
 container()
     .background(Color::rgb(0.2, 0.2, 0.3).transition(200.0))
-    .elevation(2.0.transition(200.0))
+    .shadow(LOW.transition(200.0))
 
     // State changes trigger the animations declared above
-    .when_hovered(|s| s.lighter(0.1).elevation(4.0))
-    .when_pressed(|s| s.darker(0.05).elevation(1.0))
+    .when_hovered(|s| s.lighter(0.1).shadow(RAISED))
+    .when_pressed(|s| s.darker(0.05).shadow(FLAT))
 # ;
 # }
 ```
@@ -120,17 +123,17 @@ fn animated_card() -> Container {
             1.0.transition(150.0),
             Color::rgb(0.25, 0.25, 0.3).transition(150.0),
         )
-        .elevation(4.0.transition(250.0))
+        .shadow(RAISED.transition(250.0))
 
         // State layers
         .when_hovered(|s| s
             .lighter(0.05)
             .border(2.0, Color::rgb(0.4, 0.6, 0.9))
-            .elevation(8.0)
+            .shadow(HIGH)
         )
         .when_pressed(|s| s
             .darker(0.02)
-            .elevation(2.0)
+            .shadow(LOW)
         )
 
         .child(container().child(text("Hover me!").color(Color::WHITE)))

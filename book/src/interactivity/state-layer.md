@@ -83,15 +83,17 @@ State layers can override these properties:
 # }
 ```
 
-### Elevation
+### Shadow
 
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
+# const LOW: Shadow = Shadow::simple((0.0, 1.0), 3.0, Color::rgba(0.0, 0.0, 0.0, 0.12));
+# const HIGH: Shadow = Shadow::simple((0.0, 6.0), 10.0, Color::rgba(0.0, 0.0, 0.0, 0.22));
 # fn main() {
 # container()
-.when_hovered(|s| s.elevation(8.0))
-.when_pressed(|s| s.elevation(2.0))
+.when_hovered(|s| s.shadow(HIGH))
+.when_pressed(|s| s.shadow(LOW))
 # ;
 # }
 ```
@@ -116,12 +118,13 @@ Chain multiple overrides in a single state:
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
+# const RAISED: Shadow = Shadow::simple((0.0, 3.0), 6.0, Color::rgba(0.0, 0.0, 0.0, 0.19));
 # fn main() {
 # container()
 .when_hovered(|s| s
     .lighter(0.1)
     .border(2.0, Color::WHITE)
-    .elevation(6.0)
+    .shadow(RAISED)
 )
 
 .when_pressed(|s| s
@@ -198,7 +201,7 @@ pub struct StateStyle {
     pub translate: Option<Signal<Translate>>,
     pub rotate: Option<Signal<f32>>,
     pub scale: Option<Signal<Scale>>,
-    pub elevation: Option<Signal<f32>>,
+    pub shadow: Option<Signal<Shadow>>,
     pub text_color: Option<Signal<Color>>,
     pub alpha: Option<Signal<f32>>,
     pub ripple: Option<RippleConfig>,

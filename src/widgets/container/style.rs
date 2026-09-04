@@ -114,49 +114,54 @@ impl Container {
         self.resolve_state_value(id, base, |state| state.scale.map(|s| s.get()))
     }
 
-    /// The largest elevation this container can reach, and the number its damage
-    /// rect is sized from.
+    /// How far past its own bounds the deepest shadow this container can cast
+    /// reaches, and the number its damage rect is sized by.
     ///
-    /// Damage bounds want the worst case, not the current value. Elevation is a
-    /// paint-only animation, so a hover that lifts a card never re-runs layout —
-    /// and layout is where the shadow's reach is recorded. Sizing the reach to
-    /// what is possible rather than to what is showing keeps the damage rect
-    /// correct without asking a colour change to re-run a layout.
+    /// Layout's, not paint's. A shadow animates paint-only, so a hover that
+    /// lifts a card never re-runs this layout, and layout is where the shadow's
+    /// reach is recorded. Sizing the reach to whatever is showing would leave
+    /// the ring outside every damage rect.
     ///
-    /// Three things can be showing, so all three are folded:
+    /// So the answer is a bound over everything the shadow can be:
     ///
-    /// - the declared elevation, and every state layer's,
-    /// - the overshoot, because a spring does not stop at its target,
-    /// - **and whatever is in flight**, because a *falling* elevation is drawn
-    ///   from a value the declarations no longer mention. `.elevation(move ||
-    ///   if lifted.get() { 8.0 } else { 0.0 })` re-runs this layout on the write
-    ///   that starts the descent, and at that instant the declared maximum is
-    ///   already 0 while the shadow on screen is still 8 deep.
+    /// - the declared shadow, and every state layer's,
+    /// - inflated by the overshoot a spring still has to come,
+    /// - **and whatever is in flight**, because a *shrinking* shadow is drawn
+    ///   from a value the declarations no longer mention. `.shadow(move ||
+    ///   pick.get())` written from deep to none re-runs this layout on the
+    ///   write, at which point every declaration reads as nothing while the
+    ///   shadow on screen is still 8 deep.
     ///
-    /// The whole fold is read under layout tracking, which is the cost to know
-    /// about: every elevation *any* state layer declares is a layout dependency,
-    /// active or not, because the maximum genuinely moves when one of them
-    /// changes. `.elevation(0.0).when_hovered(|s| s.elevation(8.0))` — both
-    /// constants — subscribes to nothing and hovering moves only the paint;
-    /// `when_hovered(|s| s.elevation(lift))` with `lift` a signal re-lays out the
-    /// subtree whenever `lift` is written, pressed or not.
-    pub(super) fn max_elevation(&self) -> f32 {
-        let base = self.elevation.get_or(0.0);
-        let anim = self.anims.as_ref().and_then(|a| a.elevation.as_ref());
-        let declared = match self.interaction {
-            Some(ref ix) => ix.states.iter().fold(base, |most, (_, state)| {
-                match state.elevation.map(|s| s.get()) {
-                    Some(level) => most.max(level),
-                    None => most,
-                }
-            }),
-            None => base,
-        };
+    /// Reading every state layer under layout tracking is what the comment on
+    /// [`max_transform_reach`](Self::max_transform_reach) is about: every shadow
+    /// *any* state layer declares is a layout dependency, so a container whose
+    /// hover shadow is a constant re-lays out only when the declaration changes.
+    /// `.shadow(none).when_hovered(|s| s.shadow(lifted))` — both constants — is
+    /// laid out once; `when_hovered(|s| s.shadow(lift))` with `lift` a signal
+    /// re-lays out the container when it moves.
+    pub(super) fn max_shadow_extent(&self) -> f32 {
+        let base = self.shadow.get_or(Shadow::none());
+        let anim = self.anims.as_ref().and_then(|a| a.shadow.as_ref());
+        let declared = self
+            .interaction
+            .iter()
+            .flat_map(|ix| ix.states.iter())
+            .filter_map(|(_, state)| state.shadow.map(|s| s.get().extent()))
+            .fold(base.extent(), f32::max);
 
         match anim {
             // The value in flight is already past its overshoot, so it is folded
             // in flat; the declarations have theirs still to come.
-            Some(anim) => (declared * (1.0 + anim.peak_overshoot())).max(*anim.current()),
+            //
+            // Scaling the extent by the overshoot is exact only while every
+            // channel keeps its sign, which a level guaranteed and a shadow does
+            // not: `(0.0, -100.0)` to `(0.0, 100.0)` are both 100 deep, and at
+            // the peak of a bounce the offset is 134. `animated_shadow` shrinks
+            // whatever is in flight to this number, so that is a visibly damped
+            // peak on a sign-crossing bounce rather than a ring outside the
+            // damage rect — the same one-sided error the clamp already trades
+            // for not sizing every rect to a resonant gain.
+            Some(anim) => (declared * (1.0 + anim.peak_overshoot())).max(anim.current().extent()),
             None => declared,
         }
     }
@@ -202,10 +207,11 @@ impl Container {
     /// holds in place; it is not a bound taken once and trusted.
     ///
     /// For everything that *is* declared it is the largest, not the one
-    /// showing, for the reason [`Self::max_elevation`] gives: a transform animates paint-only, so a
-    /// hover that lifts a card never re-runs this layout. A reach sized to the
-    /// resting value would leave the lifted card outside the rect its parent
-    /// culls against, and it would vanish for exactly as long as it was moved.
+    /// showing, for the reason [`Self::max_shadow_extent`] gives: a transform
+    /// animates paint-only, so a hover that lifts a card never re-runs this
+    /// layout. A reach sized to the resting value would leave the lifted card
+    /// outside the rect its parent culls against, and it would vanish for
+    /// exactly as long as it was moved.
     ///
     /// A bound rather than a value, so the error is one-sided. Everything
     /// downstream grows a laid-out rect by this and asks whether the result is
@@ -255,9 +261,9 @@ impl Container {
 
         // A rotation's outset is not monotone in its angle: a box turned 0 or
         // 180 degrees sits back where it started and somewhere between stands
-        // furthest outside. Endpoints bound a shadow, which grows with
-        // elevation; they bound nothing here. So a container that can rotate at
-        // all is given the worst angle outright.
+        // furthest outside. Endpoints bound a shadow, which grows monotonically
+        // with its extent; they bound nothing here. So a container that can
+        // rotate at all is given the worst angle outright.
         //
         // Turning about a pivot keeps every point at its own distance from it,
         // so the whole swept shape fits the circle of radius `far` about the
@@ -303,7 +309,7 @@ impl Container {
 
         // A spring passes its target before it settles, so the declared reach
         // is inflated by the overshoot still to come — the same allowance
-        // `max_elevation` makes — and the value in flight, which is already
+        // `max_shadow_extent` makes — and the value in flight, which is already
         // past whatever overshoot it had, is folded in flat.
         if let Some(anims) = anims {
             let overshoot = [
@@ -330,9 +336,9 @@ impl Container {
         reach
     }
 
-    pub(super) fn effective_elevation_target(&self, id: WidgetId) -> f32 {
-        let base = self.elevation.get_or(0.0);
-        self.resolve_state_value(id, base, |state| state.elevation.map(|s| s.get()))
+    pub(super) fn effective_shadow_target(&self, id: WidgetId) -> Shadow {
+        let base = self.shadow.get_or(Shadow::none());
+        self.resolve_state_value(id, base, |state| state.shadow.map(|s| s.get()))
     }
 
     // -----------------------------------------------------------------------
@@ -372,14 +378,18 @@ impl Container {
         )
     }
 
-    /// The elevation to draw, never deeper than the rect the layout reserved.
+    /// The shadow to draw, never reaching further than the rect the layout
+    /// reserved.
     ///
-    /// Clamped, and clamped to [`elevation_reach`](super::Container::elevation_reach)
+    /// Clamped, and clamped to [`shadow_reach`](super::Container::shadow_reach)
     /// — the number `layout` recorded — rather than to a fresh
-    /// [`max_elevation`](Self::max_elevation). Recomputing it here reads the
-    /// signals at *paint* time, which is a different frame's answer: on a falling
-    /// elevation the declared maximum has already reached 0 and the shadow was
-    /// cut to nothing while the animation was still playing.
+    /// [`max_shadow_extent`](Self::max_shadow_extent). Recomputing it here reads
+    /// the signals at *paint* time, which is a different frame's answer: on a
+    /// shrinking shadow the declared maximum has already reached nothing and the
+    /// shadow was cut away while the animation was still playing.
+    ///
+    /// Uniformly — see [`Shadow::shrunk_to`] — because a shadow is four numbers
+    /// and the reserved rect is one.
     ///
     /// A clamp at all, rather than a wider reach, because the reach that would
     /// make one unnecessary is not a small one. A spring keeps its momentum
@@ -389,12 +399,19 @@ impl Container {
     /// ζ = 0.05, and sizing every damage rect for that is not a trade worth
     /// making for the tip of a bounce nobody asked for. See
     /// `hover_flicker_cannot_push_a_shadow_outside_its_damage_rect`.
-    pub(super) fn animated_elevation(&self, id: WidgetId) -> f32 {
-        let anim = self.anims.as_ref().and_then(|a| a.elevation.as_ref());
-        let level = get_animated_value(anim, || self.effective_elevation_target(id));
+    pub(super) fn animated_shadow(&self, id: WidgetId) -> Shadow {
+        let anim = self.anims.as_ref().and_then(|a| a.shadow.as_ref());
+        let shadow = get_animated_value(anim, || self.effective_shadow_target(id));
         match anim {
-            Some(_) => level.min(self.elevation_reach.get()),
-            None => level,
+            Some(_) => shadow.shrunk_to(self.shadow_reach.get()),
+            // Only where something is in flight, because `shadow_reach` is the
+            // number *layout* recorded and layout has not run yet on the frame
+            // a container is first painted — it is `0.0` until then, and
+            // clamping to it would draw no shadow at all. Everything a
+            // declaration or a state layer can resolve to is already folded
+            // into `max_shadow_extent`, so an unanimated shadow is inside the
+            // rect by construction and has nothing to be clamped to.
+            None => shadow,
         }
     }
 
@@ -465,7 +482,7 @@ impl Container {
         self.anims.as_ref().is_some_and(|a| {
             a.background.is_some()
                 || a.corners.is_some()
-                || a.elevation.is_some()
+                || a.shadow.is_some()
                 || a.border_width.is_some()
                 || a.border_color.is_some()
                 || a.translate.is_some()
@@ -484,7 +501,7 @@ impl Container {
                 || a.border_width.is_some()
                 || a.background.is_some()
                 || a.corners.is_some()
-                || a.elevation.is_some()
+                || a.shadow.is_some()
                 || a.border_color.is_some()
                 || a.translate.is_some()
                 || a.rotate.is_some()
@@ -499,7 +516,7 @@ pub(super) struct Decoration {
     pub gradient: Option<LinearGradient>,
     pub corner_radii: crate::renderer::CornerRadii,
     pub corner_curvature: f32,
-    pub elevation: f32,
+    pub shadow: Shadow,
     pub border_width: f32,
     pub border_color: Color,
 }
@@ -514,8 +531,8 @@ impl Container {
         // A gradient replaces the solid fill rather than layering over it — but
         // not the shadow, which belongs to the box rather than to either fill.
         // Both are reactive, so which of the two branches a container takes can
-        // change between frames; a gradient that dropped the shadow meant an
-        // elevation animation stopped drawing halfway through while still asking
+        // change between frames; a gradient that dropped the shadow meant a
+        // shadow animation stopped drawing halfway through while still asking
         // for a frame at every step.
         //
         // To the box *it draws*, though: the shadow rides whichever fill runs,
@@ -524,12 +541,11 @@ impl Container {
         // goes on reserving the room. A shadow with nothing above it is a smear
         // rather than a lift, so that is the behaviour; it is not a
         // free-standing command waiting for a box to belong to.
-        // Not `elevation > 0.0`: the first frames of a lift are at ~0.001, where
-        // the shadow's alpha rounds to nothing and every frame would still push a
-        // rect carrying it. The same gate the border gets, on the thing that is
-        // actually drawn rather than on the level that asked for it.
-        let shadow = elevation_to_shadow(d.elevation);
-        let shadow = (shadow.color.a > SHADOW_ALPHA_FLOOR).then_some(shadow);
+        // On the alpha rather than on whether a shadow was declared: the first
+        // frames of a lift out of `Shadow::none()` carry an alpha of ~0.001,
+        // where the shadow rounds to nothing and every frame would still push a
+        // rect carrying it. The same gate the border gets.
+        let shadow = (d.shadow.color.a > SHADOW_ALPHA_FLOOR).then_some(d.shadow);
 
         // Gated like the fill, the border and the shadow: a gradient between two
         // fully transparent colours draws nothing, and with both endpoints
@@ -588,72 +604,9 @@ impl Container {
 }
 
 /// Below this the shadow is not a faint shadow, it is nothing — and a rect
-/// carrying it is a rect drawn for no reason, once per frame for as long as an
-/// elevation animation is leaving zero.
-const SHADOW_ALPHA_FLOOR: f32 = 0.004;
-
-/// The tabulated Material steps, `level => (offset_y, blur, alpha)`.
-///
-/// Level 0 is in the table so the interpolation below has somewhere to come
-/// from, and the last entry meets the formula that continues past it exactly:
-/// at 5, `level * 1.2`, `level * 2.0` and `0.12 + level * 0.02` are 6.0, 10.0
-/// and 0.22.
-const ELEVATION_STEPS: [(f32, f32, f32); 6] = [
-    (0.0, 0.0, 0.0),
-    (1.0, 3.0, 0.12),
-    (2.0, 4.0, 0.16),
-    (3.0, 6.0, 0.19),
-    (4.0, 8.0, 0.20),
-    (6.0, 10.0, 0.22),
-];
-
-/// Convert an elevation level to the shadow that expresses it.
-///
-/// Material-style: the higher the surface sits, the further the shadow falls
-/// and the softer it gets. Levels 0–5 are tabulated; above that the numbers
-/// keep growing on the same curve, up to a ceiling.
-///
-/// A fractional level interpolates between the two steps around it. Reading the
-/// table with `level as i32` was fine while elevation could not be animated —
-/// it always arrived as one of the six integers. Now that it can, truncation
-/// made the shadow a staircase between 1 and 5, and worse, discontinuous where
-/// the table met the formula: 0.999 fell through to the formula for
-/// (1.199, 1.998, 0.140) while 1.0 read the table for (1.0, 3.0, 0.12), so
-/// crossing 1 dropped the offset and the alpha while jumping the blur.
-///
-/// A level that is not a number is no shadow. `.elevation(f32::NAN)` is
-/// writable, and NaN fails every comparison on the way in, so it reached the
-/// interpolating branch and came back out as a NaN extent — into
-/// `set_own_paint_reach`, where it disables every `min` and `max` downstream
-/// without anything failing. The same guard `SpringConfig::peak_overshoot` has,
-/// for the same reason: a number that sizes a rect has to be one.
-pub(super) fn elevation_to_shadow(level: f32) -> Shadow {
-    if level.is_nan() || level <= 0.0 {
-        return Shadow::none();
-    }
-
-    let last = (ELEVATION_STEPS.len() - 1) as f32;
-    let (offset_y, blur, alpha) = if level >= last {
-        (
-            (level * 1.2).min(12.0),
-            (level * 2.0).min(24.0),
-            (0.12 + level * 0.02).min(0.25),
-        )
-    } else {
-        let lower = level.floor();
-        let t = level - lower;
-        let (o0, b0, a0) = ELEVATION_STEPS[lower as usize];
-        let (o1, b1, a1) = ELEVATION_STEPS[lower as usize + 1];
-        (o0 + (o1 - o0) * t, b0 + (b1 - b0) * t, a0 + (a1 - a0) * t)
-    };
-
-    Shadow::new(
-        (0.0, offset_y),
-        blur,
-        0.0,
-        Color::rgba(0.0, 0.0, 0.0, alpha),
-    )
-}
+/// carrying it is a rect drawn for no reason, once per frame for as long as a
+/// shadow animation is leaving transparent.
+pub(super) const SHADOW_ALPHA_FLOOR: f32 = 0.004;
 
 /// How far `painted`, once `transform` has carried it, stands outside `bounds`.
 ///
@@ -677,92 +630,6 @@ fn outset_of(transform: Transform, painted: Rect, bounds: Rect, pivot: Pivot) ->
         transform.about(pivot, bounds).map_rect(painted)
     };
     moved.outset_beyond(bounds)
-}
-
-#[cfg(test)]
-mod elevation_tests {
-    use super::*;
-
-    fn parts(level: f32) -> (f32, f32, f32) {
-        let s = elevation_to_shadow(level);
-        (s.offset.1, s.blur, s.color.a)
-    }
-
-    /// Whole levels keep the Material numbers they always had, which is every
-    /// elevation the examples and snapshots use.
-    ///
-    /// A *fractional* static elevation does move: `0.5` now interpolates from
-    /// nothing towards level 1 rather than falling through to the formula, so
-    /// its shadow is lighter and tighter than before. That is the point of
-    /// interpolating, and it is what makes an animation pass through the
-    /// fractions smoothly, but it is a change and this says so rather than
-    /// claiming nothing moved.
-    #[test]
-    fn the_tabulated_levels_are_unchanged() {
-        assert_eq!(parts(1.0), (1.0, 3.0, 0.12));
-        assert_eq!(parts(2.0), (2.0, 4.0, 0.16));
-        assert_eq!(parts(3.0), (3.0, 6.0, 0.19));
-        assert_eq!(parts(4.0), (4.0, 8.0, 0.20));
-        assert_eq!(parts(5.0), (6.0, 10.0, 0.22));
-    }
-
-    /// An animated elevation sweeps through the fractions, so every component
-    /// has to grow without ever going backwards. Reading the table with
-    /// `level as i32` failed this twice over: flat between whole levels, and
-    /// non-monotonic across 1, where the formula's (1.199, 1.998, 0.140) met
-    /// the table's (1.0, 3.0, 0.12).
-    #[test]
-    fn a_fractional_level_never_goes_backwards() {
-        let mut previous = parts(0.001);
-        let mut moved = 0;
-        for step in 2..=8000 {
-            let level = step as f32 * 0.001;
-            let current = parts(level);
-            assert!(
-                current.0 >= previous.0 - 1e-4
-                    && current.1 >= previous.1 - 1e-4
-                    && current.2 >= previous.2 - 1e-4,
-                "level {level} went backwards: {previous:?} -> {current:?}"
-            );
-            if current != previous {
-                moved += 1;
-            }
-            previous = current;
-        }
-        assert!(
-            moved > 7000,
-            "the shadow has to actually move with the level, moved on {moved} of 7999 steps"
-        );
-    }
-
-    /// The table hands over to the formula without a step.
-    #[test]
-    fn the_table_meets_the_formula_at_five() {
-        let below = parts(5.0 - 1e-4);
-        let above = parts(5.0 + 1e-4);
-        assert!((below.0 - above.0).abs() < 1e-2);
-        assert!((below.1 - above.1).abs() < 1e-2);
-        assert!((below.2 - above.2).abs() < 1e-3);
-    }
-
-    /// A level that is not a number is no shadow either. NaN fails every
-    /// comparison on the way in, so it used to reach the interpolating branch and
-    /// come back out as a NaN extent — into `set_own_paint_reach`, where it
-    /// disables every `min` and `max` downstream without anything failing.
-    #[test]
-    fn a_level_that_is_not_a_number_is_no_shadow() {
-        let s = elevation_to_shadow(f32::NAN);
-        assert_eq!(s.color, Color::TRANSPARENT);
-        assert!(!s.extent().is_nan(), "and nothing downstream is poisoned");
-    }
-
-    /// Zero is no shadow at all, not a shadow of size zero with a colour.
-    #[test]
-    fn zero_is_no_shadow() {
-        let s = elevation_to_shadow(0.0);
-        assert_eq!(s.color, Color::TRANSPARENT);
-        assert_eq!(s.blur, 0.0);
-    }
 }
 
 /// `outset_of` is the arithmetic every cull and every damage rect is grown by,

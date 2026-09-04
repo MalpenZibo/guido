@@ -170,12 +170,12 @@ Note that a layer *replaces* the base value rather than ranking against it. A pr
 .when_hovered(|s| s.corners(12.0))
 ```
 
-### Elevation (Shadow)
+### Shadow
 
 ```rust
-.elevation(2.0)
-.when_hovered(|s| s.elevation(4.0))
-.when_pressed(|s| s.elevation(1.0))
+.shadow(Shadow::simple((0.0, 2.0), 4.0, Color::rgba(0.0, 0.0, 0.0, 0.16)))
+.when_hovered(|s| s.shadow(Shadow::simple((0.0, 4.0), 8.0, Color::rgba(0.0, 0.0, 0.0, 0.2))))
+.when_pressed(|s| s.shadow(Shadow::simple((0.0, 1.0), 3.0, Color::rgba(0.0, 0.0, 0.0, 0.12))))
 ```
 
 ## Ripple Effects
@@ -231,7 +231,7 @@ quietly ignored, because [`Animated`] is deliberately not an [`IntoSignal`]:
 ```
 
 Every animatable property takes a motion the same way — `background`, `border`
-(each half separately), `corners`, `padding`, `elevation`, `width`, `height`,
+(each half separately), `corners`, `padding`, `shadow`, `width`, `height`,
 `translate`, `rotate` and `scale` on a container, and `color` and `font_size` on
 a `text` or a `text_input`.
 
@@ -284,7 +284,7 @@ pub struct StateStyle {
     pub translate: Option<Signal<Translate>>,
     pub rotate: Option<Signal<f32>>,
     pub scale: Option<Signal<Scale>>,
-    pub elevation: Option<Signal<f32>>,
+    pub shadow: Option<Signal<Shadow>>,
     pub text_color: Option<Signal<Color>>,
     pub alpha: Option<Signal<f32>>,
     pub ripple: Option<RippleConfig>,

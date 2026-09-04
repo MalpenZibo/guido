@@ -118,7 +118,7 @@ impl Container {
             anims.is_some_and(|a| a.border_width.as_ref().is_some_and(|a| a.is_initial()));
         let bg_init = anims.is_some_and(|a| a.background.as_ref().is_some_and(|a| a.is_initial()));
         let cr_init = anims.is_some_and(|a| a.corners.as_ref().is_some_and(|a| a.is_initial()));
-        let el_init = anims.is_some_and(|a| a.elevation.as_ref().is_some_and(|a| a.is_initial()));
+        let sh_init = anims.is_some_and(|a| a.shadow.as_ref().is_some_and(|a| a.is_initial()));
         let bc_init =
             anims.is_some_and(|a| a.border_color.as_ref().is_some_and(|a| a.is_initial()));
         let tr_init = anims.is_some_and(|a| a.translate.as_ref().is_some_and(|a| a.is_initial()));
@@ -129,7 +129,7 @@ impl Container {
             || bw_init
             || bg_init
             || cr_init
-            || el_init
+            || sh_init
             || bc_init
             || tr_init
             || ro_init
@@ -140,7 +140,7 @@ impl Container {
 
         // Targets are computed under `&self` first: the writes below need
         // `&mut self.anims`, and the effective_* readers need `&self`.
-        let (bg_target, cr_target, el_target, bc_target, tr_target, ro_target, sc_target) =
+        let (bg_target, cr_target, sh_target, bc_target, tr_target, ro_target, sc_target) =
             with_signal_tracking(id, JobType::Animation, || {
                 // Read for the subscription even where the value is unused.
                 if pd_init {
@@ -152,7 +152,7 @@ impl Container {
                 (
                     bg_init.then(|| self.effective_background_target(id)),
                     cr_init.then(|| self.effective_corners_target(id)),
-                    el_init.then(|| self.effective_elevation_target(id)),
+                    sh_init.then(|| self.effective_shadow_target(id)),
                     bc_init.then(|| self.effective_border_color_target(id)),
                     tr_init.then(|| self.effective_translate_target(id)),
                     ro_init.then(|| self.effective_rotate_target(id)),
@@ -167,7 +167,7 @@ impl Container {
         // different type, so there is nothing to iterate over.
         seed(&mut anims.background, bg_target);
         seed(&mut anims.corners, cr_target);
-        seed(&mut anims.elevation, el_target);
+        seed(&mut anims.shadow, sh_target);
         seed(&mut anims.border_color, bc_target);
         seed(&mut anims.translate, tr_target);
         seed(&mut anims.rotate, ro_target);
@@ -224,10 +224,10 @@ impl Container {
                 );
                 drift |= a.wants_play();
             }
-            if let Some(a) = &anims.elevation {
+            if let Some(a) = &anims.shadow {
                 drift |= moved(
                     a.is_initial(),
-                    *a.target() == self.effective_elevation_target(id),
+                    *a.target() == self.effective_shadow_target(id),
                 );
                 drift |= a.wants_play();
             }

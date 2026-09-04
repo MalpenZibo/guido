@@ -398,11 +398,11 @@ fn transforms_and_origins() {
     assert_snapshot("transforms_and_origins", render(view, 400.0, 600.0));
 }
 
-/// After `examples/showcase.rs` and `elevation_example.rs`: the corner
-/// curvature family and the elevation ladder, both of which land entirely in
-/// the emitted draw commands.
+/// After `examples/showcase.rs` and `shadow_example.rs`: the corner curvature
+/// family and a ladder of shadows, both of which land entirely in the emitted
+/// draw commands.
 #[test]
-fn corners_borders_and_elevation() {
+fn corners_borders_and_shadows() {
     let base = |c: Color| swatch(70.0, 70.0, c).corners(16.0);
 
     let view = container()
@@ -420,10 +420,10 @@ fn corners_borders_and_elevation() {
         .child(
             container()
                 .layout(Flex::row().spacing(10.0))
-                .children((0..6).map(|level| {
+                .children(common::LADDER.iter().map(|&step| {
                     swatch(60.0, 60.0, Color::rgb(0.9, 0.9, 0.95))
                         .corners(8.0)
-                        .elevation(level as f32)
+                        .shadow(step)
                 })),
         )
         .child(
@@ -445,7 +445,7 @@ fn corners_borders_and_elevation() {
                 ),
         );
 
-    assert_snapshot("corners_borders_and_elevation", render(view, 500.0, 400.0));
+    assert_snapshot("corners_borders_and_shadows", render(view, 500.0, 400.0));
 }
 
 /// After `examples/blur_example.rs`: the backdrop blur, which is the one command
@@ -582,7 +582,7 @@ fn bar_like_composition() {
                         .children((0..6).map(|_| swatch(30.0, 20.0, Color::CYAN))),
                 ),
         )
-        .child(module(50.0, Color::rgb(0.3, 0.2, 0.2)).elevation(2.0));
+        .child(module(50.0, Color::rgb(0.3, 0.2, 0.2)).shadow(common::LADDER[2]));
 
     assert_snapshot("bar_like_composition", render(view, 600.0, 36.0));
 }

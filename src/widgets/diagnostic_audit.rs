@@ -23,7 +23,7 @@ use crate::animation::{Animate, TimingFunction, Transition};
 use crate::layout::{Constraints, Flex};
 use crate::reactive::create_signal;
 use crate::reactive::diagnostics::report_count;
-use crate::renderer::{PaintContext, RenderNode};
+use crate::renderer::{PaintContext, RenderNode, Shadow};
 use crate::tree::Tree;
 use crate::widgets::widget::{Event, Key, Modifiers, MouseButton, ScrollSource};
 use crate::widgets::{Color, ImageSource, LinearGradient, Overflow, Scroll};
@@ -121,7 +121,9 @@ fn a_fully_reactive_container_is_quiet() {
             (move || crate::widgets::Corners::superellipse(n.get() + 4.0, n.get() + 1.0))
                 .transition(t()),
         )
-        .elevation((move || n.get()).transition(t()))
+        .shadow(
+            (move || Shadow::new((0.0, n.get()), n.get() * 2.0, 0.0, Color::BLACK)).transition(t()),
+        )
         .width((move || n.get() + 100.0).transition(t()))
         .height((move || n.get() + 100.0).transition(t()))
         .visible(move || !flag.get())

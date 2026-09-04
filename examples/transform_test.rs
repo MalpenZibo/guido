@@ -24,7 +24,13 @@ fn main() {
                             .padding(10.0)
                             .background(Color::rgb(0.8, 0.3, 0.3))
                             .corners(8.0)
-                            .elevation(4.0) // Add shadow to test shadow rendering with rotation
+                            // A shadow, to test shadow rendering with rotation
+                            .shadow(Shadow::new(
+                                (0.0, 4.0),
+                                8.0,
+                                0.0,
+                                Color::rgba(0.0, 0.0, 0.0, 0.2),
+                            ))
                             .rotate(45.0), // Should be clearly rotated
                     )
             },

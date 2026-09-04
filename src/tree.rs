@@ -1587,8 +1587,8 @@ mod tests {
         );
     }
 
-    /// Whatever a widget paints outside its own bounds — an elevation shadow,
-    /// a glyph shadow — has to be inside the damage it reports, or repainting
+    /// Whatever a widget paints outside its own bounds — a box shadow, a glyph
+    /// shadow — has to be inside the damage it reports, or repainting
     /// it re-composites a rect that stops short and the old one stays on
     /// screen as a fringe.
     #[test]
@@ -1959,11 +1959,11 @@ mod tests {
 
     /// The same defect without a transform anywhere near it.
     ///
-    /// An elevation falling to nothing shrinks the same reach by the same
-    /// route, and predates transforms contributing to it at all. Here so the
-    /// fix is not made transform-shaped when the defect is not.
+    /// A shadow falling to nothing shrinks the same reach by the same route,
+    /// and predates transforms contributing to it at all. Here so the fix is
+    /// not made transform-shaped when the defect is not.
     #[test]
-    fn damage_covers_the_shadow_an_elevation_drop_leaves_behind() {
+    fn damage_covers_the_ring_a_shrinking_shadow_leaves_behind() {
         let (mut tree, root, child) = inset_child();
 
         tree.set_own_paint_reach(child, 8.0);

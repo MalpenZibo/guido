@@ -57,14 +57,16 @@ container()
 # }
 ```
 
-**Elevation lift:**
+**Shadow lift:**
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
+# const LOW: Shadow = Shadow::simple((0.0, 1.0), 3.0, Color::rgba(0.0, 0.0, 0.0, 0.12));
+# const RAISED: Shadow = Shadow::simple((0.0, 3.0), 6.0, Color::rgba(0.0, 0.0, 0.0, 0.19));
 # fn main() {
 # container()
-.elevation(2.0)
-.when_hovered(|s| s.elevation(4.0))
+.shadow(LOW)
+.when_hovered(|s| s.shadow(RAISED))
 # ;
 # }
 ```
@@ -108,14 +110,16 @@ container()
 # }
 ```
 
-**Reduce elevation (press into surface):**
+**Shrink the shadow (press into the surface):**
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
+# const LOW: Shadow = Shadow::simple((0.0, 1.0), 3.0, Color::rgba(0.0, 0.0, 0.0, 0.12));
+# const RAISED: Shadow = Shadow::simple((0.0, 3.0), 6.0, Color::rgba(0.0, 0.0, 0.0, 0.19));
 # fn main() {
 # container()
-.elevation(4.0)
-.when_pressed(|s| s.elevation(1.0))
+.shadow(RAISED)
+.when_pressed(|s| s.shadow(LOW))
 # ;
 # }
 ```
@@ -197,7 +201,7 @@ container()
 ```
 
 It cannot be animated. A container transitions `background`, `border_color`,
-`border_width`, `corners`, `elevation`, `width`, `height`, `padding`,
+`border_width`, `corners`, `shadow`, `width`, `height`, `padding`,
 `translate`, `rotate` and `scale`; text colour is not among them, so the
 override lands in one frame.
 
@@ -375,19 +379,21 @@ Each state can override multiple properties:
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
+# const LOW: Shadow = Shadow::simple((0.0, 1.0), 3.0, Color::rgba(0.0, 0.0, 0.0, 0.12));
+# const RAISED: Shadow = Shadow::simple((0.0, 3.0), 6.0, Color::rgba(0.0, 0.0, 0.0, 0.19));
 # fn main() {
 # container()
 .when_hovered(|s| s
     .lighter(0.1)
     .border(2.0, Color::rgb(0.5, 0.7, 1.0))
-    .elevation(6.0)
+    .shadow(RAISED)
 )
 
 .when_pressed(|s| s
     .ripple()
     .darker(0.05)
     .scale(0.98)
-    .elevation(2.0)
+    .shadow(LOW)
 )
 # ;
 # }
@@ -454,14 +460,17 @@ container()
 ```rust,ignore
 # extern crate guido;
 # use guido::prelude::*;
+# const FLAT: Shadow = Shadow::none();
+# const LOW: Shadow = Shadow::simple((0.0, 1.0), 3.0, Color::rgba(0.0, 0.0, 0.0, 0.12));
+# const RAISED: Shadow = Shadow::simple((0.0, 3.0), 6.0, Color::rgba(0.0, 0.0, 0.0, 0.19));
 # fn main() {
 container()
     .padding(16.0)
     .background(Color::rgb(0.15, 0.15, 0.2))
     .corners(8.0)
-    .elevation(2.0.transition(200.0))
-    .when_hovered(|s| s.elevation(6.0).lighter(0.03))
-    .when_pressed(|s| s.elevation(1.0))
+    .shadow(LOW.transition(200.0))
+    .when_hovered(|s| s.shadow(RAISED).lighter(0.03))
+    .when_pressed(|s| s.shadow(FLAT))
     .children([...])
 # ;
 # }
@@ -487,7 +496,7 @@ impl StateStyleBuilder {
     pub fn translate<M>(self, translate: impl IntoSignal<Translate, M>) -> Self;
     pub fn rotate<M>(self, degrees: impl IntoSignal<f32, M>) -> Self;
     pub fn scale<M>(self, factor: impl IntoSignal<Scale, M>) -> Self;
-    pub fn elevation(self, level: f32) -> Self;
+    pub fn shadow<M>(self, shadow: impl IntoSignal<Shadow, M>) -> Self;
 
     // Ripple
     pub fn ripple(self) -> Self;

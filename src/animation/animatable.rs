@@ -1,13 +1,15 @@
 use smallvec::SmallVec;
 
+use crate::renderer::Shadow;
 use crate::transform::{Scale, Translate};
 use crate::widgets::{Color, Padding};
 
-/// The channels of one animatable value. `Corners` is the widest at five —
-/// four radii and a curvature — and six costs the same 32 bytes as five, so
-/// the inline capacity is six: the headroom is free and a value that spills
-/// costs four heap allocations per spring retarget in `carry_velocity`.
-pub type Channels = SmallVec<[f32; 6]>;
+/// The channels of one animatable value. `Shadow` is the widest at eight — two
+/// offsets, a blur, a spread and four colour components — and it is what sets
+/// the inline capacity: a value that spills costs four heap allocations per
+/// spring retarget in `carry_velocity`, which is a worse trade than the eight
+/// bytes eight slots cost over the six `Corners` needs.
+pub type Channels = SmallVec<[f32; 8]>;
 
 /// Trait for types that can be animated by interpolating between values
 pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
@@ -23,6 +25,7 @@ pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
     /// - `Scale`: the two factors, added and unsigned, decreasing
     /// - `Color`: alpha decreasing, then luminance decreasing
     /// - `Padding`: total padding decreasing
+    /// - `Shadow`: extent decreasing, then alpha decreasing
     ///
     /// # A value of more than one number has ties, and they are not reversals
     ///
@@ -155,6 +158,47 @@ impl Animatable for Color {
 
     fn channels(&self) -> Channels {
         Channels::from_slice(&[self.r, self.g, self.b, self.a])
+    }
+}
+
+impl Animatable for Shadow {
+    fn lerp(from: &Self, to: &Self, t: f32) -> Self {
+        let f = |a: f32, b: f32| a + (b - a) * t;
+        Self {
+            offset: (f(from.offset.0, to.offset.0), f(from.offset.1, to.offset.1)),
+            blur: f(from.blur, to.blur),
+            spread: f(from.spread, to.spread),
+            color: Color::lerp(&from.color, &to.color, t),
+        }
+    }
+
+    /// Shrinking, and then fading at a constant size.
+    ///
+    /// [`extent`](Shadow::extent) is the same reduction the
+    /// damage rect is sized by, so "reverse" here means the same thing it means
+    /// to everything downstream: the shadow is giving ground back. Alpha breaks
+    /// the tie because `extent` reports the full reach at any alpha above zero,
+    /// so a shadow fading out at a constant geometry would otherwise read as
+    /// forward in both directions.
+    ///
+    /// The ties this keeps are the ones that trade one dimension for another —
+    /// a blur of 8 becoming a spread of 8, an offset moving from down to
+    /// sideways. Both reduce to the same extent, and neither is larger.
+    fn is_reverse(from: &Self, to: &Self) -> bool {
+        (to.extent(), to.color.a) < (from.extent(), from.color.a)
+    }
+
+    fn channels(&self) -> Channels {
+        Channels::from_slice(&[
+            self.offset.0,
+            self.offset.1,
+            self.blur,
+            self.spread,
+            self.color.r,
+            self.color.g,
+            self.color.b,
+            self.color.a,
+        ])
     }
 }
 
@@ -300,6 +344,81 @@ mod tests {
         assert!(!Translate::is_reverse(&left, &right));
     }
 
+    /// Every channel at a known `t`, because the behavioural test can only see
+    /// a direction and a bound.
+    ///
+    /// `a + (b - a) * t` with the sign flipped to `a + (b + a) * t` moves every
+    /// channel the same way it should, just at the wrong rate, so a test that
+    /// asks "did it leave, is it short of the target, is it further along" says
+    /// yes to both. Exact values at `t = 0.5` are what tell them apart.
+    #[test]
+    fn a_shadow_lerps_every_one_of_its_channels() {
+        let from = Shadow::new((6.0, 2.0), 4.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.4));
+        let to = Shadow::new((-10.0, 12.0), 24.0, 6.0, Color::rgba(1.0, 0.0, 0.0, 0.6));
+
+        assert_eq!(
+            Shadow::lerp(&from, &to, 0.0),
+            from,
+            "t=0 is where it starts"
+        );
+        assert_eq!(Shadow::lerp(&from, &to, 1.0), to, "and t=1 is the target");
+
+        let mid = Shadow::lerp(&from, &to, 0.5);
+        assert_eq!(mid.offset, (-2.0, 7.0), "both axes, one crossing zero");
+        assert_eq!(mid.blur, 14.0);
+        assert_eq!(mid.spread, 3.0);
+        assert_eq!(mid.color.r, 0.5);
+        assert!((mid.color.a - 0.5).abs() < 1e-6);
+
+        // Past the target, which is what a spring needs of it.
+        assert_eq!(Shadow::lerp(&from, &to, 1.5).blur, 34.0);
+    }
+
+    /// A shadow giving ground back is a reversal, and the three parts of the
+    /// rule are three different questions.
+    ///
+    /// Without these the whole body can be replaced by `false` and the suite
+    /// stays green — `is_reverse` only picks between a declared transition and
+    /// its `.reverse()`, so nothing else is watching it. Verified: that mutant
+    /// now fails two of the three below.
+    #[test]
+    fn a_shadow_is_reversing_when_it_gives_ground_back() {
+        let flat = Shadow::simple((0.0, 1.0), 2.0, Color::BLACK);
+        let deep = Shadow::simple((0.0, 6.0), 12.0, Color::BLACK);
+        assert!(!Shadow::is_reverse(&flat, &deep), "rising is forward");
+        assert!(Shadow::is_reverse(&deep, &flat), "and falling is not");
+    }
+
+    /// Alpha breaks the tie, because `extent` reports the full reach at any
+    /// alpha above zero — so a shadow fading at a constant geometry would
+    /// otherwise read as forward in both directions.
+    #[test]
+    fn a_shadow_fading_at_a_constant_size_is_still_reversing() {
+        let solid = Shadow::simple((0.0, 6.0), 12.0, Color::rgba(0.0, 0.0, 0.0, 0.5));
+        let faint = Shadow::simple((0.0, 6.0), 12.0, Color::rgba(0.0, 0.0, 0.0, 0.1));
+        assert_eq!(
+            solid.extent(),
+            faint.extent(),
+            "same reach, different alpha"
+        );
+        assert!(
+            Shadow::is_reverse(&solid, &faint),
+            "fading out is a reversal"
+        );
+        assert!(!Shadow::is_reverse(&faint, &solid));
+    }
+
+    /// Trading one dimension for another is neither larger nor smaller, and the
+    /// impl says which ties it chooses to keep.
+    #[test]
+    fn a_shadow_trading_one_dimension_for_another_is_a_tie() {
+        let blurred = Shadow::new((0.0, 0.0), 8.0, 0.0, Color::BLACK);
+        let spread = Shadow::new((0.0, 0.0), 0.0, 8.0, Color::BLACK);
+        assert_eq!(blurred.extent(), spread.extent());
+        assert!(!Shadow::is_reverse(&blurred, &spread));
+        assert!(!Shadow::is_reverse(&spread, &blurred));
+    }
+
     /// A slide back is a reversal — which the old `Transform` could not say,
     /// because it compared scale and a translation does not change it.
     #[test]
@@ -345,13 +464,19 @@ mod tests {
         assert_eq!(Color::WHITE.channels().len(), 4);
         assert_eq!(Padding::all(2.0).channels().len(), 4);
         assert_eq!(Translate::new(1.0, 2.0).channels().len(), 2);
-        // The widest, and so the one the inline capacity is sized from: four
-        // radii and a curvature. `carry_velocity` builds four of these per
-        // retarget, so a spilled one is four heap allocations per spring.
+        // The widest, and so the one the inline capacity is sized from: two
+        // offsets, a blur, a spread and four colour components.
+        // `carry_velocity` builds four of these per retarget, so a spilled one
+        // is four heap allocations per spring. `Corners` is the runner-up at
+        // five, and is asserted too so that shrinking the capacity back to it
+        // fails here rather than in a profile.
+        let inline = Channels::new().inline_size();
+        assert_eq!(Shadow::none().channels().len(), 8);
         assert!(
-            crate::widgets::Corners::SQUARE.channels().len() <= Channels::new().inline_size(),
+            Shadow::none().channels().len() <= inline,
             "Channels must hold the widest animatable value without spilling"
         );
+        assert!(crate::widgets::Corners::SQUARE.channels().len() <= inline);
         assert_eq!(Scale::uniform(2.0).channels().len(), 2);
         assert_eq!(3.0_f32.channels().as_slice(), &[3.0]);
     }

@@ -88,7 +88,7 @@ The primary building block. Supports:
 - Padding, background (solid or gradient)
 - Corner radius with superellipse curvature
 - Borders with SDF rendering
-- Shadows with elevation levels
+- Shadows: offset, blur, spread and colour
 - Transforms (translate, rotate, scale)
 - State layers (hover/pressed styles)
 - Ripple effects
@@ -574,7 +574,7 @@ The paint system tracks which widgets need repainting:
   that makes a widget cover *less* has to name what it is leaving before it changes —
   `set_origin` and `cache_layout` damage the old rect and then the new one, and
   `set_own_paint_reach` damages the ring a shrinking reach gives up (a transform coming
-  back to rest, an elevation falling to zero). Without it the buffer is redrawn correctly
+  back to rest, a shadow falling to nothing). Without it the buffer is redrawn correctly
   and the compositor is never told to re-composite the pixels the widget has left, so the
   old position survives on screen as a fringe.
 - **Incremental flatten**: `RenderNode` caches its flattened commands. Clean subtrees

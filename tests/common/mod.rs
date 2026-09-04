@@ -26,6 +26,23 @@ use guido::renderer::{DrawCommand, PaintContext, RenderNode};
 use guido::tree::{Tree, WidgetId};
 use guido::widgets::widget::EventResponse;
 
+/// The Material elevation ladder, written out as the six `Shadow` values the
+/// library's own table used to produce for levels 0 to 5.
+///
+/// It lives here, in a test file, because that is where it belongs now: guido
+/// ships `shadow` and no ladder, so a design system's steps are values the
+/// application writes down. Two reference harnesses draw this one, and the
+/// numbers are exact rather than approximate so the pixels and the snapshot
+/// text did not move when the table was deleted.
+pub const LADDER: [Shadow; 6] = [
+    Shadow::none(),
+    Shadow::new((0.0, 1.0), 3.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.12)),
+    Shadow::new((0.0, 2.0), 4.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.16)),
+    Shadow::new((0.0, 3.0), 6.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.19)),
+    Shadow::new((0.0, 4.0), 8.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.20)),
+    Shadow::new((0.0, 6.0), 10.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.22)),
+];
+
 /// A registered widget and the tree that holds its bounds.
 pub struct Harness {
     pub tree: Tree,

@@ -37,7 +37,7 @@ The primary building block supporting:
 - Padding, backgrounds (solid/gradient)
 - Corners with superellipse curvature
 - Borders with SDF rendering
-- Shadows (elevation)
+- Shadows
 - Transforms
 - State layers (hover/pressed)
 - Ripple effects
