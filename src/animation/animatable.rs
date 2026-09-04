@@ -344,6 +344,51 @@ mod tests {
         assert!(!Translate::is_reverse(&left, &right));
     }
 
+    /// A shadow giving ground back is a reversal, and the three parts of the
+    /// rule are three different questions.
+    ///
+    /// Without these the whole body can be replaced by `false` and the suite
+    /// stays green — `is_reverse` only picks between a declared transition and
+    /// its `.reverse()`, so nothing else is watching it. Verified: that mutant
+    /// now fails two of the three below.
+    #[test]
+    fn a_shadow_is_reversing_when_it_gives_ground_back() {
+        let flat = Shadow::simple((0.0, 1.0), 2.0, Color::BLACK);
+        let deep = Shadow::simple((0.0, 6.0), 12.0, Color::BLACK);
+        assert!(!Shadow::is_reverse(&flat, &deep), "rising is forward");
+        assert!(Shadow::is_reverse(&deep, &flat), "and falling is not");
+    }
+
+    /// Alpha breaks the tie, because `extent` reports the full reach at any
+    /// alpha above zero — so a shadow fading at a constant geometry would
+    /// otherwise read as forward in both directions.
+    #[test]
+    fn a_shadow_fading_at_a_constant_size_is_still_reversing() {
+        let solid = Shadow::simple((0.0, 6.0), 12.0, Color::rgba(0.0, 0.0, 0.0, 0.5));
+        let faint = Shadow::simple((0.0, 6.0), 12.0, Color::rgba(0.0, 0.0, 0.0, 0.1));
+        assert_eq!(
+            solid.extent(),
+            faint.extent(),
+            "same reach, different alpha"
+        );
+        assert!(
+            Shadow::is_reverse(&solid, &faint),
+            "fading out is a reversal"
+        );
+        assert!(!Shadow::is_reverse(&faint, &solid));
+    }
+
+    /// Trading one dimension for another is neither larger nor smaller, and the
+    /// impl says which ties it chooses to keep.
+    #[test]
+    fn a_shadow_trading_one_dimension_for_another_is_a_tie() {
+        let blurred = Shadow::new((0.0, 0.0), 8.0, 0.0, Color::BLACK);
+        let spread = Shadow::new((0.0, 0.0), 0.0, 8.0, Color::BLACK);
+        assert_eq!(blurred.extent(), spread.extent());
+        assert!(!Shadow::is_reverse(&blurred, &spread));
+        assert!(!Shadow::is_reverse(&spread, &blurred));
+    }
+
     /// A slide back is a reversal — which the old `Transform` could not say,
     /// because it compared scale and a translation does not change it.
     #[test]

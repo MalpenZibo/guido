@@ -152,6 +152,15 @@ impl Container {
         match anim {
             // The value in flight is already past its overshoot, so it is folded
             // in flat; the declarations have theirs still to come.
+            //
+            // Scaling the extent by the overshoot is exact only while every
+            // channel keeps its sign, which a level guaranteed and a shadow does
+            // not: `(0.0, -100.0)` to `(0.0, 100.0)` are both 100 deep, and at
+            // the peak of a bounce the offset is 134. `animated_shadow` shrinks
+            // whatever is in flight to this number, so that is a visibly damped
+            // peak on a sign-crossing bounce rather than a ring outside the
+            // damage rect — the same one-sided error the clamp already trades
+            // for not sizing every rect to a resonant gain.
             Some(anim) => (declared * (1.0 + anim.peak_overshoot())).max(anim.current().extent()),
             None => declared,
         }

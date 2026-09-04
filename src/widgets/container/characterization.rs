@@ -2907,7 +2907,7 @@ fn events_use_the_clip_of_the_frame_on_screen() {
 /// reports has to reach past its own bounds — and it has to reach far enough for
 /// the *largest* shadow it can cast, not the one showing.
 ///
-/// Elevation animates paint-only, so a hover that lifts a card never re-runs the
+/// A shadow animates paint-only, so a hover that lifts a card never re-runs the
 /// layout that records the reach. Sized to the resting value, the shadow ring
 /// falls outside every damage rect: absent on the way up, left on screen on the
 /// way down.
@@ -2967,6 +2967,9 @@ fn the_damage_reach_allows_for_a_spring_overshooting() {
         "and far enough for BOUNCY's ~17%, got {with_bounce}"
     );
 }
+
+/// One of the five numbers `Shadow::lerp` moves, named so a failure says which.
+type ShadowChannel = (&'static str, fn(&Shadow) -> f32);
 
 /// Three shadows to test with, standing where the elevation table's levels 8, 3
 /// and 0.001 used to stand: one deep enough to reach well past its box, one
@@ -3049,8 +3052,14 @@ fn every_field_of_a_shadow_reaches_the_renderer() {
 #[test]
 fn a_declared_shadow_eases_only_where_the_declaration_carries_a_motion() {
     let lifted = create_signal(false);
-    let flat = Shadow::new((0.0, 2.0), 4.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.4));
-    let deep = Shadow::new((0.0, 12.0), 24.0, 6.0, Color::rgba(0.0, 0.0, 0.0, 0.4));
+    // Every channel differs, and the horizontal offset differs in *sign*: a
+    // `lerp` that dropped a channel would carry it through unchanged, and with
+    // endpoints that agree on it nothing would notice. Three of the five used
+    // to survive exactly that mutation — including the sideways offset and the
+    // spread, which are two of the three degrees of freedom this API exists to
+    // reach.
+    let flat = Shadow::new((6.0, 2.0), 4.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.4));
+    let deep = Shadow::new((-10.0, 12.0), 24.0, 6.0, Color::rgba(0.0, 0.0, 0.0, 0.55));
     let pick = move || if lifted.get() { deep } else { flat };
 
     let mut h = H::new(
@@ -3094,15 +3103,34 @@ fn a_declared_shadow_eases_only_where_the_declaration_carries_a_motion() {
         std::thread::sleep(std::time::Duration::from_millis(20));
         pump(&mut h);
         h.fit(200.0, 200.0);
-        seen.push(shadows_in(&h.paint())[0].blur);
+        seen.push(shadows_in(&h.paint())[0]);
     }
-    assert!(
-        seen[0] > flat.blur && seen[1] > seen[0] && seen[1] < deep.blur,
-        "the declared transition has to be on its way and still moving between \
-         {} and {}, got {seen:?}",
-        flat.blur,
-        deep.blur
-    );
+
+    // Every channel, not the blur alone. Each has to have left its resting
+    // value, be short of its target, and be further along on the second sample
+    // than the first — whichever direction it is travelling in, since the
+    // horizontal offset here is going the other way.
+    let channels: [ShadowChannel; 5] = [
+        ("offset.x", |s| s.offset.0),
+        ("offset.y", |s| s.offset.1),
+        ("blur", |s| s.blur),
+        ("spread", |s| s.spread),
+        ("alpha", |s| s.color.a),
+    ];
+    for (name, read) in channels {
+        let (from, to) = (read(&flat), read(&deep));
+        let (first, second) = (read(&seen[0]), read(&seen[1]));
+        let moving = if to > from {
+            from < first && first < second && second < to
+        } else {
+            from > first && first > second && second > to
+        };
+        assert!(
+            moving,
+            "{name} has to be on its way from {from} to {to} and still moving, \
+             got {first} then {second}"
+        );
+    }
     assert_eq!(
         shadows_in(&h.paint())[1],
         deep,
