@@ -1193,6 +1193,41 @@ fn a_shadow_written_before_the_first_paint_still_asks_for_its_frame() {
     );
 }
 
+/// The same for a background, which is the slot beside the shadow's in that
+/// guard and has never had a test of its own.
+///
+/// Not this change's property, but this change is what put a light on the
+/// clause: the chain is only as good as its weakest term, and each one needs a
+/// container that animates *that property alone* to say it carries.
+#[test]
+fn a_background_written_before_the_first_paint_still_asks_for_its_frame() {
+    let declared = create_signal(Color::RED);
+    let mut h = H::new(container().width(40.0).height(40.0).background(
+        (move || declared.get()).transition(Transition::new(40.0, TimingFunction::Linear)),
+    ));
+    h.fit(100.0, 100.0);
+    h.drain_jobs();
+
+    declared.set(Color::BLUE);
+    let queued = jobs::queued_job_types(h.root);
+    assert!(
+        queued.contains(&JobType::Animation),
+        "the write landed before any paint and nothing was listening: {queued:?}"
+    );
+}
+
+/// And corners, the slot beside the shadow's in the animated-state list.
+#[test]
+fn corners_alone_are_an_animated_state_property() {
+    assert!(
+        container()
+            .corners(4.0.transition(Transition::new(80.0, TimingFunction::Linear)))
+            .when_hovered(|s| s.corners(12.0))
+            .has_animated_state_properties(),
+        "hovering moves the corners, so it needs an Animation job"
+    );
+}
+
 /// A shadow that has arrived stops asking for frames.
 ///
 /// `resync_animation_targets` compares the target it holds against the one the
