@@ -4423,6 +4423,9 @@ fn a_property_follows_its_signal_again_once_the_signal_recovers() {
 /// Hit testing is where it lands: `untransform_point` composes the transform
 /// about the pivot, and a NaN origin makes every `contains` answer no, so a
 /// container stops taking the clicks that are plainly inside it.
+///
+/// The bad number is the *vertical* anchor here and the horizontal one in the
+/// enumeration above, so neither arm of the answer can be deleted unnoticed.
 #[test]
 fn a_pivot_that_is_not_a_number_does_not_swallow_a_click() {
     let clicks = std::rc::Rc::new(std::cell::Cell::new(0));
@@ -4430,7 +4433,7 @@ fn a_pivot_that_is_not_a_number_does_not_swallow_a_click() {
     let mut h = H::new(
         box_of(50.0, 50.0)
             .rotate(45.0)
-            .pivot(move || Pivot::percent(f32::NAN, 50.0))
+            .pivot(move || Pivot::percent(50.0, f32::NAN))
             .on_click(move || counter.set(counter.get() + 1)),
     );
     h.fit(200.0, 200.0);
@@ -4497,7 +4500,10 @@ fn every_declared_property_is_resolved_to_a_finite_value() {
             .rotate(nan)
             .scale(nan)
             .translate((nan, nan))
-            .pivot(Pivot::percent(nan, nan))
+            // Horizontal only: with both anchors bad, either arm of the
+            // answer still detects it and neither can be deleted noticeably.
+            // The hit-testing test takes the vertical for the same reason.
+            .pivot(Pivot::percent(nan, 50.0))
             .background(Color::rgba(nan, 0.0, 0.0, 1.0))
             .shadow(Shadow::new((nan, nan), nan, nan, Color::BLACK))
     };

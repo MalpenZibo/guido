@@ -128,6 +128,9 @@ impl AllFinite for crate::pivot::Pivot {
             V::Percent(p) | V::Px(p) => p.is_finite(),
             _ => true,
         };
+        // Both arms, and both are watched: the enumeration test puts the bad
+        // number in the horizontal anchor and the hit-testing one puts it in
+        // the vertical, so neither can be deleted unnoticed.
         horizontal && vertical
     }
 }
