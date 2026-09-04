@@ -237,6 +237,11 @@ pub struct TextInput {
     mask_char: Option<Signal<char>>,
     cached_mask_char: char,
 
+    /// Whether the text refuses to change. Not the same as disabled: a
+    /// read-only field still takes the focus, still says so, and still lets a
+    /// selection be made and copied — it only refuses the edit.
+    readonly: Option<Signal<bool>>,
+
     /// Whether a caret is drawn at all. Off costs nothing: no caret, no blink,
     /// nothing to wake the loop for.
     caret: Option<Signal<bool>>,
@@ -316,6 +321,7 @@ impl TextInput {
             cached_password: false,
             mask_char: None,
             cached_mask_char: '•',
+            readonly: None,
             caret: None,
             cached_caret: true,
             widget_ref: None,
@@ -359,6 +365,20 @@ impl TextInput {
         style
     }
 
+    /// Give up the hover, and the cursor icon that goes with it.
+    ///
+    /// Two events mean the same thing — the pointer moved out of the bounds, or
+    /// it left the surface — and both used to spell the three lines out. The
+    /// guard lives here rather than at the call sites so that neither can
+    /// forget it: an unchanged pointer move must not cost a signal write.
+    fn release_pointer(&mut self) {
+        if self.is_hovered {
+            self.is_hovered = false;
+            self.hover.set(false);
+            set_cursor(CursorIcon::Default);
+        }
+    }
+
     /// Whether an override applies. Reading the answer subscribes the field to
     /// its control, so it is asked only for a state it declares.
     fn is_state_active(&self, id: WidgetId, control: Option<&Control>, when: &StateWhen) -> bool {
@@ -370,7 +390,8 @@ impl TextInput {
             // focus, so both answers are its own.
             (StateWhen::Hovered, None) => self.hover.get(),
             (StateWhen::Focused, None) => crate::reactive::focus::focus_path().contains(id),
-            // Nothing above it declared `enabled`, so nothing switched it off.
+            // Nothing above it declared `enabled`, so nothing switched it off —
+            // and being read-only is not being disabled.
             (StateWhen::Pressed | StateWhen::Disabled, None) => false,
         }
     }
@@ -388,6 +409,45 @@ impl TextInput {
     /// Set custom mask character for password mode (default: '•')
     pub fn mask_char<M>(mut self, c: impl IntoSignal<char, M>) -> Self {
         self.mask_char = Some(c.into_signal());
+        self
+    }
+
+    /// Refuse edits, and nothing else.
+    ///
+    /// For the field whose answer is already in flight: a lock screen that has
+    /// sent the password to PAM must stop taking the characters typed while it
+    /// waits, because they can never be sent and are thrown away when the
+    /// answer arrives.
+    ///
+    /// **It keeps the focus, and the ring that says so.** That is the whole
+    /// reason this is not
+    /// [`Container::enabled`](crate::widgets::Container::enabled): a disabled
+    /// thing is not available and gives the keyboard up, while a read-only one
+    /// is still where your typing is aimed — on a multi-monitor lock screen the
+    /// `when_focused` ring is the only thing naming the screen. Every toolkit
+    /// keeps these two apart for exactly this reason: `readonly` beside
+    /// `disabled` on the web, `setReadOnly` beside `setEnabled` in Qt,
+    /// `readOnly` beside `enabled` in Flutter.
+    ///
+    /// The caret is not part of it. A field that should stop blinking while it
+    /// waits says so with the property that owns that —
+    /// [`caret`](Self::caret) — driven by the same signal.
+    ///
+    /// ```
+    /// use guido::prelude::*;
+    ///
+    /// let value = create_signal(String::new());
+    /// let busy = create_signal(false);
+    /// let _ = text_input(value).readonly(busy).caret(move || !busy.get());
+    /// ```
+    ///
+    /// What it refuses is every *edit*: typing, backspace, delete, paste, cut
+    /// and undo. What it keeps is everything that only reads — the caret moves,
+    /// a selection can be made and copied, and `Enter` still reaches
+    /// [`on_submit`](Self::on_submit), which is Qt's line and the one a caller
+    /// can put its own guard behind.
+    pub fn readonly<M>(mut self, readonly: impl IntoSignal<bool, M>) -> Self {
+        self.readonly = Some(readonly.into_signal());
         self
     }
 
@@ -752,7 +812,23 @@ impl TextInput {
     }
 
     /// Insert text at cursor, replacing any selection
+    /// Whether the field is refusing edits right now.
+    ///
+    /// Asked by each of the four functions that write the text, rather than at
+    /// the entrance: a keystroke is not the only way in — a middle click pastes
+    /// the primary selection straight into `insert_text` — and a guard at one
+    /// entrance is a guard the next one does not have. Untracked for the same
+    /// reason the clipboard guards are: an event does not wait for a layout, so
+    /// a field told to freeze must be frozen for the very next key rather than
+    /// for the frame after the next pass.
+    fn refuses_edits(&self) -> bool {
+        self.readonly.as_ref().is_some_and(|r| r.get_untracked())
+    }
+
     fn insert_text(&mut self, text: &str, edit: Edit) {
+        if self.refuses_edits() {
+            return;
+        }
         // Save state before modification
         self.save_to_history(EditType::Insert, edit.at);
 
@@ -780,6 +856,9 @@ impl TextInput {
 
     /// Delete selected text or character before/after cursor
     fn delete(&mut self, forward: bool, edit: Edit) {
+        if self.refuses_edits() {
+            return;
+        }
         // Check if there's anything to delete
         let has_content_to_delete = if self.selection.has_selection() {
             true
@@ -999,6 +1078,9 @@ impl TextInput {
 
     /// Undo the last change
     fn undo(&mut self, edit: Edit) {
+        if self.refuses_edits() {
+            return;
+        }
         let current = self.current_history_entry();
         if let Some(previous) = self.history.undo(current) {
             self.cached_value = previous.text;
@@ -1016,6 +1098,9 @@ impl TextInput {
 
     /// Redo the last undone change
     fn redo(&mut self, edit: Edit) {
+        if self.refuses_edits() {
+            return;
+        }
         let current = self.current_history_entry();
         if let Some(next) = self.history.redo(current) {
             self.cached_value = next.text;
@@ -1043,6 +1128,14 @@ impl TextInput {
 
     /// Handle key down event
     fn handle_key(&mut self, key: &Key, ctrl: bool, shift: bool, edit: Edit) -> EventResponse {
+        // What the *answer* is for a key a read-only field will not use — the
+        // refusal itself is at the four writers, which is what makes it hold
+        // for the middle-click paste as well. `Ignored` rather than `Handled`,
+        // because a keystroke this field will not use is a keystroke somebody
+        // else may: Qt's read-only line edit ignores them for the same reason.
+        if mutates(key, ctrl) && self.refuses_edits() {
+            return EventResponse::Ignored;
+        }
         match key {
             Key::Backspace => {
                 self.delete(false, edit);
@@ -1132,6 +1225,20 @@ impl TextInput {
             }
             _ => EventResponse::Ignored,
         }
+    }
+}
+
+/// Whether this keystroke would change the text.
+///
+/// Only decides what a read-only field *answers* — the edit is already refused
+/// at the writers — so a key missing from this list is a key answered
+/// `Handled` that changes nothing, rather than a hole.
+fn mutates(key: &Key, ctrl: bool) -> bool {
+    match key {
+        Key::Backspace | Key::Delete => true,
+        Key::Char(c) if ctrl => matches!(c.to_ascii_lowercase(), 'x' | 'v' | 'z' | 'y'),
+        Key::Char(c) => !c.is_control(),
+        _ => false,
     }
 }
 
@@ -1382,10 +1489,8 @@ impl Widget for TextInput {
                     self.is_hovered = true;
                     self.hover.set(true);
                     set_cursor(CursorIcon::Text);
-                } else if !in_bounds && self.is_hovered {
-                    self.is_hovered = false;
-                    self.hover.set(false);
-                    set_cursor(CursorIcon::Default);
+                } else if !in_bounds {
+                    self.release_pointer();
                 }
 
                 if let Some(at) = at
@@ -1446,11 +1551,7 @@ impl Widget for TextInput {
                 self.is_dragging = false;
                 request_job(id, JobRequest::Paint);
             }
-            Event::MouseLeave if self.is_hovered => {
-                self.is_hovered = false;
-                self.hover.set(false);
-                set_cursor(CursorIcon::Default);
-            }
+            Event::MouseLeave => self.release_pointer(),
             _ => {}
         }
 
