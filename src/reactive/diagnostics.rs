@@ -91,9 +91,7 @@ mod imp {
             return;
         }
 
-        REPORTS.with(|c| c.set(c.get() + 1));
-
-        let message = format!(
+        report(format!(
             "{}:{}:{}: signal read with no reactive scope — this value is a \
              snapshot and will not update. Pass a closure instead (e.g. \
              `move || …` rather than the value it computes), or use \
@@ -102,11 +100,17 @@ mod imp {
             loc.file(),
             loc.line(),
             loc.column(),
-        );
-        // The audience for this warning is whoever just wrote their first
-        // guido app, who quite likely has no logger installed yet — with the
-        // log crate uninitialised `max_level` is Off and a `warn!` would go
-        // nowhere, so say it on stderr instead.
+        ));
+    }
+
+    /// Say it once, wherever it can be heard.
+    ///
+    /// The audience for these is whoever just wrote their first guido app, who
+    /// quite likely has no logger installed yet — with the log crate
+    /// uninitialised `max_level` is Off and a `warn!` would go nowhere, so say
+    /// it on stderr instead. Shared, so a second diagnostic cannot forget it.
+    fn report(message: String) {
+        REPORTS.with(|c| c.set(c.get() + 1));
         if log::max_level() == log::LevelFilter::Off {
             eprintln!("guido: {message}");
         } else {
