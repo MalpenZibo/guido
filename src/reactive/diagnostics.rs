@@ -57,6 +57,24 @@ pub(crate) fn check_reactive_scope() {
     imp::check();
 }
 
+/// Report that a declared value was not a number arithmetic can carry on with,
+/// and was read as if it had not been declared.
+///
+/// Once per call site — which names the property, because each is resolved by
+/// its own accessor — rather than once per process, so a rotation and a
+/// background that both go bad both say so. A property that silently stops
+/// following its signal is the hardest failure in this library to find by
+/// looking, and it is silent by construction: the picture is *correct*, it is
+/// just not the picture the signal asked for.
+///
+/// Debug builds only, which is where Flutter puts the same assertion.
+pub(crate) fn non_finite_value(id: crate::tree::WidgetId, property: &'static str) {
+    #[cfg(debug_assertions)]
+    imp::non_finite(id, property);
+    #[cfg(not(debug_assertions))]
+    let _ = (id, property);
+}
+
 #[cfg(debug_assertions)]
 mod imp {
     use std::cell::{Cell, RefCell};
@@ -118,8 +136,33 @@ mod imp {
         }
     }
 
+    thread_local! {
+        /// Its own set, so this warning's rate limit is not spent by the one
+        /// above it — the last attempt at this shared one process-wide limit
+        /// with every other caller and went quiet for the wrong reasons.
+        ///
+        /// Keyed on the widget and the property rather than the call site,
+        /// which is what makes the message's own words true: it names a widget,
+        /// so a second widget with the same bad property has to be able to say
+        /// so too.
+        static NON_FINITE: RefCell<FxHashSet<(crate::tree::WidgetId, &'static str)>> =
+            RefCell::new(FxHashSet::default());
+    }
+
+    pub(super) fn non_finite(id: crate::tree::WidgetId, property: &'static str) {
+        if !NON_FINITE.with(|r| r.borrow_mut().insert((id, property))) {
+            return;
+        }
+        report(format!(
+            "widget {id:?}: `{property}` resolved to a value that is not a \
+             finite number, so it was read as if it had not been declared. A \
+             division by a measured zero is the usual cause. (debug builds only)"
+        ));
+    }
+
     /// Forget every reported call site (used by `reset_reactive`).
     pub(crate) fn reset() {
+        NON_FINITE.with(|r| r.borrow_mut().clear());
         REPORTED.with(|r| r.borrow_mut().clear());
         DEPTH.with(|d| d.set(0));
         REPORTS.with(|c| c.set(0));

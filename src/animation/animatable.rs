@@ -54,7 +54,7 @@ pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
 
     /// The value as the vector of numbers the animation interpolates.
     ///
-    /// Only `carry_velocity` reads this, and only as a direction: a spring's
+    /// `carry_velocity` and the finiteness check read this, and only as a direction: a spring's
     /// momentum is a vector in this space, and what a new segment inherits is
     /// the part of it pointing along itself. The channels may be in different
     /// units — `Corners` carries four radii in pixels beside a unitless

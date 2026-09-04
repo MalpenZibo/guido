@@ -19,6 +19,7 @@
 //! a size or in a colour.
 
 use super::*;
+use crate::finite::{AllFinite, FiniteOr};
 
 impl Container {
     // -----------------------------------------------------------------------
@@ -27,7 +28,7 @@ impl Container {
 
     /// Apply the active state layer's override to `base`, if it declares one.
     /// Priority is pressed > focused > hovered.
-    fn resolve_state_value<T: Clone>(
+    fn resolve_state_value<T: AllFinite + Clone>(
         &self,
         id: WidgetId,
         base: T,
@@ -53,7 +54,11 @@ impl Container {
         // so `when_hovered(|s| s.lighter(0.1))` still lightens under a pressed
         // layer that only scales.
         for (when, state) in ix.states.iter().rev() {
-            let Some(value) = extractor(state) else {
+            // A layer whose value is not finite is passed over exactly as one
+            // that says nothing about this property is — the base it falls
+            // through to was resolved the same way, so what comes out of here
+            // is finite whatever the application computed.
+            let Some(value) = extractor(state).filter(|v| v.all_finite()) else {
                 continue;
             };
             if control.is_active(when) {
@@ -66,7 +71,9 @@ impl Container {
     /// The background a state layer resolves to: its own colour if it declares
     /// one, its own alpha if it declares one, otherwise the base.
     pub(super) fn effective_background_target(&self, id: WidgetId) -> Color {
-        let base = self.background.get_or(Color::TRANSPARENT);
+        let base = self
+            .background
+            .get_finite_or(Color::TRANSPARENT, id, "background");
         self.resolve_state_value(id, base, |state| {
             let bg_color = state
                 .background
@@ -89,32 +96,38 @@ impl Container {
     }
 
     pub(super) fn effective_border_width_target(&self, id: WidgetId) -> f32 {
-        let base = self.border_width.get_or(0.0);
+        let base = self.border_width.get_finite_or(0.0, id, "border_width");
         self.resolve_state_value(id, base, |state| state.border.map(|b| b.width.get()))
     }
 
     pub(super) fn effective_border_color_target(&self, id: WidgetId) -> Color {
-        let base = self.border_color.get_or(Color::TRANSPARENT);
+        let base = self
+            .border_color
+            .get_finite_or(Color::TRANSPARENT, id, "border_color");
         self.resolve_state_value(id, base, |state| state.border.map(|b| b.color.get()))
     }
 
     pub(super) fn effective_corners_target(&self, id: WidgetId) -> crate::widgets::Corners {
-        let base = self.corners.get_or(crate::widgets::Corners::SQUARE);
+        let base = self
+            .corners
+            .get_finite_or(crate::widgets::Corners::SQUARE, id, "corners");
         self.resolve_state_value(id, base, |state| state.corners.map(|s| s.get()))
     }
 
     pub(super) fn effective_translate_target(&self, id: WidgetId) -> Translate {
-        let base = self.translate_signal().get_or(Translate::NONE);
+        let base = self
+            .translate_signal()
+            .get_finite_or(Translate::NONE, id, "translate");
         self.resolve_state_value(id, base, |state| state.translate.map(|s| s.get()))
     }
 
     pub(super) fn effective_rotate_target(&self, id: WidgetId) -> f32 {
-        let base = self.rotate_signal().get_or(0.0);
+        let base = self.rotate_signal().get_finite_or(0.0, id, "rotate");
         self.resolve_state_value(id, base, |state| state.rotate.map(|s| s.get()))
     }
 
     pub(super) fn effective_scale_target(&self, id: WidgetId) -> Scale {
-        let base = self.scale_signal().get_or(Scale::NONE);
+        let base = self.scale_signal().get_finite_or(Scale::NONE, id, "scale");
         self.resolve_state_value(id, base, |state| state.scale.map(|s| s.get()))
     }
 
@@ -143,14 +156,16 @@ impl Container {
     /// `.shadow(none).when_hovered(|s| s.shadow(lifted))` — both constants — is
     /// laid out once; `when_hovered(|s| s.shadow(lift))` with `lift` a signal
     /// re-lays out the container when it moves.
-    pub(super) fn max_shadow_extent(&self) -> f32 {
-        let base = self.shadow.get_or(Shadow::none());
+    pub(super) fn max_shadow_extent(&self, id: WidgetId) -> f32 {
+        let base = self.shadow.get_finite_or(Shadow::none(), id, "shadow");
         let anim = self.anims.as_ref().and_then(|a| a.shadow.as_ref());
         let declared = self
             .interaction
             .iter()
             .flat_map(|ix| ix.states.iter())
-            .filter_map(|(_, state)| state.shadow.map(|s| s.get().extent()))
+            .filter_map(|(_, state)| state.shadow.map(|s| s.get()))
+            .filter(AllFinite::all_finite)
+            .map(|shadow| shadow.extent())
             .fold(base.extent(), f32::max);
 
         match anim {
@@ -254,12 +269,14 @@ impl Container {
         // taken against `painted` would report the excursion beyond the shadow
         // and lose its width.
         let painted = bounds.outset(shadow_extent);
-        let pivot = self.pivot_signal().get_or_untracked(Pivot::CENTER);
+        let pivot = self.resolved_pivot_untracked();
         let anims = self.anims.as_ref();
 
-        let base_translate = self.translate_signal().get_or_untracked(Translate::NONE);
-        let base_rotate = self.rotate_signal().get_or_untracked(0.0);
-        let base_scale = self.scale_signal().get_or_untracked(Scale::NONE);
+        let base_translate = self
+            .translate_signal()
+            .get_finite_or_untracked(Translate::NONE);
+        let base_rotate = self.rotate_signal().get_finite_or_untracked(0.0);
+        let base_scale = self.scale_signal().get_finite_or_untracked(Scale::NONE);
         let base = Transform::compose(base_translate, base_rotate, base_scale);
         let mut reach = outset_of(base, painted, bounds, pivot);
 
@@ -341,7 +358,7 @@ impl Container {
     }
 
     pub(super) fn effective_shadow_target(&self, id: WidgetId) -> Shadow {
-        let base = self.shadow.get_or(Shadow::none());
+        let base = self.shadow.get_finite_or(Shadow::none(), id, "shadow");
         self.resolve_state_value(id, base, |state| state.shadow.map(|s| s.get()))
     }
 
@@ -349,9 +366,34 @@ impl Container {
     // Animation: the in-flight value when one is running
     // -----------------------------------------------------------------------
 
-    pub(super) fn animated_padding(&self) -> Padding {
+    /// The declared pivot, with one nobody can compute reading as undeclared —
+    /// the same rule every other property is resolved by, spelled here because
+    /// a pivot has no state layer to be resolved through.
+    pub(super) fn resolved_pivot(&self, id: WidgetId) -> Pivot {
+        self.pivot_signal()
+            .get_finite_or(Pivot::CENTER, id, "pivot")
+    }
+
+    /// The same, for the reach calculation, which reads a snapshot rather than
+    /// subscribing — and says nothing, because the paint that reports it is
+    /// reading the same signal in the same frame and one warning is the point.
+    pub(super) fn resolved_pivot_untracked(&self) -> Pivot {
+        self.pivot_signal().get_finite_or_untracked(Pivot::CENTER)
+    }
+
+    /// The declared padding, coerced like every other property.
+    ///
+    /// Its own accessor because four places read it — the seeding pass, the
+    /// drift check, layout and the animated reader — and a property resolved
+    /// four ways is a property three of them will eventually resolve wrongly.
+    pub(super) fn effective_padding_target(&self, id: WidgetId) -> Padding {
+        self.padding
+            .get_finite_or(Padding::default(), id, "padding")
+    }
+
+    pub(super) fn animated_padding(&self, id: WidgetId) -> Padding {
         get_animated_value(self.anims.as_ref().and_then(|a| a.padding.as_ref()), || {
-            self.padding.get_or(Padding::default())
+            self.effective_padding_target(id)
         })
     }
 
