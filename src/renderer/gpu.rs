@@ -394,6 +394,33 @@ impl ShapeInstance {
 mod tests {
     use super::*;
 
+    /// The three lengths carry the surface scale into the instance buffer and
+    /// the colour does not.
+    ///
+    /// The whole method could return `Default::default()` with the suite green:
+    /// what draws a shadow correctly is watched by the goldens, and those skip
+    /// on any adapter but lavapipe — including the one the mutation job runs on.
+    /// So this is the only thing standing between a HiDPI shadow and silence.
+    #[test]
+    fn a_shadow_reaches_the_instance_buffer_scaled_but_not_faded() {
+        let shadow = super::super::types::Shadow::new(
+            (3.0, -4.0),
+            8.0,
+            2.0,
+            crate::widgets::Color::rgba(1.0, 0.0, 0.0, 0.5),
+        );
+        let i = ShapeInstance::default().with_shadow(&shadow, 2.0);
+
+        assert_eq!(i.shadow_offset, [6.0, -8.0], "both axes, sign kept");
+        assert_eq!(i.shadow_blur, 16.0);
+        assert_eq!(i.shadow_spread, 4.0);
+        assert_eq!(
+            i.shadow_color,
+            [1.0, 0.0, 0.0, 0.5],
+            "the colour is not a length"
+        );
+    }
+
     #[test]
     fn test_shape_instance_size() {
         // Every instance is uploaded per draw, so growth is paid on every

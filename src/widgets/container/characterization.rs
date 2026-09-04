@@ -1129,6 +1129,173 @@ fn a_state_layer_moving_an_animated_transform_counts_as_movable() {
     );
 }
 
+/// A declared shadow that carries a motion is already at its value on the first
+/// frame, rather than easing up to it from nothing.
+///
+/// That is what `seed_animations` is for, and the guard in front of it is a
+/// chain of `||` over every animatable slot — so a container animating *nothing
+/// but a shadow* is the only shape that says the shadow's own term carries the
+/// chain. On a ramp no runner can finish, so "already there" cannot be confused
+/// with "arrived quickly".
+#[test]
+fn a_declared_shadow_starts_at_its_value_rather_than_easing_up_to_it() {
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .shadow(LIFTED.transition(Transition::new(60_000.0, TimingFunction::Linear))),
+    );
+    h.fit(100.0, 100.0);
+
+    assert_eq!(
+        drawn_shadow(&h.paint()),
+        Some(LIFTED),
+        "a declaration is where the motion starts, not where it is heading"
+    );
+}
+
+/// A write landing between the first layout and the first paint is not missed.
+///
+/// That is the whole of what `seed_animations` buys: it reads every animated
+/// property under Animation tracking at the *first layout*, so the subscription
+/// exists before anything can be written. The module docs name the bug —
+/// a menu whose open-flip fired in that window stayed collapsed for ever.
+///
+/// Asserted on the job queue rather than on the picture, because the picture
+/// cannot tell: `resync_animation_targets` re-reads the targets at every paint,
+/// so any frame that happens for another reason repairs it. What only the seed
+/// can do is make the write itself ask for that frame.
+///
+/// The guard in front of the seed is a chain of `||` over every animatable
+/// slot, so this has to animate the shadow and nothing else.
+#[test]
+fn a_shadow_written_before_the_first_paint_still_asks_for_its_frame() {
+    let declared = create_signal(Shadow::none());
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .shadow(
+                (move || declared.get()).transition(Transition::new(40.0, TimingFunction::Linear)),
+            ),
+    );
+    // The first layout, and no paint after it.
+    h.fit(100.0, 100.0);
+    h.drain_jobs();
+
+    declared.set(LIFTED);
+    let queued = jobs::queued_job_types(h.root);
+    assert!(
+        queued.contains(&JobType::Animation),
+        "the write landed before any paint and nothing was listening: {queued:?}"
+    );
+}
+
+/// A shadow that has arrived stops asking for frames.
+///
+/// `resync_animation_targets` compares the target it holds against the one the
+/// declarations resolve to, and asks for an Animation job when they differ.
+/// Invert that comparison and it asks when they *agree* — so a settled shadow
+/// requests a frame on every paint, for ever, and nothing about the picture on
+/// screen is wrong. Only the job queue can see it.
+///
+/// The queue is drained first and the assertion is on what the *paint* puts
+/// back, so there is something to find either way: a test that cleared the
+/// queue and then asserted it was empty would pass however the code behaved.
+#[test]
+fn a_settled_shadow_stops_asking_for_frames() {
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .shadow(LIFTED.transition(Transition::new(40.0, TimingFunction::Linear))),
+    );
+    h.fit(100.0, 100.0);
+    settle(&mut h, 200);
+
+    h.drain_jobs();
+    h.paint();
+    let queued = jobs::queued_job_types(h.root);
+    assert!(
+        !queued.contains(&JobType::Animation),
+        "a shadow that has arrived asked for another frame: {queued:?}"
+    );
+}
+
+/// A shadow is on both animated-property lists, and a container that animates
+/// nothing else has to be enough to put it there.
+///
+/// Asked of the predicates rather than through a hover, for the reason the
+/// border-width test above gives. Each list is a chain of `||` over eight or
+/// nine slots, so a clause that drifted into `&&` still answers correctly for
+/// every container that animates two things — only one that animates the shadow
+/// *alone* can tell.
+#[test]
+fn a_shadow_alone_is_an_animated_property_on_both_lists() {
+    let t = || Transition::new(80.0, TimingFunction::Linear);
+
+    assert!(
+        container()
+            .shadow(Shadow::none().transition(t()))
+            .when_hovered(|s| s.shadow(LIFTED))
+            .has_animated_state_properties(),
+        "hovering moves the shadow, so it needs an Animation job"
+    );
+    assert!(
+        !container()
+            .shadow(LIFTED)
+            .when_hovered(|s| s.shadow(LOW))
+            .has_animated_state_properties(),
+        "and with no motion declared, a plain repaint is the whole job"
+    );
+    assert!(
+        container()
+            .shadow(Shadow::none().transition(t()))
+            .has_signal_animated_props(),
+        "a shadow animation mirrors a signal, so it re-syncs at paint"
+    );
+}
+
+/// The alpha floor is a floor: a shadow exactly at it is still nothing.
+///
+/// `>` and `>=` differ on one value, and that value is reachable — an
+/// application can declare it, and an animation leaving transparent passes
+/// through it. Drawn at the boundary, the rect it pushes carries a shadow
+/// nobody can see.
+#[test]
+fn a_shadow_exactly_at_the_alpha_floor_is_not_drawn() {
+    let alpha = create_signal(style::SHADOW_ALPHA_FLOOR);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .shadow(move || {
+                Shadow::new(
+                    (0.0, 2.0),
+                    4.0,
+                    0.0,
+                    Color::rgba(0.0, 0.0, 0.0, alpha.get()),
+                )
+            }),
+    );
+    h.fit(100.0, 100.0);
+    assert!(
+        drawn_shadow(&h.paint()).is_none(),
+        "at the floor exactly, there is nothing to see"
+    );
+
+    alpha.set(style::SHADOW_ALPHA_FLOOR * 1.5);
+    h.fit(100.0, 100.0);
+    assert!(
+        drawn_shadow(&h.paint()).is_some(),
+        "and just above it there is"
+    );
+}
+
 /// Every animated transform component holds a copy of signal-derived state, so
 /// every one of them needs the paint-time target re-sync. Width does not: its
 /// target follows the measured content and is recomputed at each layout.
@@ -2179,6 +2346,67 @@ fn a_translate_target_behind_an_untaken_branch_is_picked_up_by_the_resync() {
     assert!(
         (tx - 40.0).abs() < 0.5,
         "a target behind a branch nobody tracked still has to converge, got {tx}"
+    );
+}
+
+/// The same for a shadow, which reaches paint by its own slot in both the seed
+/// and the drift list.
+///
+/// Two things this is the only witness to. `seed_animations` guards on a chain
+/// of `||` over every animatable slot, so a container animating *nothing but a
+/// shadow* is what says the shadow's own term carries the chain. And
+/// `resync_animation_targets` compares the held target against the effective one
+/// — invert that comparison and a target behind an untaken branch is never
+/// picked up, which is exactly the write below.
+#[test]
+fn a_shadow_target_behind_an_untaken_branch_is_picked_up_by_the_resync() {
+    let armed = create_signal(false);
+    let depth = create_signal(4.0f32);
+    let shadow_of = move |blur: f32| {
+        Shadow::new(
+            (0.0, blur * 0.5),
+            blur,
+            0.0,
+            Color::rgba(0.0, 0.0, 0.0, 0.5),
+        )
+    };
+    // The root, not a child: a fixed-size container is a relayout boundary, and
+    // `pump` discards the layout roots the real loop lays out from — so a nested
+    // one keeps the reach of its last layout and `animated_shadow` clamps the
+    // convergence away. The same reason the easing test gives.
+    let mut h = H::new(
+        container()
+            .width(50.0)
+            .height(50.0)
+            .background(Color::RED)
+            .shadow(
+                (move || {
+                    if armed.get() {
+                        shadow_of(depth.get())
+                    } else {
+                        Shadow::none()
+                    }
+                })
+                .transition(Transition::new(80.0, TimingFunction::Linear)),
+            ),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+
+    // The branch flips, which the first subscription can see.
+    armed.set(true);
+    settle(&mut h, 120);
+
+    // And this one it cannot: only the re-sync stands between it and a stale
+    // target.
+    depth.set(20.0);
+    settle(&mut h, 120);
+
+    let painted = drawn_shadow(&h.paint()).expect("a shadow is drawn");
+    assert!(
+        (painted.blur - 20.0).abs() < 0.5,
+        "a target behind a branch nobody tracked still has to converge, got {}",
+        painted.blur
     );
 }
 

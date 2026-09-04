@@ -344,6 +344,36 @@ mod tests {
         assert!(!Translate::is_reverse(&left, &right));
     }
 
+    /// Every channel at a known `t`, because the behavioural test can only see
+    /// a direction and a bound.
+    ///
+    /// `a + (b - a) * t` with the sign flipped to `a + (b + a) * t` moves every
+    /// channel the same way it should, just at the wrong rate, so a test that
+    /// asks "did it leave, is it short of the target, is it further along" says
+    /// yes to both. Exact values at `t = 0.5` are what tell them apart.
+    #[test]
+    fn a_shadow_lerps_every_one_of_its_channels() {
+        let from = Shadow::new((6.0, 2.0), 4.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.4));
+        let to = Shadow::new((-10.0, 12.0), 24.0, 6.0, Color::rgba(1.0, 0.0, 0.0, 0.6));
+
+        assert_eq!(
+            Shadow::lerp(&from, &to, 0.0),
+            from,
+            "t=0 is where it starts"
+        );
+        assert_eq!(Shadow::lerp(&from, &to, 1.0), to, "and t=1 is the target");
+
+        let mid = Shadow::lerp(&from, &to, 0.5);
+        assert_eq!(mid.offset, (-2.0, 7.0), "both axes, one crossing zero");
+        assert_eq!(mid.blur, 14.0);
+        assert_eq!(mid.spread, 3.0);
+        assert_eq!(mid.color.r, 0.5);
+        assert!((mid.color.a - 0.5).abs() < 1e-6);
+
+        // Past the target, which is what a spring needs of it.
+        assert_eq!(Shadow::lerp(&from, &to, 1.5).blur, 34.0);
+    }
+
     /// A shadow giving ground back is a reversal, and the three parts of the
     /// rule are three different questions.
     ///

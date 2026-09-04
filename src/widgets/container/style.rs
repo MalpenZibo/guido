@@ -606,7 +606,7 @@ impl Container {
 /// Below this the shadow is not a faint shadow, it is nothing — and a rect
 /// carrying it is a rect drawn for no reason, once per frame for as long as a
 /// shadow animation is leaving transparent.
-const SHADOW_ALPHA_FLOOR: f32 = 0.004;
+pub(super) const SHADOW_ALPHA_FLOOR: f32 = 0.004;
 
 /// How far `painted`, once `transform` has carried it, stands outside `bounds`.
 ///
