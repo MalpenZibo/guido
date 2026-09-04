@@ -44,6 +44,10 @@ impl Container {
             return base;
         }
 
+        // Built once for the whole walk rather than per layer: eight properties
+        // resolve per paint, each walking these same layers.
+        let control = ix.as_control(id);
+
         // Backwards: the last layer declared wins. A layer that says nothing
         // about *this* property is passed over rather than ending the search,
         // so `when_hovered(|s| s.lighter(0.1))` still lightens under a pressed
@@ -52,7 +56,7 @@ impl Container {
             let Some(value) = extractor(state) else {
                 continue;
             };
-            if ix.is_active(id, when) {
+            if control.is_active(when) {
                 return value;
             }
         }

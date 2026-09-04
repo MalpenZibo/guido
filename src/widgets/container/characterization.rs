@@ -2515,7 +2515,8 @@ fn a_translate_sequence_and_a_scale_sequence_move_the_transform() {
 /// a widget that no longer exists.
 #[test]
 fn unregistering_a_focused_widget_releases_the_focus() {
-    use crate::reactive::{focus_path, request_focus};
+    use crate::reactive::focus::focus_path;
+    use crate::reactive::request_focus;
 
     let mut h = H::new(
         container()
@@ -4107,5 +4108,198 @@ fn a_fully_transparent_gradient_draws_nothing() {
     assert_eq!(
         rects(&over.paint()).first().map(|(_, c)| *c),
         Some(Color::GRAY)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Enabled
+// ---------------------------------------------------------------------------
+
+/// The subtree gate, at its plainest: the handler is on the child, the
+/// declaration on the parent, and the click reaches neither.
+///
+/// `Ignored` rather than a merely silent handler, because a click a disabled
+/// form swallows must not be swallowed at all — the container behind it is
+/// entitled to it.
+#[test]
+fn a_click_does_not_reach_a_handler_below_a_disabled_container() {
+    let clicks = std::rc::Rc::new(std::cell::Cell::new(0));
+    let counter = clicks.clone();
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(100.0)
+            .enabled(false)
+            .child(box_of(50.0, 20.0).on_click(move || counter.set(counter.get() + 1))),
+    );
+    h.fit(500.0, 500.0);
+
+    for event in click_at(5.0, 5.0) {
+        assert_eq!(h.send(event), EventResponse::Ignored);
+    }
+    assert_eq!(clicks.get(), 0, "the handler is below a disabled container");
+}
+
+/// Disabling propagates down and a descendant cannot undo it — the rule Qt,
+/// GTK and SwiftUI all settled on, asserted here so it is not re-litigated one
+/// widget at a time.
+///
+/// Both halves, because they are two mechanisms: the click is stopped by the
+/// early-out in `event`, and the inner control's *answer* is a signal folded
+/// at registration. A change that kept one and lost the other would leave a
+/// subtree that refuses input while styling itself as if it took it.
+#[test]
+fn a_descendant_declaring_itself_enabled_stays_disabled() {
+    let clicks = std::rc::Rc::new(std::cell::Cell::new(0));
+    let counter = clicks.clone();
+    let mut h = H::new(
+        container().width(100.0).height(100.0).enabled(false).child(
+            container()
+                .width(80.0)
+                .height(80.0)
+                .enabled(true)
+                .child(box_of(50.0, 20.0).on_click(move || counter.set(counter.get() + 1))),
+        ),
+    );
+    h.fit(500.0, 500.0);
+
+    for event in click_at(5.0, 5.0) {
+        h.send(event);
+    }
+    assert_eq!(clicks.get(), 0, "an ancestor said no");
+
+    let inner = h.children()[0];
+    assert!(
+        h.tree
+            .nearest_control(inner)
+            .expect("declaring `enabled` makes a container an interaction unit")
+            .is_disabled(),
+        "the inner unit answers for its ancestors as well as itself"
+    );
+}
+
+/// The gate is a signal like every other declared property: flipping it back
+/// lets the next click through, and the write moves nothing, so it costs no
+/// layout.
+#[test]
+fn re_enabling_lets_the_next_click_through_and_costs_no_layout() {
+    let enabled = create_signal(false);
+    let clicks = std::rc::Rc::new(std::cell::Cell::new(0));
+    let counter = clicks.clone();
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(100.0)
+            .enabled(enabled)
+            .child(box_of(50.0, 20.0).on_click(move || counter.set(counter.get() + 1))),
+    );
+    h.fit(500.0, 500.0);
+
+    for event in click_at(5.0, 5.0) {
+        h.send(event);
+    }
+    assert_eq!(clicks.get(), 0);
+
+    let jobs = h.jobs_from(|| enabled.set(true));
+    assert!(
+        !jobs.contains(&JobType::Layout),
+        "enabling changes what an event does, not where anything sits: {jobs:?}"
+    );
+
+    for event in click_at(5.0, 5.0) {
+        h.send(event);
+    }
+    assert_eq!(clicks.get(), 1, "the gate is open again");
+}
+
+/// The trap in copying the `visible` early-out: it returns before
+/// `track_pointer`, so a container disabled under the pointer would keep
+/// `HOVERED` set for ever and `when_hovered` would stick.
+#[test]
+fn a_container_disabled_while_hovered_is_no_longer_hovered() {
+    let enabled = create_signal(true);
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(100.0)
+            .control()
+            .enabled(enabled)
+            .when_hovered(|s| s.background(Color::BLUE)),
+    );
+    h.fit(500.0, 500.0);
+    let control = h.tree.nearest_control(h.root).expect("a control");
+
+    set_hover(&mut h, true);
+    assert!(control.is_hovered());
+
+    enabled.set(false);
+    assert!(
+        !control.is_hovered(),
+        "a unit that refuses the pointer is not under it"
+    );
+
+    // And the flag itself is given up, not merely masked: the pointer leaves
+    // while the container is disabled, and re-enabling must not light it again.
+    set_hover(&mut h, false);
+    enabled.set(true);
+    assert!(
+        !control.is_hovered(),
+        "the pointer is somewhere else entirely"
+    );
+}
+
+/// The reason the answer is a signal on the control rather than a walk of the
+/// tree: a descendant resolves its own colour from inside a tracking scope
+/// that has no tree in hand.
+#[test]
+fn a_text_below_a_disabled_container_styles_itself_from_it() {
+    let enabled = create_signal(true);
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(40.0)
+            .enabled(enabled)
+            .child(
+                crate::widgets::text("Label")
+                    .color(Color::WHITE)
+                    .when_disabled(|s| s.color(Color::GRAY)),
+            ),
+    );
+
+    assert_eq!(painted_text_color(&mut h), Color::WHITE);
+    enabled.set(false);
+    assert_eq!(painted_text_color(&mut h), Color::GRAY);
+    enabled.set(true);
+    assert_eq!(painted_text_color(&mut h), Color::WHITE);
+}
+
+/// The question the issue left to the implementation: a disabled subtree does
+/// not scroll either.
+///
+/// Scrolling is something a subtree does in answer to an event, and the gate
+/// is on the event — so this follows from where the gate sits rather than from
+/// a decision taken about scrolling separately.
+#[test]
+fn a_disabled_scroller_does_not_scroll() {
+    let enabled = create_signal(false);
+    let rows: Vec<crate::widgets::AnyWidget> =
+        (0..10).map(|_| box_of(40.0, 20.0).into_any()).collect();
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(30.0)
+            .enabled(enabled)
+            .scroll(Scroll::vertical())
+            .children(rows),
+    );
+    h.fit(40.0, 30.0);
+
+    let wheel = || Event::scroll(20.0, 15.0, 0.0, 60.0, ScrollSource::Wheel);
+    assert_eq!(h.send(wheel()), EventResponse::Ignored);
+    enabled.set(true);
+    assert_eq!(
+        h.send(wheel()),
+        EventResponse::Handled,
+        "the same scroller, enabled, takes the wheel"
     );
 }

@@ -22,8 +22,12 @@ use std::time::{Duration, Instant};
 
 use common::Harness;
 use guido::prelude::*;
-use guido::reactive::clipboard::{clear_system_clipboard, clipboard_paste, take_clipboard_change};
-use guido::reactive::focus::{clear_focus, request_focus};
+use guido::reactive::clipboard::{
+    clear_system_clipboard, clipboard_paste, primary_copy, take_clipboard_change,
+};
+use guido::reactive::focus::{clear_focus, focus_path, request_focus};
+use guido::renderer::{DrawCommand, RenderNode};
+use guido::tree::WidgetId;
 
 /// Narrow enough that a sentence does not fit, which is what the scrolling
 /// tests below need and what the rest are indifferent to.
@@ -76,7 +80,27 @@ impl Field {
         Self::around(value, text_input(value))
     }
 
-    fn around(value: RwSignal<String>, input: TextInput) -> Self {
+    /// A focused field wrapped in whatever the test wants to say about it — a
+    /// container declaring the whole subtree disabled, mostly. The *field*
+    /// holds the focus, not the wrapper, which is what the tests below turn on.
+    fn wrapped(value: RwSignal<String>, root: impl Widget + 'static) -> Self {
+        let field = Self::around(value, root);
+        request_focus(&field.harness.tree, field.input());
+        field
+    }
+
+    /// The field itself: the last child of the wrapper, or the root when
+    /// nothing wraps it.
+    fn input(&self) -> WidgetId {
+        self.harness
+            .tree
+            .get_children(self.harness.root)
+            .last()
+            .copied()
+            .unwrap_or(self.harness.root)
+    }
+
+    fn around(value: RwSignal<String>, input: impl Widget + 'static) -> Self {
         // The focus and the selection a previous field in this thread published
         // would otherwise answer for this one.
         clear_focus();
@@ -132,6 +156,13 @@ impl Field {
         );
     }
 
+    /// A middle press at a point, which is the primary-selection paste.
+    fn middle_click(&mut self, x: f32, y: f32) {
+        self.now += Duration::from_millis(1);
+        self.harness
+            .send_at(Event::mouse_down(x, y, MouseButton::Middle), self.now);
+    }
+
     fn type_text(&mut self, text: &str) {
         for c in text.chars() {
             self.key(Key::Char(c));
@@ -155,6 +186,26 @@ impl Field {
     }
 
     /// Where the caret is drawn, if it is showing.
+    /// Where the caret is drawn, if it is showing.
+    fn caret_x(&mut self) -> Option<f32> {
+        self.caret().map(|c| c.x)
+    }
+
+    /// The colour the field's own glyphs were drawn in.
+    fn text_colour(&mut self) -> Option<Color> {
+        fn find(node: &RenderNode) -> Option<Color> {
+            for cmd in &node.commands {
+                if let DrawCommand::Text { color, .. } = &**cmd {
+                    return Some(*color);
+                }
+            }
+            node.children.iter().find_map(|child| find(child))
+        }
+        self.harness.lay_out(WIDTH, HEIGHT);
+        find(&self.harness.paint())
+    }
+
+    /// The caret's rectangle, if it is showing.
     fn caret(&mut self) -> Option<Rect> {
         let painted = self.harness.painted_rects();
         assert!(
@@ -601,4 +652,258 @@ fn the_view_comes_back_to_the_start_when_the_cursor_does() {
         0.0,
         "a cursor at the start of the text belongs at the start of the field",
     );
+}
+
+// ---------------------------------------------------------------------------
+// A field that has been told to stop
+// ---------------------------------------------------------------------------
+
+/// The other half of the subtree gate: keys take the same dispatch path as the
+/// pointer, so a container that refuses one refuses the other.
+#[test]
+fn a_field_below_a_disabled_container_does_not_hear_the_keyboard() {
+    let value = create_signal("hi".to_owned());
+    let mut field = Field::wrapped(
+        value,
+        container()
+            .width(WIDTH)
+            .height(HEIGHT)
+            .enabled(false)
+            .child(text_input(value)),
+    );
+
+    let response = field.key(Key::Char('x'));
+
+    assert_eq!(response, EventResponse::Ignored);
+    assert_eq!(
+        field.text(),
+        "hi",
+        "a field under a disabled container took a keystroke"
+    );
+}
+
+/// A disabled subtree shows no focus ring — the same answer Qt, GTK and a
+/// `<fieldset disabled>` give, and the reason `readonly` exists beside it.
+///
+/// The focus itself is not asserted here: what a caller can see is what its
+/// control answers, and a disabled unit answers no.
+#[test]
+fn a_disabled_container_stops_claiming_the_focus_below_it() {
+    let value = create_signal(String::new());
+    let enabled = create_signal(true);
+    let field = Field::wrapped(
+        value,
+        container()
+            .width(WIDTH)
+            .height(HEIGHT)
+            .enabled(enabled)
+            .child(text_input(value)),
+    );
+    let control = field
+        .harness
+        .tree
+        .nearest_control(field.input())
+        .expect("declaring `enabled` makes a container an interaction unit");
+
+    assert!(control.has_focus(), "the field below it holds the keyboard");
+    enabled.set(false);
+    assert!(
+        !control.has_focus(),
+        "a disabled unit is not where the keyboard is aimed"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Read-only: refusing the edit, and nothing else
+// ---------------------------------------------------------------------------
+
+/// #211: a lock screen that has sent the password to PAM must stop taking the
+/// characters typed while it waits, because they can never be sent.
+#[test]
+fn a_read_only_field_refuses_every_edit() {
+    let value = create_signal("hi".to_owned());
+    let readonly = create_signal(true);
+    let mut field = Field::wrapped(
+        value,
+        container()
+            .width(WIDTH)
+            .height(HEIGHT)
+            .child(text_input(value).readonly(readonly)),
+    );
+
+    // The response as well as the text. The refusal itself is at the writers,
+    // so the text would be right even if the keyboard gate were gone entirely —
+    // what says the gate is still there is the field declining the key, which
+    // is what lets somebody else have it.
+    for key in [Key::Char('x'), Key::Backspace, Key::Delete] {
+        assert_eq!(
+            field.key(key),
+            EventResponse::Ignored,
+            "a key it will not use is a key somebody else may"
+        );
+    }
+    for c in ['x', 'v', 'z', 'y'] {
+        assert_eq!(
+            field.press(
+                Key::Char(c),
+                Modifiers {
+                    ctrl: true,
+                    ..Default::default()
+                }
+            ),
+            EventResponse::Ignored,
+            "ctrl+{c} edits, so it is refused too"
+        );
+    }
+    // Ctrl+A only selects, so it is not refused.
+    assert_eq!(
+        field.press(
+            Key::Char('a'),
+            Modifiers {
+                ctrl: true,
+                ..Default::default()
+            }
+        ),
+        EventResponse::Handled
+    );
+    assert_eq!(field.text(), "hi", "not one of those may change the text");
+
+    readonly.set(false);
+    field.key(Key::End);
+    field.key(Key::Char('x'));
+    assert_eq!(field.text(), "hix", "and it takes them again when it may");
+}
+
+/// A keystroke is not the only way into the text. A middle click pastes the
+/// primary selection straight into `insert_text`, so a guard that sat at
+/// `handle_key` would have let it through — on a lock screen, into the password
+/// PAM is already answering.
+#[test]
+fn a_read_only_field_refuses_a_middle_click_paste() {
+    let value = create_signal("hi".to_owned());
+    let readonly = create_signal(true);
+    let mut field = Field::wrapped(
+        value,
+        container()
+            .width(WIDTH)
+            .height(HEIGHT)
+            .child(text_input(value).readonly(readonly)),
+    );
+    primary_copy("pasted");
+
+    field.middle_click(4.0, 5.0);
+    assert_eq!(field.text(), "hi", "the primary selection got in");
+
+    readonly.set(false);
+    field.middle_click(4.0, 5.0);
+    assert!(
+        field.text().contains("pasted"),
+        "and the same click works when the field is not read-only: {}",
+        field.text()
+    );
+}
+
+/// A field resolves its own state layers through its control, exactly as a
+/// `Text` beside it does — nothing declared one on a `TextInput` before, so the
+/// whole of `is_state_active` could be replaced by a constant unnoticed.
+#[test]
+fn a_field_styles_itself_from_its_control() {
+    const CALM: Color = Color::rgb(0.5, 0.5, 0.5);
+    const LIT: Color = Color::rgb(1.0, 1.0, 1.0);
+
+    let value = create_signal("hi".to_owned());
+    let enabled = create_signal(true);
+    let mut field = Field::wrapped(
+        value,
+        container()
+            .width(WIDTH)
+            .height(HEIGHT)
+            .enabled(enabled)
+            .child(text_input(value).color(CALM).when_focused(|s| s.color(LIT))),
+    );
+
+    assert_eq!(
+        field.text_colour(),
+        Some(LIT),
+        "the field holds the focus, so its focused layer applies"
+    );
+
+    enabled.set(false);
+    assert_eq!(
+        field.text_colour(),
+        Some(CALM),
+        "a disabled unit is not where the keyboard is aimed, so the layer lifts"
+    );
+}
+
+/// `Enter` is deliberately not an edit, and this is the half that carries
+/// allock: `readonly` is set from inside the submit path, so a field that
+/// swallowed its own `Enter` would go permanently unsubmittable.
+#[test]
+fn a_read_only_field_still_submits() {
+    let value = create_signal("hi".to_owned());
+    let submits = Rc::new(RefCell::new(Vec::new()));
+    let sink = submits.clone();
+    let mut field = Field::wrapped(
+        value,
+        container().width(WIDTH).height(HEIGHT).child(
+            text_input(value)
+                .readonly(true)
+                .on_submit(move |text| sink.borrow_mut().push(text.to_owned())),
+        ),
+    );
+
+    assert_eq!(field.key(Key::Enter), EventResponse::Handled);
+    assert_eq!(submits.borrow().as_slice(), ["hi"]);
+}
+
+/// The whole reason this is not `enabled`. A field that has stopped taking
+/// edits is still the one the keyboard is aimed at, and on a multi-monitor
+/// lock screen the `when_focused` ring is the only thing naming the screen.
+#[test]
+fn a_read_only_field_keeps_the_focus_and_the_ring() {
+    let value = create_signal("hi".to_owned());
+    let readonly = create_signal(false);
+    let field = Field::wrapped(
+        value,
+        container()
+            .width(WIDTH)
+            .height(HEIGHT)
+            .control()
+            .child(text_input(value).readonly(readonly)),
+    );
+    let control = field.harness.tree.nearest_control(field.input()).unwrap();
+    let before = focus_path();
+    assert!(before.contains(field.input()));
+    assert!(control.has_focus());
+
+    readonly.set(true);
+
+    assert_eq!(before, focus_path(), "the focus path is untouched");
+    assert!(
+        control.has_focus(),
+        "read-only is not disabled: the ring stays"
+    );
+}
+
+/// It refuses the edit and nothing else, which is Qt's line: the caret still
+/// moves, so a caller can still see and copy what is there.
+#[test]
+fn a_read_only_field_still_moves_its_caret() {
+    let value = create_signal(SENTENCE.to_owned());
+    let mut field = Field::wrapped(
+        value,
+        container()
+            .width(WIDTH)
+            .height(HEIGHT)
+            .child(text_input(value).readonly(true)),
+    );
+
+    assert_eq!(field.key(Key::End), EventResponse::Handled);
+    assert_ne!(
+        field.caret_x(),
+        Some(0.0),
+        "End moved the caret off the start"
+    );
+    assert_eq!(field.key(Key::Home), EventResponse::Handled);
 }

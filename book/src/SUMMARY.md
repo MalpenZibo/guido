@@ -33,6 +33,7 @@
 - [Interactivity](interactivity/README.md)
     - [State Layer API](interactivity/state-layer.md)
     - [Hover & Pressed States](interactivity/states.md)
+    - [Disabling a Subtree](interactivity/disabled.md)
     - [Ripple Effects](interactivity/ripples.md)
     - [Event Handling](interactivity/events.md)
 

@@ -29,7 +29,8 @@ use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Axis, Constraints, Flex, Layout, Length, Size};
 use crate::pivot::Pivot;
 use crate::reactive::{
-    IntoSignal, OptionSignalExt, RwSignal, Signal, create_signal, focus_path, with_signal_tracking,
+    IntoSignal, OptionSignalExt, RwSignal, Signal, create_derived, create_signal,
+    with_signal_tracking,
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::{Scale, Transform, Translate};
@@ -274,6 +275,18 @@ pub(super) struct InteractionState {
     /// and a single bit would have made it pay for a translate and a rotate
     /// nothing declares.
     pub(super) declares_transform: Moves,
+    /// What this container was declared with, and — once the tree has been in
+    /// hand — what that means with the enclosing control's answer folded in.
+    ///
+    /// Two fields because they answer two questions. `declared_enabled` is
+    /// what gates events: dispatch is one recursive walk, so a container that
+    /// returns before asking its children *is* the propagation, and reading
+    /// the folded answer there would be asking the same ancestors twice.
+    /// `enabled` is what a style resolves against, and that question has to be
+    /// answerable with no tree — from inside a `create_derived` closure — so
+    /// the ancestry is folded once, at registration, into a signal.
+    pub(super) declared_enabled: Option<Signal<bool>>,
+    pub(super) enabled: Option<Signal<bool>>,
     pub(super) ripple: RippleState,
 }
 
@@ -292,12 +305,18 @@ impl Default for InteractionState {
             flags: create_signal(InteractionFlags::empty()),
             states: Vec::new(),
             declares_transform: Moves::default(),
+            declared_enabled: None,
+            enabled: None,
             ripple: RippleState::new(),
         }
     }
 }
 
 impl InteractionState {
+    /// The raw flag, untracked and **ungated by `enabled`** — unlike
+    /// [`Control::is_hovered`], which is what a style asks. Event handling can
+    /// use it because it never reaches a disabled container: the gate at the
+    /// top of `Container::event` returned long before.
     pub(super) fn is_hovered(&self) -> bool {
         self.flags
             .get_untracked()
@@ -348,20 +367,13 @@ impl InteractionState {
             .and_then(|(_, s)| s.ripple)
     }
 
-    /// Whether the layer is active right now. Reading this is what subscribes
-    /// the caller to the state, which is why it is not asked for layers that
-    /// declare nothing about the property being resolved.
-    pub(super) fn is_active(&self, id: WidgetId, when: &StateWhen) -> bool {
-        match when {
-            StateWhen::Hovered => self.flags.get().contains(InteractionFlags::HOVERED),
-            StateWhen::Pressed => self.flags.get().contains(InteractionFlags::PRESSED),
-            // The path, rather than a walk of this container's descendants:
-            // the same question has to be answerable from a `create_derived`
-            // closure, which has no tree, and that is where a container
-            // resolves the text colour it publishes below it.
-            StateWhen::Focused => focus_path().contains(id),
-            StateWhen::When(condition) => condition.get(),
-        }
+    /// This container as the interaction unit it is, which is what resolves its
+    /// own state layers.
+    ///
+    /// A container asks [`Control::is_active`] exactly as a `Text` below it
+    /// does, so the two cannot come to disagree about the unit they share.
+    pub(super) fn as_control(&self, id: WidgetId) -> Control {
+        Control::new(id, self.flags, self.enabled)
     }
 }
 
@@ -831,6 +843,54 @@ impl Container {
         self
     }
 
+    /// Whether this container and everything below it accepts input.
+    ///
+    /// A disabled subtree takes no clicks, no keys and no scrolls: the event
+    /// stops here, so nothing below it has to know why. It is still laid out
+    /// and still painted exactly as declared — greying it out is
+    /// [`when_disabled`](crate::widgets::Stateful::when_disabled), which reads
+    /// the same declaration, so the look and the behaviour cannot come apart:
+    ///
+    /// ```
+    /// use guido::prelude::*;
+    ///
+    /// let busy = create_signal(false);
+    /// let _ = container()
+    ///     .enabled(move || !busy.get())
+    ///     .child(container().on_click(|| println!("send")))
+    ///     .child(text("Send").when_disabled(|s| s.color(Color::GRAY)));
+    /// ```
+    ///
+    /// **Disabling propagates and a descendant cannot undo it.** A container
+    /// declaring `enabled(true)` inside one declaring `enabled(false)` is
+    /// disabled — the rule Qt, GTK and SwiftUI all settled on, and the only one
+    /// under which a form can be switched off in a single place.
+    ///
+    /// A disabled subtree is not where the keyboard is aimed: it resolves no
+    /// `when_focused` layer, so the ring goes with the rest of it. That is what
+    /// Qt, GTK, SwiftUI and a `<fieldset disabled>` all do. A field that must go
+    /// on saying the keys are *its* while refusing them is not disabled — it is
+    /// [read-only](crate::widgets::TextInput::readonly), which is the other
+    /// half of this and keeps its focus.
+    ///
+    /// Declaring it makes the container an interaction unit, as every other
+    /// behaviour does, because that is what a descendant asks.
+    ///
+    /// Enabling is a *declaration*, not a state override: there is no way to
+    /// say a container is enabled only while hovered, the same way there is no
+    /// way to declare a timing on an override.
+    ///
+    /// ```compile_fail
+    /// use guido::prelude::*;
+    ///
+    /// let _ = container().when_hovered(|s| s.enabled(false));
+    /// ```
+    pub fn enabled<M>(mut self, enabled: impl IntoSignal<bool, M>) -> Self {
+        let signal = enabled.into_signal();
+        self.interact_mut().declared_enabled = Some(signal);
+        self
+    }
+
     /// Scroll this container, and say what its scrollbar looks like.
     ///
     /// One value rather than three setters. `scrollbar_visibility` and
@@ -1069,6 +1129,41 @@ impl Container {
         self
     }
 
+    /// Fold the enclosing unit's answer into this one's, once, where the tree
+    /// is in hand.
+    ///
+    /// This is the whole mechanism the propagation rests on. Ancestry cannot be
+    /// walked from where the question is asked — a descendant resolves its
+    /// colour inside a `create_derived` closure, which has no tree — so the walk
+    /// happens here, at registration, and leaves behind a signal. The parent's
+    /// own fold has already happened, because registration is top-down and
+    /// `set_control` runs before the children are registered, so one `&&` per
+    /// nested declaration is the whole chain.
+    ///
+    /// A container that declares nothing keeps `None` and allocates no signal,
+    /// which is nearly all of them, and nesting is the only case that allocates
+    /// at all — one declaration inside another's reach.
+    ///
+    /// That one signal belongs to the surface rather than to this widget:
+    /// `register_signal` files under `current_owner`, and registration does not
+    /// run inside the owner a dynamic row was built in. So a keyed list whose
+    /// rows declare `enabled` beneath a control that also does leaks a slot per
+    /// row created, for the surface's lifetime. Closing it means running
+    /// registration under the widget's own owner, which is #330.
+    fn fold_enabled(&mut self, tree: &Tree, id: WidgetId) {
+        let Some(ix) = self.interaction.as_deref_mut() else {
+            return;
+        };
+        let inherited = tree
+            .get_parent(id)
+            .and_then(|parent| tree.nearest_control(parent))
+            .and_then(|control| control.enabled_signal());
+        ix.enabled = match (ix.declared_enabled, inherited) {
+            (Some(own), Some(above)) => Some(create_derived(move || above.get() && own.get())),
+            (own, above) => own.or(above),
+        };
+    }
+
     /// Whether this container is an interaction unit.
     ///
     /// A pointer target *is* one — it has to know whether it is being pointed
@@ -1080,7 +1175,8 @@ impl Container {
             return true;
         }
         self.interaction.as_ref().is_some_and(|ix| {
-            ix.has_any_state()
+            ix.declared_enabled.is_some()
+                || ix.has_any_state()
                 || ix.on_click.is_some()
                 || ix.on_right_click.is_some()
                 || ix.on_middle_click.is_some()
@@ -1332,13 +1428,14 @@ impl Widget for Container {
         // Set container_id for children source
         self.children_source.set_container_id(id);
 
+        self.fold_enabled(tree, id);
         tree.set_control(
             id,
             self.is_control()
                 .then(|| {
                     self.interaction
                         .as_ref()
-                        .map(|ix| Control::new(id, ix.flags))
+                        .map(|ix| Control::new(id, ix.flags, ix.enabled))
                 })
                 .flatten(),
         );
@@ -1513,6 +1610,15 @@ impl Widget for Container {
 
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
         if !self.visible.get_or(true) {
+            return EventResponse::Ignored;
+        }
+        // The subtree gate. Only this container's own declaration, because
+        // returning before the children are asked *is* the propagation: an
+        // ancestor that is disabled has already stopped the event above us.
+        if let Some(ref ix) = self.interaction
+            && !ix.declared_enabled.get_or(true)
+        {
+            self.pointer_left(id, tree.event_instant());
             return EventResponse::Ignored;
         }
 
