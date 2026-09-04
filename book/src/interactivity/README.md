@@ -30,6 +30,7 @@ The framework handles:
 
 - [State Layer API](state-layer.md) - Overview of the state layer system
 - [Hover & Pressed States](states.md) - Define visual overrides per state
+- [Disabling a Subtree](disabled.md) - Stop a whole subtree taking input, and style it
 - [Ripple Effects](ripples.md) - Material Design-style touch feedback
 - [Event Handling](events.md) - Click, hover, and scroll events
 

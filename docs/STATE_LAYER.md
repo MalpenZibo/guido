@@ -8,6 +8,7 @@ State layers allow containers to define how they should look when:
 - **Hovered**: Mouse cursor is over the widget
 - **Pressed**: Mouse button is held down on the widget
 - **Focused**: Any child widget has keyboard focus (e.g., text input)
+- **Disabled**: the control, or something above it, was declared `enabled(false)`
 - **A condition the app owns**: `state(condition, |s| ...)` — the last submit failed, this row is selected
 
 Style changes are defined declaratively using builder methods, and the framework handles all state transitions, animations, and rendering automatically.
@@ -66,6 +67,51 @@ container()
 
 The same signal can be read anywhere else that needs it, independently. That is why there is one generic `state` rather than a named method per case.
 
+### Disabled
+
+`when_disabled` is the one state that is *declared* rather than noticed:
+`Container::enabled` stops every event at that container, and the layer reads
+the same declaration, so the look and the behaviour cannot come apart. The rule
+is that disabling propagates down and a descendant cannot undo it. What that
+means for a caller is in
+[the book](../book/src/interactivity/disabled.md); what it costs is here.
+
+The question has to be answerable **with no tree in hand** — a container
+resolves the text colour it publishes below it from inside a `create_derived`
+closure — so ancestry cannot be walked where the question is asked. It is walked
+once instead, at `register_children`, and left behind as a signal on the
+`Control`:
+
+- `InteractionState::declared_enabled` is what this container said. It gates
+  events, and only it: dispatch is one recursive walk, so a container returning
+  before it asks its children *is* the propagation, and folding there would ask
+  the same ancestors twice.
+- `InteractionState::enabled` is that folded with the enclosing control's, which
+  is what a style resolves against. `Container::fold_enabled` builds it, and
+  because registration is top-down the parent's fold has already happened — so
+  one `&&` per nested declaration is the whole chain.
+
+Declaring `enabled` therefore makes a container an interaction unit, because a
+unit is what a descendant asks. A container that declares nothing keeps `None`
+and allocates no signal, and `OptionSignalExt::get_or` on a `None` reads
+nothing, so every container that does not use this pays two branches.
+
+Context is not an alternative: `reactive::context` is app-global with one value
+per type, so it cannot carry a value scoped to a subtree.
+
+`Control::is_hovered`, `is_pressed` and `has_focus` are all gated on the answer:
+a disabled unit is under no pointer and is not where the keyboard is aimed, so
+its `when_focused` ring goes with the rest of it. Keeping the ring while
+refusing the keys is a *different* concept and has its own setter —
+`TextInput::readonly` — which is why this one does not have to compromise. Every
+toolkit keeps the two apart for that reason: `readonly` beside `disabled` on the
+web, `setReadOnly` beside `setEnabled` in Qt, `readOnly` beside `enabled` in
+Flutter.
+
+One asymmetry worth not rediscovering: `InteractionState::is_hovered` is the
+*raw* flag, untracked and ungated, unlike the `Control` method of the same name.
+Event handling may use it because it never reaches a disabled container.
+
 ## Interaction Units
 
 When a text declares a hover style, hover *of what*? Not its own glyphs — a
@@ -88,13 +134,13 @@ inside its subtree. Which is what makes the case above work at all — the focus
 is in a *sibling*, and both belong to the same unit.
 
 `control()` is rarely written by hand. Anything the pointer can act on is a
-unit by necessity, so `on_click`, `on_hover`, `on_scroll`, `scroll` and a
-declared state layer all imply it. Write it where the boundary is real but
+unit by necessity, so `on_click`, `on_hover`, `on_scroll`, `scroll`,
+`enabled` and a declared state layer all imply it. Write it where the boundary is real but
 nothing else announces it — a field's label and input, a row whose highlight
 belongs to the row.
 
-Leaves declare states with `when_hovered`, `when_pressed`, `when_focused` and
-`state`, from the `Stateful` trait. The closure receives the same partial style
+Leaves declare states with `when_hovered`, `when_pressed`, `when_focused`,
+`when_disabled` and `state`, from the `Stateful` trait. The closure receives the same partial style
 the widget itself is built with, because an override *is* another partial
 style:
 

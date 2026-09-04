@@ -120,6 +120,15 @@ fn the_values_that_became_signals_take_all_three_forms() {
         .mask_char(mask)
         .caret(wraps);
 
+    let live = create_signal(true);
+    let _ = container().enabled(false);
+    let _ = container().enabled(move || live.get());
+    let _ = container().enabled(live);
+
+    let _ = text_input(create_signal(String::new())).readonly(true);
+    let _ = text_input(create_signal(String::new())).readonly(move || !live.get());
+    let _ = text_input(create_signal(String::new())).readonly(live);
+
     let _ = container().layout(Flex::new(Axis::Horizontal));
     let _ = container().layout(Flex::new(move || axis.get()));
     let _ = container().layout(Flex::new(axis));

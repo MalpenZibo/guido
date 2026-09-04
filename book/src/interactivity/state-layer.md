@@ -7,6 +7,8 @@ The state layer system provides declarative style overrides based on widget inte
 State layers let containers define how they should look when:
 - **Hovered** - Mouse cursor is over the widget
 - **Pressed** - Mouse button is held down on the widget
+- **Focused** - The keyboard focus is inside the widget
+- **Disabled** - The widget, or something above it, was declared `enabled(false)` — see [Disabling a Subtree](disabled.md)
 
 Changes are defined declaratively, and the framework handles state transitions, animations, and rendering.
 
