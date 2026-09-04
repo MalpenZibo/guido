@@ -327,7 +327,7 @@ mod overshoot_tests {
     ///
     /// This is why anything sizing a rect from that figure has to clamp what it
     /// draws to it rather than assume the value stays inside: see
-    /// `Container::animated_elevation`.
+    /// `Container::animated_shadow`.
     #[test]
     fn a_spring_given_velocity_overshoots_more_than_one_at_rest() {
         let config = SpringConfig::BOUNCY;

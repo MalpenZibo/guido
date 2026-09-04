@@ -600,24 +600,56 @@ fn borders_and_gradients() {
     golden("borders_and_gradients", (440.0, 224.0), 1.0, BACKDROP, view);
 }
 
-/// The elevation ladder. Shadows are the one thing in the pipeline that draws
+/// A ladder of shadows. Shadows are the one thing in the pipeline that draws
 /// outside the widget's own box, so a golden catches both the falloff and the
 /// quad expansion that has to make room for it.
 #[test]
-fn elevation_ladder() {
+fn shadow_ladder() {
     let view = container()
         .background(Color::rgb(0.92, 0.92, 0.94))
         .padding(24.0)
         .layout(Flex::row().spacing(24.0))
-        .children((0..5).map(|level| {
+        .children(
+            common::LADDER[..5]
+                .iter()
+                .map(|&step| swatch(70.0, 70.0, Color::WHITE).corners(10.0).shadow(step)),
+        );
+
+    golden(
+        "shadow_ladder",
+        (494.0, 118.0),
+        1.0,
+        Color::rgb(0.92, 0.92, 0.94),
+        view,
+    );
+}
+
+/// The three degrees of freedom the elevation table could not reach: a shadow
+/// thrown sideways, a coloured one, and one with spread.
+///
+/// `elevation` wrote `(0.0, offset_y)`, a spread of `0.0` and black at the
+/// alpha its level was paired with, so no golden that existed before `shadow`
+/// could show any of these — which is why this is a new reference rather than a
+/// moved one.
+#[test]
+fn shadow_variations() {
+    let sideways = Shadow::new((16.0, 0.0), 8.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.35));
+    let coloured = Shadow::new((0.0, 6.0), 12.0, 0.0, Color::rgba(0.85, 0.1, 0.2, 0.55));
+    let spread = Shadow::new((0.0, 0.0), 6.0, 8.0, Color::rgba(0.1, 0.2, 0.8, 0.45));
+
+    let view = container()
+        .background(Color::rgb(0.92, 0.92, 0.94))
+        .padding(30.0)
+        .layout(Flex::row().spacing(30.0))
+        .children([sideways, coloured, spread].map(|shadow| {
             swatch(70.0, 70.0, Color::WHITE)
                 .corners(10.0)
-                .elevation(level as f32)
+                .shadow(shadow)
         }));
 
     golden(
-        "elevation_ladder",
-        (494.0, 118.0),
+        "shadow_variations",
+        (350.0, 130.0),
         1.0,
         Color::rgb(0.92, 0.92, 0.94),
         view,
@@ -709,7 +741,7 @@ fn hidpi_at_scale_2x() {
         .child(
             swatch(80.0, 60.0, Color::WHITE)
                 .corners(Corners::squircle(16.0))
-                .elevation(3.0),
+                .shadow(common::LADDER[3]),
         );
 
     golden("hidpi_at_scale_2x", (200.0, 84.0), 2.0, BACKDROP, view);

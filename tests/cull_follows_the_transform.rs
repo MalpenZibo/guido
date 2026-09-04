@@ -241,9 +241,9 @@ fn a_subtree_scaled_to_nothing_paints_nothing() {
 /// widest reach among the children at both ends, and only the far end is
 /// obvious: everything below the fold is a far-end case. This is the other one.
 ///
-/// The reach here is an elevation rather than a transform, which is the point:
-/// what the window widens by is how far a child paints outside itself, whatever
-/// put it there.
+/// The reach here is a shadow rather than a transform, which is the point: what
+/// the window widens by is how far a child paints outside itself, whatever put
+/// it there.
 #[test]
 fn the_window_widens_on_the_near_side_as_well() {
     let mut rows: Vec<_> = (0..20)
@@ -255,12 +255,17 @@ fn the_window_widens_on_the_near_side_as_well() {
         })
         .collect();
     // Row seven ends at y=248, just above the 300..500 the lift brings into
-    // view, and its shadow hangs 100px below that — into the middle of it.
+    // view, and this shadow reaches 100px past its box — into the middle of it.
     rows[7] = container()
         .width(MARKED_WIDTH)
         .height(ROW_HEIGHT)
         .background(Color::rgb(1.0, 0.0, 0.0))
-        .elevation(24.0);
+        .shadow(Shadow::new(
+            (0.0, 40.0),
+            40.0,
+            20.0,
+            Color::rgba(0.0, 0.0, 0.0, 0.3),
+        ));
 
     let lifted = tops(
         container()

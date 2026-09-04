@@ -267,10 +267,10 @@ mod overshoot_bound_tests {
     use super::*;
 
     /// A custom curve keeps the shape it was written with, and reports what that
-    /// shape actually does. Anything sized from that number — the damage rect an
-    /// elevation shadow needs, above all — would otherwise be measured for less
-    /// than what is drawn; clamping the curve instead would have made the bound
-    /// true by shortening every hand-rolled bounce, silently.
+    /// shape actually does. Anything sized from that number — the damage rect a
+    /// shadow needs, above all — would otherwise be measured for less than what
+    /// is drawn; clamping the curve instead would have made the bound true by
+    /// shortening every hand-rolled bounce, silently.
     #[test]
     fn a_custom_curve_is_measured_rather_than_clamped() {
         // Overshoots at the end and anticipates at the start: a bound that holds

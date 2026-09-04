@@ -15,6 +15,7 @@
 //! ```
 
 use crate::reactive::{IntoSignal, Signal, create_stored};
+use crate::renderer::Shadow;
 use crate::transform::{Scale, Translate};
 use crate::widgets::Color;
 
@@ -124,8 +125,8 @@ pub struct StateStyle {
     pub rotate: Option<Signal<f32>>,
     /// Scale override (e.g., the shrink on press)
     pub scale: Option<Signal<Scale>>,
-    /// Elevation (shadow) override
-    pub elevation: Option<Signal<f32>>,
+    /// Shadow override
+    pub shadow: Option<Signal<Shadow>>,
     /// Override the background alpha channel (applied after background override)
     pub alpha: Option<Signal<f32>>,
     /// Ripple effect configuration (typically used in a pressed layer)
@@ -294,9 +295,31 @@ impl StateStyle {
         self
     }
 
-    /// Set the elevation (shadow level) for this state.
-    pub fn elevation<M>(mut self, elevation: impl IntoSignal<f32, M>) -> Self {
-        self.elevation = Some(elevation.into_signal());
+    /// Set the shadow for this state.
+    ///
+    /// ```
+    /// use guido::prelude::*;
+    ///
+    /// const LIFTED: Shadow = Shadow::new((0.0, 8.0), 16.0, 0.0, Color::BLACK);
+    /// let _ = container()
+    ///     .shadow(Shadow::none().transition(120.0))
+    ///     .when_hovered(|s| s.shadow(LIFTED));
+    /// ```
+    ///
+    /// A value, never a motion: the timing belongs to the declaration this
+    /// overrides, so a transition here does not compile rather than being
+    /// quietly ignored.
+    ///
+    /// ```compile_fail
+    /// use guido::prelude::*;
+    ///
+    /// const LIFTED: Shadow = Shadow::new((0.0, 8.0), 16.0, 0.0, Color::BLACK);
+    /// let _ = container()
+    ///     .shadow(Shadow::none())
+    ///     .when_hovered(|s| s.shadow(LIFTED.transition(80.0)));
+    /// ```
+    pub fn shadow<M>(mut self, shadow: impl IntoSignal<Shadow, M>) -> Self {
+        self.shadow = Some(shadow.into_signal());
         self
     }
 

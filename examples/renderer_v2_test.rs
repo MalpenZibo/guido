@@ -74,13 +74,18 @@ fn main() {
                             .background(Color::rgb(0.7, 0.4, 0.1))
                             .corners(16.0)
                             .border(2.0, Color::WHITE),
-                        // Box with shadow (elevation)
+                        // Box with a shadow
                         container()
                             .width(60.0)
                             .height(60.0)
                             .background(Color::rgb(0.2, 0.8, 0.8))
                             .corners(8.0)
-                            .elevation(4.0),
+                            .shadow(Shadow::new(
+                                (0.0, 4.0),
+                                8.0,
+                                0.0,
+                                Color::rgba(0.0, 0.0, 0.0, 0.2),
+                            )),
                         // Clickable box with ripple
                         container()
                             .width(60.0)

@@ -26,7 +26,6 @@ fn a_signal_reaches_a_property_it_can_convert_into() {
         .padding(f)
         .corners(f)
         .backdrop_blur(f)
-        .elevation(i)
         .scale(f)
         .scale(pair)
         .translate(pair)
@@ -128,4 +127,17 @@ fn the_values_that_became_signals_take_all_three_forms() {
     let _ = container().when_pressed(|s| s.ripple_with_color(Color::RED));
     let _ = container().when_pressed(move |s| s.ripple_with_color(move || hot.get()));
     let _ = container().when_pressed(move |s| s.ripple_with_color(hot));
+
+    // `shadow` takes a `Shadow` and nothing convertible into one, so there is no
+    // entry in `converting_signals!` for it — which is exactly the case this
+    // test exists to cover: the three forms have to arrive through the blanket
+    // impls, and nothing checks that they do until it is written down. On the
+    // state layer too, where the override is a value and never a motion.
+    let lift = create_signal(Shadow::new((0.0, 6.0), 10.0, 0.0, Color::BLACK));
+    let _ = container().shadow(Shadow::none());
+    let _ = container().shadow(move || lift.get());
+    let _ = container().shadow(lift);
+    let _ = container().when_hovered(|s| s.shadow(Shadow::none()));
+    let _ = container().when_hovered(move |s| s.shadow(move || lift.get()));
+    let _ = container().when_hovered(move |s| s.shadow(lift));
 }
