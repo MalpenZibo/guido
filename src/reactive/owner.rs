@@ -195,13 +195,31 @@ pub(crate) fn reset_owners() {
 /// With no `App` — unit tests — there is no root, and the current scope is used
 /// as before.
 pub(crate) fn with_root_owner<T>(f: impl FnOnce() -> T) -> T {
-    let Some(root) = ROOT_OWNER.with(|root| root.get()) else {
-        return f();
-    };
-    let previous = CURRENT_OWNER.with(|current| current.replace(Some(root)));
-    let value = f();
-    CURRENT_OWNER.with(|current| current.replace(previous));
-    value
+    match ROOT_OWNER.with(|root| root.get()) {
+        Some(root) => under_owner(root, f),
+        None => f(),
+    }
+}
+
+/// Run `f` with `owner_id` as the current owner, whatever it was before.
+///
+/// The one place `CURRENT_OWNER` is swapped: [`with_owner`] allocates a scope
+/// and hands it here, [`with_root_owner`] names the root, and a widget names its
+/// own. Restoring on unwind is why they all go through it — a leaked scope
+/// silently re-parents every reactive resource created afterwards, and the copy
+/// that forgot the guard is the one that would have done it.
+///
+/// It does not *make* a scope. [`with_owner`] is the one that does, and picking
+/// the wrong one compiles: this one files resources under an owner somebody else
+/// disposes, that one under a fresh scope nothing does.
+pub(crate) fn under_owner<T>(owner_id: OwnerId, f: impl FnOnce() -> T) -> T {
+    let previous = CURRENT_OWNER.with(|current| current.replace(Some(owner_id)));
+    let _guard = crate::reactive::guard::defer(move || {
+        CURRENT_OWNER.with(|current| {
+            *current.borrow_mut() = previous;
+        });
+    });
+    f()
 }
 
 /// Execute a closure within a new owner scope.
@@ -234,26 +252,7 @@ pub fn with_owner<T>(f: impl FnOnce() -> T) -> (T, OwnerId) {
         id
     });
 
-    // Set as current owner
-    let prev_owner = CURRENT_OWNER.with(|current| {
-        let prev = *current.borrow();
-        *current.borrow_mut() = Some(owner_id);
-        prev
-    });
-
-    // Restore on unwind too: a leaked owner scope would silently re-parent
-    // every reactive resource created afterwards.
-    let guard = crate::reactive::guard::defer(move || {
-        CURRENT_OWNER.with(|current| {
-            *current.borrow_mut() = prev_owner;
-        });
-    });
-
-    // Execute the closure
-    let result = f();
-    drop(guard);
-
-    (result, owner_id)
+    (under_owner(owner_id, f), owner_id)
 }
 
 /// Get the current owner ID, if any.
@@ -452,6 +451,50 @@ pub(crate) fn flush_pending_disposals() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The guard is the whole of `under_owner`, and until this test the suite
+    /// said nothing about it: the restore could be moved out of `defer` and
+    /// onto the line after `f()` with every test still green.
+    ///
+    /// It matters because the corruption is silent and permanent. The one
+    /// caller of `with_root_owner` (`global.rs`) runs application code inside
+    /// it; if that panics and the owner is not put back, `CURRENT_OWNER` stays
+    /// pinned at the root, and every `with_owner` after it captures root as its
+    /// `previous` and restores *that*. Nothing ever notices.
+    ///
+    /// Both spellings are checked, because they are one function now.
+    #[test]
+    fn an_unwinding_closure_puts_the_previous_owner_back() {
+        let hushed = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+
+        let outer = create_root_owner();
+        assert_eq!(current_owner(), Some(outer));
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_owner(|| panic!("a builder that gave up"));
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(
+            current_owner(),
+            Some(outer),
+            "a new scope that unwound left itself current"
+        );
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_root_owner(|| panic!("a global initialiser that gave up"))
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(
+            current_owner(),
+            Some(outer),
+            "the root stayed current after an unwind, and would have swallowed \
+             every scope opened afterwards"
+        );
+
+        std::panic::set_hook(hushed);
+        reset_owners();
+    }
 
     #[test]
     fn test_with_owner_basic() {
