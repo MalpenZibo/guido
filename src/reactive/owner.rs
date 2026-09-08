@@ -34,12 +34,17 @@
 //! // All signals, effects, and cleanup callbacks are now disposed
 //! ```
 
+use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use super::invalidation::clear_signal_subscribers;
 use super::runtime::{EffectId, SignalId, with_runtime};
 use super::storage::dispose_signal;
+
+/// The values one scope declares, in declaration order.
+type Declarations = Vec<(TypeId, Rc<dyn Any>)>;
 
 /// Unique identifier for an owner in the owner arena.
 ///
@@ -61,6 +66,18 @@ struct Owner {
     effects: Vec<EffectId>,
     cleanups: Vec<Box<dyn FnOnce()>>,
     children: Vec<OwnerId>,
+    /// Values declared for this scope and everything below it, keyed by type.
+    ///
+    /// Behind an `Option<Box<..>>` because declaring anything is the exception:
+    /// a scope is allocated per surface, per popup and per row of a dynamic
+    /// list, and almost none of them declare. Eight bytes rather than
+    /// twenty-four keeps the arena — walked on every signal and effect
+    /// registration — the size it was.
+    ///
+    /// `Rc` rather than `Box` on the value so a lookup can clone the handle and
+    /// drop the arena borrow before the value reaches a caller's closure: that
+    /// closure reads signals, and a signal read borrows the arena again.
+    contexts: Option<Box<Declarations>>,
 }
 
 impl Owner {
@@ -71,6 +88,7 @@ impl Owner {
             effects: Vec::new(),
             cleanups: Vec::new(),
             children: Vec::new(),
+            contexts: None,
         }
     }
 }
@@ -122,6 +140,13 @@ impl OwnerArena {
                 generation: 0,
             }
         }
+    }
+
+    fn get(&self, id: OwnerId) -> Option<&Owner> {
+        self.slots
+            .get(id.index as usize)
+            .filter(|slot| slot.generation == id.generation)
+            .and_then(|slot| slot.owner.as_ref())
     }
 
     fn get_mut(&mut self, id: OwnerId) -> Option<&mut Owner> {
@@ -253,6 +278,52 @@ pub fn with_owner<T>(f: impl FnOnce() -> T) -> (T, OwnerId) {
     });
 
     (under_owner(owner_id, f), owner_id)
+}
+
+/// Hand the current scope's declarations to `f`, or `None` if no scope is
+/// current.
+///
+/// What may be declared, and what a second declaration of a type means, is the
+/// caller's to decide — see `context`. This is the storage and nothing else.
+pub(crate) fn with_scope_declarations<R>(f: impl FnOnce(&mut Declarations) -> R) -> Option<R> {
+    let id = current_owner()?;
+    OWNERS.with(|owners| {
+        let mut owners = owners.borrow_mut();
+        // A current scope that is no longer in the arena is a scope that is
+        // gone, which is the same answer as none at all — and the caller has a
+        // better sentence for it than an `expect` here would.
+        let owner = owners.get_mut(id)?;
+        Some(f(owner.contexts.get_or_insert_default()))
+    })
+}
+
+/// The nearest declaration of `type_id` at or above the current scope.
+///
+/// `None` where nothing declared it and where no scope is current at all — a
+/// handler, a paint closure — which are the same answer on purpose: both mean
+/// *there is nothing here to read*.
+///
+/// The handle is cloned and the arena borrow released before it goes back to
+/// the caller, which is what lets a borrowed read hand the value to a closure
+/// that reads a signal — the shape `try_call_derived` uses, for the same
+/// reason.
+pub(crate) fn nearest_declaration(type_id: TypeId) -> Option<Rc<dyn Any>> {
+    let mut scope = current_owner();
+    OWNERS.with(|owners| {
+        let owners = owners.borrow();
+        while let Some(id) = scope {
+            let owner = owners.get(id)?;
+            let declared = owner
+                .contexts
+                .as_deref()
+                .and_then(|declarations| declarations.iter().find(|(d, _)| *d == type_id));
+            if let Some((_, value)) = declared {
+                return Some(Rc::clone(value));
+            }
+            scope = owner.parent;
+        }
+        None
+    })
 }
 
 /// Get the current owner ID, if any.

@@ -54,7 +54,9 @@ pub use owner::{dispose_owner, on_cleanup};
 pub use trigger::{Trigger, create_trigger};
 
 /// Internal module for macro support. NOT PART OF PUBLIC API.
-/// Do not use directly - these are re-exported for proc macros only.
+/// Do not use directly - these are re-exported for the proc macros, and for the
+/// doc tests of `context`, which need a scope to declare a value in and have no
+/// public way to open one.
 #[doc(hidden)]
 pub mod __internal {
     pub use super::owner::{OwnerId, dispose_owner_now as dispose_owner, with_owner};
@@ -81,6 +83,5 @@ pub(crate) fn reset_reactive() {
     invalidation::reset_invalidation();
     clipboard::reset_clipboard();
     cursor::reset_cursor();
-    context::reset_contexts();
     diagnostics::reset();
 }

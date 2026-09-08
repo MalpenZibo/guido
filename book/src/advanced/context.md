@@ -1,6 +1,8 @@
 # Context
 
-Context provides a way to share app-wide state (config, theme, services) across widgets without passing values through every level of the widget tree.
+Context shares state across widgets without passing it through every level of
+the tree: a value is declared for a **scope**, and every widget built below that
+scope can read it back by type.
 
 ## When to Use Context
 
@@ -11,22 +13,77 @@ Use context for **cross-cutting concerns** that many widgets need:
 - Service handles (loggers, API clients)
 - User preferences
 
-For state that only a few nearby widgets share, passing signals directly is simpler and preferred.
+For state that only a few nearby widgets share, passing signals directly is
+simpler and preferred.
+
+## Scopes
+
+A scope is a lifetime, and guido opens one wherever it invokes a closure of
+yours: the `App::run` setup, each surface, each popup, and each dynamic children
+factory. A value declared with `provide_context` belongs to the scope that is
+current when the call runs, and a read walks from the reader's scope upward and
+takes the nearest declaration.
+
+Three things follow, and they are the whole model:
+
+- **An inner declaration shadows an outer one** for its own scope only. A popup
+  that declares its own `RwSignal<Theme>` does not disturb the bar it opened
+  from.
+- **A declaration dies with its scope.** When the popup closes, what it declared
+  goes with it; nothing is left behind for a later read to find.
+- **Declaring the same type twice in one scope panics.** Two of a type is what
+  shadowing is for, and shadowing needs two scopes — a second declaration in one
+  scope would replace the first with nothing to say it had.
+
+A widget factory is an ordinary function call, not a scope. A `provide_context`
+written inside one declares its value for whatever scope called it — the whole
+surface — and not for the subtree the factory is building.
+
+## Where a Read Resolves
+
+In the body of the factory that builds the widgets. That is where the scope the
+value was declared for is the one that is current, so it is where guido knows
+who is asking.
+
+An event handler, a property closure and a spawned task open no scope of their
+own, so a read inside one resolves against whatever is current, and in a running
+application that is the root — `App::run` enters the root scope before your
+setup closure and never leaves it. What the application declared is therefore
+readable from a handler; what a surface or a popup declared is not.
+
+Read the value once in the factory body and capture it, and the question does
+not arise:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# #[derive(Clone, PartialEq, Default)]
+# struct Theme { bg_color: Color, title: String }
+# fn main() {
+fn themed_box() -> Container {
+    let theme = expect_context::<RwSignal<Theme>>();   // here: a scope is current
+
+    container()
+        .background(move || theme.get().bg_color)      // not here: the handle is captured
+        .child(text(move || theme.get().title.clone()))
+}
+# }
+```
 
 ## Providing Context
 
-Call `provide_context` in your `App::run()` setup to make a value available everywhere:
+Call `provide_context` in your `App::run()` setup to make a value available to
+every surface:
 
-```rust,ignore
+```rust,no_run
 # extern crate guido;
+# use guido::prelude::*;
 # fn build_ui() -> Container { container() }
 # #[derive(Clone, Default)]
-# struct Config;
-# impl Config { fn load() -> Self { Self } }
+# struct Config { warn_threshold: f64 }
+# impl Config { fn load() -> Self { Self::default() } }
 # fn main() {
 # let config = SurfaceConfig::new();
-use guido::prelude::*;
-
 App::new().run(|app| {
     provide_context(Config::load());
 
@@ -40,14 +97,13 @@ App::new().run(|app| {
 
 ### use_context (fallible)
 
-Returns `Option<T>` — useful when the context is optional:
+Returns `Option<T>` — `None` when no scope at or above this one declared it:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # #[derive(Clone, Default)]
-# struct Config;
-# impl Config { fn load() -> Self { Self } }
+# struct Config { warn_threshold: f64 }
 # fn main() {
 if let Some(cfg) = use_context::<Config>() {
     println!("threshold: {}", cfg.warn_threshold);
@@ -58,14 +114,14 @@ if let Some(cfg) = use_context::<Config>() {
 
 ### expect_context (infallible)
 
-Panics with a helpful message if the context was not provided:
+Panics if nothing declared it, naming the type and both of the reasons it can be
+missing:
 
 ```rust,no_run
 # extern crate guido;
 # use guido::prelude::*;
 # #[derive(Clone, Default)]
-# struct Config;
-# impl Config { fn load() -> Self { Self } }
+# struct Config { warn_threshold: f64 }
 # fn main() {
 let cfg = expect_context::<Config>();
 # ;
@@ -74,29 +130,30 @@ let cfg = expect_context::<Config>();
 
 ### with_context (zero-clone)
 
-Borrows the value without cloning — ideal for large structs when you only need one field:
+Borrows the value without cloning — ideal for large structs when you only need
+one field:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # #[derive(Clone, Default)]
-# struct Config;
-# impl Config { fn load() -> Self { Self } }
+# struct Config { warn_threshold: f64 }
 # fn main() {
-let threshold = with_context::<Config, _>(|cfg| cfg.cpu.warn_threshold);
+let threshold = with_context::<Config, _>(|cfg| cfg.warn_threshold);
 # ;
 # }
 ```
 
 ### has_context (existence check)
 
-Check if a context has been provided without retrieving it:
+Check whether a type is declared without retrieving it:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # #[derive(Clone, Default)]
 # struct Logger;
+# impl Logger { fn info(&self, _: &str) {} }
 # fn main() {
 if has_context::<Logger>() {
     expect_context::<Logger>().info("ready");
@@ -107,20 +164,24 @@ if has_context::<Logger>() {
 
 ## Reactive Context
 
-For mutable shared state, store a `Signal<T>` as context. This is the most powerful pattern — any widget reading the signal during paint/layout auto-tracks it for reactive updates.
+For mutable shared state, declare an `RwSignal<T>`. Any widget reading the
+signal during paint or layout tracks it, so a write anywhere repaints everything
+that reads it.
 
 ### provide_signal_context
 
-Creates an `RwSignal` and provides it as context in one step:
+Creates an `RwSignal` and declares it in one step:
 
-```rust,ignore
+```rust,no_run
 # extern crate guido;
 # use guido::prelude::*;
 # fn build_ui() -> Container { container() }
+# #[derive(Clone, PartialEq, Default)]
+# struct Theme { bg_color: Color, title: String }
 # fn main() {
 # let config = SurfaceConfig::new();
 App::new().run(|app| {
-    // Creates RwSignal<Theme> and stores it as context
+    // Creates RwSignal<Theme> and declares it for the root scope
     let theme = provide_signal_context(Theme::default());
 
     app.add_surface(config, || build_ui());
@@ -129,23 +190,13 @@ App::new().run(|app| {
 # }
 ```
 
-### Reading a signal context
-
-```rust,ignore
-fn themed_box() -> Container {
-    let theme = expect_context::<RwSignal<Theme>>();
-
-    container()
-        .background(move || theme.get().bg_color)
-        .child(text(move || theme.get().title.clone()))
-}
-```
-
-When the signal is updated anywhere, all widgets reading it automatically repaint.
+What it declares is an `RwSignal<T>`, and that is the type to ask for. Asking
+for a `Signal<T>` finds nothing: a different type is a different key.
 
 ## Combining with SignalFields
 
-For config structs with many fields, use `#[derive(SignalFields)]` with context so each widget only repaints when the specific field it reads changes:
+For config structs with many fields, use `#[derive(SignalFields)]` with context
+so each widget only repaints when the specific field it reads changes:
 
 ```rust,ignore
 #[derive(Clone, PartialEq, SignalFields)]
@@ -189,12 +240,14 @@ fn cpu_indicator() -> Container {
 | **Pass signals directly** | Parent-child, 1-2 levels deep, few consumers |
 | **Context** | App-wide state, many consumers across modules |
 
-Since `Signal<T>` is `Copy`, passing them directly is zero-cost. Context adds a Vec scan + downcast, which is negligible but unnecessary when only a few widgets need the value.
+Since `Signal<T>` is `Copy`, passing them directly is zero-cost. A context read
+scans the declarations of the current scope and then of each scope above it,
+which is negligible but unnecessary when only a few widgets need the value.
 
 ## API Reference
 
-```rust,ignore
-// Store a value (one per type, replaces if exists)
+```text
+// Declare a value for the current scope
 pub fn provide_context<T: 'static>(value: T);
 
 // Retrieve (clones)
@@ -207,7 +260,7 @@ pub fn with_context<T: 'static, R>(f: impl FnOnce(&T) -> R) -> Option<R>;
 // Existence check
 pub fn has_context<T: 'static>() -> bool;
 
-// Create signal + provide as context
+// Create signal + declare it
 pub fn provide_signal_context<T: Clone + PartialEq + Send + 'static>(
     value: T
 ) -> RwSignal<T>;
