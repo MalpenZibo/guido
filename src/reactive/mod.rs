@@ -85,3 +85,44 @@ pub(crate) fn reset_reactive() {
     cursor::reset_cursor();
     diagnostics::reset();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `App::drop` is the only caller, and until now nothing said what it is
+    /// for: the next `App` on this thread starts on the arena the last one
+    /// left, and an id kept across that names a signal somebody else now owns.
+    ///
+    /// Named by the mutation job on #220's diff — deleting the body of
+    /// `reset_reactive` changed nothing any test could see.
+    #[test]
+    fn resetting_leaves_nothing_for_the_next_app_to_inherit() {
+        owner::create_root_owner();
+        let _signal = create_signal(1u32);
+        provide_context(7u32);
+        assert!(
+            storage::live_signal_count() > 0,
+            "the App under test has state to wipe"
+        );
+
+        reset_reactive();
+
+        assert_eq!(
+            storage::live_signal_count(),
+            0,
+            "a signal from the last App is still in the arena the next one allocates from"
+        );
+        assert!(
+            owner::current_owner().is_none(),
+            "the next App would file its setup under a scope that no longer exists"
+        );
+
+        owner::create_root_owner();
+        assert_eq!(
+            use_context::<u32>(),
+            None,
+            "the next App would read the last one's declarations"
+        );
+    }
+}
