@@ -27,13 +27,19 @@ takes the nearest declaration.
 Three things follow, and they are the whole model:
 
 - **An inner declaration shadows an outer one** for its own scope only. A popup
-  that declares its own `RwSignal<Theme>` does not disturb the bar it opened
-  from.
+  that declares its own `RwSignal<Theme>` reads that one rather than the
+  application's, and leaves the application's alone for everything else.
 - **A declaration dies with its scope.** When the popup closes, what it declared
   goes with it; nothing is left behind for a later read to find.
 - **Declaring the same type twice in one scope panics.** Two of a type is what
   shadowing is for, and shadowing needs two scopes — a second declaration in one
   scope would replace the first with nothing to say it had.
+
+The scopes are one level deep. A surface, a popup and a surface spawned at
+runtime are all children of the root — the loop opens each one's scope from the
+root, not from the surface it belongs to — so a popup reads what the
+application declared and not what the surface that opened it did, and two
+surfaces are siblings that cannot see each other's declarations.
 
 A widget factory is an ordinary function call, not a scope. A `provide_context`
 written inside one declares its value for whatever scope called it — the whole
@@ -46,10 +52,13 @@ value was declared for is the one that is current, so it is where guido knows
 who is asking.
 
 An event handler, a property closure and a spawned task open no scope of their
-own, so a read inside one resolves against whatever is current, and in a running
-application that is the root — `App::run` enters the root scope before your
-setup closure and never leaves it. What the application declared is therefore
-readable from a handler; what a surface or a popup declared is not.
+own, so a read inside one resolves against whatever is current. For a handler
+that is the root — `App::run` enters the root scope before your setup closure
+and never leaves it — so the application's declarations are readable from one
+and a surface's are not. For a property closure it depends on when the closure
+is read: laying out a dynamic list re-enters that row's scope and painting does
+not, so one read can resolve against two different scopes on two phases of a
+frame.
 
 Read the value once in the factory body and capture it, and the question does
 not arise:
