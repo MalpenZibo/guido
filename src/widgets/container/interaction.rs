@@ -425,9 +425,10 @@ impl Container {
                 }
             }
 
-            // The finger lifted. Momentum starts here or not at all — and it
-            // starts now, on the event, rather than becoming due for whatever
-            // frame happens along next.
+            // The finger lifted. Whether there is a momentum at all is decided
+            // here, on the event that ended the gesture; when it starts is the
+            // first frame that carries it, because the gap between the two is
+            // the loop's latency and not the motion going stale (#265).
             Event::ScrollEnd { at } => {
                 if self.scroll_axis != ScrollAxis::None && hit.contains(*at) {
                     let sd = self.scroll_mut();

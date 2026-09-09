@@ -392,7 +392,14 @@ impl ScrollState {
         }
         self.gesture_ended = true;
         self.gesture_samples = 0;
-        self.momentum_since = Some(at.as_frame_start());
+        // Not stamped here. The lift is an event and the momentum runs on
+        // frames, and the difference between the two clocks is the loop's
+        // input latency — which this field is differenced against a 200ms
+        // threshold, so stamping it from the event meant a stalled loop read
+        // its own lateness as the flick having gone stale and cancelled it on
+        // the first frame (#265). Nothing has advanced this momentum yet, and
+        // `None` is what that means.
+        self.momentum_since = None;
     }
 
     /// Discard a momentum that stopped being advanced `idle_ms` ago.
@@ -758,6 +765,37 @@ mod tests {
             state.record_gesture_sample(0.0, delta, dt);
         }
         end_gesture_after(state, dt_ms);
+    }
+
+    /// The flick and the frame that carries it are on different clocks: the
+    /// lift is stamped when the compositor sent it, the frame when it began.
+    /// Between them is the loop's input latency, and `momentum_since` used to
+    /// be stamped from the lift and then differenced against the frame — so a
+    /// loop 250ms behind read its own lateness as the flick having gone stale
+    /// and cancelled it before it moved a pixel (#265).
+    #[test]
+    fn a_flick_survives_a_loop_that_was_late_delivering_the_lift() {
+        let mut state = scroller();
+        gesture(&mut state, 5, 20.0, 8.0);
+        assert!(
+            state.should_apply_momentum(),
+            "the gesture left a velocity to fling"
+        );
+
+        // The first frame to carry it starts a quarter of a second after the
+        // lift — longer than MOMENTUM_STALE_MS, which is the trap.
+        let late =
+            FrameInstant::from(std::time::Instant::now() + std::time::Duration::from_millis(250));
+
+        assert!(
+            state.advance_momentum(late),
+            "the flick has to run on the frame that finally arrived, not be \
+             expired by how long it took to arrive"
+        );
+        assert!(
+            state.offset_y != 0.0,
+            "and it has to have moved the content"
+        );
     }
 
     /// How far the momentum carries the content once the finger has lifted.
