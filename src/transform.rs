@@ -97,39 +97,10 @@ macro_rules! scale_from_scalar {
 }
 scale_from_scalar!(f32, f64, i32, u32);
 
-// A closure has to accept whatever the constant form accepts, or the same
-// expression compiles in one position and not the other — the asymmetry
-// `IntoSignal` exists to remove. `From` covers the constants; these cover the
-// closures.
-macro_rules! into_val_pairs {
-    ($t:ty $(, $n:ty)*) => {$(
-        impl crate::reactive::IntoVal<$t> for ($n, $n) {
-            fn into_val(self) -> $t {
-                self.into()
-            }
-        }
-        impl crate::reactive::IntoVal<$t> for [$n; 2] {
-            fn into_val(self) -> $t {
-                self.into()
-            }
-        }
-    )*};
-}
-into_val_pairs!(Translate, f32, f64, i32, u32);
-into_val_pairs!(Scale, f32, f64, i32, u32);
-
-macro_rules! into_val_scalar {
-    ($($n:ty),*) => {$(
-        impl crate::reactive::IntoVal<Scale> for $n {
-            fn into_val(self) -> Scale {
-                Scale::uniform(self as f32)
-            }
-        }
-    )*};
-}
-into_val_scalar!(f32, f64, i32, u32);
-
-crate::reactive::converting_signals!(
+// Every conversion a scale or a translation accepts, declared once. `From`
+// covers the constants, above; this covers the closure and the three signal
+// forms, so the same expression compiles in every position.
+crate::reactive::converts!(
     f32 => Scale,
     f64 => Scale,
     i32 => Scale,

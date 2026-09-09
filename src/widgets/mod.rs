@@ -42,143 +42,19 @@ pub use widget::{
     Point, Rect, ScrollSource, Widget,
 };
 
-// IntoVal<Padding> impls for closures returning numeric types
-use crate::reactive::IntoVal;
-
-// And for a closure that returns a bare size where a corner shape is wanted.
-impl IntoVal<Corners> for f32 {
-    fn into_val(self) -> Corners {
-        Corners::from(self)
-    }
-}
-
-impl IntoVal<Corners> for f64 {
-    fn into_val(self) -> Corners {
-        Corners::from(self as f32)
-    }
-}
-
-impl IntoVal<Corners> for i32 {
-    fn into_val(self) -> Corners {
-        Corners::from(self)
-    }
-}
-
-impl IntoVal<Corners> for crate::renderer::CornerRadii {
-    fn into_val(self) -> Corners {
-        self.into()
-    }
-}
-
-impl IntoVal<Corners> for u16 {
-    fn into_val(self) -> Corners {
-        self.into()
-    }
-}
-
-impl IntoVal<Corners> for (f32, f32, f32, f32) {
-    fn into_val(self) -> Corners {
-        self.into()
-    }
-}
-
-impl IntoVal<Corners> for u32 {
-    fn into_val(self) -> Corners {
-        Corners::from(self)
-    }
-}
-
-impl IntoVal<Corners> for [i32; 2] {
-    fn into_val(self) -> Corners {
-        Corners::from(self)
-    }
-}
-
-impl IntoVal<Corners> for [i32; 4] {
-    fn into_val(self) -> Corners {
-        Corners::from(self)
-    }
-}
-
-impl IntoVal<Corners> for [f32; 2] {
-    fn into_val(self) -> Corners {
-        Corners::from(self)
-    }
-}
-
-impl IntoVal<Corners> for [f32; 4] {
-    fn into_val(self) -> Corners {
-        Corners::from(self)
-    }
-}
-
-impl IntoVal<Padding> for i32 {
-    fn into_val(self) -> Padding {
-        Padding::from(self)
-    }
-}
-
-impl IntoVal<Padding> for u32 {
-    fn into_val(self) -> Padding {
-        Padding::from(self)
-    }
-}
-
-impl IntoVal<Padding> for u16 {
-    fn into_val(self) -> Padding {
-        Padding::from(self)
-    }
-}
-
-impl IntoVal<Padding> for f32 {
-    fn into_val(self) -> Padding {
-        Padding::from(self)
-    }
-}
-
-impl IntoVal<Padding> for [f32; 2] {
-    fn into_val(self) -> Padding {
-        self.into()
-    }
-}
-
-impl IntoVal<Padding> for [f32; 4] {
-    fn into_val(self) -> Padding {
-        self.into()
-    }
-}
-
-impl IntoVal<Padding> for [i32; 2] {
-    fn into_val(self) -> Padding {
-        self.into()
-    }
-}
-
-impl IntoVal<Padding> for [i32; 4] {
-    fn into_val(self) -> Padding {
-        self.into()
-    }
-}
-
-impl IntoVal<Padding> for f64 {
-    fn into_val(self) -> Padding {
-        Padding::from(self as f32)
-    }
-}
-
-// A signal accepts what a closure returning the same type accepts. The lists
-// mirror the `IntoVal` impls above one for one; see `reactive::into_signal`
-// for why they cannot be one blanket impl.
-crate::reactive::converting_signals!(
+// Every conversion a corner shape or a padding accepts, declared once. The
+// value form is the `From` beside each type; these are the other four. See
+// `reactive::into_signal` for why the signal forms name their source type.
+crate::reactive::converts!(
     f32 => Corners,
     f64 => Corners,
     i32 => Corners,
     u32 => Corners,
+    u16 => Corners,
     [f32; 2] => Corners,
     [f32; 4] => Corners,
     [i32; 2] => Corners,
     [i32; 4] => Corners,
-    u16 => Corners,
     (f32, f32, f32, f32) => Corners,
     crate::renderer::CornerRadii => Corners,
 

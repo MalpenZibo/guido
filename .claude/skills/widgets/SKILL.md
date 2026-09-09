@@ -57,36 +57,50 @@ than a value quietly ignored.
 A new property lands on one side of that line. If it changes what a pixel looks
 like, it is reactive.
 
-## A reactive property has three spellings, and they must agree
+## A reactive property has five spellings, and they must agree
 
-`IntoSignal` accepts a value, a closure, or a signal. A property is only
-properly reactive when the *same expression* compiles in all three positions:
+`IntoSignal` accepts a value, a closure, a signal, a writable signal or a memo.
+A property is only properly reactive when the *same expression* compiles in
+every position:
 
 ```rust
 container().width(100.0)             // value
 container().width(move || w.get())   // closure
-container().width(w)                 // signal
+container().width(w)                 // signal, writable signal or memo
 ```
 
-Three different sets of impls serve them, and they drift apart silently —
-nothing fails to build when one is missing; a call site refuses months later.
+**A conversion is declared once, and `converts!` emits every form:**
 
-**Adding a conversion to a property type means adding all three:**
+```rust
+crate::reactive::converts!(
+    f32 => Length,
+    f64 => Length,
+);
+```
 
-| spelling | impl | where |
-| --- | --- | --- |
-| value | `From<S> for T` | beside `T` |
-| closure | `IntoVal<T> for S` | beside `T` |
-| signal | `converting_signals!(S => T)` | beside `T` |
+That writes `IntoVal<Length> for f32` — the closure form — and the
+`Signal<f32>`, `RwSignal<f32>` and `Memo<f32>` impls into `Length`. The value
+form is the `From<f32> for Length` beside the type, which the `=>` arm calls,
+so a pair that compiles through `converts!` has all five by construction.
 
-They cannot be collapsed into one blanket impl: `IntoVal` is reflexive, so a
-blanket `S: IntoVal<T>` also covers `Signal<T> -> T`, collides with the
-passthrough impl, and leaves the marker generic undecidable. Excluding the
-reflexive case needs negative bounds or specialisation, neither stable.
+A widening std has no `From` for is spelled `f64 as f32`, and there the value
+form is the macro's too. A pair that *has* a `From` must not use `as`: both
+value impls would then apply and the marker generic would be undecidable.
 
-So the lists are hand-kept, and `tests/signal_conversions.rs` is the only thing
-standing between them and drift: **add a spelling there in the same change.**
-Tracked in #226.
+It was two lists that mirrored each other by hand, and they drifted: nothing
+failed to build when one was missing, and a call site refused months later.
+That is what #225 fixed by hand and #226 closed at the definition.
+
+The signal impls still name their source type rather than being one blanket
+impl: `IntoVal` is reflexive, so a blanket `S: IntoVal<T>` also covers
+`Signal<T> -> T`, collides with the passthrough impl, and leaves the marker
+generic undecidable. Excluding the reflexive case needs negative bounds or
+specialisation, neither stable. So the pairs are a list — but one list, and the
+macro is the only way to write an entry in it.
+
+`tests/signal_conversions.rs` is the list of spellings a caller can reach, and
+`one_declaration_covers_every_form` in `reactive::into_signal` is what says the
+macro still emits all five. **Add a spelling to the first in the same change.**
 
 ## The Widget trait
 
@@ -167,8 +181,8 @@ container().corners(Corners::superellipse(12.0, 1.5))
 ## Adding a widget property, end to end
 
 1. Decide reactive or structural (the rule above).
-2. Add the setter; if it takes a new conversion, add all three spellings and a
-   line in `tests/signal_conversions.rs`.
+2. Add the setter; if it takes a new conversion, add one `converts!` entry and
+   a line in `tests/signal_conversions.rs`.
 3. Make it reach paint, and add a scenario to `tests/golden_images.rs` if it
    changes pixels — see the `visual-verification` skill.
 4. Update `docs/` where the pattern is described, and the book chapter that

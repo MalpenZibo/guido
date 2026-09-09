@@ -59,34 +59,6 @@ impl<T> IntoVal<Option<T>> for T {
     }
 }
 
-// Lossy f64 → f32: bare float literals in closures default to f64, and
-// accepting them avoids the deprecated f32 inference fallback
-// (rust-lang/rust#154024)
-impl IntoVal<f32> for f64 {
-    fn into_val(self) -> f32 {
-        self as f32
-    }
-}
-
-// Lossy integer → f32 conversions (no std From impl)
-impl IntoVal<f32> for i32 {
-    fn into_val(self) -> f32 {
-        self as f32
-    }
-}
-
-impl IntoVal<f32> for u32 {
-    fn into_val(self) -> f32 {
-        self as f32
-    }
-}
-
-impl IntoVal<f32> for u16 {
-    fn into_val(self) -> f32 {
-        self as f32
-    }
-}
-
 // ============================================================================
 // Blanket IntoSignal impls with distinct markers
 // ============================================================================
@@ -98,28 +70,7 @@ impl<T: Clone + 'static, I: Into<T>> IntoSignal<T, ValueMarker> for I {
     }
 }
 
-// 2. Lossy f64/i32/u32 → f32 static conversions (no std From, can't use the
-// Into blanket). f64 matters most: bare float literals default to f64, so
-// accepting them avoids the deprecated f32 inference fallback.
-impl IntoSignal<f32, LossyMarker> for f64 {
-    fn into_signal(self) -> Signal<f32> {
-        create_stored(self as f32)
-    }
-}
-
-impl IntoSignal<f32, LossyMarker> for i32 {
-    fn into_signal(self) -> Signal<f32> {
-        create_stored(self as f32)
-    }
-}
-
-impl IntoSignal<f32, LossyMarker> for u32 {
-    fn into_signal(self) -> Signal<f32> {
-        create_stored(self as f32)
-    }
-}
-
-// 3. Closures: Fn() -> R where R: IntoVal<T>
+// 2. Closures: Fn() -> R where R: IntoVal<T>
 impl<T, R, F> IntoSignal<T, ClosureMarker> for F
 where
     T: Clone + 'static,
@@ -131,27 +82,43 @@ where
     }
 }
 
-// 3b. A signal whose value converts to the property's type.
+// 3. A conversion, in every form a property accepts.
 //
-// Without these a signal is the one form of `IntoSignal` that does not take
-// what the others take: `width(100.0)` and `width(move || w.get())` both
-// compile, and `width(w)` on a `Signal<f32>` did not, because `Length` is a
-// different type and so a different key. The rule these restore is that **a
-// signal accepts what a closure returning the same type accepts** — which is
-// exactly the `IntoVal` relation, so that is what they are written over.
+// A property takes a value, a closure, a signal, a writable signal or a memo,
+// and the same expression has to compile in all five or the property is only
+// reactive by accident. This macro is where a pair is declared, once, and it
+// emits every form the pair does not already have — so a pair cannot exist in
+// one and not the others. It was two lists mirrored by hand, and they drifted.
 //
-// Written out per source type rather than as a blanket `S: IntoVal<T>`, which
-// cannot work: `IntoVal` is reflexive, so a blanket impl also covers
-// `Signal<Length> -> Length`, collides with the passthrough below, and leaves
-// the marker undecidable. Naming the source excludes the reflexive case by
-// construction, so a signal already holding the property's own type still
-// arrives by identity rather than through a derived signal.
+// The `=>` shape is a pair std can convert: the body is `<To>::from`, which
+// will not compile unless the `From` beside the type exists, so the value form
+// is proved rather than mirrored. The `as` shape is a widening std has no
+// `From` for, and there the value form is ours to emit too. A pair that has a
+// `From` must not use `as`: both value impls would apply and the marker would
+// be undecidable.
 //
-// The cost of that is a list: a new conversion gets the value and closure
-// forms from one `IntoVal` impl and the signal form only if someone adds it
-// here too. See #226.
-macro_rules! converting_signals {
-    ($($from:ty => $to:ty),* $(,)?) => {$(
+// The two shapes cannot be mixed in one invocation — a list is all `=>` or all
+// `as` — and `@pair` is the internal rule they share, not a way in: it takes
+// the conversion body directly, which is exactly the proof the `=>` arm buys.
+//
+// The signal impls name their source type rather than being one blanket
+// `S: IntoVal<T>`. `IntoVal` is reflexive, so a blanket also covers
+// `Signal<Length> -> Length` and collides with the passthrough impl, leaving
+// the marker undecidable. Dropping the passthrough would make the blanket
+// compile — the collision is not a language limit — but then every
+// `.width(sig)` already holding the property's type would build a derived node
+// to hand itself through, and that is the commonest call in the library. So
+// the pairs stay a list, and this is the only way to write an entry in it.
+macro_rules! converts {
+    // One pair, in every reactive form. Both shapes below arrive here.
+    (@pair $from:ty, $to:ty, |$value:ident| $conversion:expr) => {
+        impl $crate::reactive::IntoVal<$to> for $from {
+            fn into_val(self) -> $to {
+                let $value = self;
+                $conversion
+            }
+        }
+
         impl $crate::reactive::IntoSignal<$to, $crate::reactive::ConvertedSignalMarker>
             for $crate::reactive::Signal<$from>
         {
@@ -161,6 +128,7 @@ macro_rules! converting_signals {
                 })
             }
         }
+
         impl $crate::reactive::IntoSignal<$to, $crate::reactive::ConvertedSignalMarker>
             for $crate::reactive::RwSignal<$from>
         {
@@ -171,6 +139,7 @@ macro_rules! converting_signals {
                 })
             }
         }
+
         impl $crate::reactive::IntoSignal<$to, $crate::reactive::ConvertedSignalMarker>
             for $crate::reactive::Memo<$from>
         {
@@ -180,17 +149,35 @@ macro_rules! converting_signals {
                 })
             }
         }
+    };
+
+    // A pair std converts, which is every pair but three.
+    ($($from:ty => $to:ty),* $(,)?) => {$(
+        $crate::reactive::converts!(@pair $from, $to, |value| <$to>::from(value));
+    )*};
+
+    // A widening std has no `From` for, so the value form is emitted here.
+    ($($from:ty as $to:ty),* $(,)?) => {$(
+        $crate::reactive::converts!(@pair $from, $to, |value| value as $to);
+
+        impl $crate::reactive::IntoSignal<$to, $crate::reactive::LossyMarker> for $from {
+            fn into_signal(self) -> $crate::reactive::Signal<$to> {
+                $crate::reactive::create_stored(self as $to)
+            }
+        }
     )*};
 }
-pub(crate) use converting_signals;
+pub(crate) use converts;
 
-// The numeric widenings, beside the `IntoVal<f32>` impls they mirror.
-converting_signals!(
-    f64 => f32,
-    i32 => f32,
-    u32 => f32,
-    u16 => f32,
-);
+// The numeric widenings. `f64` matters most: a bare float literal defaults to
+// it, so accepting it avoids the deprecated f32 inference fallback
+// (rust-lang/rust#154024).
+converts!(f64 as f32, i32 as f32, u32 as f32);
+
+// `u16` widens without loss, so std has the `From` and the value form arrives
+// through the `Into` blanket above. Declaring it with `as` would emit a second
+// value impl and make `4u16` ambiguous between the two markers.
+converts!(u16 => f32);
 
 // The optional case generalises where the others cannot. `IntoVal<Option<T>>
 // for T` already lets a closure return a bare value where an optional one is
@@ -338,5 +325,73 @@ mod tests {
 
         count.set(10);
         assert_eq!(derived.get(), 20);
+    }
+}
+
+#[cfg(test)]
+mod one_declaration_covers_every_form {
+    use super::*;
+    use crate::reactive::{create_memo, create_signal};
+
+    /// A type with no conversions of its own beyond the `From` every value
+    /// needs, so the only thing that can carry it into a property is the
+    /// declaration below.
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    struct Millimetres(f32);
+
+    impl From<f32> for Millimetres {
+        fn from(size: f32) -> Self {
+            Self(size)
+        }
+    }
+
+    converts!(f32 => Millimetres);
+
+    /// What a property setter does with what it is given.
+    fn resolve<M>(source: impl IntoSignal<Millimetres, M>) -> Millimetres {
+        source.into_signal().get()
+    }
+
+    /// One declaration, and the pair arrives in all five spellings a property
+    /// accepts. Drop any impl the macro emits and this stops compiling — which
+    /// is the whole point of the pair being declared once.
+    #[test]
+    fn a_pair_declared_once_arrives_in_every_form() {
+        let count = create_signal(4.0f32);
+        let read = count.read_only();
+        let doubled = create_memo(move || count.get() * 2.0);
+
+        assert_eq!(resolve(4.0f32), Millimetres(4.0), "a value");
+        assert_eq!(resolve(move || 4.0f32), Millimetres(4.0), "a closure");
+        assert_eq!(resolve(read), Millimetres(4.0), "a signal");
+        assert_eq!(resolve(count), Millimetres(4.0), "a writable signal");
+        assert_eq!(resolve(doubled), Millimetres(8.0), "a memo");
+    }
+
+    /// The other shape, where std has no `From` and so the value form is the
+    /// macro's to emit as well. `i64` is a source nothing else in the library
+    /// converts from, so these five impls are the declaration below and
+    /// nothing else.
+    mod a_widening_std_cannot_do {
+        use super::*;
+
+        converts!(i64 as f32);
+
+        fn resolve<M>(source: impl IntoSignal<f32, M>) -> f32 {
+            source.into_signal().get()
+        }
+
+        #[test]
+        fn arrives_in_every_form_too() {
+            let count = create_signal(4i64);
+            let read = count.read_only();
+            let doubled = create_memo(move || count.get() * 2);
+
+            assert_eq!(resolve(4i64), 4.0, "a value");
+            assert_eq!(resolve(move || 4i64), 4.0, "a closure");
+            assert_eq!(resolve(read), 4.0, "a signal");
+            assert_eq!(resolve(count), 4.0, "a writable signal");
+            assert_eq!(resolve(doubled), 8.0, "a memo");
+        }
     }
 }

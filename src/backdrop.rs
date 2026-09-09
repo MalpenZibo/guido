@@ -95,29 +95,10 @@ impl From<f64> for BackdropBlur {
     }
 }
 
-// A closure may return a bare radius where a blur is expected, so the same
-// conversions have to exist for `IntoVal` — that is what makes
-// `.backdrop_blur(move || if glass { 16.0 } else { 0.0 })` compile.
-impl crate::reactive::IntoVal<BackdropBlur> for f32 {
-    fn into_val(self) -> BackdropBlur {
-        BackdropBlur::new(self)
-    }
-}
-
-impl crate::reactive::IntoVal<BackdropBlur> for f64 {
-    fn into_val(self) -> BackdropBlur {
-        BackdropBlur::new(self as f32)
-    }
-}
-
-impl crate::reactive::IntoVal<BackdropBlur> for i32 {
-    fn into_val(self) -> BackdropBlur {
-        BackdropBlur::new(self as f32)
-    }
-}
-
-// A signal accepts what a closure returning the same type accepts.
-crate::reactive::converting_signals!(
+// Every conversion a blur accepts, declared once — which is what makes
+// `.backdrop_blur(move || if glass { 16.0 } else { 0.0 })` compile, and
+// `.backdrop_blur(radius)` on a signal beside it.
+crate::reactive::converts!(
     f32 => BackdropBlur,
     f64 => BackdropBlur,
     i32 => BackdropBlur,
