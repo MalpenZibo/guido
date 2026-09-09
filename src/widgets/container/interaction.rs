@@ -425,10 +425,10 @@ impl Container {
                 }
             }
 
-            // The finger lifted. Whether there is a momentum at all is decided
-            // here, on the event that ended the gesture; when it starts is the
-            // first frame that carries it, because the gap between the two is
-            // the loop's latency and not the motion going stale (#265).
+            // The finger lifted, and that is where the glide begins — the
+            // frame that carries it decays it by however late it was, rather
+            // than starting it fresh or cancelling it for the delay (#265,
+            // #340).
             Event::ScrollEnd { at } => {
                 if self.scroll_axis != ScrollAxis::None && hit.contains(*at) {
                     let sd = self.scroll_mut();
