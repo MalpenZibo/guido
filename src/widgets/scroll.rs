@@ -768,6 +768,71 @@ mod tests {
         }
     }
 
+    /// A scroller with room to fling sideways in.
+    fn wide_scroller() -> ScrollState {
+        ScrollState {
+            content_width: 5000.0,
+            viewport_width: 400.0,
+            ..Default::default()
+        }
+    }
+
+    /// A sideways gesture, which is the same thing on the other axis.
+    fn sideways_gesture(state: &mut ScrollState, samples: u32, delta: f32, dt_ms: f32) {
+        for i in 0..samples {
+            let dt = (i > 0).then_some(dt_ms);
+            state.record_gesture_sample(delta, 0.0, dt);
+        }
+        end_gesture_after(state, dt_ms);
+    }
+
+    /// The horizontal glide is the vertical one with the other field, and the
+    /// two are written out separately — so a flick sideways has to decay the
+    /// same way, and until this test nothing here ever flicked sideways at all.
+    /// The mutation job named ten survivors on those lines, all of them the x
+    /// axis of the arithmetic this change rewrote.
+    #[test]
+    fn a_sideways_flick_glides_and_decays_like_a_downward_one() {
+        let mut sideways = wide_scroller();
+        sideways_gesture(&mut sideways, 5, 20.0, 8.0);
+        let sideways_speed = sideways.velocity_x;
+
+        let mut downward = scroller();
+        gesture(&mut downward, 5, 20.0, 8.0);
+        let downward_speed = downward.velocity_y;
+        assert!(
+            (sideways_speed - downward_speed).abs() < 0.01,
+            "the same gesture on either axis leaves the same speed"
+        );
+
+        let start = lifted();
+        let travelled = {
+            let before = sideways.offset_x;
+            let mut at = start;
+            for _ in 0..30 {
+                at = at + A_FRAME;
+                if !sideways.advance_momentum(at) {
+                    break;
+                }
+            }
+            sideways.offset_x - before
+        };
+        let down = coast_at(&mut downward, start, A_FRAME, 30);
+
+        assert!(
+            travelled > 0.0,
+            "a sideways flick has to carry the content sideways"
+        );
+        assert!(
+            (travelled - down).abs() < down * 0.05,
+            "and as far as the same flick downward: {travelled}px against {down}px"
+        );
+        assert!(
+            (sideways.velocity_x - downward.velocity_y).abs() < 0.01,
+            "leaving the same speed behind it"
+        );
+    }
+
     /// Play `samples` movements of `delta` pixels `dt_ms` apart, then lift.
     fn gesture(state: &mut ScrollState, samples: u32, delta: f32, dt_ms: f32) {
         for i in 0..samples {
