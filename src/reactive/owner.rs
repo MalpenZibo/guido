@@ -239,8 +239,9 @@ pub(crate) fn with_root_owner<T>(f: impl FnOnce() -> T) -> T {
 /// Run `f` with `owner_id` as the current owner, whatever it was before.
 ///
 /// The one place `CURRENT_OWNER` is swapped: [`with_owner`] allocates a scope
-/// and hands it here, [`with_root_owner`] names the root, and a widget names
-/// its own. Restoring on unwind is why they all go through it — a leaked scope
+/// and hands it here, [`with_root_owner`] names the root, a widget names its
+/// own, and [`under_scope`] names the one a derived closure was written in —
+/// which is the frequent one, once per read of a reactive property. Restoring on unwind is why they all go through it — a leaked scope
 /// silently re-parents every reactive resource created afterwards, and the copy
 /// that forgot the guard is the one that would have done it.
 ///
@@ -253,6 +254,27 @@ pub(crate) fn under_owner<T>(owner_id: OwnerId, f: impl FnOnce() -> T) -> T {
         CURRENT_OWNER.with(|current| current.set(previous));
     });
     f()
+}
+
+/// Run `f` under `scope`, where there is one and it is not already current.
+///
+/// Two things are nothing to do, and both are common: a closure written outside
+/// any scope has none to enter, and entering the scope that is already current
+/// changes nothing — which is every read during layout, since
+/// `OwnedWidget::layout` has entered the row's scope before any of its
+/// properties are read.
+///
+/// The second is worth its branch and then some. Without it a frame of three
+/// hundred rows measured 77.5µs against 56.5µs with it — the swap is cheap and
+/// a frame does it thousands of times. It is also invisible to every test,
+/// because entering the scope you are already in is a no-op by definition: the
+/// mutation job reports the guard as unkilled and always will, and the
+/// benchmark in `reactive::bench` is what holds it instead.
+pub(crate) fn under_scope<T>(scope: Option<OwnerId>, f: impl FnOnce() -> T) -> T {
+    match scope {
+        Some(scope) if current_owner() != Some(scope) => under_owner(scope, f),
+        _ => f(),
+    }
 }
 
 /// Execute a closure within a new owner scope.

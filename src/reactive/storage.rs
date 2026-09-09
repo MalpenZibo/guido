@@ -21,6 +21,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use super::owner::{OwnerId, current_owner, under_scope};
 use super::runtime::SignalId;
 
 type SignalValue = Rc<dyn Any>;
@@ -166,12 +167,30 @@ pub fn allocate_signal_slot() -> SignalId {
     alloc_slot(Rc::new(()))
 }
 
+/// A derived signal's closure, and the scope it was written in.
+///
+/// The scope travels with the closure because the two are separated in time: a
+/// property is declared once, in a widget factory, and its body runs on every
+/// read from whatever phase reads it. Resolving a context against *that* would
+/// answer the row's declaration when layout asked and nothing when paint did
+/// (#335), so the closure carries where it was written and is run there.
+///
+/// The scope is held inside the `Rc`'s allocation rather than beside it in the
+/// map: the entry stays one 16-byte handle, and the eight bytes go where an
+/// allocation already was.
+struct Derived<T> {
+    scope: Option<OwnerId>,
+    call: Box<dyn Fn() -> T>,
+}
+
 /// Store a derived closure for the given signal ID.
 pub fn store_derived_closure<T: Clone + 'static>(id: SignalId, closure: impl Fn() -> T + 'static) {
+    let derived = Derived {
+        scope: current_owner(),
+        call: Box::new(closure),
+    };
     STORAGE.with(|storage| {
-        let mut storage = storage.borrow_mut();
-        let boxed: Box<dyn Fn() -> T> = Box::new(closure);
-        storage.derived.insert(id, Rc::new(boxed));
+        storage.borrow_mut().derived.insert(id, Rc::new(derived));
     });
 }
 
@@ -187,14 +206,14 @@ pub fn try_call_derived<T: Clone + 'static>(id: SignalId) -> Option<T> {
 
     // Phase 2: storage borrow released — call the closure
     closure_rc.map(|rc| {
-        let closure = rc.downcast_ref::<Box<dyn Fn() -> T>>().unwrap_or_else(|| {
+        let derived = rc.downcast_ref::<Derived<T>>().unwrap_or_else(|| {
             panic!(
                 "Derived signal {} type mismatch: closure return type does not match {}",
                 id,
                 std::any::type_name::<T>()
             )
         });
-        closure()
+        under_scope(derived.scope, || (derived.call)())
     })
 }
 
@@ -415,5 +434,40 @@ mod dispose_write_tests {
         dispose_owner_now(owner);
         sig.set(2); // must not panic
         sig.update(|v| *v += 1); // must not panic
+    }
+}
+
+#[cfg(test)]
+mod derived_scope_tests {
+    use super::live_signal_count;
+    use crate::reactive::owner::{dispose_owner_now, with_owner};
+    use crate::reactive::{create_derived, create_signal};
+
+    /// The other half of #335's rule: a derived closure's body runs under the
+    /// scope the closure was written in, so what the body *makes* is filed
+    /// there too — not under whoever happened to read it.
+    ///
+    /// Read from outside that scope, and with the reads' signals filed under
+    /// nothing, they would outlive the closure that made them for the life of
+    /// the application. Disposing the scope has to take them.
+    #[test]
+    fn what_a_derived_body_makes_belongs_to_the_scope_the_closure_was_written_in() {
+        let baseline = live_signal_count();
+
+        let (derived, scope) = with_owner(|| create_derived(|| create_signal(7u32).get()));
+        assert_eq!(derived.get(), 7);
+        assert_eq!(derived.get(), 7);
+        assert!(
+            live_signal_count() > baseline,
+            "the reads made signals, which is what this is about"
+        );
+
+        dispose_owner_now(scope);
+
+        assert_eq!(
+            live_signal_count(),
+            baseline,
+            "everything the closure made went with the scope it was written in"
+        );
     }
 }

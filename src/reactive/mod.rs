@@ -126,3 +126,115 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod bench {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+
+    /// A frame of a list, which is where the per-read number lands: three
+    /// hundred rows of four reactive properties each, laid out and painted the
+    /// way `render_surface` does, with a signal moved between frames so the
+    /// work is real rather than cached.
+    ///
+    /// `cargo test --release --lib bench:: -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn a_frame_of_three_hundred_rows() {
+        use crate::layout::Constraints;
+        use crate::renderer::{PaintContext, RenderNode};
+        use crate::tree::Tree;
+        use crate::widgets::widget::Color;
+        use crate::widgets::{Widget, container};
+
+        owner::create_root_owner();
+        let width = create_signal(40.0f32);
+
+        let rows: Vec<_> = (0..300)
+            .map(|row| {
+                container()
+                    .width(move || width.get() + row as f32 % 3.0)
+                    .height(move || 12.0 + row as f32 % 2.0)
+                    .background(move || Color::rgb(0.1 + width.get() / 400.0, 0.2, 0.3))
+                    .padding(move || width.get() / 20.0)
+            })
+            .collect();
+
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(container().children(rows)) as Box<dyn Widget>);
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let frames = 200u32;
+        let best = (0..5)
+            .map(|_| {
+                let started = Instant::now();
+                for frame in 0..frames {
+                    width.set(40.0 + (frame % 7) as f32);
+                    tree.with_widget_mut(root, |w, id, t| {
+                        w.layout(t, id, Constraints::new(0.0, 0.0, 400.0, 4000.0));
+                    });
+                    let mut node = RenderNode::new(root.as_u64());
+                    tree.with_widget_mut(root, |w, id, t| {
+                        let mut ctx = PaintContext::new(&mut node);
+                        w.paint(t, id, &mut ctx);
+                    });
+                    std::hint::black_box(&node);
+                }
+                started.elapsed() / frames
+            })
+            .min()
+            .expect("five rounds");
+
+        println!("a frame of 300 rows: {best:?}");
+    }
+
+    /// Not a test: the number for #335, which is what a derived read costs
+    /// now that it enters the scope it was written in.
+    /// `cargo test --release --lib bench:: -- --ignored --nocapture`
+    ///
+    /// Best of five in one process: the machine is noisy enough that two
+    /// separate runs say nothing about each other.
+    #[test]
+    #[ignore]
+    fn a_derived_read() {
+        owner::create_root_owner();
+        let source = create_signal(1u32);
+        let derived = create_derived(move || source.get() + 1);
+
+        let rounds = 1_000_000u32;
+        let best = |derived: Signal<u32>| -> Duration {
+            (0..5)
+                .map(|_| {
+                    let started = Instant::now();
+                    for _ in 0..rounds {
+                        std::hint::black_box(derived.get());
+                    }
+                    started.elapsed()
+                })
+                .min()
+                .expect("five rounds")
+        };
+
+        // Warm everything: the closure, the subscription bookkeeping, the caches.
+        for _ in 0..100_000 {
+            std::hint::black_box(derived.get());
+        }
+
+        // Read from the scope the closure was written in — every read during
+        // layout, where `OwnedWidget::layout` has already entered the row's
+        // scope — and then from another scope, which is every read during
+        // paint, where nothing has.
+        let from_its_own_scope = best(derived);
+        let (from_elsewhere, elsewhere) = owner::with_owner(|| best(derived));
+        owner::dispose_owner_now(elsewhere);
+
+        // Reported as the whole loop as well as the quotient: the per-read
+        // figure is a whole number of nanoseconds against an effect of one or
+        // two, so on its own it can only bound the cost.
+        println!(
+            "{rounds} derived reads: {from_its_own_scope:?} from their own \
+             scope, {from_elsewhere:?} from another"
+        );
+    }
+}
