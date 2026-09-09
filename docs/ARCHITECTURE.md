@@ -441,11 +441,21 @@ saw it happen, not when the handler ran: the two differ by however long the
 event sat in the queue, and that difference is what a velocity or a
 double-keystroke window would otherwise measure by mistake.
 
+The two answer different types — `FrameInstant` and `EventInstant`, from
+`clock` — so the difference is the compiler's business rather than a reader's
+memory. Neither carries `elapsed()`, and neither can be differenced against the
+other: a moment belongs to the sequence its pass owns, and crossing between them
+takes `EventInstant::as_frame_start`, which is named so the crossings can be
+found. What that costs when it is invisible is #265: a flick was cancelled on
+its first frame because the loop's own input latency had been differenced
+against a staleness threshold.
+
 Neither is `Instant::now()`. Reading the clock inside a widget makes one frame
 several instants, and makes the middle of an animation — or the gap between two
 keystrokes — something no test can ask about, only sleep towards.
 `set_frame_instant` and `set_event_instant` are how a test names the moment it
-is asking about.
+is asking about, and reading either clock outside the pass that sets it reports
+a diagnostic in a debug build rather than quietly handing back the wall clock.
 
 ### Widgets written outside the crate
 
