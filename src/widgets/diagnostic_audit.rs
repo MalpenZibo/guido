@@ -38,6 +38,13 @@ fn diagnostics_from_full_lifecycle(widget: impl Widget + 'static) -> u64 {
     let root = tree.register(Box::new(widget));
     tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
 
+    // The frame's passes run with the frame's instant declared, as
+    // `render_surface` declares it: a widget that asks the time during one is
+    // asking about this frame, and answering with the wall clock instead is
+    // the thing #265's diagnostic exists to say. The audit answers "what will a
+    // user see in their console", so it has to name the moment the loop names.
+    tree.set_frame_instant(Some(std::time::Instant::now()));
+
     // layout_hints is what a parent asks before laying a child out
     tree.with_widget(root, |w| w.layout_hints());
 
@@ -58,10 +65,13 @@ fn diagnostics_from_full_lifecycle(widget: impl Widget + 'static) -> u64 {
         w.reconcile_children(t, id);
     });
 
-    // Event dispatch runs inside a snapshot zone in the real loop
-    // (`render_surface`, lib.rs), so it is wrapped here too. The audit answers
+    // Event dispatch runs outside the frame and carries its own instant, which
+    // `dispatch_events` declares per event. It also runs inside a snapshot zone
+    // in the real loop (`render_surface`, lib.rs), so it is wrapped here too. The audit answers
     // "what will a user see in their console", and that question is only
     // meaningful against the call sites the library actually uses.
+    tree.set_frame_instant(None);
+    tree.set_event_instant(Some(std::time::Instant::now()));
     crate::reactive::diagnostics::snapshot_zone(|| {
         for event in [
             Event::mouse_enter(10.0, 10.0),
@@ -79,6 +89,9 @@ fn diagnostics_from_full_lifecycle(widget: impl Widget + 'static) -> u64 {
         }
     });
 
+    tree.set_event_instant(None);
+    tree.set_frame_instant(Some(std::time::Instant::now()));
+
     // A second pass: the first one seeded caches, this one exercises the
     // steady-state paths (early-outs, paint-cache reuse, target re-sync).
     tree.with_widget_mut(root, |w, id, t| w.layout(t, id, constraints));
@@ -95,10 +108,11 @@ fn diagnostics_from_full_lifecycle(widget: impl Widget + 'static) -> u64 {
 fn assert_quiet(what: &str, count: u64) {
     assert_eq!(
         count, 0,
-        "{what} made {count} signal read(s) the diagnostic considers \
-         non-reactive. Re-run with `--nocapture` to see the file and line. \
-         Either the read needs a tracking scope, or it is a legitimate \
-         snapshot and needs to say so with `snapshot_zone`."
+        "{what} drew {count} diagnostic(s) from the library. Re-run with \
+         `--nocapture` to see which and where. A read with no reactive scope \
+         either needs a tracking scope or is a legitimate snapshot and needs \
+         to say so with `snapshot_zone`; a clock read outside its pass either \
+         belongs inside one or is asking the wrong clock."
     );
 }
 

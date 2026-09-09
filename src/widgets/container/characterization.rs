@@ -1041,9 +1041,14 @@ fn advancing_animations_does_not_report_a_missing_scope() {
 
     let before = report_count();
     let root = h.root;
+    // Advancing animations is a frame's first pass, and it runs with the
+    // frame's instant declared — reading it without one is a different
+    // diagnostic (#265), and this test is about the reactive one.
+    h.tree.set_frame_instant(Some(std::time::Instant::now()));
     h.tree.with_widget_mut(root, |w, id, tree| {
         w.advance_animations(tree, id);
     });
+    h.tree.set_frame_instant(None);
     assert_eq!(
         report_count() - before,
         0,

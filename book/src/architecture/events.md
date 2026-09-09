@@ -214,7 +214,11 @@ fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventRespon
         }
         Event::MouseDown { at: Some(at), .. } => {
             self.flags.update(|f| f.insert(InteractionFlags::PRESSED));
-            self.ripple.start(at.x, at.y, Instant::now());
+            // The event's own moment, not the wall clock: a ripple begins
+            // when the press arrived, and `event_instant` is the only thing
+            // that knows when that was. `as_frame_start` is the crossing —
+            // the ripple then grows on frames.
+            self.ripple.start(at.x, at.y, tree.event_instant().as_frame_start());
         }
         // ...
     }

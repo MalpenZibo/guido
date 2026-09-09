@@ -1,6 +1,7 @@
 pub mod animation;
 pub mod backdrop;
 mod blur;
+pub mod clock;
 pub mod compositor;
 mod deferred;
 pub(crate) mod finite;
@@ -219,6 +220,7 @@ pub mod prelude {
 /// that makes a widget's signal reads *its own*, so a change to its content
 /// re-runs it rather than the nearest ancestor that happened to open a scope.
 pub mod widget_prelude {
+    pub use crate::clock::{EventInstant, FrameInstant};
     pub use crate::layout::{Constraints, IntoF32, Layout};
     pub use crate::reactive::{JobType, OptionSignalExt, with_signal_tracking};
     pub use crate::renderer::{PaintContext, RenderNode};
@@ -2719,7 +2721,7 @@ mod dispatch_declares_the_moment {
 
     /// A widget that records what time the tree said it was when it was handed
     /// an event.
-    struct Spy(std::rc::Rc<std::cell::Cell<Option<std::time::Instant>>>);
+    struct Spy(std::rc::Rc<std::cell::Cell<Option<crate::clock::EventInstant>>>);
 
     impl widgets::Widget for Spy {
         fn layout(
@@ -2758,6 +2760,7 @@ mod dispatch_declares_the_moment {
         // An hour ago: no clock this process could read would answer with it,
         // so the widget can only have got it from the event.
         let happened = std::time::Instant::now() - std::time::Duration::from_secs(3600);
+        let happened_on_the_event_clock = crate::clock::EventInstant::from(happened);
         let events = [(
             happened,
             Event::MouseMove {
@@ -2769,7 +2772,7 @@ mod dispatch_declares_the_moment {
 
         assert_eq!(
             seen.get(),
-            Some(happened),
+            Some(happened_on_the_event_clock),
             "the widget has to be told the moment the queue carried, not the \
              moment the dispatch ran"
         );
@@ -2777,7 +2780,7 @@ mod dispatch_declares_the_moment {
         // reader gets is the clock, not the last event's time.
         let after = tree.event_instant();
         assert!(
-            after > happened,
+            after > happened_on_the_event_clock,
             "the moment has to be cleared when the dispatch ends, got {after:?} \
              for an event from an hour ago"
         );

@@ -128,13 +128,20 @@ impl Harness {
     }
 
     /// Paint the whole tree and hand back what it drew.
+    ///
+    /// Inside a frame, because a paint is one of the three passes a frame is
+    /// made of: a widget that asks the time while drawing — a scrollbar's
+    /// hover expansion does — is asking about this frame, and the loop always
+    /// has an answer. Without one it gets the wall clock and a diagnostic.
     pub fn paint(&mut self) -> RenderNode {
         let root = self.root;
+        self.tree.set_frame_instant(Some(std::time::Instant::now()));
         let mut node = RenderNode::new(root.as_u64());
         self.tree.with_widget_mut(root, |w, id, t| {
             let mut ctx = PaintContext::new(&mut node);
             w.paint(t, id, &mut ctx);
         });
+        self.tree.set_frame_instant(None);
         node
     }
 

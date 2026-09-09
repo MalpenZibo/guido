@@ -11,6 +11,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+use crate::clock::{EventInstant, FrameInstant};
 use crate::default_font_family;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job, request_job_at};
 use crate::layout::{Constraints, Size};
@@ -57,7 +58,7 @@ const HISTORY_COALESCE_MS: u64 = 500;
 #[derive(Clone, Copy)]
 struct Edit {
     width: f32,
-    at: Instant,
+    at: EventInstant,
 }
 
 /// Type alias for text input callbacks
@@ -88,7 +89,7 @@ struct History {
     /// Stack of undone states for redo
     redo_stack: VecDeque<HistoryEntry>,
     /// Time of last edit (for coalescing)
-    last_edit_time: Instant,
+    last_edit_time: EventInstant,
     /// Type of last edit (for coalescing)
     last_edit_type: Option<EditType>,
 }
@@ -98,14 +99,14 @@ impl History {
         Self {
             undo_stack: VecDeque::new(),
             redo_stack: VecDeque::new(),
-            last_edit_time: Instant::now(),
+            last_edit_time: Instant::now().into(),
             last_edit_type: None,
         }
     }
 
     /// Push a new state to history (clears redo stack)
     /// Uses coalescing to merge similar edits within a time window
-    fn push(&mut self, entry: HistoryEntry, edit_type: EditType, at: Instant) {
+    fn push(&mut self, entry: HistoryEntry, edit_type: EditType, at: EventInstant) {
         let since_last = at.duration_since(self.last_edit_time);
 
         // Don't push if it's the same as the last entry
@@ -263,7 +264,7 @@ pub struct TextInput {
 
     // Cursor blinking
     cursor_visible: bool,
-    last_cursor_toggle: Instant,
+    last_cursor_toggle: FrameInstant,
 
     // Mouse drag selection
     is_dragging: bool,
@@ -329,7 +330,7 @@ impl TextInput {
             autofocus_pending: false,
             selection: Selection::new(0),
             cursor_visible: true,
-            last_cursor_toggle: Instant::now(),
+            last_cursor_toggle: Instant::now().into(),
             is_dragging: false,
             is_hovered: false,
             hover: crate::reactive::signal::create_signal(false),
@@ -715,7 +716,7 @@ impl TextInput {
     /// changes twice a second, so 113 frames out of 114 repaint the same pixels.
     /// A focused field is the normal state of a lock screen, and that ran all
     /// night.
-    fn update_cursor_blink(&mut self, id: WidgetId, now: Instant) -> bool {
+    fn update_cursor_blink(&mut self, id: WidgetId, now: FrameInstant) -> bool {
         if !self.cached_caret || !has_focus(id) {
             return false;
         }
@@ -728,7 +729,16 @@ impl TextInput {
     }
 
     /// Reset cursor to visible (called on input)
-    fn reset_cursor_blink(&mut self, at: Instant) {
+    /// Restart the caret's blink from the edit that moved it.
+    ///
+    /// The blink runs on frames and the edit happened on an event, so the
+    /// phase starts a loop's input latency earlier than the frame that will
+    /// draw it — which shifts the first blink and nothing else. That is the
+    /// crossing, made here rather than at each of the callers, which is the
+    /// only reason this takes an [`EventInstant`] and not the clock it
+    /// measures against.
+    fn reset_cursor_blink(&mut self, at: EventInstant) {
+        let at = at.as_frame_start();
         self.cursor_visible = true;
         self.last_cursor_toggle = at;
     }
@@ -1055,7 +1065,7 @@ impl TextInput {
     }
 
     /// Save current state to history (call before making changes)
-    fn save_to_history(&mut self, edit_type: EditType, at: Instant) {
+    fn save_to_history(&mut self, edit_type: EditType, at: EventInstant) {
         self.history.push(
             HistoryEntry {
                 text: self.cached_value.clone(),
@@ -1430,7 +1440,9 @@ impl Widget for TextInput {
             request_job_at(
                 id,
                 JobRequest::Animation(RequiredJob::Paint),
-                self.last_cursor_toggle + Duration::from_millis(CURSOR_BLINK_MS),
+                // A deadline the loop compares against the wall clock, so it
+                // leaves the frame's sequence here.
+                (self.last_cursor_toggle + Duration::from_millis(CURSOR_BLINK_MS)).into_inner(),
             );
 
             if self.cursor_visible {
@@ -1640,7 +1652,7 @@ mod tests {
         };
 
         let inside = {
-            let t0 = Instant::now();
+            let t0: EventInstant = Instant::now().into();
             let mut history = History::new();
             history.push(entry("a"), EditType::Insert, t0);
             history.push(
@@ -1656,7 +1668,7 @@ mod tests {
         );
 
         let outside = {
-            let t0 = Instant::now();
+            let t0: EventInstant = Instant::now().into();
             let mut history = History::new();
             history.push(entry("a"), EditType::Insert, t0);
             history.push(entry("ab"), EditType::Insert, t0 + Duration::from_secs(5));
