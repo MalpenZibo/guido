@@ -1,0 +1,6 @@
+node 0,0 220x100
+  node 0,0 80x60 at 20,20
+    draw backdrop-blur 0,0 80x60 sources=BackdropSources(COMPOSITOR) radius=0 corners=16/16/16/16 k=1
+    draw rect 0,0 80x60 fill=#ffffff26 radius=16/16/16/16
+  node 0,0 80x60 at 120,20
+    draw rect 0,0 80x60 fill=#ffffff26 radius=16/16/16/16

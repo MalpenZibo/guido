@@ -740,6 +740,10 @@ impl Container {
     /// A radius of `0.0` is "no blur", so a blur can be switched off by the
     /// same signal that switches it on — the shape
     /// [`Text::backdrop_blur`](crate::widgets::Text::backdrop_blur) already has.
+    /// That is the radius saying so, so it holds wherever the surface is a
+    /// source. A blur restricted to the compositor has no radius of its own to
+    /// say it with, and asks for its region on its sources alone; switch that
+    /// one off with [`BackdropSources::empty`](crate::backdrop::BackdropSources::empty).
     pub fn backdrop_blur<M>(mut self, blur: impl IntoSignal<BackdropBlur, M>) -> Self {
         self.backdrop_blur = Some(blur.into_signal());
         self
@@ -1758,7 +1762,7 @@ impl Widget for Container {
         // dropped by the render tree itself rather than by a registry that has
         // to be told.
         if let Some(blur) = backdrop_blur
-            && blur.radius > 0.0
+            && blur.asks_for_anything()
         {
             ctx.draw_backdrop_blur(
                 local_bounds,

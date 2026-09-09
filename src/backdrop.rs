@@ -74,6 +74,19 @@ impl BackdropBlur {
         self.sources = sources;
         self
     }
+
+    /// Whether this request asks for anything at all.
+    ///
+    /// Where the surface is a source the radius decides, and zero means off.
+    /// Otherwise the sources decide alone, for the reason
+    /// [`BackdropSources::COMPOSITOR`] gives: that half carries no radius.
+    pub(crate) fn asks_for_anything(&self) -> bool {
+        if self.sources.contains(BackdropSources::SURFACE) {
+            self.radius > 0.0
+        } else {
+            !self.sources.is_empty()
+        }
+    }
 }
 
 impl From<f32> for BackdropBlur {
