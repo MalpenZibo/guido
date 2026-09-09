@@ -224,17 +224,54 @@ impl Tree {
     /// What time it is for the pass now running.
     ///
     /// Falls back to the clock for a call that arrives outside a pass — the
-    /// behaviour every caller had before there was a frame instant at all.
+    /// behaviour every caller had before there was a frame instant at all,
+    /// kept so a widget asking the time between passes gets a usable number
+    /// rather than a panic on somebody's bar. A debug build says so first,
+    /// naming the call site and the other clock.
+    #[track_caller]
     pub fn frame_instant(&self) -> std::time::Instant {
-        self.frame_instant.unwrap_or_else(std::time::Instant::now)
+        Self::in_pass(
+            self.frame_instant,
+            "frame_instant",
+            "a frame",
+            "event_instant",
+        )
     }
 
     /// When the event being dispatched happened.
     ///
-    /// Falls back to the clock outside a dispatch — the behaviour every caller
-    /// had before an event carried its own time.
+    /// Falls back to the clock outside a dispatch, and says so, exactly as
+    /// [`Self::frame_instant`] does.
+    #[track_caller]
     pub fn event_instant(&self) -> std::time::Instant {
-        self.event_instant.unwrap_or_else(std::time::Instant::now)
+        Self::in_pass(
+            self.event_instant,
+            "event_instant",
+            "a dispatch",
+            "frame_instant",
+        )
+    }
+
+    /// The moment a pass declared, or the wall clock and a word about it.
+    ///
+    /// `#[track_caller]` all the way down, and no closure in between: the
+    /// message names the site that asked, and the rate limit is keyed on that
+    /// site — so a `unwrap_or_else` here would collapse every caller in the
+    /// application onto one key and silence all but the first.
+    #[track_caller]
+    fn in_pass<T: From<std::time::Instant>>(
+        declared: Option<std::time::Instant>,
+        read: &'static str,
+        owner: &'static str,
+        other: &'static str,
+    ) -> T {
+        match declared {
+            Some(at) => at.into(),
+            None => {
+                crate::reactive::diagnostics::clock_outside_its_pass(read, owner, other);
+                std::time::Instant::now().into()
+            }
+        }
     }
 
     /// Declare when the event about to be dispatched happened, or `None` when
@@ -1981,6 +2018,100 @@ mod tests {
             0.0,
             "the frame that drops the shadow damages {without:?}, so the ring \
              it cast at {with_shadow:?} stays on screen"
+        );
+    }
+}
+
+/// Reading a clock outside the pass that owns it.
+///
+/// Both getters answer with the wall clock when their pass is not running, so
+/// the reader gets a plausible number rather than an error — deliberately, and
+/// #265 is not about removing that. It is about the number being plausible in
+/// silence: an animation that read the event clock advanced by the age of the
+/// input, and a widget that read either between passes measured against
+/// whenever it happened to ask.
+#[cfg(all(test, debug_assertions))]
+mod clock_diagnostics {
+    use std::time::Instant;
+
+    use super::*;
+    use crate::reactive::diagnostics::report_count;
+
+    #[test]
+    fn reading_the_frame_clock_outside_a_frame_is_reported() {
+        let tree = Tree::new();
+
+        let before = report_count();
+        let _ = tree.frame_instant();
+
+        assert_eq!(
+            report_count(),
+            before + 1,
+            "the wall clock came back where the frame's instant was asked for, \
+             and nothing said so"
+        );
+    }
+
+    #[test]
+    fn reading_the_event_clock_outside_a_dispatch_is_reported() {
+        let tree = Tree::new();
+
+        let before = report_count();
+        let _ = tree.event_instant();
+
+        assert_eq!(
+            report_count(),
+            before + 1,
+            "the wall clock came back where the event's instant was asked for, \
+             and nothing said so"
+        );
+    }
+
+    /// The message names the call site, so each site has to be its own entry
+    /// in the rate limit: with one key for the whole getter, the first misuse
+    /// anywhere in an application silences every other one for good, and the
+    /// location it printed was the diagnostic's own.
+    #[test]
+    fn every_call_site_reports_once_and_the_next_site_still_reports() {
+        let tree = Tree::new();
+
+        let before = report_count();
+        for _ in 0..3 {
+            let _ = tree.frame_instant();
+        }
+        assert_eq!(
+            report_count(),
+            before + 1,
+            "one site, however often it is read, says it once"
+        );
+
+        let _ = tree.frame_instant();
+        assert_eq!(
+            report_count(),
+            before + 2,
+            "and the next site is a different site, not the same one again"
+        );
+    }
+
+    #[test]
+    fn each_clock_is_quiet_inside_the_pass_that_owns_it() {
+        let mut tree = Tree::new();
+        let now = Instant::now();
+
+        tree.set_frame_instant(Some(now));
+        let before = report_count();
+        assert_eq!(tree.frame_instant(), now);
+        tree.set_frame_instant(None);
+
+        tree.set_event_instant(Some(now));
+        assert_eq!(tree.event_instant(), now);
+        tree.set_event_instant(None);
+
+        assert_eq!(
+            report_count(),
+            before,
+            "a clock read inside its own pass is the ordinary case and says \
+             nothing"
         );
     }
 }

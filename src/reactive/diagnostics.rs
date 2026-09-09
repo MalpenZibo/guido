@@ -75,6 +75,25 @@ pub(crate) fn non_finite_value(id: crate::tree::WidgetId, property: &'static str
     let _ = (id, property);
 }
 
+/// Report that a clock was read outside the pass that sets it, so what came
+/// back is the wall clock rather than the moment that was asked for.
+///
+/// `read` is the getter that was called and `owner` is the pass that would have
+/// set it; the message names the other clock too, because reaching for the
+/// wrong one and reaching for the right one at the wrong time look identical
+/// from the call site and the fix is different.
+///
+/// Debug builds only, and the fallback stays either way: a widget asking the
+/// time between passes gets a usable number rather than a panic on somebody's
+/// bar (#265).
+#[track_caller]
+pub(crate) fn clock_outside_its_pass(read: &'static str, owner: &'static str, other: &'static str) {
+    #[cfg(debug_assertions)]
+    imp::clock_outside_its_pass(read, owner, other);
+    #[cfg(not(debug_assertions))]
+    let _ = (read, owner, other);
+}
+
 #[cfg(debug_assertions)]
 mod imp {
     use std::cell::{Cell, RefCell};
@@ -160,8 +179,40 @@ mod imp {
         ));
     }
 
+    #[track_caller]
+    pub(super) fn clock_outside_its_pass(
+        read: &'static str,
+        owner: &'static str,
+        other: &'static str,
+    ) {
+        let loc = std::panic::Location::caller();
+        if !CLOCKS.with(|r| {
+            r.borrow_mut()
+                .insert((loc.file(), loc.line(), loc.column()))
+        }) {
+            return;
+        }
+        report(format!(
+            "{}:{}:{}: `{read}()` was read outside {owner}, so it answered \
+             with the wall clock rather than the moment asked for. Either \
+             the read belongs inside {owner}, or the question was \
+             `{other}()`. (debug builds only)",
+            loc.file(),
+            loc.line(),
+            loc.column(),
+        ));
+    }
+
+    thread_local! {
+        /// Its own set, for the reason `NON_FINITE` has its own: a rate limit
+        /// shared with another diagnostic goes quiet for the wrong reasons.
+        static CLOCKS: RefCell<FxHashSet<(&'static str, u32, u32)>> =
+            RefCell::new(FxHashSet::default());
+    }
+
     /// Forget every reported call site (used by `reset_reactive`).
     pub(crate) fn reset() {
+        CLOCKS.with(|r| r.borrow_mut().clear());
         NON_FINITE.with(|r| r.borrow_mut().clear());
         REPORTED.with(|r| r.borrow_mut().clear());
         DEPTH.with(|d| d.set(0));
