@@ -9,11 +9,17 @@
 //!
 //! Both were `std::time::Instant`, so a value from either fitted anywhere the
 //! other was expected and the mistake compiled. `ScrollState::momentum_since`
-//! is what that costs: written from the event clock when a finger lifts,
-//! written from the frame clock while the flick runs, and differenced against
-//! the frame clock to decide whether the motion had gone stale — so the first
-//! frame after a lift measured input latency against a 200ms threshold and
-//! could cancel a flick that had only just started (#265).
+//! is what that costs: written from the event clock when a finger lifts and
+//! differenced against the frame clock to decide whether the motion had gone
+//! stale — so the first frame after a lift measured the loop's input latency
+//! against a 200ms threshold, and could cancel a flick that had only just
+//! started (#265).
+//!
+//! That field still takes the lift's moment across, and is right to: the glide
+//! *begins* there, and what reads it now is a friction applied for the elapsed
+//! time rather than a threshold that cancels (#340). Which is the rule below —
+//! a start may cross, a deadline may not — and the same field on both sides of
+//! it is as good an illustration as the two types have.
 //!
 //! Neither type carries `elapsed()`. Nor is either a wall against a determined
 //! caller — `From<Instant>` and `into_inner` are both public, because a job

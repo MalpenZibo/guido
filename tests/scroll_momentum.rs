@@ -187,15 +187,18 @@ fn a_continuous_gesture_coasts_and_a_wheel_does_not() {
     );
 }
 
-/// A momentum belongs to a moment as well as to a gesture. If the loop goes
-/// idle with velocity left — the pointer wandered off, nothing asked for a
-/// frame — that motion is over. The frame that eventually arrives, from
-/// whatever asked for it, must not carry on where it left off.
+/// A momentum left half-run is not resumed at the speed it had. If the loop
+/// goes idle with velocity left — the pointer wandered off, nothing asked for
+/// a frame — the frame that eventually arrives finds a motion that spent the
+/// whole idle slowing down, because friction is applied per elapsed
+/// millisecond rather than per call (#340).
 ///
-/// This is the same failure as #246 one gate further along: the gesture *did*
-/// end, so the flag that replaced the timeout is set, and stays set.
+/// It used to be cancelled outright, by a rule about a number: nothing
+/// advanced for 200ms was declared over. That rule is what #265's cross-clock
+/// bug lived in, and what this replaces — the 304px resumption it was written
+/// against is now a short tail, and a longer idle leaves nothing at all.
 #[test]
-fn a_momentum_left_half_run_is_not_carried_on_by_a_later_frame() {
+fn a_momentum_left_half_run_is_not_resumed_at_the_speed_it_had() {
     let mut h = H::new();
     let lifted = h.flick_from(ScrollSource::Finger, Instant::now());
 
@@ -211,11 +214,12 @@ fn a_momentum_left_half_run_is_not_carried_on_by_a_later_frame() {
     // expansion, which does exactly this.
     h.frames_from(30, stopped + Duration::from_millis(400));
 
-    let after = h.offset();
+    let tail = h.offset() - interrupted_at;
     assert!(
-        (after - interrupted_at).abs() < 0.01,
-        "content carried on from {interrupted_at} to {after}: a momentum \
-         abandoned mid-flight was resumed instead of being over"
+        tail < interrupted_at * 0.25,
+        "content carried on {tail}px after a 400ms idle, against the \
+         {interrupted_at}px it had covered while it was being drawn: an \
+         abandoned momentum has to arrive slowed, not where it left off"
     );
 }
 

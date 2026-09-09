@@ -290,6 +290,26 @@ pub(crate) struct ScrollState {
     pub gesture_samples: u32,
 }
 
+/// The unit a momentum's velocity is in: pixels per frame at sixty a second.
+///
+/// A gesture arrives in pixels per millisecond and `record_gesture_sample`
+/// converts; `advance_momentum` converts back, to know how much of a glide a
+/// gap between two frames was worth. The two have to agree for "pixels per
+/// nominal frame" to mean anything, so there is one of them.
+const NOMINAL_FRAME_MS: f32 = 1000.0 / 60.0;
+
+/// How much of a gap between two frames counts as the surface having been
+/// drawn, in nominal frames.
+///
+/// Three of them is fifty milliseconds — a twenty-a-second loop, which is a
+/// machine under load rather than a machine that stopped. Below this the glide
+/// travels the whole gap, so a 30Hz display and a hitching 45fps loop carry a
+/// flick the same distance a 60Hz one does. Above it the surface was not being
+/// drawn, and travelling the gap would put the content where it would have been
+/// rather than where it was left: 304px of it, which is the jump this exists to
+/// stop.
+const DRAWN_PACING_FRAMES: f32 = 3.0;
+
 impl ScrollState {
     /// Get the maximum scroll offset in X direction
     pub fn max_scroll_x(&self) -> f32 {
@@ -333,9 +353,6 @@ impl ScrollState {
         /// Two events can arrive within the same millisecond; the speed that
         /// implies is unbounded and meaningless.
         const MIN_SAMPLE_MS: f32 = 1.0;
-        /// A momentum step is in pixels per frame, a gesture in pixels per
-        /// millisecond. This is what turns one into the other.
-        const NOMINAL_FRAME_MS: f32 = 1000.0 / 60.0;
         /// Weight of the newest sample. Smoothed, because the last sample of a
         /// gesture is the one most likely to be a stray.
         const SMOOTHING: f32 = 0.6;
@@ -392,47 +409,12 @@ impl ScrollState {
         }
         self.gesture_ended = true;
         self.gesture_samples = 0;
-        // Not stamped here. The lift is an event and the momentum runs on
-        // frames, and the difference between the two clocks is the loop's
-        // input latency — which this field is differenced against a 200ms
-        // threshold, so stamping it from the event meant a stalled loop read
-        // its own lateness as the flick having gone stale and cancelled it on
-        // the first frame (#265). Nothing has advanced this momentum yet, and
-        // `None` is what that means.
-        self.momentum_since = None;
-    }
-
-    /// Discard a momentum that stopped being advanced `idle_ms` ago.
-    ///
-    /// A momentum belongs to a moment as well as to a gesture. Gating it on the
-    /// gesture having ended stopped a velocity being flung while the finger was
-    /// still down, but a flag that is set and stays set has the same fault the
-    /// timeout had: one that was left half-run — the loop went idle, nothing
-    /// asked for a frame — was still due, and the next animation frame from any
-    /// source picked it up where it stopped. Measured at 148px, then 304px
-    /// after a wait of 400ms.
-    ///
-    /// This is not a guess about the user, which is what the timeout was. It is
-    /// a statement about this loop: nothing has advanced this motion for long
-    /// enough that it is not the same motion any more.
-    pub fn expire_stale_momentum(&mut self, idle_ms: f32) {
-        /// Six dropped frames at 60fps. Long enough that an ordinary hitch does
-        /// not cut a fling short, short enough that nobody reads the resumption
-        /// as a continuation.
-        const MOMENTUM_STALE_MS: f32 = 200.0;
-
-        if idle_ms > MOMENTUM_STALE_MS {
-            self.velocity_x = 0.0;
-            self.velocity_y = 0.0;
-            self.gesture_ended = false;
-            self.momentum_since = None;
-        }
-    }
-
-    /// How long since the momentum was last advanced, if one is due.
-    pub fn momentum_idle_ms(&self, now: FrameInstant) -> Option<f32> {
-        self.momentum_since
-            .map(|t| now.duration_since(t).as_secs_f32() * 1000.0)
+        // The glide begins when the finger leaves, so the first frame decays
+        // it by however long it took to arrive. Crossing the clocks here is
+        // sound for the reason it was not before: this is where a timeline
+        // starts and the gap is decayed continuously, rather than a deadline
+        // whose crossing cancelled the motion (#265, #340).
+        self.momentum_since = Some(at.as_frame_start());
     }
 
     /// Whether the momentum may run: the gesture is over and it left a speed.
@@ -451,16 +433,31 @@ impl ScrollState {
                 || self.velocity_y.abs() > VELOCITY_THRESHOLD)
     }
 
-    /// Advance kinetic scrolling animation, returns true if still animating
+    /// Advance the glide to `now`, and say whether any of it is left.
+    ///
+    /// The step is how much time has passed, not how many times this was
+    /// called. Per call, a friction decays twice as fast on a 120Hz display as
+    /// on a 60Hz one — the same flick travelling a different distance depending
+    /// on the monitor — and a pause between frames does not slow the glide at
+    /// all but freezes it, so any later frame from any source resumes it at the
+    /// speed it had. That was measured at 148px, then 304px after a wait of
+    /// 400ms, and was guarded by cancelling a motion nothing had advanced for
+    /// 200ms: a rule about a number standing in for the elapsed time the motion
+    /// should have been using. There is no such rule now (#340).
+    ///
+    /// It slows first and moves after, so a glide that waited arrives at the
+    /// speed the wait left it with. It decays by the whole gap, and moves for
+    /// as much of it as the surface
+    /// was plausibly being drawn for — [`DRAWN_PACING_FRAMES`]. A gap inside
+    /// that is ordinary pacing, including a display slower than sixty a second
+    /// and a loop under load, and the glide travels all of it. A gap beyond it
+    /// is a surface nobody was drawing, and the part nobody saw is not
+    /// travelled: a glide that slowed down out of sight does not have to
+    /// reappear where it would have been.
     pub fn advance_momentum(&mut self, now: FrameInstant) -> bool {
+        /// What a flick keeps after one nominal frame of friction.
         const FRICTION: f32 = 0.92;
         const VELOCITY_THRESHOLD: f32 = 0.5;
-
-        // A motion nobody has advanced for long enough is not this motion any
-        // more, whatever velocity is left of it.
-        if let Some(idle_ms) = self.momentum_idle_ms(now) {
-            self.expire_stale_momentum(idle_ms);
-        }
 
         // Nothing to run, and nothing to keep the loop awake for: a velocity
         // whose gesture has not ended is not a momentum waiting its turn, it
@@ -469,22 +466,34 @@ impl ScrollState {
             return false;
         }
 
+        // Every path that leaves a momentum to run stamps where it began:
+        // `end_gesture` at the lift, this function on every frame after. No
+        // origin is no glide rather than a glide of some default length.
+        let Some(began) = self.momentum_since else {
+            return false;
+        };
+        let frames = now.saturating_duration_since(began).as_secs_f32() * 1000.0 / NOMINAL_FRAME_MS;
+        let travelled = frames.min(DRAWN_PACING_FRAMES);
         self.momentum_since = Some(now);
 
         let mut animating = false;
 
-        // Apply velocity to offset
+        // Slowed first, then moved: the glide arrives at the speed the gap
+        // left it with, rather than taking its last remembered speed into the
+        // frame that finally drew it.
+        let decay = FRICTION.powf(frames);
+
         if self.velocity_x.abs() > VELOCITY_THRESHOLD {
-            self.offset_x += self.velocity_x;
-            self.velocity_x *= FRICTION;
+            self.velocity_x *= decay;
+            self.offset_x += self.velocity_x * travelled;
             animating = true;
         } else {
             self.velocity_x = 0.0;
         }
 
         if self.velocity_y.abs() > VELOCITY_THRESHOLD {
-            self.offset_y += self.velocity_y;
-            self.velocity_y *= FRICTION;
+            self.velocity_y *= decay;
+            self.offset_y += self.velocity_y * travelled;
             animating = true;
         } else {
             self.velocity_y = 0.0;
@@ -738,6 +747,7 @@ impl ScrollState {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
 
     /// Lift the finger `gap_ms` after the last sample, which is what the
     /// production path records in `last_scroll_time` before ending a gesture.
@@ -758,6 +768,138 @@ mod tests {
         }
     }
 
+    /// A scroller with room to fling sideways in.
+    fn wide_scroller() -> ScrollState {
+        ScrollState {
+            content_width: 5000.0,
+            viewport_width: 400.0,
+            ..Default::default()
+        }
+    }
+
+    /// A sideways gesture, which is the same thing on the other axis.
+    fn sideways_gesture(state: &mut ScrollState, samples: u32, delta: f32, dt_ms: f32) {
+        for i in 0..samples {
+            let dt = (i > 0).then_some(dt_ms);
+            state.record_gesture_sample(delta, 0.0, dt);
+        }
+        end_gesture_after(state, dt_ms);
+    }
+
+    /// The horizontal glide is the vertical one with the other field, and the
+    /// two are written out separately — so a flick sideways has to decay the
+    /// same way, and until this test nothing here ever flicked sideways at all.
+    /// The mutation job named ten survivors on those lines, all of them the x
+    /// axis of the arithmetic this change rewrote.
+    #[test]
+    fn a_sideways_flick_glides_and_decays_like_a_downward_one() {
+        let mut sideways = wide_scroller();
+        sideways_gesture(&mut sideways, 5, 20.0, 8.0);
+        let sideways_speed = sideways.velocity_x;
+
+        let mut downward = scroller();
+        gesture(&mut downward, 5, 20.0, 8.0);
+        let downward_speed = downward.velocity_y;
+        assert!(
+            (sideways_speed - downward_speed).abs() < 0.01,
+            "the same gesture on either axis leaves the same speed"
+        );
+
+        let start = lifted();
+        let travelled = {
+            let before = sideways.offset_x;
+            let mut at = start;
+            for _ in 0..30 {
+                at = at + A_FRAME;
+                if !sideways.advance_momentum(at) {
+                    break;
+                }
+            }
+            sideways.offset_x - before
+        };
+        let down = coast_at(&mut downward, start, A_FRAME, 30);
+
+        assert!(
+            travelled > 0.0,
+            "a sideways flick has to carry the content sideways"
+        );
+        assert!(
+            (travelled - down).abs() < down * 0.05,
+            "and as far as the same flick downward: {travelled}px against {down}px"
+        );
+        assert!(
+            (sideways.velocity_x - downward.velocity_y).abs() < 0.01,
+            "leaving the same speed behind it"
+        );
+    }
+
+    /// A speed exactly at the threshold is not enough to keep an axis going.
+    /// Each axis asks separately, so each is set up to be the one at the line
+    /// while the other carries the motion — and the answer has to be that the
+    /// axis at the line does not move.
+    #[test]
+    fn an_axis_at_the_threshold_does_not_glide() {
+        for sideways in [true, false] {
+            let mut state = ScrollState {
+                content_width: 5000.0,
+                viewport_width: 400.0,
+                content_height: 5000.0,
+                viewport_height: 400.0,
+                gesture_ended: true,
+                momentum_since: Some(lifted()),
+                ..Default::default()
+            };
+            // One axis at the line, the other well past it so the glide runs
+            // at all.
+            let at_the_line = 0.5;
+            if sideways {
+                state.velocity_x = at_the_line;
+                state.velocity_y = 10.0;
+            } else {
+                state.velocity_x = 10.0;
+                state.velocity_y = at_the_line;
+            }
+
+            state.advance_momentum(lifted() + A_FRAME);
+
+            let (stalled, moving) = if sideways {
+                (state.offset_x, state.offset_y)
+            } else {
+                (state.offset_y, state.offset_x)
+            };
+            assert_eq!(
+                stalled, 0.0,
+                "a speed of exactly {at_the_line} is not a glide (sideways: \
+                 {sideways})"
+            );
+            assert!(
+                moving > 0.0,
+                "and the other axis carried on (sideways: {sideways})"
+            );
+        }
+    }
+
+    /// Half a frame is half a step, on either axis. Stepping at sixty a second
+    /// makes the two indistinguishable — the step is one — so this steps at a
+    /// hundred and twenty.
+    #[test]
+    fn half_a_frame_moves_half_a_step_sideways() {
+        let mut state = wide_scroller();
+        sideways_gesture(&mut state, 5, 20.0, 8.0);
+        let speed = state.velocity_x;
+
+        let start = lifted();
+        state.advance_momentum(start + A_FRAME / 2);
+
+        let expected = speed * 0.92f32.powf(0.5) * 0.5;
+        assert!(
+            (state.offset_x - expected).abs() < expected * 0.05,
+            "half a frame of a {speed}px glide moved {}px, against the \
+             {expected}px half a step is worth",
+            state.offset_x
+        );
+    }
+
     /// Play `samples` movements of `delta` pixels `dt_ms` apart, then lift.
     fn gesture(state: &mut ScrollState, samples: u32, delta: f32, dt_ms: f32) {
         for i in 0..samples {
@@ -765,6 +907,133 @@ mod tests {
             state.record_gesture_sample(0.0, delta, dt);
         }
         end_gesture_after(state, dt_ms);
+    }
+
+    /// One nominal frame, which is the unit `record_gesture_sample` hands the
+    /// velocity over in.
+    const A_FRAME: std::time::Duration = std::time::Duration::from_micros(16_667);
+
+    /// The moment the glide starts from, read after the lift has stamped its
+    /// own: the gesture helpers end on a real instant, and a synthetic clock
+    /// that began before it would run backwards.
+    fn lifted() -> FrameInstant {
+        FrameInstant::from(std::time::Instant::now())
+    }
+
+    /// Step a flick for `frames` nominal frames, `each` apart, and say how far
+    /// the content travelled.
+    fn coast_at(state: &mut ScrollState, start: FrameInstant, each: Duration, steps: u32) -> f32 {
+        let before = state.offset_y;
+        let mut at = start;
+        for _ in 0..steps {
+            at = at + each;
+            if !state.advance_momentum(at) {
+                break;
+            }
+        }
+        state.offset_y - before
+    }
+
+    /// The same flick on a 60Hz display and on a 120Hz one, over the same
+    /// half second of wall clock. A friction applied once per frame decays
+    /// twice as fast on the faster display, so the same gesture carries the
+    /// content a different distance depending on the monitor it is on.
+    #[test]
+    fn a_flick_travels_the_same_distance_whatever_the_refresh_rate() {
+        let mut sixty = scroller();
+        gesture(&mut sixty, 5, 20.0, 8.0);
+        let at_sixty = coast_at(&mut sixty, lifted(), A_FRAME, 30);
+
+        let mut one_twenty = scroller();
+        gesture(&mut one_twenty, 5, 20.0, 8.0);
+        let at_one_twenty = coast_at(&mut one_twenty, lifted(), A_FRAME / 2, 60);
+
+        let difference = (at_sixty - at_one_twenty).abs();
+        assert!(
+            difference < at_sixty * 0.05,
+            "the same flick over the same half second travelled {at_sixty}px at \
+             60Hz and {at_one_twenty}px at 120Hz"
+        );
+    }
+
+    /// A pause is not a freezer. Frames stop — the surface is occluded, the
+    /// loop is throttled — and the glide has to have slowed by exactly as much
+    /// as the pause was long, not resumed at the speed it had.
+    #[test]
+    fn a_pause_decays_the_flick_by_the_length_of_the_pause() {
+        let mut unbroken = scroller();
+        gesture(&mut unbroken, 5, 20.0, 8.0);
+        coast_at(&mut unbroken, lifted(), A_FRAME, 24);
+
+        let mut paused = scroller();
+        gesture(&mut paused, 5, 20.0, 8.0);
+        coast_at(&mut paused, lifted(), A_FRAME * 24, 1);
+
+        let difference = (unbroken.velocity_y - paused.velocity_y).abs();
+        assert!(
+            difference < 0.01,
+            "twenty-four frames of glide and one frame covering the same time \
+             have to leave the same speed: {} against {}",
+            unbroken.velocity_y,
+            paused.velocity_y
+        );
+    }
+
+    /// And it does not teleport. Content nobody drew is content that slowed
+    /// down out of sight, not content that has to appear where it would have
+    /// been — so a long gap travels the drawn-pacing window and no more.
+    #[test]
+    fn a_pause_does_not_jump_the_content() {
+        let mut state = scroller();
+        gesture(&mut state, 5, 20.0, 8.0);
+        let first = state.velocity_y;
+
+        let moved = coast_at(&mut state, lifted(), A_FRAME * 24, 1);
+
+        assert!(
+            moved <= first * DRAWN_PACING_FRAMES * 1.01,
+            "one frame after a four hundred millisecond gap moved {moved}px, \
+             which is more than the {}px the drawn part of it was worth",
+            first * DRAWN_PACING_FRAMES
+        );
+    }
+
+    /// The cap has to be wide enough for a loop that is merely slow. A 30Hz
+    /// display, or a 60Hz one dropping every other frame, is being drawn — so
+    /// a flick has to carry the same distance there as at sixty a second, and
+    /// a cap of one nominal frame would have shortened it by half.
+    #[test]
+    fn a_slow_loop_carries_a_flick_as_far_as_a_fast_one() {
+        let mut sixty = scroller();
+        gesture(&mut sixty, 5, 20.0, 8.0);
+        let at_sixty = coast_at(&mut sixty, lifted(), A_FRAME, 120);
+
+        let mut thirty = scroller();
+        gesture(&mut thirty, 5, 20.0, 8.0);
+        let at_thirty = coast_at(&mut thirty, lifted(), A_FRAME * 2, 60);
+
+        let difference = (at_sixty - at_thirty).abs();
+        assert!(
+            difference < at_sixty * 0.05,
+            "the same flick carried {at_sixty}px at 60Hz and {at_thirty}px at \
+             30Hz"
+        );
+    }
+
+    /// A gap long enough leaves nothing to run, and nothing says so in
+    /// milliseconds: the velocity simply decayed under the threshold.
+    #[test]
+    fn a_long_enough_pause_ends_the_flick_without_a_rule_about_it() {
+        let mut state = scroller();
+        gesture(&mut state, 5, 20.0, 8.0);
+
+        let at = lifted() + Duration::from_secs(2);
+        state.advance_momentum(at);
+
+        assert!(
+            !state.advance_momentum(at + A_FRAME),
+            "two seconds of decay is nothing left to animate"
+        );
     }
 
     /// The flick and the frame that carries it are on different clocks: the
@@ -798,15 +1067,16 @@ mod tests {
         );
     }
 
-    /// How far the momentum carries the content once the finger has lifted.
+    /// How far the momentum carries the content once the finger has lifted,
+    /// at sixty frames a second — which has to be said now that the answer
+    /// depends on it.
     fn coast(state: &mut ScrollState) -> f32 {
-        let start = state.offset_y;
-        for _ in 0..600 {
-            if !state.advance_momentum(std::time::Instant::now().into()) {
-                break;
-            }
-        }
-        state.offset_y - start
+        coast_at(
+            state,
+            FrameInstant::from(std::time::Instant::now()),
+            A_FRAME,
+            600,
+        )
     }
 
     /// The point of measuring a speed instead of keeping the last delta: two
@@ -868,33 +1138,53 @@ mod tests {
     /// The unit behind the integration case: a motion that has not been
     /// advanced for long enough is over, whatever velocity is left of it.
     #[test]
-    fn a_momentum_abandoned_mid_flight_expires() {
+    fn a_momentum_abandoned_mid_flight_runs_down_to_nothing() {
         let mut state = scroller();
         gesture(&mut state, 6, 10.0, 8.0);
         assert!(state.should_apply_momentum(), "the flick is due");
+        let start = lifted();
 
-        // A few frames run, and then nothing does.
-        state.advance_momentum(std::time::Instant::now().into());
+        // A frame runs, and then nothing does for four hundred milliseconds.
+        state.advance_momentum(start + A_FRAME);
         assert!(state.should_apply_momentum(), "still due between frames");
 
-        state.expire_stale_momentum(400.0);
+        let running = state.velocity_y;
+        let abandoned = start + A_FRAME + Duration::from_millis(400);
+        state.advance_momentum(abandoned);
 
-        assert!(!state.should_apply_momentum());
-        assert_eq!(state.velocity_y, 0.0);
-        assert_eq!(coast(&mut state), 0.0);
+        assert!(
+            state.velocity_y < running * 0.2,
+            "four hundred milliseconds of friction leaves a fraction of the \
+             speed, not the speed it had: {} against {running}",
+            state.velocity_y
+        );
+        // The frame that covers a gap still moves what it has; it is the one
+        // after that finds nothing left.
+        let a_second_later = abandoned + Duration::from_secs(1);
+        state.advance_momentum(a_second_later);
+        assert!(
+            !state.advance_momentum(a_second_later + A_FRAME),
+            "and a second more of it is nothing left to run"
+        );
     }
 
     /// An ordinary hitch is not an abandonment: a dropped frame or two must not
     /// cut a fling short.
     #[test]
-    fn a_dropped_frame_does_not_expire_a_momentum() {
+    fn a_dropped_frame_does_not_cut_a_momentum_short() {
         let mut state = scroller();
         gesture(&mut state, 6, 10.0, 8.0);
 
-        state.expire_stale_momentum(50.0);
-
-        assert!(state.should_apply_momentum());
-        assert!(coast(&mut state) > 0.0);
+        // Three frames' worth of hitch, which is an ordinary one.
+        let after_the_hitch = lifted() + A_FRAME * 3;
+        assert!(
+            state.advance_momentum(after_the_hitch),
+            "a hitch slows a flick, it does not end it"
+        );
+        assert!(
+            coast_at(&mut state, after_the_hitch, A_FRAME, 120) > 0.0,
+            "and there is still a glide to run"
+        );
     }
 
     /// A sample landing after the gesture ended is the next gesture starting,
