@@ -96,8 +96,9 @@ unit is what a descendant asks. A container that declares nothing keeps `None`
 and allocates no signal, and `OptionSignalExt::get_or` on a `None` reads
 nothing, so every container that does not use this pays two branches.
 
-Context is not an alternative: `reactive::context` is app-global with one value
-per type, so it cannot carry a value scoped to a subtree.
+Context is not an alternative: `reactive::context` is scoped to the reactive
+owner — the application, a surface, a popup, a row of a dynamic list — and a
+container is none of those, so it cannot carry a value scoped to a subtree.
 
 `Control::is_hovered`, `is_pressed` and `has_focus` are all gated on the answer:
 a disabled unit is under no pointer and is not where the keyboard is aimed, so

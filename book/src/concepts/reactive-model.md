@@ -360,23 +360,23 @@ text(format!("Count: {}", value))  // Won't update!
 
 For values that many widgets across different modules need (config, theme, services), use the [Context API](../advanced/context.md) instead of passing signals through every function:
 
-```rust
+```rust,no_run
 # extern crate guido;
 # use guido::prelude::*;
 # #[derive(Clone, Default)]
 # struct Config;
 # impl Config { fn load() -> Self { Self } }
 # fn main() {
-// Setup
+// In the App::run setup, which is the root scope
 provide_context(Config::load());
 
-// Any widget, any module
+// In any widget factory below it, in any module
 let cfg = expect_context::<Config>();
 # ;
 # }
 ```
 
-For mutable shared state, use `provide_signal_context` to combine context with reactivity.
+A value is declared for the scope that is current — the setup, a surface, a popup, a dynamic list — and read by the scopes below it. For mutable shared state, use `provide_signal_context` to combine context with reactivity.
 
 ### Use Memo for Derived State
 
