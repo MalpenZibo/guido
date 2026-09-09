@@ -15,7 +15,7 @@
 //! [`track_pointer`]: Container::track_pointer
 //! [`handle_own_event`]: Container::handle_own_event
 
-use std::time::Instant;
+use crate::clock::EventInstant;
 
 use super::*;
 use crate::reactive::focus::focus_within;
@@ -122,7 +122,7 @@ impl Container {
     /// over a disabled subtree cost one comparison each and wake nobody.
     ///
     /// [`Control::is_hovered`]: crate::widgets::Control::is_hovered
-    pub(super) fn pointer_left(&mut self, id: WidgetId, now: Instant) {
+    pub(super) fn pointer_left(&mut self, id: WidgetId, now: EventInstant) {
         let Some(ref mut ix) = self.interaction else {
             return;
         };
@@ -141,7 +141,7 @@ impl Container {
         if ix.ripple.is_active()
             && let Some(config) = ix.ripple_config()
         {
-            ix.ripple.cancel(&config, now);
+            ix.ripple.cancel(&config, now.as_frame_start());
             request_job(id, JobRequest::Animation(RequiredJob::Paint));
         }
 
@@ -160,7 +160,7 @@ impl Container {
         id: WidgetId,
         hit: &HitContext,
         event: &Event,
-        now: Instant,
+        now: EventInstant,
     ) {
         let has_animated = self.has_animated_state_properties();
         // Read before the mutable borrow: cancelling a ripple below needs it.
@@ -230,7 +230,7 @@ impl Container {
                     && ix.ripple.is_active()
                     && let Some(ref config) = ripple_config
                 {
-                    ix.ripple.cancel(config, now);
+                    ix.ripple.cancel(config, now.as_frame_start());
                     request_job(id, JobRequest::Animation(RequiredJob::Paint));
                 }
 
@@ -259,7 +259,7 @@ impl Container {
         hit: &HitContext,
         event: &Event,
         local: &Event,
-        now: Instant,
+        now: EventInstant,
     ) -> EventResponse {
         // One question for a press, asked once and answered up to twice: by the
         // arm that handles it, and by the focus claim at the end of the
@@ -309,7 +309,7 @@ impl Container {
                         // rebased for this container.
                         let on_screen = event.coords().unwrap_or(*at);
                         if let Some(local) = hit.local(on_screen) {
-                            ix.ripple.start(local.x, local.y, now);
+                            ix.ripple.start(local.x, local.y, now.as_frame_start());
                         }
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }
@@ -350,9 +350,9 @@ impl Container {
                         && let Some(config) = ix.ripple_config()
                     {
                         if hit.contains(*at) {
-                            ix.ripple.release(&config, now);
+                            ix.ripple.release(&config, now.as_frame_start());
                         } else {
-                            ix.ripple.cancel(&config, now);
+                            ix.ripple.cancel(&config, now.as_frame_start());
                         }
                         request_job(id, JobRequest::Animation(RequiredJob::Paint));
                     }

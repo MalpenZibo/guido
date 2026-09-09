@@ -1,6 +1,7 @@
 //! Scroll configuration types for scrollable containers.
 
 use super::widget::Rect;
+use crate::clock::{EventInstant, FrameInstant};
 use crate::reactive::{IntoSignal, Signal};
 use crate::widgets::{Color, Container};
 
@@ -276,14 +277,14 @@ pub(crate) struct ScrollState {
     pub velocity_y: f32,
     /// Timestamp of the last gesture sample, for the interval between samples
     /// and for how old the gesture is when it ends.
-    pub last_scroll_time: Option<std::time::Instant>,
+    pub last_scroll_time: Option<EventInstant>,
     /// The gesture that produced the velocity is over, so the momentum may run.
     /// Set by an end-of-gesture, cleared by the next sample.
     pub gesture_ended: bool,
     /// When the momentum became due, refreshed by every step it takes. A
     /// momentum that stops being advanced has been abandoned, and the field is
     /// what says how long ago that was.
-    pub momentum_since: Option<std::time::Instant>,
+    pub momentum_since: Option<FrameInstant>,
     /// Samples in the current gesture, so the first timed one seeds the
     /// estimate instead of being smoothed against a velocity from before it.
     pub gesture_samples: u32,
@@ -377,7 +378,7 @@ impl ScrollState {
     /// in. `last_scroll_time` is this state's own field, and a caller measuring
     /// it with a second clock is how the sample path and the end path came to
     /// disagree about what time it was inside one gesture.
-    pub fn end_gesture(&mut self, at: std::time::Instant) {
+    pub fn end_gesture(&mut self, at: EventInstant) {
         let since_last_sample_ms = self
             .last_scroll_time
             .map(|t| at.duration_since(t).as_secs_f32() * 1000.0);
@@ -391,7 +392,7 @@ impl ScrollState {
         }
         self.gesture_ended = true;
         self.gesture_samples = 0;
-        self.momentum_since = Some(at);
+        self.momentum_since = Some(at.as_frame_start());
     }
 
     /// Discard a momentum that stopped being advanced `idle_ms` ago.
@@ -422,7 +423,7 @@ impl ScrollState {
     }
 
     /// How long since the momentum was last advanced, if one is due.
-    pub fn momentum_idle_ms(&self, now: std::time::Instant) -> Option<f32> {
+    pub fn momentum_idle_ms(&self, now: FrameInstant) -> Option<f32> {
         self.momentum_since
             .map(|t| now.duration_since(t).as_secs_f32() * 1000.0)
     }
@@ -444,7 +445,7 @@ impl ScrollState {
     }
 
     /// Advance kinetic scrolling animation, returns true if still animating
-    pub fn advance_momentum(&mut self, now: std::time::Instant) -> bool {
+    pub fn advance_momentum(&mut self, now: FrameInstant) -> bool {
         const FRICTION: f32 = 0.92;
         const VELOCITY_THRESHOLD: f32 = 0.5;
 
@@ -736,8 +737,8 @@ mod tests {
     fn end_gesture_after(state: &mut ScrollState, gap_ms: f32) {
         let at = std::time::Instant::now();
         state.last_scroll_time =
-            Some(at - std::time::Duration::from_micros((gap_ms * 1000.0) as u64));
-        state.end_gesture(at);
+            Some((at - std::time::Duration::from_micros((gap_ms * 1000.0) as u64)).into());
+        state.end_gesture(at.into());
     }
     use super::*;
 
@@ -763,7 +764,7 @@ mod tests {
     fn coast(state: &mut ScrollState) -> f32 {
         let start = state.offset_y;
         for _ in 0..600 {
-            if !state.advance_momentum(std::time::Instant::now()) {
+            if !state.advance_momentum(std::time::Instant::now().into()) {
                 break;
             }
         }
@@ -820,7 +821,7 @@ mod tests {
         assert!(state.velocity_y.abs() > 0.5, "the gesture built a speed");
         assert!(!state.should_apply_momentum(), "but it is not due");
         assert!(
-            !state.advance_momentum(std::time::Instant::now()),
+            !state.advance_momentum(std::time::Instant::now().into()),
             "and nothing is animating, so the loop is not kept awake for it"
         );
         assert_eq!(coast(&mut state), 0.0);
@@ -835,7 +836,7 @@ mod tests {
         assert!(state.should_apply_momentum(), "the flick is due");
 
         // A few frames run, and then nothing does.
-        state.advance_momentum(std::time::Instant::now());
+        state.advance_momentum(std::time::Instant::now().into());
         assert!(state.should_apply_momentum(), "still due between frames");
 
         state.expire_stale_momentum(400.0);

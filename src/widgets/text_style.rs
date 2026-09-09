@@ -44,8 +44,7 @@
 
 use smallvec::SmallVec;
 
-use std::time::Instant;
-
+use crate::clock::FrameInstant;
 use crate::jobs::RequiredJob;
 use crate::reactive::{IntoSignal, Signal};
 use crate::widgets::container::AnimationState;
@@ -266,7 +265,7 @@ impl TextAnims {
         &mut self,
         color: Color,
         size: f32,
-        now: Instant,
+        now: FrameInstant,
     ) -> (Option<RequiredJob>, f32) {
         let mut wants = None;
         if let Some(a) = self.color.as_mut() {
@@ -300,7 +299,7 @@ impl TextAnims {
     /// `None` where nothing moved: a transition inside its `delay_ms` is
     /// animating and has produced no new value, and asking for a paint there
     /// would wake the loop every frame for a picture that has not changed.
-    pub(crate) fn advance(&mut self, now: Instant) -> Option<RequiredJob> {
+    pub(crate) fn advance(&mut self, now: FrameInstant) -> Option<RequiredJob> {
         let mut wants = None;
         if let Some(a) = self.color.as_mut()
             && a.advance(now).is_changed()

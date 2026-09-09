@@ -229,7 +229,7 @@ impl Tree {
     /// rather than a panic on somebody's bar. A debug build says so first,
     /// naming the call site and the other clock.
     #[track_caller]
-    pub fn frame_instant(&self) -> std::time::Instant {
+    pub fn frame_instant(&self) -> crate::clock::FrameInstant {
         Self::in_pass(
             self.frame_instant,
             "frame_instant",
@@ -243,7 +243,7 @@ impl Tree {
     /// Falls back to the clock outside a dispatch, and says so, exactly as
     /// [`Self::frame_instant`] does.
     #[track_caller]
-    pub fn event_instant(&self) -> std::time::Instant {
+    pub fn event_instant(&self) -> crate::clock::EventInstant {
         Self::in_pass(
             self.event_instant,
             "event_instant",
@@ -2100,11 +2100,11 @@ mod clock_diagnostics {
 
         tree.set_frame_instant(Some(now));
         let before = report_count();
-        assert_eq!(tree.frame_instant(), now);
+        assert_eq!(tree.frame_instant(), now.into());
         tree.set_frame_instant(None);
 
         tree.set_event_instant(Some(now));
-        assert_eq!(tree.event_instant(), now);
+        assert_eq!(tree.event_instant(), now.into());
         tree.set_event_instant(None);
 
         assert_eq!(

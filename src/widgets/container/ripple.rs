@@ -36,7 +36,9 @@
 //! that restarts loses the second. [`MAX_LIVE_RIPPLES`] bounds the work; past it the
 //! oldest is dropped, which is the one nearest to invisible anyway.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use crate::clock::FrameInstant;
 
 use crate::widgets::state_layer::RippleConfig;
 
@@ -89,7 +91,7 @@ fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
 }
 
-fn since(start: Instant, now: Instant) -> f32 {
+fn since(start: FrameInstant, now: FrameInstant) -> f32 {
     now.saturating_duration_since(start).as_secs_f32()
 }
 
@@ -107,7 +109,7 @@ enum ExitKind {
 #[derive(Debug, Clone, Copy)]
 struct Exit {
     kind: ExitKind,
-    at: Instant,
+    at: FrameInstant,
     /// Growth when the exit began, so the remainder can be compressed into it
     /// instead of restarting from zero.
     growth: f32,
@@ -118,7 +120,7 @@ struct Exit {
 pub struct Ripple {
     /// Where the pointer went down, in local container coordinates.
     origin: (f32, f32),
-    born: Instant,
+    born: FrameInstant,
     exit: Option<Exit>,
     /// 0 at [`START_RADIUS`], 1 fully expanded.
     growth: f32,
@@ -126,7 +128,7 @@ pub struct Ripple {
 }
 
 impl Ripple {
-    fn new(origin: (f32, f32), now: Instant) -> Self {
+    fn new(origin: (f32, f32), now: FrameInstant) -> Self {
         Self {
             origin,
             born: now,
@@ -174,7 +176,7 @@ impl Ripple {
     /// the frame's animation pass runs, so a touch tap — down and up in one
     /// batch — arrives before `advance` has ever run, and the compressed
     /// remainder has to start from the real growth rather than a stale zero.
-    fn begin_exit(&mut self, kind: ExitKind, config: &RippleConfig, now: Instant) {
+    fn begin_exit(&mut self, kind: ExitKind, config: &RippleConfig, now: FrameInstant) {
         if self.exit.is_some() {
             return;
         }
@@ -193,7 +195,7 @@ impl Ripple {
     /// was. Cutting the rise off at the release instead — the obvious reading —
     /// makes every click shorter than the rise dimmer than the one before it,
     /// and a tap that arrives in a single event batch invisible outright.
-    fn opacity_at(&self, config: &RippleConfig, now: Instant) -> f32 {
+    fn opacity_at(&self, config: &RippleConfig, now: FrameInstant) -> f32 {
         let fade_speed = sane_speed(config.fade_speed);
         let rise_over = FADE_IN / fade_speed;
         let risen = phase(since(self.born, now), rise_over);
@@ -211,7 +213,7 @@ impl Ripple {
     }
 
     /// When the disc has finished leaving, so it can be dropped.
-    fn gone(&self, config: &RippleConfig, now: Instant) -> bool {
+    fn gone(&self, config: &RippleConfig, now: FrameInstant) -> bool {
         let Some(exit) = self.exit else {
             return false;
         };
@@ -227,13 +229,13 @@ impl Ripple {
     }
 
     /// The growth a ripple nobody has released yet has reached.
-    fn held_growth(&self, config: &RippleConfig, now: Instant) -> f32 {
+    fn held_growth(&self, config: &RippleConfig, now: FrameInstant) -> f32 {
         let duration = HELD_GROWTH / sane_speed(config.expand_speed);
         ease_out(phase(since(self.born, now), duration))
     }
 
     /// Advance, and report whether this ripple is still worth drawing.
-    fn advance(&mut self, config: &RippleConfig, now: Instant) -> bool {
+    fn advance(&mut self, config: &RippleConfig, now: FrameInstant) -> bool {
         self.opacity = self.opacity_at(config, now);
 
         let Some(exit) = self.exit else {
@@ -282,7 +284,7 @@ impl RippleState {
     /// Begin a ripple at the given local coordinates.
     ///
     /// The coordinates are relative to the container's origin (0,0 = top-left).
-    pub fn start(&mut self, local_x: f32, local_y: f32, now: Instant) {
+    pub fn start(&mut self, local_x: f32, local_y: f32, now: FrameInstant) {
         // At capacity the oldest goes. It is the one furthest through its own
         // fade, so it is the least of them to lose.
         while self.live.len() >= MAX_LIVE_RIPPLES {
@@ -295,14 +297,14 @@ impl RippleState {
     ///
     /// Only the ripple still being held is confirmed. The others already have
     /// an exit of their own and keep it.
-    pub fn release(&mut self, config: &RippleConfig, now: Instant) {
+    pub fn release(&mut self, config: &RippleConfig, now: FrameInstant) {
         if let Some(held) = self.live.iter_mut().rev().find(|r| !r.is_leaving()) {
             held.begin_exit(ExitKind::Confirmed, config, now);
         }
     }
 
     /// The press was abandoned: every ripple still being held just goes.
-    pub fn cancel(&mut self, config: &RippleConfig, now: Instant) {
+    pub fn cancel(&mut self, config: &RippleConfig, now: FrameInstant) {
         for ripple in self.live.iter_mut().filter(|r| !r.is_leaving()) {
             ripple.begin_exit(ExitKind::Cancelled, config, now);
         }
@@ -323,7 +325,7 @@ impl RippleState {
     /// Returns whether any is still animating. Dropping a ripple at zero
     /// opacity needs no deferred frame: it draws nothing at that point, so
     /// there is no last frame to preserve.
-    pub fn advance(&mut self, config: &RippleConfig, now: Instant) -> bool {
+    pub fn advance(&mut self, config: &RippleConfig, now: FrameInstant) -> bool {
         let mut animating = false;
         self.live.retain_mut(|ripple| {
             let alive = ripple.advance(config, now);
@@ -336,6 +338,7 @@ impl RippleState {
 
 #[cfg(test)]
 mod tests {
+
     use std::time::Duration;
 
     use super::*;
@@ -344,7 +347,7 @@ mod tests {
         RippleConfig::default()
     }
 
-    fn at(base: Instant, ms: u64) -> Instant {
+    fn at(base: FrameInstant, ms: u64) -> FrameInstant {
         base + Duration::from_millis(ms)
     }
 
@@ -352,7 +355,7 @@ mod tests {
     /// pulls it back.
     #[test]
     fn a_click_never_moves_the_radius_backwards() {
-        let t0 = Instant::now();
+        let t0 = FrameInstant::from(std::time::Instant::now());
         let mut state = RippleState::new();
         state.start(10.0, 10.0, t0);
 
@@ -380,7 +383,7 @@ mod tests {
     /// instead of abandoning it.
     #[test]
     fn a_click_completes_the_expansion_it_started() {
-        let t0 = Instant::now();
+        let t0 = FrameInstant::from(std::time::Instant::now());
         let mut state = RippleState::new();
         state.start(10.0, 10.0, t0);
         state.advance(&cfg(), at(t0, 80));
@@ -403,7 +406,7 @@ mod tests {
     /// for its whole life — a ripple that drew nothing, for 375ms of frames.
     #[test]
     fn a_tap_released_before_its_first_frame_is_still_seen() {
-        let t0 = Instant::now();
+        let t0 = FrameInstant::from(std::time::Instant::now());
         let mut state = RippleState::new();
         state.start(10.0, 10.0, t0);
         state.release(&cfg(), t0);
@@ -426,7 +429,7 @@ mod tests {
     #[test]
     fn a_click_shorter_than_the_rise_still_reaches_full_strength() {
         for click_ms in [20, 40, 60, 74] {
-            let t0 = Instant::now();
+            let t0 = FrameInstant::from(std::time::Instant::now());
             let mut state = RippleState::new();
             state.start(10.0, 10.0, t0);
             state.advance(&cfg(), at(t0, click_ms));
@@ -448,7 +451,7 @@ mod tests {
     /// edge press cover the box long before the growth ended.
     #[test]
     fn the_size_does_not_depend_on_where_the_press_landed() {
-        let t0 = Instant::now();
+        let t0 = FrameInstant::from(std::time::Instant::now());
         let (w, h) = (200.0, 40.0);
 
         let mut corner = RippleState::new();
@@ -469,7 +472,7 @@ mod tests {
     /// inside, and it was not already inside a third of the way back.
     #[test]
     fn a_finished_ripple_covers_the_container_and_not_before() {
-        let t0 = Instant::now();
+        let t0 = FrameInstant::from(std::time::Instant::now());
         let (w, h) = (200.0, 40.0);
         let mut state = RippleState::new();
         state.start(0.0, 0.0, t0);
@@ -501,7 +504,7 @@ mod tests {
                 fade_speed: fade,
                 ..Default::default()
             };
-            let t0 = Instant::now();
+            let t0 = FrameInstant::from(std::time::Instant::now());
             let mut state = RippleState::new();
             state.start(10.0, 10.0, t0);
             state.release(&config, t0);
@@ -528,7 +531,7 @@ mod tests {
 
     #[test]
     fn a_confirmed_ripple_leaves_when_it_has_faded() {
-        let t0 = Instant::now();
+        let t0 = FrameInstant::from(std::time::Instant::now());
         let mut state = RippleState::new();
         state.start(10.0, 10.0, t0);
         state.release(&cfg(), at(t0, 80));
@@ -544,7 +547,7 @@ mod tests {
     /// exit: no completion, and a fade short enough to get out of the way.
     #[test]
     fn leaving_without_releasing_does_not_complete_the_expansion() {
-        let t0 = Instant::now();
+        let t0 = FrameInstant::from(std::time::Instant::now());
         let mut state = RippleState::new();
         state.start(10.0, 10.0, t0);
         state.advance(&cfg(), at(t0, 80));
@@ -566,7 +569,7 @@ mod tests {
     /// other.
     #[test]
     fn a_second_press_does_not_erase_the_first() {
-        let t0 = Instant::now();
+        let t0 = FrameInstant::from(std::time::Instant::now());
         let mut state = RippleState::new();
         state.start(10.0, 10.0, t0);
         state.release(&cfg(), at(t0, 80));
@@ -582,7 +585,7 @@ mod tests {
     /// A release confirms the press being held, not the ones already leaving.
     #[test]
     fn a_release_confirms_only_the_ripple_still_held() {
-        let t0 = Instant::now();
+        let t0 = FrameInstant::from(std::time::Instant::now());
         let mut state = RippleState::new();
         state.start(10.0, 10.0, t0);
         state.release(&cfg(), at(t0, 50));
@@ -599,7 +602,7 @@ mod tests {
 
     #[test]
     fn the_oldest_goes_when_the_bound_is_reached() {
-        let t0 = Instant::now();
+        let t0 = FrameInstant::from(std::time::Instant::now());
         let mut state = RippleState::new();
         for i in 0..(MAX_LIVE_RIPPLES + 2) {
             state.start(i as f32, 0.0, at(t0, i as u64 * 10));
@@ -612,7 +615,7 @@ mod tests {
 
     #[test]
     fn a_held_ripple_stops_asking_for_frames_once_it_is_fully_grown() {
-        let t0 = Instant::now();
+        let t0 = FrameInstant::from(std::time::Instant::now());
         let mut state = RippleState::new();
         state.start(10.0, 10.0, t0);
 

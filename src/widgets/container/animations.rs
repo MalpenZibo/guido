@@ -1,4 +1,4 @@
-use std::time::Instant;
+use crate::clock::FrameInstant;
 
 use crate::animation::{
     Animatable, Keyframes, SpringState, Transition, TransitionConfig, carry_velocity,
@@ -13,7 +13,7 @@ use crate::reactive::Signal;
 struct Timeline<T> {
     keyframes: Keyframes<T>,
     /// When the current run started, if one is running.
-    playing: Option<Instant>,
+    playing: Option<FrameInstant>,
     /// A signal whose every change plays the sequence once, and the count last
     /// acted on.
     ///
@@ -62,7 +62,7 @@ pub struct AnimationState<T: Animatable> {
     /// When the running segment began, if one is running. `None` until the
     /// first one does: a state that has never animated has no start, and a
     /// placeholder instant would be a time nobody chose.
-    start_time: Option<Instant>,
+    start_time: Option<FrameInstant>,
     /// Forward transition (used when value increases or no reverse is set)
     transition: Transition,
     /// Optional reverse transition (used when value decreases)
@@ -118,7 +118,7 @@ impl<T: Animatable> AnimationState<T> {
     }
 
     /// Start animating to a new target value
-    pub fn animate_to(&mut self, new_target: T, now: Instant) {
+    pub fn animate_to(&mut self, new_target: T, now: FrameInstant) {
         // Don't restart if we're already animating to this target
         if new_target == self.target {
             return;
@@ -145,12 +145,12 @@ impl<T: Animatable> AnimationState<T> {
     }
 
     /// Start a fresh run toward the current target, from rest.
-    fn begin_segment_from(&mut self, from: T, now: Instant) {
+    fn begin_segment_from(&mut self, from: T, now: FrameInstant) {
         self.begin_segment(from, 0.0, now);
     }
 
     /// The bookkeeping every new segment shares.
-    fn begin_segment(&mut self, from: T, carried: f32, now: Instant) {
+    fn begin_segment(&mut self, from: T, carried: f32, now: FrameInstant) {
         let is_spring = matches!(
             self.active_transition().timing,
             crate::animation::TimingFunction::Spring(_)
@@ -197,7 +197,7 @@ impl<T: Animatable> AnimationState<T> {
     }
 
     /// Advance the animation and return whether the value changed
-    pub fn advance(&mut self, now: Instant) -> AdvanceResult<T> {
+    pub fn advance(&mut self, now: FrameInstant) -> AdvanceResult<T> {
         // A sequence speaks for the property while it runs, and nothing else
         // does — the same rule the cascade gives a CSS animation over a normal
         // declaration.
@@ -367,7 +367,7 @@ impl<T: Animatable> AnimationState<T> {
 
     /// Start the sequence, from the top. Playing it again while it runs
     /// restarts it: the second refusal is not half a shake.
-    pub(crate) fn play(&mut self, now: Instant) {
+    pub(crate) fn play(&mut self, now: FrameInstant) {
         if let Some(timeline) = &mut self.timeline
             && !timeline.keyframes.is_empty()
         {
@@ -377,7 +377,7 @@ impl<T: Animatable> AnimationState<T> {
 
     /// Advance the running timeline. `None` when there is none, or when the
     /// one that was running has just handed the property back.
-    fn advance_timeline(&mut self, now: Instant) -> Option<AdvanceResult<T>> {
+    fn advance_timeline(&mut self, now: FrameInstant) -> Option<AdvanceResult<T>> {
         // Both halves together, so a `playing` without a sequence to play
         // cannot survive the question. On its own it would keep
         // `is_animating` true for good: a surface asking for a frame every
@@ -559,6 +559,8 @@ pub fn get_animated_value<T: Animatable + Copy>(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use super::*;
 
     /// on_complete fires exactly once per completed run; a retarget that
@@ -578,16 +580,16 @@ mod tests {
         );
         anim.set_immediate(0.0);
 
-        anim.animate_to(1.0, Instant::now());
+        anim.animate_to(1.0, FrameInstant::from(Instant::now()));
         std::thread::sleep(std::time::Duration::from_millis(10));
-        anim.advance(Instant::now());
+        anim.advance(FrameInstant::from(Instant::now()));
         assert_eq!(fired.get(), 1, "settle must fire the callback once");
-        anim.advance(Instant::now());
+        anim.advance(FrameInstant::from(Instant::now()));
         assert_eq!(fired.get(), 1, "no refire after completion");
 
-        anim.animate_to(2.0, Instant::now());
+        anim.animate_to(2.0, FrameInstant::from(Instant::now()));
         std::thread::sleep(std::time::Duration::from_millis(10));
-        anim.advance(Instant::now());
+        anim.advance(FrameInstant::from(Instant::now()));
         assert_eq!(fired.get(), 2, "a new completed run fires again");
     }
     use crate::animation::TimingFunction;
@@ -621,7 +623,7 @@ mod tests {
             never_played(),
         );
 
-        anim.play(Instant::now());
+        anim.play(FrameInstant::from(Instant::now()));
         assert!(anim.is_animating(), "a playing timeline is an animation");
 
         play_at(&mut anim, 30);
@@ -632,7 +634,7 @@ mod tests {
         );
 
         // The declared value moves while the sequence is running.
-        anim.animate_to(3.0, Instant::now());
+        anim.animate_to(3.0, FrameInstant::from(Instant::now()));
         play_at(&mut anim, 70);
         at(&mut anim, 10);
         assert_eq!(*anim.current(), 3.0, "over, and back to what is declared");
@@ -652,12 +654,12 @@ mod tests {
             never_played(),
         );
 
-        anim.play(Instant::now());
+        anim.play(FrameInstant::from(Instant::now()));
         play_at(&mut anim, 60);
         let far = *anim.current();
 
-        anim.play(Instant::now());
-        anim.advance(Instant::now());
+        anim.play(FrameInstant::from(Instant::now()));
+        anim.advance(FrameInstant::from(Instant::now()));
         assert!(
             *anim.current() < far,
             "back near the top of the run, got {} after {far}",
@@ -682,11 +684,11 @@ mod tests {
             never_played(),
         );
 
-        anim.play(Instant::now());
+        anim.play(FrameInstant::from(Instant::now()));
         play_at(&mut anim, 30);
 
         // Something declares a new value while the sequence is running.
-        anim.animate_to(100.0, Instant::now());
+        anim.animate_to(100.0, FrameInstant::from(Instant::now()));
 
         // The sequence runs out.
         play_at(&mut anim, 70);
@@ -722,8 +724,8 @@ mod tests {
             never_played(),
         );
 
-        anim.animate_to(1.0, Instant::now());
-        anim.play(Instant::now());
+        anim.animate_to(1.0, FrameInstant::from(Instant::now()));
+        anim.play(FrameInstant::from(Instant::now()));
         play_at(&mut anim, 30);
         assert_eq!(fired.get(), 0, "nothing has arrived yet");
 
@@ -739,8 +741,8 @@ mod tests {
     fn a_play_without_a_sequence_does_not_pin_the_frame_loop() {
         let mut anim = AnimationState::new(0.0_f32, Transition::new(10.0, TimingFunction::Linear));
         anim.set_immediate(0.0);
-        anim.play(Instant::now());
-        anim.advance(Instant::now());
+        anim.play(FrameInstant::from(Instant::now()));
+        anim.advance(FrameInstant::from(Instant::now()));
         assert!(!anim.is_animating(), "nothing to play, nothing to animate");
     }
 
@@ -812,14 +814,14 @@ mod tests {
 
         let mut anim = AnimationState::new(0.0_f32, spring(SpringConfig::BOUNCY));
         anim.set_immediate(0.0);
-        anim.animate_to(1.0, Instant::now());
+        anim.animate_to(1.0, FrameInstant::from(Instant::now()));
         run(&mut anim, 40);
         assert!(
             *anim.current() > 0.0,
             "the spring has to be moving before it can be interrupted"
         );
 
-        anim.animate_to(0.0, Instant::now());
+        anim.animate_to(0.0, FrameInstant::from(Instant::now()));
         let velocity = velocity_of(&anim);
         assert!(
             velocity < 0.0,
@@ -836,9 +838,9 @@ mod tests {
 
         let mut anim = AnimationState::new(0.0_f32, spring(SpringConfig::BOUNCY));
         anim.set_immediate(0.0);
-        anim.animate_to(1.0, Instant::now());
+        anim.animate_to(1.0, FrameInstant::from(Instant::now()));
         run(&mut anim, 40);
-        anim.animate_to(0.0, Instant::now());
+        anim.animate_to(0.0, FrameInstant::from(Instant::now()));
         let (low, _) = run(&mut anim, 400);
 
         assert!(
@@ -855,10 +857,10 @@ mod tests {
 
         let mut anim = AnimationState::new(0.0_f32, spring(SpringConfig::DEFAULT));
         anim.set_immediate(0.0);
-        anim.animate_to(1.0, Instant::now());
+        anim.animate_to(1.0, FrameInstant::from(Instant::now()));
         run(&mut anim, 40);
 
-        anim.animate_to(2.0, Instant::now());
+        anim.animate_to(2.0, FrameInstant::from(Instant::now()));
         assert!(
             velocity_of(&anim) > 0.0,
             "still heading there, got {}",
@@ -878,11 +880,11 @@ mod tests {
 
         let mut anim = AnimationState::new(0.0_f32, spring(SpringConfig::DEFAULT));
         anim.set_immediate(0.0);
-        anim.animate_to(1.0, Instant::now());
+        anim.animate_to(1.0, FrameInstant::from(Instant::now()));
         run(&mut anim, 1200);
         assert!(!anim.is_animating(), "it has to have settled first");
 
-        anim.animate_to(1.0001, Instant::now());
+        anim.animate_to(1.0001, FrameInstant::from(Instant::now()));
         assert_eq!(
             velocity_of(&anim),
             0.0,
@@ -903,7 +905,7 @@ mod tests {
 
         let mut anim = AnimationState::new(0.0_f32, spring(SpringConfig::BOUNCY));
         anim.set_immediate(0.0);
-        anim.animate_to(1.0, Instant::now());
+        anim.animate_to(1.0, FrameInstant::from(Instant::now()));
         run(&mut anim, 184);
 
         assert!(
@@ -915,7 +917,7 @@ mod tests {
         );
 
         // Falling toward 1.0 from above is falling toward 0.0 as well.
-        anim.animate_to(0.0, Instant::now());
+        anim.animate_to(0.0, FrameInstant::from(Instant::now()));
         assert!(
             velocity_of(&anim) > 0.0,
             "it was already heading that way, so the new segment closes on its \
@@ -939,14 +941,20 @@ mod tests {
 
         let mut anim = AnimationState::new(Translate::NONE, spring(SpringConfig::DEFAULT));
         anim.set_immediate(Translate::NONE);
-        anim.animate_to(Translate::new(200.0, 0.0), Instant::now());
+        anim.animate_to(
+            Translate::new(200.0, 0.0),
+            FrameInstant::from(Instant::now()),
+        );
         at(&mut anim, 40);
         assert!(velocity_of(&anim) > 0.0, "it has to be moving first");
 
         // Straight down from wherever the rightward slide got to: the y
         // channel moves, the x channel does not.
         let here = *anim.current();
-        anim.animate_to(Translate::new(here.x, here.y + 200.0), Instant::now());
+        anim.animate_to(
+            Translate::new(here.x, here.y + 200.0),
+            FrameInstant::from(Instant::now()),
+        );
 
         assert!(
             velocity_of(&anim).abs() < 0.5,
@@ -965,7 +973,7 @@ mod tests {
 
         let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
         anim.set_immediate(0.0);
-        anim.animate_to(180.0, Instant::now());
+        anim.animate_to(180.0, FrameInstant::from(Instant::now()));
 
         let mut smallest = f32::INFINITY;
         for frame in 0..=25 {
@@ -987,7 +995,7 @@ mod tests {
     fn a_full_turn_is_a_turn_and_not_a_no_op() {
         let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
         anim.set_immediate(0.0);
-        anim.animate_to(360.0, Instant::now());
+        anim.animate_to(360.0, FrameInstant::from(Instant::now()));
 
         at(&mut anim, 50);
         let halfway = *anim.current();
@@ -1011,7 +1019,7 @@ mod tests {
     fn an_angle_past_the_wrap_keeps_going_forward() {
         let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
         anim.set_immediate(350.0);
-        anim.animate_to(370.0, Instant::now());
+        anim.animate_to(370.0, FrameInstant::from(Instant::now()));
 
         at(&mut anim, 50);
         let halfway = *anim.current();
@@ -1028,7 +1036,7 @@ mod tests {
     fn the_angle_moves_at_the_rate_the_easing_asks_for() {
         let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
         anim.set_immediate(0.0);
-        anim.animate_to(90.0, Instant::now());
+        anim.animate_to(90.0, FrameInstant::from(Instant::now()));
 
         at(&mut anim, 25);
         assert!(
@@ -1049,7 +1057,7 @@ mod tests {
 
         // 40 frames of the target creeping upward, then it stops.
         for frame in 1..=40u64 {
-            anim.animate_to(frame as f32, Instant::now());
+            anim.animate_to(frame as f32, FrameInstant::from(Instant::now()));
             at(&mut anim, 8);
         }
         let (_, high) = run(&mut anim, 800);
@@ -1070,7 +1078,7 @@ mod tests {
     fn a_property_with_no_timeline_cannot_be_played() {
         let mut anim = AnimationState::new(0.0_f32, Transition::new(10.0, TimingFunction::Linear));
         anim.set_immediate(0.0);
-        anim.play(Instant::now());
+        anim.play(FrameInstant::from(Instant::now()));
         assert!(!anim.is_animating(), "nothing to play");
     }
 
@@ -1084,11 +1092,11 @@ mod tests {
         let delayed = Transition::new(0.0, TimingFunction::Spring(SpringConfig::BOUNCY)).delay(200);
         let mut anim = AnimationState::new(0.0_f32, delayed);
         anim.set_immediate(0.0);
-        anim.animate_to(1.0, Instant::now());
+        anim.animate_to(1.0, FrameInstant::from(Instant::now()));
         run(&mut anim, 400);
         assert!(*anim.current() > 0.0, "past the delay and moving");
 
-        anim.animate_to(0.0, Instant::now());
+        anim.animate_to(0.0, FrameInstant::from(Instant::now()));
         assert_eq!(velocity_of(&anim), 0.0);
     }
 
@@ -1098,9 +1106,9 @@ mod tests {
     fn a_timed_transition_has_no_spring_to_carry() {
         let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
         anim.set_immediate(0.0);
-        anim.animate_to(1.0, Instant::now());
+        anim.animate_to(1.0, FrameInstant::from(Instant::now()));
         run(&mut anim, 24);
-        anim.animate_to(0.0, Instant::now());
+        anim.animate_to(0.0, FrameInstant::from(Instant::now()));
         assert!(anim.spring_state.is_none());
     }
 
@@ -1120,7 +1128,7 @@ mod tests {
         let transition = Transition::new(300.0, TimingFunction::Linear);
         let mut state = AnimationState::new(0.0f32, transition);
 
-        state.animate_to(100.0, Instant::now());
+        state.animate_to(100.0, FrameInstant::from(Instant::now()));
 
         assert_eq!(*state.target(), 100.0);
         assert!(state.is_animating());
@@ -1131,11 +1139,11 @@ mod tests {
         let transition = Transition::new(300.0, TimingFunction::Linear);
         let mut state = AnimationState::new(0.0f32, transition);
 
-        state.animate_to(100.0, Instant::now());
+        state.animate_to(100.0, FrameInstant::from(Instant::now()));
         let first_start_time = state.start_time;
 
         // Animate to same target should not restart
-        state.animate_to(100.0, Instant::now());
+        state.animate_to(100.0, FrameInstant::from(Instant::now()));
         assert_eq!(state.start_time, first_start_time);
     }
 

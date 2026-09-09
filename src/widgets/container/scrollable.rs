@@ -233,7 +233,7 @@ impl Container {
     pub(super) fn advance_scrollbar_scale_animations_internal(
         &mut self,
         id: WidgetId,
-        now: std::time::Instant,
+        now: crate::clock::FrameInstant,
     ) -> bool {
         if self.scroll_axis == ScrollAxis::None
             || self.scroll_data().scrollbar_visibility == ScrollbarVisibility::Hidden
@@ -267,7 +267,7 @@ impl Container {
         axis: ScrollbarAxis,
         scale_factor: f32,
         id: WidgetId,
-        now: std::time::Instant,
+        now: crate::clock::FrameInstant,
     ) -> bool {
         // Determine target scale based on hover state
         let sd = self.scroll_data();
@@ -855,7 +855,7 @@ impl Container {
         delta_x: f32,
         delta_y: f32,
         source: ScrollSource,
-        at: std::time::Instant,
+        at: crate::clock::EventInstant,
     ) -> bool {
         let axis = self.scroll_axis;
         let sd = self.scroll_mut();
