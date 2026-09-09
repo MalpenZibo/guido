@@ -1,16 +1,19 @@
 //! A signal accepts what a closure returning the same type accepts.
 //!
-//! `IntoSignal` has three forms — a value, a closure, a signal — and the
-//! conversions have to line up across all three or the same expression compiles
-//! in one position and not another. The value and closure forms share the
-//! `From`/`IntoVal` impls beside each type; the signal form needs its own, and
-//! for a long time did not have them, so `width(100.0)` and
-//! `width(move || w.get())` compiled while `width(w)` on a `Signal<f32>` did
-//! not.
+//! `IntoSignal` has five forms — a value, a closure, a signal, a writable
+//! signal and a memo — and the conversions have to line up across all of them
+//! or the same expression compiles in one position and not another. The value
+//! form is the `From` beside each type and the rest come from one `converts!`
+//! entry; before that entry existed they were separate lists, so
+//! `width(100.0)` and `width(move || w.get())` compiled while `width(w)` on a
+//! `Signal<f32>` did not.
 //!
-//! A test that only has to build. It is a list rather than a rule because the
-//! impls are a list — see `reactive::into_signal` for why they cannot be one
-//! blanket impl, and #226 for the drift that leaves.
+//! A test that only has to build. It is a list because the pairs are a list —
+//! see `reactive::into_signal` for why they cannot be one blanket impl — but
+//! one list now: `converts!` emits the closure form and the three signal forms
+//! from a single declaration, so a pair can no longer be in one and not the
+//! other. What that macro still emits is checked beside it, in
+//! `one_declaration_covers_every_form`; what a caller can reach is here.
 
 use guido::prelude::*;
 
@@ -50,9 +53,9 @@ fn a_memo_reaches_a_property_it_can_convert_into() {
 }
 
 /// The pair and array forms, in every numeric type the value form takes. These
-/// are the ones the first list of `converting_signals!` left out — the drift
-/// the rule in `.claude/skills/widgets` exists to stop, committed in the same
-/// change that wrote the rule.
+/// are the ones the first signal list left out — the drift the rule in
+/// `.claude/skills/widgets` exists to stop, committed in the same change that
+/// wrote the rule, and closed at the definition by #226.
 #[test]
 fn the_pair_and_array_forms_convert_in_every_numeric_type() {
     let ints = create_signal((10i32, 20i32));
@@ -81,17 +84,17 @@ fn a_signal_of_the_property_type_is_unaffected() {
     let _ = container().corners(c).scale(s).padding(p);
 }
 
-/// The properties that stopped being read once, in all three spellings.
+/// The properties that stopped being read once, in every spelling.
 ///
 /// The point of the change was that these take a signal at all; the point of
 /// this test is that they still take the other two. A setter widened to
 /// `impl IntoSignal<T, M>` accepts the value form through the blanket `Into`
 /// impl and the closure form through `IntoVal`'s reflexive one, so nothing has
-/// to be added to `converting_signals!` for a property whose declared type is
+/// to be declared with `converts!` for a property whose declared type is
 /// the type it is given — but nothing checks that until somebody writes it
 /// down, which is what this is.
 #[test]
-fn the_values_that_became_signals_take_all_three_forms() {
+fn the_values_that_became_signals_take_every_form() {
     let masked = create_signal(true);
     let mask = create_signal('*');
     let fit = create_signal(ContentFit::Cover);
@@ -137,11 +140,11 @@ fn the_values_that_became_signals_take_all_three_forms() {
     let _ = container().when_pressed(move |s| s.ripple_with_color(move || hot.get()));
     let _ = container().when_pressed(move |s| s.ripple_with_color(hot));
 
-    // `shadow` takes a `Shadow` and nothing convertible into one, so there is no
-    // entry in `converting_signals!` for it — which is exactly the case this
-    // test exists to cover: the three forms have to arrive through the blanket
-    // impls, and nothing checks that they do until it is written down. On the
-    // state layer too, where the override is a value and never a motion.
+    // `shadow` takes a `Shadow` and nothing convertible into one, so there is
+    // no `converts!` entry for it — which is exactly the case this test exists
+    // to cover: the forms have to arrive through the blanket impls, and nothing
+    // checks that they do until it is written down. On the state layer too,
+    // where the override is a value and never a motion.
     let lift = create_signal(Shadow::new((0.0, 6.0), 10.0, 0.0, Color::BLACK));
     let _ = container().shadow(Shadow::none());
     let _ = container().shadow(move || lift.get());

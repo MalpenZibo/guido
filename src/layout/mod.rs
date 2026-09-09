@@ -239,39 +239,6 @@ impl From<u32> for Length {
     }
 }
 
-// IntoVal<Length> impls for closures returning numeric types
-use crate::reactive::IntoVal;
-
-impl IntoVal<Length> for i32 {
-    fn into_val(self) -> Length {
-        Length::from(self)
-    }
-}
-
-impl IntoVal<Length> for u32 {
-    fn into_val(self) -> Length {
-        Length::from(self)
-    }
-}
-
-impl IntoVal<Length> for u16 {
-    fn into_val(self) -> Length {
-        Length::from(self)
-    }
-}
-
-impl IntoVal<Length> for f32 {
-    fn into_val(self) -> Length {
-        Length::from(self)
-    }
-}
-
-impl IntoVal<Length> for f64 {
-    fn into_val(self) -> Length {
-        Length::from(self as f32)
-    }
-}
-
 /// Trait for layout strategies that position multiple children
 pub trait Layout {
     /// Perform layout on children and return the total size.
@@ -321,11 +288,11 @@ pub enum CrossAlignment {
     Baseline,
 }
 
-// A signal accepts what a closure returning the same type accepts; the list
-// mirrors the `IntoVal<Length>` impls above one for one. See
-// `reactive::into_signal` for why it cannot be one blanket impl, and the
-// `widgets` skill for the rule that keeps the two lists together.
-crate::reactive::converting_signals!(
+// Every conversion a length accepts, declared once: the closure form and the
+// three signal forms. The value form is the `From` above. See
+// `reactive::into_signal` for why the signal forms name their source type, and
+// the `widgets` skill for the rule that a property takes all five.
+crate::reactive::converts!(
     f32 => Length,
     f64 => Length,
     i32 => Length,
