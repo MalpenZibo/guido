@@ -833,6 +833,73 @@ mod tests {
         );
     }
 
+    /// A speed exactly at the threshold is not enough to keep an axis going.
+    /// Each axis asks separately, so each is set up to be the one at the line
+    /// while the other carries the motion — and the answer has to be that the
+    /// axis at the line does not move.
+    #[test]
+    fn an_axis_at_the_threshold_does_not_glide() {
+        for sideways in [true, false] {
+            let mut state = ScrollState {
+                content_width: 5000.0,
+                viewport_width: 400.0,
+                content_height: 5000.0,
+                viewport_height: 400.0,
+                gesture_ended: true,
+                momentum_since: Some(lifted()),
+                ..Default::default()
+            };
+            // One axis at the line, the other well past it so the glide runs
+            // at all.
+            let at_the_line = 0.5;
+            if sideways {
+                state.velocity_x = at_the_line;
+                state.velocity_y = 10.0;
+            } else {
+                state.velocity_x = 10.0;
+                state.velocity_y = at_the_line;
+            }
+
+            state.advance_momentum(lifted() + A_FRAME);
+
+            let (stalled, moving) = if sideways {
+                (state.offset_x, state.offset_y)
+            } else {
+                (state.offset_y, state.offset_x)
+            };
+            assert_eq!(
+                stalled, 0.0,
+                "a speed of exactly {at_the_line} is not a glide (sideways: \
+                 {sideways})"
+            );
+            assert!(
+                moving > 0.0,
+                "and the other axis carried on (sideways: {sideways})"
+            );
+        }
+    }
+
+    /// Half a frame is half a step, on either axis. Stepping at sixty a second
+    /// makes the two indistinguishable — the step is one — so this steps at a
+    /// hundred and twenty.
+    #[test]
+    fn half_a_frame_moves_half_a_step_sideways() {
+        let mut state = wide_scroller();
+        sideways_gesture(&mut state, 5, 20.0, 8.0);
+        let speed = state.velocity_x;
+
+        let start = lifted();
+        state.advance_momentum(start + A_FRAME / 2);
+
+        let expected = speed * 0.92f32.powf(0.5) * 0.5;
+        assert!(
+            (state.offset_x - expected).abs() < expected * 0.05,
+            "half a frame of a {speed}px glide moved {}px, against the \
+             {expected}px half a step is worth",
+            state.offset_x
+        );
+    }
+
     /// Play `samples` movements of `delta` pixels `dt_ms` apart, then lift.
     fn gesture(state: &mut ScrollState, samples: u32, delta: f32, dt_ms: f32) {
         for i in 0..samples {
