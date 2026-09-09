@@ -218,6 +218,37 @@ mod tests {
         EllipticalRadii::circular(CornerRadii::uniform(radius))
     }
 
+    /// The radius belongs to the blur guido runs in its own shader. The
+    /// compositor picks its own, so a region is published for a compositor
+    /// source whatever the radius says — including zero, which is the spelling
+    /// for "blur nothing yourself, let the compositor blur what is behind me".
+    #[test]
+    fn a_compositor_region_does_not_need_a_radius() {
+        let command = FlattenedCommand {
+            command: std::rc::Rc::new(DrawCommand::BackdropBlur {
+                rect: Rect::new(0.0, 0.0, 100.0, 50.0),
+                sources: BackdropSources::COMPOSITOR,
+                radius: 0.0,
+                corner_radii: CornerRadii::uniform(0.0),
+                curvature: Default::default(),
+            }),
+            world_transform: Default::default(),
+            world_transform_origin: None,
+            layer: Default::default(),
+            clip: None,
+            clip_is_local: false,
+        };
+        assert_eq!(
+            regions_from_commands(&[command]),
+            vec![BlurRect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 50
+            }]
+        );
+    }
+
     #[test]
     fn zero_radius_is_bounding_box() {
         let rects = rounded_rect_to_blur_rects(Rect::new(10.0, 20.0, 100.0, 50.0), round(0.0));

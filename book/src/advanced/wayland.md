@@ -664,6 +664,26 @@ small rectangles because `wl_region` has no notion of curves, and the
 protocol carries no radius — the compositor picks its own, so `radius`
 does not apply there. Check availability with `compositor_effects()`.
 
+Which is why a blur restricted to the compositor asks for its region on
+its sources alone, and a radius of zero there is a request rather than a
+refusal:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+// Blur nothing of our own; let the compositor blur the desktop behind us.
+container().backdrop_blur(
+    BackdropBlur::new(0.0).sources(BackdropSources::COMPOSITOR),
+)
+# ;
+# }
+```
+
+Everywhere the surface is a source, a radius of zero still means no blur
+— that is how a blur is switched off by the same signal that switches it
+on. To switch off a compositor-only one, empty its sources instead.
+
 The **surface** side is guido's own: the frame is drawn into an
 offscreen target, each region is downsampled, blurred with a separable
 gaussian and composited back masked to the container's rounded shape.

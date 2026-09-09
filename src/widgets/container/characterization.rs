@@ -3839,6 +3839,54 @@ fn a_surface_only_blur_publishes_no_compositor_region() {
     assert_eq!(blur_radii(&frame.node), vec![24.0], "but it draws one");
 }
 
+/// A compositor-only blur has no radius of its own — `ext-background-effect-v1`
+/// carries none, the compositor picks it — so a zero radius is not "no blur"
+/// there, and the region has to be published anyway. It was the switch that
+/// decided whether the command existed at all, so the one spelling the
+/// documentation describes emitted nothing and the compositor blurred the whole
+/// surface, or nothing, but never the container's shape.
+#[test]
+fn a_compositor_only_blur_is_published_without_a_radius() {
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(20.0)
+            .backdrop_blur(BackdropBlur::new(0.0).sources(BackdropSources::COMPOSITOR)),
+    );
+    let frame = h.frame(100.0, 100.0);
+    assert!(
+        !frame.blur.is_empty(),
+        "the compositor's half does not read the radius"
+    );
+    assert_eq!(
+        blur_radii(&frame.node),
+        vec![0.0],
+        "and the command carries the zero, so the surface half draws nothing"
+    );
+}
+
+/// And emptying the sources is the off switch for a blur that has no radius to
+/// switch off — which is what the documentation on `backdrop_blur` tells a
+/// caller to reach for, so it has to be true at any radius.
+#[test]
+fn an_emptied_source_set_asks_for_nothing_at_any_radius() {
+    for radius in [0.0, 24.0] {
+        let mut h = H::new(
+            container()
+                .width(40.0)
+                .height(20.0)
+                .backdrop_blur(BackdropBlur::new(radius).sources(BackdropSources::empty())),
+        );
+        let frame = h.frame(100.0, 100.0);
+        assert_eq!(frame.blur, Vec::new(), "radius {radius} publishes nothing");
+        assert_eq!(
+            blur_radii(&frame.node),
+            Vec::<f32>::new(),
+            "radius {radius} draws nothing"
+        );
+    }
+}
+
 /// A hidden panel blurs nothing, and neither does anything inside it. The
 /// parent's paint returns at the visibility gate before its children are
 /// painted, so a blurred *descendant* never gets to withdraw its own region —

@@ -220,7 +220,10 @@ container()
 
 A blur radius of `0.0` is "no blur", on a container and on a text alike, which
 is what lets one signal switch the effect on and off rather than forcing the
-caller to rebuild the widget in a Rust branch.
+caller to rebuild the widget in a Rust branch. That holds wherever the surface
+is one of the sources, which is everything by default. A container that
+restricts itself to the compositor has no radius of its own — the protocol
+carries none — so it asks on its sources alone, and empties them to switch off.
 
 **What is not reactive** is structural: `.layout(..)`, the axis a `.scroll(..)`
 is built with, `.control()`, and the motion a

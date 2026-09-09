@@ -280,6 +280,13 @@ fn swatch(w: f32, h: f32, c: Color) -> Container {
     box_of(w, h).background(c)
 }
 
+/// A translucent card, the shape both backdrop-blur scenarios blur behind.
+fn panel() -> Container {
+    box_of(80.0, 60.0)
+        .background(Color::rgba(1.0, 1.0, 1.0, 0.15))
+        .corners(16.0)
+}
+
 // ---------------------------------------------------------------------------
 // Scenarios
 // ---------------------------------------------------------------------------
@@ -461,12 +468,7 @@ fn corners_borders_and_shadows() {
 /// `a_transformed_blur_publishes_the_shape_it_is_drawn_as`.
 #[test]
 fn backdrop_blur_sources_and_geometry() {
-    let frosted = |radius: f32| {
-        box_of(80.0, 60.0)
-            .background(Color::rgba(1.0, 1.0, 1.0, 0.15))
-            .corners(16.0)
-            .backdrop_blur(radius)
-    };
+    let frosted = |radius: f32| panel().backdrop_blur(radius);
 
     let view = container()
         .layout(Flex::row().spacing(20.0))
@@ -485,6 +487,30 @@ fn backdrop_blur_sources_and_geometry() {
         .child(frosted(24.0).scale(2.0));
 
     assert_snapshot("backdrop_blur", render(view, 700.0, 200.0));
+}
+
+/// After `examples/blur_example.rs`, which asks the compositor to blur the
+/// desktop behind a translucent panel and nothing of its own.
+///
+/// The radius is the radius of the blur guido runs in its own shader.
+/// `ext-background-effect-v1` carries none, so a compositor source is asked for
+/// by its sources alone — and a zero radius there is a request, not a refusal.
+/// Where the surface is a source the radius is the only thing that could say
+/// "off", so zero still means off.
+#[test]
+fn a_compositor_blur_needs_no_radius_of_its_own() {
+    let view = container()
+        .layout(Flex::row().spacing(20.0))
+        .padding(20.0)
+        // Asks for a region and draws nothing itself.
+        .child(panel().backdrop_blur(BackdropBlur::new(0.0).sources(BackdropSources::COMPOSITOR)))
+        // Both sources, and a radius of zero: still off, and no command at all.
+        .child(panel().backdrop_blur(BackdropBlur::new(0.0)));
+
+    assert_snapshot(
+        "compositor_blur_without_a_radius",
+        render(view, 300.0, 120.0),
+    );
 }
 
 /// After `examples/clip_test.rs`: hidden overflow clips its children, and a
