@@ -2093,6 +2093,39 @@ mod clock_diagnostics {
         );
     }
 
+    /// The rate limit is per call site and lasts for the life of the process,
+    /// so the reset that wipes the reactive state between `App`s has to wipe it
+    /// too: the second application on this thread makes the same mistakes as
+    /// the first, and would be told nothing.
+    ///
+    /// Named by the mutation job — deleting the body of `diagnostics::reset`
+    /// changed nothing any test could see.
+    #[test]
+    fn a_reset_forgets_the_sites_that_have_already_reported() {
+        let tree = Tree::new();
+        // One site, read twice: a closure so both reads are the same line.
+        let read_outside_a_frame = || {
+            let _ = tree.frame_instant();
+        };
+
+        read_outside_a_frame();
+        assert_eq!(report_count(), 1, "the site said it once");
+
+        crate::reactive::reset_reactive();
+
+        assert_eq!(
+            report_count(),
+            0,
+            "the reset forgets what has been reported, counter included"
+        );
+        read_outside_a_frame();
+        assert_eq!(
+            report_count(),
+            1,
+            "and the site is free to say it to the next application"
+        );
+    }
+
     #[test]
     fn each_clock_is_quiet_inside_the_pass_that_owns_it() {
         let mut tree = Tree::new();
