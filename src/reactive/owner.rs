@@ -37,6 +37,7 @@
 use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 use std::rc::Rc;
 
 use super::invalidation::clear_signal_subscribers;
@@ -51,10 +52,14 @@ type Declarations = Vec<(TypeId, Rc<dyn Any>)>;
 /// Generational: the arena recycles slot indices and bumps the generation on
 /// every reuse, so a stale `OwnerId` held after disposal can never dispose or
 /// mutate an unrelated owner that later occupied the same slot.
+///
+/// The generation counts from one so that zero is free to be the niche: an
+/// `Option<OwnerId>` is eight bytes rather than twelve, which is what
+/// `Owner::parent` and every derived closure's captured scope are made of.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct OwnerId {
     index: u32,
-    generation: u32,
+    generation: NonZeroU32,
 }
 
 /// An owner that manages the lifecycle of reactive primitives.
@@ -97,7 +102,7 @@ impl Owner {
 /// indices can be distinguished from their previous occupants.
 struct OwnerSlot {
     owner: Option<Owner>,
-    generation: u32,
+    generation: NonZeroU32,
 }
 
 /// Arena-based storage for owners with slot recycling.
@@ -123,7 +128,9 @@ impl OwnerArena {
         let owner = Owner::new(parent);
         if let Some(index) = self.free_indices.pop() {
             let slot = &mut self.slots[index as usize];
-            slot.generation = slot.generation.wrapping_add(1);
+            // Wrapping, and skipping zero on the way round: zero is what makes
+            // `Option<OwnerId>` eight bytes.
+            slot.generation = slot.generation.checked_add(1).unwrap_or(NonZeroU32::MIN);
             slot.owner = Some(owner);
             OwnerId {
                 index,
@@ -133,11 +140,11 @@ impl OwnerArena {
             let index = self.slots.len() as u32;
             self.slots.push(OwnerSlot {
                 owner: Some(owner),
-                generation: 0,
+                generation: NonZeroU32::MIN,
             });
             OwnerId {
                 index,
-                generation: 0,
+                generation: NonZeroU32::MIN,
             }
         }
     }
@@ -172,7 +179,10 @@ impl OwnerArena {
 }
 
 thread_local! {
-    static CURRENT_OWNER: RefCell<Option<OwnerId>> = const { RefCell::new(None) };
+    /// A `Cell` rather than a `RefCell`: an `OwnerId` is `Copy`, nothing ever
+    /// holds a borrow of this across a call, and every derived read swaps it —
+    /// so the borrow flag was bookkeeping on the hottest path in the library.
+    static CURRENT_OWNER: Cell<Option<OwnerId>> = const { Cell::new(None) };
     static OWNERS: RefCell<OwnerArena> = RefCell::new(OwnerArena::new());
     /// Remembered so [`with_root_owner`] can reach it from any depth.
     static ROOT_OWNER: Cell<Option<OwnerId>> = const { Cell::new(None) };
@@ -185,7 +195,7 @@ thread_local! {
 /// disposed, all signals, effects, and cleanup callbacks cascade.
 pub(crate) fn create_root_owner() -> OwnerId {
     let id = OWNERS.with(|owners| owners.borrow_mut().allocate(None));
-    CURRENT_OWNER.with(|current| *current.borrow_mut() = Some(id));
+    CURRENT_OWNER.with(|current| current.set(Some(id)));
     ROOT_OWNER.with(|root| root.set(Some(id)));
     id
 }
@@ -195,7 +205,7 @@ pub(crate) fn create_root_owner() -> OwnerId {
 /// Called during `App::drop()` after `dispose_owner()` has cleaned up the
 /// reactive graph. This wipes the arena so the next `App` run starts fresh.
 pub(crate) fn reset_owners() {
-    CURRENT_OWNER.with(|c| *c.borrow_mut() = None);
+    CURRENT_OWNER.with(|c| c.set(None));
     ROOT_OWNER.with(|root| root.set(None));
     OWNERS.with(|o| *o.borrow_mut() = OwnerArena::new());
     // With them, anything queued against them. Owner ids restart from zero
@@ -229,8 +239,8 @@ pub(crate) fn with_root_owner<T>(f: impl FnOnce() -> T) -> T {
 /// Run `f` with `owner_id` as the current owner, whatever it was before.
 ///
 /// The one place `CURRENT_OWNER` is swapped: [`with_owner`] allocates a scope
-/// and hands it here, [`with_root_owner`] names the root, and a widget names its
-/// own. Restoring on unwind is why they all go through it — a leaked scope
+/// and hands it here, [`with_root_owner`] names the root, and a widget names
+/// its own. Restoring on unwind is why they all go through it — a leaked scope
 /// silently re-parents every reactive resource created afterwards, and the copy
 /// that forgot the guard is the one that would have done it.
 ///
@@ -240,9 +250,7 @@ pub(crate) fn with_root_owner<T>(f: impl FnOnce() -> T) -> T {
 pub(crate) fn under_owner<T>(owner_id: OwnerId, f: impl FnOnce() -> T) -> T {
     let previous = CURRENT_OWNER.with(|current| current.replace(Some(owner_id)));
     let _guard = crate::reactive::guard::defer(move || {
-        CURRENT_OWNER.with(|current| {
-            *current.borrow_mut() = previous;
-        });
+        CURRENT_OWNER.with(|current| current.set(previous));
     });
     f()
 }
@@ -262,7 +270,7 @@ pub(crate) fn under_owner<T>(owner_id: OwnerId, f: impl FnOnce() -> T) -> T {
 /// Use `on_cleanup` for registering cleanup callbacks in user code.
 pub fn with_owner<T>(f: impl FnOnce() -> T) -> (T, OwnerId) {
     // Allocate new owner and register as child of current owner (if any)
-    let parent_id = CURRENT_OWNER.with(|current| *current.borrow());
+    let parent_id = CURRENT_OWNER.with(Cell::get);
     let owner_id = OWNERS.with(|owners| {
         let mut owners = owners.borrow_mut();
         let id = owners.allocate(parent_id);
@@ -330,7 +338,7 @@ pub(crate) fn nearest_declaration(type_id: TypeId) -> Option<Rc<dyn Any>> {
 ///
 /// Returns `None` if not currently inside an owner scope.
 pub fn current_owner() -> Option<OwnerId> {
-    CURRENT_OWNER.with(|current| *current.borrow())
+    CURRENT_OWNER.with(Cell::get)
 }
 
 /// Dispose an owner and all its resources.
@@ -871,6 +879,16 @@ mod tests {
         // Both should be disposed
         assert!(!effect_has_owner(inner_effect));
         assert!(!effect_has_owner(outer_effect));
+    }
+
+    /// The niche is the whole point of the `NonZeroU32`. `Option<OwnerId>` is
+    /// what `Owner::parent` and every derived closure's captured scope are made
+    /// of; twelve bytes there was four spent on a tag the generation can carry
+    /// itself, on a structure allocated per surface, per popup and per row.
+    #[test]
+    fn an_optional_owner_id_costs_no_more_than_an_owner_id() {
+        assert_eq!(size_of::<OwnerId>(), 8);
+        assert_eq!(size_of::<Option<OwnerId>>(), size_of::<OwnerId>());
     }
 
     #[test]
