@@ -36,7 +36,6 @@
 
 use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 
@@ -110,9 +109,6 @@ struct OwnerArena {
     slots: Vec<OwnerSlot>,
     /// Vacant slot indices available for reuse.
     free_indices: Vec<u32>,
-    /// Reverse mapping from effect ID to owner ID for O(1) lookup.
-    /// This avoids linear search through all owners when checking if an effect is owned.
-    effect_owners: HashMap<EffectId, OwnerId>,
 }
 
 impl OwnerArena {
@@ -120,7 +116,6 @@ impl OwnerArena {
         Self {
             slots: Vec::new(),
             free_indices: Vec::new(),
-            effect_owners: HashMap::new(),
         }
     }
 
@@ -416,12 +411,6 @@ pub fn dispose_owner_now(id: OwnerId) {
         crate::reactive::diagnostics::snapshot_zone(cleanup);
     }
 
-    // Dispose effects and remove from reverse mapping
-    for effect_id in &owner.effects {
-        OWNERS.with(|owners| {
-            owners.borrow_mut().effect_owners.remove(effect_id);
-        });
-    }
     for effect_id in owner.effects {
         with_runtime(|rt| rt.dispose_effect(effect_id));
     }
@@ -494,19 +483,20 @@ pub(crate) fn register_effect(id: EffectId) {
             let mut owners = owners.borrow_mut();
             if let Some(owner) = owners.get_mut(owner_id) {
                 owner.effects.push(id);
-                owners.effect_owners.insert(id, owner_id);
             }
         });
     }
 }
 
-/// Check if an effect is owned by any owner, in O(1) via the reverse mapping.
+/// Check if an effect is owned by any owner.
 ///
-/// Only the ownership tests below ask this: nothing in the running library
-/// needs to, since an effect's lifetime is entirely its scope's.
+/// The effect's slot in the runtime is where the answer lives, since #337 put
+/// the scope there so a re-run could be given it without a lookup. A map here
+/// beside it would be a second copy of one fact, maintained on the creation and
+/// disposal paths to answer a question only these tests ask.
 #[cfg(test)]
 pub(crate) fn effect_has_owner(id: EffectId) -> bool {
-    OWNERS.with(|owners| owners.borrow().effect_owners.contains_key(&id))
+    crate::reactive::runtime::with_runtime(|rt| rt.effect_scope(id)).is_some()
 }
 
 // Owners scheduled for deferred disposal (see `dispose_owner`).

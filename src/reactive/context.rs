@@ -22,12 +22,20 @@
 //! frame, rather than the row's during layout and the application's during
 //! paint (#335).
 //!
-//! An **event handler** and a **spawned task** open no scope and carry none, so
-//! a read inside one resolves against whatever is current, which in a running
-//! application is the root: `App::run` enters the root scope before the setup
-//! closure and never leaves it. The application's declarations are readable
-//! from a handler; a surface's are not. Read the value in the factory body and
-//! capture the handle, and the question does not arise:
+//! An **effect** and a **memo** are the same story on a different clock. Their
+//! bodies run once where they were created and again whenever a dependency
+//! changes — and that second run happens at a flush, which belongs to the
+//! application rather than to whatever declared the value. They carry their
+//! scope too, so a memo of a row's declaration is that row's
+//! on its first computation and on every one after it (#337).
+//!
+//! An **event handler** and a **spawned task** are what is left: they open no
+//! scope and carry none, so a read inside one resolves against whatever is
+//! current, which in a running application is the root — `App::run` enters the
+//! root scope before the setup closure and never leaves it. The application's
+//! declarations are readable from a handler; a surface's are not. Read the
+//! value in the factory body and capture the handle, and the question does not
+//! arise:
 //!
 //! ```
 //! # use guido::prelude::*;
@@ -365,6 +373,120 @@ mod tests {
             use_context::<RwSignal<i32>>().is_none(),
             "the handle went with the scope rather than outliving it"
         );
+    }
+
+    /// A memo's body is an effect body, and it runs twice: once where it was
+    /// created, and again whenever a dependency changes — which happens at the
+    /// flush, with the root current. So the row's declaration answered the
+    /// first computation and the application's answered every one after it
+    /// (#337).
+    #[test]
+    fn a_memo_reads_its_own_scope_on_every_recomputation() {
+        create_root_owner();
+        provide_context("the application's".to_string());
+        let trigger = create_signal(0u32);
+
+        let (memo, row) = with_owner(|| {
+            provide_context("the row's".to_string());
+            crate::reactive::create_memo(move || {
+                trigger.get();
+                use_context::<String>()
+            })
+        });
+
+        assert_eq!(
+            memo.get().as_deref(),
+            Some("the row's"),
+            "the first computation runs where the memo was created"
+        );
+
+        trigger.set(1);
+
+        assert_eq!(
+            memo.get().as_deref(),
+            Some("the row's"),
+            "and so does every one after it"
+        );
+        dispose_owner_now(row);
+    }
+
+    /// The same for a bare effect, which is what a memo is made of: its re-run
+    /// is scheduled, and what scope the schedule happens to be flushed under is
+    /// not the effect's business.
+    #[test]
+    fn an_effect_reads_its_own_scope_on_every_run() {
+        create_root_owner();
+        provide_context("the application's".to_string());
+        let trigger = create_signal(0u32);
+
+        let seen = Rc::new(Cell::new(None));
+        let recorder = Rc::clone(&seen);
+        let ((), row) = with_owner(move || {
+            provide_context("the row's".to_string());
+            crate::reactive::create_effect(move || {
+                trigger.get();
+                recorder.set(use_context::<String>());
+            });
+        });
+
+        assert_eq!(seen.take().as_deref(), Some("the row's"), "the first run");
+
+        trigger.set(1);
+
+        assert_eq!(
+            seen.take().as_deref(),
+            Some("the row's"),
+            "and the run the change scheduled"
+        );
+        dispose_owner_now(row);
+    }
+
+    /// An effect's slot is recycled when the effect is disposed, and the next
+    /// effect gets it — a row of a list going away hands its memo's slot to the
+    /// row that replaces it. The scope in that slot has to be replaced with the
+    /// new effect's, and nothing else says so: the two tests above run in a
+    /// process where nothing has been freed yet, so they only ever see a fresh
+    /// slot.
+    ///
+    /// With the slot's scope left as it was, this reads a scope that has been
+    /// disposed — `None`, and a signal made there would register nowhere.
+    #[test]
+    fn an_effect_in_a_recycled_slot_reads_its_own_scope_and_not_the_dead_one() {
+        create_root_owner();
+        let trigger = create_signal(0u32);
+
+        let ((), dead_row) = with_owner(|| {
+            provide_context("the dead row's".to_string());
+            crate::reactive::create_effect(move || {
+                trigger.get();
+            });
+        });
+        dispose_owner_now(dead_row);
+
+        let seen = Rc::new(Cell::new(None));
+        let recorder = Rc::clone(&seen);
+        let ((), live_row) = with_owner(move || {
+            provide_context("the live row's".to_string());
+            crate::reactive::create_effect(move || {
+                trigger.get();
+                recorder.set(use_context::<String>());
+            });
+        });
+
+        assert_eq!(
+            seen.take().as_deref(),
+            Some("the live row's"),
+            "its first run"
+        );
+
+        trigger.set(1);
+
+        assert_eq!(
+            seen.take().as_deref(),
+            Some("the live row's"),
+            "and the scheduled one, from a slot the disposed effect used to hold"
+        );
+        dispose_owner_now(live_row);
     }
 
     /// A property closure is a scope — the one it was written in, entered on

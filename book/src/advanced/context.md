@@ -60,11 +60,18 @@ current when the builder ran travels with it — so a property declared in a row
 of a dynamic list reads that row's declarations on every phase of every frame,
 and not the row's while laying out and the application's while painting.
 
-An **event handler** and a **spawned task** open no scope and carry none, so a
-read inside one resolves against whatever is current, which in a running
-application is the root: `App::run` enters the root scope before your setup
-closure and never leaves it. The application's declarations are readable from a
-handler; a surface's are not.
+An **effect** and a **memo** are the same story on a different clock. Their
+bodies run once where they were created and again whenever a dependency
+changes — and that second run happens at a flush, which belongs to the
+application rather than to whatever declared the value. They carry their scope
+too, so a memo of a row's declaration is that row's on its first computation and
+on every one after it.
+
+An **event handler** and a **spawned task** are what is left: they open no
+scope and carry none, so a read inside one resolves against whatever is
+current, which in a running application is the root — `App::run` enters the
+root scope before your setup closure and never leaves it. The application's
+declarations are readable from a handler; a surface's are not.
 
 Reading the value once in the factory body and capturing it works everywhere,
 and is still the clearest thing to write:

@@ -471,3 +471,40 @@ mod derived_scope_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod effect_scope_tests {
+    use super::live_signal_count;
+    use crate::reactive::owner::{dispose_owner_now, with_owner};
+    use crate::reactive::{create_effect, create_signal};
+
+    /// The half of #337 that is about lifetimes rather than lookup: an effect
+    /// body runs under the scope the effect was created in, so what the body
+    /// makes belongs there too.
+    ///
+    /// The first run always did — it happens inside the scope. The run a
+    /// dependency schedules did not: it happens at the flush, under whatever is
+    /// current there, and what it made outlived the effect that made it.
+    #[test]
+    fn what_an_effect_body_makes_belongs_to_the_scope_the_effect_was_created_in() {
+        let baseline = live_signal_count();
+        let trigger = create_signal(0u32);
+
+        let ((), scope) = with_owner(|| {
+            create_effect(move || {
+                trigger.get();
+                create_signal(1u32);
+            });
+        });
+        trigger.set(1);
+
+        dispose_owner_now(scope);
+
+        assert_eq!(
+            live_signal_count(),
+            baseline + 1,
+            "everything the body made went with the scope, and only the trigger \
+             — made outside it — is left"
+        );
+    }
+}
