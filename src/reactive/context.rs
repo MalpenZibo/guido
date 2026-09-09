@@ -15,17 +15,19 @@
 //! the value was declared for is the scope that is current, so it is where the
 //! library knows who is asking.
 //!
-//! An event handler, a property closure and a spawned task open no scope of
-//! their own, so a read inside one resolves against whatever is current. For a
-//! handler that is the root — `App::run` enters the root scope before the setup
-//! closure and never leaves it — so the application's declarations are readable
-//! from one and a surface's are not. For a property closure it depends on when
-//! the closure is read: laying out a dynamic list re-enters that row's scope,
-//! painting does not, so the same read can resolve against two different scopes
-//! on two phases of one frame.
+//! A **property closure** resolves where it was written, whenever it is read. A
+//! closure handed to a builder becomes a derived signal, and the scope that was
+//! current when the builder ran travels with it — so a property declared in a
+//! row of a dynamic list reads that row's declarations on every phase of every
+//! frame, rather than the row's during layout and the application's during
+//! paint (#335).
 //!
-//! Read the value once in the factory body and capture the handle into the
-//! closure, and none of that arises:
+//! An **event handler** and a **spawned task** open no scope and carry none, so
+//! a read inside one resolves against whatever is current, which in a running
+//! application is the root: `App::run` enters the root scope before the setup
+//! closure and never leaves it. The application's declarations are readable
+//! from a handler; a surface's are not. Read the value in the factory body and
+//! capture the handle, and the question does not arise:
 //!
 //! ```
 //! # use guido::prelude::*;
@@ -36,7 +38,7 @@
 //! # provide_signal_context(Theme::default());
 //! fn themed_box() -> Container {
 //!     let theme = expect_context::<RwSignal<Theme>>();   // here: a scope is current
-//!     container().background(move || theme.get().bg)     // not here: the handle is captured
+//!     container().background(move || theme.get().bg)     // or here: the closure keeps this scope
 //! }
 //! # themed_box();
 //! # });
@@ -80,6 +82,10 @@ use super::signal::{RwSignal, create_signal};
 /// If no scope is current at all, or if this scope already declares the type —
 /// two of a type is what shadowing is for, and shadowing needs two scopes.
 ///
+/// A property closure is not a place to declare from, though it is a scope: it
+/// runs once per read, so the second read declares a type its own scope already
+/// has, and that is the panic you get.
+///
 /// # Example
 ///
 /// ```
@@ -112,8 +118,8 @@ pub fn provide_context<T: 'static>(value: T) {
         declared.is_some(),
         "`{}` was declared where no scope is current.\n\
          A value belongs to a scope — the application's setup, a surface, a \
-         popup, a dynamic list — and an event handler, a property closure or a \
-         spawned task is none of them. Declare it where the tree is built.",
+         popup, a dynamic list — and an event handler or a spawned task is \
+         neither. Declare it where the tree is built.",
         type_name::<T>()
     );
 }
@@ -168,9 +174,9 @@ pub fn expect_context<T: Clone + 'static>() -> T {
     use_context::<T>().unwrap_or_else(|| {
         panic!(
             "No value of type `{}` is declared in this scope or any above it.\n\
-             Either nothing declared it, or the read happened outside the scope \
-             it was declared for — an event handler, a property closure and a \
-             spawned task read against the root. Read it in the factory body and \
+             Either nothing declared it, or the read happened somewhere that \
+             carries no scope of its own — an event handler or a spawned task, \
+             which read against the root. Read it in the factory body and \
              capture the value into the closure.",
             type_name::<T>()
         )
@@ -359,6 +365,25 @@ mod tests {
             use_context::<RwSignal<i32>>().is_none(),
             "the handle went with the scope rather than outliving it"
         );
+    }
+
+    /// A property closure is a scope — the one it was written in, entered on
+    /// every read (#335) — so declaring from inside one declares into that
+    /// scope once per read, and the second read is a duplicate.
+    ///
+    /// Not a rule anybody would want, but the truthful consequence of the one
+    /// above it, and worth pinning: the message a caller meets depends on it.
+    #[test]
+    #[should_panic(expected = "already declared in this scope")]
+    fn declaring_from_a_property_closure_declares_once_per_read() {
+        create_root_owner();
+        let property = crate::reactive::create_derived(|| {
+            provide_context(1u32);
+            0u32
+        });
+
+        property.get();
+        property.get();
     }
 
     /// A declaration needs somewhere to live. With no scope current — an event

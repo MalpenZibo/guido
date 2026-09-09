@@ -41,9 +41,12 @@ root, not from the surface it belongs to — so a popup reads what the
 application declared and not what the surface that opened it did, and two
 surfaces are siblings that cannot see each other's declarations.
 
-A widget factory is an ordinary function call, not a scope. A `provide_context`
-written inside one declares its value for whatever scope called it — the whole
-surface — and not for the subtree the factory is building.
+A plain widget factory is an ordinary function call, not a scope: a
+`provide_context` written inside one declares its value for whatever scope
+called it — the whole surface — and not for the subtree the factory is
+building. A closure guido *invokes* is a scope, and that is the difference: the
+factory you hand to `.child(…)` for dynamic children is called by the library,
+which opens a scope around it, so a declaration made there belongs to that row.
 
 ## Where a Read Resolves
 
@@ -51,17 +54,20 @@ In the body of the factory that builds the widgets. That is where the scope the
 value was declared for is the one that is current, so it is where guido knows
 who is asking.
 
-An event handler, a property closure and a spawned task open no scope of their
-own, so a read inside one resolves against whatever is current. For a handler
-that is the root — `App::run` enters the root scope before your setup closure
-and never leaves it — so the application's declarations are readable from one
-and a surface's are not. For a property closure it depends on when the closure
-is read: laying out a dynamic list re-enters that row's scope and painting does
-not, so one read can resolve against two different scopes on two phases of a
-frame.
+A **property closure** resolves where it was written, whenever it is read. The
+closure you hand a builder becomes a derived signal, and the scope that was
+current when the builder ran travels with it — so a property declared in a row
+of a dynamic list reads that row's declarations on every phase of every frame,
+and not the row's while laying out and the application's while painting.
 
-Read the value once in the factory body and capture it, and the question does
-not arise:
+An **event handler** and a **spawned task** open no scope and carry none, so a
+read inside one resolves against whatever is current, which in a running
+application is the root: `App::run` enters the root scope before your setup
+closure and never leaves it. The application's declarations are readable from a
+handler; a surface's are not.
+
+Reading the value once in the factory body and capturing it works everywhere,
+and is still the clearest thing to write:
 
 ```rust
 # extern crate guido;
@@ -73,7 +79,7 @@ fn themed_box() -> Container {
     let theme = expect_context::<RwSignal<Theme>>();   // here: a scope is current
 
     container()
-        .background(move || theme.get().bg_color)      // not here: the handle is captured
+        .background(move || theme.get().bg_color)      // or here: the closure keeps this scope
         .child(text(move || theme.get().title.clone()))
 }
 # }
