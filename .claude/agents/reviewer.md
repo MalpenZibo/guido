@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: Reviews a change against Guido's own rules — harness coverage, the reactivity rule, the three spellings, atomic commits, documentation. Use before opening a pull request, or on an existing PR diff. Reports findings; does not fix them.
+description: Reviews a change against Guido's own rules — harness coverage, the reactivity rule, the five spellings, atomic commits, documentation. Use before opening a pull request, or on an existing PR diff. Reports findings; does not fix them.
 tools: Read, Grep, Glob, Bash
 ---
 
@@ -42,9 +42,14 @@ them.
 
 - **The reactivity rule**: anything that survives to paint takes
   `impl IntoSignal<T, M>`; structural declarations do not.
-- **The three spellings**: a new conversion needs `From`, `IntoVal` *and*
-  `converting_signals!`, plus a line in `tests/signal_conversions.rs`. A missing
-  signal form compiles fine and refuses at a call site months later.
+- **The five spellings**: a new conversion is one `converts!` entry, which
+  emits the closure and signal forms together, plus a line in
+  `tests/signal_conversions.rs`. An `S => T` entry needs the `From` beside the
+  type, and will not compile without it; an `S as T` entry is a widening std
+  has no `From` for, where the macro emits the value form too and a `From`
+  would make the marker ambiguous. An `IntoVal` impl written by hand
+  is the drift #226 closed: it gives the closure form and not the signal one,
+  which compiles fine and refuses at a call site months later.
 - Position and bounds live in the `Tree`, never on the widget.
 - Performance claims come with a measurement, before and after.
 - Commits are atomic and their subjects are sentences saying what is now true.
