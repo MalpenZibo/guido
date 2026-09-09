@@ -187,7 +187,8 @@ name.set("Guido".to_string()); // Effect re-runs, prints: Hello, Guido!
 
 A signal belongs to the scope that was current when it was created, and that
 scope is ambient: inside a widget factory it is that surface's, inside a click
-handler the root, on an effect's first run whoever created the effect. For the
+handler the root, inside an effect or a property closure the scope that effect
+or closure was written in — on every run of it, not only the first. For the
 handful of things with one instance per process — what the compositor reports,
 where the keyboard focus is — the owner is none of those. It is the
 application.

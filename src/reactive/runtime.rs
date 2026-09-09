@@ -28,6 +28,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use smallvec::SmallVec;
 
 use super::invalidation::suspend_widget_tracking;
+use super::owner::{OwnerId, current_owner, under_scope};
 
 /// Buffered signal reads for an effect. Most effects read 1–4 signals,
 /// so SmallVec avoids heap allocation in the common case.
@@ -248,11 +249,21 @@ enum EffectState {
     DisposedWhileRunning,
 }
 
+/// An effect's callback, taken out of its slot to be run, and the scope to run
+/// it in.
+type EffectRun = (Box<dyn FnMut()>, Option<OwnerId>);
+
 /// Storage slot for one effect. The generation survives disposal so recycled
 /// indices can be told apart from their previous occupants.
 #[derive(Default)]
 struct EffectSlot {
     callback: Option<Box<dyn FnMut()>>,
+    /// The scope the effect was created in, which is where its body runs —
+    /// every run, not just the first (#337).
+    ///
+    /// Held here rather than looked up in the owner arena's `effect_owners`
+    /// map: a re-run would pay a hash for it, and the slot is already in hand.
+    scope: Option<OwnerId>,
     /// Signals this effect reads. Vec with dedup — most effects depend on
     /// 1–3 signals, making linear scan faster than HashSet.
     dependencies: Vec<SignalId>,
@@ -314,12 +325,16 @@ impl Runtime {
     }
 
     pub fn allocate_effect(&mut self, callback: Box<dyn FnMut()>) -> EffectId {
+        // Reading the current scope borrows nothing this call holds: it is a
+        // `Cell` beside the arena, not the arena.
+        let scope = current_owner();
         // Reuse a freed slot if available, bumping its generation so stale
         // ids for the previous occupant can never act on this effect
         if let Some(index) = self.free_effect_indices.pop() {
             let slot = &mut self.effects[index as usize];
             slot.generation = slot.generation.wrapping_add(1);
             slot.callback = Some(callback);
+            slot.scope = scope;
             slot.dependencies.clear();
             slot.state = EffectState::Idle;
             return EffectId {
@@ -331,6 +346,7 @@ impl Runtime {
         let index = self.effects.len() as u32;
         self.effects.push(EffectSlot {
             callback: Some(callback),
+            scope,
             dependencies: Vec::new(),
             generation: 0,
             state: EffectState::Idle,
@@ -364,12 +380,13 @@ impl Runtime {
     /// id, clear old dependencies, and hand the callback out so it can run
     /// WITHOUT the runtime borrowed. Returns `None` for stale/disposed ids
     /// or if the effect is already running (re-entrant trigger).
-    fn begin_effect(&mut self, effect_id: EffectId) -> Option<Box<dyn FnMut()>> {
+    fn begin_effect(&mut self, effect_id: EffectId) -> Option<EffectRun> {
         let slot = self.effect_slot_mut(effect_id)?;
         if slot.state != EffectState::Idle {
             return None;
         }
         let callback = slot.callback.take()?;
+        let scope = slot.scope;
         slot.state = EffectState::Running;
 
         // Clear old dependencies; they are re-established from this run's reads
@@ -379,7 +396,7 @@ impl Runtime {
                 vec_remove(subs, &effect_id);
             }
         }
-        Some(callback)
+        Some((callback, scope))
     }
 
     /// Phase 3 of effect execution (under the runtime borrow): restore the
@@ -420,6 +437,21 @@ impl Runtime {
                 drop(callback);
             }
         }
+    }
+
+    /// The scope an effect belongs to, or `None` for a stale id or a slot that
+    /// has been disposed.
+    ///
+    /// Only the ownership tests ask in this form: the running library gets the
+    /// scope from [`begin_effect`](Self::begin_effect), which hands it out with
+    /// the callback it is about to run.
+    #[cfg(test)]
+    pub(crate) fn effect_scope(&self, effect_id: EffectId) -> Option<OwnerId> {
+        let slot = self.effects.get(effect_id.index as usize)?;
+        if slot.generation != effect_id.generation || slot.state == EffectState::Vacant {
+            return None;
+        }
+        slot.scope
     }
 
     pub fn dispose_effect(&mut self, effect_id: EffectId) {
@@ -477,7 +509,7 @@ thread_local! {
 /// work), then restore it and register the tracked reads.
 pub(crate) fn run_effect_by_id(effect_id: EffectId) {
     // Phase 1 (borrow): take the callback out
-    let Some(mut callback) = with_runtime(|rt| rt.begin_effect(effect_id)) else {
+    let Some((mut callback, scope)) = with_runtime(|rt| rt.begin_effect(effect_id)) else {
         return;
     };
 
@@ -488,8 +520,12 @@ pub(crate) fn run_effect_by_id(effect_id: EffectId) {
     EFFECT_TRACKING.with(|stack| {
         stack.borrow_mut().push((effect_id, EffectReads::new()));
     });
+    // Under the scope the effect was created in, not the one the flush happens
+    // to be under: a context read in the body answers the same on the first run
+    // and on every one a dependency schedules (#337), and a signal the body
+    // makes belongs where the effect does rather than outliving it.
     let panic_payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        suspend_widget_tracking(&mut *callback);
+        under_scope(scope, || suspend_widget_tracking(&mut *callback));
     }))
     .err();
     let reads = EFFECT_TRACKING

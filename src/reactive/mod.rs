@@ -133,6 +133,61 @@ mod bench {
 
     use super::*;
 
+    /// Best of five: the machine is noisy enough that a single round says
+    /// nothing about the one before it.
+    fn best_of_five(mut round: impl FnMut() -> Duration) -> Duration {
+        (0..5).map(|_| round()).min().expect("five rounds")
+    }
+
+    /// What an effect's re-run costs now that it enters the scope it was
+    /// created in: a signal written a million times, with one effect reading
+    /// it, which is a million scheduled re-runs.
+    ///
+    /// Twice, because `under_scope` declines to enter a scope already current:
+    /// an effect created where the flush runs pays a compare, and one created
+    /// in a scope of its own — a row of a list, which is the case this exists
+    /// for — pays the swap.
+    ///
+    /// `cargo test --release --lib bench:: -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn an_effect_rerun() {
+        let rounds = 1_000_000u32;
+        let time_a_million_reruns = |in_a_scope_of_its_own: bool| -> Duration {
+            owner::create_root_owner();
+            let source = create_signal(0u32);
+            let seen = std::rc::Rc::new(std::cell::Cell::new(0u32));
+            let recorder = std::rc::Rc::clone(&seen);
+
+            let effect = move || {
+                let recorder = std::rc::Rc::clone(&recorder);
+                create_effect(move || recorder.set(source.get()));
+            };
+            if in_a_scope_of_its_own {
+                owner::with_owner(effect);
+            } else {
+                effect();
+            }
+
+            let best = best_of_five(|| {
+                let started = Instant::now();
+                for round in 0..rounds {
+                    source.set(round);
+                }
+                started.elapsed()
+            });
+            assert_eq!(seen.get(), rounds - 1, "the effect ran");
+            best
+        };
+
+        let where_the_flush_is = time_a_million_reruns(false);
+        let in_a_scope_of_its_own = time_a_million_reruns(true);
+        println!(
+            "{rounds} effect re-runs: {where_the_flush_is:?} for an effect of the \
+             flush's own scope, {in_a_scope_of_its_own:?} for one in a scope below it"
+        );
+    }
+
     /// A frame of a list, which is where the per-read number lands: three
     /// hundred rows of four reactive properties each, laid out and painted the
     /// way `render_surface` does, with a signal moved between frames so the
@@ -166,25 +221,22 @@ mod bench {
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
 
         let frames = 200u32;
-        let best = (0..5)
-            .map(|_| {
-                let started = Instant::now();
-                for frame in 0..frames {
-                    width.set(40.0 + (frame % 7) as f32);
-                    tree.with_widget_mut(root, |w, id, t| {
-                        w.layout(t, id, Constraints::new(0.0, 0.0, 400.0, 4000.0));
-                    });
-                    let mut node = RenderNode::new(root.as_u64());
-                    tree.with_widget_mut(root, |w, id, t| {
-                        let mut ctx = PaintContext::new(&mut node);
-                        w.paint(t, id, &mut ctx);
-                    });
-                    std::hint::black_box(&node);
-                }
-                started.elapsed() / frames
-            })
-            .min()
-            .expect("five rounds");
+        let best = best_of_five(|| {
+            let started = Instant::now();
+            for frame in 0..frames {
+                width.set(40.0 + (frame % 7) as f32);
+                tree.with_widget_mut(root, |w, id, t| {
+                    w.layout(t, id, Constraints::new(0.0, 0.0, 400.0, 4000.0));
+                });
+                let mut node = RenderNode::new(root.as_u64());
+                tree.with_widget_mut(root, |w, id, t| {
+                    let mut ctx = PaintContext::new(&mut node);
+                    w.paint(t, id, &mut ctx);
+                });
+                std::hint::black_box(&node);
+            }
+            started.elapsed() / frames
+        });
 
         println!("a frame of 300 rows: {best:?}");
     }
@@ -204,16 +256,13 @@ mod bench {
 
         let rounds = 1_000_000u32;
         let best = |derived: Signal<u32>| -> Duration {
-            (0..5)
-                .map(|_| {
-                    let started = Instant::now();
-                    for _ in 0..rounds {
-                        std::hint::black_box(derived.get());
-                    }
-                    started.elapsed()
-                })
-                .min()
-                .expect("five rounds")
+            best_of_five(|| {
+                let started = Instant::now();
+                for _ in 0..rounds {
+                    std::hint::black_box(derived.get());
+                }
+                started.elapsed()
+            })
         };
 
         // Warm everything: the closure, the subscription bookkeeping, the caches.
