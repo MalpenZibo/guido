@@ -65,8 +65,8 @@ fn main() {
         let view = container()
             .padding(24.0)
             .layout(Flex::row().spacing(20.0))
-            .child(card("shake", plays).rotate(0.0.timeline(shake(), plays)))
-            .child(card("nod", plays).translate(Translate::NONE.timeline(nod(), plays)));
+            .child(card("shake", plays).rotate(0.0.timeline(shake().played_by(plays))))
+            .child(card("nod", plays).translate(Translate::NONE.timeline(nod().played_by(plays))));
 
         app.add_surface(
             SurfaceConfig::new()

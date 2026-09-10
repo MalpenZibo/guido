@@ -6,8 +6,9 @@
 //! flash, a bounce, anything that has to pass through somewhere on its way and
 //! end where it started.
 //!
-//! A timeline is the other shape. It has no target; it plays, from a trigger,
-//! and while it plays it *replaces* the declared value — the same rule CSS
+//! A timeline is the other shape. It has no target; it plays — as soon as the
+//! widget exists, or on a trigger if it was given one — and while it plays it
+//! *replaces* the declared value — the same rule CSS
 //! settled on, where an animation outranks a normal declaration for as long as
 //! it runs and hands the property back afterwards.
 //!
@@ -22,8 +23,8 @@
 //!         .at(0.2, 1.5)
 //!         .at(0.5, -1.0)
 //!         .at(0.8, 0.4)
-//!         .at(1.0, 0.0),
-//!     rejections,
+//!         .at(1.0, 0.0)
+//!         .played_by(rejections),
 //! ))
 //! ```
 //!
@@ -40,6 +41,7 @@
 
 use crate::animation::{Animatable, TimingFunction};
 use crate::layout::IntoF32;
+use crate::reactive::{IntoSignal, Signal};
 
 /// One point on a timeline: where it sits, what the value is there, and how the
 /// segment leaving it is eased.
@@ -50,12 +52,34 @@ struct Stop<T> {
     easing: TimingFunction,
 }
 
-/// A sequence of values over a fixed duration, played on a trigger.
+/// How many times a sequence runs.
+///
+/// One field with two kinds of value, so "three times *and* endlessly" cannot
+/// be written. `animation-iteration-count` is the same shape: a number, or
+/// `infinite`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Repeat {
+    /// Run this many times and then rest on the declared value. At least once.
+    Times(u32),
+    /// Run until the widget carrying it is gone. There is no other way to stop
+    /// it, which is the point: the widget being on screen *is* the animation
+    /// running, so showing and hiding it is the only switch to keep in step.
+    Forever,
+}
+
+/// A sequence of values over a fixed duration.
+///
+/// Plays as soon as the widget carrying it exists, unless it is
+/// [`played_by`](Self::played_by) a trigger — a shake waits to be asked, a
+/// spinner does not.
 #[derive(Clone)]
 pub struct Keyframes<T> {
     stops: Vec<Stop<T>>,
     duration_ms: f32,
-    repeat: u32,
+    repeat: Repeat,
+    /// What replays it, if anything. `None` plays once from the moment the
+    /// widget appears, which is what a wait wants and what a gesture does not.
+    trigger: Option<Signal<u32>>,
 }
 
 impl<T: Animatable> Keyframes<T> {
@@ -64,7 +88,8 @@ impl<T: Animatable> Keyframes<T> {
         Self {
             stops: Vec::new(),
             duration_ms: duration_ms.into_f32().max(1.0),
-            repeat: 1,
+            repeat: Repeat::Times(1),
+            trigger: None,
         }
     }
 
@@ -117,15 +142,38 @@ impl<T: Animatable> Keyframes<T> {
         self
     }
 
-    /// Play it `times` times in a row. Once by default.
-    pub fn repeat(mut self, times: u32) -> Self {
-        self.repeat = times.max(1);
+    /// How many times it runs. Once by default.
+    pub fn repeat(mut self, repeat: Repeat) -> Self {
+        self.repeat = repeat;
         self
     }
 
-    /// How long the whole thing lasts, repeats included.
-    pub fn total_ms(&self) -> f32 {
-        self.duration_ms * self.repeat as f32
+    /// Replay it on every change of `trigger`, instead of playing when the
+    /// widget appears.
+    ///
+    /// A count and not a flag, because two refusals in a row are two events
+    /// and a signal that stays equal notifies nobody.
+    pub fn played_by<M>(mut self, trigger: impl IntoSignal<u32, M>) -> Self {
+        self.trigger = Some(trigger.into_signal());
+        self
+    }
+
+    pub(crate) fn trigger(&self) -> Option<Signal<u32>> {
+        self.trigger
+    }
+
+    /// How long the whole thing lasts, repeats included, or `None` where it
+    /// does not end.
+    pub fn total_ms(&self) -> Option<f32> {
+        match self.repeat {
+            Repeat::Times(times) => Some(self.duration_ms * times.max(1) as f32),
+            Repeat::Forever => None,
+        }
+    }
+
+    /// How long one run takes.
+    pub(crate) fn duration_ms(&self) -> f32 {
+        self.duration_ms
     }
 
     /// Whether there is anything to play.
@@ -135,7 +183,10 @@ impl<T: Animatable> Keyframes<T> {
 
     /// The value `elapsed_ms` into the run, or `None` once it is over.
     pub fn value_at(&self, elapsed_ms: f32) -> Option<T> {
-        if self.stops.is_empty() || elapsed_ms >= self.total_ms() {
+        if self.stops.is_empty() {
+            return None;
+        }
+        if self.total_ms().is_some_and(|total| elapsed_ms >= total) {
             return None;
         }
         let within = (elapsed_ms.max(0.0) % self.duration_ms) / self.duration_ms;
@@ -226,8 +277,8 @@ mod tests {
 
     #[test]
     fn a_repeat_plays_the_same_run_again() {
-        let kf = shake().repeat(2);
-        assert_eq!(kf.total_ms(), 600.0);
+        let kf = shake().repeat(Repeat::Times(2));
+        assert_eq!(kf.total_ms(), Some(600.0));
         assert_eq!(kf.value_at(150.0), Some(10.0));
         assert_eq!(kf.value_at(450.0), Some(10.0), "the peak of the second run");
         assert_eq!(kf.value_at(600.0), None);

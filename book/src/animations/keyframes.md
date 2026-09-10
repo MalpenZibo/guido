@@ -21,8 +21,8 @@ container()
             .at(0.15, 2.0)
             .at(0.40, -1.6)
             .at(0.65, 0.9)
-            .at(1.0, 0.0),
-        rejections,
+            .at(1.0, 0.0)
+            .played_by(rejections),
     ))
 # ;
 # }
@@ -42,8 +42,8 @@ container()
         Keyframes::new(240.0)
             .at(0.0, surface)
             .at(0.3, Color::rgb(0.8, 0.2, 0.2))
-            .at(1.0, surface),
-        errors,
+            .at(1.0, surface)
+            .played_by(errors),
     ))
 # ;
 # }
@@ -65,7 +65,7 @@ sequence resting on a live signal has nowhere else to put its expression:
 # let shake = || Keyframes::new(320.0).at(0.0, 0.0).at(0.5, 2.0).at(1.0, 0.0);
 // A glyph that spins on one signal, and shakes on another.
 container()
-    .rotate((move || spin.get() as f32 * 90.0).timeline(shake(), rejections))
+    .rotate((move || spin.get() as f32 * 90.0).timeline(shake().played_by(rejections)))
 # ;
 # }
 ```
@@ -75,16 +75,51 @@ persist is a transition.
 
 ## What plays it
 
-The second argument is a signal, and **every change to it plays the sequence
-once**. A count rather than a flag, because two refusals in a row are two
-events and a signal that stays equal notifies nobody — the second wrong
+**A sequence plays as soon as the widget carrying it exists.** That is what a
+wait looks like: a spinner should turn from the moment it is on screen, and
+there is nothing to ask it.
+
+**`played_by(trigger)` makes it wait instead**, and then every change to that
+signal plays it once. A count rather than a flag, because two refusals in a row
+are two events and a signal that stays equal notifies nobody — the second wrong
 password has to shake as loudly as the first. SwiftUI's keyframe animator takes
 its trigger the same way.
 
-Nothing plays on the first frame: the container remembers what the signal held
-when it was built. Played again while it is still running, a sequence starts
-over from the top rather than continuing — half a shake is not what a second
-refusal means.
+A sequence with a trigger plays nothing on the first frame: the container
+remembers what the signal held when it was built. Played again while it is
+still running, a sequence starts over from the top rather than continuing —
+half a shake is not what a second refusal means.
+
+## How long it runs
+
+`repeat(Repeat::Times(n))` plays the whole run `n` times and then rests.
+`Repeat::Forever` never stops:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let busy = create_signal(true);
+fn spin() -> Keyframes<f32> {
+    Keyframes::new(1000.0).at(1.0, 360.0).repeat(Repeat::Forever)
+}
+
+fn spinner() -> Container {
+    container().rotate(0.0.timeline(spin())).child(text("*"))
+}
+
+// On screen only while the work is outstanding.
+container().child(move || busy.get().then(spinner))
+# ;
+# }
+```
+
+There is no way to stop an endless sequence other than removing the widget that
+carries it, and that is the point. The widget being on screen *is* the
+animation running, so showing and hiding it is the only switch to keep in step
+— nothing to call off, and no way to leave a spinner turning after the work is
+done. Compose reaches the same place from the other direction: an infinite
+transition there runs for as long as the composable is in composition.
 
 ## Offsets and easing
 
@@ -106,7 +141,6 @@ Keyframes::new(360.0)
 
 Before the first stop and after the last one the nearest stop holds — a
 timeline whose first stop is at `0.25` is not a timeline that starts undefined.
-`repeat(n)` plays the whole run `n` times.
 
 ## What it does to the declared value
 
@@ -128,7 +162,7 @@ at the same time without the two meeting at all:
 container()
     .when_hovered(|s| s.scale(1.03))
     .scale(Scale::NONE.transition(Transition::spring(SpringConfig::SNAPPY)))
-    .rotate(0.0.timeline(shake(), rejections))
+    .rotate(0.0.timeline(shake().played_by(rejections)))
 # ;
 # }
 ```
@@ -147,7 +181,7 @@ component:
 # let shake = move || {};
 container()
     .when_hovered(|s| s.rotate(3.0))
-    .rotate(0.0.timeline(shake(), rejections))
+    .rotate(0.0.timeline(shake().played_by(rejections)))
 # ;
 # }
 ```
