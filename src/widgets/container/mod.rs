@@ -1690,7 +1690,7 @@ impl Widget for Container {
             }
         }
 
-        self.handle_own_event(id, &hit, event, &local_event, at)
+        self.handle_own_event(tree, id, &hit, event, &local_event, at)
     }
 
     fn refresh_paint_bounds(&self, tree: &mut Tree, id: WidgetId) {

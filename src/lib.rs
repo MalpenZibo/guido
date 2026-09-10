@@ -643,8 +643,15 @@ fn dispatch_events(
             // goes with it. This is the only place that can tell: a widget is
             // handed the presses that miss it, but never learns whether one of
             // them turned out to be somebody else's.
+            //
+            // Two ways to be somebody's. A widget consumed it, which is what
+            // `Handled` says. Or the focus itself claims it — the box drawn
+            // around a focused field is that field to the eye — which is a
+            // different sentence and arrives on its own channel, because
+            // saying it with `Handled` also silenced every ancestor (#308).
             if matches!(event, widgets::Event::MouseDown { .. })
                 && response != Some(widgets::EventResponse::Handled)
+                && !tree.focus_claimed_the_press()
             {
                 reactive::focus::release_focus_under(root);
             }
@@ -2845,6 +2852,18 @@ mod a_press_nothing_claimed_takes_the_focus_with_it {
             self.press_button(root, x, y, MouseButton::Left);
         }
 
+        /// A press and its release, which is the gesture a click is made of:
+        /// `on_click` fires on the release and only if the press was seen.
+        fn click(&mut self, x: f32, y: f32) {
+            self.press(x, y);
+            let root = self.root;
+            let events = [(
+                std::time::Instant::now(),
+                Event::mouse_up(x, y, MouseButton::Left),
+            )];
+            dispatch_events(&events, root, &mut self.tree, &Default::default());
+        }
+
         fn press_button(&mut self, root: WidgetId, x: f32, y: f32, button: MouseButton) {
             let events = [(std::time::Instant::now(), Event::mouse_down(x, y, button))];
             dispatch_events(&events, root, &mut self.tree, &Default::default());
@@ -3008,6 +3027,166 @@ mod a_press_nothing_claimed_takes_the_focus_with_it {
         assert!(
             field.is_focused(),
             "the padding of the box that lights up for this focus belongs to it"
+        );
+    }
+
+    /// Keeping the keyboard and consuming the press are two different
+    /// sentences, and the box that keeps the focus says only the first.
+    ///
+    /// A clickable row wrapping a decorated field: pressing the box's padding
+    /// is pressing the field as far as the focus goes, and pressing the row as
+    /// far as the row goes. Answering with `Handled` said both at once, so the
+    /// row never saw the press and its `on_click` never fired — and which of
+    /// the two happened depended on where the keyboard was.
+    #[test]
+    fn a_box_that_keeps_the_focus_does_not_swallow_the_press() {
+        let field = a_field();
+        let clicks = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let counted = std::rc::Rc::clone(&clicks);
+        let mut screen = Screen::new(
+            container()
+                .width(200.0)
+                .height(100.0)
+                .on_click(move || counted.set(counted.get() + 1))
+                .child(
+                    container()
+                        .padding(8.0)
+                        .when_focused(|s| s.border(2.0, crate::widgets::Color::WHITE))
+                        .child(text_input(create_signal(String::new())).widget_ref(field)),
+                ),
+        );
+
+        // Released, because a press left down leaves the field dragging a
+        // selection and the next release is the field's by right.
+        screen.click(100.0, 12.0);
+        assert!(field.is_focused(), "the press reached the field");
+        assert_eq!(
+            clicks.get(),
+            0,
+            "which the field claimed, so the row did not"
+        );
+
+        screen.click(4.0, 4.0);
+        assert!(
+            field.is_focused(),
+            "the padding of the box that lights up for this focus belongs to it"
+        );
+        assert_eq!(
+            clicks.get(),
+            1,
+            "and the row around it is still a row that can be clicked"
+        );
+    }
+
+    /// The claim belongs to the press that earned it and to no other.
+    ///
+    /// It is one field on the tree, and what makes it mean "this press" rather
+    /// than "some press once" is that `dispatch_events` clears it going into
+    /// every event. Without that line the first press on a focused box latches
+    /// it, and nothing blurs a field again for the life of the process — the
+    /// whole of #206 undone, silently, by a flag nobody reset.
+    #[test]
+    fn a_claim_does_not_outlive_the_press_that_made_it() {
+        let field = a_field();
+        let mut screen = Screen::new(
+            container().width(200.0).height(100.0).child(
+                container()
+                    .padding(8.0)
+                    .when_focused(|s| s.border(2.0, crate::widgets::Color::WHITE))
+                    .child(text_input(create_signal(String::new())).widget_ref(field)),
+            ),
+        );
+
+        screen.press(100.0, 12.0);
+        assert!(field.is_focused(), "the press reached the field");
+
+        screen.press(4.0, 4.0);
+        assert!(field.is_focused(), "the box's padding claims this one");
+
+        screen.press(100.0, 80.0);
+        assert!(
+            !field.is_focused(),
+            "the claim belonged to the press before it, not to this one"
+        );
+    }
+
+    /// The box is asked where the press landed, and it is asked in its own
+    /// coordinates.
+    ///
+    /// The box sits 50 down the surface and at zero inside its own parent, so
+    /// the two answers cannot be confused for one another: its surface rows are
+    /// 50 to 90, its parent-relative rows are 0 to 40, and the press below is
+    /// in the first and not the second. Only the walk knows the difference —
+    /// by the time the event reaches the box the point has been rebased through
+    /// every ancestor. Resolving this from outside, against the bounds the tree
+    /// stores, tests the press against a rectangle somewhere else entirely.
+    #[test]
+    fn a_box_offset_from_the_surface_is_asked_in_its_own_coordinates() {
+        let field = a_field();
+        let mut screen = Screen::new(
+            container()
+                .width(200.0)
+                .height(100.0)
+                .layout(Flex::column())
+                .child(container().width(200.0).height(50.0))
+                .child(
+                    container().layout(Flex::column()).child(
+                        container()
+                            .width(200.0)
+                            .height(40.0)
+                            .padding(8.0)
+                            .when_focused(|s| s.border(2.0, crate::widgets::Color::WHITE))
+                            .child(text_input(create_signal(String::new())).widget_ref(field)),
+                    ),
+                ),
+        );
+
+        screen.press(100.0, 65.0);
+        assert!(field.is_focused(), "the press reached the field");
+
+        // The bottom padding of the box: inside it on the surface, outside the
+        // rectangle the tree stores for it.
+        screen.press(100.0, 85.0);
+        assert!(
+            field.is_focused(),
+            "the padding of the box belongs to it wherever the box happens to be"
+        );
+    }
+
+    /// The field itself keeps the focus on a press it does not otherwise claim,
+    /// and that must not silence an ancestor either.
+    ///
+    /// A right press inside a focused field falls past every arm that grants
+    /// focus, so the field has to say the press is its own. Saying it with
+    /// `Handled` meant a row wrapping the field never got its context menu —
+    /// and got one when the field was not focused. The same conflation as the
+    /// box, one widget over.
+    #[test]
+    fn a_field_keeping_its_own_focus_does_not_swallow_the_press() {
+        let field = a_field();
+        let menus = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let counted = std::rc::Rc::clone(&menus);
+        let mut screen = Screen::new(
+            container()
+                .width(200.0)
+                .height(100.0)
+                .on_right_click(move || counted.set(counted.get() + 1))
+                .child(text_input(create_signal(String::new())).widget_ref(field)),
+        );
+
+        screen.press(100.0, 8.0);
+        assert!(field.is_focused(), "the press reached the field");
+
+        let root = screen.root;
+        screen.press_button(root, 100.0, 8.0, MouseButton::Right);
+        assert!(
+            field.is_focused(),
+            "a press inside the field is the field's, whatever the button"
+        );
+        assert_eq!(
+            menus.get(),
+            1,
+            "and the row around it still opens its context menu"
         );
     }
 

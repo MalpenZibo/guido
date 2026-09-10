@@ -195,12 +195,16 @@ a container with only an `on_click` does not claim a right press, and a right
 press it did not claim is a press on nothing like any other.
 
 A press inside the focused field is always the field's, whichever button it
-was.
+was — and it keeps the keyboard without consuming the press, so a row wrapping
+the field still gets its own click or context menu.
 
 The box drawn around a field is the third case, and it is the one worth knowing:
 a container that declares `when_focused` and currently holds that focus keeps
-presses inside itself. Clicking its padding, its border, the space beside the
-caret, is clicking the field it draws.
+that focus against a press inside itself. Clicking its padding, its border, the
+space beside the caret, is clicking the field it draws.
+
+The press still travels. The box keeps the keyboard and consumes nothing, so a
+clickable ancestor wrapping the field is clicked as it would be anywhere else.
 
 ```rust
 # extern crate guido;

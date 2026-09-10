@@ -16,9 +16,9 @@
 //! [`handle_own_event`]: Container::handle_own_event
 
 use crate::clock::EventInstant;
+use crate::reactive::focus::focus_within;
 
 use super::*;
-use crate::reactive::focus::focus_within;
 
 /// The geometry an event is resolved against: where the container ended up,
 /// what shape it is, and the transform standing between the two.
@@ -255,16 +255,16 @@ impl Container {
     /// against.
     pub(super) fn handle_own_event(
         &mut self,
+        tree: &mut Tree,
         id: WidgetId,
         hit: &HitContext,
         event: &Event,
         local: &Event,
         now: EventInstant,
     ) -> EventResponse {
-        // One question for a press, asked once and answered up to twice: by the
-        // arm that handles it, and by the focus claim at the end of the
-        // function. `contains` runs the corner SDF, and a press inside the
-        // shape is exactly the case that would run it twice.
+        // Asked once and read by whichever arm handles the press: `contains`
+        // runs the corner SDF, and a press inside the shape is exactly the
+        // case that would otherwise run it more than once.
         let pressed_inside =
             matches!(local, Event::MouseDown { .. }) && hit.contains(local.coords());
 
@@ -274,8 +274,6 @@ impl Container {
             // containers from tracking their own.
             Event::MouseEnter { .. } | Event::MouseMove { .. } => {}
 
-            // Claiming a press here is not only about the callback: the focus
-            // claim at the end of the function reads the same `pressed_inside`.
             Event::MouseDown { button, .. } if *button != MouseButton::Left => {
                 if pressed_inside && let Some(ref ix) = self.interaction {
                     let callback = match button {
@@ -444,12 +442,19 @@ impl Container {
         }
 
         // A press inside the box that lights up for this focus is a press on
-        // the field the box draws — its padding, its border, the gap beside
-        // the caret. The dispatcher takes the focus off a press nobody
-        // claimed, so claiming it here is how the box says the keyboard is
-        // still its own.
+        // the field the box draws — its padding, its border, the gap beside the
+        // caret. The dispatcher takes the focus off a press nobody claimed, so
+        // this is how the box says the keyboard is still its own.
+        //
+        // Said here and not there because `hit` is this container's: the point
+        // arrived rebased through every ancestor, with the scroll offset added
+        // and the transform undone. Nothing outside the walk has that point
+        // without redoing the walk. Said on the tree and not by returning
+        // `Handled` because that also means consumed, which silenced an outer
+        // clickable row and made it work or not depending on where the keyboard
+        // was (#308).
         if pressed_inside && self.holds_the_focus_it_draws(id) {
-            return EventResponse::Handled;
+            tree.keep_the_focus_this_press_landed_on();
         }
 
         EventResponse::Ignored
