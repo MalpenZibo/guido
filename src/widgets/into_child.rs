@@ -164,6 +164,10 @@ pub struct StaticChildren;
 /// Marker type for reactive children (closure or [`keyed()`])
 pub struct DynamicChildren;
 
+/// Marker type for children forwarded from a [`ChildrenSource`] a component
+/// was handed
+pub struct ForwardedChildren;
+
 /// Trait for values that can be added as children to a container.
 ///
 /// Accepted forms:
@@ -172,8 +176,10 @@ pub struct DynamicChildren;
 ///   reads changes, replacing all rows
 /// - [`keyed(data, key, build)`](keyed) — reactive with stable identity:
 ///   preserves per-row state, rebuilds only changed rows
+/// - a [`ChildrenSource`] — the children a component was handed by its
+///   caller, taking their place where the call is written
 #[diagnostic::on_unimplemented(
-    message = "`.children()` takes an iterator of widgets, a reactive closure returning one, or `keyed(data, key, build)` — and `{Self}` is none of those",
+    message = "`.children()` takes an iterator of widgets, a reactive closure returning one, `keyed(data, key, build)`, or the `ChildrenSource` a component was handed — and `{Self}` is none of those",
     note = "`.children(move || widgets)` replaces all rows when a signal it reads changes; `keyed(data, key, build)` preserves per-row state via stable identity and rebuilds only rows whose item changed"
 )]
 pub trait IntoChildren<Marker = StaticChildren> {
@@ -191,6 +197,18 @@ where
         for widget in self {
             children_source.add_static(Box::new(widget));
         }
+    }
+}
+
+/// The children a component was handed, put where the component wants them.
+///
+/// `#[prop(children)]` gives the component a `ChildrenSource` the caller
+/// filled in, and this is how it goes back into a tree — as one item in a
+/// sequence, so a title above it and a footer below it stay where they were
+/// written.
+impl IntoChildren<ForwardedChildren> for ChildrenSource {
+    fn add_to_container(self, children_source: &mut ChildrenSource) {
+        children_source.append(self);
     }
 }
 
