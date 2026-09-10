@@ -195,7 +195,8 @@ a container with only an `on_click` does not claim a right press, and a right
 press it did not claim is a press on nothing like any other.
 
 A press inside the focused field is always the field's, whichever button it
-was.
+was — and it keeps the keyboard without consuming the press, so a row wrapping
+the field still gets its own click or context menu.
 
 The box drawn around a field is the third case, and it is the one worth knowing:
 a container that declares `when_focused` and currently holds that focus keeps

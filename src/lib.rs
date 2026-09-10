@@ -3153,6 +3153,43 @@ mod a_press_nothing_claimed_takes_the_focus_with_it {
         );
     }
 
+    /// The field itself keeps the focus on a press it does not otherwise claim,
+    /// and that must not silence an ancestor either.
+    ///
+    /// A right press inside a focused field falls past every arm that grants
+    /// focus, so the field has to say the press is its own. Saying it with
+    /// `Handled` meant a row wrapping the field never got its context menu —
+    /// and got one when the field was not focused. The same conflation as the
+    /// box, one widget over.
+    #[test]
+    fn a_field_keeping_its_own_focus_does_not_swallow_the_press() {
+        let field = a_field();
+        let menus = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let counted = std::rc::Rc::clone(&menus);
+        let mut screen = Screen::new(
+            container()
+                .width(200.0)
+                .height(100.0)
+                .on_right_click(move || counted.set(counted.get() + 1))
+                .child(text_input(create_signal(String::new())).widget_ref(field)),
+        );
+
+        screen.press(100.0, 8.0);
+        assert!(field.is_focused(), "the press reached the field");
+
+        let root = screen.root;
+        screen.press_button(root, 100.0, 8.0, MouseButton::Right);
+        assert!(
+            field.is_focused(),
+            "a press inside the field is the field's, whatever the button"
+        );
+        assert_eq!(
+            menus.get(),
+            1,
+            "and the row around it still opens its context menu"
+        );
+    }
+
     /// A toolbar button acting on the field, spelled the way every button is
     /// spelled: it has an `on_click`, so it claims the press, so the press is
     /// not a press on nothing.
