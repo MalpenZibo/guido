@@ -320,10 +320,15 @@ pointer over its own bounds. It is never pressed: being pressed means being
 activated, and it has nothing to activate.
 
 **`when_focused` also keeps the focus.** A press that no widget claimed takes
-the keyboard off whatever held it, and a container declaring `when_focused`
-while that focus is inside it claims presses on itself. A box that says it
-lights up for a field has said the box is part of the field, so clicking its
-padding does not blur what it draws. See
+the keyboard off whatever held it, and a press inside a container declaring
+`when_focused` while that focus is inside it is not one of those. A box that
+says it lights up for a field has said the box is part of the field, so
+clicking its padding does not blur what it draws.
+
+It keeps the focus without consuming the press. A clickable row wrapping a
+decorated field still sees the click, still lights its pressed layer and still
+fires its `on_click` — keeping the keyboard and swallowing the event are two
+different things. See
 [Losing Focus](../building-ui/text-input.md#losing-focus).
 
 ## Which Layer Wins

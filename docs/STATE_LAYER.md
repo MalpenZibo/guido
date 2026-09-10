@@ -44,9 +44,14 @@ The declaration carries a second meaning, and it is load-bearing rather than
 decorative. `dispatch_events` takes the focus off a `MouseDown` that came back
 `Ignored` from the root the focus path ends at — a press nobody claimed is a
 press on nothing. A container declaring `when_focused` while that focus is
-inside it therefore claims presses on itself (`handle_own_event`), so the
-padding and the border of the box above belong to the field it draws rather than
-blurring it.
+inside it therefore keeps the focus against a press inside itself
+(`handle_own_event`), so the padding and the border of the box above belong to
+the field it draws rather than blurring it.
+
+It keeps the focus without consuming the press: the box says so on the tree's
+per-event channel rather than by returning `Handled`, so an outer clickable row
+still receives the press and fires. The two used to share `Handled`, which made
+the row work or not depending on where the keyboard was (#308).
 
 The coupling is deliberate and is the whole of the mechanism: there is no
 separate `.keeps_focus()`, and the box that lights up for a focus is the box

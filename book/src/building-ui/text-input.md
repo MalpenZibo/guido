@@ -199,8 +199,11 @@ was.
 
 The box drawn around a field is the third case, and it is the one worth knowing:
 a container that declares `when_focused` and currently holds that focus keeps
-presses inside itself. Clicking its padding, its border, the space beside the
-caret, is clicking the field it draws.
+that focus against a press inside itself. Clicking its padding, its border, the
+space beside the caret, is clicking the field it draws.
+
+The press still travels. The box keeps the keyboard and consumes nothing, so a
+clickable ancestor wrapping the field is clicked as it would be anywhere else.
 
 ```rust
 # extern crate guido;

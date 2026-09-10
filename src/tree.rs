@@ -206,6 +206,29 @@ pub struct Tree {
     /// `dispatch_events` writes it, once per event, because it delivers them one
     /// at a time. `None` outside a dispatch, where nobody should be reading it.
     event_instant: Option<std::time::Instant>,
+
+    /// Whether the press being dispatched was claimed by the focus it landed
+    /// on, and so must not release it.
+    ///
+    /// A container that draws the focus it holds *is* the focused field to the
+    /// person looking at it — its padding, its border, the gap beside the caret
+    /// — so a press there is not a press on nothing. Only the widget can say
+    /// so: by the time an event reaches it the point has been rebased through
+    /// every ancestor, the scroll offset applied and the transform undone, and
+    /// none of that can be redone from outside without walking the tree again.
+    ///
+    /// It used to say it by returning `EventResponse::Handled`, which also
+    /// means "consumed" — so an outer clickable row never saw the press, and
+    /// whether it worked depended on where the keyboard was (#308). The two are
+    /// different sentences, and this is the channel for the one `Handled` was
+    /// never meant to carry. The web splits them the same way: `preventDefault`
+    /// cancels what the event would otherwise cause, `stopPropagation` stops it
+    /// travelling, and a mousedown's default action is the focus change.
+    ///
+    /// `dispatch_events` clears it before each event and reads it after.
+    /// Cleared going in rather than coming out, so nothing that returns early
+    /// can leave it set for the next press.
+    focus_claimed_the_press: bool,
 }
 
 impl Tree {
@@ -218,6 +241,7 @@ impl Tree {
             damage: std::collections::HashMap::new(),
             frame_instant: None,
             event_instant: None,
+            focus_claimed_the_press: false,
         }
     }
 
@@ -274,13 +298,38 @@ impl Tree {
         }
     }
 
+    /// Say that the press being dispatched landed on the focus, and so must not
+    /// take it away.
+    ///
+    /// Called by a widget that draws the focus it is holding, from its own
+    /// event handling, where the point is already in its coordinates. Reset for
+    /// every event by `dispatch_events`.
+    pub fn keep_the_focus_this_press_landed_on(&mut self) {
+        self.focus_claimed_the_press = true;
+    }
+
+    /// Whether anything claimed the focus during the event just dispatched.
+    ///
+    /// `dispatch_events` is the only caller there should ever be: it is the one
+    /// place that knows a press went unclaimed, which is the only question this
+    /// answers. The setter beside it is public because a widget written outside
+    /// this crate has to be able to say it; this one has no such caller.
+    pub(crate) fn focus_claimed_the_press(&self) -> bool {
+        self.focus_claimed_the_press
+    }
+
     /// Declare when the event about to be dispatched happened, or `None` when
     /// the dispatch is over.
     ///
     /// `dispatch_events` is the caller in the loop; a test that wants to place
     /// an event in time is the other one.
+    ///
+    /// It also forgets any focus claim made for the previous event, which is
+    /// what makes that claim mean *this* press — see
+    /// [`keep_the_focus_this_press_landed_on`](Self::keep_the_focus_this_press_landed_on).
     pub fn set_event_instant(&mut self, at: Option<std::time::Instant>) {
         self.event_instant = at;
+        self.focus_claimed_the_press = false;
     }
 
     /// Declare the instant of the frame about to run, or `None` when it is
