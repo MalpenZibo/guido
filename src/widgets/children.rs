@@ -72,6 +72,42 @@ impl ChildrenSource {
         }
     }
 
+    /// Take everything `other` holds, in order, after what this source has.
+    ///
+    /// Both halves are build-time state — `pending_static` is drained at
+    /// registration and `segments` is written while the tree is being built —
+    /// so appending the two is the whole of it. Static widgets stay in
+    /// insertion order because the reconciler walks segments and takes that
+    /// many from the merged list in the order they were pushed.
+    ///
+    /// What it is for: a component forwarding the children it was handed, via
+    /// [`IntoChildren`](super::IntoChildren) for `ChildrenSource`.
+    pub(crate) fn append(&mut self, mut other: ChildrenSource) {
+        debug_assert!(
+            other.merged.is_empty() && !other.initial_reconcile_done,
+            "a source is forwarded while the tree is being built, before \
+             anything in it has reached a widget id"
+        );
+
+        // Moved out field by field, so the husk that drops at the end of this
+        // call holds nothing: `ChildrenSource` drops by asking the loop to
+        // unregister every widget it still has.
+        let mut statics = std::mem::take(&mut other.pending_static).into_iter();
+        for segment in std::mem::take(&mut other.segments) {
+            match segment {
+                // Back through `add_static`, so a static run arriving at the
+                // seam is opened or extended by the same rule as one written
+                // here directly.
+                SegmentType::Static(count) => {
+                    for widget in statics.by_ref().take(count) {
+                        self.add_static(widget);
+                    }
+                }
+                dynamic => self.segments.push(dynamic),
+            }
+        }
+    }
+
     /// Register all pending static widgets with the tree.
     ///
     /// This should be called before layout. It recursively registers the widget tree.

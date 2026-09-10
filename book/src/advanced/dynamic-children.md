@@ -301,7 +301,7 @@ impl Container {
     pub fn child<M>(self, child: impl IntoChild<M>) -> Self;
 
     // An iterator of widgets, a reactive closure returning one,
-    // or keyed(data, key, build)
+    // keyed(data, key, build), or the ChildrenSource a component was handed
     pub fn children<M>(self, children: impl IntoChildren<M>) -> Self;
 }
 

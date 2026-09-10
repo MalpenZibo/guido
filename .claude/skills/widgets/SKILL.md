@@ -134,8 +134,10 @@ write its own.
 Children: `.child()` for a static one — a widget, or an `Option` of one that
 is simply absent when `None`. `.children()` takes
 whatever `IntoChildren` fits — an iterator of widgets is static, a closure is
-dynamic and re-runs when what it read changes, and `keyed(data, key, build)`
-reconciles by key so widget state survives a reorder:
+dynamic and re-runs when what it read changes, `keyed(data, key, build)`
+reconciles by key so widget state survives a reorder, and a `ChildrenSource` is
+the set a component was handed by its caller, taking its place where the call is
+written:
 
 ```rust
 container().children(keyed(
