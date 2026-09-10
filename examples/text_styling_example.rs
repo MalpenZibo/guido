@@ -135,8 +135,8 @@ fn create_combined_section() -> Container {
 
 /// Section demonstrating text input with styling
 ///
-/// The input reads the same declarations a `text` would: there is no separate
-/// styling vocabulary for it, and `cursor_color` would be declared alongside.
+/// The field reads the same declarations a `text` would, and says three more
+/// that only it can draw: the caret, the selection band and the placeholder.
 fn create_text_input_section() -> Container {
     let input_value = create_signal("Type here...".to_string());
 

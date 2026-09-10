@@ -266,9 +266,9 @@ widgets that draw glyphs — from one list, so the two cannot drift apart.
 `color` and `font_size` are declarations, so they carry how they move as well
 as what they are: `color(theme.warn.transition(200.0))`. The rest take values,
 because a family and a weight snap to an installed face and a stroke and a
-shadow have nothing to interpolate. A `TextInput`
-also implements `InputStyled` for `cursor_color`, `selection_color` and
-`placeholder_color`, which only it can draw.
+shadow have nothing to interpolate. `cursor_color`, `selection_color` and
+`placeholder_color` are `TextInput`'s own methods and nothing else's, because
+it is the only widget that draws a caret, a band or a placeholder.
 
 ### The same style, many times: write a function
 
