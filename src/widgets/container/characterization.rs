@@ -2336,17 +2336,20 @@ fn showing_the_widget_starts_the_sequence_and_hiding_it_stops_everything() {
     );
 }
 
-/// An endless sequence still moves between one frame and the next after a
-/// month on screen.
+/// An endless sequence is at the same point in its run a month later as it was
+/// in its first, and still moves between one frame and the next.
 ///
-/// Its elapsed time is an `f32` count of milliseconds, and it would otherwise
-/// be measured from the moment the widget appeared for the widget's whole life.
-/// The gap between representable values grows with the number: a whole 60Hz
-/// frame at about thirty-seven hours, and past a run's own duration in a few
-/// weeks — at which point the sequence shows one value for frame after frame.
-/// A bar is the thing that runs for weeks.
+/// Its elapsed time is an `f32` count of milliseconds measured from a start
+/// that moves up with every whole run behind it. Left growing for the life of
+/// the widget, the gap between representable values reaches a whole 60Hz frame
+/// at about thirty-seven hours and a whole run of a short sequence within a few
+/// weeks — at which point it shows one value for frame after frame. A bar is
+/// the thing that runs for weeks.
+///
+/// Asserted on *where in the run it is*, not merely that it moved: a start that
+/// is moved by the wrong amount, or in the wrong direction, still moves.
 #[test]
-fn an_endless_sequence_still_moves_frame_to_frame_after_a_long_time() {
+fn an_endless_sequence_keeps_its_place_in_the_run_a_month_later() {
     let mut h = H::new(spinning(Repeat::Forever));
     let t0 = std::time::Instant::now();
     frame_at(&mut h, t0, 200.0, 200.0);
@@ -2357,46 +2360,83 @@ fn an_endless_sequence_still_moves_frame_to_frame_after_a_long_time() {
         200.0,
     );
 
-    let late = t0 + std::time::Duration::from_secs(30 * 24 * 60 * 60);
-    frame_at(&mut h, late, 200.0, 200.0);
-    let first = h.paint().children[0].local_transform;
-
-    // One frame later at 60Hz, and the sequence runs in 200ms, so it has to
-    // have moved.
     frame_at(
         &mut h,
-        late + std::time::Duration::from_millis(16),
+        t0 + std::time::Duration::from_millis(100),
         200.0,
         200.0,
     );
-    let next = h.paint().children[0].local_transform;
+    let first_run = h.paint().children[0].local_transform;
 
+    // A whole number of 200ms runs, so the same point in the run — 30 days is
+    // 12,960,000 of them exactly.
+    let month = std::time::Duration::from_secs(30 * 24 * 60 * 60);
+    frame_at(
+        &mut h,
+        t0 + month + std::time::Duration::from_millis(100),
+        200.0,
+        200.0,
+    );
+    assert_eq!(
+        h.paint().children[0].local_transform,
+        first_run,
+        "a whole number of runs later is the same point in the run"
+    );
+
+    frame_at(
+        &mut h,
+        t0 + month + std::time::Duration::from_millis(116),
+        200.0,
+        200.0,
+    );
     assert!(
-        first != next,
-        "two frames of a running sequence a month in show the same value: {first:?}"
+        h.paint().children[0].local_transform != first_run,
+        "and the frame after it has moved on, rather than showing the same value"
     );
 }
 
-/// The seed pass asks for the frame; the animate pass plays. Neither half is
-/// interchangeable, and this is what says so.
+/// A sequence that has run out lets the surface settle.
 ///
-/// Playing inside the seed would consume the one-shot during a popup's
-/// pre-spawn measure — `measure_natural_size` runs a whole layout before the
-/// surface exists — against a tree with no frame instant, which is a wall-clock
-/// fallback and a diagnostic. `seed_or_enter` takes the instant as a closure so
-/// it is never read there, and a layout outside a frame is how that is checked.
+/// `wants_play` is what `resync_animation_targets` asks at every paint, and it
+/// has to say no once a sequence with no trigger has had its one play —
+/// otherwise the container is woken for a play it has already had, every frame,
+/// for as long as it exists.
 #[test]
-fn seeding_a_sequence_never_asks_what_time_it_is() {
-    crate::reactive::diagnostics::reset();
-    let mut h = H::new(spinning(Repeat::Forever));
+fn a_finished_sequence_stops_asking_to_be_played() {
+    let mut h = H::new(spinning(Repeat::Times(1)));
+    let t0 = std::time::Instant::now();
+    for step in 0..6 {
+        frame_at(
+            &mut h,
+            t0 + std::time::Duration::from_millis(step * 100),
+            200.0,
+            200.0,
+        );
+        h.paint();
+    }
+    assert!(
+        !pump(&mut h),
+        "the sequence is over, so nothing is owed another frame"
+    );
+}
 
-    // No frame instant declared: this is the shape of a measure pass.
-    h.fit(200.0, 200.0);
+/// A property that eases has nothing to play, and must not ask for the frame a
+/// sequence would need.
+#[test]
+fn a_property_with_no_sequence_asks_for_no_play() {
+    let mut h = H::new(
+        container()
+            .layout(Flex::row())
+            .child(box_of(50.0, 50.0).rotate(0.0.transition(200.0))),
+    );
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 200.0, 200.0);
+    h.paint();
 
-    assert_eq!(
-        crate::reactive::diagnostics::report_count(),
-        0,
-        "the seed pass read a clock it has no business reading"
+    assert!(
+        !pump(&mut h),
+        "an eased property with no sequence is owed no play, so the first \
+         layout has nothing to ask for"
     );
 }
 

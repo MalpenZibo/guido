@@ -1220,6 +1220,22 @@ impl Widget for Container {
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         // Use advance_animations_self for this widget's animations
         let mut any_animating = false;
+        // Nothing anyone can see, so nothing to advance and no frame to ask
+        // for. Read under tracking, exactly as `layout` reads it: that is the
+        // subscription that brings the animation back, because a flip to
+        // visible queues the Animation job this pass would otherwise have had
+        // to keep asking for.
+        //
+        // A container hidden before its animation ever started never gets here
+        // — layout returns at its own gate, so the sequence is never seeded.
+        // This is for one hidden while it runs, which before now went on
+        // asking for a frame every vsync and repainting a surface showing
+        // nothing (#351).
+        let is_visible = with_signal_tracking(id, JobType::Animation, || self.visible.get_or(true));
+        if !is_visible {
+            return false;
+        }
+
         // One frame, one instant. Every animation below is asked about the
         // same moment — the ripple included, which used to read a clock of its
         // own a few microseconds later than the rest.
