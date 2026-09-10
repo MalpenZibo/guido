@@ -31,7 +31,7 @@ pub fn card(
         .corners(8.0)
         .layout(Flex::column().spacing(8.0))
         .child(text(title).font_size(18.0).color(Color::WHITE))
-        .children_source(children)
+        .children(children)
 }
 
 fn main() {

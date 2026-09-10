@@ -226,9 +226,14 @@ pub fn card(
         .corners(8.0)
         .layout(Flex::column().spacing(8.0))
         .child(container().child(text(title).font_size(18.0).color(Color::WHITE)))
-        .children_source(children)
+        .children(children)
 }
 ```
+
+`children` is the same method the caller uses, and the rows land where the call
+is written: the title above stays above them, and anything the component adds
+afterwards comes after. A component that never calls it drops what it was
+handed.
 
 Use with child/children methods:
 
@@ -347,7 +352,7 @@ pub fn card(
         .corners(8.0)
         .layout(Flex::column().spacing(8.0))
         .child(container().child(text(title).font_size(18.0).color(Color::WHITE)))
-        .children_source(children)
+        .children(children)
 }
 
 fn main() {

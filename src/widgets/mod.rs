@@ -28,7 +28,8 @@ pub use font::{FontFamily, FontWeight};
 pub use image::{ContentFit, Image, ImageSource, image};
 pub use input_style::{InputStyle, InputStyled};
 pub use into_child::{
-    DynamicChildren, IntoChild, IntoChildren, IntoDynChild, KeyedChildren, StaticChildren, keyed,
+    DynamicChildren, ForwardedChildren, IntoChild, IntoChildren, IntoDynChild, KeyedChildren,
+    StaticChildren, keyed,
 };
 pub use scroll::{Scroll, ScrollbarVisibility};
 pub use state_layer::{
