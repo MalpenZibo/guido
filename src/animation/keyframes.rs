@@ -59,7 +59,9 @@ struct Stop<T> {
 /// `infinite`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Repeat {
-    /// Run this many times and then rest on the declared value. At least once.
+    /// Run this many times and then rest on the declared value. At least
+    /// once: a count of zero is stored as one by
+    /// [`repeat`](Keyframes::repeat).
     Times(u32),
     /// Run until the widget carrying it is gone. There is no other way to stop
     /// it, which is the point: the widget being on screen *is* the animation
@@ -142,9 +144,17 @@ impl<T: Animatable> Keyframes<T> {
         self
     }
 
-    /// How many times it runs. Once by default.
+    /// How many times it runs. Once by default, and never fewer —
+    /// [`Repeat::Times`] is at least once.
     pub fn repeat(mut self, repeat: Repeat) -> Self {
-        self.repeat = repeat;
+        // A count is usually computed, and `items.len()` on an empty list is
+        // all it takes to compute zero. Absorbed here, as the duration and a
+        // NaN offset are, so that what is stored means what it says rather
+        // than being corrected by whoever reads it.
+        self.repeat = match repeat {
+            Repeat::Times(times) => Repeat::Times(times.max(1)),
+            Repeat::Forever => Repeat::Forever,
+        };
         self
     }
 
@@ -166,7 +176,7 @@ impl<T: Animatable> Keyframes<T> {
     /// does not end.
     pub fn total_ms(&self) -> Option<f32> {
         match self.repeat {
-            Repeat::Times(times) => Some(self.duration_ms * times.max(1) as f32),
+            Repeat::Times(times) => Some(self.duration_ms * times as f32),
             Repeat::Forever => None,
         }
     }
@@ -282,6 +292,14 @@ mod tests {
         assert_eq!(kf.value_at(150.0), Some(10.0));
         assert_eq!(kf.value_at(450.0), Some(10.0), "the peak of the second run");
         assert_eq!(kf.value_at(600.0), None);
+    }
+
+    /// The stored count is the discriminating one: with the clamp at the
+    /// reader, `total_ms` answered 300 either way and the field still said
+    /// zero.
+    #[test]
+    fn a_count_of_zero_is_kept_as_the_one_run_it_means() {
+        assert_eq!(shake().repeat(Repeat::Times(0)).repeat, Repeat::Times(1));
     }
 
     #[test]
