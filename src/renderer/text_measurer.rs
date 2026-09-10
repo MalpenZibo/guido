@@ -3,6 +3,39 @@ use crate::widgets::font::{FontFamily, FontWeight};
 use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping};
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
+
+/// The smallest font size guido will hand to the shaper.
+///
+/// Not a taste decision: `Metrics` built from a non-positive size does not
+/// terminate inside cosmic-text, so a `font_size(-1.0)` — or any size computed
+/// from a width that went negative — hangs the process with nothing drawn and
+/// nothing said (#349). Well below a pixel, so a size that was merely very
+/// small still measures as itself.
+const SMALLEST_SHAPEABLE: f32 = 0.01;
+
+/// A size the shaper can actually work with, and the line height that goes
+/// with it.
+///
+/// One door, because there are four places that build `Metrics` from a font
+/// size — this measurer and the three draw paths — and each would otherwise
+/// have to know that a non-finite or non-positive one is the single input that
+/// does not come back. Returns the size rather than the metrics because the
+/// draw paths build theirs from glyphon's own copy of cosmic-text, which is a
+/// different type from this one.
+///
+/// A clamped size draws a glyph far too small to see, which is what a caller
+/// who asked for nothing drawable should get.
+pub(crate) fn shapeable_metrics(font_size: f32) -> (f32, f32) {
+    let size = if font_size.is_finite() && font_size >= SMALLEST_SHAPEABLE {
+        font_size
+    } else {
+        SMALLEST_SHAPEABLE
+    };
+    (size, size * LINE_HEIGHT_RATIO)
+}
+
+/// The line height guido asks for, as a multiple of the font size.
+const LINE_HEIGHT_RATIO: f32 = 1.2;
 use std::hash::{Hash, Hasher};
 
 /// Cache key for measurement results.
@@ -165,7 +198,8 @@ impl TextMeasurer {
         font_family: &FontFamily,
         font_weight: FontWeight,
     ) -> Buffer {
-        let metrics = Metrics::new(font_size, font_size * 1.2);
+        let (size, line_height) = shapeable_metrics(font_size);
+        let metrics = Metrics::new(size, line_height);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
 
         buffer.set_size(&mut self.font_system, max_width, None);
@@ -425,6 +459,43 @@ pub fn char_index_from_x_styled(
 #[cfg(test)]
 mod baseline_tests {
     use super::*;
+
+    /// A size that cannot be shaped comes back rather than spinning.
+    ///
+    /// `Metrics` built from a non-positive size does not terminate inside
+    /// cosmic-text: `text("...").font_size(-1.0)` hung the process with nothing
+    /// drawn and nothing said, and it was the mutation job that found it — the
+    /// mutant that returned `-1.0` from `TextAnims::retarget` was the one
+    /// non-caught mutant of fifty-one, and it timed out rather than surviving
+    /// (#349).
+    ///
+    /// Run on a thread with a deadline, because the failure this guards is a
+    /// hang: asserted inline, a regression would take CI down with it instead
+    /// of failing.
+    #[test]
+    fn a_size_that_cannot_be_shaped_still_answers() {
+        let (done, waiting) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for font_size in [-1.0f32, 0.0, -0.0, f32::NAN, f32::NEG_INFINITY] {
+                let m = measure_text_full(
+                    "a line of words",
+                    font_size,
+                    Some(100.0),
+                    &FontFamily::default(),
+                    FontWeight::NORMAL,
+                );
+                assert!(
+                    m.size.width.is_finite() && m.size.height.is_finite(),
+                    "a {font_size} size measured as {:?}",
+                    m.size
+                );
+            }
+            let _ = done.send(());
+        });
+        waiting
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("a font size that cannot be shaped has to come back, not spin");
+    }
 
     /// A baseline sits below the ascenders and above the descenders — never
     /// at the very bottom of the line box, which is what "align by the bottom

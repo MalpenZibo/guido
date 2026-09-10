@@ -199,10 +199,8 @@ impl TextMaskRenderer {
 
         // Shaped the way the on-screen text is shaped, or the hole would not be
         // the shape of the letters that land in it.
-        let mut buffer = Buffer::new(
-            &mut shaper.font_system,
-            Metrics::new(font_size, font_size * 1.2),
-        );
+        let (size, line_height) = crate::renderer::text_measurer::shapeable_metrics(font_size);
+        let mut buffer = Buffer::new(&mut shaper.font_system, Metrics::new(size, line_height));
         buffer.set_size(
             &mut shaper.font_system,
             Some(spec.logical.0.max(200.0) * spec.scale_factor),

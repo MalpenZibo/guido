@@ -217,10 +217,9 @@ impl TextQuadRenderer {
         }
 
         // Cache miss: shape and rasterize
-        let mut buffer = Buffer::new(
-            &mut self.font_system,
-            Metrics::new(scaled_font_size, scaled_font_size * 1.2),
-        );
+        let (size, line_height) =
+            crate::renderer::text_measurer::shapeable_metrics(scaled_font_size);
+        let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(size, line_height));
         buffer.set_size(
             &mut self.font_system,
             Some(buffer_width),
