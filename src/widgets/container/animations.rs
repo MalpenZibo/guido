@@ -75,6 +75,14 @@ pub struct AnimationState<T: Animatable> {
     initialized: bool,
     /// Previous value for change detection
     prev_value: Option<T>,
+    /// Where this property begins the one time the widget appears, until the
+    /// first layout takes it. `None` for almost every declaration — see
+    /// [`Animated::entering_from`](crate::animation::Animated::entering_from)
+    /// — and boxed for the reason `timeline` below is: this struct is held
+    /// eleven times over by every container that animates anything, and a
+    /// `Shadow` inline here would widen all eleven to carry a value almost
+    /// none of them has and none of them keeps past the first layout.
+    enter_from: Option<Box<T>>,
     /// A sequence to play on demand, and what plays it. Boxed and absent by
     /// default: most declared properties ease to a target and never carry one,
     /// so they pay a pointer rather than the struct.
@@ -104,8 +112,61 @@ impl<T: Animatable> AnimationState<T> {
             spring_state,
             initialized: false, // Not yet initialized with real content-based value
             prev_value: None,
+            enter_from: None,
             timeline: None,
         }
+    }
+
+    /// Declare where this property starts on the frame it first appears.
+    pub(crate) fn with_enter_from(mut self, from: Option<T>) -> Self {
+        self.enter_from = from.map(Box::new);
+        self
+    }
+
+    /// Begin the enter this property declared, if it declared one, and answer
+    /// whether it did.
+    ///
+    /// Every first initialisation goes through here, which is what makes an
+    /// enter reach every animatable property rather than the ones whose
+    /// initialiser remembered to ask. Taken and not read: an enter happens
+    /// once, so the first initialisation is the appearance and every one after
+    /// it is not.
+    ///
+    /// The instant is a closure because the overwhelmingly common answer is
+    /// "no enter was declared", and asking a `Tree` for the time outside a
+    /// frame is a diagnostic rather than a free read.
+    pub(crate) fn begin_enter(&mut self, target: T, now: impl FnOnce() -> FrameInstant) -> bool {
+        // A measure pass is not an appearance. It runs before the surface
+        // exists — `measure_natural_size` sizes a popup so the compositor can
+        // be told how big to make it — and it reads targets rather than
+        // in-flight values for exactly this reason. Consuming the enter there
+        // would play it against a surface that is not yet mapped, and there is
+        // no frame instant to play it against either.
+        if measuring_final() {
+            return false;
+        }
+        let Some(from) = self.enter_from.take() else {
+            return false;
+        };
+        let from = *from;
+        if from == target {
+            // Declared, but nowhere to travel from. Placing it is what every
+            // property without an enter does, and it costs no frame.
+            self.set_immediate(target);
+            return false;
+        }
+
+        self.set_immediate(from);
+        // Forward, whichever way it travels. `animate_to` would read the
+        // direction off `current`, which is now the enter value, so an enter
+        // that shrinks — a card settling down from a larger scale — would run
+        // the transition written for the value *later* decreasing, and fire
+        // its `on_complete`. In the pattern this feature exists for that
+        // callback destroys the popup, so appearing would close it.
+        self.using_reverse = false;
+        self.target = target;
+        self.begin_segment_from(from, now());
+        true
     }
 
     /// Get the currently active transition (forward or reverse).

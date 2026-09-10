@@ -560,6 +560,37 @@ mod tests {
         );
     }
 
+    /// A text's colour appears from somewhere else too.
+    ///
+    /// `TextAnims::retarget` is one of the four initialisers that place a
+    /// property for the first time, and it is the one furthest from the
+    /// container's seed pass. It asked for the enter only once the take moved
+    /// onto `AnimationState` itself; before that a text colour accepted an
+    /// enter and arrived at its declared value without a word.
+    #[test]
+    fn a_text_colour_can_appear_from_somewhere_else() {
+        const FROM: Color = Color::rgb(0.0, 0.0, 0.0);
+        const TO: Color = Color::rgb(1.0, 1.0, 1.0);
+
+        let mut tree = Tree::new();
+        let root = tree
+            .register(Box::new(container().child(
+                Text::new("entering").color(TO.transition(400.0).entering_from(FROM)),
+            )));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let t0 = std::time::Instant::now();
+        all_text(&mut tree, root, t0);
+        let midway = all_text(&mut tree, root, t0 + std::time::Duration::from_millis(100))[0].0;
+        assert!(
+            midway.r > 0.01 && midway.r < 0.99,
+            "the colour is arriving rather than arrived, got {midway:?}"
+        );
+
+        let settled = all_text(&mut tree, root, t0 + std::time::Duration::from_millis(600))[0].0;
+        assert!(settled.r > 0.99, "and it gets there, got {settled:?}");
+    }
+
     /// The same for a size, which moves layout rather than paint — so the claim
     /// is what the *container* measured, not what the text drew.
     ///

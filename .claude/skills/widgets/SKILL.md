@@ -205,6 +205,21 @@ A bare number is milliseconds, eased out — the one place the animation
 vocabulary has two defaults, because `Transition::default()` is a spring and
 has no duration for a number to attach to.
 
+`.entering_from(..)` is the third verb, and a modifier on the first rather than
+a peer: a transition says how a value moves, an enter says where it starts the
+one time the widget appears, and CSS keeps the same two apart as `transition`
+and `@starting-style`. It plays once, at the first layout, and is consumed
+there.
+
+```rust
+container().background(theme.surface.transition(200.0).entering_from(Color::TRANSPARENT))
+```
+
+The take lives on `AnimationState`, not in the initialiser that seeds most
+properties — there are four of those, and an enter asked for in one of them
+compiles on every setter and works on half. That is #303's own defect, and the
+rule is that a property is *placed* in exactly one place, whichever it is.
+
 Three rules the shape depends on, in order of how easily they are broken:
 
 - **A declaration is the whole property.** Restating one replaces the value

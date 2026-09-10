@@ -270,7 +270,9 @@ impl TextAnims {
         let mut wants = None;
         if let Some(a) = self.color.as_mut() {
             if a.is_initial() {
-                a.set_immediate(color);
+                if !a.begin_enter(color, || now) {
+                    a.set_immediate(color);
+                }
             } else {
                 a.animate_to(color, now);
             }
@@ -281,7 +283,9 @@ impl TextAnims {
         let mut measured = size;
         if let Some(a) = self.font_size.as_mut() {
             if a.is_initial() {
-                a.set_immediate(size);
+                if !a.begin_enter(size, || now) {
+                    a.set_immediate(size);
+                }
             } else {
                 a.animate_to(size, now);
             }

@@ -3000,7 +3000,274 @@ fn a_state_override_replaces_the_whole_corner_shape() {
     assert_eq!(hovered.radii.top_left, 20.0);
 }
 
-/// Every `BackdropBlur` radius drawn by a node.
+/// A container whose background enters from transparent, and one declared the
+/// same way without an enter.
+///
+/// The pair is the assertion: on the frame after the first layout one is
+/// mid-animation and the other is already at its declared value, and some
+/// frames later they agree. Without the pair, "it is not the target yet" could
+/// be any of a dozen things.
+#[test]
+fn a_background_with_an_enter_starts_somewhere_else_and_arrives() {
+    let entering = |from: Option<Color>| {
+        let value =
+            Color::rgb(1.0, 0.0, 0.0).transition(Transition::new(100.0, TimingFunction::Linear));
+        container().width(20.0).height(20.0).background(match from {
+            Some(from) => value.entering_from(from),
+            None => value,
+        })
+    };
+
+    let t0 = std::time::Instant::now();
+
+    let mut plain = H::new(entering(None));
+    frame_at(&mut plain, t0, 100.0, 100.0);
+    assert_eq!(
+        rects(&plain.paint()).first().map(|(_, c)| *c),
+        Some(Color::rgb(1.0, 0.0, 0.0)),
+        "with no enter declared, the first frame is the declared value"
+    );
+
+    let mut entered = H::new(entering(Some(Color::rgba(1.0, 0.0, 0.0, 0.0))));
+    frame_at(&mut entered, t0, 100.0, 100.0);
+
+    // Halfway through a linear hundred milliseconds. The frame that seeds is
+    // the frame the enter begins on, so the curve is read on the next one.
+    frame_at(
+        &mut entered,
+        t0 + std::time::Duration::from_millis(50),
+        100.0,
+        100.0,
+    );
+    let midway = rects(&entered.paint())
+        .first()
+        .map(|(_, c)| *c)
+        .expect("it paints");
+    assert!(
+        midway.a > 0.0 && midway.a < 1.0,
+        "the enter is under way rather than arrived, got {midway:?}"
+    );
+
+    frame_at(
+        &mut entered,
+        t0 + std::time::Duration::from_millis(200),
+        100.0,
+        100.0,
+    );
+    assert_eq!(
+        rects(&entered.paint()).first().map(|(_, c)| *c),
+        Some(Color::rgb(1.0, 0.0, 0.0)),
+        "and it arrives at the declared value"
+    );
+}
+
+/// The same verb on a transform, which is the half the removed methods could
+/// do — and the half the one real caller uses, a menu scaling open from
+/// collapsed on its first layout.
+#[test]
+fn a_scale_with_an_enter_starts_collapsed() {
+    let t0 = std::time::Instant::now();
+    let mut h = H::new(
+        container().width(20.0).height(20.0).scale(
+            Scale::uniform(1.0)
+                .transition(Transition::new(100.0, TimingFunction::Linear))
+                .entering_from(Scale::uniform(0.0)),
+        ),
+    );
+
+    frame_at(&mut h, t0, 100.0, 100.0);
+    let first = h.paint().local_transform;
+    assert!(
+        first.a() < 1.0,
+        "the box is still opening on the frame after its first layout, got {first:?}"
+    );
+
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(200),
+        100.0,
+        100.0,
+    );
+    assert_eq!(h.paint().local_transform.a(), 1.0, "and it finishes open");
+}
+
+/// An enter is what a widget does when it appears, so it happens once. A
+/// relayout is not an appearance.
+#[test]
+fn an_enter_is_consumed_by_the_first_layout_and_does_not_play_again() {
+    let t0 = std::time::Instant::now();
+    let mut h = H::new(
+        container().width(20.0).height(20.0).background(
+            Color::rgb(1.0, 0.0, 0.0)
+                .transition(Transition::new(100.0, TimingFunction::Linear))
+                .entering_from(Color::rgba(1.0, 0.0, 0.0, 0.0)),
+        ),
+    );
+
+    frame_at(&mut h, t0, 100.0, 100.0);
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(200),
+        100.0,
+        100.0,
+    );
+    assert_eq!(
+        rects(&h.paint()).first().map(|(_, c)| *c),
+        Some(Color::rgb(1.0, 0.0, 0.0)),
+        "the enter has finished"
+    );
+
+    // A different viewport: layout runs again, and nothing about the widget
+    // appearing has happened.
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(300),
+        160.0,
+        160.0,
+    );
+    assert_eq!(
+        rects(&h.paint()).first().map(|(_, c)| *c),
+        Some(Color::rgb(1.0, 0.0, 0.0)),
+        "a relayout is not an appearance, so nothing plays a second time"
+    );
+}
+
+/// The verb reaches the properties whose first value is placed somewhere other
+/// than the seed pass — a size, which `update_size_targets` initialises, and a
+/// padding, which keeps the seed it was built with and is never re-seeded.
+///
+/// These are two of the four that accepted an enter and silently dropped it
+/// while the take lived in one initialiser instead of in `AnimationState`.
+/// The padding is read through the child it moves, because a padding is only
+/// visible in where it puts things.
+#[test]
+fn an_enter_reaches_a_size_and_a_padding_too() {
+    let t0 = std::time::Instant::now();
+    let mut h = H::new(
+        container()
+            .height(60.0)
+            .width(
+                120.0f32
+                    .transition(Transition::new(100.0, TimingFunction::Linear))
+                    .entering_from(0.0),
+            )
+            .padding(
+                Padding::all(20.0)
+                    .transition(Transition::new(100.0, TimingFunction::Linear))
+                    .entering_from(Padding::all(0.0)),
+            )
+            .child(container().width(10.0).height(10.0)),
+    );
+
+    frame_at(&mut h, t0, 400.0, 400.0);
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(50),
+        400.0,
+        400.0,
+    );
+
+    let midway = h.tree.cached_size(h.root).unwrap().width;
+    assert!(
+        midway > 0.0 && midway < 120.0,
+        "the width is opening rather than already open, got {midway}"
+    );
+    let child = h.tree.get_children(h.root)[0];
+    let inset = h.tree.get_origin(child).unwrap().0;
+    assert!(
+        inset > 0.0 && inset < 20.0,
+        "the padding is opening too, got {inset}"
+    );
+
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(200),
+        400.0,
+        400.0,
+    );
+    assert_eq!(
+        h.tree.cached_size(h.root).unwrap().width,
+        120.0,
+        "and the width arrives"
+    );
+    assert_eq!(
+        h.tree.get_origin(h.tree.get_children(h.root)[0]).unwrap().0,
+        20.0,
+        "and so does the padding"
+    );
+}
+
+/// An appearance has no direction, so it runs the forward transition whichever
+/// way it travels.
+///
+/// `animate_to` reads the direction off the value it is leaving, and an enter
+/// has just placed that value at the start of the appearance. A card settling
+/// down from a larger scale therefore looked like a value decreasing, ran the
+/// transition written for the *later* close, and fired its `on_complete` — the
+/// callback that destroys the popup in the pattern this feature exists for.
+#[test]
+fn an_enter_that_shrinks_still_runs_the_forward_transition() {
+    let closed = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let counted = std::rc::Rc::clone(&closed);
+    let t0 = std::time::Instant::now();
+    let mut h = H::new(
+        container().width(20.0).height(20.0).scale(
+            Scale::uniform(1.0)
+                .transition(
+                    Transition::new(400.0, TimingFunction::Linear).reverse(
+                        Transition::new(20.0, TimingFunction::Linear)
+                            .on_complete(move || counted.set(counted.get() + 1)),
+                    ),
+                )
+                .entering_from(Scale::uniform(1.4)),
+        ),
+    );
+
+    frame_at(&mut h, t0, 100.0, 100.0);
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(50),
+        100.0,
+        100.0,
+    );
+    assert_eq!(
+        closed.get(),
+        0,
+        "the reverse transition's completion belongs to the close, not the open"
+    );
+    let midway = h.paint().local_transform.a();
+    assert!(
+        midway > 1.0,
+        "and the forward curve is still running at 50ms of 400, got {midway}"
+    );
+}
+
+/// An enter is written in the vocabulary every other position takes.
+///
+/// `IntoVal` and not `Into`: the numeric widenings guido declares with
+/// `converts!(S as T)` carry no std `From`, so `Into` would accept a rotation
+/// entered from `0.0f32` and refuse the same value written `0i32` — in a
+/// setter that takes both.
+#[test]
+fn an_enter_takes_what_the_property_takes() {
+    let _ = container()
+        .rotate(45.0f32.transition(200.0).entering_from(0i32))
+        .scale(Scale::uniform(1.0).transition(200.0).entering_from(0.0f64))
+        .width(120.0f32.transition(200.0).entering_from(0u16));
+}
+
+/// A timeline already says where it starts, so an enter on one would be
+/// dropped in silence. It says so instead.
+#[test]
+#[should_panic(expected = "a timeline already says where it starts")]
+fn an_enter_on_a_timeline_refuses() {
+    let plays = create_signal(0u32);
+    let _ = 0.0f32
+        .timeline(Keyframes::new(100.0).at(1.0, 1.0), plays)
+        .entering_from(0.0);
+}
+
+/// Every `BackdropBlur` radius drawn by a node./// Every `BackdropBlur` radius drawn by a node.
 fn blur_radii(node: &RenderNode) -> Vec<f32> {
     node.commands
         .iter()
