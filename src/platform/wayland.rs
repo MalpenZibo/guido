@@ -512,7 +512,7 @@ impl WaylandState {
             layer_surface.set_margin(margin.top, margin.right, margin.bottom, margin.left);
         }
 
-        if let Some(rects) = &config.input_region {
+        if let Some(rects) = &declared.input_region {
             self.apply_input_region(&wl_surface, Some(rects));
         }
 

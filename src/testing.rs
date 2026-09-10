@@ -30,7 +30,7 @@ use crate::renderer::{GpuContext, RenderTarget, Renderer};
 use crate::surface::{SurfaceConfig, SurfaceId};
 use crate::surface_manager::{ManagedSurface, SurfaceManager};
 use crate::tree::{Tree, WidgetId};
-use crate::widgets::{Event, MouseButton, Widget};
+use crate::widgets::{Event, MouseButton, Rect, Widget};
 use crate::{Frame, LoopContext, Platform, Surface, iterate};
 
 /// The compositor's half of one surface: what it has said, and what it has
@@ -52,6 +52,8 @@ struct RecordedSurface {
     events: Vec<(Instant, Event)>,
     first_frame_presented: bool,
     exclusive_zones: Vec<i32>,
+    /// Every input region asked for, oldest first.
+    input_regions: Vec<Option<Vec<Rect>>>,
     sizes_asked: Vec<(u32, u32)>,
     frame_callbacks: u32,
 }
@@ -115,6 +117,10 @@ impl Surface for &mut RecordedSurface {
         self.exclusive_zones.push(zone);
     }
 
+    fn set_input_region(&mut self, rects: Option<&[Rect]>) {
+        self.input_regions.push(rects.map(<[Rect]>::to_vec));
+    }
+
     fn request_frame_callback(&mut self) {
         self.frame_callbacks += 1;
     }
@@ -142,6 +148,7 @@ impl Platform for Recorder {
                 scale: 1.0,
                 sizes_asked: vec![declared.asked],
                 exclusive_zones: vec![declared.exclusive_zone],
+                input_regions: Vec::from_iter(declared.input_region.map(Some)),
                 ..Default::default()
             },
         );
@@ -370,6 +377,13 @@ impl Headless {
     /// and only a list can tell them apart.
     pub fn exclusive_zones_asked(&self, id: SurfaceId) -> &[i32] {
         &self.host.get(id).exclusive_zones
+    }
+
+    /// Every input region a surface has asked for, oldest first. `None` is the
+    /// whole surface, and an empty list is a surface that takes no input at
+    /// all.
+    pub fn input_regions_asked(&self, id: SurfaceId) -> &[Option<Vec<Rect>>] {
+        &self.host.get(id).input_regions
     }
 
     /// The sizes a surface has asked for, oldest first.
