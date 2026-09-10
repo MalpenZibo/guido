@@ -92,7 +92,8 @@ half a shake is not what a second refusal means.
 
 ## How long it runs
 
-`repeat(Repeat::Times(n))` plays the whole run `n` times and then rests.
+`repeat(Repeat::Times(n))` plays the whole run `n` times and then rests, and
+never fewer than once — a computed `n` of zero is a single run.
 `Repeat::Forever` never stops:
 
 ```rust
