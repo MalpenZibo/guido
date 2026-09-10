@@ -42,9 +42,7 @@ container().child(text_input(value).color(Color::WHITE))
 # use guido::prelude::*;
 # fn main() {
 # let value = create_signal(String::new());
-text_input(value);
-// or, for every input below one container:
-container().child(text_input(value).cursor_color(Color::rgb(0.4, 0.8, 1.0)).cursor_color(Color::rgb(0.4, 0.8, 1.0)))
+text_input(value).cursor_color(Color::rgb(0.4, 0.8, 1.0))
 # ;
 # }
 ```
@@ -259,8 +257,8 @@ text_input(answer).placeholder(move || prompt.get())
 ```
 
 The colour is the field's own text colour at reduced alpha — a placeholder is the
-same text, quieter. Declare `placeholder_color` on the field, or on a
-container to cover every field below it:
+same text, quieter. Declare `placeholder_color` on the field itself: only a
+field draws a placeholder, so only a field says what colour it is.
 
 ```rust
 # extern crate guido;
@@ -272,8 +270,6 @@ container to cover every field below it:
 # let theme = Theme::default();
 # let value = create_signal(String::new());
 container()
-    
-    
     .child(text_input(value).placeholder_color(theme.text_weak).color(theme.text).placeholder("Search"))
 # ;
 # }

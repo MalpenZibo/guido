@@ -10,15 +10,12 @@ mod common;
 
 use common::Harness;
 use guido::prelude::*;
-use guido::reactive::focus::{clear_focus, has_focus, request_focus};
+use guido::reactive::focus::{clear_focus, has_focus};
 
 /// Every rectangle a focused input draws. With no selection, the caret is the
 /// only one there can be.
 fn rects(input: TextInput) -> Vec<Rect> {
-    clear_focus();
-    let mut harness = Harness::laid_out(input, 200.0, 40.0);
-    request_focus(&harness.tree, harness.root);
-    harness.painted_rects()
+    Harness::focused(input, 200.0, 40.0).painted_rects()
 }
 
 #[test]

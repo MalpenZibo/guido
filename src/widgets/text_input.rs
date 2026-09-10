@@ -27,10 +27,32 @@ use crate::widget_ref::{WidgetRef, register_widget_ref};
 
 use super::control::Control;
 use super::font::{FontFamily, FontWeight};
-use super::input_style::{InputStyle, InputStyled};
 use super::state_layer::{StateWhen, Stateful};
 use super::text_style::TextStyle;
 use super::widget::{Color, Event, EventResponse, Key, MouseButton, Rect, Widget};
+
+/// The caret, selection band and placeholder colours a field declares for
+/// itself.
+///
+/// These three are not text style. A [`Text`](crate::widgets::Text) draws
+/// glyphs and nothing else; only a field draws a caret, a band or a
+/// placeholder, so only a field is asked about them. They lived in
+/// [`TextStyle`] for a while, each with a doc comment admitting that one
+/// widget ever read it, which is the shape of a property in the wrong struct.
+///
+/// Every field is optional and independent, so declaring only the caret colour
+/// leaves the selection at its default.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(crate) struct InputStyle {
+    /// Colour of the caret. Defaults to the resolved text colour — a field
+    /// that only sets its text colour should not sprout a blue cursor.
+    pub(crate) cursor_color: Option<Signal<Color>>,
+    /// Colour of the selection band drawn behind the selected glyphs.
+    pub(crate) selection_color: Option<Signal<Color>>,
+    /// Colour of the placeholder. Defaults to the text colour at reduced
+    /// alpha — a placeholder is the same text, quieter.
+    pub(crate) placeholder_color: Option<Signal<Color>>,
+}
 
 /// Cursor blink interval in milliseconds
 const CURSOR_BLINK_MS: u64 = 530;
@@ -471,7 +493,7 @@ impl TextInput {
     ///
     /// Drawn in the placeholder colour — this field's text colour at reduced
     /// alpha unless it declares
-    /// [`placeholder_color`](crate::widgets::InputStyled::placeholder_color) — and
+    /// [`placeholder_color`](Self::placeholder_color) — and
     /// never masked, since it is a label rather than a value: a password field
     /// with a placeholder shows the word, not bullets.
     ///
@@ -1262,9 +1284,33 @@ impl Stateful for TextInput {
 
 crate::widgets::text_style::declares_text_style!(TextInput, text_style, text_anims);
 
-impl InputStyled for TextInput {
+/// The field's own furniture: the caret, the selection band and the
+/// placeholder.
+///
+/// Inherent, and only here, because a field is the only widget that draws any
+/// of it. A caret colour on a `Text` would be a property nothing reads, and a
+/// container declares nothing about the text inside it.
+impl TextInput {
     fn input_style_mut(&mut self) -> &mut InputStyle {
         self.input_style.get_or_insert_with(Box::default)
+    }
+
+    /// Colour of the caret.
+    pub fn cursor_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.input_style_mut().cursor_color = Some(color.into_signal());
+        self
+    }
+
+    /// Colour of the selection band behind the selected glyphs.
+    pub fn selection_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.input_style_mut().selection_color = Some(color.into_signal());
+        self
+    }
+
+    /// Colour of the placeholder.
+    pub fn placeholder_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.input_style_mut().placeholder_color = Some(color.into_signal());
+        self
     }
 }
 
