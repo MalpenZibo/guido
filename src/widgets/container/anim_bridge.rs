@@ -88,8 +88,14 @@ impl Container {
 
             if anim.is_initial() {
                 // Mark initialized at the first layout whatever the value, so
-                // later changes animate instead of snapping.
-                anim.set_immediate(target);
+                // later changes animate instead of snapping — unless an enter
+                // was declared, in which case this is the appearance it was
+                // waiting for and the size animates from there.
+                if anim.begin_enter(target, || tree.frame_instant()) {
+                    retargeted = true;
+                } else {
+                    anim.set_immediate(target);
+                }
             } else if (target - *anim.target()).abs() > 0.001 {
                 anim.animate_to(target, tree.frame_instant());
                 retargeted = true;
@@ -109,7 +115,7 @@ impl Container {
     /// value its signal actually holds, not the one captured at construction.
     ///
     /// See the module docs for why this cannot wait for the first paint.
-    pub(super) fn seed_animations(&mut self, id: WidgetId) {
+    pub(super) fn seed_animations(&mut self, tree: &Tree, id: WidgetId) {
         // Written out one by one: each property animates a different type, so
         // there is no single accessor to loop over.
         let anims = self.anims.as_ref();
@@ -140,15 +146,17 @@ impl Container {
 
         // Targets are computed under `&self` first: the writes below need
         // `&mut self.anims`, and the effective_* readers need `&self`.
+        let (pd_target, bw_target) = with_signal_tracking(id, JobType::Animation, || {
+            // Read for the subscription, and kept: these two keep the
+            // seed they were built with rather than being re-seeded here,
+            // but an enter declared on them still has to begin somewhere.
+            (
+                pd_init.then(|| self.effective_padding_target(id)),
+                bw_init.then(|| self.effective_border_width_target(id)),
+            )
+        });
         let (bg_target, cr_target, sh_target, bc_target, tr_target, ro_target, sc_target) =
             with_signal_tracking(id, JobType::Animation, || {
-                // Read for the subscription even where the value is unused.
-                if pd_init {
-                    let _ = self.effective_padding_target(id);
-                }
-                if bw_init {
-                    let _ = self.effective_border_width_target(id);
-                }
                 (
                     bg_init.then(|| self.effective_background_target(id)),
                     cr_init.then(|| self.effective_corners_target(id)),
@@ -165,13 +173,23 @@ impl Container {
         };
         // One line per property rather than a loop: each animates a
         // different type, so there is nothing to iterate over.
-        seed(&mut anims.background, bg_target);
-        seed(&mut anims.corners, cr_target);
-        seed(&mut anims.shadow, sh_target);
-        seed(&mut anims.border_color, bc_target);
-        seed(&mut anims.translate, tr_target);
-        seed(&mut anims.rotate, ro_target);
-        seed(&mut anims.scale, sc_target);
+        let now = || tree.frame_instant();
+        let mut entered = false;
+        entered |= seed_or_enter(&mut anims.background, bg_target, now);
+        entered |= seed_or_enter(&mut anims.corners, cr_target, now);
+        entered |= seed_or_enter(&mut anims.shadow, sh_target, now);
+        entered |= seed_or_enter(&mut anims.border_color, bc_target, now);
+        entered |= seed_or_enter(&mut anims.translate, tr_target, now);
+        entered |= seed_or_enter(&mut anims.rotate, ro_target, now);
+        entered |= seed_or_enter(&mut anims.scale, sc_target, now);
+        entered |= seed_or_enter(&mut anims.padding, pd_target, now);
+        entered |= seed_or_enter(&mut anims.border_width, bw_target, now);
+
+        // An enter is under way from this frame, so there has to be another
+        // one: nothing else will ask, because no signal changed.
+        if entered {
+            request_job(id, JobRequest::Animation(RequiredJob::Paint));
+        }
     }
 
     /// Every paint: re-read the animated targets under tracking, and ask for an
@@ -268,12 +286,23 @@ impl Container {
     }
 }
 
-/// Start one animated property at the target just read for it.
+/// Start one animated property at the target just read for it, or begin the
+/// enter it declared. Returns whether an enter began, which is what needs a
+/// frame after this one.
 ///
 /// Written as a call per property rather than a loop, because each animates a
 /// different type and there is no single accessor to iterate.
-fn seed<T: crate::animation::Animatable>(slot: &mut Option<AnimationState<T>>, target: Option<T>) {
-    if let (Some(anim), Some(target)) = (slot, target) {
-        anim.set_immediate(target);
+fn seed_or_enter<T: crate::animation::Animatable>(
+    slot: &mut Option<AnimationState<T>>,
+    target: Option<T>,
+    now: impl FnOnce() -> crate::clock::FrameInstant,
+) -> bool {
+    let Some((anim, target)) = slot.as_mut().zip(target) else {
+        return false;
+    };
+    if anim.begin_enter(target, now) {
+        return true;
     }
+    anim.set_immediate(target);
+    false
 }

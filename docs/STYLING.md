@@ -246,7 +246,8 @@ carries none — so it asks on its sources alone, and empties them to switch off
 
 **What is not reactive** is structural: `.layout(..)`, the axis a `.scroll(..)`
 is built with, `.control()`, and the motion a value is declared with —
-`.transition(..)` and `.timeline(..)`. These say what
+`.transition(..)`, `.timeline(..)` and the `.entering_from(..)` that says where
+a transition begins on the frame the widget appears. These say what
 kind of thing the container *is*; change one and you are describing a different
 widget, so declare it in the closure that builds the widget instead. The
 *value* a motion decorates is as reactive as any other.

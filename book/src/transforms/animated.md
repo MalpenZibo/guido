@@ -20,6 +20,50 @@ container()
 
 When `rotation_signal` changes, the transform animates smoothly.
 
+## Appearing mid-animation
+
+`transition` says how a value moves. `entering_from` says where it starts the
+one time the widget appears — the CSS pair, where `transition` supplies the
+motion and `@starting-style` supplies the before-value.
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let open = create_signal(true);
+# let collapsed = Scale::new(1.0, 0.0);
+container()
+    .scale(
+        (move || if open.get() { Scale::NONE } else { collapsed })
+            .transition(Transition::spring(SpringConfig::SNAPPY))
+            .entering_from(collapsed),
+    )
+    .pivot(Pivot::TOP)
+# ;
+# }
+```
+
+A menu that scales open on its first layout, and closes by the same transition
+running the other way.
+
+It is not transform-shaped: the verb hangs off the value, so it reaches every
+animatable property. A card can fade in.
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container()
+    .background(Color::rgb(0.1, 0.1, 0.15).transition(200.0).entering_from(Color::TRANSPARENT))
+# ;
+# }
+```
+
+The enter plays once, at the first layout, and is consumed there: a relayout, a
+resize or a state change is not an appearance and does not replay it. It needs a
+transition to travel with, so declaring one on a timeline is a panic rather than
+a value quietly ignored — a timeline already says where it starts.
+
 ## Duration-Based Animation
 
 Standard easing curve transitions:
@@ -199,6 +243,9 @@ impl Container {
     pub fn rotate<M>(self, degrees: impl IntoAnimated<f32, M>) -> Self;
     pub fn scale<M>(self, factor: impl IntoAnimated<Scale, M>) -> Self;
 }
+
+// Where a property starts the one time its widget appears.
+Animated::entering_from(self, from: T) -> Animated<T>
 
 // Duration-based
 Transition::new(duration_ms: f32, timing: TimingFunction) -> Transition

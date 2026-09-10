@@ -206,10 +206,10 @@ impl TextRenderState {
             } else {
                 // Cache miss — create and shape a new buffer
                 let scaled_font_size = entry.font_size * scale_factor;
-                let mut buffer = Buffer::new(
-                    &mut self.font_system,
-                    Metrics::new(scaled_font_size, scaled_font_size * 1.2),
-                );
+                let (size, line_height) =
+                    crate::renderer::text_measurer::shapeable_metrics(scaled_font_size);
+                let mut buffer =
+                    Buffer::new(&mut self.font_system, Metrics::new(size, line_height));
                 buffer.set_size(
                     &mut self.font_system,
                     Some((entry.rect.width.max(200.0)) * scale_factor),

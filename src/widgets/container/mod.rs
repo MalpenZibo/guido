@@ -1552,7 +1552,7 @@ impl Widget for Container {
         }
 
         self.update_size_targets(tree, id, &lengths, content_size);
-        self.seed_animations(id);
+        self.seed_animations(tree, id);
 
         let size = self.resolve_size(&lengths, constraints, content_size);
 
@@ -1936,11 +1936,12 @@ fn sorted_axis(tree: &Tree, children: &[WidgetId]) -> Option<Axis> {
 /// never two declarations for one property to reconcile, only the one written
 /// last.
 ///
-/// The animation is seeded from the signal's value at builder time. For every
-/// property but padding and border width that seed is replaced at the first
-/// layout by `seed_animations`, which reads the signal rather than this
-/// snapshot; those two are read there only for their subscription, so their
-/// seed survives into the first advance.
+/// The animation is seeded from the signal's value at builder time, and that
+/// seed is replaced at the first layout by `seed_animations`, which reads the
+/// signal rather than this snapshot. Padding and border width used to be the
+/// exception, read there only for their subscription — which left them the two
+/// properties `is_initial()` was never false for, and so the two the drift
+/// check in `resync_animation_targets` could never speak for.
 pub(crate) fn declare<A: Default, T: Animatable, M>(
     anims: &mut Option<Box<A>>,
     value: impl IntoAnimated<T, M>,
@@ -1950,7 +1951,9 @@ pub(crate) fn declare<A: Default, T: Animatable, M>(
     let installed = motion.map(|motion| {
         let seed = signal.get_untracked();
         match *motion {
-            Motion::Ease(config) => AnimationState::new(seed, config),
+            Motion::Ease { config, enter_from } => {
+                AnimationState::new(seed, config).with_enter_from(enter_from)
+            }
             Motion::Play { keyframes, plays } => {
                 AnimationState::new(seed, instant_transition()).with_timeline(keyframes, plays)
             }
@@ -1990,9 +1993,12 @@ fn declare_size<M>(
     slot: impl FnOnce(&mut ContainerAnims) -> &mut Option<AnimationState<f32>>,
 ) -> Signal<Length> {
     let (signal, ease) = value.into_animated().into_eased();
-    let installed = ease.map(|config| {
-        let length = signal.get_untracked();
-        AnimationState::new(length.exact.or(length.min).unwrap_or(0.0), config)
+    // A size declares a `Length` and animates the `f32` inside it, so the enter
+    // is narrowed by the same formula as the seed.
+    let resolved = |length: Length| length.exact.or(length.min).unwrap_or(0.0);
+    let installed = ease.map(|(config, enter_from)| {
+        AnimationState::new(resolved(signal.get_untracked()), config)
+            .with_enter_from(enter_from.map(resolved))
     });
     write_slot(anims, slot, installed);
     signal

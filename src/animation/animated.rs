@@ -24,7 +24,7 @@
 //! .when_hovered(|s| s.background(HOT.transition(900.0)))   // does not compile
 //! ```
 
-use crate::reactive::{IntoSignal, Signal};
+use crate::reactive::{IntoSignal, IntoVal, Signal};
 
 use super::{Animatable, Keyframes, TransitionConfig};
 
@@ -45,6 +45,50 @@ pub struct Animated<T> {
 }
 
 impl<T> Animated<T> {
+    /// Start somewhere else the one time this widget appears, and travel to
+    /// the declared value with the transition already named.
+    ///
+    /// `transition` says how a value moves; this says where it begins. They are
+    /// separate questions and compose on one property, which is the split CSS
+    /// makes between `transition` and `@starting-style`.
+    ///
+    /// ```ignore
+    /// // a menu that scales open on its first layout
+    /// container().transform(
+    ///     (move || if open.get() { Transform::IDENTITY } else { collapsed })
+    ///         .transition(Transition::spring(SpringConfig::SNAPPY))
+    ///         .entering_from(collapsed),
+    /// )
+    /// // and the same verb on anything else that animates
+    /// container().background(theme.surface.transition(200.0).entering_from(Color::TRANSPARENT))
+    /// ```
+    ///
+    /// Played once, at the first layout, and consumed there: a relayout, a
+    /// resize or a state change is not an appearance and does not replay it.
+    ///
+    /// Panics if a timeline was declared instead of a transition: a timeline
+    /// already says where it begins, so an enter has nothing to add and would
+    /// be dropped in silence. Caught the first time the widget is built.
+    pub fn entering_from(mut self, from: impl IntoVal<T>) -> Self {
+        match self.motion.as_deref_mut() {
+            Some(Motion::Ease { enter_from, .. }) => *enter_from = Some(from.into_val()),
+            Some(Motion::Play { .. }) => panic!(
+                "`entering_from` needs a transition to travel with, and a timeline \
+                 already says where it starts — declare the enter on a \
+                 `transition(..)` value instead"
+            ),
+            // Loud rather than silent, for the reason `into_eased` gives: an
+            // `Animated<T>` with no motion is only made inside a setter, so a
+            // caller cannot spell this — and the day one can, it has to say so
+            // rather than dropping the value.
+            None => unreachable!(
+                "an `Animated<T>` with no motion is only made by `into_animated`, \
+                 inside the setter that immediately consumes it"
+            ),
+        }
+        self
+    }
+
     /// The value and its motion, taken apart by the setter that installs them.
     pub(crate) fn into_parts(self) -> (Signal<T>, Option<Box<Motion<T>>>) {
         (self.signal, self.motion)
@@ -60,9 +104,9 @@ impl<T> Animated<T> {
     /// not exist. That bound is what makes this a narrowing rather than a
     /// value quietly dropped, and relaxing it would have to bring a spelling
     /// for a timeline on a size with it.
-    pub(crate) fn into_eased(self) -> (Signal<T>, Option<TransitionConfig>) {
+    pub(crate) fn into_eased(self) -> (Signal<T>, Option<(TransitionConfig, Option<T>)>) {
         let ease = match self.motion.map(|motion| *motion) {
-            Some(Motion::Ease(config)) => Some(config),
+            Some(Motion::Ease { config, enter_from }) => Some((config, enter_from)),
             None => None,
             // Loud rather than `None`, because the thing that makes this
             // unreachable is a bound three types away: silently dropping a
@@ -81,8 +125,14 @@ impl<T> Animated<T> {
 /// means a pointer event here and scrolling calls its own `momentum`, so a
 /// public name about easing would sit between two unrelated meanings.
 pub(crate) enum Motion<T> {
-    /// Ease to each new value instead of jumping to it.
-    Ease(TransitionConfig),
+    /// Ease to each new value instead of jumping to it, and — if an enter was
+    /// declared — begin from somewhere else on the first layout.
+    Ease {
+        config: TransitionConfig,
+        /// Where the property starts the one time the widget appears. `None`
+        /// for almost every declaration; see [`Animated::entering_from`].
+        enter_from: Option<T>,
+    },
     /// Play a sequence whenever the trigger changes, and rest on the declared
     /// value in between.
     Play {
@@ -111,7 +161,10 @@ pub trait Animate<T: Clone + 'static, M>: IntoSignal<T, M> + Sized {
     fn transition(self, transition: impl Into<TransitionConfig>) -> Animated<T> {
         Animated {
             signal: self.into_signal(),
-            motion: Some(Box::new(Motion::Ease(transition.into()))),
+            motion: Some(Box::new(Motion::Ease {
+                config: transition.into(),
+                enter_from: None,
+            })),
         }
     }
 
