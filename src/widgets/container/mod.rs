@@ -645,12 +645,6 @@ impl Container {
         self
     }
 
-    /// Transfer children from another ChildrenSource (useful for components)
-    pub fn children_source(mut self, source: ChildrenSource) -> Self {
-        self.children_source = source;
-        self
-    }
-
     /// Set padding in logical pixels.
     ///
     /// Accepts multiple formats via `From` conversions:
