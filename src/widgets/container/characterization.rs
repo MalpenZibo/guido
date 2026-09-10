@@ -14,7 +14,7 @@
 use rustc_hash::FxHashSet;
 
 use super::*;
-use crate::animation::{Animate, Keyframes, SpringConfig, TimingFunction, Transition};
+use crate::animation::{Animate, Keyframes, Repeat, SpringConfig, TimingFunction, Transition};
 use crate::backdrop::BackdropSources;
 use crate::jobs::{self, JobType};
 use crate::layout::{Constraints, Flex, at_least, at_most, fill, fraction};
@@ -2145,8 +2145,8 @@ fn a_timeline_plays_on_a_padding() {
                     Keyframes::new(200.0)
                         .at(0.0, rest)
                         .at(0.5, Padding::all(20.0))
-                        .at(1.0, rest),
-                    plays,
+                        .at(1.0, rest)
+                        .played_by(plays),
                 ),
             )
             .child(box_of(20.0, 20.0)),
@@ -2186,8 +2186,8 @@ fn a_timeline_plays_on_a_background() {
                 Keyframes::new(200.0)
                     .at(0.0, rest)
                     .at(0.5, Color::RED)
-                    .at(1.0, rest),
-                plays,
+                    .at(1.0, rest)
+                    .played_by(plays),
             ),
         ),
     );
@@ -2227,10 +2227,17 @@ fn a_timeline_plays_on_a_background() {
 #[test]
 fn a_container_wakes_when_its_timeline_is_asked_to_play() {
     let plays = create_signal(0u32);
-    let mut h = H::new(box_of(50.0, 50.0).rotate(0.0.timeline(
-        Keyframes::new(200.0).at(0.0, 0.0).at(0.5, 2.0).at(1.0, 0.0),
-        plays,
-    )));
+    let mut h = H::new(
+        box_of(50.0, 50.0).rotate(
+            0.0.timeline(
+                Keyframes::new(200.0)
+                    .at(0.0, 0.0)
+                    .at(0.5, 2.0)
+                    .at(1.0, 0.0)
+                    .played_by(plays),
+            ),
+        ),
+    );
     h.fit(100.0, 100.0);
     h.paint();
 
@@ -2257,6 +2264,259 @@ fn played_transform(h: &mut H) -> Transform {
     h.paint().children[0].local_transform
 }
 
+/// A sequence with nothing to trigger it plays because the widget exists.
+///
+/// This is what a spinner needs and what a shake must not do. A trigger records
+/// its value when the widget is built and waits for a change, so a widget
+/// mounted at the instant its condition became true sits perfectly still,
+/// waiting for something that has already happened (#213).
+///
+/// The first frame is the one that asks — `seed_animations` requests the
+/// animation job, because nothing else will — and the play itself happens where
+/// every other play happens, in the animate pass.
+#[test]
+fn a_sequence_with_no_trigger_plays_because_it_exists() {
+    let mut h = H::new(spinning(Repeat::Times(1)));
+    frame_at(&mut h, std::time::Instant::now(), 200.0, 200.0);
+
+    assert!(
+        !played_transform(&mut h).is_identity(),
+        "nothing asked it to play, and that is the point: it plays because it is there"
+    );
+}
+
+/// The whole design in one test: showing the widget starts it, hiding it stops
+/// it, and the surface goes idle afterwards.
+///
+/// Nothing is added for stopping an endless sequence, and this is why that is a
+/// design rather than an omission — the widget's presence *is* the switch. It
+/// is also the case the issue says fails today: the spinner is built *after*
+/// `busy` became true, so a trigger would record the new value and wait for a
+/// change that has already happened.
+#[test]
+fn showing_the_widget_starts_the_sequence_and_hiding_it_stops_everything() {
+    let busy = create_signal(false);
+    let mut h = H::new(
+        container()
+            .layout(Flex::row())
+            .child(move || busy.get().then(|| spinning_child(Repeat::Forever))),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+
+    assert!(
+        h.paint().children.is_empty(),
+        "nothing is waiting, so there is no spinner"
+    );
+
+    busy.set(true);
+    // One frame to reconcile the child into the tree and lay it out, which is
+    // where it asks for the animation job. The play itself is the frame after,
+    // in the animate pass, and `played_transform` is those two.
+    frame_at(&mut h, std::time::Instant::now(), 200.0, 200.0);
+    assert!(
+        !played_transform(&mut h).is_identity(),
+        "it appeared, so it plays — with nothing having asked it to"
+    );
+
+    busy.set(false);
+    let t0 = std::time::Instant::now();
+    for step in 0..6 {
+        frame_at(
+            &mut h,
+            t0 + std::time::Duration::from_millis(step * 200),
+            200.0,
+            200.0,
+        );
+    }
+    assert!(
+        !pump(&mut h),
+        "an endless sequence has no stop call, so the widget going away has to \
+         be what lets the surface settle"
+    );
+}
+
+/// An endless sequence is at the same point in its run a month later as it was
+/// in its first, and still moves between one frame and the next.
+///
+/// Its elapsed time is an `f32` count of milliseconds measured from a start
+/// that moves up with every whole run behind it. Left growing for the life of
+/// the widget, the gap between representable values reaches a whole 60Hz frame
+/// at about thirty-seven hours and a whole run of a short sequence within a few
+/// weeks — at which point it shows one value for frame after frame. A bar is
+/// the thing that runs for weeks.
+///
+/// Asserted on *where in the run it is*, not merely that it moved: a start that
+/// is moved by the wrong amount, or in the wrong direction, still moves.
+#[test]
+fn an_endless_sequence_keeps_its_place_in_the_run_a_month_later() {
+    let mut h = H::new(spinning(Repeat::Forever));
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 200.0, 200.0);
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(1),
+        200.0,
+        200.0,
+    );
+
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(100),
+        200.0,
+        200.0,
+    );
+    let first_run = h.paint().children[0].local_transform;
+
+    // A whole number of 200ms runs, so the same point in the run — 30 days is
+    // 12,960,000 of them exactly.
+    let month = std::time::Duration::from_secs(30 * 24 * 60 * 60);
+    frame_at(
+        &mut h,
+        t0 + month + std::time::Duration::from_millis(100),
+        200.0,
+        200.0,
+    );
+    assert_eq!(
+        h.paint().children[0].local_transform,
+        first_run,
+        "a whole number of runs later is the same point in the run"
+    );
+
+    frame_at(
+        &mut h,
+        t0 + month + std::time::Duration::from_millis(116),
+        200.0,
+        200.0,
+    );
+    assert!(
+        h.paint().children[0].local_transform != first_run,
+        "and the frame after it has moved on, rather than showing the same value"
+    );
+}
+
+/// A sequence that has run out lets the surface settle.
+///
+/// `wants_play` is what `resync_animation_targets` asks at every paint, and it
+/// has to say no once a sequence with no trigger has had its one play —
+/// otherwise the container is woken for a play it has already had, every frame,
+/// for as long as it exists.
+#[test]
+fn a_finished_sequence_stops_asking_to_be_played() {
+    let mut h = H::new(spinning(Repeat::Times(1)));
+    let t0 = std::time::Instant::now();
+    for step in 0..6 {
+        frame_at(
+            &mut h,
+            t0 + std::time::Duration::from_millis(step * 100),
+            200.0,
+            200.0,
+        );
+        h.paint();
+    }
+    assert!(
+        !pump(&mut h),
+        "the sequence is over, so nothing is owed another frame"
+    );
+}
+
+/// A property that eases has nothing to play, and must not ask for the frame a
+/// sequence would need.
+#[test]
+fn a_property_with_no_sequence_asks_for_no_play() {
+    let mut h = H::new(
+        container()
+            .layout(Flex::row())
+            .child(box_of(50.0, 50.0).rotate(0.0.transition(200.0))),
+    );
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 200.0, 200.0);
+    h.paint();
+
+    assert!(
+        !pump(&mut h),
+        "an eased property with no sequence is owed no play, so the first \
+         layout has nothing to ask for"
+    );
+}
+
+/// The tree both endless tests use: a rotation with a sequence and no trigger.
+fn spinning(repeat: Repeat) -> Container {
+    container()
+        .layout(Flex::row())
+        .child(spinning_child(repeat))
+}
+
+/// The child on its own, for the test that mounts it after the fact.
+fn spinning_child(repeat: Repeat) -> Container {
+    box_of(50.0, 50.0).rotate(
+        0.0.timeline(
+            Keyframes::new(200.0)
+                .at(0.0, 0.0)
+                .at(0.5, 20.0)
+                .at(1.0, 0.0)
+                .repeat(repeat),
+        ),
+    )
+}
+
+/// And it keeps going, which a sequence that repeats a fixed number of times
+/// does not.
+#[test]
+fn a_sequence_that_repeats_forever_is_still_running_much_later() {
+    let mut endless = H::new(spinning(Repeat::Forever));
+    let mut counted = H::new(spinning(Repeat::Times(1)));
+
+    let t0 = std::time::Instant::now();
+    // Well past a single run, and off the resting value of both.
+    let at = t0 + std::time::Duration::from_millis(2100);
+    for h in [&mut endless, &mut counted] {
+        frame_at(h, t0, 200.0, 200.0);
+        frame_at(h, t0 + std::time::Duration::from_millis(1), 200.0, 200.0);
+        frame_at(h, at, 200.0, 200.0);
+        // One more, because a sequence that has run out hands the property back
+        // on the frame it ends and settles on the next.
+        frame_at(h, at + std::time::Duration::from_millis(1), 200.0, 200.0);
+    }
+
+    assert!(
+        !endless.paint().children[0].local_transform.is_identity(),
+        "a sequence that repeats forever is still moving ten runs later"
+    );
+    assert!(
+        counted.paint().children[0].local_transform.is_identity(),
+        "and one that does not is back at rest, which is what says the first \
+         assertion is about the repeat and not about the clock"
+    );
+}
+
+/// A trigger still means what it meant: play on each change, and not before.
+#[test]
+fn a_sequence_played_by_a_trigger_waits_for_it() {
+    let plays = create_signal(0u32);
+    let mut h = H::new(
+        container().layout(Flex::row()).child(
+            box_of(50.0, 50.0).rotate(
+                0.0.timeline(
+                    Keyframes::new(200.0)
+                        .at(0.0, 0.0)
+                        .at(0.5, 20.0)
+                        .at(1.0, 0.0)
+                        .played_by(plays),
+                ),
+            ),
+        ),
+    );
+
+    assert!(
+        played_transform(&mut h).is_identity(),
+        "nothing has asked it to play yet"
+    );
+
+    plays.set(1);
+    assert!(!played_transform(&mut h).is_identity(), "and now it has");
+}
+
 /// Waking is not playing. The test above passes whether or not the sequence
 /// survived, because the job comes from the trigger — so this one asks the
 /// only question that matters: did the property move?
@@ -2270,8 +2530,8 @@ fn a_played_sequence_actually_moves_the_transform() {
                     Keyframes::new(200.0)
                         .at(0.0, 0.0)
                         .at(0.5, 20.0)
-                        .at(1.0, 0.0),
-                    plays,
+                        .at(1.0, 0.0)
+                        .played_by(plays),
                 ),
             ),
         ),
@@ -2472,8 +2732,8 @@ fn a_translate_sequence_and_a_scale_sequence_move_the_transform() {
                     Keyframes::new(200.0)
                         .at(0.0, Translate::new(10.0, 0.0))
                         .at(0.5, Translate::new(30.0, 0.0))
-                        .at(1.0, Translate::new(10.0, 0.0)),
-                    plays,
+                        .at(1.0, Translate::new(10.0, 0.0))
+                        .played_by(plays),
                 ),
             ),
         ),
@@ -2496,8 +2756,8 @@ fn a_translate_sequence_and_a_scale_sequence_move_the_transform() {
                     Keyframes::new(200.0)
                         .at(0.0, Scale::uniform(1.1))
                         .at(0.5, Scale::uniform(1.4))
-                        .at(1.0, Scale::uniform(1.1)),
-                    plays,
+                        .at(1.0, Scale::uniform(1.1))
+                        .played_by(plays),
                 ),
             ),
         ),
@@ -3263,7 +3523,7 @@ fn an_enter_takes_what_the_property_takes() {
 fn an_enter_on_a_timeline_refuses() {
     let plays = create_signal(0u32);
     let _ = 0.0f32
-        .timeline(Keyframes::new(100.0).at(1.0, 1.0), plays)
+        .timeline(Keyframes::new(100.0).at(1.0, 1.0).played_by(plays))
         .entering_from(0.0);
 }
 

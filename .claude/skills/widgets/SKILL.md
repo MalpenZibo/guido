@@ -198,7 +198,7 @@ available on everything a property setter already accepts, and each returns an
 container()
     .background(theme.surface.transition(200.0))
     .width((move || if open.get() { 520.0 } else { 120.0 }).transition(SpringConfig::SNAPPY))
-    .rotate(0.0.timeline(shake(), rejections))
+    .rotate(0.0.timeline(shake().played_by(rejections)))
 ```
 
 A bare number is milliseconds, eased out — the one place the animation

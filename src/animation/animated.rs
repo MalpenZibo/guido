@@ -12,7 +12,7 @@
 //! container()
 //!     .background(theme.surface.transition(200.0))
 //!     .width((move || if open.get() { 520.0 } else { 120.0 }).transition(SpringConfig::SNAPPY))
-//!     .rotate(0.0.timeline(shake(), rejections))
+//!     .rotate(0.0.timeline(shake().played_by(rejections)))
 //! ```
 //!
 //! [`Animated`] is deliberately **not** an [`IntoSignal`]. A state layer
@@ -135,10 +135,7 @@ pub(crate) enum Motion<T> {
     },
     /// Play a sequence whenever the trigger changes, and rest on the declared
     /// value in between.
-    Play {
-        keyframes: Keyframes<T>,
-        plays: Signal<u32>,
-    },
+    Play { keyframes: Keyframes<T> },
 }
 
 /// The two verbs, on everything [`IntoSignal`] accepts.
@@ -183,8 +180,8 @@ pub trait Animate<T: Clone + 'static, M>: IntoSignal<T, M> + Sized {
     /// put its expression:
     ///
     /// ```ignore
-    /// container().rotate(0.0.timeline(shake(), rejections))
-    /// container().rotate((move || spin.get() * STEP).timeline(shake(), rejections))
+    /// container().rotate(0.0.timeline(shake().played_by(rejections)))
+    /// container().rotate((move || spin.get() * STEP).timeline(shake().played_by(rejections)))
     /// ```
     ///
     /// A timeline is for something that happens and is over. A change that
@@ -196,16 +193,13 @@ pub trait Animate<T: Clone + 'static, M>: IntoSignal<T, M> + Sized {
     /// sized with a `Length` and move an `f32`, and a `Length` is not
     /// animatable — so `width(w.timeline(..))` does not compile, rather than
     /// compiling and playing nothing.
-    fn timeline<M2>(self, keyframes: Keyframes<T>, plays: impl IntoSignal<u32, M2>) -> Animated<T>
+    fn timeline(self, keyframes: Keyframes<T>) -> Animated<T>
     where
         T: Animatable,
     {
         Animated {
             signal: self.into_signal(),
-            motion: Some(Box::new(Motion::Play {
-                keyframes,
-                plays: plays.into_signal(),
-            })),
+            motion: Some(Box::new(Motion::Play { keyframes })),
         }
     }
 }

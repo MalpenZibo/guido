@@ -1,11 +1,11 @@
 use crate::clock::FrameInstant;
+use crate::reactive::Signal;
 
 use crate::animation::{
     Animatable, Keyframes, SpringState, Transition, TransitionConfig, carry_velocity,
 };
-use crate::reactive::Signal;
 
-/// A sequence a property can be told to play, and the signal that tells it.
+/// A sequence a property plays, and what decides when it runs.
 ///
 /// Unlike everything else in an `AnimationState` this has no target: while it
 /// runs it *replaces* the declared value, and when it ends the property is
@@ -14,15 +14,23 @@ struct Timeline<T> {
     keyframes: Keyframes<T>,
     /// When the current run started, if one is running.
     playing: Option<FrameInstant>,
-    /// A signal whose every change plays the sequence once, and the count last
-    /// acted on.
-    ///
-    /// A count rather than a flag, because two refusals in a row are two
-    /// events and a signal that stays equal notifies nobody. Reading it and
-    /// committing to it live in one place, so the pass that subscribes and the
-    /// pass that plays cannot disagree about what has been seen.
-    trigger: Signal<u32>,
-    last_play: u32,
+    play: Play,
+}
+
+/// What decides when a sequence runs.
+///
+/// Two states rather than two `Option`s, so "waiting for a trigger it does not
+/// have" cannot be written down.
+enum Play {
+    /// Every change of the trigger plays it once, and this is the count last
+    /// acted on. A count rather than a flag, because two refusals in a row are
+    /// two events and a signal that stays equal notifies nobody. Asking and
+    /// committing live in one place, so the pass that subscribes and the pass
+    /// that plays cannot disagree about what has been seen.
+    OnTrigger { trigger: Signal<u32>, last: u32 },
+    /// Nothing asks: it plays because the widget exists. `played` is what makes
+    /// that happen exactly once.
+    OnMount { played: bool },
 }
 
 /// A transition of no duration: a timeline speaks for its property while it
@@ -387,19 +395,41 @@ impl<T: Animatable> AnimationState<T> {
             || (self.spring_state.is_some() && self.progress < 0.99)
     }
 
-    /// Give this property a sequence and the signal that plays it.
+    /// Give this property a sequence.
     ///
     /// One declaration per property, so this replaces rather than merges:
     /// a motion arrives with the value it moves, and a second `.rotate(..)`
     /// restates the whole property.
-    pub(crate) fn with_timeline(mut self, keyframes: Keyframes<T>, plays: Signal<u32>) -> Self {
+    ///
+    /// A sequence with no trigger is pending from here: the first frame plays
+    /// it, because a wait starts when the widget appears rather than when
+    /// something asks. One that has a trigger waits for it, and records what
+    /// it holds now so a change is what plays it.
+    pub(crate) fn with_timeline(mut self, keyframes: Keyframes<T>) -> Self {
+        let play = match keyframes.trigger() {
+            Some(trigger) => Play::OnTrigger {
+                trigger,
+                last: trigger.get_untracked(),
+            },
+            None => Play::OnMount { played: false },
+        };
         self.timeline = Some(Box::new(Timeline {
             keyframes,
             playing: None,
-            last_play: plays.get_untracked(),
-            trigger: plays,
+            play,
         }));
         self
+    }
+
+    /// Whether this sequence is owed the one play it gets for existing.
+    ///
+    /// Reads no signal, which is what lets the first layout ask it: a tracked
+    /// read there would register the trigger against whichever widget's scope
+    /// happens to be open, which is the parent's.
+    pub(crate) fn owes_its_first_play(&self) -> bool {
+        self.timeline
+            .as_ref()
+            .is_some_and(|t| matches!(t.play, Play::OnMount { played: false }))
     }
 
     /// Whether the trigger has moved since the sequence last played.
@@ -407,9 +437,10 @@ impl<T: Animatable> AnimationState<T> {
     /// Reading the signal is the subscription, so the pass that asks this is
     /// the pass that gets woken.
     pub(crate) fn wants_play(&self) -> bool {
-        self.timeline
-            .as_ref()
-            .is_some_and(|t| t.trigger.get() != t.last_play)
+        self.timeline.as_ref().is_some_and(|t| match t.play {
+            Play::OnTrigger { trigger, last } => trigger.get() != last,
+            Play::OnMount { played } => !played,
+        })
     }
 
     /// The same question, answered once: `true` hands over the play and marks
@@ -418,11 +449,19 @@ impl<T: Animatable> AnimationState<T> {
         let Some(timeline) = &mut self.timeline else {
             return false;
         };
-        let now = timeline.trigger.get();
-        if now == timeline.last_play {
-            return false;
+        match timeline.play {
+            Play::OnTrigger { trigger, last } => {
+                let now = trigger.get();
+                if now == last {
+                    return false;
+                }
+                timeline.play = Play::OnTrigger { trigger, last: now };
+            }
+            Play::OnMount { played: true } => return false,
+            Play::OnMount { played: false } => {
+                timeline.play = Play::OnMount { played: true };
+            }
         }
-        timeline.last_play = now;
         true
     }
 
@@ -448,7 +487,31 @@ impl<T: Animatable> AnimationState<T> {
         };
         let started = timeline.playing?;
 
-        let elapsed = now.duration_since(started).as_secs_f32() * 1000.0;
+        // Measured in `f64` and handed on as `f32`. An endless sequence never
+        // ends, so its distance from its start grows for the life of the
+        // widget, and an `f32` count of milliseconds loses a whole 60Hz frame
+        // of resolution after about thirty-seven hours and a whole run of a
+        // short sequence within a few weeks — at which point it shows one value
+        // for frame after frame. A bar is the thing that runs for weeks.
+        //
+        // Whole runs behind it say nothing about where it is now, so they are
+        // taken off before the number is narrowed. Taken off here rather than
+        // by moving `playing` forward: the reduction is computed from the start
+        // on every frame anyway, so a stored one would be a second place for
+        // the same arithmetic to be wrong in.
+        //
+        // The guard on the length is not paranoia: an endless sequence has no
+        // total to be past, so a run of no length would be a division by zero
+        // every frame for the life of the widget. What such a sequence *shows*
+        // is unchanged either way, which is why nothing here asserts it.
+        let since_start = now.duration_since(started).as_secs_f64() * 1000.0;
+        let duration = f64::from(timeline.keyframes.duration_ms());
+        let elapsed = if timeline.keyframes.total_ms().is_none() && duration > 0.0 {
+            (since_start % duration) as f32
+        } else {
+            since_start as f32
+        };
+
         let Some(value) = timeline.keyframes.value_at(elapsed) else {
             // Over. The property goes back to whatever declares it — by
             // *animating* there from where the sequence left it, not by
@@ -656,7 +719,7 @@ mod tests {
     use crate::animation::TimingFunction;
 
     /// A trigger nothing ever writes to: these tests call `play` directly.
-    fn never_played() -> Signal<u32> {
+    fn never_played() -> crate::reactive::Signal<u32> {
         crate::reactive::create_stored(0)
     }
 
@@ -680,8 +743,11 @@ mod tests {
         let mut anim = AnimationState::new(0.0_f32, Transition::new(0.0, TimingFunction::Linear));
         anim.set_immediate(0.0);
         anim = anim.with_timeline(
-            Keyframes::new(60.0).at(0.0, 0.0).at(0.5, 10.0).at(1.0, 0.0),
-            never_played(),
+            Keyframes::new(60.0)
+                .at(0.0, 0.0)
+                .at(0.5, 10.0)
+                .at(1.0, 0.0)
+                .played_by(never_played()),
         );
 
         anim.play(FrameInstant::from(Instant::now()));
@@ -711,8 +777,10 @@ mod tests {
         let mut anim = AnimationState::new(0.0_f32, Transition::new(0.0, TimingFunction::Linear));
         anim.set_immediate(0.0);
         anim = anim.with_timeline(
-            Keyframes::new(80.0).at(0.0, 0.0).at(1.0, 8.0),
-            never_played(),
+            Keyframes::new(80.0)
+                .at(0.0, 0.0)
+                .at(1.0, 8.0)
+                .played_by(never_played()),
         );
 
         anim.play(FrameInstant::from(Instant::now()));
@@ -741,8 +809,10 @@ mod tests {
         let mut anim = AnimationState::new(0.0_f32, Transition::new(200.0, TimingFunction::Linear));
         anim.set_immediate(0.0);
         anim = anim.with_timeline(
-            Keyframes::new(60.0).at(0.0, 0.0).at(1.0, 10.0),
-            never_played(),
+            Keyframes::new(60.0)
+                .at(0.0, 0.0)
+                .at(1.0, 10.0)
+                .played_by(never_played()),
         );
 
         anim.play(FrameInstant::from(Instant::now()));
@@ -781,8 +851,10 @@ mod tests {
         let mut anim = AnimationState::new(0.0_f32, transition);
         anim.set_immediate(0.0);
         anim = anim.with_timeline(
-            Keyframes::new(60.0).at(0.0, 0.0).at(1.0, 5.0),
-            never_played(),
+            Keyframes::new(60.0)
+                .at(0.0, 0.0)
+                .at(1.0, 5.0)
+                .played_by(never_played()),
         );
 
         anim.animate_to(1.0, FrameInstant::from(Instant::now()));
@@ -817,7 +889,12 @@ mod tests {
 
         let plays = create_signal(0_u32);
         let mut anim = AnimationState::new(0.0_f32, Transition::new(0.0, TimingFunction::Linear));
-        anim = anim.with_timeline(Keyframes::new(40.0).at(0.0, 0.0).at(1.0, 1.0), plays.into());
+        anim = anim.with_timeline(
+            Keyframes::new(40.0)
+                .at(0.0, 0.0)
+                .at(1.0, 1.0)
+                .played_by(plays),
+        );
 
         assert!(!anim.wants_play(), "nothing has happened yet");
 

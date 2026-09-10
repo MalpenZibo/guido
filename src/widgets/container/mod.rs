@@ -676,7 +676,7 @@ impl Container {
     /// container().background(Color::rgb(0.2, 0.2, 0.3))
     /// container().background(Color::rgba(0.0, 0.0, 0.0, 0.5))  // 50% transparent black
     /// container().background(theme.surface.transition(200.0))  // eased
-    /// container().background(theme.surface.timeline(flash(), errors))
+    /// container().background(theme.surface.timeline(flash().played_by(errors)))
     /// ```
     pub fn background<M>(mut self, color: impl IntoAnimated<Color, M>) -> Self {
         self.background = Some(declare(&mut self.anims, color, |a| &mut a.background));
@@ -1043,7 +1043,7 @@ impl Container {
     /// container().translate((20.0, 10.0))
     /// container().translate(move || Translate::new(offset.get(), 0.0))
     /// container().translate(target.transition(SpringConfig::SNAPPY))
-    /// container().translate(Translate::NONE.timeline(nod(), refusals))
+    /// container().translate(Translate::NONE.timeline(nod().played_by(refusals)))
     /// ```
     pub fn translate<M>(mut self, t: impl IntoAnimated<Translate, M>) -> Self {
         let signal = declare(&mut self.anims, t, |a| &mut a.translate);
@@ -1061,7 +1061,7 @@ impl Container {
     /// ```ignore
     /// container().rotate(45.0)
     /// container().rotate(move || heading.get())
-    /// container().rotate(0.0.timeline(shake(), rejections))
+    /// container().rotate(0.0.timeline(shake().played_by(rejections)))
     /// ```
     ///
     /// An eased angle is interpolated as the number it is, so a turn to 360°
@@ -1091,7 +1091,7 @@ impl Container {
     /// container().scale(1.5)
     /// container().scale((2.0, 0.5))
     /// container().scale(open_size.transition(SpringConfig::SNAPPY))
-    /// container().scale(Scale::NONE.timeline(pulse(), beats))
+    /// container().scale(Scale::NONE.timeline(pulse().played_by(beats)))
     /// ```
     pub fn scale<M>(mut self, factor: impl IntoAnimated<Scale, M>) -> Self {
         let signal = declare(&mut self.anims, factor, |a| &mut a.scale);
@@ -1220,6 +1220,22 @@ impl Widget for Container {
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         // Use advance_animations_self for this widget's animations
         let mut any_animating = false;
+        // Nothing anyone can see, so nothing to advance and no frame to ask
+        // for. Read under tracking, exactly as `layout` reads it: that is the
+        // subscription that brings the animation back, because a flip to
+        // visible queues the Animation job this pass would otherwise have had
+        // to keep asking for.
+        //
+        // A container hidden before its animation ever started never gets here
+        // — layout returns at its own gate, so the sequence is never seeded.
+        // This is for one hidden while it runs, which before now went on
+        // asking for a frame every vsync and repainting a surface showing
+        // nothing (#351).
+        let is_visible = with_signal_tracking(id, JobType::Animation, || self.visible.get_or(true));
+        if !is_visible {
+            return false;
+        }
+
         // One frame, one instant. Every animation below is asked about the
         // same moment — the ripple included, which used to read a clock of its
         // own a few microseconds later than the rest.
@@ -1954,8 +1970,8 @@ pub(crate) fn declare<A: Default, T: Animatable, M>(
             Motion::Ease { config, enter_from } => {
                 AnimationState::new(seed, config).with_enter_from(enter_from)
             }
-            Motion::Play { keyframes, plays } => {
-                AnimationState::new(seed, instant_transition()).with_timeline(keyframes, plays)
+            Motion::Play { keyframes } => {
+                AnimationState::new(seed, instant_transition()).with_timeline(keyframes)
             }
         }
     });

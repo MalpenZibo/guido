@@ -523,7 +523,7 @@ being set and the two cannot disagree about which property they mean:
 .scale(open.transition(Transition::spring(SpringConfig::BOUNCY)))
 
 // A sequence played on a trigger, resting on the declared value between plays
-.rotate(0.0.timeline(shake, rejections))
+.rotate(0.0.timeline(shake.played_by(rejections)))
 ```
 
 ## Performance Considerations

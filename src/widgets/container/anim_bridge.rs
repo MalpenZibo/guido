@@ -185,8 +185,9 @@ impl Container {
         entered |= seed_or_enter(&mut anims.padding, pd_target, now);
         entered |= seed_or_enter(&mut anims.border_width, bw_target, now);
 
-        // An enter is under way from this frame, so there has to be another
-        // one: nothing else will ask, because no signal changed.
+        // Something is under way from this frame — an enter, or a sequence
+        // owed the play it gets for existing — so there has to be another one:
+        // nothing else will ask, because no signal changed.
         if entered {
             request_job(id, JobRequest::Animation(RequiredJob::Paint));
         }
@@ -287,8 +288,8 @@ impl Container {
 }
 
 /// Start one animated property at the target just read for it, or begin the
-/// enter it declared. Returns whether an enter began, which is what needs a
-/// frame after this one.
+/// enter it declared. Returns whether this frame started something, which is
+/// what needs another frame after it.
 ///
 /// Written as a call per property rather than a loop, because each animates a
 /// different type and there is no single accessor to iterate.
@@ -300,9 +301,14 @@ fn seed_or_enter<T: crate::animation::Animatable>(
     let Some((anim, target)) = slot.as_mut().zip(target) else {
         return false;
     };
-    if anim.begin_enter(target, now) {
-        return true;
+    let entered = anim.begin_enter(target, now);
+    if !entered {
+        anim.set_immediate(target);
     }
-    anim.set_immediate(target);
-    false
+    // A sequence with no trigger is owed a play, and only this pass can ask for
+    // the frame that gives it one: a triggered sequence wakes its container
+    // through the signal it reads, and one that plays because the widget exists
+    // has no signal to read. Starting it stays where every other play starts,
+    // in the animate pass — asked for here, played there.
+    entered || anim.owes_its_first_play()
 }

@@ -385,7 +385,7 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 ### Animations
 Declared on the value, not beside it:
 - `value.transition(ms)` - ease to each new value
-- `value.timeline(keyframes, plays)` - play a sequence on a trigger
+- `value.timeline(keyframes.played_by(plays))` - play a sequence on a trigger
 
 ### Visibility
 - `.visible(condition)` - Show or hide the container (accepts static, signal, or closure)

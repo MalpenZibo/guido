@@ -8,7 +8,7 @@ pub(crate) use animatable::carry_velocity;
 pub use animatable::{Animatable, Channels};
 pub(crate) use animated::Motion;
 pub use animated::{Animate, Animated, AnimatedMarker, IntoAnimated, Plain};
-pub use keyframes::Keyframes;
+pub use keyframes::{Keyframes, Repeat};
 pub use spring::{SpringConfig, SpringState};
 pub use timing::{CustomCurve, TimingFunction};
 
