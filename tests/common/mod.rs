@@ -66,6 +66,19 @@ impl Harness {
         surface
     }
 
+    /// Register a widget, lay it out, and put the keyboard on it.
+    ///
+    /// The focus belongs to the thread, not to the harness, and the test
+    /// runner reuses threads — so the field a previous test focused would
+    /// otherwise answer for this one. Clearing first is part of the setup
+    /// rather than something each file remembers.
+    pub fn focused(widget: impl Widget + 'static, width: f32, height: f32) -> Self {
+        guido::reactive::focus::clear_focus();
+        let harness = Self::laid_out(widget, width, height);
+        guido::reactive::focus::request_focus(&harness.tree, harness.root);
+        harness
+    }
+
     /// Lay out loose within `width` x `height`.
     pub fn lay_out(&mut self, width: f32, height: f32) -> Size {
         let root = self.root;
@@ -109,12 +122,21 @@ impl Harness {
     /// Every rectangle the tree painted, in the order it drew them.
     ///
     /// What a caret or a selection highlight is made of: `TextInput` draws
-    /// both as rounded rects with no radius, and two files ask about them.
+    /// both as rounded rects with no radius, and four files ask about them.
     pub fn painted_rects(&mut self) -> Vec<Rect> {
-        fn collect(node: &RenderNode, out: &mut Vec<Rect>) {
+        self.painted_rounded_rects()
+            .into_iter()
+            .map(|(rect, _)| rect)
+            .collect()
+    }
+
+    /// The same rectangles with what they are filled with, for the tests that
+    /// ask which of them is the caret and which is the selection band.
+    pub fn painted_rounded_rects(&mut self) -> Vec<(Rect, Color)> {
+        fn collect(node: &RenderNode, out: &mut Vec<(Rect, Color)>) {
             for cmd in &node.commands {
-                if let DrawCommand::RoundedRect { rect, .. } = &**cmd {
-                    out.push(*rect);
+                if let DrawCommand::RoundedRect { rect, color, .. } = &**cmd {
+                    out.push((*rect, *color));
                 }
             }
             for child in &node.children {
