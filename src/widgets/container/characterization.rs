@@ -179,7 +179,7 @@ impl H {
 /// paint left registered.
 struct Frame {
     node: std::rc::Rc<RenderNode>,
-    blur: Vec<crate::blur::BlurRect>,
+    blur: Vec<crate::region::RegionRect>,
 }
 
 /// A leaf of an exactly known size.
@@ -4628,7 +4628,7 @@ fn a_transformed_blur_publishes_the_shape_it_is_drawn_as() {
         .frame(200.0, 200.0)
         .blur;
 
-    let span = |rects: &[crate::blur::BlurRect]| {
+    let span = |rects: &[crate::region::RegionRect]| {
         let left = rects.iter().map(|r| r.x).min().expect("a region");
         let right = rects.iter().map(|r| r.x + r.width).max().expect("a region");
         right - left

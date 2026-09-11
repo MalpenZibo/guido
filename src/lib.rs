@@ -13,6 +13,7 @@ pub mod layout;
 pub mod outputs;
 pub mod pivot;
 pub mod reactive;
+mod region;
 pub mod render_stats;
 pub mod session_lock;
 pub mod surface;
@@ -839,7 +840,7 @@ pub(crate) trait Surface {
     }
 
     /// Publish the region to blur behind this surface.
-    fn sync_blur_region(&mut self, rects: Vec<blur::BlurRect>, commit: bool) {
+    fn sync_blur_region(&mut self, rects: Vec<region::RegionRect>, commit: bool) {
         let _ = (rects, commit);
     }
 
@@ -1313,7 +1314,7 @@ impl Surface for WaylandSurface<'_> {
         self.state.take_blur_resync(self.id)
     }
 
-    fn sync_blur_region(&mut self, rects: Vec<blur::BlurRect>, commit: bool) {
+    fn sync_blur_region(&mut self, rects: Vec<region::RegionRect>, commit: bool) {
         self.state.sync_blur_region(self.id, rects, commit)
     }
 

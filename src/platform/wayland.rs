@@ -42,8 +42,8 @@ use super::lock::Lock;
 use super::outputs::OutputRegistry;
 use super::popups::Popups;
 use super::selections::Selections;
-use crate::blur::BlurRect;
 use crate::outputs::{self};
+use crate::region::RegionRect;
 use crate::surface::SurfaceId;
 use crate::widgets::{Event, Rect};
 
@@ -110,7 +110,7 @@ pub struct WaylandSurfaceState {
     /// Last blur rects pushed to the compositor. `None` means nothing has
     /// been pushed yet (also reset when the blur capability changes, so the
     /// region is re-sent if it comes back).
-    pub(super) blur_region: Option<Vec<BlurRect>>,
+    pub(super) blur_region: Option<Vec<RegionRect>>,
     /// Set when the compositor's blur capability changes, so a surface that is
     /// not repainting knows it owes a region — and, the rest of the time, knows
     /// it does not. See
@@ -420,12 +420,8 @@ impl WaylandState {
         let region = Region::new(&self.compositor_state)
             .map_err(|e| log::warn!("Failed to create wl_region: {e}"))
             .ok()?;
-        for r in rects {
-            let x = r.x.floor() as i32;
-            let y = r.y.floor() as i32;
-            let width = (r.x + r.width).ceil() as i32 - x;
-            let height = (r.y + r.height).ceil() as i32 - y;
-            region.add(x, y, width, height);
+        for r in rects.iter().copied().filter_map(RegionRect::covering) {
+            region.add(r.x, r.y, r.width, r.height);
         }
         Some(region)
     }
