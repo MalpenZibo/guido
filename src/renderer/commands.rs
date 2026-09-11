@@ -282,6 +282,22 @@ pub enum DrawCommand {
         font_weight: FontWeight,
     },
 
+    /// Where pointer and touch input reaches this surface, or stops reaching
+    /// it. Draws nothing: it rides the frame so that the region published to
+    /// the compositor is read off the same list the pixels came from, which is
+    /// what keeps a hidden, culled or cached container from leaving a stale
+    /// hole behind it.
+    InputRegion {
+        /// The area declared, in local coordinates.
+        rect: Rect,
+        /// Corner radii of that area, so the region follows the shape drawn
+        /// rather than its bounding box.
+        corner_radii: CornerRadii,
+        /// Whether input reaches this area. `false` is a hole in a surface
+        /// that otherwise takes input; `true` is an island in one that does
+        /// not.
+        takes: bool,
+    },
     /// Filter what has already been drawn beneath `rect`, in place.
     ///
     /// Ordered before the container's own background so the container paints

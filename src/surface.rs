@@ -332,6 +332,11 @@ pub(crate) struct InitialDeclaration {
     pub believed: (u32, u32),
     /// The screen space to reserve, resolved against `believed`.
     pub exclusive_zone: i32,
+    /// The input region to apply, or `None` where the surface declared none
+    /// and takes input everywhere. Here rather than read from the config at
+    /// each platform, so "applied at birth only when one was declared" is one
+    /// rule rather than two copies of it.
+    pub input_region: Option<Vec<Rect>>,
 }
 
 pub(crate) fn initial_declaration(config: &SurfaceConfig) -> InitialDeclaration {
@@ -349,6 +354,7 @@ pub(crate) fn initial_declaration(config: &SurfaceConfig) -> InitialDeclaration 
             believed.0,
             believed.1,
         ),
+        input_region: config.input_region.clone(),
     }
 }
 

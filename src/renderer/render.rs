@@ -818,6 +818,8 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
         // Filters the target rather than adding geometry; handled between
         // draw groups, not as an instance.
         DrawCommand::BackdropBlur { .. } | DrawCommand::TextBackdropBlur { .. } => None,
+        // Says where input goes, not what is drawn.
+        DrawCommand::InputRegion { .. } => None,
         // Image commands are handled separately via ImageQuadRenderer
         DrawCommand::Image { .. } => None,
     }

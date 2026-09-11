@@ -98,7 +98,8 @@ impl H {
             // The gate: nothing is dirty, so nothing repaints and the region
             // comes from the frame still on screen.
             let blur = crate::blur::regions_from_commands(&commands);
-            return Frame { node, blur };
+            let input = crate::region::input_ops_from_commands(&commands);
+            return Frame { node, blur, input };
         }
 
         let mut node = RenderNode::new(root.as_u64());
@@ -112,6 +113,7 @@ impl H {
         let mut layers = Vec::new();
         let _ = crate::renderer::flatten_root_into(&node, &mut commands, &mut layers);
         let blur = crate::blur::regions_from_commands(&commands);
+        let input = crate::region::input_ops_from_commands(&commands);
 
         // Per child of the root and then `clear_needs_paint(root)`, which is
         // what the loop does: the surface root always repaints, so it is never
@@ -123,7 +125,7 @@ impl H {
         self.tree.clear_needs_paint(root);
         self.last = Some((std::rc::Rc::clone(&node), commands));
 
-        Frame { node, blur }
+        Frame { node, blur, input }
     }
 
     fn send(&mut self, event: Event) -> EventResponse {
@@ -179,7 +181,8 @@ impl H {
 /// paint left registered.
 struct Frame {
     node: std::rc::Rc<RenderNode>,
-    blur: Vec<crate::blur::BlurRect>,
+    blur: Vec<crate::region::RegionRect>,
+    input: Vec<crate::region::InputRegionOp>,
 }
 
 /// A leaf of an exactly known size.
@@ -4628,7 +4631,7 @@ fn a_transformed_blur_publishes_the_shape_it_is_drawn_as() {
         .frame(200.0, 200.0)
         .blur;
 
-    let span = |rects: &[crate::blur::BlurRect]| {
+    let span = |rects: &[crate::region::RegionRect]| {
         let left = rects.iter().map(|r| r.x).min().expect("a region");
         let right = rects.iter().map(|r| r.x + r.width).max().expect("a region");
         right - left
@@ -4642,6 +4645,67 @@ fn a_transformed_blur_publishes_the_shape_it_is_drawn_as() {
     assert!(
         turned > plain && turned < scaled,
         "turned on its corner it covers its diagonal, {turned} against {plain}"
+    );
+}
+
+/// The region an island declares is the shape it is drawn as, corners and all —
+/// the same thing `a_transformed_blur_publishes_the_shape_it_is_drawn_as` says
+/// about the other region read off a frame, and for the same reason: both come
+/// off the flattened commands, through one tessellation.
+#[test]
+fn an_island_declares_its_corners_and_not_its_bounding_box() {
+    let takes = |x: i32, y: i32, ops: &[crate::region::InputRegionOp]| {
+        ops.iter().any(|op| {
+            op.takes
+                && x >= op.rect.x
+                && y >= op.rect.y
+                && x < op.rect.x + op.rect.width
+                && y < op.rect.y + op.rect.height
+        })
+    };
+
+    let square = H::new(box_of(40.0, 40.0).takes_input(true))
+        .frame(200.0, 200.0)
+        .input;
+    let round = H::new(box_of(40.0, 40.0).corners(20.0).takes_input(true))
+        .frame(200.0, 200.0)
+        .input;
+
+    assert!(takes(1, 1, &square), "a square island reaches its corner");
+    assert!(
+        !takes(1, 1, &round),
+        "and a round one does not, so the click there goes where the pixel does"
+    );
+    assert!(takes(20, 20, &round), "its middle is still its own");
+}
+
+/// A declaration inside a clip is cut by it, the same way
+/// `a_clipped_blur_publishes_only_what_is_on_show` says the other region is:
+/// input reaches what is on screen, not what a layout pass measured.
+#[test]
+fn a_clipped_declaration_reaches_only_what_is_on_show() {
+    let island = || box_of(40.0, 40.0).takes_input(true);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .overflow(Overflow::Hidden)
+            .layout(Flex::row())
+            .child(island())
+            .child(island()),
+    );
+
+    let widest = h
+        .frame(200.0, 200.0)
+        .input
+        .iter()
+        .map(|op| op.rect.x + op.rect.width)
+        .max()
+        .expect("the visible island still takes input");
+
+    assert!(
+        widest <= 40,
+        "the row is 80 wide inside a 40-wide clip, so nothing may take input at {widest}"
     );
 }
 

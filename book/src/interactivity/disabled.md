@@ -20,6 +20,12 @@ container()
 click, a key, a scroll, a nested button's handler — is reached, and nothing
 below it has to know why.
 
+It still stands in the way, which is the point: a click on a disabled button is
+a click the application swallowed, not one the desktop behind the surface
+receives. Letting it through is
+[`takes_input(false)`](../advanced/wayland.md#input-regions), a different
+question asked of the compositor rather than of the widget.
+
 ## It propagates, and cannot be undone from below
 
 A container declaring `enabled(true)` inside one declaring `enabled(false)` is

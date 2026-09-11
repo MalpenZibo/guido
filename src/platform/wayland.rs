@@ -42,8 +42,8 @@ use super::lock::Lock;
 use super::outputs::OutputRegistry;
 use super::popups::Popups;
 use super::selections::Selections;
-use crate::blur::BlurRect;
 use crate::outputs::{self};
+use crate::region::RegionRect;
 use crate::surface::SurfaceId;
 use crate::widgets::{Event, Rect};
 
@@ -110,7 +110,7 @@ pub struct WaylandSurfaceState {
     /// Last blur rects pushed to the compositor. `None` means nothing has
     /// been pushed yet (also reset when the blur capability changes, so the
     /// region is re-sent if it comes back).
-    pub(super) blur_region: Option<Vec<BlurRect>>,
+    pub(super) blur_region: Option<Vec<RegionRect>>,
     /// Set when the compositor's blur capability changes, so a surface that is
     /// not repainting knows it owes a region — and, the rest of the time, knows
     /// it does not. See
@@ -420,12 +420,8 @@ impl WaylandState {
         let region = Region::new(&self.compositor_state)
             .map_err(|e| log::warn!("Failed to create wl_region: {e}"))
             .ok()?;
-        for r in rects {
-            let x = r.x.floor() as i32;
-            let y = r.y.floor() as i32;
-            let width = (r.x + r.width).ceil() as i32 - x;
-            let height = (r.y + r.height).ceil() as i32 - y;
-            region.add(x, y, width, height);
+        for r in rects.iter().copied().filter_map(RegionRect::covering) {
+            region.add(r.x, r.y, r.width, r.height);
         }
         Some(region)
     }
@@ -445,6 +441,57 @@ impl WaylandState {
                 };
                 wl_surface.set_input_region(Some(region.wl_region()));
             }
+        }
+    }
+
+    /// Publish where input reaches a surface: the area it takes, then the
+    /// declarations the frame made, in the order they were painted.
+    ///
+    /// `wl_region` is exactly this program — add and subtract — so a rounded
+    /// hole cut out of a bar needs no complement computed anywhere.
+    ///
+    /// Not committed here by default: the request rides the buffer commit
+    /// inside the upcoming present, so the region and the frame it was read
+    /// off change together. `commit: true` is for the paths that skip
+    /// presenting.
+    pub(crate) fn sync_input_region(
+        &mut self,
+        id: SurfaceId,
+        request: &crate::region::InputRegionRequest,
+        commit: bool,
+    ) {
+        let Some(surface_state) = self.surfaces.get(&id) else {
+            return;
+        };
+        let Ok(region) = Region::new(&self.compositor_state) else {
+            log::warn!("Failed to create wl_region for input");
+            return;
+        };
+
+        for r in &request.base {
+            region.add(r.x, r.y, r.width, r.height);
+        }
+        for op in &request.ops {
+            let r = op.rect;
+            if op.takes {
+                region.add(r.x, r.y, r.width, r.height);
+            } else {
+                region.subtract(r.x, r.y, r.width, r.height);
+            }
+        }
+        surface_state
+            .wl_surface
+            .set_input_region(Some(region.wl_region()));
+
+        log::debug!(
+            "Surface {:?} input region: {} base rect(s), {} declaration(s)",
+            id,
+            request.base.len(),
+            request.ops.len()
+        );
+
+        if commit {
+            surface_state.wl_surface.commit();
         }
     }
 
@@ -512,7 +559,7 @@ impl WaylandState {
             layer_surface.set_margin(margin.top, margin.right, margin.bottom, margin.left);
         }
 
-        if let Some(rects) = &config.input_region {
+        if let Some(rects) = &declared.input_region {
             self.apply_input_region(&wl_surface, Some(rects));
         }
 

@@ -452,3 +452,217 @@ fn a_click_outside_the_field_takes_the_keyboard_off_it() {
         "and a click on the bar behind it gives it back"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Input regions, declared on the tree and derived from the frame (#360)
+// ---------------------------------------------------------------------------
+
+/// A surface that lets everything through, with one island that does not.
+fn island(w: f32, h: f32) -> Container {
+    container()
+        .width(fill())
+        .height(fill())
+        .child(container().width(w).height(h).takes_input(true))
+}
+
+#[test]
+fn an_island_is_where_input_reaches_a_click_through_surface() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar().click_through(), || island(80.0, 20.0));
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    assert!(app.input_reaches(surface, 40.0, 10.0), "inside the island");
+    assert!(
+        !app.input_reaches(surface, 150.0, 40.0),
+        "the surface around it passes clicks to whatever is below"
+    );
+}
+
+#[test]
+fn a_hole_passes_clicks_through_a_surface_that_otherwise_takes_them() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), || {
+        container()
+            .width(fill())
+            .height(fill())
+            .child(container().width(80.0).height(20.0).takes_input(false))
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    assert!(
+        !app.input_reaches(surface, 40.0, 10.0),
+        "the hole is where the desktop gets the click"
+    );
+    assert!(app.input_reaches(surface, 150.0, 40.0), "the bar around it");
+}
+
+/// The region is the shape that was *drawn*. A `WidgetRef` reports the box a
+/// widget was laid out in, which is why the region could never follow one.
+#[test]
+fn a_transformed_island_declares_where_it_draws_not_where_it_was_laid_out() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar().click_through(), || {
+        container().width(fill()).height(fill()).child(
+            container()
+                .width(80.0)
+                .height(20.0)
+                .scale(2.0)
+                .takes_input(true),
+        )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    assert!(
+        app.input_reaches(surface, 100.0, 25.0),
+        "outside the laid-out box, inside the shape on screen"
+    );
+}
+
+/// Every way a container can stop painting is a way a registry would have gone
+/// stale. The frame is the register.
+#[test]
+fn an_island_that_stops_painting_stops_taking_input() {
+    let Some(mut app) = headless() else { return };
+    let shown = create_signal(true);
+    let surface = app.surface(fixed_bar().click_through(), move || {
+        container().width(fill()).height(fill()).child(
+            container()
+                .width(80.0)
+                .height(20.0)
+                .visible(shown)
+                .takes_input(true),
+        )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+    assert!(app.input_reaches(surface, 40.0, 10.0));
+
+    shown.set(false);
+    app.step();
+    assert!(
+        !app.input_reaches(surface, 40.0, 10.0),
+        "a hidden island leaves no region behind it"
+    );
+}
+
+/// The same discipline `sync_blur_region` keeps: a frame that repaints for
+/// some other reason, with the region unchanged, says nothing about it.
+///
+/// A frame that does not repaint at all proves nothing here — it never reaches
+/// the comparison — so this one paints, twice, and watches the count stand
+/// still while the frames go up.
+#[test]
+fn a_frame_that_repaints_without_moving_the_region_publishes_nothing() {
+    let Some(mut app) = headless() else { return };
+    let shade = create_signal(Color::rgb(0.1, 0.1, 0.1));
+    let surface = app.surface(fixed_bar().click_through(), move || {
+        container()
+            .width(fill())
+            .height(fill())
+            .background(shade)
+            .child(container().width(80.0).height(20.0).takes_input(true))
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    let (frames, published) = (
+        app.frames_presented(surface),
+        app.input_regions_published(surface),
+    );
+
+    shade.set(Color::rgb(0.2, 0.2, 0.2));
+    app.step();
+    shade.set(Color::rgb(0.3, 0.3, 0.3));
+    app.step();
+
+    assert!(
+        app.frames_presented(surface) > frames,
+        "the frames have to have run for this to be asking anything"
+    );
+    assert_eq!(
+        app.input_regions_published(surface),
+        published,
+        "and the region did not move, so the compositor was not told twice"
+    );
+}
+
+/// The rectangle the surface itself can name, for a region that belongs to no
+/// widget.
+const PILL: Rect = Rect {
+    x: 120.0,
+    y: 10.0,
+    width: 40.0,
+    height: 20.0,
+};
+
+/// The escape hatch is still there and still watched: a region the surface
+/// declares reaches the compositor when it is created, without a frame and
+/// without anything in the tree saying a word.
+#[test]
+fn a_surface_declared_with_a_region_asks_for_it_at_birth() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar().input_region([PILL]), container);
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    assert_eq!(app.input_regions_asked(surface), [Some(vec![PILL])]);
+}
+
+/// The two ways of saying it compose rather than erasing each other: what a
+/// handle sets is the area the surface takes, and the declarations in the tree
+/// are applied on top of it.
+#[test]
+fn a_region_set_by_hand_is_the_base_the_tree_declares_against() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), || island(80.0, 20.0));
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    surface_handle(surface).set_input_region(Some(vec![PILL]));
+    app.step();
+
+    assert!(
+        app.input_reaches(surface, 130.0, 15.0),
+        "the rectangle the handle named"
+    );
+    assert!(
+        app.input_reaches(surface, 40.0, 10.0),
+        "and the island the tree declared, on top of it"
+    );
+    assert!(
+        !app.input_reaches(surface, 40.0, 45.0),
+        "and nothing else, where the bar used to take everything"
+    );
+}
+
+/// A declaration inside a declaration is a smaller area declared later, which
+/// is the whole of the nesting rule: an island inside a hole takes input, the
+/// hole around it does not, and the bar around that still does.
+#[test]
+fn a_declaration_inside_a_hole_is_an_island_in_it() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), || {
+        container().width(fill()).height(fill()).child(
+            container()
+                .width(80.0)
+                .height(40.0)
+                .takes_input(false)
+                .child(container().width(20.0).height(10.0).takes_input(true)),
+        )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    assert!(app.input_reaches(surface, 10.0, 5.0), "the island");
+    assert!(
+        !app.input_reaches(surface, 60.0, 30.0),
+        "the hole around it"
+    );
+    assert!(
+        app.input_reaches(surface, 150.0, 40.0),
+        "the bar around that"
+    );
+}

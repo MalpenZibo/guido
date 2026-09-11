@@ -1,0 +1,12 @@
+node 0,0 136x104
+  node 0,0 120x40 at 8,8
+    draw input-region 0,0 120x40 takes=true corners=20/20/20/20
+    draw rect 0,0 120x40 fill=#33334dff radius=20/20/20/20
+    node 0,0 20x20
+      draw rect 0,0 20x20 fill=#00ffffff radius=0/0/0/0
+  node 0,0 120x40 at 8,56
+    draw input-region 0,0 120x40 takes=false corners=0/0/0/0
+    draw rect 0,0 120x40 fill=#4d3333ff radius=0/0/0/0
+    node 0,0 20x20
+      draw input-region 0,0 20x20 takes=true corners=0/0/0/0
+      draw rect 0,0 20x20 fill=#ff00ffff radius=0/0/0/0

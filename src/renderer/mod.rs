@@ -29,7 +29,7 @@ mod tree;
 mod types;
 
 pub use commands::{Border, CornerRadii, DrawCommand, EllipticalRadii};
-pub use flatten::{CommandLayer, FlattenedCommand, flatten_root_into};
+pub use flatten::{CommandLayer, FlattenedCommand, RegionsCarried, flatten_root_into};
 #[cfg(any(test, feature = "testing"))]
 pub use gpu_context::OffscreenTarget;
 pub use gpu_context::{GpuContext, RenderTarget, SurfaceState};

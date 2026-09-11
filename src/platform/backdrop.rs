@@ -17,7 +17,7 @@ use wayland_protocols::ext::background_effect::v1::client::{
 };
 
 use super::wayland::WaylandState;
-use crate::blur::BlurRect;
+use crate::region::RegionRect;
 use crate::surface::SurfaceId;
 
 /// The compositor's background-effect manager and what it currently offers.
@@ -91,7 +91,7 @@ impl WaylandState {
     /// an *empty* region, never NULL: NULL only withdraws our opinion and
     /// lets such a rule blur the whole surface, where an empty region says
     /// "blur exactly nothing".
-    pub(crate) fn sync_blur_region(&mut self, id: SurfaceId, rects: Vec<BlurRect>, commit: bool) {
+    pub(crate) fn sync_blur_region(&mut self, id: SurfaceId, rects: Vec<RegionRect>, commit: bool) {
         if !self.backdrop.bg_effect_supports_blur {
             return;
         }
