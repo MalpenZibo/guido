@@ -7,7 +7,9 @@ use super::runtime::{EffectId, run_effect_by_id, with_runtime};
 /// or the root one `App::run` opens — and is disposed with it. Created outside
 /// any scope it runs for the lifetime of the application.
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
+/// # let count = create_signal(0);
 /// create_effect(move || println!("count is {}", count.get()));
 /// ```
 ///

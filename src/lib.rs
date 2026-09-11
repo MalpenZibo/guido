@@ -67,7 +67,8 @@ thread_local! {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
 /// set_default_font_family(FontFamily::Name("Inter".into()));
 /// ```
 pub fn set_default_font_family(family: FontFamily) {
@@ -91,6 +92,8 @@ pub fn default_font_family() -> FontFamily {
 /// # Example
 ///
 /// ```ignore
+/// // not compiled: `include_bytes!` needs a font file at the reader's own path,
+/// // and the point of the sample is that the bytes are embedded at compile time.
 /// const NERD_FONT: &[u8] = include_bytes!("../assets/MyFont.ttf");
 /// guido::load_font(NERD_FONT.to_vec());
 /// ```
@@ -209,7 +212,7 @@ pub mod prelude {
 ///
 /// The two are meant to be imported together:
 ///
-/// ```ignore
+/// ```no_run
 /// use guido::prelude::*;
 /// use guido::widget_prelude::*;
 /// ```
@@ -2099,11 +2102,15 @@ impl App {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let config = SurfaceConfig::new();
+    /// # let view = || text("hi");
     /// App::new()
     ///     .default_font_family(FontFamily::Name("Inter".into()))
-    ///     .add_surface(config, || view)
-    ///     .run();
+    ///     .run(|app| {
+    ///         app.add_surface(config, view);
+    ///     });
     /// ```
     pub fn default_font_family(self, family: FontFamily) -> Self {
         set_default_font_family(family);
@@ -2123,7 +2130,8 @@ impl App {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
     /// App::new().run(|app| {
     ///     let bar_id = app.add_surface(
     ///         SurfaceConfig::new()
@@ -2131,7 +2139,7 @@ impl App {
     ///             .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
     ///             .layer(Layer::Top)
     ///             .namespace("status-bar"),
-    ///         || status_bar_widget()
+    ///         || text("bar"),
     ///     );
     /// });
     /// ```
@@ -2162,7 +2170,10 @@ impl App {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let config = SurfaceConfig::new();
+    /// # let build_ui = |c: RwSignal<i32>| text(move || c.get().to_string());
     /// App::new().run(|app| {
     ///     let count = create_signal(0);
     ///     app.add_surface(config, move || build_ui(count));

@@ -22,10 +22,12 @@
 //!
 //! ## Usage
 //!
-//! ```ignore
+//! ```no_run
+//! # use guido::prelude::*;
+//! # let (button_a, button_b, button_c) = (text("a"), text("b"), text("c"));
 //! container()
 //!     .layout(Flex::row().spacing(8.0).main_alignment(MainAlignment::Center))
-//!     .children([button_a, button_b, button_c])
+//!     .children([button_a, button_b, button_c]);
 //! ```
 
 use super::{Axis, Constraints, CrossAlignment, Layout, MainAlignment, Size};

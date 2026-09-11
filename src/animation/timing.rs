@@ -18,12 +18,16 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! A curve rides with the value it moves, in the [`Transition`](super::Transition)
+//! the property is declared with. A state layer supplies a value and never a
+//! timing, so the curve is named once, where the property is:
+//!
+//! ```no_run
+//! # use guido::prelude::*;
+//! # let surface = Color::rgb(0.3, 0.3, 0.4);
 //! container()
-//!     .when_hovered(|s| s
-//!         .lighter(0.1)
-//!         .timing(TimingFunction::EaseOut)
-//!         .duration(Duration::from_millis(150)))
+//!     .background(surface.transition(Transition::new(150.0, TimingFunction::EaseOut)))
+//!     .when_hovered(|s| s.lighter(0.1));
 //! ```
 
 use super::spring::SpringConfig;

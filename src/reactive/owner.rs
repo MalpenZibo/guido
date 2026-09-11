@@ -13,7 +13,9 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
+//! # use guido::prelude::*;
+//! # use guido::reactive::__internal::{with_owner, dispose_owner};
 //! // Create a scope with automatic cleanup
 //! let (result, owner_id) = with_owner(|| {
 //!     let signal = create_signal(42);
@@ -438,7 +440,11 @@ pub fn dispose_owner_now(id: OwnerId) {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
+/// # use guido::reactive::__internal::with_owner;
+/// # let start_timer = || 0u32;
+/// # let stop_timer = |_: u32| {};
 /// with_owner(|| {
 ///     // Start a timer
 ///     let timer_id = start_timer();

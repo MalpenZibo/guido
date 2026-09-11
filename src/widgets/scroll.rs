@@ -98,15 +98,18 @@ fn pill() -> crate::widgets::Corners {
 /// compiled and did nothing. Reached through [`Container::scroll`], there is no
 /// way to spell the parts apart from the thing they configure.
 ///
-/// ```ignore
-/// container().scroll(Scroll::vertical())
+/// ```no_run
+/// # use guido::prelude::*;
+/// # let handle_color = Color::rgb(0.4, 0.4, 0.4);
+/// # let hot = Color::rgb(0.6, 0.6, 0.6);
+/// container().scroll(Scroll::vertical());
 ///
 /// container().scroll(
 ///     Scroll::vertical()
 ///         .width(6.0)
-///         .handle(|h| h.background(theme.handle)
-///             .when_hovered(|s| s.background(theme.hot))),
-/// )
+///         .handle(move |h| h.background(handle_color)
+///             .when_hovered(move |s| s.background(hot))),
+/// );
 /// ```
 ///
 /// The axis is structural — it decides what kind of widget this is — so it is

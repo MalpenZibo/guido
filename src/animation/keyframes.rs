@@ -16,7 +16,9 @@
 //! [`timeline`](crate::animation::Animate::timeline), on whatever the property
 //! rests at between plays:
 //!
-//! ```ignore
+//! ```no_run
+//! # use guido::prelude::*;
+//! # let rejections = create_signal(0u32);
 //! container().rotate(0.0.timeline(
 //!     Keyframes::new(320.0)
 //!         .at(0.0, 0.0)
@@ -25,7 +27,7 @@
 //!         .at(0.8, 0.4)
 //!         .at(1.0, 0.0)
 //!         .played_by(rejections),
-//! ))
+//! ));
 //! ```
 //!
 //! A timeline belongs to the one property it moves — a rotation for a shake, a

@@ -41,26 +41,27 @@ pub enum VerticalAnchor {
 /// The centre of the widget by default.
 ///
 /// # Example
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
 /// // Rotate around the top-left corner
 /// container()
 ///     .rotate(45.0)
-///     .pivot(Pivot::TOP_LEFT)
+///     .pivot(Pivot::TOP_LEFT);
 ///
 /// // Scale from the bottom-right corner
 /// container()
 ///     .scale(1.5)
-///     .pivot(Pivot::BOTTOM_RIGHT)
+///     .pivot(Pivot::BOTTOM_RIGHT);
 ///
 /// // Use percentage-based origin (25% from left, 75% from top)
 /// container()
 ///     .rotate(30.0)
-///     .pivot(Pivot::percent(25.0, 75.0))
+///     .pivot(Pivot::percent(25.0, 75.0));
 ///
 /// // Use pixel-based offset (10px from left, 20px from top)
 /// container()
 ///     .scale(2.0)
-///     .pivot(Pivot::px(10.0, 20.0))
+///     .pivot(Pivot::px(10.0, 20.0));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pivot {
@@ -136,9 +137,10 @@ impl Pivot {
     /// A pivot from percentages (0-100 scale)
     ///
     /// # Example
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
     /// // 25% from left, 75% from top
-    /// Pivot::percent(25.0, 75.0)
+    /// Pivot::percent(25.0, 75.0);
     /// ```
     pub fn percent(x_percent: f32, y_percent: f32) -> Self {
         Self {
@@ -150,9 +152,10 @@ impl Pivot {
     /// A pivot from pixel offsets from the top-left corner
     ///
     /// # Example
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
     /// // 10px from left, 20px from top
-    /// Pivot::px(10.0, 20.0)
+    /// Pivot::px(10.0, 20.0);
     /// ```
     pub fn px(x: f32, y: f32) -> Self {
         Self {

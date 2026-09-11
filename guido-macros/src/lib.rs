@@ -17,6 +17,10 @@ use syn::{DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro
 ///
 /// # Example
 /// ```ignore
+/// // not compiled: `guido-macros` is a proc-macro crate and does not depend on
+/// // `guido`, so a sample using `container()` has nothing to compile against.
+/// // `tests/forwarded_children.rs` and `examples/component_example.rs` are the
+/// // compiled versions.
 /// #[component]
 /// pub fn button(
 ///     label: String,
@@ -473,6 +477,8 @@ fn to_pascal_case(s: &str) -> String {
 /// # Example
 ///
 /// ```ignore
+/// // not compiled: see the `component` sample above — this crate has nothing to
+/// // compile a widget against.
 /// #[derive(Clone, PartialEq, SignalFields)]
 /// pub struct AppState {
 ///     pub count: i32,
@@ -492,6 +498,7 @@ fn to_pascal_case(s: &str) -> String {
 /// # Generic example
 ///
 /// ```ignore
+/// // not compiled: see the `component` sample above.
 /// #[derive(Clone, PartialEq, SignalFields)]
 /// pub struct Pair<A: Clone + PartialEq + Send + 'static, B: Clone + PartialEq + Send + 'static> {
 ///     pub first: A,

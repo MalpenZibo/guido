@@ -8,11 +8,16 @@
 //! Two verbs, on everything a property setter already accepts — a value, a
 //! closure, a signal:
 //!
-//! ```ignore
+//! ```no_run
+//! # use guido::prelude::*;
+//! # let surface = Color::rgb(0.1, 0.1, 0.2);
+//! # let open = create_signal(false);
+//! # let rejections = create_signal(0u32);
+//! # let shake = || Keyframes::new(320.0).at(0.0, 0.0).at(0.5, 8.0).at(1.0, 0.0);
 //! container()
-//!     .background(theme.surface.transition(200.0))
+//!     .background(surface.transition(200.0))
 //!     .width((move || if open.get() { 520.0 } else { 120.0 }).transition(SpringConfig::SNAPPY))
-//!     .rotate(0.0.timeline(shake().played_by(rejections)))
+//!     .rotate(0.0.timeline(shake().played_by(rejections)));
 //! ```
 //!
 //! [`Animated`] is deliberately **not** an [`IntoSignal`]. A state layer
@@ -20,8 +25,13 @@
 //! to give — and because the two traits are separate, saying otherwise is a
 //! compile error rather than a value quietly ignored:
 //!
-//! ```ignore
-//! .when_hovered(|s| s.background(HOT.transition(900.0)))   // does not compile
+//! ```compile_fail,E0277
+//! # use guido::prelude::*;
+//! const HOT: Color = Color::rgb(0.9, 0.3, 0.2);
+//! // E0277 pinned: a bare `compile_fail` passes on any error at all, including
+//! // a typo in the sample, so it would go on passing after it stopped meaning
+//! // anything.
+//! container().when_hovered(|s| s.background(HOT.transition(900.0)));
 //! ```
 
 use crate::reactive::{IntoSignal, IntoVal, Signal};
@@ -52,15 +62,18 @@ impl<T> Animated<T> {
     /// separate questions and compose on one property, which is the split CSS
     /// makes between `transition` and `@starting-style`.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let open = create_signal(false);
+    /// # let surface = Color::rgb(0.1, 0.1, 0.2);
     /// // a menu that scales open on its first layout
-    /// container().transform(
-    ///     (move || if open.get() { Transform::IDENTITY } else { collapsed })
-    ///         .transition(Transition::spring(SpringConfig::SNAPPY))
-    ///         .entering_from(collapsed),
-    /// )
+    /// container().scale(
+    ///     (move || if open.get() { Scale::NONE } else { Scale::uniform(0.8) })
+    ///         .transition(SpringConfig::SNAPPY)
+    ///         .entering_from(Scale::uniform(0.8)),
+    /// );
     /// // and the same verb on anything else that animates
-    /// container().background(theme.surface.transition(200.0).entering_from(Color::TRANSPARENT))
+    /// container().background(surface.transition(200.0).entering_from(Color::TRANSPARENT));
     /// ```
     ///
     /// Played once, at the first layout, and consumed there: a relayout, a
@@ -151,9 +164,12 @@ pub trait Animate<T: Clone + 'static, M>: IntoSignal<T, M> + Sized {
     /// A bare number is milliseconds; a [`Transition`](super::Transition) or a
     /// [`SpringConfig`](super::SpringConfig) says which curve.
     ///
-    /// ```ignore
-    /// container().background(theme.surface.transition(200.0))
-    /// container().width(w.transition(Transition::spring(SpringConfig::SNAPPY)))
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let surface = Color::rgb(0.1, 0.1, 0.2);
+    /// # let w = create_signal(120.0f32);
+    /// container().background(surface.transition(200.0));
+    /// container().width(w.transition(Transition::spring(SpringConfig::SNAPPY)));
     /// ```
     fn transition(self, transition: impl Into<TransitionConfig>) -> Animated<T> {
         Animated {
@@ -179,9 +195,14 @@ pub trait Animate<T: Clone + 'static, M>: IntoSignal<T, M> + Sized {
     /// back to it, and a sequence resting on a live signal has nowhere else to
     /// put its expression:
     ///
-    /// ```ignore
-    /// container().rotate(0.0.timeline(shake().played_by(rejections)))
-    /// container().rotate((move || spin.get() * STEP).timeline(shake().played_by(rejections)))
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let rejections = create_signal(0u32);
+    /// # let spin = create_signal(0.0f32);
+    /// # const STEP: f32 = 90.0;
+    /// # let shake = || Keyframes::new(320.0).at(0.0, 0.0).at(0.5, 8.0).at(1.0, 0.0);
+    /// container().rotate(0.0.timeline(shake().played_by(rejections)));
+    /// container().rotate((move || spin.get() * STEP).timeline(shake().played_by(rejections)));
     /// ```
     ///
     /// A timeline is for something that happens and is over. A change that

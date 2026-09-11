@@ -671,11 +671,16 @@ impl Container {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// container().background(Color::rgb(0.2, 0.2, 0.3))
-    /// container().background(Color::rgba(0.0, 0.0, 0.0, 0.5))  // 50% transparent black
-    /// container().background(theme.surface.transition(200.0))  // eased
-    /// container().background(theme.surface.timeline(flash().played_by(errors)))
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # struct Theme { surface: Color }
+    /// # let theme = Theme { surface: Color::rgb(0.12, 0.12, 0.16) };
+    /// # let flash = || Keyframes::new(200.0).at(0.0, Color::BLACK).at(0.5, Color::WHITE).at(1.0, Color::BLACK);
+    /// # let errors = create_signal(0u32);
+    /// container().background(Color::rgb(0.2, 0.2, 0.3));
+    /// container().background(Color::rgba(0.0, 0.0, 0.0, 0.5));  // 50% transparent black
+    /// container().background(theme.surface.transition(200.0));  // eased
+    /// container().background(theme.surface.timeline(flash().played_by(errors)));
     /// ```
     pub fn background<M>(mut self, color: impl IntoAnimated<Color, M>) -> Self {
         self.background = Some(declare(&mut self.anims, color, |a| &mut a.background));
@@ -693,11 +698,12 @@ impl Container {
     /// bottom-right, bottom-left]` clockwise as CSS writes it. A constructor
     /// names another shape:
     ///
-    /// ```ignore
-    /// container().corners(8.0)
-    /// container().corners([16.0, 0.0])
-    /// container().corners(Corners::squircle(12.0))
-    /// container().corners(Corners::bevel([16.0, 0.0]))
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// container().corners(8.0);
+    /// container().corners([16.0, 0.0]);
+    /// container().corners(Corners::squircle(12.0));
+    /// container().corners(Corners::bevel([16.0, 0.0]));
     /// ```
     ///
     /// The shape reaches everything: the box, its border and shadow, the blur
@@ -721,11 +727,12 @@ impl Container {
     /// translucent. Pair it with a translucent
     /// [`background()`](Self::background) so the result shows through.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
     /// container()
     ///     .corners(16.0)
     ///     .backdrop_blur(32.0)
-    ///     .background(Color::rgba(0.1, 0.1, 0.15, 0.6))
+    ///     .background(Color::rgba(0.1, 0.1, 0.15, 0.6));
     /// ```
     ///
     /// Restrict it with [`BackdropSources`](crate::backdrop::BackdropSources) when
@@ -811,16 +818,23 @@ impl Container {
     /// half-declaration to mean. Each half takes a signal of its own, so
     /// anything that has to change over time already can:
     ///
-    /// ```ignore
-    /// container().border(1.5, move || if failed.get() { theme.danger } else { theme.line })
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # struct Theme { line: Color, danger: Color }
+    /// # let theme = Theme { line: Color::rgb(0.3, 0.3, 0.35), danger: Color::rgb(0.9, 0.3, 0.2) };
+    /// # let failed = create_signal(false);
+    /// container().border(1.5, move || if failed.get() { theme.danger } else { theme.line });
     /// ```
     ///
     /// A state layer says it the same way, and replaces the whole border:
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # struct Theme { line: Color, accent: Color }
+    /// # let theme = Theme { line: Color::rgb(0.3, 0.3, 0.35), accent: Color::rgb(0.4, 0.6, 1.0) };
     /// container()
     ///     .border(1.5, theme.line)
-    ///     .when_focused(|s| s.border(1.5, theme.accent))
+    ///     .when_focused(|s| s.border(1.5, theme.accent));
     /// ```
     ///
     /// A width repeated across layers is a constant in your own code — there is
@@ -830,11 +844,13 @@ impl Container {
     /// two channels are different types and a border can spring open while its
     /// colour eases.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let thick = create_signal(false);
     /// container().border(
     ///     (move || if thick.get() { 14.0 } else { 2.0 }).transition(SpringConfig::BOUNCY),
     ///     Color::rgb(0.40, 0.50, 0.70).transition(300.0),
-    /// )
+    /// );
     /// ```
     pub fn border<M1, M2>(
         mut self,
@@ -855,10 +871,15 @@ impl Container {
     /// a value meaning *off*, a gradient that only applies sometimes forces the
     /// caller back to branching in Rust and rebuilding the widget.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # struct Theme { surface: Color }
+    /// # let theme = Theme { surface: Color::rgb(0.12, 0.12, 0.16) };
+    /// # let expanded = create_signal(false);
+    /// # let palette = create_signal(LinearGradient::horizontal(Color::WHITE, Color::BLACK));
     /// container()
     ///     .background(theme.surface)
-    ///     .gradient(move || expanded.get().then(|| palette.get().header()))
+    ///     .gradient(move || expanded.get().then(|| palette.get()));
     /// ```
     pub fn gradient<M>(mut self, gradient: impl IntoSignal<Option<LinearGradient>, M>) -> Self {
         self.gradient = Some(gradient.into_signal());
@@ -993,7 +1014,8 @@ impl Container {
     /// `Option<Callback>` — the last being what a `#[component]` callback prop
     /// holds, so a component forwards its own prop with no ceremony:
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
     /// #[component]
     /// fn button(#[prop(callback)] on_click: ()) -> impl Widget {
     ///     container().on_click(on_click)
@@ -1094,11 +1116,16 @@ impl Container {
     /// so a card can spring into place while its rotation eases. Declaring one
     /// says nothing about the other two.
     ///
-    /// ```ignore
-    /// container().translate((20.0, 10.0))
-    /// container().translate(move || Translate::new(offset.get(), 0.0))
-    /// container().translate(target.transition(SpringConfig::SNAPPY))
-    /// container().translate(Translate::NONE.timeline(nod().played_by(refusals)))
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let offset = create_signal(0.0f32);
+    /// # let target = create_signal(Translate::NONE);
+    /// # let refusals = create_signal(0u32);
+    /// # let nod = || Keyframes::new(200.0).at(0.0, Translate::NONE).at(0.5, Translate::new(0.0, 4.0)).at(1.0, Translate::NONE);
+    /// container().translate((20.0, 10.0));
+    /// container().translate(move || Translate::new(offset.get(), 0.0));
+    /// container().translate(target.transition(SpringConfig::SNAPPY));
+    /// container().translate(Translate::NONE.timeline(nod().played_by(refusals)));
     /// ```
     pub fn translate<M>(mut self, t: impl IntoAnimated<Translate, M>) -> Self {
         let signal = declare(&mut self.anims, t, |a| &mut a.translate);
@@ -1113,10 +1140,14 @@ impl Container {
     /// [`rotate`](Self::rotate) is given is what an animation interpolates and
     /// what a read gives back.
     ///
-    /// ```ignore
-    /// container().rotate(45.0)
-    /// container().rotate(move || heading.get())
-    /// container().rotate(0.0.timeline(shake().played_by(rejections)))
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let heading = create_signal(0.0f32);
+    /// # let rejections = create_signal(0u32);
+    /// # let shake = || Keyframes::new(320.0).at(0.0, 0.0).at(0.5, 8.0).at(1.0, 0.0);
+    /// container().rotate(45.0);
+    /// container().rotate(move || heading.get());
+    /// container().rotate(0.0.timeline(shake().played_by(rejections)));
     /// ```
     ///
     /// An eased angle is interpolated as the number it is, so a turn to 360°
@@ -1142,11 +1173,15 @@ impl Container {
     ///
     /// A bare factor scales both axes; a pair scales them apart.
     ///
-    /// ```ignore
-    /// container().scale(1.5)
-    /// container().scale((2.0, 0.5))
-    /// container().scale(open_size.transition(SpringConfig::SNAPPY))
-    /// container().scale(Scale::NONE.timeline(pulse().played_by(beats)))
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let open_size = create_signal(Scale::NONE);
+    /// # let beats = create_signal(0u32);
+    /// # let pulse = || Keyframes::new(200.0).at(0.0, Scale::NONE).at(0.5, Scale::uniform(1.1)).at(1.0, Scale::NONE);
+    /// container().scale(1.5);
+    /// container().scale((2.0, 0.5));
+    /// container().scale(open_size.transition(SpringConfig::SNAPPY));
+    /// container().scale(Scale::NONE.timeline(pulse().played_by(beats)));
     /// ```
     pub fn scale<M>(mut self, factor: impl IntoAnimated<Scale, M>) -> Self {
         let signal = declare(&mut self.anims, factor, |a| &mut a.scale);
@@ -1175,10 +1210,14 @@ impl Container {
     /// whose highlight belongs to the row.
     ///
     /// # Example
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # struct Theme { accent: Color }
+    /// # let theme = Theme { accent: Color::rgb(0.4, 0.6, 1.0) };
+    /// # let password = create_signal(String::new());
     /// container().control()
     ///     .child(text("Password").when_focused(|s| s.color(theme.accent)))
-    ///     .child(text_input(password))
+    ///     .child(text_input(password));
     /// ```
     pub fn control(mut self) -> Self {
         self.declared_control = true;

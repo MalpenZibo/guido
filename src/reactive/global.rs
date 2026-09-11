@@ -11,6 +11,8 @@
 //! A `GlobalSignal` says so at the declaration:
 //!
 //! ```ignore
+//! // not compiled: `GlobalSignal` is crate-internal, and a doctest compiles
+//! // against the crate from outside.
 //! static MODIFIERS: GlobalSignal<Modifiers> = GlobalSignal::new(Modifiers::default);
 //!
 //! pub fn keyboard_modifiers() -> Signal<Modifiers> {

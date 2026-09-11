@@ -6,12 +6,13 @@
 //! could not follow the theme would be a second, quieter styling system.
 //!
 //! # Example
-//! ```ignore
+//! ```no_run
+//! # use guido::prelude::*;
 //! container()
 //!     .background(Color::rgb(0.2, 0.2, 0.3))
 //!     .when_hovered(|s| s.lighter(0.1))
 //!     .when_pressed(|s| s.darker(0.1).scale(0.98))
-//!     .child(text("Interactive button"))
+//!     .child(text("Interactive button"));
 //! ```
 
 use crate::reactive::{IntoSignal, Signal, create_stored};
@@ -196,10 +197,13 @@ impl StateStyle {
     /// property somebody else owns — so a hover already eases under whatever
     /// the base declared:
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let base = Color::rgb(0.2, 0.2, 0.3);
+    /// # const HOT: Color = Color::rgb(0.9, 0.3, 0.2);
     /// container()
-    ///     .background(base.transition(200.0))    // the property eases
-    ///     .when_hovered(|s| s.background(HOT.transition(900.0)))   // the override changes the value
+    ///     .background(base.transition(200.0))   // the property eases
+    ///     .when_hovered(|s| s.background(HOT)); // the override supplies the value
     /// ```
     ///
     /// Declaring a timing here is a compile error rather than a value quietly
@@ -225,10 +229,11 @@ impl StateStyle {
     /// by blending toward white.
     ///
     /// # Example
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
     /// container()
     ///     .background(Color::rgb(0.2, 0.2, 0.3))
-    ///     .when_hovered(|s| s.lighter(0.1)) // 10% lighter on hover
+    ///     .when_hovered(|s| s.lighter(0.1)); // 10% lighter on hover
     /// ```
     pub fn lighter<M>(mut self, amount: impl IntoSignal<f32, M>) -> Self {
         self.background = Some(BackgroundOverride::Lighter(amount.into_signal()));
@@ -238,10 +243,11 @@ impl StateStyle {
     /// Darken the base background by amount (0.0-1.0).
     ///
     /// # Example
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
     /// container()
     ///     .background(Color::rgb(0.2, 0.2, 0.3))
-    ///     .when_pressed(|s| s.darker(0.1)) // 10% darker on press
+    ///     .when_pressed(|s| s.darker(0.1)); // 10% darker on press
     /// ```
     pub fn darker<M>(mut self, amount: impl IntoSignal<f32, M>) -> Self {
         self.background = Some(BackgroundOverride::Darker(amount.into_signal()));
@@ -294,8 +300,9 @@ impl StateStyle {
     ///
     /// The press effect, most of the time:
     ///
-    /// ```ignore
-    /// container().when_pressed(|s| s.scale(0.98))
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// container().when_pressed(|s| s.scale(0.98));
     /// ```
     pub fn scale<M>(mut self, factor: impl IntoSignal<Scale, M>) -> Self {
         self.scale = Some(factor.into_signal());
@@ -336,10 +343,11 @@ impl StateStyle {
     /// Useful for making semi-transparent elements more visible on hover.
     ///
     /// # Example
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
     /// container()
     ///     .background(Color::rgba(1.0, 0.5, 0.0, 0.4))
-    ///     .when_hovered(|s| s.lighter(0.1).alpha(0.7)) // boost alpha on hover
+    ///     .when_hovered(|s| s.lighter(0.1).alpha(0.7)); // boost alpha on hover
     /// ```
     pub fn alpha<M>(mut self, alpha: impl IntoSignal<f32, M>) -> Self {
         self.alpha = Some(alpha.into_signal());
@@ -351,10 +359,11 @@ impl StateStyle {
     /// The ripple expands from the click point and fades out when released.
     ///
     /// # Example
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
     /// container()
     ///     .when_pressed(|s| s.ripple())
-    ///     .child(text("Click for ripple"))
+    ///     .child(text("Click for ripple"));
     /// ```
     pub fn ripple(mut self) -> Self {
         self.ripple = Some(RippleConfig::default());
@@ -364,10 +373,11 @@ impl StateStyle {
     /// Enable ripple effect with a custom color.
     ///
     /// # Example
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
     /// container()
     ///     .when_pressed(|s| s.ripple_with_color(Color::rgba(1.0, 0.5, 0.0, 0.3)))
-    ///     .child(text("Orange ripple"))
+    ///     .child(text("Orange ripple"));
     /// ```
     pub fn ripple_with_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
         self.ripple = Some(RippleConfig::with_color(color));
@@ -405,8 +415,11 @@ pub fn resolve_background(base: Color, override_: &BackgroundOverride) -> Color 
 /// The closure receives the same partial style the widget itself is built
 /// with, because an override *is* another partial style:
 ///
-/// ```ignore
-/// text("Save").color(theme.weak).when_hovered(|s| s.color(theme.strong))
+/// ```no_run
+/// # use guido::prelude::*;
+/// # struct Theme { weak: Color, strong: Color }
+/// # let theme = Theme { weak: Color::rgb(0.6, 0.6, 0.6), strong: Color::WHITE };
+/// text("Save").color(theme.weak).when_hovered(|s| s.color(theme.strong));
 /// ```
 ///
 /// Layers resolve in reverse declaration order, per property, exactly as a

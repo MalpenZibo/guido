@@ -16,13 +16,14 @@ use super::signal::{RwSignal, Signal, create_signal};
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
 /// let count = create_signal(0);
 /// let doubled = create_memo(move || count.get() * 2);
 ///
 /// container().background(move || {
 ///     if doubled.get() > 10 { Color::RED } else { Color::BLUE }
-/// })
+/// });
 /// ```
 pub struct Memo<T: Clone + PartialEq + Send + 'static> {
     signal: RwSignal<T>,
@@ -44,10 +45,11 @@ impl<T: Clone + PartialEq + Send + 'static> Copy for Memo<T> {}
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
 /// let count = create_signal(0);
 /// let label = create_memo(move || format!("Count: {}", count.get()));
-/// text(label)  // Only repaints when the formatted string actually changes
+/// text(label);  // Only repaints when the formatted string actually changes
 /// ```
 pub fn create_memo<T, F>(f: F) -> Memo<T>
 where

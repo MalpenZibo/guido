@@ -388,30 +388,34 @@ impl Drop for ChildrenSource {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use guido::{create_signal, create_effect, on_cleanup};
+/// ```no_run
+/// use guido::prelude::*;
+/// # #[derive(Clone, PartialEq)] struct Item { id: u64, name: String }
+/// # let data = create_signal(Vec::<Item>::new());
 ///
-/// // Using .children() with dynamic keyed items - ownership is automatic
-/// container().children(move || {
-///     data.get().iter().map(|item| {
-///         (item.id, move || {
-///             // Signals created here are automatically cleaned up
-///             let local_state = create_signal(0);
+/// // `keyed` is how a caller reaches this: one owner per key, and ownership of
+/// // whatever the builder creates is automatic.
+/// container().children(keyed(
+///     move || data.get(),
+///     |item| item.id,
+///     |item| {
+///         // Signals created here are automatically cleaned up
+///         let local_state = create_signal(0);
 ///
-///             // Effects are automatically disposed
-///             create_effect(move || {
-///                 println!("Item {} state: {}", item.id, local_state.get());
-///             });
+///         // Effects are automatically disposed
+///         let id = item.id;
+///         create_effect(move || {
+///             println!("Item {id} state: {}", local_state.get());
+///         });
 ///
-///             // Register custom cleanup for non-reactive resources
-///             on_cleanup(|| {
-///                 println!("Item {} was removed!", item.id);
-///             });
+///         // Register custom cleanup for non-reactive resources
+///         on_cleanup(move || {
+///             println!("Item {id} was removed!");
+///         });
 ///
-///             text(move || format!("Item: {}", item.name))
-///         })
-///     })
-/// });
+///         text(move || format!("Item: {}", item.name))
+///     },
+/// ));
 /// ```
 pub struct DynItem {
     pub key: u64,
@@ -455,8 +459,10 @@ impl DynItem {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use guido::{OwnedWidget, with_owner, create_signal, text};
+/// ```no_run
+/// use guido::prelude::*;
+/// # use guido::reactive::__internal::with_owner;
+/// use guido::widgets::children::OwnedWidget;
 ///
 /// // Manual ownership wrapping (usually not needed - use .children() instead)
 /// let (widget, owner_id) = with_owner(|| {

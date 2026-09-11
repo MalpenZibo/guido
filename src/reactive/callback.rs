@@ -12,7 +12,8 @@
 //! The argument list is a tuple, and each arity gets its own `new`/`run` so
 //! both ends stay flat:
 //!
-//! ```ignore
+//! ```no_run
+//! # use guido::prelude::*;
 //! let greet = Callback::new(|name: String| println!("hi {name}"));
 //! greet.run("world".into());
 //! ```

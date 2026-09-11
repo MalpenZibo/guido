@@ -458,10 +458,11 @@ impl TextInput {
     /// The container has the same builder; put the ref on the *input* when what
     /// you mean is "focus this field", since a container cannot take focus.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
     /// let field = create_widget_ref();
     /// // ...
-    /// container().on_click(move || field.focus())
+    /// container().on_click(move || field.focus());
     /// ```
     pub fn widget_ref(mut self, widget_ref: WidgetRef) -> Self {
         self.widget_ref = Some(widget_ref);
@@ -1600,9 +1601,10 @@ impl Widget for TextInput {
 /// Create a text input widget with two-way signal binding.
 ///
 /// Changes made in the text input will be written back to the signal.
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
 /// let username = create_signal(String::new());
-/// text_input(username)
+/// text_input(username);
 /// ```
 pub fn text_input(signal: RwSignal<String>) -> TextInput {
     TextInput::new(signal)

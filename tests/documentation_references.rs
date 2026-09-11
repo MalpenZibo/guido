@@ -324,3 +324,94 @@ fn every_fence_in_the_book_says_what_it_holds() {
         wrong.join("\n")
     );
 }
+
+/// Every rustdoc sample in `src/` is compiled, or says why it is not.
+///
+/// An `ignore`d block is the one place in this repository where an API name can
+/// be written and nothing at all checks it. Prose in backticks is checked above;
+/// the book's fences are checked below and by `mdbook test`; every other rustdoc
+/// sample is compiled by rustdoc in CI. An `ignore` is exempt from all four, and
+/// it does not announce itself in the rendered page.
+///
+/// Three samples were found teaching methods the crate does not have, two of them
+/// `container().font_size(..)` and one `container().transform(..)`. The first
+/// would have been copied by a caller: it sat on `Text`'s own documentation, next
+/// to a line saying a container declares nothing about text.
+///
+/// Extending the name check above cannot catch these. `font_size` exists three
+/// times over — on `Text`, on `TextInput`, on `TextStyle` — and what made the
+/// sample false was the receiver. Only a compiler knows receivers, so the sample
+/// has to reach one.
+///
+/// The escape hatch is the block that says why, as its first line: a sample built
+/// around an `async` block, or one that would open a surface on somebody's screen,
+/// has a reason and should carry it where the next reader meets it.
+#[test]
+fn every_rustdoc_sample_is_compiled_or_says_why_not() {
+    /// What an exempt block's first line has to start with.
+    const REASON: &str = "// not compiled:";
+
+    // Both crates, as the prose test above reads both: `guido-macros` carries the
+    // `#[component]` sample, which is the first one a new caller copies.
+    let mut sources = Vec::new();
+    read_dir_files(&repo().join("src"), "rs", &mut sources);
+    read_dir_files(&repo().join("guido-macros/src"), "rs", &mut sources);
+    assert!(!sources.is_empty(), "no sources found: scanning nothing");
+
+    let mut unexplained = Vec::new();
+    let mut exempt = 0usize;
+    for file in sources {
+        let source = std::fs::read_to_string(&file).expect("unreadable source");
+        let lines: Vec<&str> = source.lines().collect();
+        for (number, line) in lines.iter().enumerate() {
+            let Some(fence) = doc_comment_body(line) else {
+                continue;
+            };
+            // Tokenised rather than compared: ```` ```rust,ignore ```` and
+            // ```` ```ignore,no_run ```` are skipped by rustdoc exactly the same,
+            // and the first is in the book's own allowlist twenty lines up — so it
+            // is the spelling an author coming from the book reaches for. Matching
+            // one spelling is how the fence-label scar above happened.
+            let Some(info) = fence.trim().strip_prefix("```") else {
+                continue;
+            };
+            if !info.split(',').any(|token| token.trim() == "ignore") {
+                continue;
+            }
+            // The first line of the block, which is where the reason goes.
+            let first = lines
+                .get(number + 1)
+                .and_then(|next| doc_comment_body(next))
+                .unwrap_or_default();
+            if first.trim_start().starts_with(REASON) {
+                exempt += 1;
+                continue;
+            }
+            let name = file.strip_prefix(repo()).unwrap_or(&file).display();
+            unexplained.push(format!("  {name}:{}", number + 1));
+        }
+    }
+
+    assert!(
+        unexplained.is_empty(),
+        "{} rustdoc sample(s) are marked `ignore`, so nothing compiles them and \
+         nothing else checks the names inside them. Either drop the `ignore` — \
+         adding whatever hidden `#` setup lines it takes, or `no_run` where the \
+         sample compiles but must not run — or state the reason on the block's \
+         first line as `{REASON} ...`.\n{}\n\n({exempt} exempt with a reason)",
+        unexplained.len(),
+        unexplained.join("\n")
+    );
+}
+
+/// What a line says after its doc-comment marker, if it is one.
+///
+/// Both markers: an inner `//!` block is documentation the same as an outer
+/// `///` one, and `src/lib.rs` carries most of its samples in the inner kind.
+fn doc_comment_body(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let body = trimmed
+        .strip_prefix("///")
+        .or_else(|| trimmed.strip_prefix("//!"))?;
+    Some(body.strip_prefix(' ').unwrap_or(body))
+}

@@ -6,9 +6,11 @@
 //! for. That is the single most common way to write a UI that silently stops
 //! updating —
 //!
-//! ```ignore
-//! text(format!("{}", count.get()))          // snapshot: never updates
-//! text(move || format!("{}", count.get()))  // reactive: the closure re-runs
+//! ```no_run
+//! # use guido::prelude::*;
+//! # let count = create_signal(0);
+//! text(format!("{}", count.get()));          // snapshot: never updates
+//! text(move || format!("{}", count.get()));  // reactive: the closure re-runs
 //! ```
 //!
 //! Rust cannot express this at compile time: the two lines differ only in

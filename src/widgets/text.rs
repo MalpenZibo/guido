@@ -32,8 +32,11 @@ pub(crate) fn decoration_overflow(stroke: Option<TextStroke>, shadow: Option<Tex
 /// the defaults:
 /// white, 14 logical pixels, the registered family, normal weight.
 ///
-/// ```ignore
-/// text("Hello").font_size(21.0).color(theme.text)
+/// ```no_run
+/// # use guido::prelude::*;
+/// # struct Theme { text: Color }
+/// # let theme = Theme { text: Color::WHITE };
+/// text("Hello").font_size(21.0).color(theme.text);
 /// ```
 ///
 /// There is no enclosing declaration to inherit from: a container draws a box
@@ -117,11 +120,12 @@ impl Text {
     /// text's own colour is the tint laid over it — which is why this is usually
     /// paired with a translucent one.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
     /// text("09:41")
     ///     .font_size(76.0)
     ///     .color(Color::rgba(1.0, 1.0, 1.0, 0.35))
-    ///     .backdrop_blur(16.0)
+    ///     .backdrop_blur(16.0);
     /// ```
     ///
     /// It filters what *this surface* has already drawn — a wallpaper, a photo,
@@ -378,15 +382,19 @@ impl Widget for Text {
 /// Create a text widget
 ///
 /// Accepts static strings, closures, or signals:
-/// ```ignore
-/// text("Hello")  // static string
-/// text(move || format!("Count: {}", count.get()))  // reactive closure
-/// text(my_signal)  // reactive signal
+/// ```no_run
+/// # use guido::prelude::*;
+/// # let count = create_signal(0);
+/// # let my_signal = create_signal(String::from("hi"));
+/// text("Hello");  // static string
+/// text(move || format!("Count: {}", count.get()));  // reactive closure
+/// text(my_signal);  // reactive signal
 /// ```
 ///
 /// Styling is declared here, on the widget that draws the glyphs:
-/// ```ignore
-/// text("Hello").font_size(18.0).bold()
+/// ```no_run
+/// # use guido::prelude::*;
+/// text("Hello").font_size(18.0).bold();
 /// ```
 pub fn text<M>(content: impl IntoSignal<String, M>) -> Text {
     Text::new(content)

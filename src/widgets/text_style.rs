@@ -5,8 +5,11 @@
 //! say how those glyphs look. A container draws a box and says nothing about
 //! what is written inside it.
 //!
-//! ```ignore
-//! text("Hello").font_size(16.0).color(theme.text).bold()
+//! ```no_run
+//! # use guido::prelude::*;
+//! # struct Theme { text: Color }
+//! # let theme = Theme { text: Color::WHITE };
+//! text("Hello").font_size(16.0).color(theme.text).bold();
 //! ```
 //!
 //! # A style is a partial record
@@ -26,9 +29,11 @@
 //! Write a function. It keeps the declaration next to the widget that draws
 //! it, costs no wrapper node, and gives the style a name:
 //!
-//! ```ignore
-//! let label = |s: &str| text(s).color(theme.weak).font_size(12.0);
-//! container().children([label("one"), label("two"), label("three")])
+//! ```no_run
+//! # use guido::prelude::*;
+//! # let weak = Color::rgb(0.6, 0.6, 0.6);
+//! let label = move |s: &str| text(s).color(weak).font_size(12.0);
+//! container().children([label("one"), label("two"), label("three")]);
 //! ```
 //!
 //! # A state that reaches the glyphs
@@ -37,9 +42,12 @@
 //! each where it happens and let [`control()`](crate::widgets::Container::control)
 //! join them: a leaf resolves its own states from the nearest control above it.
 //!
-//! ```ignore
+//! ```no_run
+//! # use guido::prelude::*;
+//! # let weak = Color::rgb(0.6, 0.6, 0.6);
+//! # let strong = Color::WHITE;
 //! container().control().when_hovered(|s| s.lighter(0.1))
-//!     .child(text("Label").color(weak).when_hovered(|s| s.color(strong)))
+//!     .child(text("Label").color(weak).when_hovered(|s| s.color(strong)));
 //! ```
 
 use smallvec::SmallVec;
