@@ -34,8 +34,12 @@ pub(crate) fn decoration_overflow(stroke: Option<TextStroke>, shadow: Option<Tex
 ///
 /// ```ignore
 /// text("Hello").font_size(21.0).color(theme.text)
-/// container().font_size(21.0).child(text("Hello"))   // same, for a group
 /// ```
+///
+/// There is no enclosing declaration to inherit from: a container draws a box
+/// and says nothing about what is written inside it. A style shared by several
+/// labels is a function that returns one — see
+/// [`text_style`](crate::widgets::text_style).
 pub struct Text {
     content: Signal<String>,
     /// What this text declares about itself. Boxed and absent by default: a
@@ -145,30 +149,6 @@ impl Text {
         self
     }
 
-    /// This text's own declaration, with whatever an active state overrides
-    /// folded over it, nearest first.
-    ///
-    /// Called inside the caller's tracking scope, like the fold it wraps: the
-    /// signals come back unread, and reading them is what subscribes.
-    fn resolved_style(&self, tree: &Tree, id: WidgetId) -> TextStyle {
-        let mut style = TextStyle::default();
-        // Active overrides first, last declared first, so they outrank the
-        // text's own declaration — and `inherit_from` takes only what is still
-        // missing, which is what makes the whole chain resolve per property.
-        if !self.states.is_empty() {
-            let control = tree.nearest_control(id);
-            for (when, override_) in self.states.iter().rev() {
-                if self.is_state_active(id, control.as_ref(), when) {
-                    style.inherit_from(override_);
-                }
-            }
-        }
-        if let Some(own) = self.style.as_deref() {
-            style.inherit_from(own);
-        }
-        style
-    }
-
     /// Whether an override applies. Reading the answer is what subscribes the
     /// text to the control, so it is asked only for a state it declares.
     fn is_state_active(&self, id: WidgetId, control: Option<&Control>, when: &StateWhen) -> bool {
@@ -199,18 +179,18 @@ impl Text {
     fn refresh(&mut self, tree: &Tree, id: WidgetId) -> (f32, Option<Color>) {
         let mut declared_color = None;
         let overflow = with_signal_tracking(id, JobType::Layout, || {
-            let style = self.resolved_style(tree, id);
+            let style = self.resolved_text_style(tree, id);
             self.cached_text = self.content.get();
-            self.cached_font_size = style.resolved_font_size(id);
+            self.cached_font_size = style.font_size(id);
             // Only where a colour motion was declared. Reading it here
             // subscribes this text's *layout* to the colour, and a text that
             // merely paints one has no reason to re-measure when it changes —
             // paint reads it under its own scope, as it always did.
-            declared_color = self.animates_text_color().then(|| style.resolved_color(id));
-            self.cached_font_family = style.font_family.get_or_else(default_font_family);
-            self.cached_font_weight = style.font_weight.get_or(FontWeight::NORMAL);
+            declared_color = self.animates_text_color().then(|| style.color(id));
+            self.cached_font_family = style.font_family();
+            self.cached_font_weight = style.font_weight();
             self.cached_wrap = self.wrap.get_or(true);
-            decoration_overflow(style.stroke.map(|s| s.get()), style.shadow.map(|s| s.get()))
+            decoration_overflow(style.stroke(), style.shadow())
         });
         (overflow, declared_color)
     }
@@ -357,13 +337,13 @@ impl Widget for Text {
         // Read the painted properties with tracking so a change on whichever
         // ancestor supplied them repaints this text and nothing else.
         let (color, stroke, shadow, blur) = with_signal_tracking(id, JobType::Paint, || {
-            let style = self.resolved_style(tree, id);
+            let style = self.resolved_text_style(tree, id);
             (
                 get_animated_value(self.anims.as_ref().and_then(|a| a.color.as_ref()), || {
-                    style.resolved_color(id)
+                    style.color(id)
                 }),
-                style.stroke.map(|s| s.get()),
-                style.shadow.map(|s| s.get()),
+                style.stroke(),
+                style.shadow(),
                 self.backdrop_blur.map(|radius| radius.get()),
             )
         });
@@ -404,9 +384,9 @@ impl Widget for Text {
 /// text(my_signal)  // reactive signal
 /// ```
 ///
-/// Styling lives on an enclosing container:
+/// Styling is declared here, on the widget that draws the glyphs:
 /// ```ignore
-/// container().font_size(18.0).bold().child(text("Hello"))
+/// text("Hello").font_size(18.0).bold()
 /// ```
 pub fn text<M>(content: impl IntoSignal<String, M>) -> Text {
     Text::new(content)
@@ -833,6 +813,119 @@ mod tests {
         );
     }
 
+    /// An override nobody can compute is passed over, and the declaration it
+    /// displaced is what the text uses.
+    ///
+    /// `Container` answers the same question this way, at `resolve_state_value`:
+    /// a layer whose value is not finite is passed over exactly as one that says
+    /// nothing about the property is. What makes it possible here is that the
+    /// walk keeps a chain — a fold that picked a winner and put the door on
+    /// whatever it picked would have dropped this text's own 32 before the bad
+    /// override was ever looked at, and landed on 14.
+    #[test]
+    fn an_override_that_is_not_a_number_falls_through_to_the_declaration() {
+        let hot = create_signal(true);
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new("x")
+                .font_size(32.0)
+                .color(Color::RED)
+                .state(hot, |s: TextStyle| {
+                    s.font_size(f32::NAN)
+                        .color(Color::rgba(f32::NAN, 0.0, 0.0, 1.0))
+                }),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        #[cfg(debug_assertions)]
+        let before = crate::reactive::diagnostics::report_count();
+        let (color, size) = frame(&mut tree, root);
+        assert!(
+            (size - 32.0).abs() < 0.01,
+            "a bad override falls through to the size the text declares, not to \
+             the default: got {size}"
+        );
+        assert_eq!(color, Color::RED, "and to the colour it declares");
+
+        // And says nothing about it, as a container passes a layer over in
+        // silence: what the text is left following is exactly what it declared,
+        // so there is nothing to tell anybody. The diagnostic belongs to a
+        // declaration that is itself wrong — see
+        // `a_bad_declaration_is_reported_even_under_a_good_override`.
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::reactive::diagnostics::report_count() - before,
+            0,
+            "a passed-over override must not be reported"
+        );
+    }
+
+    /// A declaration the application got wrong is reported even when an override
+    /// is covering it.
+    ///
+    /// This is why the base is resolved apart from the overrides rather than as
+    /// the last link of one chain. An override that is not a number is passed over
+    /// in silence, because the value the widget is left following is fine — but
+    /// when the *declaration* is the broken one, silence loses the only message
+    /// this has to give. A state active from the first frame would bury it for the
+    /// life of the process, since the report dedupes per widget and property.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_bad_declaration_is_reported_even_under_a_good_override() {
+        use crate::reactive::diagnostics::report_count;
+
+        let hot = create_signal(true);
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new("x")
+                .font_size(f32::NAN)
+                .state(hot, |s: TextStyle| s.font_size(20.0)),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let before = report_count();
+        let (_, size) = frame(&mut tree, root);
+        assert!(
+            (size - 20.0).abs() < 0.01,
+            "the override is what the text draws with, got {size}"
+        );
+        assert_eq!(
+            report_count() - before,
+            1,
+            "and the declaration underneath it was still wrong"
+        );
+    }
+
+    /// An override's colour must not wake a layout, for the same reason a plain
+    /// one must not.
+    ///
+    /// This is the test that decides where a declaration is *read* — see
+    /// `ResolvedTextStyle`, which is where the reasoning lives. It fails against
+    /// the shorter fix, the one that tests each candidate as it walks.
+    #[test]
+    fn an_override_colour_wakes_no_layout_either() {
+        let hot = create_signal(true);
+        let hue = create_signal(Color::RED);
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new("x").state(hot, move |s: TextStyle| s.color(hue)),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        frame(&mut tree, root);
+        jobs::clear_pending_jobs();
+
+        hue.set(Color::BLUE);
+        let woken = jobs::queued_job_types(root);
+        assert!(
+            !woken.contains(&JobType::Layout),
+            "an override's colour must not re-measure the text: {woken:?}"
+        );
+        assert!(
+            woken.contains(&JobType::Paint),
+            "and it does have to repaint it: {woken:?}"
+        );
+    }
+
     /// Every override setter, not just the one an earlier test happened to
     /// reach.
     ///
@@ -1239,24 +1332,22 @@ mod tests {
     #[test]
     fn every_animated_text_property_is_resolved_to_a_finite_value() {
         let nan = f32::NAN;
-        let style = TextStyle::default()
+        let declared = TextStyle::default()
             .font_size(nan)
             .color(Color::rgba(nan, 0.0, 0.0, 1.0));
+        let mut style = crate::widgets::text_style::ResolvedTextStyle::default();
+        style.push_own(&declared);
 
-        // Any id: neither resolver consults the tree, and the diagnostic only
+        // Any id: the resolvers do not consult the tree, and the diagnostic only
         // prints the number.
         let id = WidgetId::from_u64(1);
 
         assert!(
-            style.resolved_font_size(id).is_finite(),
+            style.font_size(id).is_finite(),
             "font_size resolved to a value that is not finite"
         );
         assert!(
-            style
-                .resolved_color(id)
-                .channels()
-                .iter()
-                .all(|c| c.is_finite()),
+            style.color(id).channels().iter().all(|c| c.is_finite()),
             "color resolved to a value that is not finite"
         );
     }

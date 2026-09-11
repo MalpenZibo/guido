@@ -367,27 +367,6 @@ impl TextInput {
         }
     }
 
-    /// This input's own declarations, completed by the ancestors' for whatever
-    /// they leave out. Each walk is skipped when nothing is left to find.
-    fn resolved_text_style(&self, tree: &Tree, id: WidgetId) -> TextStyle {
-        let mut style = TextStyle::default();
-        // Active overrides first and last declared first, so they outrank this
-        // field's own declaration; `inherit_from` takes only what is missing,
-        // which resolves the chain per property.
-        if !self.states.is_empty() {
-            let control = tree.nearest_control(id);
-            for (when, override_) in self.states.iter().rev() {
-                if self.is_state_active(id, control.as_ref(), when) {
-                    style.inherit_from(override_);
-                }
-            }
-        }
-        if let Some(own) = self.text_style.as_deref() {
-            style.inherit_from(own);
-        }
-        style
-    }
-
     /// Give up the hover, and the cursor icon that goes with it.
     ///
     /// Two events mean the same thing — the pointer moved out of the bounds, or
@@ -683,14 +662,11 @@ impl TextInput {
 
                 (
                     self.value.get(),
-                    style.resolved_font_size(id),
-                    style.font_family.get_or_else(default_font_family),
-                    style.font_weight.get_or(FontWeight::NORMAL),
-                    crate::widgets::text::decoration_overflow(
-                        style.stroke.map(|s| s.get()),
-                        style.shadow.map(|s| s.get()),
-                    ),
-                    self.animates_text_color().then(|| style.resolved_color(id)),
+                    style.font_size(id),
+                    style.font_family(),
+                    style.font_weight(),
+                    crate::widgets::text::decoration_overflow(style.stroke(), style.shadow()),
+                    self.animates_text_color().then(|| style.color(id)),
                 )
             });
 
@@ -1390,7 +1366,7 @@ impl Widget for TextInput {
                 let input = self.resolved_input_style();
                 let text_color = crate::widgets::container::get_animated_value(
                     self.text_anims.as_ref().and_then(|a| a.color.as_ref()),
-                    || style.resolved_color(id),
+                    || style.color(id),
                 );
                 // Only when there is nothing to show instead. Read inside the
                 // tracking scope like every other paint input, so a prompt that
@@ -1415,8 +1391,8 @@ impl Widget for TextInput {
                     // The caret defaults to the text colour: an input that
                     // only sets `text_color` should not sprout a blue cursor.
                     input.cursor_color.get_or(text_color),
-                    style.stroke.map(|s| s.get()),
-                    style.shadow.map(|s| s.get()),
+                    style.stroke(),
+                    style.shadow(),
                     placeholder,
                 )
             });
@@ -2013,6 +1989,32 @@ mod tests {
             "a field given one bad colour never followed its signal again: \
              got {painted:?}"
         );
+    }
+
+    /// The field walks its own chain, so the fall-through is its own to get
+    /// right — see `an_override_that_is_not_a_number_falls_through_to_the_declaration`
+    /// for the rule and why a fold could not state it.
+    #[test]
+    fn an_override_that_is_not_a_number_falls_through_to_the_fields_declaration() {
+        let hot = create_signal(true);
+        let (mut tree, root, _id) = field_in_container(
+            text_input(create_signal("abc".to_owned()))
+                .font_size(32.0)
+                .color(Color::RED)
+                .state(hot, |s: TextStyle| {
+                    s.font_size(f32::NAN)
+                        .color(Color::rgba(f32::NAN, 0.0, 0.0, 1.0))
+                }),
+        );
+
+        let (color, size) = drawn_text(&mut tree, root, std::time::Instant::now())
+            .expect("the field draws its text");
+        assert!(
+            (size - 32.0).abs() < 0.01,
+            "a bad override falls through to the size the field declares, not to \
+             the default: got {size}"
+        );
+        assert_eq!(color, Color::RED, "and to the colour it declares");
     }
 
     /// A field switched to masked refuses the very next copy, not the one after.

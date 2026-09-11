@@ -18,8 +18,8 @@
 //!
 //! The partiality earns its keep on state overrides, which *are* merged:
 //! `when_hovered(|s| s.color(..))` changes the colour of a hovered label and
-//! leaves its metrics alone. `TextStyle::inherit_from` is what
-//! folds them, nearest declaration first.
+//! leaves its metrics alone. Every property resolves on its own, from the
+//! nearest declaration that says anything about it.
 //!
 //! # The same style, many times
 //!
@@ -45,9 +45,9 @@
 use smallvec::SmallVec;
 
 use crate::clock::FrameInstant;
-use crate::finite::FiniteOr;
+use crate::finite::{FiniteOr, first_finite_override};
 use crate::jobs::RequiredJob;
-use crate::reactive::{IntoSignal, Signal};
+use crate::reactive::{IntoSignal, OptionSignalExt, Signal};
 use crate::tree::WidgetId;
 use crate::widgets::container::AnimationState;
 
@@ -209,7 +209,8 @@ impl TextShadow {
 /// nobody can compute falls back to.
 pub(crate) const DEFAULT_FONT_SIZE: f32 = 14.0;
 
-/// The text style a container declares for its descendants.
+/// What a widget that draws glyphs declares about them, or what one of its state
+/// overrides supplies.
 ///
 /// Every field is optional and resolved independently: a state override that
 /// sets only `color` leaves the metrics the widget declared alone. Properties
@@ -231,37 +232,104 @@ pub struct TextStyle {
     pub shadow: Option<Signal<TextShadow>>,
 }
 
-impl TextStyle {
+/// What a widget's text declarations come to: its own, and the active state
+/// overrides that outrank it.
+///
+/// The two are kept apart rather than folded into a winner, which is what lets an
+/// override nobody can compute fall through to the declaration it displaced —
+/// a fold would have dropped that declaration before the finite check ever ran.
+/// Container resolves its own properties in these two steps, and
+/// [`first_finite_override`] carries the rule they share.
+///
+/// Only the two numeric properties have the distinction. A family and a weight
+/// cannot fail to be numbers, so the nearest declaration is the whole answer for
+/// them. A stroke and a shadow *can* — they are made of numbers — and they keep
+/// the nearest declaration anyway, because no `AllFinite` impl reaches them: that
+/// is a gap rather than a reason, and neither has an animation to poison, so a bad
+/// number is gone from them the frame the signal recovers.
+///
+/// **A value is read when its property is asked for, not while walking.** The
+/// walk runs during layout and again during paint, and a read subscribes whichever
+/// pass it lands in — so testing a candidate while walking would subscribe the
+/// *measurement* to a colour, and a theme change would then reflow every label
+/// that declares a hover colour, since `Text` is not a relayout boundary. Asking
+/// where the property is wanted puts each read in the pass that owns it: the size
+/// while measuring, the colour while painting.
+#[derive(Default)]
+pub(crate) struct ResolvedTextStyle {
+    /// Active overrides, nearest first.
+    color_overrides: SmallVec<[Signal<Color>; 3]>,
+    font_size_overrides: SmallVec<[Signal<f32>; 3]>,
+    /// The widget's own declaration, which every override falls through to and
+    /// where the door reports.
+    color: Option<Signal<Color>>,
+    font_size: Option<Signal<f32>>,
+    font_family: Option<Signal<FontFamily>>,
+    font_weight: Option<Signal<FontWeight>>,
+    stroke: Option<Signal<TextStroke>>,
+    shadow: Option<Signal<TextShadow>>,
+}
+
+impl ResolvedTextStyle {
+    /// Add an active override, further out than every one already added.
+    pub(crate) fn push_override(&mut self, style: &TextStyle) {
+        if let Some(color) = style.color {
+            self.color_overrides.push(color);
+        }
+        if let Some(font_size) = style.font_size {
+            self.font_size_overrides.push(font_size);
+        }
+        self.take_unset(style);
+    }
+
+    /// Add the widget's own declaration, which is the innermost there is.
+    pub(crate) fn push_own(&mut self, style: &TextStyle) {
+        self.color = style.color;
+        self.font_size = style.font_size;
+        self.take_unset(style);
+    }
+
+    /// The four that resolve to one declaration: nearest wins, so whatever is
+    /// already set was found first.
+    fn take_unset(&mut self, style: &TextStyle) {
+        self.font_family = self.font_family.or(style.font_family);
+        self.font_weight = self.font_weight.or(style.font_weight);
+        self.stroke = self.stroke.or(style.stroke);
+        self.shadow = self.shadow.or(style.shadow);
+    }
+
     /// The colour to draw the glyphs in.
-    ///
-    /// This and the size below are resolved here, rather than at each widget's
-    /// `refresh`, so that both pass [`FiniteOr`] on their way to
-    /// [`TextAnims::retarget`]: a value nothing can compute becomes a segment's
-    /// start, and every segment after it begins from there. See
-    /// [`crate::finite`] for why the door belongs at the resolver.
-    pub(crate) fn resolved_color(&self, id: WidgetId) -> Color {
-        self.color.get_finite_or(Color::WHITE, id, "color")
+    pub(crate) fn color(&self, id: WidgetId) -> Color {
+        let base = self.color.get_finite_or(Color::WHITE, id, "color");
+        first_finite_override(&self.color_overrides, base)
     }
 
-    /// The size to measure and draw the glyphs at, in logical pixels — see
-    /// [`resolved_color`](Self::resolved_color) for the door both pass.
-    pub(crate) fn resolved_font_size(&self, id: WidgetId) -> f32 {
-        self.font_size
-            .get_finite_or(DEFAULT_FONT_SIZE, id, "font_size")
+    /// The size to measure and draw the glyphs at, in logical pixels.
+    pub(crate) fn font_size(&self, id: WidgetId) -> f32 {
+        let base = self
+            .font_size
+            .get_finite_or(DEFAULT_FONT_SIZE, id, "font_size");
+        first_finite_override(&self.font_size_overrides, base)
     }
 
-    /// Take from `outer` every property this style does not already declare.
-    ///
-    /// Called as the fold moves outward from the most specific declaration —
-    /// an active state override, then the widget's own — so the nearer one
-    /// always wins: whatever is already set was found first.
-    pub(crate) fn inherit_from(&mut self, outer: &Self) {
-        self.color = self.color.or(outer.color);
-        self.font_size = self.font_size.or(outer.font_size);
-        self.font_family = self.font_family.or(outer.font_family);
-        self.font_weight = self.font_weight.or(outer.font_weight);
-        self.stroke = self.stroke.or(outer.stroke);
-        self.shadow = self.shadow.or(outer.shadow);
+    /// The family to shape the glyphs with.
+    pub(crate) fn font_family(&self) -> FontFamily {
+        self.font_family.get_or_else(crate::default_font_family)
+    }
+
+    /// The weight to shape them at, on the CSS 100-900 scale.
+    pub(crate) fn font_weight(&self) -> FontWeight {
+        self.font_weight.get_or(FontWeight::NORMAL)
+    }
+
+    /// The contour drawn around the glyphs, if one is declared.
+    pub(crate) fn stroke(&self) -> Option<TextStroke> {
+        self.stroke.map(|s| s.get())
+    }
+
+    /// The shadow cast by the glyphs, if one is declared.
+    pub(crate) fn shadow(&self) -> Option<TextShadow> {
+        self.shadow.map(|s| s.get())
     }
 }
 
@@ -383,6 +451,46 @@ macro_rules! declares_text_style {
         impl $widget {
             fn text_style_mut(&mut self) -> &mut $crate::widgets::text_style::TextStyle {
                 self.$style.get_or_insert_with(Default::default)
+            }
+
+            /// This widget's own declaration, and the active state overrides
+            /// that outrank it.
+            ///
+            /// Emitted for both widgets rather than written twice: the two
+            /// differ in nothing but which field holds the declaration, and a
+            /// widget that resolved its style its own way would be the place the
+            /// two drift apart. What stays per widget is
+            /// `is_state_active` — a text with no control above it answers for
+            /// its own hover, and a field for its own.
+            ///
+            /// Called inside the caller's tracking scope, and it has to be: the
+            /// walk reads no declared *value* — collecting those is all it does,
+            /// and `ResolvedTextStyle`'s accessors are what read them and so what
+            /// subscribe to them — but `is_state_active` reads the conditions, and
+            /// that is how a state change re-measures and repaints the widget it
+            /// belongs to. Hoisting this out of the pass, or keeping its answer
+            /// across passes, would cost exactly those subscriptions.
+            fn resolved_text_style(
+                &self,
+                tree: &$crate::tree::Tree,
+                id: $crate::tree::WidgetId,
+            ) -> $crate::widgets::text_style::ResolvedTextStyle {
+                let mut style = $crate::widgets::text_style::ResolvedTextStyle::default();
+                // Last declared first, so the nearest override outranks the ones
+                // before it, and this widget's own declaration outranks none of
+                // them — it is what they fall through to.
+                if !self.states.is_empty() {
+                    let control = tree.nearest_control(id);
+                    for (when, override_) in self.states.iter().rev() {
+                        if self.is_state_active(id, control.as_ref(), when) {
+                            style.push_override(override_);
+                        }
+                    }
+                }
+                if let Some(own) = self.$style.as_deref() {
+                    style.push_own(own);
+                }
+                style
             }
 
             /// Point the declared motions at the resolved style, and hand back

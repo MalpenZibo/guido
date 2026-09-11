@@ -74,6 +74,40 @@ impl<T: AllFinite + Clone + 'static> FiniteOr<T> for Option<Signal<T>> {
     }
 }
 
+/// The nearest state override that is a number, or `base` where none of them
+/// is.
+///
+/// [`FiniteOr`] answers for a property declared once. A property with state
+/// overrides is declared more than once — the override, and the declaration it
+/// supplies a value for — and then reading a bad override as if nothing had been
+/// declared is the wrong answer: what it falls through to is the declaration
+/// underneath it.
+///
+/// `base` is that declaration, already resolved through [`FiniteOr`], so it is
+/// finite and a bad one has already been reported. These are the same two steps
+/// in the same order as a container's resolution, and they carry the same rule:
+/// an override that is not a number is passed over exactly as one that says
+/// nothing about this property is, and passed over *silently*, because the
+/// diagnostic belongs to the declaration the widget is left following.
+///
+/// Nearest override first, stopping at the first that is a number. The ones
+/// beyond it are left unread on purpose and nothing is lost by it: only an
+/// override nearer than the winner can change the answer, and every one of those
+/// was read on the way in, so a frame where one of them stops being NaN is a
+/// frame this widget is woken for.
+pub(crate) fn first_finite_override<T: AllFinite + Clone + 'static>(
+    overrides: &[Signal<T>],
+    base: T,
+) -> T {
+    for signal in overrides {
+        let value = signal.get();
+        if value.all_finite() {
+            return value;
+        }
+    }
+    base
+}
+
 /// Every type a `Container` property is declared with, answered from the
 /// numbers it is made of.
 ///
