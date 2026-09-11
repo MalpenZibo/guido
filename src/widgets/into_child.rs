@@ -2,12 +2,19 @@
 //!
 //! Children come in four forms — two static, two reactive:
 //!
-//! ```ignore
+//! ```no_run
+//! # use guido::prelude::*;
+//! # #[derive(Clone, PartialEq)] struct Item { id: u64, name: String }
+//! # let entries = create_signal(Vec::<Item>::new());
+//! # let items = create_signal(Vec::<Item>::new());
+//! # let build_menu = |_: Vec<Item>| text("menu");
+//! # let row = |item: Item| text(item.name);
+//! # let (a, b, c) = (text("a"), text("b"), text("c"));
 //! container()
 //!     .child(text("hi"))                                  // static single
 //!     .child(move || build_menu(entries.get()))           // reactive single
 //!     .children([a, b, c])                                // static list
-//!     .children(keyed(move || items.get(), |i| i.id, row)) // reactive keyed list
+//!     .children(keyed(move || items.get(), |i| i.id, row)); // reactive keyed list
 //! ```
 //!
 //! A reactive closure re-runs when a signal it read is written, and its
@@ -313,18 +320,25 @@ pub struct KeyedChildren<T, I, K, W> {
 /// Rows are indexed by the key itself, not by a hash of it, so two distinct keys
 /// are never reconciled as one:
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
+/// # #[derive(Clone, PartialEq)] struct Space { id: u64 }
+/// # let workspaces = create_signal(Vec::<Space>::new());
+/// # let workspace_pill = |_: Space| text("ws");
 /// container().children(keyed(
 ///     move || workspaces.get(),
 ///     |ws| ws.id,
 ///     workspace_pill,
-/// ))
+/// ));
 ///
+/// # #[derive(Clone, PartialEq)] struct Tab { title: String }
+/// # let tabs = create_signal(Vec::<Tab>::new());
+/// # let tab_button = |_: Tab| text("tab");
 /// container().children(keyed(
 ///     move || tabs.get(),
 ///     |tab| tab.title.clone(),
 ///     tab_button,
-/// ))
+/// ));
 /// ```
 pub fn keyed<T, I, K, W>(
     data: impl Fn() -> I + 'static,

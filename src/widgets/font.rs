@@ -8,9 +8,10 @@ use cosmic_text::{Family, Weight};
 ///
 /// # Examples
 ///
-/// ```ignore
-/// text("Hello").font_family(FontFamily::Monospace)
-/// text("Hello").font_family(FontFamily::Name("Inter".into()))
+/// ```no_run
+/// # use guido::prelude::*;
+/// text("Hello").font_family(FontFamily::Monospace);
+/// text("Hello").font_family(FontFamily::Name("Inter".into()));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum FontFamily {
@@ -47,9 +48,10 @@ impl FontFamily {
 ///
 /// # Examples
 ///
-/// ```ignore
-/// text("Hello").font_weight(FontWeight::BOLD)
-/// text("Hello").font_weight(FontWeight(600))
+/// ```no_run
+/// # use guido::prelude::*;
+/// text("Hello").font_weight(FontWeight::BOLD);
+/// text("Hello").font_weight(FontWeight(600));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct FontWeight(pub u16);

@@ -10,10 +10,12 @@ use super::signal::{RwSignal, create_signal};
 /// "something happened" pulse through the reactive graph when there is no
 /// value to carry (external data changed, a cache was invalidated):
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
 /// let refresh = create_trigger();
 ///
 /// create_effect(move || {
+/// # let rebuild_from_external_source = || {};
 ///     refresh.track();
 ///     rebuild_from_external_source();
 /// });

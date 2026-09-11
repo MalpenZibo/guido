@@ -7,13 +7,14 @@
 //!
 //! The constructors name the *shape*, and take the size:
 //!
-//! ```ignore
-//! container().corners(8.0)                        // rounded, uniform
-//! container().corners([16.0, 0.0])                // rounded on the top pair only
-//! container().corners(Corners::squircle(12.0))    // iOS-style continuous
-//! container().corners(Corners::bevel(12.0))       // a diagonal cut
-//! container().corners(Corners::scoop(12.0))       // concave
-//! container().corners(Corners::superellipse(12.0, 1.5))
+//! ```no_run
+//! # use guido::prelude::*;
+//! container().corners(8.0);                        // rounded, uniform
+//! container().corners([16.0, 0.0]);                // rounded on the top pair only
+//! container().corners(Corners::squircle(12.0));    // iOS-style continuous
+//! container().corners(Corners::bevel(12.0));       // a diagonal cut
+//! container().corners(Corners::scoop(12.0));       // concave
+//! container().corners(Corners::superellipse(12.0, 1.5));
 //! ```
 //!
 //! The radii take one value for all four, `[top, bottom]` for the two pairs,

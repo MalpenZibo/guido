@@ -6,8 +6,9 @@
 //! compositor blanks all outputs and routes input to the lock surfaces, so
 //! a `text_input` password field works out of the box.
 //!
-//! ```ignore
-//! lock_session(|output| lock_screen_widget(output));
+//! ```no_run
+//! # use guido::prelude::*;
+//! lock_session(|output: OutputInfo| text(format!("locked: {}", output.id.raw())));
 //! // …later, e.g. after password verification:
 //! unlock_session();
 //! ```

@@ -847,12 +847,15 @@ pub trait Widget {
     /// Type-erase this widget into a boxed trait object.
     ///
     /// Useful when returning different widget types from conditional branches:
-    /// ```ignore
-    /// if condition {
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let condition = true;
+    /// # let (widget_a, widget_b) = (text("a"), text("b"));
+    /// let _child = if condition {
     ///     widget_a.into_any()
     /// } else {
     ///     widget_b.into_any()
-    /// }
+    /// };
     /// ```
     fn into_any(self) -> AnyWidget
     where

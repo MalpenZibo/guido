@@ -25,6 +25,8 @@ use crate::widgets::{Color, Rect};
 /// # Example
 ///
 /// ```ignore
+/// // not compiled: a fragment of a `Widget` impl, shown without the impl it
+/// // belongs to. `tests/external_widget.rs` is the compiled version of this.
 /// fn paint(&self, ctx: &mut PaintContext) {
 ///     // Local bounds (0,0 origin with widget's own width/height)
 ///     let local_bounds = Rect::new(0.0, 0.0, self.bounds.width, self.bounds.height);

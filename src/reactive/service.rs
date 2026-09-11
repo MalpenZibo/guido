@@ -5,10 +5,12 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
+//! # use guido::prelude::*;
+//! # enum MyCommand { DoSomething }
 //! let service = create_service(move |mut rx, ctx| async move {
 //!     while ctx.is_running() {
-//!         if let Some(cmd) = rx.recv().await {
+//!         if let Some(MyCommand::DoSomething) = rx.recv().await {
 //!             // handle command
 //!         }
 //!         // update signals
@@ -98,7 +100,9 @@ impl<Cmd: 'static> Service<Cmd> {
 ///
 /// # Example: Bidirectional Service
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
+/// # use std::time::Duration;
 /// enum Cmd {
 ///     SwitchWorkspace(i32),
 /// }
@@ -176,13 +180,16 @@ where
 /// keep. It is aborted when the scope that created it is disposed, exactly as a
 /// service is.
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
+/// # use std::time::Duration;
+/// # let now = || String::from("09:41");
 /// let time = create_signal(String::new());
 /// let time_w = time.writer();
 ///
 /// create_task(move |ctx| async move {
 ///     while ctx.is_running() {
-///         time_w.set(chrono::Local::now().format("%H:%M").to_string());
+///         time_w.set(now());
 ///         tokio::time::sleep(Duration::from_secs(1)).await;
 ///     }
 /// });

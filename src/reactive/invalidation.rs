@@ -58,6 +58,9 @@ thread_local! {
 /// container for layout, which re-lays-out every sibling as well.
 ///
 /// ```ignore
+/// // not compiled: a fragment of a `Widget` impl, shown without the impl it
+/// // belongs to — `self` has no meaning on its own. `tests/external_widget.rs`
+/// // is where the same call is compiled.
 /// fn layout(&mut self, tree: &mut Tree, id: WidgetId, c: Constraints) -> Size {
 ///     with_signal_tracking(id, JobType::Layout, || {
 ///         let text = self.content.get();   // subscribes this widget, not its parent

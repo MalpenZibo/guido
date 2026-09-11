@@ -4,7 +4,9 @@
 //! tracked closure (effects, dynamic children, reactive properties) and the
 //! closure re-runs when monitors are added, removed, or reconfigured.
 //!
-//! ```ignore
+//! ```no_run
+//! # use guido::prelude::*;
+//! # let bar_widget = || text("bar");
 //! // One bar per monitor, reacting to hotplug:
 //! create_effect(move || {
 //!     for info in outputs().get() {

@@ -13,10 +13,11 @@
 //! keystroke behind — announcing caps lock only once you had already typed
 //! into it.
 //!
-//! ```ignore
+//! ```no_run
+//! # use guido::prelude::*;
 //! container().child(move || {
 //!     keyboard_modifiers().get().caps_lock.then(|| text("Caps lock is on"))
-//! })
+//! });
 //! ```
 
 use crate::reactive::global::GlobalSignal;

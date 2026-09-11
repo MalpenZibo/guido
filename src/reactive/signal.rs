@@ -375,7 +375,14 @@ impl<T: Clone + Send + Sync + 'static> RwSignal<T> {
     /// When the scope that created it is disposed the sender drops, so
     /// `changed()` returns `Err`: the task's cue that the UI is gone.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # use std::time::Duration;
+    /// # #[derive(Clone, Copy, PartialEq)] enum Menu { SystemInfo }
+    /// # #[derive(Clone, Copy)] enum Scope { All, Bar }
+    /// # let menu = create_signal(None::<Menu>);
+    /// # let interval = Duration::from_secs(1);
+    /// # let sample = |_: Scope| {};
     /// let wide = create_memo(move || menu.get() == Some(Menu::SystemInfo));
     /// let mut wide_rx = wide.watch();
     ///
@@ -425,7 +432,10 @@ impl<T: Clone + 'static> From<RwSignal<T>> for Signal<T> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
+/// # use std::time::Duration;
+/// # let get_current_time = || String::from("09:41");
 /// let time = create_signal(get_current_time());
 /// let time_w = time.writer();
 ///
@@ -555,11 +565,12 @@ impl<T: Clone + Send + 'static> WriteSignal<T> {
 ///
 /// # Example
 ///
-/// ```ignore
-/// let count = create_signal(0);
-/// count.set(1);           // write
+/// ```no_run
+/// # use guido::prelude::*;
+/// let count = create_signal(0.0f32);
+/// count.set(1.0);         // write
 /// count.get();            // read
-/// container().padding(count) // auto-converts to Signal<T> via IntoSignal
+/// container().padding(count); // auto-converts to Signal<T> via IntoSignal
 /// ```
 pub fn create_signal<T: Clone + Send + 'static>(value: T) -> RwSignal<T> {
     let id = create_signal_value(value);
@@ -582,9 +593,10 @@ pub fn create_signal<T: Clone + Send + 'static>(value: T) -> RwSignal<T> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
 /// let color = create_stored(Color::RED);
-/// container().background(color) // Copy, no clone needed
+/// container().background(color); // Copy, no clone needed
 /// ```
 pub fn create_stored<T: Clone + 'static>(value: T) -> Signal<T> {
     let id = create_stored_value(value);
@@ -607,10 +619,11 @@ pub fn create_stored<T: Clone + 'static>(value: T) -> Signal<T> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
 /// let count = create_signal(0);
 /// let label = create_derived(move || format!("Count: {}", count.get()));
-/// text(label) // Copy, reactive
+/// text(label); // Copy, reactive
 /// ```
 pub fn create_derived<T: Clone + 'static>(f: impl Fn() -> T + 'static) -> Signal<T> {
     let id = allocate_signal_slot();

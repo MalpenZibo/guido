@@ -98,11 +98,13 @@ pub enum ContentFit {
 /// the box itself comes from the enclosing container, like every other size in
 /// guido:
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
+/// # let source = "./photo.jpg";
 /// container()
 ///     .width(fill())
 ///     .height(fill())
-///     .child(image(source).content_fit(ContentFit::Cover))
+///     .child(image(source).content_fit(ContentFit::Cover));
 /// ```
 pub struct Image {
     source: Signal<ImageSource>,
@@ -256,24 +258,24 @@ impl Widget for Image {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
+/// # let svg_data: Vec<u8> = Vec::new();
 /// // From file path (auto-detects SVG)
-/// image("./icon.png")
-/// image("./logo.svg")
+/// image("./icon.png");
+/// image("./logo.svg");
 ///
-/// // With explicit dimensions
-/// image("./icon.png")
-///     .width(32.0)
-///     .height(32.0)
+/// // Sized by the container it sits in: an image has no width of its own
+/// container().width(32.0).height(32.0).child(image("./icon.png"));
 ///
-/// // With content fit mode
-/// image("./photo.jpg")
+/// // With content fit mode, in a box that gives it its size
+/// container()
 ///     .width(200.0)
 ///     .height(150.0)
-///     .content_fit(ContentFit::Cover)
+///     .child(image("./photo.jpg").content_fit(ContentFit::Cover));
 ///
 /// // From ImageSource
-/// image(ImageSource::SvgBytes(svg_data.into()))
+/// image(ImageSource::SvgBytes(svg_data.into()));
 /// ```
 pub fn image<M>(source: impl IntoSignal<ImageSource, M>) -> Image {
     Image::new(source)

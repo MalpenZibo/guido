@@ -18,14 +18,16 @@
 //!
 //! ## Usage
 //!
-//! ```ignore
-//! use guido::animation::{TimingFunction, SpringConfig};
+//! A spring is a timing, and a timing rides with the value it moves — a state
+//! layer supplies the value to move *to* and says nothing about how:
+//!
+//! ```no_run
+//! use guido::prelude::*;
+//! use guido::animation::SpringConfig;
 //!
 //! container()
-//!     .scale(1.0)
-//!     .when_hovered(|s| s
-//!         .scale(1.1)
-//!         .timing(TimingFunction::Spring(SpringConfig::BOUNCY)))
+//!     .scale(Scale::NONE.transition(SpringConfig::BOUNCY))
+//!     .when_hovered(|s| s.scale(1.1));
 //! ```
 
 /// Configuration for spring physics animation

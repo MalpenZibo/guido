@@ -6,7 +6,9 @@
 //!
 //! # Static Surface Definition (at startup)
 //!
-//! ```ignore
+//! ```no_run
+//! # use guido::prelude::*;
+//! # let status_bar_widget = || text("bar");
 //! App::new().run(|app| {
 //!     app.add_surface(
 //!         SurfaceConfig::new()
@@ -21,7 +23,9 @@
 //!
 //! # Dynamic Surface Creation (at runtime)
 //!
-//! ```ignore
+//! ```no_run
+//! # use guido::prelude::*;
+//! # let popup_widget = || text("popup");
 //! // In an event handler or anywhere in widget code:
 //! let handle = spawn_surface(
 //!     SurfaceConfig::new()
@@ -71,7 +75,8 @@ impl SurfaceId {
 ///
 /// Use the builder pattern to configure surface properties:
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
 /// SurfaceConfig::new()
 ///     .width(300)
 ///     .height(200)
@@ -79,7 +84,7 @@ impl SurfaceId {
 ///     .layer(Layer::Overlay)
 ///     .keyboard_interactivity(KeyboardInteractivity::Exclusive)
 ///     .namespace("my-popup")
-///     .background_color(Color::rgb(0.2, 0.2, 0.3))
+///     .background_color(Color::rgb(0.2, 0.2, 0.3));
 /// ```
 #[derive(Clone)]
 pub struct SurfaceConfig {
@@ -118,10 +123,11 @@ pub struct SurfaceConfig {
 /// because `zwlr_layer_surface_v1::set_margin` is defined in integers and a
 /// fractional margin has nothing to round to that the compositor would honour.
 ///
-/// ```ignore
-/// SurfaceConfig::new().margin(8)                   // all four edges
-/// SurfaceConfig::new().margin([0, 12])             // none top/bottom, 12 aside
-/// SurfaceConfig::new().margin([8, 12, 0, 12])      // top, right, bottom, left
+/// ```no_run
+/// # use guido::prelude::*;
+/// SurfaceConfig::new().margin(8);                   // all four edges
+/// SurfaceConfig::new().margin([0, 12]);             // none top/bottom, 12 aside
+/// SurfaceConfig::new().margin([8, 12, 0, 12]);      // top, right, bottom, left
 /// ```
 ///
 /// Negative values are allowed: layer-shell reads them as pushing the surface
@@ -209,10 +215,11 @@ impl From<[u32; 4]> for Margin {
 /// [`content()`] constructor reads like [`fill()`](crate::layout::fill)
 /// and friends:
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
 /// SurfaceConfig::new()
 ///     .width(360)             // fixed
-///     .height(content())      // follows the toast stack
+///     .height(content());     // follows the toast stack
 /// ```
 ///
 /// Content semantics, designed to stay footgun-free:
@@ -425,11 +432,12 @@ pub fn content() -> SurfaceExtent {
 /// default is [`ExclusiveZone::None`] — a bar declares its reservation
 /// explicitly:
 ///
-/// ```ignore
-/// .exclusive_zone(ExclusiveZone::Auto)    // a bar reserving itself
-/// .exclusive_zone(34)                     // fixed reservation
-/// .exclusive_zone(ExclusiveZone::None)    // reserve nothing (toasts, OSD)
-/// .exclusive_zone(ExclusiveZone::Ignore)  // overlap panels too
+/// ```no_run
+/// # use guido::prelude::*;
+/// SurfaceConfig::new().exclusive_zone(ExclusiveZone::Auto);   // a bar reserving itself
+/// SurfaceConfig::new().exclusive_zone(34);                    // fixed reservation
+/// SurfaceConfig::new().exclusive_zone(ExclusiveZone::None);   // reserve nothing (toasts, OSD)
+/// SurfaceConfig::new().exclusive_zone(ExclusiveZone::Ignore); // overlap panels too
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExclusiveZone {
@@ -656,7 +664,11 @@ pub type PopupGravity = PopupAnchor;
 /// The compositor positions the popup relative to `anchor_rect` (parent
 /// surface coordinates) and adjusts it to stay on screen (flip/slide).
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
+/// # let bar_surface_id = SurfaceId::next();
+/// # let button_rect = Rect::new(0.0, 0.0, 10.0, 10.0);
+/// # let menu_widget = || text("menu");
 /// spawn_popup(
 ///     bar_surface_id,
 ///     PopupConfig::new(250)
@@ -938,7 +950,8 @@ pub(crate) fn drain_surface_commands() -> Vec<SurfaceCommand> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
 /// let handle = spawn_surface(
 ///     SurfaceConfig::new()
 ///         .width(300)
@@ -1066,7 +1079,12 @@ pub(crate) fn reset_popups() {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
+/// # let button_ref = create_widget_ref();
+/// # let bar_id = SurfaceId::next();
+/// # let menu_open = create_signal(true);
+/// # let menu_widget = || text("menu");
 /// let button_rect = button_ref.rect().get();
 /// let popup = spawn_popup(
 ///     bar_id,
@@ -1110,7 +1128,10 @@ where
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
+/// # use guido::prelude::*;
+/// # let config = SurfaceConfig::new();
+/// # let status_bar_id = SurfaceId::next();
 /// // Store the ID when adding the surface
 /// App::new().run(|app| {
 ///     let status_bar_id = app.add_surface(config, move || {
