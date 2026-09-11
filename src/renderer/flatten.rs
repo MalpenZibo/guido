@@ -237,12 +237,11 @@ impl FlattenedCommand {
 /// column of buttons stays one group; a tint over a photo gets two.
 struct LayeredCommands {
     groups: Vec<LayerBuckets>,
-    /// Whether any command asks the compositor to blur behind it.
-    ///
-    /// Counted while the commands go past, because the alternative is walking
-    /// them all again afterwards to find out — on every painted frame, for the
-    /// large majority of surfaces that never ask for it at all.
-    compositor_blur: bool,
+    /// What this frame carries for the compositor, counted while the commands
+    /// go past — because the alternative is walking them all again afterwards
+    /// to find out, on every painted frame, for the large majority of surfaces
+    /// that carry neither.
+    carried: RegionsCarried,
 }
 
 #[derive(Default)]
@@ -346,15 +345,32 @@ impl LayeredCommands {
     fn new() -> Self {
         Self {
             groups: vec![LayerBuckets::default()],
-            compositor_blur: false,
+            carried: RegionsCarried::default(),
         }
     }
 
     fn push(&mut self, cmd: FlattenedCommand) {
-        if let DrawCommand::BackdropBlur { sources, .. } = &*cmd.command
-            && sources.contains(crate::backdrop::BackdropSources::COMPOSITOR)
-        {
-            self.compositor_blur = true;
+        match &*cmd.command {
+            DrawCommand::BackdropBlur { sources, .. }
+                if sources.contains(crate::backdrop::BackdropSources::COMPOSITOR) =>
+            {
+                self.carried.compositor_blur = true;
+            }
+            DrawCommand::InputRegion { .. } => {
+                self.carried.input_region = true;
+                // No pixels, so no group. Splitting one for a command that
+                // draws nothing costs a pipeline bind per frame, and recording
+                // its bounds spends one of the tracked rectangles a real
+                // overlap test needs. Its place in the list is all the region
+                // is read for.
+                self.groups
+                    .last_mut()
+                    .expect("at least one group")
+                    .bucket_mut(cmd.layer)
+                    .push(cmd);
+                return;
+            }
+            _ => {}
         }
         let layer = cmd.layer;
         let rect = world_bounds(&cmd);
@@ -492,23 +508,33 @@ impl CommandLayer {
 ///
 /// `layers` receives the groups to draw, in order; see [`CommandLayer`].
 ///
-/// Returns whether the frame carries a backdrop blur the *compositor* is asked
-/// to apply, which is the only reason to walk the result again and build a
-/// `wl_region` from it.
+/// Returns what the frame carries that becomes a `wl_region` — a backdrop blur
+/// the *compositor* is asked to apply, and a declaration about where input
+/// reaches the surface — which is the only reason to walk the result again and
+/// build one from it.
 pub fn flatten_root_into(
     root: &RenderNode,
     commands: &mut Vec<FlattenedCommand>,
     layers: &mut Vec<CommandLayer>,
-) -> bool {
+) -> RegionsCarried {
     commands.clear();
     layers.clear();
 
     let mut layered = LayeredCommands::new();
     flatten_node(root, Transform::IDENTITY, None, None, &mut layered);
 
-    let compositor_blur = layered.compositor_blur;
+    let carried = layered.carried;
     layered.drain_into(commands, layers);
-    compositor_blur
+    carried
+}
+
+/// What a flattened frame carries for the compositor, counted on the way past.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RegionsCarried {
+    /// A backdrop blur the compositor is asked to apply.
+    pub compositor_blur: bool,
+    /// A declaration about where input reaches the surface.
+    pub input_region: bool,
 }
 
 /// Recursively flatten a node and its children.
@@ -618,6 +644,9 @@ fn flatten_node(
             {
                 RenderLayer::Shapes
             }
+            // Draws nothing, for the same reason and by the same route: it
+            // travels with the shapes, where it produces no instance.
+            DrawCommand::InputRegion { .. } => RenderLayer::Shapes,
             DrawCommand::BackdropBlur { .. } | DrawCommand::TextBackdropBlur { .. } => {
                 RenderLayer::Backdrop
             }
@@ -738,7 +767,7 @@ fn world_bounds(cmd: &FlattenedCommand) -> Option<Rect> {
             radius * 2.0,
         ),
         DrawCommand::Image { rect, .. } => *rect,
-        DrawCommand::BackdropBlur { rect, .. } => *rect,
+        DrawCommand::BackdropBlur { rect, .. } | DrawCommand::InputRegion { rect, .. } => *rect,
         DrawCommand::Text {
             rect, font_size, ..
         }
@@ -896,7 +925,7 @@ mod tests {
             }));
 
             let (mut commands, mut layers) = (Vec::new(), Vec::new());
-            let told = flatten_root_into(&node, &mut commands, &mut layers);
+            let told = flatten_root_into(&node, &mut commands, &mut layers).compositor_blur;
             let drawn = layers.iter().any(|l| !l.backdrop.is_empty());
             (told, drawn, layers.len())
         };

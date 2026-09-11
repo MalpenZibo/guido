@@ -1773,9 +1773,9 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
     });
 
     // Flatten tree into reused buffers
-    let compositor_blur;
+    let carried;
     time_phase!(render_stats::Phase::Flatten, {
-        compositor_blur = flatten_root_into(
+        carried = flatten_root_into(
             &surface.root_node,
             &mut surface.flattened_commands,
             &mut surface.command_layers,
@@ -1797,7 +1797,7 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
     // it owes the compositor the empty region that withdraws the last one.
     if wayland_state.supports_blur_region()
         && let Some(mut handle) = wayland_state.surface(id)
-        && (compositor_blur || handle.has_published_blur())
+        && (carried.compositor_blur || handle.has_published_blur())
     {
         let blur_rects = blur::regions_from_commands(&surface.flattened_commands);
         handle.sync_blur_region(blur_rects, false);

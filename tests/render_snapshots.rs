@@ -169,6 +169,21 @@ fn dump_command(cmd: &DrawCommand, depth: usize, kind: &str, out: &mut String) {
                 n(*curvature),
             ));
         }
+        DrawCommand::InputRegion {
+            rect: r,
+            corner_radii,
+            takes,
+        } => {
+            out.push_str(&format!(
+                "{pad}{kind} input-region {} takes={} corners={}/{}/{}/{}\n",
+                rect(r),
+                takes,
+                n(corner_radii.top_left),
+                n(corner_radii.top_right),
+                n(corner_radii.bottom_right),
+                n(corner_radii.bottom_left),
+            ));
+        }
         DrawCommand::RoundedRect {
             rect: r,
             color: c,

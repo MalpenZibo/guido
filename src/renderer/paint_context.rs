@@ -327,6 +327,21 @@ impl<'a> PaintContext<'a> {
         }));
     }
 
+    /// Declare where input reaches this surface, or stops reaching it, over
+    /// `rect`. Draws nothing; the region is read off the flattened frame.
+    pub fn declare_input_region(
+        &mut self,
+        rect: Rect,
+        corner_radii: impl Into<CornerRadii>,
+        takes: bool,
+    ) {
+        self.node.commands.push(Rc::new(DrawCommand::InputRegion {
+            rect,
+            corner_radii: corner_radii.into(),
+            takes,
+        }));
+    }
+
     /// Draw a circle in local coordinates.
     /// Blur whatever is already drawn beneath `rect`, masked to its rounded
     /// shape. Emitted before the container's own background so it paints over
